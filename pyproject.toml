@@ -64,6 +64,10 @@ openvino = [
     # Intel CPU optimization
     "openvino>=2023.0.0",
 ]
+cloud = [
+    # Cloud deployment (Modal)
+    "modal>=0.64.0",
+]
 
 [project.scripts]
 rallycut = "rallycut.cli.main:app"
