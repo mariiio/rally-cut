@@ -1,7 +1,5 @@
 """Video cutting functionality for RallyCut."""
 
-import subprocess
-import tempfile
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -23,7 +21,7 @@ class VideoCutter:
         use_quick_mode: bool = False,
         use_two_pass: bool = False,
         limit_seconds: Optional[float] = None,
-        proxy_height: Optional[int] = None,
+        use_proxy: bool = True,  # Use proxy for ML analysis (handled by TwoPassAnalyzer)
         min_gap_seconds: float = 1.5,
     ):
         config = get_config()
@@ -34,36 +32,11 @@ class VideoCutter:
         self.use_quick_mode = use_quick_mode
         self.use_two_pass = use_two_pass
         self.limit_seconds = limit_seconds
-        self.proxy_height = proxy_height  # e.g., 360 for 360p proxy
+        self.use_proxy = use_proxy
         self.min_gap_seconds = min_gap_seconds  # Min NO_PLAY gap before ending rally
 
         self._analyzer = None
         self.exporter = FFmpegExporter()
-
-    def _create_proxy(self, input_path: Path, proxy_path: Path) -> bool:
-        """Create optimized proxy: 360p for fast analysis.
-
-        Key optimizations:
-        - 360p: Small enough to be fast, big enough for motion detection
-        - Keep original fps: Avoid fps conversion complexity
-        - Fast H.264: Good balance of decode speed and compatibility
-        """
-        try:
-            cmd = [
-                "ffmpeg",
-                "-i", str(input_path),
-                "-vf", f"scale=-2:{self.proxy_height}",  # Use configured height
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-crf", "28",                     # Fast encode
-                "-an",
-                "-y",
-                str(proxy_path),
-            ]
-            subprocess.run(cmd, capture_output=True, check=True)
-            return True
-        except subprocess.CalledProcessError:
-            return False
 
     def _get_analyzer(self):
         """Lazy load the appropriate analyzer."""
@@ -73,7 +46,10 @@ class VideoCutter:
                 self._analyzer = MotionDetector()
             elif self.use_two_pass:
                 from rallycut.analysis.two_pass import TwoPassAnalyzer
-                self._analyzer = TwoPassAnalyzer(device=self.device)
+                self._analyzer = TwoPassAnalyzer(
+                    device=self.device,
+                    use_proxy=self.use_proxy,
+                )
             else:
                 from rallycut.analysis.game_state import GameStateAnalyzer
                 self._analyzer = GameStateAnalyzer(device=self.device)
@@ -234,47 +210,18 @@ class VideoCutter:
         """
         analyzer = self._get_analyzer()
 
-        # Use proxy if requested (not for quick mode which doesn't need ML)
-        proxy_file = None
-        analysis_path = input_path
+        # Run analysis (proxy handling is now done by TwoPassAnalyzer)
+        with Video(input_path) as video:
+            fps = video.info.fps
+            results = analyzer.analyze_video(
+                video,
+                stride=self.stride,
+                progress_callback=progress_callback,
+                limit_seconds=self.limit_seconds,
+            )
 
-        if self.proxy_height and not self.use_quick_mode:
-            # Create temporary proxy for ML analysis
-            proxy_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-            proxy_path = Path(proxy_file.name)
-            proxy_file.close()
-
-            if progress_callback:
-                progress_callback(0.0, f"Creating proxy ({self.proxy_height}p)...")
-
-            if self._create_proxy(input_path, proxy_path):
-                analysis_path = proxy_path
-            else:
-                # Fallback to original if proxy creation fails
-                proxy_path.unlink(missing_ok=True)
-                proxy_file = None
-
-        try:
-            # Get original video FPS (needed for timestamp calculation)
-            with Video(input_path) as original_video:
-                fps = original_video.info.fps
-
-            # Run analysis on proxy or original
-            with Video(analysis_path) as video:
-                results = analyzer.analyze_video(
-                    video,
-                    stride=self.stride,
-                    progress_callback=progress_callback,
-                    limit_seconds=self.limit_seconds,
-                )
-
-            # Convert to merged segments using original FPS
-            merged_segments = self._get_segments_from_results(results, fps)
-
-        finally:
-            # Clean up proxy file
-            if proxy_file:
-                Path(proxy_file.name).unlink(missing_ok=True)
+        # Convert to merged segments
+        merged_segments = self._get_segments_from_results(results, fps)
 
         return merged_segments
 

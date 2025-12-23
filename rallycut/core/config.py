@@ -71,6 +71,14 @@ class RallyCutConfig(BaseSettings):
     # Device settings
     device: str = Field(default_factory=_detect_device)
 
+    # Proxy settings
+    proxy_enabled: bool = True  # Use proxy for ML analysis
+    proxy_height: int = 480  # 480p resolution
+    proxy_fps: Optional[int] = None  # None = keep original FPS (safest for ML)
+    proxy_cache_dir: Path = Field(
+        default_factory=lambda: Path(user_cache_dir("rallycut")) / "proxies"
+    )
+
     model_config = SettingsConfigDict(env_prefix="RALLYCUT_")
 
 
