@@ -6,9 +6,11 @@ Second pass: ML analysis only on motion regions (skips 60-70% of video).
 Optimizations:
 - Adaptive stride: Use stride 8 near boundaries, stride 16 in middle of regions
 - Adaptive frame sampling: Sample every 2nd frame in middle zones for wider temporal context
+- Proxy video: Use 480p@15fps proxy for ML analysis (2-4x faster decode)
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional
 
 from rallycut.core.models import GameState, GameStateResult
@@ -34,6 +36,9 @@ class TwoPassAnalyzer:
 
     Typical beach volleyball matches have 60-70% dead time. By first scanning
     for motion, we can skip ML analysis on static regions and achieve 2-3x speedup.
+
+    With proxy enabled (default), Pass 2 uses a 480p@15fps proxy for 2-4x faster
+    frame decode while maintaining ML accuracy (model uses 224x224 anyway).
     """
 
     def __init__(
@@ -43,15 +48,18 @@ class TwoPassAnalyzer:
         ml_stride: int = 8,  # Finer stride for ML analysis (used at boundaries)
         motion_padding_seconds: float = 3.0,  # Padding around motion regions
         boundary_seconds: float = 2.0,  # Seconds at region edges for high-precision analysis
+        use_proxy: bool = True,  # Use proxy video for ML analysis
     ):
         self.device = device
         self.motion_stride = motion_stride
         self.ml_stride = ml_stride
         self.motion_padding_seconds = motion_padding_seconds
         self.boundary_seconds = boundary_seconds
+        self.use_proxy = use_proxy
 
         self._motion_detector = None
         self._ml_analyzer = None
+        self._proxy_generator = None
 
     def _get_motion_detector(self):
         """Lazy load motion detector."""
@@ -71,6 +79,22 @@ class TwoPassAnalyzer:
 
             self._ml_analyzer = GameStateAnalyzer(device=self.device)
         return self._ml_analyzer
+
+    def _get_proxy_generator(self):
+        """Lazy load proxy generator."""
+        if self._proxy_generator is None:
+            from rallycut.core.config import get_config
+            from rallycut.core.proxy import ProxyConfig, ProxyGenerator
+
+            config = get_config()
+            self._proxy_generator = ProxyGenerator(
+                config=ProxyConfig(
+                    height=config.proxy_height,
+                    fps=config.proxy_fps,
+                ),
+                cache_dir=config.proxy_cache_dir,
+            )
+        return self._proxy_generator
 
     def analyze_video(
         self,
@@ -141,16 +165,66 @@ class TwoPassAnalyzer:
             )
 
         # Pass 2: ML analysis on motion regions only (90% of progress)
+        # Optionally use proxy video for faster decoding
         ml_start = time.time()
-        results = self._analyze_motion_regions(
-            video,
-            motion_regions,
-            stride,
-            batch_size,
-            fps,
-            total_frames,
-            progress_callback,
-        )
+
+        if self.use_proxy and video.path is not None:
+            # Generate/get proxy and frame mapper
+            proxy_gen = self._get_proxy_generator()
+
+            def proxy_progress(pct: float, msg: str):
+                if progress_callback:
+                    progress_callback(0.1 + pct * 0.05, f"Proxy: {msg}")
+
+            proxy_path, mapper = proxy_gen.get_or_create(
+                video.path, fps, proxy_progress
+            )
+
+            # Map motion regions to proxy frame space
+            proxy_regions = [
+                MotionRegion(
+                    start_frame=mapper.source_to_proxy(r.start_frame),
+                    end_frame=mapper.source_to_proxy(r.end_frame),
+                    avg_motion=r.avg_motion,
+                )
+                for r in motion_regions
+            ]
+            proxy_total_frames = mapper.source_to_proxy(total_frames)
+
+            # Run ML analysis on proxy
+            with Video(proxy_path) as proxy_video:
+                proxy_results = self._analyze_motion_regions(
+                    proxy_video,
+                    proxy_regions,
+                    stride,
+                    batch_size,
+                    mapper.proxy_fps,
+                    proxy_total_frames,
+                    progress_callback,
+                )
+
+            # Map results back to source frame space
+            results = [
+                GameStateResult(
+                    state=r.state,
+                    confidence=r.confidence,
+                    start_frame=mapper.proxy_to_source(r.start_frame),
+                    end_frame=mapper.proxy_to_source(r.end_frame),
+                )
+                for r in proxy_results
+            ]
+        else:
+            # Original behavior without proxy
+            results = self._analyze_motion_regions(
+                video,
+                motion_regions,
+                stride,
+                batch_size,
+                fps,
+                total_frames,
+                progress_callback,
+            )
+
         ml_time = time.time() - ml_start
 
         if progress_callback:
