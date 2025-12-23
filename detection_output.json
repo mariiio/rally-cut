@@ -1,0 +1,71 @@
+{
+  "job_id": "det_b0692ffcc6ea",
+  "status": "completed",
+  "video": {
+    "source_url": "file:///Users/mario/Desktop/rallies/match_first_2min.mp4",
+    "duration": 120.0199,
+    "fps": 29.97002997002997,
+    "width": 1920,
+    "height": 1080,
+    "frame_count": 3597
+  },
+  "segments": [
+    {
+      "segment_id": 1,
+      "segment_type": "rally",
+      "start_time": 11.378033333333333,
+      "end_time": 19.619600000000002,
+      "start_frame": 341,
+      "end_frame": 588,
+      "duration": 8.24156666666667,
+      "highlight_score": 0.13735944444444448,
+      "highlight_rank": 4
+    },
+    {
+      "segment_id": 2,
+      "segment_type": "rally",
+      "start_time": 31.1311,
+      "end_time": 46.8468,
+      "start_frame": 933,
+      "end_frame": 1404,
+      "duration": 15.715700000000002,
+      "highlight_score": 0.2619283333333334,
+      "highlight_rank": 2
+    },
+    {
+      "segment_id": 3,
+      "segment_type": "rally",
+      "start_time": 62.09536666666667,
+      "end_time": 71.40466666666667,
+      "start_frame": 1861,
+      "end_frame": 2140,
+      "duration": 9.3093,
+      "highlight_score": 0.15515500000000002,
+      "highlight_rank": 3
+    },
+    {
+      "segment_id": 4,
+      "segment_type": "rally",
+      "start_time": 87.72096666666667,
+      "end_time": 112.5124,
+      "start_frame": 2629,
+      "end_frame": 3372,
+      "duration": 24.79143333333333,
+      "highlight_score": 0.4131905555555555,
+      "highlight_rank": 1
+    }
+  ],
+  "statistics": {
+    "total_segments": 4,
+    "rally_count": 4,
+    "total_play_duration": 58.058,
+    "total_dead_time": 61.96190000000001,
+    "play_percentage": 48.37364470391993,
+    "avg_rally_duration": 14.5145,
+    "longest_rally_duration": 24.79143333333333,
+    "shortest_rally_duration": 8.24156666666667
+  },
+  "processing_time_seconds": 89.57560801506042,
+  "created_at": "2025-12-23T14:59:09.404895",
+  "error": null
+}

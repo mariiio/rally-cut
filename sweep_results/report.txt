@@ -1,0 +1,28 @@
+============================================================
+PARAMETER SWEEP RESULTS
+============================================================
+
+Total configurations tested: 5
+Configurations passing all tests: 5
+
+OPTIMAL CONFIGURATION:
+----------------------------------------
+  motion_high_threshold: 0.04
+  motion_low_threshold: 0.02
+  min_play_duration: 2.0
+  min_gap_seconds: 2.0
+  padding_seconds: 1.0
+  motion_padding_seconds: 3.0
+  stride: 24
+
+  Total Recall: 100.0%
+  False Positives: 5
+  Avg Processing Time: 133.3s
+
+TOP 5 PASSING CONFIGS (by speed):
+----------------------------------------
+  1. FP=5, time=133.3s, stride=24
+  2. FP=5, time=134.7s, stride=32
+  3. FP=5, time=137.8s, stride=16
+  4. FP=5, time=138.6s, stride=64
+  5. FP=5, time=139.2s, stride=48
