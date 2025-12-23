@@ -61,15 +61,20 @@ def cut(
     padding: float = typer.Option(
         1.0,
         "--padding", "-p",
-        help="Seconds of context to preserve before/after play segments",
+        help="Seconds of padding before play segments",
+    ),
+    padding_end: Optional[float] = typer.Option(
+        None,
+        "--padding-end",
+        help="Seconds of padding after play segments (default: padding + 0.5s)",
     ),
     min_play: float = typer.Option(
-        2.0,
+        5.0,
         "--min-play",
         help="Minimum play duration in seconds to keep",
     ),
     stride: int = typer.Option(
-        8,
+        32,
         "--stride", "-s",
         help="Frames to skip between analyses (higher = faster, less accurate)",
     ),
@@ -119,9 +124,14 @@ def cut(
         help="Use two-pass: motion scan then ML on motion only (2-3x faster)",
     ),
     min_gap: float = typer.Option(
-        3.5,
+        3.0,
         "--min-gap",
         help="Min NO_PLAY gap (seconds) before ending a rally (higher = longer rallies)",
+    ),
+    auto_stride: bool = typer.Option(
+        True,
+        "--auto-stride/--no-auto-stride",
+        help="Auto-adjust stride based on video FPS (stride 32 @ 30fps = stride 64 @ 60fps)",
     ),
 ):
     """
@@ -159,30 +169,45 @@ def cut(
     if quick:
         mode_str += " (quick motion detection)"
     console.print(f"Mode: [yellow]{mode_str}[/yellow]")
-    console.print(f"Stride: [yellow]{stride} frames[/yellow]")
+
+    # Get video info first to calculate effective stride
+    with Video(video) as v:
+        video_info = v.info
+
+    # Calculate effective stride (FPS-normalized)
+    reference_fps = 30.0
+    if auto_stride:
+        effective_stride = int(round(stride * (video_info.fps / reference_fps)))
+        effective_stride = max(1, effective_stride)
+        if effective_stride != stride:
+            console.print(f"Stride: [yellow]{stride} → {effective_stride} frames[/yellow] (auto-adjusted for {video_info.fps:.0f}fps)")
+        else:
+            console.print(f"Stride: [yellow]{stride} frames[/yellow]")
+    else:
+        effective_stride = stride
+        console.print(f"Stride: [yellow]{stride} frames[/yellow]")
+
     if limit:
         console.print(f"Limit: [yellow]{format_time(limit)} ({limit:.1f}s)[/yellow]")
     console.print()
 
-    # Get video info
-    with Video(video) as v:
-        video_info = v.info
-        console.print(f"Duration: {format_time(video_info.duration)} ({video_info.duration:.1f}s)")
-        console.print(f"Resolution: {video_info.width}x{video_info.height}")
-        console.print(f"FPS: {video_info.fps:.1f}")
+    console.print(f"Duration: {format_time(video_info.duration)} ({video_info.duration:.1f}s)")
+    console.print(f"Resolution: {video_info.width}x{video_info.height}")
+    console.print(f"FPS: {video_info.fps:.1f}")
 
-        # Estimate analysis windows
-        analyze_frames = video_info.frame_count
-        if limit:
-            analyze_frames = min(analyze_frames, int(limit * video_info.fps))
-        total_windows = (analyze_frames - 16) // stride + 1
-        console.print(f"Windows to analyze: ~{total_windows}")
-        console.print()
+    # Estimate analysis windows using effective stride
+    analyze_frames = video_info.frame_count
+    if limit:
+        analyze_frames = min(analyze_frames, int(limit * video_info.fps))
+    total_windows = (analyze_frames - 16) // effective_stride + 1
+    console.print(f"Windows to analyze: ~{total_windows}")
+    console.print()
 
     # Create cutter
     cutter = VideoCutter(
         device=device,
         padding_seconds=padding,
+        padding_end_seconds=padding_end,
         min_play_duration=min_play,
         stride=stride,
         use_quick_mode=quick,
@@ -190,6 +215,7 @@ def cut(
         limit_seconds=limit,
         use_proxy=proxy,  # Proxy handled by TwoPassAnalyzer
         min_gap_seconds=min_gap,
+        auto_stride=auto_stride,
     )
 
     # Progress tracking
