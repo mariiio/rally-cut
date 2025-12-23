@@ -7,6 +7,7 @@ import numpy as np
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter1d
 
+from rallycut.core.config import get_config
 from rallycut.core.models import BallPosition
 
 
@@ -40,9 +41,9 @@ class TrajectoryProcessor:
 
     def __init__(
         self,
-        max_gap_frames: int = 15,
-        smooth_sigma: float = 1.5,
-        trail_length: int = 15,
+        max_gap_frames: Optional[int] = None,
+        smooth_sigma: Optional[float] = None,
+        trail_length: Optional[int] = None,
     ):
         """
         Initialize trajectory processor.
@@ -52,9 +53,10 @@ class TrajectoryProcessor:
             smooth_sigma: Gaussian smoothing sigma (higher = smoother)
             trail_length: Number of frames to show in ball trail
         """
-        self.max_gap_frames = max_gap_frames
-        self.smooth_sigma = smooth_sigma
-        self.trail_length = trail_length
+        config = get_config()
+        self.max_gap_frames = max_gap_frames or config.trajectory.max_gap_frames
+        self.smooth_sigma = smooth_sigma or config.trajectory.smooth_sigma
+        self.trail_length = trail_length or config.trajectory.trail_length
 
     def split_into_segments(
         self,

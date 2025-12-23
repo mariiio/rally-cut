@@ -29,6 +29,7 @@ dependencies = [
     # Configuration
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
+    "pyyaml>=6.0.0",
     # ML/Deep Learning
     "torch>=2.0.0",
     "torchvision>=0.15.0",

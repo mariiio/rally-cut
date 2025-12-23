@@ -7,6 +7,7 @@ from typing import Callable, Optional
 import cv2
 import numpy as np
 
+from rallycut.core.config import get_config
 from rallycut.core.video import Video
 from rallycut.tracking.trajectory import TrajectoryProcessor, TrajectorySegment
 
@@ -33,6 +34,22 @@ class OverlayStyle:
     trail_line_color: tuple[int, int, int] = (0, 150, 200)
     trail_line_thickness: int = 2
 
+    @classmethod
+    def from_config(cls) -> "OverlayStyle":
+        """Create OverlayStyle from global config."""
+        config = get_config()
+        return cls(
+            ball_color=config.overlay.ball_color,
+            ball_radius=config.overlay.ball_radius,
+            trail_color=config.overlay.trail_color,
+            trail_max_radius=config.overlay.trail_max_radius,
+            trail_min_radius=config.overlay.trail_min_radius,
+            predicted_color=config.overlay.predicted_color,
+            draw_trail_line=config.overlay.draw_trail_line,
+            trail_line_color=config.overlay.trail_line_color,
+            trail_line_thickness=config.overlay.trail_line_thickness,
+        )
+
 
 class OverlayRenderer:
     """
@@ -48,17 +65,18 @@ class OverlayRenderer:
     def __init__(
         self,
         style: Optional[OverlayStyle] = None,
-        trail_length: int = 15,
+        trail_length: Optional[int] = None,
     ):
         """
         Initialize overlay renderer.
 
         Args:
-            style: Visual style configuration
+            style: Visual style configuration (uses config if None)
             trail_length: Number of frames to show in trail
         """
-        self.style = style or OverlayStyle()
-        self.trail_length = trail_length
+        config = get_config()
+        self.style = style or OverlayStyle.from_config()
+        self.trail_length = trail_length or config.trajectory.trail_length
 
     def draw_ball(
         self,

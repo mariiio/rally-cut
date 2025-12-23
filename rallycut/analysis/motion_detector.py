@@ -8,6 +8,7 @@ from typing import Callable, Optional
 import cv2
 import numpy as np
 
+from rallycut.core.config import get_config
 from rallycut.core.models import GameState, GameStateResult
 from rallycut.core.video import Video
 
@@ -20,13 +21,11 @@ class MotionDetector:
     Volleyball rallies have sustained, high-intensity motion.
     """
 
-    ANALYSIS_SIZE = (320, 180)  # Small size for fast processing
-
     def __init__(
         self,
-        high_motion_threshold: float = 0.08,  # Strong motion indicator
-        low_motion_threshold: float = 0.04,  # Some motion
-        window_size: int = 5,  # Frames to average over
+        high_motion_threshold: Optional[float] = None,
+        low_motion_threshold: Optional[float] = None,
+        window_size: Optional[int] = None,
     ):
         """
         Args:
@@ -34,9 +33,11 @@ class MotionDetector:
             low_motion_threshold: Threshold for low motion (dead time likely)
             window_size: Number of frames to smooth over
         """
-        self.high_motion_threshold = high_motion_threshold
-        self.low_motion_threshold = low_motion_threshold
-        self.window_size = window_size
+        config = get_config()
+        self.high_motion_threshold = high_motion_threshold or config.motion.high_threshold
+        self.low_motion_threshold = low_motion_threshold or config.motion.low_threshold
+        self.window_size = window_size or config.motion.window_size
+        self.analysis_size = config.motion.analysis_size
 
     def analyze_video(
         self,
@@ -78,7 +79,7 @@ class MotionDetector:
         # Use sequential reading with stride - MUCH faster than seeking
         for frame_idx, frame in video.iter_frames(end_frame=max_frames, step=stride):
             # Resize for speed
-            small = cv2.resize(frame, self.ANALYSIS_SIZE, interpolation=cv2.INTER_AREA)
+            small = cv2.resize(frame, self.analysis_size, interpolation=cv2.INTER_AREA)
             gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
             gray = cv2.GaussianBlur(gray, (5, 5), 0)
 

@@ -34,8 +34,8 @@ class BallTracker:
         self,
         model_path: Optional[Path] = None,
         device: Optional[str] = None,
-        confidence_threshold: float = 0.3,
-        max_missing_frames: int = 10,
+        confidence_threshold: Optional[float] = None,
+        max_missing_frames: Optional[int] = None,
         use_predictions: bool = False,
     ):
         """
@@ -51,8 +51,8 @@ class BallTracker:
         config = get_config()
         self.model_path = model_path or config.ball_detector_path
         self.device = device or config.device
-        self.confidence_threshold = confidence_threshold
-        self.max_missing_frames = max_missing_frames
+        self.confidence_threshold = confidence_threshold or config.ball_tracking.confidence_threshold
+        self.max_missing_frames = max_missing_frames or config.ball_tracking.max_missing_frames
         self.use_predictions = use_predictions
         self._detector = None
         self._kalman = None
@@ -76,6 +76,7 @@ class BallTracker:
         State: [x, y, vx, vy] (position and velocity)
         Measurement: [x, y] (detected position)
         """
+        config = get_config()
         kf = KalmanFilter(dim_x=4, dim_z=2)
 
         # State transition matrix (constant velocity model)
@@ -94,14 +95,15 @@ class BallTracker:
             [0, 1, 0, 0],
         ])
 
-        # Measurement noise
+        # Measurement noise (from config)
+        r = config.ball_tracking.kalman_measurement_noise
         kf.R = np.array([
-            [10, 0],
-            [0, 10],
+            [r, 0],
+            [0, r],
         ])
 
-        # Process noise (acceleration uncertainty)
-        q = 5.0  # Process noise scale
+        # Process noise (acceleration uncertainty, from config)
+        q = config.ball_tracking.kalman_process_noise
         kf.Q = np.array([
             [q, 0, 0, 0],
             [0, q, 0, 0],
@@ -138,6 +140,8 @@ class BallTracker:
         Returns:
             TrackingResult with positions and stats
         """
+        config = get_config()
+        edge_margin = config.ball_tracking.edge_margin
         detector = self._get_detector()
 
         if end_frame is None:
@@ -164,7 +168,6 @@ class BallTracker:
 
             if detection is not None:
                 # Check if detection is too close to frame edge
-                edge_margin = 80
                 near_edge = (
                     detection.x < edge_margin or
                     detection.x > video.info.width - edge_margin or
@@ -214,18 +217,17 @@ class BallTracker:
                     vel_x, vel_y = kalman.x[2], kalman.x[3]
 
                     # Check if ball is heading out of frame or already outside
-                    margin = 80  # pixels from edge
                     in_frame = (
-                        margin < pred_x < video.info.width - margin and
-                        margin < pred_y < video.info.height - margin
+                        edge_margin < pred_x < video.info.width - edge_margin and
+                        edge_margin < pred_y < video.info.height - edge_margin
                     )
 
                     # Check if velocity is taking ball further out
                     heading_out = (
-                        (pred_x < margin and vel_x < 0) or
-                        (pred_x > video.info.width - margin and vel_x > 0) or
-                        (pred_y < margin and vel_y < 0) or
-                        (pred_y > video.info.height - margin and vel_y > 0)
+                        (pred_x < edge_margin and vel_x < 0) or
+                        (pred_x > video.info.width - edge_margin and vel_x > 0) or
+                        (pred_y < edge_margin and vel_y < 0) or
+                        (pred_y > video.info.height - edge_margin and vel_y > 0)
                     )
 
                     if in_frame and not heading_out:

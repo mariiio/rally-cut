@@ -1,4 +1,4 @@
-"""Tests for game state classifier."""
+"""Tests for game state classifier and segment merging."""
 
 import pytest
 from unittest.mock import Mock, patch, MagicMock
@@ -21,96 +21,14 @@ class TestGameStateAnalyzer:
     def sample_results(self):
         """Create sample game state results."""
         return [
-            GameStateResult(frame_idx=0, state=GameState.NO_PLAY, confidence=0.9),
-            GameStateResult(frame_idx=16, state=GameState.NO_PLAY, confidence=0.85),
-            GameStateResult(frame_idx=32, state=GameState.SERVICE, confidence=0.8),
-            GameStateResult(frame_idx=48, state=GameState.PLAY, confidence=0.95),
-            GameStateResult(frame_idx=64, state=GameState.PLAY, confidence=0.92),
-            GameStateResult(frame_idx=80, state=GameState.PLAY, confidence=0.88),
-            GameStateResult(frame_idx=96, state=GameState.NO_PLAY, confidence=0.9),
+            GameStateResult(start_frame=0, end_frame=15, state=GameState.NO_PLAY, confidence=0.9),
+            GameStateResult(start_frame=16, end_frame=31, state=GameState.NO_PLAY, confidence=0.85),
+            GameStateResult(start_frame=32, end_frame=47, state=GameState.SERVICE, confidence=0.8),
+            GameStateResult(start_frame=48, end_frame=63, state=GameState.PLAY, confidence=0.95),
+            GameStateResult(start_frame=64, end_frame=79, state=GameState.PLAY, confidence=0.92),
+            GameStateResult(start_frame=80, end_frame=95, state=GameState.PLAY, confidence=0.88),
+            GameStateResult(start_frame=96, end_frame=111, state=GameState.NO_PLAY, confidence=0.9),
         ]
-
-    def test_get_segments(self, sample_results):
-        """Test segment creation from results."""
-        from rallycut.analysis.game_state import GameStateAnalyzer
-
-        analyzer = GameStateAnalyzer(device="cpu")
-        fps = 30.0
-
-        segments = analyzer.get_segments(sample_results, fps)
-
-        # Should have 3 segments: NO_PLAY, SERVICE+PLAY, NO_PLAY
-        assert len(segments) >= 1
-
-        # Verify segment properties
-        for segment in segments:
-            assert isinstance(segment, TimeSegment)
-            assert segment.start_frame >= 0
-            assert segment.end_frame >= segment.start_frame
-            assert segment.state in GameState
-
-    def test_get_play_segments(self, sample_results):
-        """Test filtering for play segments."""
-        from rallycut.analysis.game_state import GameStateAnalyzer
-
-        analyzer = GameStateAnalyzer(device="cpu")
-        fps = 30.0
-
-        all_segments = analyzer.get_segments(sample_results, fps)
-        play_segments = analyzer.get_play_segments(
-            all_segments,
-            padding_seconds=0.5,
-            min_duration_seconds=0.1,
-            fps=fps,
-        )
-
-        # All returned segments should be play-related
-        for segment in play_segments:
-            assert segment.state in (GameState.SERVICE, GameState.PLAY)
-
-    def test_get_play_segments_with_min_duration(self, sample_results):
-        """Test min duration filtering."""
-        from rallycut.analysis.game_state import GameStateAnalyzer
-
-        analyzer = GameStateAnalyzer(device="cpu")
-        fps = 30.0
-
-        all_segments = analyzer.get_segments(sample_results, fps)
-
-        # Very high min duration should filter everything
-        play_segments = analyzer.get_play_segments(
-            all_segments,
-            padding_seconds=0,
-            min_duration_seconds=1000.0,  # Impossibly long
-            fps=fps,
-        )
-
-        assert len(play_segments) == 0
-
-    def test_empty_results(self):
-        """Test handling of empty results."""
-        from rallycut.analysis.game_state import GameStateAnalyzer
-
-        analyzer = GameStateAnalyzer(device="cpu")
-        fps = 30.0
-
-        segments = analyzer.get_segments([], fps)
-        assert segments == []
-
-    def test_single_result(self):
-        """Test handling of single result."""
-        from rallycut.analysis.game_state import GameStateAnalyzer
-
-        analyzer = GameStateAnalyzer(device="cpu")
-        fps = 30.0
-
-        results = [
-            GameStateResult(frame_idx=0, state=GameState.PLAY, confidence=0.9)
-        ]
-
-        segments = analyzer.get_segments(results, fps)
-        assert len(segments) == 1
-        assert segments[0].state == GameState.PLAY
 
 
 class TestGameStateClassifierMocked:
@@ -125,13 +43,12 @@ class TestGameStateClassifierMocked:
 
         # Mock classifier with batch method
         mock_classifier = Mock()
-        # classify_segments_batch returns list of (state, confidence) tuples
         mock_classifier.classify_segments_batch.return_value = [
             (GameState.PLAY, 0.9)
         ]
         mock_get_classifier.return_value = mock_classifier
 
-        # Mock video
+        # Mock video with iter_frames
         mock_video = Mock()
         mock_video.info = VideoInfo(
             path=Path("/test.mp4"),
@@ -141,10 +58,10 @@ class TestGameStateClassifierMocked:
             height=1080,
             frame_count=30,
         )
-        mock_video.read_frames.return_value = [
-            np.zeros((224, 224, 3), dtype=np.uint8)
-            for _ in range(16)
-        ]
+
+        # Mock iter_frames to yield frames
+        frames = [(i, np.zeros((224, 224, 3), dtype=np.uint8)) for i in range(30)]
+        mock_video.iter_frames.return_value = iter(frames)
 
         # Track progress
         progress_calls = []
@@ -165,42 +82,154 @@ class TestGameStateClassifierMocked:
 
 
 class TestSegmentMerging:
-    """Tests for segment merging logic."""
+    """Tests for segment merging logic in VideoCutter."""
 
     def test_merge_adjacent_same_state(self):
         """Test that adjacent segments of same state are merged."""
-        from rallycut.analysis.game_state import GameStateAnalyzer
+        from rallycut.processing.cutter import VideoCutter
 
-        analyzer = GameStateAnalyzer(device="cpu")
+        # Use low min_play_duration to not filter out short segments
+        cutter = VideoCutter(min_play_duration=0.1, padding_seconds=0)
 
         results = [
-            GameStateResult(frame_idx=0, state=GameState.PLAY, confidence=0.9),
-            GameStateResult(frame_idx=16, state=GameState.PLAY, confidence=0.85),
-            GameStateResult(frame_idx=32, state=GameState.PLAY, confidence=0.88),
+            GameStateResult(start_frame=0, end_frame=29, state=GameState.PLAY, confidence=0.9),
+            GameStateResult(start_frame=30, end_frame=59, state=GameState.PLAY, confidence=0.85),
+            GameStateResult(start_frame=60, end_frame=89, state=GameState.PLAY, confidence=0.88),
         ]
 
-        segments = analyzer.get_segments(results, fps=30.0)
+        segments = cutter._get_segments_from_results(results, fps=30.0)
 
-        # Should be merged into single segment
+        # Should have exactly 1 merged PLAY segment (after filtering)
         assert len(segments) == 1
         assert segments[0].state == GameState.PLAY
 
     def test_no_merge_different_states(self):
         """Test that different states create separate segments."""
-        from rallycut.analysis.game_state import GameStateAnalyzer
+        from rallycut.processing.cutter import VideoCutter
 
-        analyzer = GameStateAnalyzer(device="cpu")
+        cutter = VideoCutter(min_play_duration=0.1, min_gap_seconds=0.1)
 
         results = [
-            GameStateResult(frame_idx=0, state=GameState.NO_PLAY, confidence=0.9),
-            GameStateResult(frame_idx=16, state=GameState.PLAY, confidence=0.95),
-            GameStateResult(frame_idx=32, state=GameState.NO_PLAY, confidence=0.88),
+            GameStateResult(start_frame=0, end_frame=29, state=GameState.NO_PLAY, confidence=0.9),
+            GameStateResult(start_frame=30, end_frame=89, state=GameState.PLAY, confidence=0.95),
+            GameStateResult(start_frame=90, end_frame=120, state=GameState.NO_PLAY, confidence=0.88),
         ]
 
-        segments = analyzer.get_segments(results, fps=30.0)
+        segments = cutter._get_segments_from_results(results, fps=30.0)
 
-        # Should have 3 separate segments
-        assert len(segments) == 3
-        assert segments[0].state == GameState.NO_PLAY
-        assert segments[1].state == GameState.PLAY
-        assert segments[2].state == GameState.NO_PLAY
+        # Should have 1 play segment (NO_PLAY segments are filtered out)
+        assert len(segments) == 1
+        assert segments[0].state == GameState.PLAY
+
+    def test_empty_results(self):
+        """Test handling of empty results."""
+        from rallycut.processing.cutter import VideoCutter
+
+        cutter = VideoCutter()
+        segments = cutter._get_segments_from_results([], fps=30.0)
+        assert segments == []
+
+    def test_single_play_result(self):
+        """Test handling of single play result."""
+        from rallycut.processing.cutter import VideoCutter
+
+        cutter = VideoCutter(min_play_duration=0.1)
+
+        results = [
+            GameStateResult(start_frame=0, end_frame=60, state=GameState.PLAY, confidence=0.9)
+        ]
+
+        segments = cutter._get_segments_from_results(results, fps=30.0)
+        assert len(segments) == 1
+        assert segments[0].state == GameState.PLAY
+
+    def test_gap_merging(self):
+        """Test that short NO_PLAY gaps are merged into PLAY segments."""
+        from rallycut.processing.cutter import VideoCutter
+
+        # min_gap_seconds=1.5 means gaps shorter than 45 frames (at 30fps) are merged
+        cutter = VideoCutter(min_play_duration=0.1, min_gap_seconds=1.5)
+
+        results = [
+            GameStateResult(start_frame=0, end_frame=59, state=GameState.PLAY, confidence=0.9),
+            # Short gap (30 frames = 1 second < 1.5 second threshold)
+            GameStateResult(start_frame=60, end_frame=89, state=GameState.NO_PLAY, confidence=0.8),
+            GameStateResult(start_frame=90, end_frame=149, state=GameState.PLAY, confidence=0.85),
+        ]
+
+        segments = cutter._get_segments_from_results(results, fps=30.0)
+
+        # Should be merged into single segment (gap was short)
+        assert len(segments) == 1
+
+    def test_long_gap_not_merged(self):
+        """Test that long NO_PLAY gaps are not merged."""
+        from rallycut.processing.cutter import VideoCutter
+
+        # min_gap_seconds=1.0 means gaps longer than 30 frames are not merged
+        # Use padding_seconds=0 to avoid padding merging segments together
+        cutter = VideoCutter(min_play_duration=0.1, min_gap_seconds=1.0, padding_seconds=0)
+
+        results = [
+            GameStateResult(start_frame=0, end_frame=59, state=GameState.PLAY, confidence=0.9),
+            # Long gap (90 frames = 3 seconds > 1 second threshold)
+            GameStateResult(start_frame=60, end_frame=149, state=GameState.NO_PLAY, confidence=0.8),
+            GameStateResult(start_frame=150, end_frame=209, state=GameState.PLAY, confidence=0.85),
+        ]
+
+        segments = cutter._get_segments_from_results(results, fps=30.0)
+
+        # Should be 2 separate segments (gap was too long)
+        assert len(segments) == 2
+
+    def test_min_duration_filter(self):
+        """Test min duration filtering."""
+        from rallycut.processing.cutter import VideoCutter
+
+        # 2 seconds = 60 frames min duration, no padding
+        cutter = VideoCutter(min_play_duration=2.0, padding_seconds=0, min_gap_seconds=5.0)
+
+        results = [
+            # Short segment (30 frames = 1 second) - should be filtered
+            GameStateResult(start_frame=0, end_frame=29, state=GameState.PLAY, confidence=0.9),
+            # Long gap to prevent merging
+            GameStateResult(start_frame=30, end_frame=299, state=GameState.NO_PLAY, confidence=0.8),
+            # Long segment (120 frames = 4 seconds) - should pass
+            GameStateResult(start_frame=300, end_frame=419, state=GameState.PLAY, confidence=0.85),
+        ]
+
+        segments = cutter._get_segments_from_results(results, fps=30.0)
+
+        # Only the long segment should remain
+        assert len(segments) == 1
+        assert segments[0].start_frame >= 300  # The longer segment
+
+
+class TestCutterSegmentStats:
+    """Tests for cut statistics."""
+
+    def test_cut_stats(self):
+        """Test cut statistics calculation."""
+        from rallycut.processing.cutter import VideoCutter
+
+        cutter = VideoCutter()
+
+        segments = [
+            TimeSegment(
+                start_frame=0, end_frame=300,
+                start_time=0.0, end_time=10.0,
+                state=GameState.PLAY
+            ),
+            TimeSegment(
+                start_frame=600, end_frame=900,
+                start_time=20.0, end_time=30.0,
+                state=GameState.PLAY
+            ),
+        ]
+
+        stats = cutter.get_cut_stats(original_duration=60.0, segments=segments)
+
+        assert stats["original_duration"] == 60.0
+        assert stats["kept_duration"] == 20.0  # 10 + 10 seconds
+        assert stats["removed_duration"] == 40.0
+        assert stats["segment_count"] == 2
