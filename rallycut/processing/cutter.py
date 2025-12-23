@@ -126,6 +126,9 @@ class VideoCutter:
         # This extends rallies through brief detection gaps
         segments = []
         i = 0
+        # Minimum duration for a segment to trigger gap-bridging (1.0 seconds)
+        # This prevents isolated false positive windows from causing over-extension
+        min_bridge_duration_frames = int(1.0 * fps)
         while i < len(raw_segments):
             seg = raw_segments[i]
 
@@ -143,11 +146,43 @@ class VideoCutter:
                         if next_seg.frame_count < min_no_play_frames:
                             # Check if there's another PLAY segment after
                             if j + 1 < len(raw_segments) and raw_segments[j + 1].state in (GameState.SERVICE, GameState.PLAY):
-                                # Merge through the gap
-                                merged_end = raw_segments[j + 1].end_frame
-                                j += 2
-                                continue
-                        # Long enough NO_PLAY - end the rally here
+                                after_gap_seg = raw_segments[j + 1]
+                                # Only bridge if the segment after the gap is substantial
+                                # This prevents isolated short false positives from causing over-extension
+                                if after_gap_seg.frame_count >= min_bridge_duration_frames:
+                                    # Merge through the gap
+                                    merged_end = after_gap_seg.end_frame
+                                    j += 2
+                                    continue
+                                else:
+                                    # Segment is too short, but look ahead to see if there's
+                                    # substantial PLAY (accumulated) within a short distance
+                                    # This handles alternating SERVICE/PLAY that collectively form a rally
+                                    # Key: only accumulate if gaps between play segments are SHORT (<1.5s)
+                                    accumulated_play_frames = after_gap_seg.frame_count
+                                    last_play_idx = j + 1
+                                    last_play_end = after_gap_seg.end_frame
+                                    max_internal_gap_frames = int(1.5 * fps)  # Max gap between accumulated segments
+                                    for lookahead in range(j + 2, min(j + 10, len(raw_segments))):
+                                        look_seg = raw_segments[lookahead]
+                                        if look_seg.state in (GameState.SERVICE, GameState.PLAY):
+                                            accumulated_play_frames += look_seg.frame_count
+                                            last_play_idx = lookahead
+                                            last_play_end = look_seg.end_frame
+                                        elif look_seg.state == GameState.NO_PLAY:
+                                            if look_seg.frame_count >= min_no_play_frames:
+                                                # Long NO_PLAY gap - stop looking
+                                                break
+                                            elif look_seg.frame_count >= max_internal_gap_frames:
+                                                # Internal gap too long - isolated false positives
+                                                # Don't accumulate across this gap
+                                                break
+                                    # If accumulated play is substantial, merge through
+                                    if accumulated_play_frames >= min_bridge_duration_frames:
+                                        merged_end = last_play_end
+                                        j = last_play_idx + 1
+                                        continue
+                        # Long enough NO_PLAY or no substantial segment found - end the rally here
                         break
                     elif next_seg.state in (GameState.SERVICE, GameState.PLAY):
                         # Continue merging play segments
