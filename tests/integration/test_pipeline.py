@@ -81,11 +81,11 @@ class TestPipelineIntegration:
     ):
         """Test statistics generation flow."""
         from rallycut.statistics.aggregator import StatisticsAggregator
-        from rallycut.analysis.game_state import GameStateAnalyzer
+        from rallycut.processing.cutter import VideoCutter
 
-        # Get segments from game state results
-        analyzer = GameStateAnalyzer(device="cpu")
-        segments = analyzer.get_segments(mock_game_state_results, mock_video_info.fps)
+        # Get segments from game state results using VideoCutter
+        cutter = VideoCutter(min_play_duration=0.1)
+        segments = cutter._get_segments_from_results(mock_game_state_results, mock_video_info.fps)
 
         # Aggregate statistics
         aggregator = StatisticsAggregator(mock_video_info)
