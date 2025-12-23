@@ -12,10 +12,14 @@ from rallycut.processing.exporter import FFmpegExporter
 class VideoCutter:
     """Cuts video to remove dead time segments."""
 
+    # Reference FPS for stride calibration (stride 32 is optimal at 30fps)
+    REFERENCE_FPS = 30.0
+
     def __init__(
         self,
         device: Optional[str] = None,
         padding_seconds: Optional[float] = None,
+        padding_end_seconds: Optional[float] = None,
         min_play_duration: Optional[float] = None,
         stride: Optional[int] = None,
         use_quick_mode: bool = False,
@@ -23,20 +27,39 @@ class VideoCutter:
         limit_seconds: Optional[float] = None,
         use_proxy: Optional[bool] = None,
         min_gap_seconds: Optional[float] = None,
+        auto_stride: bool = True,
     ):
         config = get_config()
         self.device = device or config.device
         self.padding_seconds = padding_seconds if padding_seconds is not None else config.segment.padding_seconds
+        # End padding defaults to start padding + 0.5s for smoother endings
+        self.padding_end_seconds = padding_end_seconds if padding_end_seconds is not None else (self.padding_seconds + 0.5)
         self.min_play_duration = min_play_duration if min_play_duration is not None else config.segment.min_play_duration
-        self.stride = stride if stride is not None else config.game_state.stride
+        self.base_stride = stride if stride is not None else config.game_state.stride
         self.use_quick_mode = use_quick_mode
         self.use_two_pass = use_two_pass
         self.limit_seconds = limit_seconds
         self.use_proxy = use_proxy if use_proxy is not None else config.proxy.enabled
-        self.min_gap_seconds = min_gap_seconds if min_gap_seconds is not None else config.segment.min_gap_seconds
+        self.min_gap_seconds = min_gap_seconds if min_gap_seconds is not None else 3.0
+        self.auto_stride = auto_stride
 
         self._analyzer = None
         self.exporter = FFmpegExporter()
+
+    def _normalize_stride(self, fps: float) -> int:
+        """
+        Normalize stride based on video FPS for consistent temporal sampling.
+
+        Stride 32 at 30fps = sample every ~1.07 seconds.
+        For 60fps video, use stride 64 to maintain same temporal rate.
+        """
+        if not self.auto_stride:
+            return self.base_stride
+
+        # Scale stride proportionally to FPS
+        normalized = int(round(self.base_stride * (fps / self.REFERENCE_FPS)))
+        # Ensure minimum stride of 1
+        return max(1, normalized)
 
     def _get_analyzer(self):
         """Lazy load the appropriate analyzer."""
@@ -148,7 +171,8 @@ class VideoCutter:
                 i += 1
 
         # Filter for play segments
-        padding_frames = int(self.padding_seconds * fps)
+        padding_start_frames = int(self.padding_seconds * fps)
+        padding_end_frames = int(self.padding_end_seconds * fps)
         min_frames = int(self.min_play_duration * fps)
 
         play_segments = []
@@ -158,8 +182,8 @@ class VideoCutter:
             if segment.frame_count < min_frames:
                 continue
 
-            padded_start = max(0, segment.start_frame - padding_frames)
-            padded_end = segment.end_frame + padding_frames
+            padded_start = max(0, segment.start_frame - padding_start_frames)
+            padded_end = segment.end_frame + padding_end_frames
 
             play_segments.append(
                 TimeSegment(
@@ -213,9 +237,11 @@ class VideoCutter:
         # Run analysis (proxy handling is now done by TwoPassAnalyzer)
         with Video(input_path) as video:
             fps = video.info.fps
+            # Normalize stride based on video FPS
+            effective_stride = self._normalize_stride(fps)
             results = analyzer.analyze_video(
                 video,
-                stride=self.stride,
+                stride=effective_stride,
                 progress_callback=progress_callback,
                 limit_seconds=self.limit_seconds,
             )
