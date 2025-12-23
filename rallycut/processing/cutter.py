@@ -17,23 +17,23 @@ class VideoCutter:
         device: Optional[str] = None,
         padding_seconds: Optional[float] = None,
         min_play_duration: Optional[float] = None,
-        stride: int = 16,
+        stride: Optional[int] = None,
         use_quick_mode: bool = False,
         use_two_pass: bool = False,
         limit_seconds: Optional[float] = None,
-        use_proxy: bool = True,  # Use proxy for ML analysis (handled by TwoPassAnalyzer)
-        min_gap_seconds: float = 1.5,
+        use_proxy: Optional[bool] = None,
+        min_gap_seconds: Optional[float] = None,
     ):
         config = get_config()
         self.device = device or config.device
-        self.padding_seconds = padding_seconds or config.padding_seconds
-        self.min_play_duration = min_play_duration or config.min_play_duration
-        self.stride = stride
+        self.padding_seconds = padding_seconds if padding_seconds is not None else config.segment.padding_seconds
+        self.min_play_duration = min_play_duration if min_play_duration is not None else config.segment.min_play_duration
+        self.stride = stride if stride is not None else config.game_state.stride
         self.use_quick_mode = use_quick_mode
         self.use_two_pass = use_two_pass
         self.limit_seconds = limit_seconds
-        self.use_proxy = use_proxy
-        self.min_gap_seconds = min_gap_seconds  # Min NO_PLAY gap before ending rally
+        self.use_proxy = use_proxy if use_proxy is not None else config.proxy.enabled
+        self.min_gap_seconds = min_gap_seconds if min_gap_seconds is not None else config.segment.min_gap_seconds
 
         self._analyzer = None
         self.exporter = FFmpegExporter()

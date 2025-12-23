@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from rallycut.core.config import get_config
 from rallycut.core.models import GameState, GameStateResult
 from rallycut.core.video import Video
 
@@ -43,19 +44,20 @@ class TwoPassAnalyzer:
 
     def __init__(
         self,
-        device: str = "cpu",
-        motion_stride: int = 32,  # Larger stride for fast motion scan
-        ml_stride: int = 8,  # Finer stride for ML analysis (used at boundaries)
-        motion_padding_seconds: float = 3.0,  # Padding around motion regions
-        boundary_seconds: float = 2.0,  # Seconds at region edges for high-precision analysis
-        use_proxy: bool = True,  # Use proxy video for ML analysis
+        device: Optional[str] = None,
+        motion_stride: Optional[int] = None,
+        ml_stride: Optional[int] = None,
+        motion_padding_seconds: Optional[float] = None,
+        boundary_seconds: Optional[float] = None,
+        use_proxy: Optional[bool] = None,
     ):
-        self.device = device
-        self.motion_stride = motion_stride
-        self.ml_stride = ml_stride
-        self.motion_padding_seconds = motion_padding_seconds
-        self.boundary_seconds = boundary_seconds
-        self.use_proxy = use_proxy
+        config = get_config()
+        self.device = device or config.device
+        self.motion_stride = motion_stride or config.two_pass.motion_stride
+        self.ml_stride = ml_stride or config.two_pass.ml_stride
+        self.motion_padding_seconds = motion_padding_seconds or config.two_pass.motion_padding_seconds
+        self.boundary_seconds = boundary_seconds or config.two_pass.boundary_seconds
+        self.use_proxy = use_proxy if use_proxy is not None else config.proxy.enabled
 
         self._motion_detector = None
         self._ml_analyzer = None
@@ -66,9 +68,10 @@ class TwoPassAnalyzer:
         if self._motion_detector is None:
             from rallycut.analysis.motion_detector import MotionDetector
 
+            config = get_config()
             self._motion_detector = MotionDetector(
-                high_motion_threshold=0.06,  # Slightly lower to catch more
-                low_motion_threshold=0.03,
+                high_motion_threshold=config.two_pass.motion_high_threshold,
+                low_motion_threshold=config.two_pass.motion_low_threshold,
             )
         return self._motion_detector
 
@@ -83,14 +86,13 @@ class TwoPassAnalyzer:
     def _get_proxy_generator(self):
         """Lazy load proxy generator."""
         if self._proxy_generator is None:
-            from rallycut.core.config import get_config
             from rallycut.core.proxy import ProxyConfig, ProxyGenerator
 
             config = get_config()
             self._proxy_generator = ProxyGenerator(
                 config=ProxyConfig(
-                    height=config.proxy_height,
-                    fps=config.proxy_fps,
+                    height=config.proxy.height,
+                    fps=config.proxy.fps,
                 ),
                 cache_dir=config.proxy_cache_dir,
             )
@@ -333,9 +335,11 @@ class TwoPassAnalyzer:
             List of GameStateResult covering entire video
         """
         ml_analyzer = self._get_ml_analyzer()
+        config = get_config()
         all_results = []
 
         boundary_frames = int(self.boundary_seconds * fps)
+        window_size = config.game_state.window_size
         min_region_for_zones = boundary_frames * 2 + 32  # Need space for middle zone
 
         # Calculate total windows (approximate for progress)
@@ -343,10 +347,10 @@ class TwoPassAnalyzer:
         for region in regions:
             if region.duration_frames < min_region_for_zones:
                 # All boundary: stride 8
-                total_windows += max(0, (region.duration_frames - 16) // stride + 1)
+                total_windows += max(0, (region.duration_frames - window_size) // stride + 1)
             else:
                 # Boundaries + middle
-                boundary_windows = 2 * max(0, (boundary_frames - 16) // stride + 1)
+                boundary_windows = 2 * max(0, (boundary_frames - window_size) // stride + 1)
                 middle_frames = region.duration_frames - 2 * boundary_frames
                 middle_windows = max(0, (middle_frames - 31) // 16 + 1)  # stride 16, needs 31 frames
                 total_windows += boundary_windows + middle_windows
@@ -382,7 +386,7 @@ class TwoPassAnalyzer:
 
             # Analyze this region with ML
             region_frames = end - start
-            if region_frames < 16:
+            if region_frames < window_size:
                 # Too short for ML window - assume PLAY since motion detected
                 all_results.append(
                     GameStateResult(
@@ -400,7 +404,7 @@ class TwoPassAnalyzer:
                     stride=stride, frame_sample=1, batch_size=batch_size
                 )
                 all_results.extend(region_results)
-                region_windows = max(0, (region_frames - 16) // stride + 1)
+                region_windows = max(0, (region_frames - window_size) // stride + 1)
             else:
                 # Zone-based analysis: boundary + middle + boundary
                 # Start boundary: high precision
@@ -427,7 +431,7 @@ class TwoPassAnalyzer:
                 all_results.extend(end_results)
 
                 # Calculate windows for progress
-                boundary_windows = 2 * max(0, (boundary_frames - 16) // stride + 1)
+                boundary_windows = 2 * max(0, (boundary_frames - window_size) // stride + 1)
                 middle_frames = end_boundary_start - start_boundary_end
                 middle_windows = max(0, (middle_frames - 31) // 16 + 1)
                 region_windows = boundary_windows + middle_windows
@@ -485,11 +489,12 @@ class TwoPassAnalyzer:
         """
         import cv2
 
+        config = get_config()
         classifier = ml_analyzer._get_classifier()
         results = []
 
-        window_size = 16
-        target_size = (224, 224)  # ML model input size
+        window_size = config.game_state.window_size
+        target_size = config.game_state.analysis_size
 
         # Calculate frame span needed for one window with sampling
         # e.g., frame_sample=2: need frames 0,2,4,...,30 = 31 frame span
