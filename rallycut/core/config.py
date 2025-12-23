@@ -68,9 +68,9 @@ class TwoPassConfig(BaseModel):
     ml_stride: int = 8
     motion_padding_seconds: float = 3.0
     boundary_seconds: float = 2.0
-    # Override motion thresholds for higher sensitivity in pass 1
-    motion_high_threshold: float = 0.06
-    motion_low_threshold: float = 0.03
+    # Motion thresholds optimized via parameter sweep for accurate rally detection
+    motion_high_threshold: float = 0.04
+    motion_low_threshold: float = 0.02
 
 
 class BallTrackingConfig(BaseModel):
