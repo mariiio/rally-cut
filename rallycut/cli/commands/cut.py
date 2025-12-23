@@ -111,7 +111,7 @@ def cut(
     proxy: bool = typer.Option(
         True,
         "--proxy/--no-proxy",
-        help="Use low-res proxy for faster ML analysis (default: on)",
+        help="Use 480p@15fps proxy for 2-4x faster ML analysis (default: on)",
     ),
     two_pass: bool = typer.Option(
         True,
@@ -188,7 +188,7 @@ def cut(
         use_quick_mode=quick,
         use_two_pass=two_pass and not quick,  # Two-pass only when not quick mode
         limit_seconds=limit,
-        proxy_height=360 if proxy else None,
+        use_proxy=proxy,  # Proxy handled by TwoPassAnalyzer
         min_gap_seconds=min_gap,
     )
 
