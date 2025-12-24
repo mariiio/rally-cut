@@ -53,6 +53,7 @@ class TwoPassAnalyzer:
         motion_padding_seconds: Optional[float] = None,
         boundary_seconds: Optional[float] = None,
         use_proxy: Optional[bool] = None,
+        skip_motion_pass: Optional[bool] = None,
     ):
         config = get_config()
         self.device = device or config.device
@@ -61,6 +62,7 @@ class TwoPassAnalyzer:
         self.motion_padding_seconds = motion_padding_seconds or config.two_pass.motion_padding_seconds
         self.boundary_seconds = boundary_seconds or config.two_pass.boundary_seconds
         self.use_proxy = use_proxy if use_proxy is not None else config.proxy.enabled
+        self.skip_motion_pass = skip_motion_pass if skip_motion_pass is not None else config.two_pass.skip_motion_pass
 
         self._motion_detector = None
         self._ml_analyzer = None
@@ -131,53 +133,71 @@ class TwoPassAnalyzer:
         if limit_seconds is not None:
             total_frames = min(total_frames, int(limit_seconds * fps))
 
-        if progress_callback:
-            progress_callback(0.0, f"Pass 1/2: Motion scan ({total_frames} frames)")
-
-        # Pass 1: Quick motion scan (10% of progress)
-        motion_start = time.time()
-
-        def motion_progress(pct: float, msg: str):
+        # Check if we should skip motion detection pass
+        if self.skip_motion_pass:
+            # Skip motion detection - treat entire video as one region
             if progress_callback:
-                progress_callback(pct * 0.1, f"Pass 1/2: {msg}")
+                progress_callback(0.0, f"ML analysis ({total_frames} frames)")
 
-        motion_regions = self._detect_motion_regions(
-            video, fps, total_frames, motion_progress
-        )
-
-        motion_time = time.time() - motion_start
-
-        # Record motion detection timing
-        from rallycut.core.profiler import TimingEntry
-        profiler._entries.append(TimingEntry(
-            component="motion",
-            operation="detect_regions",
-            duration_seconds=motion_time,
-            metadata={"regions": len(motion_regions) if motion_regions else 0},
-        ))
-
-        if not motion_regions:
-            # No motion detected - return all as NO_PLAY
-            if progress_callback:
-                progress_callback(1.0, "No motion detected")
-            return [
-                GameStateResult(
-                    state=GameState.NO_PLAY,
-                    confidence=0.9,
+            motion_regions = [
+                MotionRegion(
                     start_frame=0,
-                    end_frame=total_frames - 1,
+                    end_frame=total_frames,
+                    avg_motion=0.5,  # Neutral confidence
                 )
             ]
+            motion_time = 0.0
+        else:
+            if progress_callback:
+                progress_callback(0.0, f"Pass 1/2: Motion scan ({total_frames} frames)")
+
+            # Pass 1: Quick motion scan (10% of progress)
+            motion_start = time.time()
+
+            def motion_progress(pct: float, msg: str):
+                if progress_callback:
+                    progress_callback(pct * 0.1, f"Pass 1/2: {msg}")
+
+            motion_regions = self._detect_motion_regions(
+                video, fps, total_frames, motion_progress
+            )
+
+            motion_time = time.time() - motion_start
+
+            # Record motion detection timing
+            from rallycut.core.profiler import TimingEntry
+            profiler._entries.append(TimingEntry(
+                component="motion",
+                operation="detect_regions",
+                duration_seconds=motion_time,
+                metadata={"regions": len(motion_regions) if motion_regions else 0},
+            ))
+
+            if not motion_regions:
+                # No motion detected - return all as NO_PLAY
+                if progress_callback:
+                    progress_callback(1.0, "No motion detected")
+                return [
+                    GameStateResult(
+                        state=GameState.NO_PLAY,
+                        confidence=0.9,
+                        start_frame=0,
+                        end_frame=total_frames - 1,
+                    )
+                ]
 
         # Calculate how much of video has motion
         motion_frames = sum(r.duration_frames for r in motion_regions)
         motion_ratio = motion_frames / total_frames
 
         if progress_callback:
-            progress_callback(
-                0.1,
-                f"Pass 2/2: ML on {len(motion_regions)} regions ({motion_ratio:.0%} of video, motion scan: {motion_time:.1f}s)"
-            )
+            if self.skip_motion_pass:
+                progress_callback(0.0, f"ML analysis on full video ({total_frames} frames)")
+            else:
+                progress_callback(
+                    0.1,
+                    f"Pass 2/2: ML on {len(motion_regions)} regions ({motion_ratio:.0%} of video, motion scan: {motion_time:.1f}s)"
+                )
 
         # Pass 2: ML analysis on motion regions only (90% of progress)
         # Optionally use proxy video for faster decoding
@@ -250,7 +270,10 @@ class TwoPassAnalyzer:
             )
 
         if progress_callback:
-            progress_callback(1.0, f"Done (motion: {motion_time:.1f}s, ML: {ml_time:.1f}s)")
+            if self.skip_motion_pass:
+                progress_callback(1.0, f"Done (ML: {ml_time:.1f}s)")
+            else:
+                progress_callback(1.0, f"Done (motion: {motion_time:.1f}s, ML: {ml_time:.1f}s)")
 
         return results
 
