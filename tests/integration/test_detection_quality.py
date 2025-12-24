@@ -12,30 +12,40 @@ from rallycut.processing.cutter import VideoCutter
 
 
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
+GROUND_TRUTH_PATH = FIXTURES_DIR / "ground_truth.json"
 
-# Match 1 fixtures
+# Video file paths
 VIDEO_PATH = FIXTURES_DIR / "match_first_2min.mp4"
-EXPECTED_RALLIES_PATH = FIXTURES_DIR / "expected_rallies.json"
-
-# Match 2 fixtures
 VIDEO_PATH_MATCH2 = FIXTURES_DIR / "match-2-first-2min.MOV"
-EXPECTED_RALLIES_PATH_MATCH2 = FIXTURES_DIR / "expected_rallies_match2.json"
 
 # Tolerance for rally boundary matching (seconds)
 TOLERANCE_SECONDS = 3.0
 
 
-def parse_time_range(time_range: str) -> tuple[float, float]:
-    """Parse 'MM:SS-MM:SS' format into (start_seconds, end_seconds)."""
-    start_str, end_str = time_range.split("-")
+def load_ground_truth() -> dict:
+    """Load the unified ground truth file."""
+    with open(GROUND_TRUTH_PATH) as f:
+        return json.load(f)
 
-    def to_seconds(time_str: str) -> float:
-        parts = time_str.split(":")
-        minutes = int(parts[0])
-        seconds = int(parts[1])
-        return minutes * 60 + seconds
 
-    return to_seconds(start_str), to_seconds(end_str)
+def parse_time(time_str: str) -> float:
+    """Parse 'M:SS' or 'M:SS.ms' format into seconds."""
+    parts = time_str.split(":")
+    minutes = int(parts[0])
+    seconds = float(parts[1])
+    return minutes * 60 + seconds
+
+
+def get_rally_times(video_name: str) -> list[tuple[float, float]]:
+    """Get rally (start, end) times for a video from ground truth."""
+    ground_truth = load_ground_truth()
+    video_data = ground_truth.get(video_name, {})
+    rallies = video_data.get("rallies", [])
+
+    return [
+        (parse_time(r["start"]), parse_time(r["end"]))
+        for r in rallies
+    ]
 
 
 def rally_matches(
@@ -86,10 +96,8 @@ class TestDetectionQuality:
 
     @pytest.fixture
     def expected_rallies(self) -> list[tuple[float, float]]:
-        """Load expected rallies from fixture file."""
-        with open(EXPECTED_RALLIES_PATH) as f:
-            raw_rallies = json.load(f)
-        return [parse_time_range(r) for r in raw_rallies]
+        """Load expected rallies from ground truth file."""
+        return get_rally_times("match_first_2min.mp4")
 
     @pytest.fixture
     def detected_segments(self) -> list[tuple[float, float]]:
@@ -212,10 +220,8 @@ class TestDetectionQualityMatch2:
 
     @pytest.fixture
     def expected_rallies(self) -> list[tuple[float, float]]:
-        """Load expected rallies from fixture file."""
-        with open(EXPECTED_RALLIES_PATH_MATCH2) as f:
-            raw_rallies = json.load(f)
-        return [parse_time_range(r) for r in raw_rallies]
+        """Load expected rallies from ground truth file."""
+        return get_rally_times("match-2-first-2min.MOV")
 
     @pytest.fixture
     def detected_segments(self) -> list[tuple[float, float]]:
