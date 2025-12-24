@@ -119,6 +119,9 @@ class TwoPassConfig(BaseModel):
     enable_temporal_smoothing: bool = True
     # Window size for temporal smoothing (must be odd)
     temporal_smoothing_window: int = 5
+    # Skip first pass (motion detection) - go directly to ML analysis
+    # Motion detection provides minimal filtering benefit for beach volleyball
+    skip_motion_pass: bool = True
 
 
 class BallTrackingConfig(BaseModel):
