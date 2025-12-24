@@ -9,22 +9,13 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.table import Table
 
+from rallycut.cli.utils import format_time
 from rallycut.core.config import get_config
 from rallycut.core.video import Video
 from rallycut.analysis.action_detector import ActionAnalyzer
 from rallycut.statistics.aggregator import StatisticsAggregator
 
 console = Console()
-
-
-def format_time(seconds: float) -> str:
-    """Format seconds as MM:SS or HH:MM:SS."""
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    secs = seconds % 60
-    if hours > 0:
-        return f"{hours}:{minutes:02d}:{secs:05.2f}"
-    return f"{minutes}:{secs:05.2f}"
 
 
 def stats(
