@@ -15,6 +15,7 @@ from typing import Callable, Optional
 
 from rallycut.core.config import get_config
 from rallycut.core.models import GameState, GameStateResult
+from rallycut.core.profiler import get_profiler
 from rallycut.core.video import Video
 
 
@@ -121,6 +122,7 @@ class TwoPassAnalyzer:
         """
         import time
 
+        profiler = get_profiler()
         fps = video.info.fps
         total_frames = video.info.frame_count
 
@@ -142,6 +144,15 @@ class TwoPassAnalyzer:
         )
 
         motion_time = time.time() - motion_start
+
+        # Record motion detection timing
+        from rallycut.core.profiler import TimingEntry
+        profiler._entries.append(TimingEntry(
+            component="motion",
+            operation="detect_regions",
+            duration_seconds=motion_time,
+            metadata={"regions": len(motion_regions) if motion_regions else 0},
+        ))
 
         if not motion_regions:
             # No motion detected - return all as NO_PLAY
@@ -490,6 +501,7 @@ class TwoPassAnalyzer:
         import cv2
 
         config = get_config()
+        profiler = get_profiler()
         classifier = ml_analyzer._get_classifier()
         results = []
 
@@ -507,16 +519,27 @@ class TwoPassAnalyzer:
 
         # Check first frame to see if resize is needed
         needs_resize = None
+        decode_time = 0.0
+        resize_time = 0.0
+        frames_decoded = 0
+        import time as _time
 
         for frame_idx, frame in video.iter_frames(start_frame=start_frame, end_frame=end_frame):
+            t0 = _time.perf_counter()
+            frames_decoded += 1
+
             # Check on first frame if resize is needed (proxy might already be 224x224)
             if needs_resize is None:
                 h, w = frame.shape[:2]
                 needs_resize = (w != target_size[0] or h != target_size[1])
 
+            decode_time += _time.perf_counter() - t0
+
             # Only resize if needed (skip for optimized proxy)
             if needs_resize:
+                t1 = _time.perf_counter()
                 frame = cv2.resize(frame, target_size, interpolation=cv2.INTER_AREA)
+                resize_time += _time.perf_counter() - t1
 
             frame_buffer.append(frame)
 
@@ -597,5 +620,21 @@ class TwoPassAnalyzer:
                         )
                     )
             next_window_start += stride
+
+        # Record accumulated timing from frame processing
+        from rallycut.core.profiler import TimingEntry
+        profiler._entries.append(TimingEntry(
+            component="decode",
+            operation="read_frames",
+            duration_seconds=decode_time,
+            metadata={"frames": frames_decoded},
+        ))
+        if resize_time > 0:
+            profiler._entries.append(TimingEntry(
+                component="decode",
+                operation="resize",
+                duration_seconds=resize_time,
+                metadata={"frames": frames_decoded},
+            ))
 
         return results
