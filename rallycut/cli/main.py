@@ -7,6 +7,7 @@ from rallycut.cli.commands.cut import cut as cut_command
 from rallycut.cli.commands.stats import stats as stats_command
 from rallycut.cli.commands.overlay import overlay as overlay_command
 from rallycut.cli.commands.highlights import highlights as highlights_command
+from rallycut.cli.commands.profile import profile as profile_command
 
 app = typer.Typer(
     name="rallycut",
@@ -21,6 +22,7 @@ app.command(name="cut")(cut_command)
 app.command(name="stats")(stats_command)
 app.command(name="overlay")(overlay_command)
 app.command(name="highlights")(highlights_command)
+app.command(name="profile")(profile_command)
 
 
 @app.callback()

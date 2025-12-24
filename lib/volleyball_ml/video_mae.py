@@ -13,6 +13,7 @@ import numpy as np
 
 from rallycut.core.config import get_config
 from rallycut.core.models import GameState, GameStateResult
+from rallycut.core.profiler import get_profiler
 
 
 class GameStateClassifier:
@@ -59,9 +60,17 @@ class GameStateClassifier:
 
         self._processor = VideoMAEImageProcessor.from_pretrained(model_source)
 
-        # Use half precision for CUDA only (MPS has precision issues with some ops)
-        # MPS half-precision can cause Input type (float) and bias type (c10::Half) mismatch
-        use_half = self.device == "cuda"
+        # Use half precision for CUDA with compute capability >= 7.0 (Volta+)
+        # - MPS has precision issues (Input type mismatch errors)
+        # - Older CUDA GPUs (pre-Volta) don't have efficient FP16 Tensor Cores
+        use_half = False
+        if self.device == "cuda":
+            try:
+                cc = torch.cuda.get_device_capability()
+                # Compute capability 7.0+ has Tensor Cores for efficient FP16
+                use_half = cc[0] >= 7
+            except Exception:
+                use_half = False
         dtype = torch.float16 if use_half else torch.float32
 
         if use_local:
@@ -186,32 +195,39 @@ class GameStateClassifier:
         if not batch_frames:
             return []
 
+        profiler = get_profiler()
+        batch_size = len(batch_frames)
+
         # Validate and preprocess all segments
-        batch_processed = []
-        for frames in batch_frames:
-            if len(frames) != self.FRAME_WINDOW:
-                raise ValueError(
-                    f"Expected {self.FRAME_WINDOW} frames per segment, got {len(frames)}"
-                )
-            batch_processed.append(self.preprocess_frames(frames))
+        with profiler.time("videomae", "preprocess", batch_size=batch_size):
+            batch_processed = []
+            for frames in batch_frames:
+                if len(frames) != self.FRAME_WINDOW:
+                    raise ValueError(
+                        f"Expected {self.FRAME_WINDOW} frames per segment, got {len(frames)}"
+                    )
+                batch_processed.append(self.preprocess_frames(frames))
 
         # Process all segments through the processor
         # VideoMAE processor expects list of video frames
-        inputs = self._processor(
-            [list(frames) for frames in batch_processed],
-            return_tensors="pt",
-        )
+        with profiler.time("videomae", "processor", batch_size=batch_size):
+            inputs = self._processor(
+                [list(frames) for frames in batch_processed],
+                return_tensors="pt",
+            )
 
         # Move to device
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        with profiler.time("videomae", "to_device", batch_size=batch_size, device=self.device):
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         # Batch inference
-        ctx = torch.inference_mode() if getattr(self, '_use_inference_mode', False) else torch.no_grad()
-        with ctx:
-            outputs = self._model(**inputs)
-            probs = torch.softmax(outputs.logits, dim=-1)
-            predicted_classes = probs.argmax(-1).tolist()
-            confidences = probs.max(-1).values.tolist()
+        with profiler.time("videomae", "inference", batch_size=batch_size, device=self.device):
+            ctx = torch.inference_mode() if getattr(self, '_use_inference_mode', False) else torch.no_grad()
+            with ctx:
+                outputs = self._model(**inputs)
+                probs = torch.softmax(outputs.logits, dim=-1)
+                predicted_classes = probs.argmax(-1).tolist()
+                confidences = probs.max(-1).values.tolist()
 
         # Map to GameState
         results = []
