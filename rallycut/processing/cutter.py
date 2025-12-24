@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Callable, Optional
 
-from rallycut.core.config import get_config
+from rallycut.core.config import get_config, get_recommended_batch_size
 from rallycut.core.models import TimeSegment
 from rallycut.core.video import Video
 from rallycut.processing.exporter import FFmpegExporter
@@ -274,11 +274,15 @@ class VideoCutter:
             fps = video.info.fps
             # Normalize stride based on video FPS
             effective_stride = self._normalize_stride(fps)
+            # Auto-scale batch size for GPU
+            batch_size = get_recommended_batch_size(self.device)
+
             results = analyzer.analyze_video(
                 video,
                 stride=effective_stride,
                 progress_callback=progress_callback,
                 limit_seconds=self.limit_seconds,
+                batch_size=batch_size,
             )
 
         # Convert to merged segments

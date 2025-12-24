@@ -22,6 +22,44 @@ def _detect_device() -> str:
     return "cpu"
 
 
+def get_recommended_batch_size(device: str = "auto") -> int:
+    """Get recommended batch size based on device capabilities.
+
+    For CUDA devices, scales batch size based on available VRAM:
+    - 8GB+ VRAM: batch_size=32
+    - 12GB+ VRAM: batch_size=48
+    - 16GB+ VRAM: batch_size=64
+
+    For MPS/CPU, returns conservative default of 16.
+    """
+    if device == "auto":
+        device = _detect_device()
+
+    if device != "cuda":
+        return 16  # Conservative default for MPS/CPU
+
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return 16
+
+        vram_bytes = torch.cuda.get_device_properties(0).total_memory
+        vram_gb = vram_bytes / (1024**3)
+
+        # Scale batch size based on VRAM
+        # VideoMAE uses ~0.5GB per batch of 16 at FP16
+        if vram_gb >= 16:
+            return 64
+        elif vram_gb >= 12:
+            return 48
+        elif vram_gb >= 8:
+            return 32
+        else:
+            return 16
+    except Exception:
+        return 16
+
+
 def _find_local_weights(relative_path: str) -> Optional[Path]:
     """Find local weights relative to project root."""
     # Try relative to cwd
