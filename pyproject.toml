@@ -47,6 +47,9 @@ dependencies = [
     "tqdm>=4.65.0",
     "platformdirs>=4.0.0",
     "gdown>=5.2.0",
+    "onnx>=1.20.0",
+    "onnxruntime>=1.23.2",
+    "onnxscript>=0.5.7",
 ]
 
 [project.optional-dependencies]
@@ -56,9 +59,20 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0.0",
 ]
+onnx = [
+    # ONNX Runtime for faster inference (cross-platform)
+    "onnx>=1.14.0",
+    "onnxruntime>=1.16.0",
+]
 gpu = [
     # GPU-specific optimizations
     "nvidia-ml-py>=12.0.0",
+    "onnxruntime-gpu>=1.16.0",
+    "av>=12.0.0",  # PyAV for NVDEC hardware decoding
+]
+hwaccel = [
+    # Hardware-accelerated video decoding (cross-platform)
+    "av>=12.0.0",  # PyAV for NVDEC (CUDA) / VideoToolbox (macOS)
 ]
 openvino = [
     # Intel CPU optimization
@@ -104,5 +118,7 @@ addopts = "-v --tb=short"
 
 [dependency-groups]
 dev = [
+    "mypy>=1.19.1",
     "pytest>=9.0.2",
+    "ruff>=0.14.10",
 ]
