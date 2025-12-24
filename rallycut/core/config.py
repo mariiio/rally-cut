@@ -189,9 +189,6 @@ class RallyCutConfig(BaseSettings):
     )
 
     # YOLO settings (default to local weights if available)
-    action_detector_path: Optional[Path] = Field(
-        default_factory=lambda: _find_local_weights("weights/yolov8/action_detector/best.pt")
-    )
     ball_detector_path: Optional[Path] = Field(
         default_factory=lambda: _find_local_weights("weights/yolov8/ball_detector/best.pt")
     )
