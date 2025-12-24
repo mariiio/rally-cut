@@ -109,6 +109,16 @@ class TwoPassConfig(BaseModel):
     # Motion thresholds optimized via parameter sweep for accurate rally detection
     motion_high_threshold: float = 0.04
     motion_low_threshold: float = 0.02
+    # Confidence-based ML skipping: skip ML when motion confidence is very clear
+    # High confidence PLAY: skip ML if motion_confidence > skip_ml_high_threshold
+    skip_ml_high_threshold: float = 0.90
+    # High confidence NO_PLAY: handled by motion_low_threshold (regions below it aren't included)
+    # Enable/disable confidence-based skipping
+    enable_confidence_skip: bool = True
+    # Temporal smoothing: fix isolated classification errors with median filter
+    enable_temporal_smoothing: bool = True
+    # Window size for temporal smoothing (must be odd)
+    temporal_smoothing_window: int = 5
 
 
 class BallTrackingConfig(BaseModel):
@@ -144,6 +154,22 @@ class OverlayConfig(BaseModel):
     trail_line_thickness: int = 2
 
 
+class HWAccelConfig(BaseModel):
+    """Hardware acceleration configuration."""
+
+    enabled: bool = False  # Disabled by default, enable with --hwaccel flag
+    # Automatically detect best backend based on device
+    auto_detect: bool = True
+
+
+class AsyncPipelineConfig(BaseModel):
+    """Async decode + inference pipeline configuration."""
+
+    enabled: bool = False  # Disabled by default, enable with --async flag
+    # Queue size for frame batches (higher = more memory, better throughput)
+    queue_size: int = 4
+
+
 class ProxyConfig(BaseModel):
     """Proxy video generation configuration."""
 
@@ -177,6 +203,8 @@ class RallyCutConfig(BaseSettings):
     overlay: OverlayConfig = Field(default_factory=OverlayConfig)
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
     segment: SegmentConfig = Field(default_factory=SegmentConfig)
+    hwaccel: HWAccelConfig = Field(default_factory=HWAccelConfig)
+    async_pipeline: AsyncPipelineConfig = Field(default_factory=AsyncPipelineConfig)
 
     # Model paths
     model_cache_dir: Path = Field(

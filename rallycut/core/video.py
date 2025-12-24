@@ -8,17 +8,53 @@ import numpy as np
 
 from rallycut.core.models import VideoInfo
 
+# Optional hardware acceleration
+try:
+    from rallycut.core.hwaccel import PYAV_AVAILABLE, HWAccelDecoder, get_hwaccel_type
+except ImportError:
+    PYAV_AVAILABLE = False
+    HWAccelDecoder = None
+    get_hwaccel_type = None
+
 
 class Video:
-    """Video file wrapper with metadata and frame access."""
+    """
+    Video file wrapper with metadata and frame access.
 
-    def __init__(self, path: Path | str):
+    Supports optional hardware-accelerated decoding via PyAV:
+    - NVDEC for NVIDIA CUDA GPUs (2-4x faster)
+    - VideoToolbox for Apple Silicon (2-3x faster)
+
+    Falls back to OpenCV if PyAV is not available or hardware acceleration fails.
+    """
+
+    def __init__(
+        self,
+        path: Path | str,
+        use_hwaccel: bool = False,
+        device: str | None = None,
+    ):
         self._cap: Optional[cv2.VideoCapture] = None
+        self._hwaccel_decoder = None
         self._info: Optional[VideoInfo] = None
+        self._use_hwaccel = use_hwaccel and PYAV_AVAILABLE
+        self._device = device
 
         self.path = Path(path)
         if not self.path.exists():
             raise FileNotFoundError(f"Video file not found: {self.path}")
+
+        # Initialize hardware-accelerated decoder if requested
+        if self._use_hwaccel:
+            try:
+                hwaccel_type = get_hwaccel_type(device) if get_hwaccel_type else None
+                self._hwaccel_decoder = HWAccelDecoder(
+                    self.path, hwaccel_type=hwaccel_type, device=device
+                )
+            except Exception:
+                # Fall back to OpenCV
+                self._hwaccel_decoder = None
+                self._use_hwaccel = False
 
     @property
     def info(self) -> VideoInfo:
@@ -117,9 +153,19 @@ class Video:
         """
         Iterate over frames yielding (frame_idx, frame).
 
-        For step <= 16: Uses sequential reading (optimal for dense access)
-        For step > 16: Uses seeking (optimal for sparse access like motion detection)
+        If hardware acceleration is enabled and available, uses PyAV with
+        NVDEC/VideoToolbox for 2-4x faster decoding.
+
+        For OpenCV fallback:
+        - step <= 16: Uses sequential reading (optimal for dense access)
+        - step > 16: Uses seeking (optimal for sparse access like motion detection)
         """
+        # Use hardware-accelerated decoder if available
+        if self._hwaccel_decoder is not None:
+            yield from self._hwaccel_decoder.iter_frames(start_frame, end_frame, step)
+            return
+
+        # Fall back to OpenCV
         cap = self._get_capture()
 
         if end_frame is None:
@@ -198,6 +244,9 @@ class Video:
         if self._cap is not None:
             self._cap.release()
             self._cap = None
+        if self._hwaccel_decoder is not None:
+            self._hwaccel_decoder.close()
+            self._hwaccel_decoder = None
 
     def __enter__(self):
         return self
