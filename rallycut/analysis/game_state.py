@@ -15,12 +15,10 @@ class GameStateAnalyzer:
         self,
         device: Optional[str] = None,
         model_path: Optional[Path] = None,
-        use_resize: bool = True,
     ):
         config = get_config()
         self.device = device or config.device
         self.model_path = model_path or config.videomae_model_path
-        self.use_resize = use_resize
         self._classifier = None
 
     def _get_classifier(self):
@@ -62,7 +60,7 @@ class GameStateAnalyzer:
         stride = stride or config.game_state.stride
         batch_size = batch_size or config.game_state.batch_size
         window_size = config.game_state.window_size
-        target_size = config.game_state.analysis_size if self.use_resize else None
+        target_size = config.game_state.analysis_size
 
         classifier = self._get_classifier()
         results = []

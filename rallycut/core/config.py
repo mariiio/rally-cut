@@ -149,7 +149,7 @@ class ProxyConfig(BaseModel):
 
     enabled: bool = True
     height: int = 480
-    fps: Optional[int] = None
+    fps: int = 30  # Normalize to 30fps for optimal ML temporal dynamics
 
 
 class SegmentConfig(BaseModel):
@@ -196,7 +196,6 @@ class RallyCutConfig(BaseSettings):
         default_factory=lambda: _find_local_weights("weights/yolov8/ball_detector/best.pt")
     )
     yolo_confidence: float = 0.25
-    yolo_iou: float = 0.45
 
     # Processing settings
     chunk_duration: float = 300.0  # 5 minutes in seconds
@@ -213,50 +212,6 @@ class RallyCutConfig(BaseSettings):
         env_prefix="RALLYCUT_",
         env_nested_delimiter="__",  # Allows RALLYCUT_MOTION__HIGH_THRESHOLD
     )
-
-    # -------------------------------------------------------------------------
-    # Legacy properties for backwards compatibility
-    # -------------------------------------------------------------------------
-
-    @property
-    def videomae_window_size(self) -> int:
-        """Legacy accessor for game_state.window_size."""
-        return self.game_state.window_size
-
-    @property
-    def videomae_stride(self) -> int:
-        """Legacy accessor for game_state.stride."""
-        return self.game_state.stride
-
-    @property
-    def batch_size(self) -> int:
-        """Legacy accessor for game_state.batch_size."""
-        return self.game_state.batch_size
-
-    @property
-    def min_play_duration(self) -> float:
-        """Legacy accessor for segment.min_play_duration."""
-        return self.segment.min_play_duration
-
-    @property
-    def padding_seconds(self) -> float:
-        """Legacy accessor for segment.padding_seconds."""
-        return self.segment.padding_seconds
-
-    @property
-    def proxy_enabled(self) -> bool:
-        """Legacy accessor for proxy.enabled."""
-        return self.proxy.enabled
-
-    @property
-    def proxy_height(self) -> int:
-        """Legacy accessor for proxy.height."""
-        return self.proxy.height
-
-    @property
-    def proxy_fps(self) -> Optional[int]:
-        """Legacy accessor for proxy.fps."""
-        return self.proxy.fps
 
     # -------------------------------------------------------------------------
     # YAML Loading

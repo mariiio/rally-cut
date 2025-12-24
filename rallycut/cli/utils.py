@@ -25,11 +25,6 @@ class VideoError(RallyCutError):
     pass
 
 
-class ModelError(RallyCutError):
-    """Error related to ML models."""
-    pass
-
-
 class ExportError(RallyCutError):
     """Error related to video export."""
     pass
@@ -107,46 +102,6 @@ def validate_output_path(path: Path, overwrite: bool = True) -> None:
             f"Output file already exists: {path}",
             hint="Use a different output path or delete the existing file"
         )
-
-
-def check_ffmpeg() -> bool:
-    """Check if FFmpeg is available."""
-    import subprocess
-    try:
-        subprocess.run(
-            ["ffmpeg", "-version"],
-            capture_output=True,
-            check=True,
-        )
-        return True
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return False
-
-
-def check_models_available() -> dict[str, bool]:
-    """Check which models are available."""
-    from rallycut.core.config import get_config
-    config = get_config()
-
-    return {
-        "videomae": config.videomae_model_path is not None and config.videomae_model_path.exists(),
-        "action_detector": config.action_detector_path is not None and config.action_detector_path.exists(),
-        "ball_detector": config.ball_detector_path is not None and config.ball_detector_path.exists(),
-    }
-
-
-def format_duration(seconds: float) -> str:
-    """Format seconds as human-readable duration."""
-    if seconds < 60:
-        return f"{seconds:.1f}s"
-    elif seconds < 3600:
-        minutes = int(seconds // 60)
-        secs = seconds % 60
-        return f"{minutes}m {secs:.0f}s"
-    else:
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        return f"{hours}h {minutes}m"
 
 
 def format_time(seconds: float) -> str:
