@@ -149,7 +149,12 @@ class VideoCutter:
                                 after_gap_seg = raw_segments[j + 1]
                                 # Only bridge if the segment after the gap is substantial
                                 # This prevents isolated short false positives from causing over-extension
-                                if after_gap_seg.frame_count >= min_bridge_duration_frames:
+                                # Check that total extension (to END of segment) doesn't exceed max
+                                max_extension_frames = int(3.0 * fps)
+                                # Check extension to END of segment, not just start
+                                extension_distance = after_gap_seg.end_frame - merged_end
+                                if (after_gap_seg.frame_count >= min_bridge_duration_frames and
+                                        extension_distance <= max_extension_frames):
                                     # Merge through the gap
                                     merged_end = after_gap_seg.end_frame
                                     j += 2
@@ -163,8 +168,12 @@ class VideoCutter:
                                     last_play_idx = j + 1
                                     last_play_end = after_gap_seg.end_frame
                                     max_internal_gap_frames = int(1.5 * fps)  # Max gap between accumulated segments
+                                    max_extension_frames = int(3.0 * fps)  # Max extension from current position
                                     for lookahead in range(j + 2, min(j + 10, len(raw_segments))):
                                         look_seg = raw_segments[lookahead]
+                                        # Stop if extending too far from current merged end (check to END of segment)
+                                        if look_seg.end_frame - merged_end > max_extension_frames:
+                                            break
                                         if look_seg.state in (GameState.SERVICE, GameState.PLAY):
                                             accumulated_play_frames += look_seg.frame_count
                                             last_play_idx = lookahead
@@ -240,13 +249,24 @@ class VideoCutter:
         for segment in sorted_segments[1:]:
             last = merged[-1]
             if segment.start_frame <= last.end_frame + 1:
-                merged[-1] = TimeSegment(
-                    start_frame=last.start_frame,
-                    end_frame=max(last.end_frame, segment.end_frame),
-                    start_time=last.start_time,
-                    end_time=max(last.end_frame, segment.end_frame) / fps,
-                    state=last.state,
-                )
+                # Only merge if unpadded segments were close (within padding distance)
+                # This prevents merging separate detections that only overlap due to padding
+                unpadded_last_end = last.end_frame - padding_end_frames
+                unpadded_segment_start = segment.start_frame + padding_start_frames
+                unpadded_gap_frames = unpadded_segment_start - unpadded_last_end
+                max_unpadded_gap_frames = int(1.0 * fps)  # Max 1s gap in unpadded segments
+
+                if unpadded_gap_frames > max_unpadded_gap_frames:
+                    # Unpadded segments too far apart - don't merge, keep as separate
+                    merged.append(segment)
+                else:
+                    merged[-1] = TimeSegment(
+                        start_frame=last.start_frame,
+                        end_frame=max(last.end_frame, segment.end_frame),
+                        start_time=last.start_time,
+                        end_time=max(last.end_frame, segment.end_frame) / fps,
+                        state=last.state,
+                    )
             else:
                 merged.append(segment)
 
