@@ -18,16 +18,15 @@ uv run rallycut profile <video.mp4>    # Performance profiling
 ## Common Parameters for `cut`
 - `--output`, `-o` - Output file path
 - `--dry-run` - Analyze without generating video
-- `--quick` - Fast mode (higher stride, lower accuracy)
 - `--json` - Export segments to JSON
 - `--stride` - Frame sampling interval (auto-adjusted for FPS)
 - `--padding` - Seconds of padding around play segments
 - `--min-gap` - Minimum gap to bridge between segments
 
 ## Performance Options
-- `--disable-gpu` - Force CPU processing
-- `--use-proxy` - Create 480p proxy for faster analysis
-- `--cache-dir` - Custom cache directory
+- `--no-gpu` - Force CPU processing
+- `--proxy/--no-proxy` - Use 480p proxy for faster analysis (default: on)
+- `--no-cache` - Force re-analysis even if cached
 
 ## Output Formats
 - `--json segments.json` - Export detected segments

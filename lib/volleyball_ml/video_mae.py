@@ -101,6 +101,8 @@ class GameStateClassifier:
         if self._model is not None:
             return
 
+        import os
+
         import torch
         from transformers import VideoMAEForVideoClassification, VideoMAEImageProcessor
 
@@ -110,8 +112,10 @@ class GameStateClassifier:
             model_source = str(self.model_path)
         else:
             # Use pretrained model from HuggingFace
-            # In production, this would be a fine-tuned volleyball model
-            model_source = "MCG-NJU/videomae-base-finetuned-kinetics"
+            # Override with RALLYCUT_VIDEOMAE_MODEL env var for testing variants
+            # Options: videomae-base, videomae-small (smaller/faster)
+            default_model = "MCG-NJU/videomae-base-finetuned-kinetics"
+            model_source = os.environ.get("RALLYCUT_VIDEOMAE_MODEL", default_model)
 
         self._processor = VideoMAEImageProcessor.from_pretrained(model_source)
 
@@ -150,9 +154,9 @@ class GameStateClassifier:
 
         # Try to compile model for faster inference (PyTorch 2.0+)
         # Note: torch.compile may not work with all backends
+        # MPS compilation tested - slower due to compile overhead (96s vs 50s on 2min video)
         if hasattr(torch, "compile") and self.device == "cuda":
             # CUDA gets full torch.compile optimization with max-autotune
-            # MPS doesn't fully support torch.compile yet, skip for now
             try:
                 self._model = torch.compile(
                     self._model,

@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -70,9 +69,6 @@ class DetectionConfig(BaseModel):
         ge=0.0,
         description="Minimum NO_PLAY gap before ending a rally (seconds)",
     )
-    use_two_pass: bool = Field(
-        default=True, description="Use two-pass analysis (motion + ML)"
-    )
     use_proxy: bool = Field(
         default=True, description="Use 480p proxy for faster ML analysis"
     )
@@ -85,13 +81,13 @@ class DetectionRequest(BaseModel):
     """API request for rally detection."""
 
     video_url: str = Field(description="Video URL (S3/GCS presigned or public HTTPS)")
-    config: Optional[DetectionConfig] = Field(
+    config: DetectionConfig | None = Field(
         default=None, description="Optional detection configuration overrides"
     )
-    callback_url: Optional[str] = Field(
+    callback_url: str | None = Field(
         default=None, description="Webhook URL for async completion notification"
     )
-    job_id: Optional[str] = Field(
+    job_id: str | None = Field(
         default=None, description="Client-provided job ID (auto-generated if not provided)"
     )
 
@@ -101,13 +97,13 @@ class DetectionResponse(BaseModel):
 
     job_id: str = Field(description="Unique job identifier")
     status: str = Field(description="Job status: completed, failed, or processing")
-    video: Optional[VideoMetadata] = Field(
+    video: VideoMetadata | None = Field(
         default=None, description="Source video metadata"
     )
     segments: list[DetectedSegment] = Field(
         default_factory=list, description="Detected rally segments with scores"
     )
-    statistics: Optional[MatchStatistics] = Field(
+    statistics: MatchStatistics | None = Field(
         default=None, description="Aggregated match statistics"
     )
     processing_time_seconds: float = Field(
@@ -116,7 +112,7 @@ class DetectionResponse(BaseModel):
     created_at: datetime = Field(
         default_factory=datetime.utcnow, description="Response timestamp (UTC)"
     )
-    error: Optional[str] = Field(default=None, description="Error message if failed")
+    error: str | None = Field(default=None, description="Error message if failed")
 
 
 class JobStatus(BaseModel):
@@ -124,10 +120,10 @@ class JobStatus(BaseModel):
 
     job_id: str = Field(description="Job identifier")
     status: str = Field(description="Job status: pending, processing, completed, failed")
-    progress: Optional[float] = Field(
+    progress: float | None = Field(
         default=None, ge=0.0, le=1.0, description="Progress (0.0-1.0)"
     )
-    result_url: Optional[str] = Field(
+    result_url: str | None = Field(
         default=None, description="URL to fetch results when complete"
     )
-    error: Optional[str] = Field(default=None, description="Error message if failed")
+    error: str | None = Field(default=None, description="Error message if failed")

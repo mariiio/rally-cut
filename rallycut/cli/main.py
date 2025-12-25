@@ -4,8 +4,8 @@ import typer
 from rich.console import Console
 
 from rallycut.cli.commands.cut import cut as cut_command
-from rallycut.cli.commands.overlay import overlay as overlay_command
 from rallycut.cli.commands.highlights import highlights as highlights_command
+from rallycut.cli.commands.overlay import overlay as overlay_command
 from rallycut.cli.commands.profile import profile as profile_command
 
 app = typer.Typer(

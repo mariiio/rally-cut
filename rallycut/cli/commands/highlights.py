@@ -1,11 +1,10 @@
 """Highlights command for generating highlight reels."""
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 from rallycut.cli.utils import handle_errors
@@ -25,7 +24,7 @@ def highlights(
         exists=True,
         dir_okay=False,
     ),
-    output: Optional[Path] = typer.Option(
+    output: Path | None = typer.Option(
         None,
         "-o", "--output",
         help="Output video path (default: input_highlights.mp4)",
@@ -65,22 +64,17 @@ def highlights(
         "--padding-end",
         help="Padding after each rally (seconds)",
     ),
-    quick: bool = typer.Option(
-        False,
-        "--quick",
-        help="Use fast motion detection instead of ML",
-    ),
     stride: int = typer.Option(
         8,
         "--stride",
         help="Frame stride for analysis (lower = more accurate, slower)",
     ),
-    gpu: Optional[bool] = typer.Option(
+    gpu: bool | None = typer.Option(
         None,
         "--gpu/--no-gpu",
         help="Force GPU/CPU for ML inference",
     ),
-    limit: Optional[float] = typer.Option(
+    limit: float | None = typer.Option(
         None,
         "--limit",
         help="Only analyze first N seconds (for testing)",
@@ -94,11 +88,6 @@ def highlights(
         True,
         "--proxy/--no-proxy",
         help="Use low-res proxy for faster ML analysis (default: on)",
-    ),
-    two_pass: bool = typer.Option(
-        True,
-        "--two-pass/--full-scan",
-        help="Use two-pass: motion scan then ML on motion only (2-3x faster)",
     ),
     min_gap: float = typer.Option(
         3.5,
@@ -146,11 +135,9 @@ def highlights(
     cutter = VideoCutter(
         device=device,
         stride=stride,
-        use_quick_mode=quick,
-        use_two_pass=two_pass and not quick,  # Two-pass only when not quick mode
         limit_seconds=limit,
         padding_seconds=0,  # We apply asymmetric padding below
-        proxy_height=360 if proxy else None,
+        use_proxy=proxy,
         min_gap_seconds=min_gap,
     )
 
@@ -159,7 +146,7 @@ def highlights(
     segments = None
 
     if not no_cache and limit is None:
-        segments = cache.get(video_path, stride, quick, proxy)
+        segments = cache.get(video_path, stride, proxy)
         if segments:
             console.print("[dim]Using cached analysis[/dim]")
 
@@ -183,7 +170,7 @@ def highlights(
 
         # Cache results (only if not using --limit)
         if limit is None and segments:
-            cache.set(video_path, stride, quick, segments, proxy)
+            cache.set(video_path, stride, segments, proxy)
 
     if not segments:
         console.print("[red]No rallies detected in video[/red]")

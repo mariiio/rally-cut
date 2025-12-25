@@ -1,7 +1,6 @@
 """Trajectory processing for ball tracking visualization."""
 
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 from scipy.interpolate import interp1d
@@ -41,9 +40,9 @@ class TrajectoryProcessor:
 
     def __init__(
         self,
-        max_gap_frames: Optional[int] = None,
-        smooth_sigma: Optional[float] = None,
-        trail_length: Optional[int] = None,
+        max_gap_frames: int | None = None,
+        smooth_sigma: float | None = None,
+        trail_length: int | None = None,
     ):
         """
         Initialize trajectory processor.
@@ -263,7 +262,7 @@ class TrajectoryProcessor:
         self,
         segments: list[TrajectorySegment],
         frame_idx: int,
-    ) -> Optional[BallPosition]:
+    ) -> BallPosition | None:
         """
         Get ball position at a specific frame.
 

@@ -1,6 +1,5 @@
 """Statistics aggregation for RallyCut."""
 
-from typing import Optional
 
 from rallycut.core.models import (
     Action,
@@ -22,7 +21,7 @@ class StatisticsAggregator:
     def create_rallies(
         self,
         actions: list[Action],
-        segments: Optional[list[TimeSegment]] = None,
+        segments: list[TimeSegment] | None = None,
         rally_gap_seconds: float = 5.0,
     ) -> list[Rally]:
         """
@@ -150,7 +149,7 @@ class StatisticsAggregator:
     def compute_statistics(
         self,
         actions: list[Action],
-        segments: Optional[list[TimeSegment]] = None,
+        segments: list[TimeSegment] | None = None,
     ) -> MatchStatistics:
         """
         Compute full match statistics.

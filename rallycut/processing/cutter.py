@@ -1,7 +1,7 @@
 """Video cutting functionality for RallyCut."""
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 from rallycut.core.config import get_config, get_recommended_batch_size
 from rallycut.core.models import TimeSegment
@@ -17,16 +17,14 @@ class VideoCutter:
 
     def __init__(
         self,
-        device: Optional[str] = None,
-        padding_seconds: Optional[float] = None,
-        padding_end_seconds: Optional[float] = None,
-        min_play_duration: Optional[float] = None,
-        stride: Optional[int] = None,
-        use_quick_mode: bool = False,
-        use_two_pass: bool = False,
-        limit_seconds: Optional[float] = None,
-        use_proxy: Optional[bool] = None,
-        min_gap_seconds: Optional[float] = None,
+        device: str | None = None,
+        padding_seconds: float | None = None,
+        padding_end_seconds: float | None = None,
+        min_play_duration: float | None = None,
+        stride: int | None = None,
+        limit_seconds: float | None = None,
+        use_proxy: bool | None = None,
+        min_gap_seconds: float | None = None,
         auto_stride: bool = True,
     ):
         config = get_config()
@@ -36,14 +34,13 @@ class VideoCutter:
         self.padding_end_seconds = padding_end_seconds if padding_end_seconds is not None else (self.padding_seconds + 0.5)
         self.min_play_duration = min_play_duration if min_play_duration is not None else config.segment.min_play_duration
         self.base_stride = stride if stride is not None else config.game_state.stride
-        self.use_quick_mode = use_quick_mode
-        self.use_two_pass = use_two_pass
         self.limit_seconds = limit_seconds
         self.use_proxy = use_proxy if use_proxy is not None else config.proxy.enabled
         self.min_gap_seconds = min_gap_seconds if min_gap_seconds is not None else 3.0
         self.auto_stride = auto_stride
 
         self._analyzer = None
+        self._proxy_generator = None
         self.exporter = FFmpegExporter()
 
     def _normalize_stride(self, fps: float) -> int:
@@ -62,21 +59,27 @@ class VideoCutter:
         return max(1, normalized)
 
     def _get_analyzer(self):
-        """Lazy load the appropriate analyzer."""
+        """Lazy load the game state analyzer."""
         if self._analyzer is None:
-            if self.use_quick_mode:
-                from rallycut.analysis.motion_detector import MotionDetector
-                self._analyzer = MotionDetector()
-            elif self.use_two_pass:
-                from rallycut.analysis.two_pass import TwoPassAnalyzer
-                self._analyzer = TwoPassAnalyzer(
-                    device=self.device,
-                    use_proxy=self.use_proxy,
-                )
-            else:
-                from rallycut.analysis.game_state import GameStateAnalyzer
-                self._analyzer = GameStateAnalyzer(device=self.device)
+            from rallycut.analysis.game_state import GameStateAnalyzer
+
+            self._analyzer = GameStateAnalyzer(device=self.device)
         return self._analyzer
+
+    def _get_proxy_generator(self):
+        """Lazy load proxy generator."""
+        if self._proxy_generator is None:
+            from rallycut.core.proxy import ProxyConfig, ProxyGenerator
+
+            config = get_config()
+            self._proxy_generator = ProxyGenerator(
+                config=ProxyConfig(
+                    height=config.proxy.height,
+                    fps=config.proxy.fps,
+                ),
+                cache_dir=config.proxy_cache_dir,
+            )
+        return self._proxy_generator
 
     def _get_segments_from_results(self, results, fps) -> list[TimeSegment]:
         """Convert analysis results to merged play segments with hysteresis."""
@@ -275,7 +278,7 @@ class VideoCutter:
     def analyze_only(
         self,
         input_path: Path,
-        progress_callback: Optional[Callable[[float, str], None]] = None,
+        progress_callback: Callable[[float, str], None] | None = None,
     ) -> list[TimeSegment]:
         """
         Analyze video to find play segments without generating output.
@@ -287,23 +290,69 @@ class VideoCutter:
         Returns:
             List of play segments
         """
+        from rallycut.core.models import GameStateResult
+
         analyzer = self._get_analyzer()
 
-        # Run analysis (proxy handling is now done by TwoPassAnalyzer)
+        # Get source video info for FPS and frame mapping
         with Video(input_path) as video:
-            fps = video.info.fps
-            # Normalize stride based on video FPS
-            effective_stride = self._normalize_stride(fps)
-            # Auto-scale batch size for GPU
-            batch_size = get_recommended_batch_size(self.device)
+            source_fps = video.info.fps
 
-            results = analyzer.analyze_video(
-                video,
-                stride=effective_stride,
-                progress_callback=progress_callback,
-                limit_seconds=self.limit_seconds,
-                batch_size=batch_size,
+        # Use proxy for faster analysis if enabled
+        if self.use_proxy:
+            proxy_gen = self._get_proxy_generator()
+
+            def proxy_progress(pct: float, msg: str) -> None:
+                if progress_callback:
+                    progress_callback(pct * 0.1, f"Proxy: {msg}")
+
+            proxy_path, mapper = proxy_gen.get_or_create(
+                input_path, source_fps, proxy_progress
             )
+
+            # Run analysis on proxy video
+            with Video(proxy_path) as proxy_video:
+                # Normalize stride based on proxy FPS
+                effective_stride = self._normalize_stride(mapper.proxy_fps)
+                batch_size = get_recommended_batch_size(self.device)
+
+                def analysis_progress(pct: float, msg: str) -> None:
+                    if progress_callback:
+                        progress_callback(0.1 + pct * 0.9, msg)
+
+                proxy_results = analyzer.analyze_video(
+                    proxy_video,
+                    stride=effective_stride,
+                    progress_callback=analysis_progress,
+                    limit_seconds=self.limit_seconds,
+                    batch_size=batch_size,
+                )
+
+            # Map results back to source frame space
+            results = [
+                GameStateResult(
+                    state=r.state,
+                    confidence=r.confidence,
+                    start_frame=mapper.proxy_to_source(r.start_frame),
+                    end_frame=mapper.proxy_to_source(r.end_frame),
+                )
+                for r in proxy_results
+            ]
+            fps = source_fps
+        else:
+            # Run analysis directly on source video
+            with Video(input_path) as video:
+                fps = video.info.fps
+                effective_stride = self._normalize_stride(fps)
+                batch_size = get_recommended_batch_size(self.device)
+
+                results = analyzer.analyze_video(
+                    video,
+                    stride=effective_stride,
+                    progress_callback=progress_callback,
+                    limit_seconds=self.limit_seconds,
+                    batch_size=batch_size,
+                )
 
         # Convert to merged segments
         merged_segments = self._get_segments_from_results(results, fps)
@@ -314,7 +363,7 @@ class VideoCutter:
         self,
         input_path: Path,
         output_path: Path,
-        progress_callback: Optional[Callable[[float, str], None]] = None,
+        progress_callback: Callable[[float, str], None] | None = None,
     ) -> tuple[Path, list[TimeSegment]]:
         """
         Cut video to remove dead time.

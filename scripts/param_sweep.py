@@ -21,7 +21,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from rallycut.core.config import (
     RallyCutConfig,
-    TwoPassConfig,
     SegmentConfig,
     GameStateConfig,
     set_config,
@@ -39,26 +38,16 @@ from rallycut.processing.cutter import VideoCutter
 class ParameterSet:
     """A single parameter configuration to test."""
 
-    # Motion thresholds (TwoPassConfig)
-    motion_high_threshold: float
-    motion_low_threshold: float
     # Segment parameters
     min_play_duration: float
     min_gap_seconds: float
     padding_seconds: float
-    # Two-pass parameters
-    motion_padding_seconds: float
     # Speed parameters
     stride: int
 
     def to_config(self) -> RallyCutConfig:
         """Convert to RallyCutConfig object."""
         return RallyCutConfig(
-            two_pass=TwoPassConfig(
-                motion_high_threshold=self.motion_high_threshold,
-                motion_low_threshold=self.motion_low_threshold,
-                motion_padding_seconds=self.motion_padding_seconds,
-            ),
             segment=SegmentConfig(
                 min_play_duration=self.min_play_duration,
                 padding_seconds=self.padding_seconds,
@@ -111,38 +100,27 @@ class SweepResult:
 # =============================================================================
 
 PARAMETER_GRID = {
-    # Motion detection thresholds
-    "motion_high_threshold": [0.03, 0.04, 0.05, 0.06, 0.07, 0.08],
-    "motion_low_threshold": [0.01, 0.02, 0.03, 0.04],
     # Segment processing
     "min_play_duration": [1.5, 2.0, 2.5, 3.0, 4.0, 5.0],
     "min_gap_seconds": [1.5, 2.0, 3.0, 4.0, 5.0],
     "padding_seconds": [0.5, 1.0, 1.5, 2.0],
-    # Two-pass specific
-    "motion_padding_seconds": [2.0, 3.0, 4.0],
     # Speed parameters
     "stride": [16, 24, 32, 48],
 }
 
 QUICK_GRID = {
-    # Reduced grid focused on speed testing (known-working motion thresholds)
-    "motion_high_threshold": [0.04, 0.06],
-    "motion_low_threshold": [0.02, 0.03],
+    # Reduced grid for quick testing
     "min_play_duration": [2.0, 3.0],
     "min_gap_seconds": [2.0, 3.0],
     "padding_seconds": [1.0],
-    "motion_padding_seconds": [3.0],
     "stride": [32],
 }
 
 SPEED_GRID = {
     # Grid focused on stride optimization with known-working detection params
-    "motion_high_threshold": [0.04],
-    "motion_low_threshold": [0.02],
     "min_play_duration": [2.0],
     "min_gap_seconds": [2.0],
     "padding_seconds": [1.0],
-    "motion_padding_seconds": [3.0],
     "stride": [16, 24, 32, 48, 64],
 }
 
@@ -152,11 +130,7 @@ def generate_parameter_sets(
     quick_mode: bool = False,
     speed_mode: bool = False,
 ) -> list[ParameterSet]:
-    """Generate valid parameter combinations.
-
-    Applies constraints:
-    - motion_low_threshold < motion_high_threshold
-    """
+    """Generate valid parameter combinations."""
     if speed_mode:
         grid = SPEED_GRID
     elif quick_mode:
@@ -168,11 +142,6 @@ def generate_parameter_sets(
     valid_sets = []
     for combo in itertools.product(*values):
         params = dict(zip(keys, combo))
-
-        # Constraint: low threshold must be less than high threshold
-        if params["motion_low_threshold"] >= params["motion_high_threshold"]:
-            continue
-
         valid_sets.append(ParameterSet(**params))
 
     return valid_sets
@@ -216,13 +185,12 @@ class DetectionEvaluator:
         reset_config()
         set_config(params.to_config())
 
-        # Create cutter with test parameters (use_two_pass=True is required for accurate detection)
+        # Create cutter with test parameters
         cutter = VideoCutter(
             padding_seconds=params.padding_seconds,
             min_play_duration=params.min_play_duration,
             stride=params.stride,
             min_gap_seconds=params.min_gap_seconds,
-            use_two_pass=True,
         )
 
         # Time the detection
@@ -365,9 +333,8 @@ class SweepRunner:
                 continue
 
             print(
-                f"\n[{i+1}/{total}] motion_high={params.motion_high_threshold}, "
-                f"motion_low={params.motion_low_threshold}, "
-                f"min_play={params.min_play_duration}, "
+                f"\n[{i+1}/{total}] min_play={params.min_play_duration}, "
+                f"min_gap={params.min_gap_seconds}, "
                 f"stride={params.stride}"
             )
 
@@ -522,12 +489,9 @@ class ResultAnalyzer:
                 [
                     "OPTIMAL CONFIGURATION:",
                     "-" * 40,
-                    f"  motion_high_threshold: {optimal.params.motion_high_threshold}",
-                    f"  motion_low_threshold: {optimal.params.motion_low_threshold}",
                     f"  min_play_duration: {optimal.params.min_play_duration}",
                     f"  min_gap_seconds: {optimal.params.min_gap_seconds}",
                     f"  padding_seconds: {optimal.params.padding_seconds}",
-                    f"  motion_padding_seconds: {optimal.params.motion_padding_seconds}",
                     f"  stride: {optimal.params.stride}",
                     "",
                     f"  Total Recall: {optimal.total_recall:.1%}",
@@ -546,9 +510,8 @@ class ResultAnalyzer:
             if results:
                 best_recall = max(results, key=lambda r: r.total_recall)
                 lines.append(f"Best by recall: {best_recall.total_recall:.1%}")
-                lines.append(f"  motion_high={best_recall.params.motion_high_threshold}")
-                lines.append(f"  motion_low={best_recall.params.motion_low_threshold}")
                 lines.append(f"  min_play={best_recall.params.min_play_duration}")
+                lines.append(f"  min_gap={best_recall.params.min_gap_seconds}")
             lines.append("")
 
         # Show top 5 passing configs sorted by speed

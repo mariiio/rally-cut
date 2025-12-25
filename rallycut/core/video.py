@@ -1,7 +1,7 @@
 """Video abstraction layer for RallyCut."""
 
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator, Optional
 
 import cv2
 import numpy as np
@@ -34,9 +34,9 @@ class Video:
         use_hwaccel: bool = False,
         device: str | None = None,
     ):
-        self._cap: Optional[cv2.VideoCapture] = None
+        self._cap: cv2.VideoCapture | None = None
         self._hwaccel_decoder = None
-        self._info: Optional[VideoInfo] = None
+        self._info: VideoInfo | None = None
         self._use_hwaccel = use_hwaccel and PYAV_AVAILABLE
         self._device = device
 
@@ -99,7 +99,7 @@ class Video:
             self._cap = cv2.VideoCapture(str(self.path))
         return self._cap
 
-    def read_frame(self, frame_idx: int) -> Optional[np.ndarray]:
+    def read_frame(self, frame_idx: int) -> np.ndarray | None:
         """Read a specific frame by index."""
         cap = self._get_capture()
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
@@ -111,7 +111,7 @@ class Video:
         start_frame: int,
         count: int,
         step: int = 1,
-        resize: Optional[tuple[int, int]] = None,
+        resize: tuple[int, int] | None = None,
     ) -> list[np.ndarray]:
         """
         Read multiple frames starting from a position.
@@ -147,7 +147,7 @@ class Video:
     def iter_frames(
         self,
         start_frame: int = 0,
-        end_frame: Optional[int] = None,
+        end_frame: int | None = None,
         step: int = 1,
     ) -> Iterator[tuple[int, np.ndarray]]:
         """

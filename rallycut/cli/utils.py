@@ -1,9 +1,7 @@
 """CLI utilities for RallyCut."""
 
 import functools
-import sys
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -14,7 +12,7 @@ console = Console()
 class RallyCutError(Exception):
     """Base exception for RallyCut errors."""
 
-    def __init__(self, message: str, hint: Optional[str] = None):
+    def __init__(self, message: str, hint: str | None = None):
         self.message = message
         self.hint = hint
         super().__init__(message)

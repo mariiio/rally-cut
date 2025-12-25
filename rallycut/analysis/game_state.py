@@ -1,7 +1,7 @@
 """Game state analysis for RallyCut."""
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 from rallycut.core.config import get_config
 from rallycut.core.models import GameState, GameStateResult
@@ -13,12 +13,24 @@ class GameStateAnalyzer:
 
     def __init__(
         self,
-        device: Optional[str] = None,
-        model_path: Optional[Path] = None,
+        device: str | None = None,
+        model_path: Path | None = None,
+        enable_temporal_smoothing: bool | None = None,
+        temporal_smoothing_window: int | None = None,
     ):
         config = get_config()
         self.device = device or config.device
         self.model_path = model_path or config.videomae_model_path
+        self.enable_temporal_smoothing = (
+            enable_temporal_smoothing
+            if enable_temporal_smoothing is not None
+            else config.game_state.enable_temporal_smoothing
+        )
+        self.temporal_smoothing_window = (
+            temporal_smoothing_window
+            if temporal_smoothing_window is not None
+            else config.game_state.temporal_smoothing_window
+        )
         self._classifier = None
 
     def _get_classifier(self):
@@ -35,10 +47,10 @@ class GameStateAnalyzer:
     def analyze_video(
         self,
         video: Video,
-        stride: Optional[int] = None,
-        progress_callback: Optional[Callable[[float, str], None]] = None,
-        limit_seconds: Optional[float] = None,
-        batch_size: Optional[int] = None,
+        stride: int | None = None,
+        progress_callback: Callable[[float, str], None] | None = None,
+        limit_seconds: float | None = None,
+        batch_size: int | None = None,
     ) -> list[GameStateResult]:
         """
         Analyze entire video for game states using batch processing.
@@ -74,10 +86,8 @@ class GameStateAnalyzer:
         target_fps = 30.0
         if fps > 40:  # Likely 50fps or 60fps
             frame_step = round(fps / target_fps)
-            effective_fps = fps / frame_step
         else:
             frame_step = 1
-            effective_fps = fps
 
         # Apply limit if specified
         if limit_seconds is not None:
@@ -211,4 +221,83 @@ class GameStateAnalyzer:
         if progress_callback:
             progress_callback(1.0, f"Window {windows_processed}/{total_windows}")
 
+        # Apply temporal smoothing if enabled
+        if self.enable_temporal_smoothing and results:
+            results = self._smooth_results(results, self.temporal_smoothing_window)
+
         return results
+
+    def _smooth_results(
+        self, results: list[GameStateResult], window_size: int = 5
+    ) -> list[GameStateResult]:
+        """
+        Apply temporal smoothing to fix isolated classification errors.
+
+        Uses a sliding median filter to smooth out isolated state flips.
+        For example: PLAY-NO_PLAY-PLAY -> PLAY-PLAY-PLAY
+
+        This allows using a larger stride while maintaining accuracy,
+        since isolated errors are corrected by the majority vote.
+
+        Args:
+            results: List of GameStateResult to smooth
+            window_size: Size of smoothing window (must be odd, default 5)
+
+        Returns:
+            Smoothed list of GameStateResult
+        """
+        if len(results) < window_size:
+            return results
+
+        # Ensure window size is odd
+        if window_size % 2 == 0:
+            window_size += 1
+
+        half_window = window_size // 2
+        smoothed = []
+
+        for i, result in enumerate(results):
+            # Get window of states around this result
+            window_start = max(0, i - half_window)
+            window_end = min(len(results), i + half_window + 1)
+
+            # Count states in window
+            play_count = 0
+            no_play_count = 0
+            service_count = 0
+
+            for j in range(window_start, window_end):
+                state = results[j].state
+                if state == GameState.PLAY:
+                    play_count += 1
+                elif state == GameState.NO_PLAY:
+                    no_play_count += 1
+                elif state == GameState.SERVICE:
+                    service_count += 1
+
+            # Determine majority state (SERVICE treated as PLAY for voting)
+            active_count = play_count + service_count
+
+            if active_count > no_play_count:
+                # Majority is active (PLAY/SERVICE) - keep original if active, else PLAY
+                if result.state in (GameState.PLAY, GameState.SERVICE):
+                    new_state = result.state
+                else:
+                    new_state = GameState.PLAY
+            else:
+                new_state = GameState.NO_PLAY
+
+            # Create new result with smoothed state
+            if new_state != result.state:
+                smoothed.append(
+                    GameStateResult(
+                        state=new_state,
+                        confidence=result.confidence * 0.9,  # Slightly reduce confidence
+                        start_frame=result.start_frame,
+                        end_frame=result.end_frame,
+                    )
+                )
+            else:
+                smoothed.append(result)
+
+        return smoothed

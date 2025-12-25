@@ -30,7 +30,7 @@ uv run ruff check rallycut/            # Lint
 rallycut/
 ├── cli/commands/    # Typer commands (cut, stats, highlights, overlay)
 ├── core/            # Config (Pydantic), models, Video wrapper, caching
-├── analysis/        # GameStateAnalyzer, MotionDetector, TwoPassAnalyzer
+├── analysis/        # GameStateAnalyzer (VideoMAE ML classifier)
 ├── processing/      # VideoCutter, HighlightScorer, FFmpegExporter
 ├── tracking/        # BallTracker (YOLO + Kalman filter)
 ├── service/         # Cloud detection service (Modal deployment)
@@ -50,8 +50,8 @@ tests/
 ## Key Patterns
 
 - **Lazy loading**: ML models loaded on first use, not import
-- **Two-pass analysis**: Motion pre-filter (fast) + ML refinement (accurate)
 - **Proxy videos**: 480p cached copies for faster ML processing
+- **Temporal smoothing**: Median filter on ML results fixes isolated errors
 - **Sequential reading**: Use `video.iter_frames()` not seeking
 - **Config**: Nested Pydantic BaseSettings with YAML/env var support
 
@@ -66,5 +66,5 @@ tests/
 Config loaded from (priority order):
 1. `./rallycut.yaml`
 2. `~/.config/rallycut/rallycut.yaml`
-3. Environment vars: `RALLYCUT_MOTION__HIGH_THRESHOLD`
+3. Environment vars: `RALLYCUT_GAME_STATE__STRIDE`
 4. Defaults in `core/config.py`

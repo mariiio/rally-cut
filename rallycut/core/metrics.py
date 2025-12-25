@@ -249,22 +249,22 @@ def print_quality_metrics(metrics: QualityMetrics) -> None:
     print("Quality Metrics")
     print("=" * 50)
 
-    print(f"\nOverall Accuracy:")
+    print("\nOverall Accuracy:")
     print(f"  Rally Recall:     {metrics.rally_recall * 100:.1f}%")
     print(f"  Rally Precision:  {metrics.rally_precision * 100:.1f}%")
     print(f"  F1 Score:         {metrics.f1_score * 100:.1f}%")
 
-    print(f"\nBoundary Accuracy:")
+    print("\nBoundary Accuracy:")
     print(f"  Avg Start Error:  {metrics.avg_start_error_seconds:.2f}s")
     print(f"  Avg End Error:    {metrics.avg_end_error_seconds:.2f}s")
 
-    print(f"\nRally Detection:")
+    print("\nRally Detection:")
     total = metrics.rallies_detected + metrics.rallies_missed
     print(f"  Detected:         {metrics.rallies_detected}/{total}")
     print(f"  Missed:           {metrics.rallies_missed}/{total}")
 
     if metrics.per_rally_coverage:
-        print(f"\nPer-Rally Coverage:")
+        print("\nPer-Rally Coverage:")
         for i, rally in enumerate(metrics.per_rally_coverage, 1):
             status = "OK" if rally["coverage"] >= 0.5 else "MISS"
             print(

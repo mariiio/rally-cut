@@ -1,8 +1,8 @@
 """Video overlay rendering for ball trajectory visualization."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
 
 import cv2
 import numpy as np
@@ -64,8 +64,8 @@ class OverlayRenderer:
 
     def __init__(
         self,
-        style: Optional[OverlayStyle] = None,
-        trail_length: Optional[int] = None,
+        style: OverlayStyle | None = None,
+        trail_length: int | None = None,
     ):
         """
         Initialize overlay renderer.
@@ -216,8 +216,8 @@ class OverlayRenderer:
         processor: TrajectoryProcessor,
         output_path: Path,
         start_frame: int = 0,
-        end_frame: Optional[int] = None,
-        progress_callback: Optional[Callable[[float, str], None]] = None,
+        end_frame: int | None = None,
+        progress_callback: Callable[[float, str], None] | None = None,
     ) -> Path:
         """
         Render overlay on video and save to file.
@@ -277,7 +277,7 @@ class OverlayRenderer:
         output_path: Path,
         start_time: float,
         end_time: float,
-        progress_callback: Optional[Callable[[float, str], None]] = None,
+        progress_callback: Callable[[float, str], None] | None = None,
     ) -> Path:
         """
         Render overlay for a time segment.

@@ -1,8 +1,8 @@
 """Ball tracking with Kalman filter for trajectory smoothing and prediction."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
 
 import numpy as np
 from filterpy.kalman import KalmanFilter
@@ -32,10 +32,10 @@ class BallTracker:
 
     def __init__(
         self,
-        model_path: Optional[Path] = None,
-        device: Optional[str] = None,
-        confidence_threshold: Optional[float] = None,
-        max_missing_frames: Optional[int] = None,
+        model_path: Path | None = None,
+        device: str | None = None,
+        confidence_threshold: float | None = None,
+        max_missing_frames: int | None = None,
         use_predictions: bool = False,
     ):
         """
@@ -124,8 +124,8 @@ class BallTracker:
         video: Video,
         stride: int = 1,
         start_frame: int = 0,
-        end_frame: Optional[int] = None,
-        progress_callback: Optional[Callable[[float, str], None]] = None,
+        end_frame: int | None = None,
+        progress_callback: Callable[[float, str], None] | None = None,
     ) -> TrackingResult:
         """
         Track ball through video segment.
@@ -151,7 +151,7 @@ class BallTracker:
         frames_processed = 0
         frames_detected = 0
         missing_count = 0
-        kalman: Optional[KalmanFilter] = None
+        kalman: KalmanFilter | None = None
 
         frame_indices = list(range(start_frame, end_frame, stride))
         total_frames = len(frame_indices)
