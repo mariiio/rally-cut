@@ -85,7 +85,7 @@ class GameStateConfig(BaseModel):
 
     window_size: int = 16
     analysis_size: tuple[int, int] = (224, 224)
-    stride: int = 32  # Optimized: was 8, now 2.5x faster with same accuracy
+    stride: int = 48  # Optimized: 33% faster than 32, combined with MIN_ACTIVE_WINDOWS=1
     batch_size: int = 8
     # Temporal smoothing: fix isolated classification errors with median filter
     # Disabled by default as it can remove valid sparse detections
