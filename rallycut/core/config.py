@@ -88,9 +88,10 @@ class GameStateConfig(BaseModel):
     stride: int = 32  # Optimized: was 8, now 2.5x faster with same accuracy
     batch_size: int = 8
     # Temporal smoothing: fix isolated classification errors with median filter
-    enable_temporal_smoothing: bool = True
+    # Disabled by default as it can remove valid sparse detections
+    enable_temporal_smoothing: bool = False
     # Window size for temporal smoothing (must be odd)
-    temporal_smoothing_window: int = 5
+    temporal_smoothing_window: int = 3
 
 
 class BallTrackingConfig(BaseModel):
@@ -134,14 +135,6 @@ class HWAccelConfig(BaseModel):
     auto_detect: bool = True
 
 
-class AsyncPipelineConfig(BaseModel):
-    """Async decode + inference pipeline configuration."""
-
-    enabled: bool = False  # Disabled by default, enable with --async flag
-    # Queue size for frame batches (higher = more memory, better throughput)
-    queue_size: int = 4
-
-
 class ProxyConfig(BaseModel):
     """Proxy video generation configuration."""
 
@@ -153,9 +146,12 @@ class ProxyConfig(BaseModel):
 class SegmentConfig(BaseModel):
     """Segment processing configuration."""
 
-    min_play_duration: float = 5.0
-    padding_seconds: float = 1.0
-    min_gap_seconds: float = 3.0
+    # Reduced from 5.0 to 1.0 to detect shorter/partially-detected rallies
+    min_play_duration: float = 1.0
+    # Increased from 1.0 to 3.0 to compensate for ML model under-detecting rally boundaries
+    padding_seconds: float = 3.0
+    # Increased from 3.0 to 5.0 to bridge larger gaps in fragmented detections
+    min_gap_seconds: float = 5.0
 
 
 # =============================================================================
@@ -174,7 +170,6 @@ class RallyCutConfig(BaseSettings):
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
     segment: SegmentConfig = Field(default_factory=SegmentConfig)
     hwaccel: HWAccelConfig = Field(default_factory=HWAccelConfig)
-    async_pipeline: AsyncPipelineConfig = Field(default_factory=AsyncPipelineConfig)
 
     # Model paths
     model_cache_dir: Path = Field(

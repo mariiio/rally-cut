@@ -58,99 +58,71 @@ model_volume = modal.Volume.from_name("rallycut-models", create_if_missing=True)
     volumes={"/models": model_volume},
     memory=16384,  # 16GB RAM
 )
-def detect_rallies(request_json: dict) -> dict:
+def detect_rallies(
+    job_id: str,
+    video_url: str,
+    callback_url: str,
+    webhook_secret: str | None = None,
+    config: dict | None = None,
+) -> dict:
     """
-    Core detection function - runs on GPU.
+    Core detection function - runs on GPU, posts result to callback URL.
+
+    This function is called via .spawn() from the Vercel API.
+    When complete, it POSTs the result to callback_url as a webhook.
 
     Args:
-        request_json: DetectionRequest as dict
+        job_id: Unique job identifier
+        video_url: S3/GCS presigned URL to download video from
+        callback_url: URL to POST results when complete
+        webhook_secret: Secret token for webhook authentication
+        config: Optional detection config dict
 
     Returns:
-        DetectionResponse as dict
+        DetectionResponse as dict (also sent to callback_url)
     """
     import sys
+
+    import httpx
 
     sys.path.insert(0, "/app")
 
     from rallycut.service.detection import DetectionService
-    from rallycut.service.schemas import DetectionRequest
+    from rallycut.service.schemas import DetectionConfig, DetectionRequest
 
-    request = DetectionRequest(**request_json)
+    # Build request from parameters
+    detection_config = DetectionConfig(**config) if config else None
+    request = DetectionRequest(
+        video_url=video_url,
+        job_id=job_id,
+        config=detection_config,
+    )
+
     service = DetectionService(device="cuda")
 
     # Run detection with progress tracking
     def progress_callback(pct: float, msg: str) -> None:
-        # Modal doesn't have built-in progress streaming,
-        # but we can log for monitoring
         print(f"[{pct*100:.1f}%] {msg}")
 
     response = service.detect(request, progress_callback)
-    return response.model_dump(mode="json")
+    result = response.model_dump(mode="json")
 
+    # POST result to callback URL (webhook)
+    if callback_url:
+        headers = {"Content-Type": "application/json"}
+        if webhook_secret:
+            headers["X-Webhook-Secret"] = webhook_secret
 
-@app.function(
-    image=image,
-    gpu="T4",
-    timeout=1800,
-    volumes={"/models": model_volume},
-    memory=16384,
-)
-@modal.web_endpoint(method="POST", docs=True)
-def detect(request_json: dict) -> dict:
-    """
-    REST API endpoint for synchronous detection.
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                webhook_response = client.post(callback_url, json=result, headers=headers)
+                webhook_response.raise_for_status()
+                print(f"Webhook sent successfully to {callback_url}")
+        except Exception as e:
+            print(f"Webhook failed: {e}")
+            # Don't fail the job if webhook fails - result is still returned
 
-    POST https://<your-app>.modal.run/detect
-    Content-Type: application/json
-
-    Request body:
-    {
-        "video_url": "https://...",  # S3/GCS presigned URL
-        "config": {                   # Optional
-            "min_play_duration": 5.0,
-            "padding_seconds": 1.0,
-            "use_two_pass": true
-        }
-    }
-
-    Returns:
-        Full DetectionResponse with segments, scores, statistics
-    """
-    return detect_rallies.remote(request_json)
-
-
-@app.function(image=image)
-@modal.web_endpoint(method="POST", docs=True)
-def detect_async(request_json: dict) -> dict:
-    """
-    Async API endpoint - submits job and returns immediately.
-
-    POST https://<your-app>.modal.run/detect_async
-    Content-Type: application/json
-
-    Request body: Same as /detect, with optional callback_url
-
-    Returns:
-        {
-            "job_id": "det_abc123",
-            "status": "processing",
-            "message": "Detection job started"
-        }
-    """
-    import uuid
-
-    # Generate job ID if not provided
-    job_id = request_json.get("job_id") or f"det_{uuid.uuid4().hex[:12]}"
-    request_json["job_id"] = job_id
-
-    # Spawn detection as background task
-    detect_rallies.spawn(request_json)
-
-    return {
-        "job_id": job_id,
-        "status": "processing",
-        "message": "Detection job started. Use callback_url for results or poll /jobs/{job_id}",
-    }
+    return result
 
 
 @app.function(image=image)
@@ -162,23 +134,38 @@ def health() -> dict:
 
 # Local testing entrypoint
 @app.local_entrypoint()
-def main():
-    """Test the detection service locally."""
+def main(video_url: str = "", callback_url: str = "") -> None:
+    """
+    Test the detection service locally.
+
+    Usage:
+        modal run rallycut/service/platforms/modal_app.py --video-url "https://..." --callback-url "https://..."
+
+    The callback_url is optional - if not provided, results are just printed.
+    """
     import json
 
-    # Example test request
-    test_request = {
-        "video_url": "https://example.com/test.mp4",  # Replace with real URL
-        "config": {
-            "min_play_duration": 5.0,
-            "use_two_pass": True,
-        },
-    }
+    if not video_url:
+        print("Usage: modal run modal_app.py --video-url <URL> [--callback-url <URL>]")
+        print("\nExample:")
+        print('  modal run modal_app.py --video-url "https://bucket.s3.amazonaws.com/video.mp4"')
+        return
+
+    job_id = f"test_{__import__('uuid').uuid4().hex[:8]}"
 
     print("Testing detection service...")
-    print(f"Request: {json.dumps(test_request, indent=2)}")
+    print(f"  Job ID: {job_id}")
+    print(f"  Video URL: {video_url}")
+    print(f"  Callback URL: {callback_url or '(none - results printed only)'}")
+    print()
 
     # This will run on Modal's infrastructure
-    result = detect_rallies.remote(test_request)
+    result = detect_rallies.remote(
+        job_id=job_id,
+        video_url=video_url,
+        callback_url=callback_url,
+        webhook_secret=None,
+        config={"min_play_duration": 5.0},
+    )
 
-    print(f"\nResponse: {json.dumps(result, indent=2, default=str)}")
+    print(f"\nResponse:\n{json.dumps(result, indent=2, default=str)}")

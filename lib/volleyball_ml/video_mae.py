@@ -400,7 +400,7 @@ class GameStateClassifier:
 
     def classify_segments_batch(
         self, batch_frames: list[list[np.ndarray]]
-    ) -> list[tuple[GameState, float]]:
+    ) -> list[tuple[GameState, float, float, float, float]]:
         """
         Classify multiple segments in a single forward pass.
 
@@ -411,7 +411,9 @@ class GameStateClassifier:
             batch_frames: List of frame lists, each containing exactly 16 BGR frames
 
         Returns:
-            List of (GameState, confidence) tuples for each segment
+            List of (GameState, confidence, no_play_prob, play_prob, service_prob) tuples.
+            The confidence is the max probability (same as before for backward compat).
+            Individual class probabilities enable confidence-aware boundary detection.
         """
         if not batch_frames:
             return []
@@ -457,7 +459,7 @@ class GameStateClassifier:
         batch_processed: list[np.ndarray],
         profiler: "PerformanceProfiler",
         batch_size: int,
-    ) -> list[tuple[GameState, float]]:
+    ) -> list[tuple[GameState, float, float, float, float]]:
         """Run batch inference using ONNX Runtime."""
         from scipy.special import softmax
 
@@ -479,15 +481,19 @@ class GameStateClassifier:
             logits = self._onnx_inference(pixel_values)
 
             # Apply softmax to get probabilities
+            # LABEL_MAP: 0=NO_PLAY, 1=PLAY, 2=SERVICE
             probs = softmax(logits, axis=-1)
             predicted_classes = probs.argmax(axis=-1).tolist()
             confidences = probs.max(axis=-1).tolist()
 
-        # Map to GameState
+        # Map to GameState with full class probabilities
         results = []
-        for pred_class, conf in zip(predicted_classes, confidences):
+        for i, (pred_class, conf) in enumerate(zip(predicted_classes, confidences)):
             state = self.LABEL_MAP.get(pred_class, GameState.NO_PLAY)
-            results.append((state, conf))
+            no_play_prob = float(probs[i, 0])
+            play_prob = float(probs[i, 1])
+            service_prob = float(probs[i, 2])
+            results.append((state, conf, no_play_prob, play_prob, service_prob))
 
         return results
 
@@ -496,7 +502,7 @@ class GameStateClassifier:
         batch_processed: list[np.ndarray],
         profiler: "PerformanceProfiler",
         batch_size: int,
-    ) -> list[tuple[GameState, float]]:
+    ) -> list[tuple[GameState, float, float, float, float]]:
         """Run batch inference using PyTorch."""
         import torch
 
@@ -526,15 +532,21 @@ class GameStateClassifier:
             )
             with ctx:
                 outputs = self._model(**inputs)
+                # LABEL_MAP: 0=NO_PLAY, 1=PLAY, 2=SERVICE
                 probs = torch.softmax(outputs.logits, dim=-1)
                 predicted_classes = probs.argmax(-1).tolist()
                 confidences = probs.max(-1).values.tolist()
+                # Extract individual class probabilities
+                probs_np = probs.cpu().numpy()
 
-        # Map to GameState
+        # Map to GameState with full class probabilities
         results = []
-        for pred_class, conf in zip(predicted_classes, confidences):
+        for i, (pred_class, conf) in enumerate(zip(predicted_classes, confidences)):
             state = self.LABEL_MAP.get(pred_class, GameState.NO_PLAY)
-            results.append((state, conf))
+            no_play_prob = float(probs_np[i, 0])
+            play_prob = float(probs_np[i, 1])
+            service_prob = float(probs_np[i, 2])
+            results.append((state, conf, no_play_prob, play_prob, service_prob))
 
         return results
 

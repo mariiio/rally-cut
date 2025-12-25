@@ -38,7 +38,6 @@ def main():
         video_url=video_url,
         config={
             "min_play_duration": 5.0,
-            "use_two_pass": True,
             "use_proxy": True,
         },
     )

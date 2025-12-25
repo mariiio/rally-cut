@@ -113,16 +113,16 @@ uv run rallycut overlay match.mp4 --trail 20 --smooth 2.0
 uv run rallycut overlay match.mp4 --confidence 0.2
 ```
 
-### Statistics (`stats`)
+### Performance Profiling (`profile`)
 
-Display rally statistics (experimental - best for indoor volleyball):
+Analyze performance bottlenecks in the processing pipeline:
 
 ```bash
-# Show statistics table
-uv run rallycut stats match.mp4
+# Profile processing performance
+uv run rallycut profile match.mp4
 
-# Export to JSON
-uv run rallycut stats match.mp4 --json stats.json
+# Profile with specific segment
+uv run rallycut profile match.mp4 --limit 60
 ```
 
 ## Command Reference
@@ -132,7 +132,7 @@ uv run rallycut stats match.mp4 --json stats.json
 | `rallycut cut <video>` | Remove dead time from video |
 | `rallycut highlights <video>` | Generate highlight reel |
 | `rallycut overlay <video>` | Add ball tracking overlay |
-| `rallycut stats <video>` | Extract game statistics |
+| `rallycut profile <video>` | Analyze processing performance |
 
 ## Global Options
 
@@ -142,7 +142,7 @@ All commands support:
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+
 - FFmpeg (for video processing)
 - ~500MB disk space for ML models
 
@@ -157,7 +157,7 @@ All commands support:
 rallycut/
 ├── cli/              # Typer CLI commands
 ├── core/             # Domain models, config, video handling
-├── analysis/         # ML pipeline, game state, action detection
+├── analysis/         # ML pipeline, game state classification
 ├── processing/       # Video cutting, highlights
 ├── tracking/         # Ball tracking with Kalman filter
 ├── statistics/       # Stats aggregation
@@ -190,8 +190,8 @@ Models are adapted from [volleyball_analytics](https://github.com/masouduut94/vo
 
 ## Known Limitations
 
-- Action detection (stats command) is trained on indoor volleyball and has limited accuracy on beach volleyball footage
 - Ball tracking works best with clear ball visibility and may lose tracking when ball goes out of frame
+- Game state detection accuracy is optimized for standard beach volleyball footage
 
 ## License
 

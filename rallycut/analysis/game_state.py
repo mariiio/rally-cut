@@ -51,7 +51,8 @@ class GameStateAnalyzer:
         progress_callback: Callable[[float, str], None] | None = None,
         limit_seconds: float | None = None,
         batch_size: int | None = None,
-    ) -> list[GameStateResult]:
+        return_raw: bool = False,
+    ) -> list[GameStateResult] | tuple[list[GameStateResult], list[GameStateResult]]:
         """
         Analyze entire video for game states using batch processing.
 
@@ -64,9 +65,11 @@ class GameStateAnalyzer:
             progress_callback: Callback for progress updates (percentage, message)
             limit_seconds: Only analyze first N seconds (for testing)
             batch_size: Number of windows to process in each batch
+            return_raw: If True, returns tuple of (smoothed_results, raw_results)
 
         Returns:
-            List of GameStateResult for each analyzed window
+            List of GameStateResult for each analyzed window, or
+            tuple of (smoothed_results, raw_results) if return_raw=True
         """
         config = get_config()
         stride = stride or config.game_state.stride
@@ -163,7 +166,7 @@ class GameStateAnalyzer:
                     # Process batch
                     batch_results = classifier.classify_segments_batch(batch_frames)
 
-                    for i, (state, confidence) in enumerate(batch_results):
+                    for i, (state, confidence, no_play_prob, play_prob, service_prob) in enumerate(batch_results):
                         # Convert subsampled frame index back to source frame index
                         subsampled_start = batch_starts[i]
                         source_start_frame = subsampled_start * frame_step
@@ -174,6 +177,9 @@ class GameStateAnalyzer:
                                 confidence=confidence,
                                 start_frame=source_start_frame,
                                 end_frame=source_end_frame,
+                                play_confidence=play_prob,
+                                service_confidence=service_prob,
+                                no_play_confidence=no_play_prob,
                             )
                         )
 
@@ -203,7 +209,7 @@ class GameStateAnalyzer:
                 window_frames = frame_buffer[buffer_offset:buffer_offset + window_size]
                 batch_results = classifier.classify_segments_batch([window_frames])
 
-                for state, confidence in batch_results:
+                for state, confidence, no_play_prob, play_prob, service_prob in batch_results:
                     # Convert subsampled frame index back to source frame index
                     source_start_frame = next_window_start * frame_step
                     source_end_frame = source_start_frame + (window_size - 1) * frame_step
@@ -213,6 +219,9 @@ class GameStateAnalyzer:
                             confidence=confidence,
                             start_frame=source_start_frame,
                             end_frame=source_end_frame,
+                            play_confidence=play_prob,
+                            service_confidence=service_prob,
+                            no_play_confidence=no_play_prob,
                         )
                     )
                 windows_processed += 1
@@ -221,11 +230,23 @@ class GameStateAnalyzer:
         if progress_callback:
             progress_callback(1.0, f"Window {windows_processed}/{total_windows}")
 
+        # Store raw results before smoothing (for diagnostics)
+        raw_results = list(results) if return_raw else None
+
         # Apply temporal smoothing if enabled
         if self.enable_temporal_smoothing and results:
             results = self._smooth_results(results, self.temporal_smoothing_window)
 
+        if return_raw:
+            return results, raw_results
         return results
+
+    def smooth_results(
+        self, results: list[GameStateResult], window_size: int | None = None
+    ) -> list[GameStateResult]:
+        """Public method to apply temporal smoothing to results."""
+        ws = window_size if window_size is not None else self.temporal_smoothing_window
+        return self._smooth_results(results, ws)
 
     def _smooth_results(
         self, results: list[GameStateResult], window_size: int = 5
@@ -295,6 +316,9 @@ class GameStateAnalyzer:
                         confidence=result.confidence * 0.9,  # Slightly reduce confidence
                         start_frame=result.start_frame,
                         end_frame=result.end_frame,
+                        play_confidence=result.play_confidence,
+                        service_confidence=result.service_confidence,
+                        no_play_confidence=result.no_play_confidence,
                     )
                 )
             else:
