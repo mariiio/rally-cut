@@ -13,11 +13,15 @@ from rallycut.processing.exporter import FFmpegExporter
 BOUNDARY_CONFIDENCE_THRESHOLD = 0.35
 
 # Minimum number of PLAY/SERVICE windows required to form a valid segment
-MIN_ACTIVE_WINDOWS = 2
+MIN_ACTIVE_WINDOWS = 1
 
 # Minimum density of active windows (active_windows / segment_duration_in_stride_units)
 # This filters segments that span large time ranges but have sparse detections
 MIN_ACTIVE_DENSITY = 0.25
+
+# Minimum video start time for segments (seconds)
+# Filters early-video false positives (warmup/setup that looks like play)
+MIN_SEGMENT_START_SECONDS = 10.0
 
 
 class VideoCutter:
@@ -37,6 +41,7 @@ class VideoCutter:
         use_proxy: bool | None = None,
         min_gap_seconds: float | None = None,
         auto_stride: bool = True,
+        min_segment_start_seconds: float | None = None,
     ):
         config = get_config()
         self.device = device or config.device
@@ -49,6 +54,7 @@ class VideoCutter:
         self.use_proxy = use_proxy if use_proxy is not None else config.proxy.enabled
         self.min_gap_seconds = min_gap_seconds if min_gap_seconds is not None else config.segment.min_gap_seconds
         self.auto_stride = auto_stride
+        self.min_segment_start_seconds = min_segment_start_seconds if min_segment_start_seconds is not None else MIN_SEGMENT_START_SECONDS
 
         self._analyzer = None
         self._proxy_generator = None
@@ -157,23 +163,28 @@ class VideoCutter:
 
     def _count_active_windows_in_range(
         self, results: list[GameStateResult], start_frame: int, end_frame: int
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, float]:
         """Count PLAY and SERVICE windows that overlap with the given frame range.
 
         Returns:
-            Tuple of (play_count, service_count)
+            Tuple of (play_count, service_count, avg_confidence)
         """
         from rallycut.core.models import GameState
 
         play_count = 0
         service_count = 0
+        total_confidence = 0.0
         for r in results:
             if r.end_frame >= start_frame and r.start_frame <= end_frame:
                 if r.state == GameState.PLAY:
                     play_count += 1
+                    total_confidence += r.confidence
                 elif r.state == GameState.SERVICE:
                     service_count += 1
-        return play_count, service_count
+                    total_confidence += r.confidence
+        active_count = play_count + service_count
+        avg_confidence = total_confidence / active_count if active_count > 0 else 0.0
+        return play_count, service_count, avg_confidence
 
     def _get_segments_from_results(self, results, fps) -> list[TimeSegment]:
         """Convert analysis results to merged play segments with hysteresis."""
@@ -319,13 +330,17 @@ class VideoCutter:
             # Filter out segments with too few active windows (isolated false positives)
             # Count windows from ORIGINAL results (before extension) to avoid counting
             # extended NO_PLAY windows that were converted to PLAY
-            play_count, service_count = self._count_active_windows_in_range(
+            play_count, service_count, avg_confidence = self._count_active_windows_in_range(
                 results, segment.start_frame, segment.end_frame
             )
             active_window_count = play_count + service_count
 
             # Require minimum number of active windows
             if active_window_count < MIN_ACTIVE_WINDOWS:
+                continue
+
+            # Filter early-video segments (often warmup/setup that looks like play)
+            if segment.start_time < self.min_segment_start_seconds:
                 continue
 
             # Apply min_play_duration only to multi-window segments

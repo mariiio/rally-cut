@@ -90,7 +90,8 @@ class TestSegmentMerging:
         from rallycut.processing.cutter import VideoCutter
 
         # Use low min_play_duration to not filter out short segments
-        cutter = VideoCutter(min_play_duration=0.1, padding_seconds=0)
+        # Disable early-video filter for unit tests
+        cutter = VideoCutter(min_play_duration=0.1, padding_seconds=0, min_segment_start_seconds=0)
 
         results = [
             GameStateResult(start_frame=0, end_frame=29, state=GameState.PLAY, confidence=0.9),
@@ -108,7 +109,7 @@ class TestSegmentMerging:
         """Test that different states create separate segments."""
         from rallycut.processing.cutter import VideoCutter
 
-        cutter = VideoCutter(min_play_duration=0.1, min_gap_seconds=0.1)
+        cutter = VideoCutter(min_play_duration=0.1, min_gap_seconds=0.1, min_segment_start_seconds=0)
 
         # Need at least 2 PLAY windows to pass MIN_ACTIVE_WINDOWS filter
         results = [
@@ -136,7 +137,7 @@ class TestSegmentMerging:
         """Test handling of two adjacent play results (minimum to pass filter)."""
         from rallycut.processing.cutter import VideoCutter
 
-        cutter = VideoCutter(min_play_duration=0.1)
+        cutter = VideoCutter(min_play_duration=0.1, min_segment_start_seconds=0)
 
         # Need at least 2 PLAY windows to pass MIN_ACTIVE_WINDOWS filter
         results = [
@@ -153,7 +154,7 @@ class TestSegmentMerging:
         from rallycut.processing.cutter import VideoCutter
 
         # min_gap_seconds=1.5 means gaps shorter than 45 frames (at 30fps) are merged
-        cutter = VideoCutter(min_play_duration=0.1, min_gap_seconds=1.5)
+        cutter = VideoCutter(min_play_duration=0.1, min_gap_seconds=1.5, min_segment_start_seconds=0)
 
         results = [
             GameStateResult(start_frame=0, end_frame=59, state=GameState.PLAY, confidence=0.9),
@@ -173,7 +174,7 @@ class TestSegmentMerging:
 
         # min_gap_seconds=1.0 means gaps longer than 30 frames are not merged
         # Use padding_seconds=0 to avoid padding merging segments together
-        cutter = VideoCutter(min_play_duration=0.1, min_gap_seconds=1.0, padding_seconds=0)
+        cutter = VideoCutter(min_play_duration=0.1, min_gap_seconds=1.0, padding_seconds=0, min_segment_start_seconds=0)
 
         # Need at least 2 PLAY windows per segment to pass MIN_ACTIVE_WINDOWS filter
         results = [
