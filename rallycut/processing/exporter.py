@@ -2,8 +2,8 @@
 
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 from rallycut.core.models import TimeSegment
 
@@ -33,7 +33,7 @@ class FFmpegExporter:
         input_path: Path,
         output_path: Path,
         segments: list[TimeSegment],
-        progress_callback: Optional[Callable[[float, str], None]] = None,
+        progress_callback: Callable[[float, str], None] | None = None,
     ) -> Path:
         """
         Export video segments to a single output file.

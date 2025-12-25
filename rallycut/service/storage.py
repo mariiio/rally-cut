@@ -1,8 +1,8 @@
 """Cloud storage utilities for video download."""
 
 import shutil
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -11,7 +11,7 @@ import httpx
 def download_video(
     url: str,
     temp_dir: Path,
-    progress_callback: Optional[Callable[[float, str], None]] = None,
+    progress_callback: Callable[[float, str], None] | None = None,
     timeout: float = 600.0,
 ) -> Path:
     """

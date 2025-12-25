@@ -1,7 +1,6 @@
 """Configuration management for RallyCut."""
 
 from pathlib import Path
-from typing import Optional
 
 import yaml
 from platformdirs import user_cache_dir
@@ -60,7 +59,7 @@ def get_recommended_batch_size(device: str = "auto") -> int:
         return 16
 
 
-def _find_local_weights(relative_path: str) -> Optional[Path]:
+def _find_local_weights(relative_path: str) -> Path | None:
     """Find local weights relative to project root."""
     # Try relative to cwd
     cwd_path = Path.cwd() / relative_path
@@ -81,15 +80,6 @@ def _find_local_weights(relative_path: str) -> Optional[Path]:
 # =============================================================================
 
 
-class MotionConfig(BaseModel):
-    """Motion detection configuration."""
-
-    analysis_size: tuple[int, int] = (320, 180)
-    high_threshold: float = 0.08
-    low_threshold: float = 0.04
-    window_size: int = 5
-
-
 class GameStateConfig(BaseModel):
     """VideoMAE game state classifier configuration."""
 
@@ -97,42 +87,10 @@ class GameStateConfig(BaseModel):
     analysis_size: tuple[int, int] = (224, 224)
     stride: int = 32  # Optimized: was 8, now 2.5x faster with same accuracy
     batch_size: int = 8
-
-
-class TwoPassConfig(BaseModel):
-    """Two-pass analyzer configuration."""
-
-    motion_stride: int = 32
-    ml_stride: int = 32  # Optimized: was 8, 1.77x faster with same quality
-    motion_padding_seconds: float = 3.0
-    boundary_seconds: float = 2.0
-    # Motion thresholds optimized via parameter sweep for accurate rally detection
-    motion_high_threshold: float = 0.04
-    motion_low_threshold: float = 0.02
-    # Confidence-based ML skipping: skip ML when motion confidence is very clear
-    # High confidence PLAY: skip ML if motion_confidence > skip_ml_high_threshold
-    skip_ml_high_threshold: float = 0.90
-    # High confidence NO_PLAY: handled by motion_low_threshold (regions below it aren't included)
-    # Enable/disable confidence-based skipping
-    enable_confidence_skip: bool = True
     # Temporal smoothing: fix isolated classification errors with median filter
     enable_temporal_smoothing: bool = True
     # Window size for temporal smoothing (must be odd)
     temporal_smoothing_window: int = 5
-    # Skip first pass (motion detection) - go directly to ML analysis
-    # Motion detection provides minimal filtering benefit for beach volleyball
-    skip_motion_pass: bool = True
-
-    # Hierarchical coarse-to-fine ML analysis
-    # First probe sparsely, then only refine uncertain areas
-    # NOTE: Disabled by default - random seeking is slow for H.264 videos
-    enable_hierarchical: bool = False
-    # Seconds between sparse probe samples (e.g., 4 = 1 sample per 4 seconds)
-    hierarchical_probe_interval: float = 4.0
-    # Confidence threshold for "certain" classification (skip refinement)
-    hierarchical_certainty_threshold: float = 0.80
-    # Minimum region duration (seconds) to use hierarchical approach
-    hierarchical_min_duration: float = 8.0
 
 
 class BallTrackingConfig(BaseModel):
@@ -209,9 +167,7 @@ class RallyCutConfig(BaseSettings):
     """Configuration settings for RallyCut."""
 
     # Nested configuration groups
-    motion: MotionConfig = Field(default_factory=MotionConfig)
     game_state: GameStateConfig = Field(default_factory=GameStateConfig)
-    two_pass: TwoPassConfig = Field(default_factory=TwoPassConfig)
     ball_tracking: BallTrackingConfig = Field(default_factory=BallTrackingConfig)
     trajectory: TrajectoryConfig = Field(default_factory=TrajectoryConfig)
     overlay: OverlayConfig = Field(default_factory=OverlayConfig)
@@ -226,12 +182,12 @@ class RallyCutConfig(BaseSettings):
     )
 
     # VideoMAE settings (default to local weights if available)
-    videomae_model_path: Optional[Path] = Field(
+    videomae_model_path: Path | None = Field(
         default_factory=lambda: _find_local_weights("weights/videomae/game_state_classifier")
     )
 
     # YOLO settings (default to local weights if available)
-    ball_detector_path: Optional[Path] = Field(
+    ball_detector_path: Path | None = Field(
         default_factory=lambda: _find_local_weights("weights/yolov8/ball_detector/best.pt")
     )
     yolo_confidence: float = 0.25
@@ -249,7 +205,7 @@ class RallyCutConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="RALLYCUT_",
-        env_nested_delimiter="__",  # Allows RALLYCUT_MOTION__HIGH_THRESHOLD
+        env_nested_delimiter="__",  # Allows RALLYCUT_GAME_STATE__STRIDE
     )
 
     # -------------------------------------------------------------------------
@@ -283,7 +239,7 @@ class RallyCutConfig(BaseSettings):
 # Global Config Instance
 # =============================================================================
 
-_config: Optional[RallyCutConfig] = None
+_config: RallyCutConfig | None = None
 
 
 def get_config() -> RallyCutConfig:

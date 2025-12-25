@@ -50,6 +50,7 @@ dependencies = [
     "onnx>=1.20.0",
     "onnxruntime>=1.23.2",
     "onnxscript>=0.5.7",
+    "pytorchvideo>=0.1.5",
 ]
 
 [project.optional-dependencies]

@@ -3,7 +3,6 @@
 import hashlib
 import json
 from pathlib import Path
-from typing import Optional
 
 from platformdirs import user_cache_dir
 
@@ -13,7 +12,7 @@ from rallycut.core.models import GameState, TimeSegment
 class AnalysisCache:
     """Cache for video analysis results."""
 
-    def __init__(self, cache_dir: Optional[Path] = None):
+    def __init__(self, cache_dir: Path | None = None):
         self.cache_dir = cache_dir or Path(user_cache_dir("rallycut")) / "analysis"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -32,16 +31,13 @@ class AnalysisCache:
         return signature
 
     def get_cache_key(
-        self, video_path: Path, stride: int, quick: bool, proxy: bool = False
+        self, video_path: Path, stride: int, proxy: bool = False
     ) -> str:
         """Generate cache key from video signature + analysis settings."""
         file_sig = self._get_file_signature(video_path)
-        if quick:
-            mode = "quick"
-        else:
-            mode = f"ml_s{stride}"
-            if proxy:
-                mode += "_proxy"
+        mode = f"ml_s{stride}"
+        if proxy:
+            mode += "_proxy"
 
         # Hash the combined key for a clean filename
         key_str = f"{file_sig}_{mode}"
@@ -52,11 +48,11 @@ class AnalysisCache:
         return self.cache_dir / f"{cache_key}.json"
 
     def get(
-        self, video_path: Path, stride: int, quick: bool, proxy: bool = False
-    ) -> Optional[list[TimeSegment]]:
+        self, video_path: Path, stride: int, proxy: bool = False
+    ) -> list[TimeSegment] | None:
         """Load cached segments if available."""
         try:
-            cache_key = self.get_cache_key(video_path, stride, quick, proxy)
+            cache_key = self.get_cache_key(video_path, stride, proxy)
             cache_file = self._cache_path(cache_key)
 
             if not cache_file.exists():
@@ -90,19 +86,17 @@ class AnalysisCache:
         self,
         video_path: Path,
         stride: int,
-        quick: bool,
         segments: list[TimeSegment],
         proxy: bool = False,
     ) -> None:
         """Save segments to cache."""
         try:
-            cache_key = self.get_cache_key(video_path, stride, quick, proxy)
+            cache_key = self.get_cache_key(video_path, stride, proxy)
             cache_file = self._cache_path(cache_key)
 
             data = {
                 "video": str(video_path),
                 "stride": stride,
-                "quick": quick,
                 "segments": [
                     {
                         "start_frame": seg.start_frame,

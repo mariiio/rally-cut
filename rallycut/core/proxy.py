@@ -16,9 +16,9 @@ and decode overhead by ~50%, with no loss in detection accuracy.
 
 import hashlib
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
 
 from platformdirs import user_cache_dir
 
@@ -88,8 +88,8 @@ class ProxyGenerator:
 
     def __init__(
         self,
-        config: Optional[ProxyConfig] = None,
-        cache_dir: Optional[Path] = None,
+        config: ProxyConfig | None = None,
+        cache_dir: Path | None = None,
     ):
         self.config = config or ProxyConfig()
         self.cache_dir = cache_dir or Path(user_cache_dir("rallycut")) / "proxies"
@@ -147,7 +147,7 @@ class ProxyGenerator:
     def generate_proxy(
         self,
         source_video: Path,
-        progress_callback: Optional[Callable[[float, str], None]] = None,
+        progress_callback: Callable[[float, str], None] | None = None,
     ) -> Path:
         """Generate a proxy video using ffmpeg.
 
@@ -229,7 +229,7 @@ class ProxyGenerator:
         self,
         source_video: Path,
         source_fps: float,
-        progress_callback: Optional[Callable[[float, str], None]] = None,
+        progress_callback: Callable[[float, str], None] | None = None,
     ) -> tuple[Path, FrameMapper]:
         """Get or create a proxy video with frame mapper.
 

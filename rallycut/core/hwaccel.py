@@ -6,8 +6,8 @@ Supports:
 - Falls back to software decoding if hardware unavailable
 """
 
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 import numpy as np
 

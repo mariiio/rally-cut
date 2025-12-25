@@ -1,17 +1,16 @@
 """Overlay command for ball trajectory visualization."""
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
-from rallycut.cli.utils import handle_errors, validate_video_file, validate_output_path
+from rallycut.cli.utils import handle_errors
 from rallycut.core.video import Video
+from rallycut.output.overlay import OverlayRenderer
 from rallycut.tracking.ball_tracker import BallTracker
 from rallycut.tracking.trajectory import TrajectoryProcessor
-from rallycut.output.overlay import OverlayRenderer, OverlayStyle
 
 console = Console()
 
@@ -24,17 +23,17 @@ def overlay(
         exists=True,
         dir_okay=False,
     ),
-    output: Optional[Path] = typer.Option(
+    output: Path | None = typer.Option(
         None,
         "-o", "--output",
         help="Output video path (default: input_overlay.mp4)",
     ),
-    start: Optional[float] = typer.Option(
+    start: float | None = typer.Option(
         None,
         "-s", "--start",
         help="Start time in seconds",
     ),
-    end: Optional[float] = typer.Option(
+    end: float | None = typer.Option(
         None,
         "-e", "--end",
         help="End time in seconds",
@@ -59,7 +58,7 @@ def overlay(
         "--stride",
         help="Frame stride for tracking (1 = every frame)",
     ),
-    gpu: Optional[bool] = typer.Option(
+    gpu: bool | None = typer.Option(
         None,
         "--gpu/--no-gpu",
         help="Force GPU/CPU for inference",
@@ -88,7 +87,7 @@ def overlay(
     else:
         device = "cpu"
 
-    console.print(f"[bold]Ball Tracking Overlay[/bold]")
+    console.print("[bold]Ball Tracking Overlay[/bold]")
     console.print(f"Input: {video_path}")
     console.print(f"Output: {output}")
     console.print()

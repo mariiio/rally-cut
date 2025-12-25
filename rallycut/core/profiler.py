@@ -4,11 +4,12 @@ import json
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Generator, Optional
+from typing import Any
 
 
 @dataclass
@@ -30,7 +31,7 @@ class StageMetrics:
     end_time: float = 0.0
     duration_seconds: float = 0.0
     items_processed: int = 0
-    parent: Optional[str] = None
+    parent: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def finalize(self) -> None:
@@ -102,7 +103,7 @@ class PerformanceProfiler:
 
     @contextmanager
     def stage(
-        self, name: str, parent: Optional[str] = None, **metadata: Any
+        self, name: str, parent: str | None = None, **metadata: Any
     ) -> Generator[StageMetrics, None, None]:
         """Context manager for tracking a pipeline stage.
 
@@ -324,7 +325,7 @@ class PerformanceProfiler:
         total_time = sum(s.duration_seconds for s in top_level)
 
         print(f"\n{'=' * 65}")
-        print(f"Performance Profile")
+        print("Performance Profile")
         if video_name != "unknown":
             print(f"Video: {video_name} ({video_duration:.1f}s)")
         print(f"{'=' * 65}")
@@ -375,7 +376,7 @@ class PerformanceProfiler:
 
 
 # Global profiler instance (disabled by default)
-_global_profiler: Optional[PerformanceProfiler] = None
+_global_profiler: PerformanceProfiler | None = None
 
 
 def get_profiler() -> PerformanceProfiler:

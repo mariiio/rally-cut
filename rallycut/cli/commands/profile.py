@@ -2,7 +2,6 @@
 
 import json
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -10,7 +9,7 @@ from rich.table import Table
 
 from rallycut.cli.utils import handle_errors
 from rallycut.core.config import get_config
-from rallycut.core.profiler import enable_profiling, get_profiler
+from rallycut.core.profiler import enable_profiling
 from rallycut.processing.cutter import VideoCutter
 
 console = Console()
@@ -23,7 +22,7 @@ def profile(
         exists=True,
         help="Input video file to profile",
     ),
-    output_json: Optional[Path] = typer.Option(
+    output_json: Path | None = typer.Option(
         None,
         "--output-json", "-o",
         help="Save profile results to JSON file",
@@ -36,7 +35,7 @@ def profile(
 ) -> None:
     """Profile video analysis to identify performance bottlenecks.
 
-    Runs the full two-pass analysis pipeline with detailed timing instrumentation.
+    Runs the ML analysis pipeline with detailed timing instrumentation.
     Use this to understand where time is spent and identify optimization opportunities.
     """
     config = get_config()
@@ -50,7 +49,6 @@ def profile(
     console.print("\n[yellow]Running analysis with profiling...[/yellow]\n")
 
     cutter = VideoCutter(
-        use_two_pass=True,
         device=config.device,
         use_proxy=use_proxy,
     )
@@ -62,7 +60,7 @@ def profile(
     report = profiler.report()
 
     # Display results
-    console.print(f"\n[green]Analysis complete![/green]")
+    console.print("\n[green]Analysis complete![/green]")
     console.print(f"Found {len(segments)} segments\n")
 
     # Print formatted report

@@ -7,7 +7,7 @@ Beach volleyball video analysis CLI - auto-cut dead time, generate highlights, a
 - **Auto-cut dead time**: Automatically remove no-play segments from recordings using VideoMAE ML model
 - **Highlight generation**: Auto-generate highlight reels from the longest rallies
 - **Ball tracking overlay**: Visual ball trajectory overlay on exported videos
-- **Quick mode**: Fast motion-based analysis when ML precision isn't needed
+- **Proxy mode**: 480p proxy videos for faster ML processing
 
 ## Installation
 
@@ -58,8 +58,8 @@ uv run rallycut cut match.mp4 --json segments.json
 # Load segments from JSON (skip analysis)
 uv run rallycut cut match.mp4 --segments segments.json
 
-# Quick mode (motion-based, faster but less accurate)
-uv run rallycut cut match.mp4 --quick
+# Disable proxy for full-resolution analysis (slower)
+uv run rallycut cut match.mp4 --no-proxy
 
 # Adjust padding around play segments
 uv run rallycut cut match.mp4 --padding 2.0

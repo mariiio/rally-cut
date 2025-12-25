@@ -3,7 +3,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 
 class GameState(str, Enum):
@@ -74,9 +73,9 @@ class GameStateResult:
 
     state: GameState
     confidence: float
-    start_frame: Optional[int] = None
-    end_frame: Optional[int] = None
-    frame_idx: Optional[int] = None
+    start_frame: int | None = None
+    end_frame: int | None = None
+    frame_idx: int | None = None
 
     def __post_init__(self):
         """Handle flexible initialization."""
@@ -124,10 +123,10 @@ class Action:
     frame_idx: int
     timestamp: float
     confidence: float
-    bbox: Optional[BoundingBox] = None
+    bbox: BoundingBox | None = None
 
     @property
-    def position(self) -> Optional[tuple[float, float]]:
+    def position(self) -> tuple[float, float] | None:
         """Get center position if bbox available."""
         if self.bbox:
             return self.bbox.center
@@ -173,10 +172,10 @@ class ActionCount:
     """Count of actions with optional success tracking."""
 
     count: int
-    success_count: Optional[int] = None
+    success_count: int | None = None
 
     @property
-    def success_rate(self) -> Optional[float]:
+    def success_rate(self) -> float | None:
         """Calculate success rate if success_count is set."""
         if self.success_count is None or self.count == 0:
             return None

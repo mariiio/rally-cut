@@ -1,8 +1,8 @@
 """Highlight generation for RallyCut."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
 
 from rallycut.core.models import TimeSegment
 from rallycut.processing.exporter import FFmpegExporter
@@ -122,7 +122,7 @@ class HighlightGenerator:
         segments: list[TimeSegment],
         count: int = 5,
         chronological: bool = True,
-        progress_callback: Optional[Callable[[float, str], None]] = None,
+        progress_callback: Callable[[float, str], None] | None = None,
     ) -> tuple[Path, list[ScoredSegment]]:
         """
         Generate a highlights video from the top rallies.
@@ -170,7 +170,7 @@ class HighlightGenerator:
         segments: list[TimeSegment],
         count: int = 5,
         prefix: str = "highlight",
-        progress_callback: Optional[Callable[[float, str], None]] = None,
+        progress_callback: Callable[[float, str], None] | None = None,
     ) -> list[tuple[Path, ScoredSegment]]:
         """
         Export top highlights as individual clips.

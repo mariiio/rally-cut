@@ -2,11 +2,10 @@
 
 import json
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 from rich.table import Table
 
 from rallycut.cli.utils import format_time, handle_errors
@@ -44,7 +43,7 @@ def cut(
         dir_okay=False,
         readable=True,
     ),
-    output: Optional[Path] = typer.Option(
+    output: Path | None = typer.Option(
         None,
         "--output", "-o",
         help="Output video path (default: {video}_cut.mp4)",
@@ -54,7 +53,7 @@ def cut(
         "--padding", "-p",
         help="Seconds of padding before play segments",
     ),
-    padding_end: Optional[float] = typer.Option(
+    padding_end: float | None = typer.Option(
         None,
         "--padding-end",
         help="Seconds of padding after play segments (default: padding + 0.5s)",
@@ -74,27 +73,22 @@ def cut(
         "--dry-run", "-n",
         help="Only analyze and show segments, don't generate video",
     ),
-    quick: bool = typer.Option(
-        False,
-        "--quick", "-q",
-        help="Use fast motion detection instead of ML model (less accurate)",
-    ),
-    output_json: Optional[Path] = typer.Option(
+    output_json: Path | None = typer.Option(
         None,
         "--json",
         help="Output segments as JSON to file",
     ),
-    input_segments: Optional[Path] = typer.Option(
+    input_segments: Path | None = typer.Option(
         None,
         "--segments",
         help="Load segments from JSON file (skip analysis)",
     ),
-    gpu: Optional[bool] = typer.Option(
+    gpu: bool | None = typer.Option(
         None,
         "--gpu/--no-gpu",
         help="Enable/disable GPU acceleration (auto-detected by default)",
     ),
-    limit: Optional[float] = typer.Option(
+    limit: float | None = typer.Option(
         None,
         "--limit", "-l",
         help="Only analyze first N seconds of video (for testing)",
@@ -107,12 +101,7 @@ def cut(
     proxy: bool = typer.Option(
         True,
         "--proxy/--no-proxy",
-        help="Use 480p@15fps proxy for 2-4x faster ML analysis (default: on)",
-    ),
-    two_pass: bool = typer.Option(
-        True,
-        "--two-pass/--full-scan",
-        help="Use two-pass: motion scan then ML on motion only (2-3x faster)",
+        help="Use 480p@30fps proxy for faster ML analysis (default: on)",
     ),
     min_gap: float = typer.Option(
         3.0,
@@ -129,7 +118,7 @@ def cut(
         "--profile",
         help="Enable profiling and show timing breakdown after analysis",
     ),
-    profile_json: Optional[Path] = typer.Option(
+    profile_json: Path | None = typer.Option(
         None,
         "--profile-json",
         help="Export profiling results to JSON file",
@@ -161,14 +150,12 @@ def cut(
     else:
         device = config.device
 
-    console.print(f"\n[bold]RallyCut[/bold] - Dead Time Removal")
+    console.print("\n[bold]RallyCut[/bold] - Dead Time Removal")
     console.print(f"Input: [cyan]{video}[/cyan]")
     if not dry_run:
         console.print(f"Output: [cyan]{output}[/cyan]")
     console.print(f"Device: [yellow]{device}[/yellow]")
     mode_str = "Analysis only" if dry_run else "Full processing"
-    if quick:
-        mode_str += " (quick motion detection)"
     console.print(f"Mode: [yellow]{mode_str}[/yellow]")
 
     # Get video info first to calculate effective stride
@@ -217,10 +204,8 @@ def cut(
         padding_end_seconds=padding_end,
         min_play_duration=min_play,
         stride=stride,
-        use_quick_mode=quick,
-        use_two_pass=two_pass and not quick,  # Two-pass only when not quick mode
         limit_seconds=limit,
-        use_proxy=proxy,  # Proxy handled by TwoPassAnalyzer
+        use_proxy=proxy,
         min_gap_seconds=min_gap,
         auto_stride=auto_stride,
     )
@@ -293,7 +278,7 @@ def cut(
             segments = None
 
             if not no_cache and limit is None:
-                segments = cache.get(video, stride, quick, proxy)
+                segments = cache.get(video, stride, proxy)
                 if segments:
                     console.print("[dim]Using cached analysis[/dim]")
 
@@ -314,7 +299,7 @@ def cut(
                 )
                 # Cache results (only if not using --limit)
                 if limit is None and segments:
-                    cache.set(video, stride, quick, segments, proxy)
+                    cache.set(video, stride, segments, proxy)
             else:
                 # Full processing
                 output_path, segments = cutter.cut_video(
@@ -324,7 +309,7 @@ def cut(
                 )
                 # Cache results (only if not using --limit)
                 if limit is None and segments:
-                    cache.set(video, stride, quick, segments, proxy)
+                    cache.set(video, stride, segments, proxy)
 
         progress.update(task, completed=100, description="Complete!")
 

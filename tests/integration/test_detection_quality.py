@@ -106,12 +106,10 @@ class TestDetectionQuality:
             pytest.skip(f"Test video not found: {VIDEO_PATH}")
 
         # Use VideoCutter.analyze_only() - the main entry point
-        # use_two_pass=True is required for accurate detection
         cutter = VideoCutter(
             padding_seconds=1.0,
             min_play_duration=2.0,
             stride=32,
-            use_two_pass=True,
         )
 
         segments = cutter.analyze_only(VIDEO_PATH)
@@ -229,12 +227,10 @@ class TestDetectionQualityMatch2:
         if not VIDEO_PATH_MATCH2.exists():
             pytest.skip(f"Test video not found: {VIDEO_PATH_MATCH2}")
 
-        # use_two_pass=True is required for accurate detection
         cutter = VideoCutter(
             padding_seconds=1.0,
             min_play_duration=2.0,
             stride=32,
-            use_two_pass=True,
         )
 
         segments = cutter.analyze_only(VIDEO_PATH_MATCH2)

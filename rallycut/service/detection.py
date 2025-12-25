@@ -2,9 +2,9 @@
 
 import time
 import uuid
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
 
 from rallycut.core.models import GameState
 from rallycut.core.video import Video
@@ -33,7 +33,7 @@ class DetectionService:
     def __init__(
         self,
         device: str = "cuda",
-        temp_dir: Optional[Path] = None,
+        temp_dir: Path | None = None,
     ):
         """
         Initialize detection service.
@@ -50,7 +50,7 @@ class DetectionService:
     def detect(
         self,
         request: DetectionRequest,
-        progress_callback: Optional[Callable[[float, str], None]] = None,
+        progress_callback: Callable[[float, str], None] | None = None,
     ) -> DetectionResponse:
         """
         Run rally detection on a video from cloud storage.
@@ -100,7 +100,6 @@ class DetectionService:
                 padding_seconds=config.padding_seconds,
                 min_play_duration=config.min_play_duration,
                 min_gap_seconds=config.min_gap_seconds,
-                use_two_pass=config.use_two_pass,
                 use_proxy=config.use_proxy,
                 stride=config.stride,
             )

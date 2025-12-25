@@ -1,5 +1,6 @@
 """Core domain models and configuration."""
 
+from rallycut.core.config import RallyCutConfig, get_config
 from rallycut.core.models import (
     Action,
     ActionCount,
@@ -13,7 +14,6 @@ from rallycut.core.models import (
     TimeSegment,
     VideoInfo,
 )
-from rallycut.core.config import get_config, RallyCutConfig
 
 __all__ = [
     "Action",
