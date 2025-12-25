@@ -42,9 +42,10 @@ class TestGameStateClassifierMocked:
         from pathlib import Path
 
         # Mock classifier with batch method
+        # Returns: (state, confidence, no_play_prob, play_prob, service_prob)
         mock_classifier = Mock()
         mock_classifier.classify_segments_batch.return_value = [
-            (GameState.PLAY, 0.9)
+            (GameState.PLAY, 0.9, 0.05, 0.9, 0.05)
         ]
         mock_get_classifier.return_value = mock_classifier
 
@@ -109,9 +110,11 @@ class TestSegmentMerging:
 
         cutter = VideoCutter(min_play_duration=0.1, min_gap_seconds=0.1)
 
+        # Need at least 2 PLAY windows to pass MIN_ACTIVE_WINDOWS filter
         results = [
             GameStateResult(start_frame=0, end_frame=29, state=GameState.NO_PLAY, confidence=0.9),
-            GameStateResult(start_frame=30, end_frame=89, state=GameState.PLAY, confidence=0.95),
+            GameStateResult(start_frame=30, end_frame=59, state=GameState.PLAY, confidence=0.95),
+            GameStateResult(start_frame=60, end_frame=89, state=GameState.PLAY, confidence=0.92),
             GameStateResult(start_frame=90, end_frame=120, state=GameState.NO_PLAY, confidence=0.88),
         ]
 
@@ -130,13 +133,15 @@ class TestSegmentMerging:
         assert segments == []
 
     def test_single_play_result(self):
-        """Test handling of single play result."""
+        """Test handling of two adjacent play results (minimum to pass filter)."""
         from rallycut.processing.cutter import VideoCutter
 
         cutter = VideoCutter(min_play_duration=0.1)
 
+        # Need at least 2 PLAY windows to pass MIN_ACTIVE_WINDOWS filter
         results = [
-            GameStateResult(start_frame=0, end_frame=60, state=GameState.PLAY, confidence=0.9)
+            GameStateResult(start_frame=0, end_frame=30, state=GameState.PLAY, confidence=0.9),
+            GameStateResult(start_frame=31, end_frame=60, state=GameState.PLAY, confidence=0.85),
         ]
 
         segments = cutter._get_segments_from_results(results, fps=30.0)
@@ -170,11 +175,14 @@ class TestSegmentMerging:
         # Use padding_seconds=0 to avoid padding merging segments together
         cutter = VideoCutter(min_play_duration=0.1, min_gap_seconds=1.0, padding_seconds=0)
 
+        # Need at least 2 PLAY windows per segment to pass MIN_ACTIVE_WINDOWS filter
         results = [
-            GameStateResult(start_frame=0, end_frame=59, state=GameState.PLAY, confidence=0.9),
+            GameStateResult(start_frame=0, end_frame=29, state=GameState.PLAY, confidence=0.9),
+            GameStateResult(start_frame=30, end_frame=59, state=GameState.PLAY, confidence=0.88),
             # Long gap (90 frames = 3 seconds > 1 second threshold)
             GameStateResult(start_frame=60, end_frame=149, state=GameState.NO_PLAY, confidence=0.8),
-            GameStateResult(start_frame=150, end_frame=209, state=GameState.PLAY, confidence=0.85),
+            GameStateResult(start_frame=150, end_frame=179, state=GameState.PLAY, confidence=0.85),
+            GameStateResult(start_frame=180, end_frame=209, state=GameState.PLAY, confidence=0.82),
         ]
 
         segments = cutter._get_segments_from_results(results, fps=30.0)
@@ -189,18 +197,26 @@ class TestSegmentMerging:
         # 2 seconds = 60 frames min duration, no padding
         cutter = VideoCutter(min_play_duration=2.0, padding_seconds=0, min_gap_seconds=5.0)
 
+        # Need at least 2 PLAY windows per segment to pass MIN_ACTIVE_WINDOWS filter
         results = [
-            # Short segment (30 frames = 1 second) - should be filtered
-            GameStateResult(start_frame=0, end_frame=29, state=GameState.PLAY, confidence=0.9),
+            # Short segment with 2 windows (40 frames total < 60 frames = 2 seconds) - filtered
+            GameStateResult(start_frame=0, end_frame=19, state=GameState.PLAY, confidence=0.9),
+            GameStateResult(start_frame=20, end_frame=39, state=GameState.PLAY, confidence=0.88),
             # Long gap to prevent merging
-            GameStateResult(start_frame=30, end_frame=299, state=GameState.NO_PLAY, confidence=0.8),
-            # Long segment (120 frames = 4 seconds) - should pass
-            GameStateResult(start_frame=300, end_frame=419, state=GameState.PLAY, confidence=0.85),
+            GameStateResult(start_frame=40, end_frame=299, state=GameState.NO_PLAY, confidence=0.8),
+            # Long segment with 4 windows (120 frames = 4 seconds) - should pass
+            GameStateResult(start_frame=300, end_frame=329, state=GameState.PLAY, confidence=0.85),
+            GameStateResult(start_frame=330, end_frame=359, state=GameState.PLAY, confidence=0.82),
+            GameStateResult(start_frame=360, end_frame=389, state=GameState.PLAY, confidence=0.80),
+            GameStateResult(start_frame=390, end_frame=419, state=GameState.PLAY, confidence=0.78),
         ]
 
         segments = cutter._get_segments_from_results(results, fps=30.0)
 
-        # Only the long segment should remain
+        # Both segments should remain since both have 2+ windows
+        # The first segment (40 frames = 1.33s) is below min_play_duration but
+        # min_play_duration filter only applies to multi-window segments
+        # Since both have 2+ windows and are multi-window, min_duration applies
         assert len(segments) == 1
         assert segments[0].start_frame >= 300  # The longer segment
 

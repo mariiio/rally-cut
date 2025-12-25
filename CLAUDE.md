@@ -15,7 +15,7 @@ Beach volleyball video analysis CLI. Uses ML (VideoMAE, YOLOv8) to detect game s
 uv run rallycut cut <video.mp4>        # Remove dead time
 uv run rallycut highlights <video.mp4> # Extract top rallies
 uv run rallycut overlay <video.mp4>    # Ball tracking overlay
-uv run rallycut stats <video.mp4>      # Game statistics
+uv run rallycut profile <video.mp4>    # Performance profiling
 
 # Development
 uv run pytest tests                    # Run tests (excludes slow ML tests)
@@ -28,7 +28,7 @@ uv run ruff check rallycut/            # Lint
 
 ```
 rallycut/
-├── cli/commands/    # Typer commands (cut, stats, highlights, overlay)
+├── cli/commands/    # Typer commands (cut, highlights, overlay, profile)
 ├── core/            # Config (Pydantic), models, Video wrapper, caching
 ├── analysis/        # GameStateAnalyzer (VideoMAE ML classifier)
 ├── processing/      # VideoCutter, HighlightScorer, FFmpegExporter

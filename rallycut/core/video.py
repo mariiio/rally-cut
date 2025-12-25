@@ -158,7 +158,7 @@ class Video:
 
         For OpenCV fallback:
         - step <= 16: Uses sequential reading (optimal for dense access)
-        - step > 16: Uses seeking (optimal for sparse access like motion detection)
+        - step > 16: Uses seeking (optimal for sparse frame sampling)
         """
         # Use hardware-accelerated decoder if available
         if self._hwaccel_decoder is not None:

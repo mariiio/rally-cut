@@ -19,6 +19,105 @@ app = typer.Typer(help="Remove dead time from volleyball videos")
 console = Console()
 
 
+def _print_diagnostics(console: Console, diagnostic_data: dict, fps: float) -> None:
+    """Print diagnostic information about ML classifications."""
+    from rallycut.core.models import GameState
+
+    raw_results = diagnostic_data["raw_results"]
+    smoothed_results = diagnostic_data["smoothed_results"]
+    raw_segments = diagnostic_data["raw_segments"]
+
+    console.print()
+    console.print("[bold cyan]═══ Diagnostic Report ═══[/bold cyan]")
+    console.print()
+
+    # Raw ML classification distribution
+    console.print("[bold]Raw ML Classifications (before smoothing):[/bold]")
+    state_counts = {GameState.PLAY: 0, GameState.SERVICE: 0, GameState.NO_PLAY: 0}
+    confidence_sums = {GameState.PLAY: 0.0, GameState.SERVICE: 0.0, GameState.NO_PLAY: 0.0}
+
+    for r in raw_results:
+        state_counts[r.state] += 1
+        confidence_sums[r.state] += r.confidence
+
+    total = len(raw_results)
+    for state, count in state_counts.items():
+        pct = (count / total * 100) if total > 0 else 0
+        avg_conf = (confidence_sums[state] / count) if count > 0 else 0
+        console.print(f"  {state.value:8s}: {count:3d} windows ({pct:5.1f}%), avg confidence: {avg_conf:.2f}")
+
+    # Smoothing changes
+    console.print()
+    console.print("[bold]Temporal Smoothing Changes:[/bold]")
+    changes = 0
+    for raw, smooth in zip(raw_results, smoothed_results):
+        if raw.state != smooth.state:
+            changes += 1
+    console.print(f"  Windows changed by smoothing: {changes} / {total}")
+
+    # Smoothed distribution
+    console.print()
+    console.print("[bold]After Smoothing:[/bold]")
+    smooth_counts = {GameState.PLAY: 0, GameState.SERVICE: 0, GameState.NO_PLAY: 0}
+    for r in smoothed_results:
+        smooth_counts[r.state] += 1
+
+    for state, count in smooth_counts.items():
+        pct = (count / total * 100) if total > 0 else 0
+        console.print(f"  {state.value:8s}: {count:3d} windows ({pct:5.1f}%)")
+
+    # Raw segments (before min_duration filter)
+    console.print()
+    console.print("[bold]Segments Before Duration Filter:[/bold]")
+    for i, seg in enumerate(raw_segments, 1):
+        status = "[green]KEPT[/green]" if seg.duration >= 5.0 else "[red]FILTERED (<5s)[/red]"
+        console.print(f"  {i}. {seg.start_time:6.1f}s - {seg.end_time:6.1f}s ({seg.duration:5.1f}s) {seg.state.value} {status}")
+
+    # Timeline visualization
+    console.print()
+    console.print("[bold]Timeline (each char = ~1 second):[/bold]")
+
+    # Build raw timeline
+    duration = max(r.end_frame for r in raw_results) / fps if raw_results else 0
+    raw_timeline = []
+    smooth_timeline = []
+
+    for sec in range(int(duration) + 1):
+        # Find result covering this second
+        raw_state = "-"
+        smooth_state = "-"
+
+        for r in raw_results:
+            if r.start_frame / fps <= sec < r.end_frame / fps:
+                if r.state == GameState.PLAY:
+                    raw_state = "P"
+                elif r.state == GameState.SERVICE:
+                    raw_state = "S"
+                else:
+                    raw_state = "N"
+                break
+
+        for r in smoothed_results:
+            if r.start_frame / fps <= sec < r.end_frame / fps:
+                if r.state == GameState.PLAY:
+                    smooth_state = "P"
+                elif r.state == GameState.SERVICE:
+                    smooth_state = "S"
+                else:
+                    smooth_state = "N"
+                break
+
+        raw_timeline.append(raw_state)
+        smooth_timeline.append(smooth_state)
+
+    # Print timeline with markers every 10 seconds
+    console.print("  Time:    " + "".join(f"{i:<10d}" for i in range(0, len(raw_timeline), 10)))
+    console.print("  Raw:     " + "".join(raw_timeline))
+    console.print("  Smooth:  " + "".join(smooth_timeline))
+    console.print()
+    console.print("  Legend: P=PLAY, S=SERVICE, N=NO_PLAY, -=unknown")
+
+
 def parse_time(time_str: str) -> float:
     """Parse time string like '0:12', '1:30', '1:02:30' to seconds."""
     parts = time_str.strip().split(":")
@@ -49,7 +148,7 @@ def cut(
         help="Output video path (default: {video}_cut.mp4)",
     ),
     padding: float = typer.Option(
-        1.0,
+        3.0,
         "--padding", "-p",
         help="Seconds of padding before play segments",
     ),
@@ -59,7 +158,7 @@ def cut(
         help="Seconds of padding after play segments (default: padding + 0.5s)",
     ),
     min_play: float = typer.Option(
-        5.0,
+        1.0,
         "--min-play",
         help="Minimum play duration in seconds to keep",
     ),
@@ -104,7 +203,7 @@ def cut(
         help="Use 480p@30fps proxy for faster ML analysis (default: on)",
     ),
     min_gap: float = typer.Option(
-        3.0,
+        5.0,
         "--min-gap",
         help="Min NO_PLAY gap (seconds) before ending a rally (higher = longer rallies)",
     ),
@@ -122,6 +221,11 @@ def cut(
         None,
         "--profile-json",
         help="Export profiling results to JSON file",
+    ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        help="Show detailed ML classification diagnostics",
     ),
 ):
     """
@@ -223,6 +327,9 @@ def cut(
         def update_progress(pct: float, msg: str):
             progress.update(task, completed=int(pct * 100), description=msg)
 
+        # Initialize diagnostic_data (may be populated in debug mode)
+        diagnostic_data = None
+
         if input_segments:
             # Load segments from JSON file
             progress.update(task, completed=50, description="Loading segments...")
@@ -277,7 +384,7 @@ def cut(
             cache = AnalysisCache()
             segments = None
 
-            if not no_cache and limit is None:
+            if not no_cache and limit is None and not debug:
                 segments = cache.get(video, stride, proxy)
                 if segments:
                     console.print("[dim]Using cached analysis[/dim]")
@@ -291,6 +398,14 @@ def cut(
                         video, output, segments,
                         progress_callback=lambda p, m: progress.update(task, completed=int(p * 100), description=m)
                     )
+            elif debug:
+                # Debug mode - get full diagnostic data
+                diagnostic_data = cutter.analyze_with_diagnostics(
+                    video,
+                    progress_callback=update_progress,
+                )
+                segments = diagnostic_data["final_segments"]
+                # Don't cache diagnostic results
             elif dry_run:
                 # Analysis only
                 segments = cutter.analyze_only(
@@ -346,6 +461,10 @@ def cut(
     console.print(f"  Play duration:     {format_time(stats['kept_duration'])}")
     console.print(f"  Dead time:         {format_time(stats['removed_duration'])} ({stats['removed_percentage']:.1f}%)")
     console.print(f"  Segments found:    {stats['segment_count']}")
+
+    # Print diagnostic output if debug mode
+    if debug and diagnostic_data:
+        _print_diagnostics(console, diagnostic_data, video_info.fps)
 
     # Output JSON if requested
     if output_json:

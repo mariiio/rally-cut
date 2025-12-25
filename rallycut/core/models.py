@@ -76,8 +76,12 @@ class GameStateResult:
     start_frame: int | None = None
     end_frame: int | None = None
     frame_idx: int | None = None
+    # Individual class probabilities for confidence-aware boundary detection
+    play_confidence: float = 0.0
+    service_confidence: float = 0.0
+    no_play_confidence: float = 0.0
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Handle flexible initialization."""
         # If only frame_idx provided, use it for start/end
         if self.frame_idx is not None and self.start_frame is None:

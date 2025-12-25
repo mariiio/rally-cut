@@ -1,6 +1,6 @@
 ---
 name: video-analysis
-description: Run RallyCut video analysis commands - cut dead time, extract highlights, add overlays, get statistics. Use when processing volleyball videos or configuring analysis parameters.
+description: Run RallyCut video analysis commands - cut dead time, extract highlights, add overlays, profile performance. Use when processing volleyball videos or configuring analysis parameters.
 allowed-tools: Bash, Read
 ---
 
@@ -11,7 +11,6 @@ allowed-tools: Bash, Read
 uv run rallycut cut <video.mp4>        # Remove dead time
 uv run rallycut highlights <video.mp4> # Extract top rallies
 uv run rallycut overlay <video.mp4>    # Ball tracking overlay
-uv run rallycut stats <video.mp4>      # Game statistics
 uv run rallycut profile <video.mp4>    # Performance profiling
 ```
 
