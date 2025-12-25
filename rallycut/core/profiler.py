@@ -1,10 +1,13 @@
 """Performance profiling utilities for RallyCut."""
 
+import json
 import threading
 import time
 from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Generator, Optional
 
 
@@ -18,22 +21,52 @@ class TimingEntry:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class StageMetrics:
+    """Metrics for a pipeline stage with hierarchical support."""
+
+    name: str
+    start_time: float
+    end_time: float = 0.0
+    duration_seconds: float = 0.0
+    items_processed: int = 0
+    parent: Optional[str] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def finalize(self) -> None:
+        """Calculate duration when stage ends."""
+        self.duration_seconds = self.end_time - self.start_time
+
+
 class PerformanceProfiler:
     """Thread-safe performance profiler for timing collection.
 
     Usage:
         profiler = PerformanceProfiler()
 
+        # Simple timing
         with profiler.time("videomae", "inference"):
             # ... code to time ...
+
+        # Stage tracking with hierarchy
+        with profiler.stage("ml_analysis") as stage:
+            stage.items_processed = 100
+            with profiler.stage("preprocessing", parent="ml_analysis"):
+                # ... preprocessing ...
+            with profiler.stage("inference", parent="ml_analysis"):
+                # ... inference ...
 
         report = profiler.report()
     """
 
     def __init__(self) -> None:
         self._entries: list[TimingEntry] = []
+        self._stages: list[StageMetrics] = []
+        self._active_stages: dict[str, StageMetrics] = {}
         self._lock = threading.Lock()
         self._enabled = True
+        self._config_snapshot: dict[str, Any] = {}
+        self._video_info: dict[str, Any] = {}
 
     def enable(self) -> None:
         """Enable profiling."""
@@ -47,6 +80,66 @@ class PerformanceProfiler:
         """Clear all collected entries."""
         with self._lock:
             self._entries.clear()
+            self._stages.clear()
+            self._active_stages.clear()
+            self._config_snapshot.clear()
+            self._video_info.clear()
+
+    def set_config(self, config: dict[str, Any]) -> None:
+        """Store configuration snapshot for experiment tracking."""
+        self._config_snapshot = config
+
+    def set_video_info(
+        self, path: str, duration_seconds: float, fps: float, frame_count: int
+    ) -> None:
+        """Store video information."""
+        self._video_info = {
+            "path": path,
+            "duration_seconds": duration_seconds,
+            "fps": fps,
+            "frame_count": frame_count,
+        }
+
+    @contextmanager
+    def stage(
+        self, name: str, parent: Optional[str] = None, **metadata: Any
+    ) -> Generator[StageMetrics, None, None]:
+        """Context manager for tracking a pipeline stage.
+
+        Args:
+            name: Stage name (e.g., "proxy_generation", "ml_analysis")
+            parent: Parent stage name for hierarchy
+            **metadata: Additional metadata
+
+        Yields:
+            StageMetrics object that can be updated during execution
+        """
+        if not self._enabled:
+            # Return a dummy stage that does nothing
+            dummy = StageMetrics(name=name, start_time=0.0, parent=parent)
+            yield dummy
+            return
+
+        stage = StageMetrics(
+            name=name,
+            start_time=time.perf_counter(),
+            parent=parent,
+            metadata=metadata,
+        )
+
+        with self._lock:
+            self._active_stages[name] = stage
+
+        try:
+            yield stage
+        finally:
+            stage.end_time = time.perf_counter()
+            stage.finalize()
+
+            with self._lock:
+                self._stages.append(stage)
+                if name in self._active_stages:
+                    del self._active_stages[name]
 
     @contextmanager
     def time(
@@ -175,6 +268,110 @@ class PerformanceProfiler:
                     f"({op_data['count']}x, avg {op_data['avg_seconds']*1000:.1f}ms)"
                 )
         print(f"{'=' * 60}\n")
+
+    def get_stages(self) -> list[StageMetrics]:
+        """Get all completed stage metrics."""
+        with self._lock:
+            return list(self._stages)
+
+    def stages_report(self) -> dict[str, Any]:
+        """Generate a report of stage timings with hierarchy.
+
+        Returns:
+            Dict with structure including stages, video info, and config.
+        """
+        stages = self.get_stages()
+
+        # Build stage hierarchy
+        stage_data = []
+        for stage in stages:
+            stage_data.append({
+                "name": stage.name,
+                "duration_seconds": round(stage.duration_seconds, 4),
+                "items_processed": stage.items_processed,
+                "parent": stage.parent,
+                "metadata": stage.metadata,
+            })
+
+        # Calculate total from top-level stages only
+        top_level_total = sum(
+            s.duration_seconds for s in stages if s.parent is None
+        )
+
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "total_seconds": round(top_level_total, 4),
+            "video": self._video_info,
+            "config": self._config_snapshot,
+            "stages": stage_data,
+            "entries": self.report(),
+        }
+
+    def print_stages_report(self) -> None:
+        """Print a formatted stages report to stdout."""
+        stages = self.get_stages()
+        if not stages:
+            print("No stages recorded.")
+            return
+
+        # Get video info
+        video_info = self._video_info
+        video_name = Path(video_info.get("path", "unknown")).name
+        video_duration = video_info.get("duration_seconds", 0)
+
+        # Calculate total from top-level stages
+        top_level = [s for s in stages if s.parent is None]
+        total_time = sum(s.duration_seconds for s in top_level)
+
+        print(f"\n{'=' * 65}")
+        print(f"Performance Profile")
+        if video_name != "unknown":
+            print(f"Video: {video_name} ({video_duration:.1f}s)")
+        print(f"{'=' * 65}")
+
+        # Print stages table
+        print(f"\n{'Stage':<30} | {'Time':>10} | {'%':>6} | {'Items':>8}")
+        print("-" * 65)
+
+        for stage in stages:
+            indent = "  " if stage.parent else ""
+            name = f"{indent}{stage.name}"
+            pct = (stage.duration_seconds / total_time * 100) if total_time > 0 else 0
+            items = stage.items_processed if stage.items_processed > 0 else ""
+            print(f"{name:<30} | {stage.duration_seconds:>9.2f}s | {pct:>5.1f}% | {items:>8}")
+
+        print("-" * 65)
+        print(f"{'Total':<30} | {total_time:>9.2f}s | {'100.0':>5}% |")
+        print(f"{'=' * 65}")
+
+        # Print throughput stats if available
+        if video_duration > 0 and total_time > 0:
+            speed_ratio = video_duration / total_time
+            print(f"\nProcessing speed: {speed_ratio:.2f}x realtime")
+
+        print()
+
+    def export_json(self, path: Path) -> None:
+        """Export full report to JSON file."""
+        report = self.stages_report()
+        with open(path, "w") as f:
+            json.dump(report, f, indent=2)
+
+    def export_csv(self, path: Path) -> None:
+        """Export stages to CSV file."""
+        stages = self.get_stages()
+
+        with open(path, "w") as f:
+            # Header
+            f.write("stage,duration_seconds,items_processed,parent\n")
+
+            # Data rows
+            for stage in stages:
+                parent = stage.parent or ""
+                f.write(
+                    f"{stage.name},{stage.duration_seconds:.4f},"
+                    f"{stage.items_processed},{parent}\n"
+                )
 
 
 # Global profiler instance (disabled by default)

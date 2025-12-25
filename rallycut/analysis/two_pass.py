@@ -133,6 +133,29 @@ class TwoPassAnalyzer:
         if limit_seconds is not None:
             total_frames = min(total_frames, int(limit_seconds * fps))
 
+        # Set video info for profiling
+        video_duration = total_frames / fps
+        profiler.set_video_info(
+            path=str(video.path) if video.path else "unknown",
+            duration_seconds=video_duration,
+            fps=fps,
+            frame_count=total_frames,
+        )
+
+        # Capture config snapshot for experiment tracking
+        config = get_config()
+        profiler.set_config({
+            "device": self.device,
+            "ml_stride": stride,
+            "motion_stride": self.motion_stride,
+            "skip_motion_pass": self.skip_motion_pass,
+            "use_proxy": self.use_proxy,
+            "batch_size": batch_size,
+            "boundary_seconds": self.boundary_seconds,
+            "enable_temporal_smoothing": config.two_pass.enable_temporal_smoothing,
+            "temporal_smoothing_window": config.two_pass.temporal_smoothing_window,
+        })
+
         # Check if we should skip motion detection pass
         if self.skip_motion_pass:
             # Skip motion detection - treat entire video as one region
@@ -152,26 +175,17 @@ class TwoPassAnalyzer:
                 progress_callback(0.0, f"Pass 1/2: Motion scan ({total_frames} frames)")
 
             # Pass 1: Quick motion scan (10% of progress)
-            motion_start = time.time()
-
             def motion_progress(pct: float, msg: str):
                 if progress_callback:
                     progress_callback(pct * 0.1, f"Pass 1/2: {msg}")
 
-            motion_regions = self._detect_motion_regions(
-                video, fps, total_frames, motion_progress
-            )
+            with profiler.stage("motion_detection", frames=total_frames) as motion_stage:
+                motion_regions = self._detect_motion_regions(
+                    video, fps, total_frames, motion_progress
+                )
+                motion_stage.items_processed = len(motion_regions) if motion_regions else 0
 
-            motion_time = time.time() - motion_start
-
-            # Record motion detection timing
-            from rallycut.core.profiler import TimingEntry
-            profiler._entries.append(TimingEntry(
-                component="motion",
-                operation="detect_regions",
-                duration_seconds=motion_time,
-                metadata={"regions": len(motion_regions) if motion_regions else 0},
-            ))
+            motion_time = motion_stage.duration_seconds
 
             if not motion_regions:
                 # No motion detected - return all as NO_PLAY
@@ -201,7 +215,6 @@ class TwoPassAnalyzer:
 
         # Pass 2: ML analysis on motion regions only (90% of progress)
         # Optionally use proxy video for faster decoding
-        ml_start = time.time()
 
         if self.use_proxy and video.path is not None:
             # Generate/get proxy and frame mapper
@@ -211,9 +224,11 @@ class TwoPassAnalyzer:
                 if progress_callback:
                     progress_callback(0.1 + pct * 0.05, f"Proxy: {msg}")
 
-            proxy_path, mapper = proxy_gen.get_or_create(
-                video.path, fps, proxy_progress
-            )
+            with profiler.stage("proxy_generation") as proxy_stage:
+                proxy_path, mapper = proxy_gen.get_or_create(
+                    video.path, fps, proxy_progress
+                )
+                proxy_stage.metadata["proxy_path"] = str(proxy_path)
 
             # Map motion regions to proxy frame space
             proxy_regions = [
@@ -227,16 +242,18 @@ class TwoPassAnalyzer:
             proxy_total_frames = mapper.source_to_proxy(total_frames)
 
             # Run ML analysis on proxy
-            with Video(proxy_path) as proxy_video:
-                proxy_results = self._analyze_motion_regions(
-                    proxy_video,
-                    proxy_regions,
-                    stride,
-                    batch_size,
-                    mapper.proxy_fps,
-                    proxy_total_frames,
-                    progress_callback,
-                )
+            with profiler.stage("ml_analysis", regions=len(motion_regions)) as ml_stage:
+                with Video(proxy_path) as proxy_video:
+                    proxy_results = self._analyze_motion_regions(
+                        proxy_video,
+                        proxy_regions,
+                        stride,
+                        batch_size,
+                        mapper.proxy_fps,
+                        proxy_total_frames,
+                        progress_callback,
+                    )
+                ml_stage.items_processed = len(proxy_results)
 
             # Map results back to source frame space
             results = [
@@ -248,26 +265,32 @@ class TwoPassAnalyzer:
                 )
                 for r in proxy_results
             ]
+            ml_time = ml_stage.duration_seconds
         else:
             # Original behavior without proxy
-            results = self._analyze_motion_regions(
-                video,
-                motion_regions,
-                stride,
-                batch_size,
-                fps,
-                total_frames,
-                progress_callback,
-            )
-
-        ml_time = time.time() - ml_start
+            with profiler.stage("ml_analysis", regions=len(motion_regions)) as ml_stage:
+                results = self._analyze_motion_regions(
+                    video,
+                    motion_regions,
+                    stride,
+                    batch_size,
+                    fps,
+                    total_frames,
+                    progress_callback,
+                )
+                ml_stage.items_processed = len(results)
+            ml_time = ml_stage.duration_seconds
 
         # Apply temporal smoothing if enabled
-        config = get_config()
         if config.two_pass.enable_temporal_smoothing:
-            results = self._smooth_results(
-                results, window_size=config.two_pass.temporal_smoothing_window
-            )
+            with profiler.stage(
+                "temporal_smoothing",
+                window_size=config.two_pass.temporal_smoothing_window
+            ) as smooth_stage:
+                results = self._smooth_results(
+                    results, window_size=config.two_pass.temporal_smoothing_window
+                )
+                smooth_stage.items_processed = len(results)
 
         if progress_callback:
             if self.skip_motion_pass:
@@ -482,36 +505,54 @@ class TwoPassAnalyzer:
                 region_windows = max(0, (region_frames - window_size) // stride + 1)
                 ml_region_idx += 1
             else:
-                # Zone-based analysis: boundary + middle + boundary
-                # Start boundary: high precision
-                start_boundary_end = start + boundary_frames
-                start_results = self._analyze_region(
-                    video, ml_analyzer, start, start_boundary_end,
-                    stride=stride, frame_sample=1, batch_size=batch_size
+                # Large region: use hierarchical or zone-based analysis
+                region_seconds = region_frames / fps
+                use_hierarchical = (
+                    config.two_pass.enable_hierarchical
+                    and region_seconds >= config.two_pass.hierarchical_min_duration
                 )
-                all_results.extend(start_results)
 
-                # Middle zone: lower precision, wider temporal window
-                end_boundary_start = end - boundary_frames
-                middle_results = self._analyze_region(
-                    video, ml_analyzer, start_boundary_end, end_boundary_start,
-                    stride=16, frame_sample=2, batch_size=batch_size
-                )
-                all_results.extend(middle_results)
+                if use_hierarchical:
+                    # Hierarchical coarse-to-fine analysis
+                    region_results, hier_stats = self._analyze_region_hierarchical(
+                        video, ml_analyzer, start, end, fps, batch_size
+                    )
+                    all_results.extend(region_results)
+                    region_windows = hier_stats.get("windows", 0)
+                    ml_region_idx += 1
+                else:
+                    # Zone-based analysis: boundary + middle + boundary
+                    # Start boundary: high precision
+                    start_boundary_end = start + boundary_frames
+                    start_results = self._analyze_region(
+                        video, ml_analyzer, start, start_boundary_end,
+                        stride=stride, frame_sample=1, batch_size=batch_size
+                    )
+                    all_results.extend(start_results)
 
-                # End boundary: high precision
-                end_results = self._analyze_region(
-                    video, ml_analyzer, end_boundary_start, end,
-                    stride=stride, frame_sample=1, batch_size=batch_size
-                )
-                all_results.extend(end_results)
+                    # Middle zone: lower precision, wider temporal window
+                    # Use at least the specified stride (larger = faster but less accurate)
+                    middle_stride = max(16, stride)
+                    end_boundary_start = end - boundary_frames
+                    middle_results = self._analyze_region(
+                        video, ml_analyzer, start_boundary_end, end_boundary_start,
+                        stride=middle_stride, frame_sample=2, batch_size=batch_size
+                    )
+                    all_results.extend(middle_results)
 
-                # Calculate windows for progress
-                boundary_windows = 2 * max(0, (boundary_frames - window_size) // stride + 1)
-                middle_frames = end_boundary_start - start_boundary_end
-                middle_windows = max(0, (middle_frames - 31) // 16 + 1)
-                region_windows = boundary_windows + middle_windows
-                ml_region_idx += 1
+                    # End boundary: high precision
+                    end_results = self._analyze_region(
+                        video, ml_analyzer, end_boundary_start, end,
+                        stride=stride, frame_sample=1, batch_size=batch_size
+                    )
+                    all_results.extend(end_results)
+
+                    # Calculate windows for progress
+                    boundary_windows = 2 * max(0, (boundary_frames - window_size) // stride + 1)
+                    middle_frames = end_boundary_start - start_boundary_end
+                    middle_windows = max(0, (middle_frames - 31) // middle_stride + 1)
+                    region_windows = boundary_windows + middle_windows
+                    ml_region_idx += 1
 
             processed_windows += region_windows
 
@@ -690,19 +731,20 @@ class TwoPassAnalyzer:
 
         # Record accumulated timing from frame processing
         from rallycut.core.profiler import TimingEntry
-        profiler._entries.append(TimingEntry(
-            component="decode",
-            operation="read_frames",
-            duration_seconds=decode_time,
-            metadata={"frames": frames_decoded},
-        ))
-        if resize_time > 0:
+        if profiler._enabled:
             profiler._entries.append(TimingEntry(
                 component="decode",
-                operation="resize",
-                duration_seconds=resize_time,
+                operation="read_frames",
+                duration_seconds=decode_time,
                 metadata={"frames": frames_decoded},
             ))
+            if resize_time > 0:
+                profiler._entries.append(TimingEntry(
+                    component="decode",
+                    operation="resize",
+                    duration_seconds=resize_time,
+                    metadata={"frames": frames_decoded},
+                ))
 
         return results
 
@@ -780,3 +822,203 @@ class TwoPassAnalyzer:
                 smoothed.append(result)
 
         return smoothed
+
+    def _analyze_region_hierarchical(
+        self,
+        video: Video,
+        ml_analyzer,
+        start_frame: int,
+        end_frame: int,
+        fps: float,
+        batch_size: int = 16,
+    ) -> tuple[list[GameStateResult], dict]:
+        """
+        Analyze a region using hierarchical coarse-to-fine approach.
+
+        Strategy:
+        1. Sparse probe: Sample 1 window per N seconds to get overview
+        2. If all probes are high-confidence PLAY → only find boundaries
+        3. If uncertain areas found → refine those areas with dense sampling
+
+        This can reduce ML calls by 60-80% on typical rally regions.
+
+        Args:
+            video: Video to analyze
+            ml_analyzer: GameStateAnalyzer instance
+            start_frame: Start frame of region
+            end_frame: End frame of region
+            fps: Video frame rate
+            batch_size: Batch size for ML inference
+
+        Returns:
+            Tuple of (results, stats) where stats contains profiling info
+        """
+        config = get_config()
+        window_size = config.game_state.window_size
+        frame_span = window_size  # Assuming frame_sample=1
+
+        region_frames = end_frame - start_frame
+        region_seconds = region_frames / fps
+
+        # Calculate probe positions (1 per N seconds)
+        probe_interval = config.two_pass.hierarchical_probe_interval
+        certainty_threshold = config.two_pass.hierarchical_certainty_threshold
+
+        probe_interval_frames = int(probe_interval * fps)
+        num_probes = max(2, int(region_seconds / probe_interval))
+
+        # Distribute probes evenly across region
+        probe_positions = []
+        for i in range(num_probes):
+            pos = start_frame + int((i + 0.5) * region_frames / num_probes)
+            # Ensure we don't exceed bounds
+            if pos + frame_span <= end_frame:
+                probe_positions.append(pos)
+
+        if not probe_positions:
+            # Region too short for probing, fall back to dense
+            return self._analyze_region(
+                video, ml_analyzer, start_frame, end_frame,
+                stride=8, frame_sample=1, batch_size=batch_size
+            ), {"method": "dense_fallback", "probes": 0, "windows": 0}
+
+        # Step 1: Sparse probing
+        probe_frames = self._read_windows_at_positions(
+            video, probe_positions, window_size, config.game_state.analysis_size
+        )
+
+        classifier = ml_analyzer._get_classifier()
+        probe_results = classifier.classify_segments_batch(probe_frames)
+
+        stats = {
+            "method": "hierarchical",
+            "probes": len(probe_positions),
+            "windows": len(probe_positions),  # Start with probe count
+        }
+
+        # Analyze probe results
+        all_play = True
+        uncertain_zones = []  # List of (start, end) uncertain regions
+        prev_pos = start_frame
+
+        for i, (state, confidence) in enumerate(probe_results):
+            pos = probe_positions[i]
+            is_play = state in (GameState.PLAY, GameState.SERVICE)
+            is_certain = confidence >= certainty_threshold
+
+            if not is_play or not is_certain:
+                all_play = False
+                # Mark zone around this probe as uncertain
+                zone_start = max(start_frame, pos - probe_interval_frames)
+                zone_end = min(end_frame, pos + probe_interval_frames + frame_span)
+                uncertain_zones.append((zone_start, zone_end))
+
+        results = []
+
+        if all_play:
+            # All probes are high-confidence PLAY
+            # Only need to find exact boundaries with dense sampling
+            stats["method"] = "hierarchical_boundary_only"
+
+            boundary_frames = int(self.boundary_seconds * fps)
+
+            # Start boundary: find where PLAY begins
+            start_boundary_end = min(start_frame + boundary_frames, end_frame)
+            start_results = self._analyze_region(
+                video, ml_analyzer, start_frame, start_boundary_end,
+                stride=8, frame_sample=1, batch_size=batch_size
+            )
+            results.extend(start_results)
+            stats["windows"] += len(start_results)
+
+            # Middle: just mark as PLAY (no ML needed)
+            end_boundary_start = max(end_frame - boundary_frames, start_boundary_end)
+            if end_boundary_start > start_boundary_end:
+                # Add synthetic PLAY result for middle section
+                results.append(
+                    GameStateResult(
+                        state=GameState.PLAY,
+                        confidence=0.90,  # Inferred from probes
+                        start_frame=start_boundary_end,
+                        end_frame=end_boundary_start - 1,
+                    )
+                )
+
+            # End boundary: find where PLAY ends
+            if end_boundary_start < end_frame:
+                end_results = self._analyze_region(
+                    video, ml_analyzer, end_boundary_start, end_frame,
+                    stride=8, frame_sample=1, batch_size=batch_size
+                )
+                results.extend(end_results)
+                stats["windows"] += len(end_results)
+        else:
+            # Some uncertain areas - need to refine
+            stats["method"] = "hierarchical_refine"
+
+            # Merge overlapping uncertain zones
+            uncertain_zones.sort()
+            merged_zones = []
+            for zone in uncertain_zones:
+                if merged_zones and zone[0] <= merged_zones[-1][1]:
+                    merged_zones[-1] = (merged_zones[-1][0], max(merged_zones[-1][1], zone[1]))
+                else:
+                    merged_zones.append(zone)
+
+            # Fill gaps between zones with PLAY (from confident probes)
+            prev_end = start_frame
+            for zone_start, zone_end in merged_zones:
+                # Gap before uncertain zone = PLAY
+                if zone_start > prev_end:
+                    results.append(
+                        GameStateResult(
+                            state=GameState.PLAY,
+                            confidence=0.85,
+                            start_frame=prev_end,
+                            end_frame=zone_start - 1,
+                        )
+                    )
+
+                # Dense analysis on uncertain zone
+                zone_results = self._analyze_region(
+                    video, ml_analyzer, zone_start, zone_end,
+                    stride=8, frame_sample=1, batch_size=batch_size
+                )
+                results.extend(zone_results)
+                stats["windows"] += len(zone_results)
+
+                prev_end = zone_end
+
+            # Gap after last uncertain zone = PLAY
+            if prev_end < end_frame:
+                results.append(
+                    GameStateResult(
+                        state=GameState.PLAY,
+                        confidence=0.85,
+                        start_frame=prev_end,
+                        end_frame=end_frame - 1,
+                    )
+                )
+
+        return results, stats
+
+    def _read_windows_at_positions(
+        self,
+        video: Video,
+        positions: list[int],
+        window_size: int,
+        target_size: tuple[int, int],
+    ) -> list[list]:
+        """
+        Read specific windows at given frame positions.
+
+        More efficient than iterating through entire video when we only
+        need sparse samples.
+        """
+        windows = []
+        for pos in positions:
+            frames = video.read_frames(pos, window_size, resize=target_size)
+            if len(frames) == window_size:
+                windows.append(frames)
+
+        return windows

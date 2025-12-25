@@ -415,22 +415,38 @@ class GameStateClassifier:
         profiler = get_profiler()
         batch_size = len(batch_frames)
 
-        # Validate and preprocess all segments
-        with profiler.time("videomae", "preprocess", batch_size=batch_size):
-            batch_processed = []
-            for frames in batch_frames:
-                if len(frames) != self.FRAME_WINDOW:
-                    raise ValueError(
-                        f"Expected {self.FRAME_WINDOW} frames per segment, got {len(frames)}"
-                    )
-                batch_processed.append(self.preprocess_frames(frames))
+        # Track overall batch processing with a stage
+        with profiler.stage(
+            "videomae_batch", batch_size=batch_size, parent="ml_analysis"
+        ) as batch_stage:
+            # Validate and preprocess all segments
+            with profiler.time("videomae", "preprocess", batch_size=batch_size):
+                batch_processed = []
+                for frames in batch_frames:
+                    if len(frames) != self.FRAME_WINDOW:
+                        raise ValueError(
+                            f"Expected {self.FRAME_WINDOW} frames per segment, "
+                            f"got {len(frames)}"
+                        )
+                    batch_processed.append(self.preprocess_frames(frames))
 
-        # Try ONNX inference first (faster)
-        if self._use_onnx and self._load_onnx_session():
-            return self._classify_batch_onnx(batch_processed, profiler, batch_size)
+            # Try ONNX inference first (faster)
+            if self._use_onnx and self._load_onnx_session():
+                results = self._classify_batch_onnx(
+                    batch_processed, profiler, batch_size
+                )
+            else:
+                # Fall back to PyTorch inference
+                results = self._classify_batch_pytorch(
+                    batch_processed, profiler, batch_size
+                )
 
-        # Fall back to PyTorch inference
-        return self._classify_batch_pytorch(batch_processed, profiler, batch_size)
+            batch_stage.items_processed = batch_size
+            batch_stage.metadata["backend"] = (
+                "onnx" if self._use_onnx and self._onnx_session else "pytorch"
+            )
+
+        return results
 
     def _classify_batch_onnx(
         self,

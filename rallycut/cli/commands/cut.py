@@ -12,6 +12,7 @@ from rich.table import Table
 from rallycut.cli.utils import format_time, handle_errors
 from rallycut.core.cache import AnalysisCache
 from rallycut.core.config import get_config
+from rallycut.core.profiler import enable_profiling, get_profiler
 from rallycut.core.video import Video
 from rallycut.processing.cutter import VideoCutter
 
@@ -123,6 +124,16 @@ def cut(
         "--auto-stride/--no-auto-stride",
         help="Auto-adjust stride based on video FPS (stride 32 @ 30fps = stride 64 @ 60fps)",
     ),
+    profile: bool = typer.Option(
+        False,
+        "--profile",
+        help="Enable profiling and show timing breakdown after analysis",
+    ),
+    profile_json: Optional[Path] = typer.Option(
+        None,
+        "--profile-json",
+        help="Export profiling results to JSON file",
+    ),
 ):
     """
     Automatically remove no-play segments from beach volleyball recordings.
@@ -192,6 +203,12 @@ def cut(
     total_windows = (analyze_frames - 16) // effective_stride + 1
     console.print(f"Windows to analyze: ~{total_windows}")
     console.print()
+
+    # Enable profiling if requested
+    if profile or profile_json:
+        profiler = enable_profiling()
+        console.print("[dim]Profiling enabled[/dim]")
+        console.print()
 
     # Create cutter
     cutter = VideoCutter(
@@ -370,3 +387,18 @@ def cut(
 
     if not dry_run:
         console.print(f"\nOutput saved to: [cyan]{output}[/cyan]")
+
+    # Print profiling report if enabled
+    if profile or profile_json:
+        profiler = get_profiler()
+        console.print()
+        console.print("[bold]Profiling Results:[/bold]")
+        profiler.print_stages_report()
+
+        # Also print component breakdown
+        profiler.print_report()
+
+        # Export to JSON if requested
+        if profile_json:
+            profiler.export_json(profile_json)
+            console.print(f"\nProfile saved to: [cyan]{profile_json}[/cyan]")
