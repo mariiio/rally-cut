@@ -1,7 +1,9 @@
 """CLI utilities for RallyCut."""
 
 import functools
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any, TypeVar
 
 import typer
 from rich.console import Console
@@ -28,11 +30,14 @@ class ExportError(RallyCutError):
     pass
 
 
-def handle_errors(func):
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+def handle_errors(func: F) -> F:
     """Decorator to handle common errors in CLI commands."""
 
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
             return func(*args, **kwargs)
         except RallyCutError as e:
@@ -59,7 +64,7 @@ def handle_errors(func):
             console.print("[dim]Please report this issue at https://github.com/anthropics/rallycut/issues[/dim]")
             raise typer.Exit(1)
 
-    return wrapper
+    return wrapper  # type: ignore[return-value]
 
 
 def validate_video_file(path: Path) -> None:

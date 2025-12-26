@@ -94,7 +94,7 @@ def highlights(
         "--min-gap",
         help="Min NO_PLAY gap (seconds) before ending a rally (higher = longer rallies)",
     ),
-):
+) -> None:
     """
     Generate highlight reel from top rallies.
 
@@ -162,7 +162,7 @@ def highlights(
         ) as progress:
             task = progress.add_task("Analyzing video...", total=100)
 
-            def analysis_progress(pct: float, msg: str):
+            def analysis_progress(pct: float, msg: str) -> None:
                 progress.update(task, completed=int(pct * 100))
 
             segments = cutter.analyze_only(video_path, analysis_progress)
@@ -197,7 +197,7 @@ def highlights(
 
     # Merge overlapping segments to avoid jumps in output
     padded_segments.sort(key=lambda s: s.start_time)
-    merged_segments = []
+    merged_segments: list[TimeSegment] = []
     for seg in padded_segments:
         if merged_segments and seg.start_time <= merged_segments[-1].end_time:
             # Overlapping - merge
@@ -233,7 +233,7 @@ def highlights(
         table.add_column("Time", style="yellow")
         table.add_column("Score", style="magenta")
 
-        total_duration = 0
+        total_duration = 0.0
         for highlight in top_highlights:
             total_duration += highlight.duration
             table.add_row(
@@ -260,7 +260,7 @@ def highlights(
         ) as progress:
             task = progress.add_task("Exporting clips...", total=100)
 
-            def export_progress(pct: float, msg: str):
+            def export_progress(pct: float, msg: str) -> None:
                 progress.update(task, completed=int(pct * 100))
 
             results = generator.export_individual_clips(
@@ -304,7 +304,7 @@ def highlights(
         ) as progress:
             task = progress.add_task("Generating highlights...", total=100)
 
-            def export_progress(pct: float, msg: str):
+            def export_progress(pct: float, msg: str) -> None:
                 progress.update(task, completed=int(pct * 100))
 
             _, top_highlights = generator.generate_highlights(
@@ -325,7 +325,7 @@ def highlights(
         table.add_column("Time", style="yellow")
         table.add_column("Score", style="magenta")
 
-        total_duration = 0
+        total_duration = 0.0
         for highlight in sorted(top_highlights, key=lambda h: h.start_time):
             total_duration += highlight.duration
             table.add_row(

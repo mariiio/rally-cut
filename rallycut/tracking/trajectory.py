@@ -3,8 +3,8 @@
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.interpolate import interp1d
-from scipy.ndimage import gaussian_filter1d
+from scipy.interpolate import interp1d  # type: ignore[import-untyped]
+from scipy.ndimage import gaussian_filter1d  # type: ignore[import-untyped]
 
 from rallycut.core.config import get_config
 from rallycut.core.models import BallPosition

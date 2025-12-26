@@ -93,7 +93,7 @@ class GameStateResult:
             self.frame_idx = self.start_frame
 
     @property
-    def frame_range(self) -> tuple[int, int]:
+    def frame_range(self) -> tuple[int | None, int | None]:
         """Get frame range as tuple."""
         return (self.start_frame, self.end_frame)
 

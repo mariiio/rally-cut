@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from rallycut.core.config import get_config
 from rallycut.core.models import GameState, GameStateResult
@@ -31,9 +32,9 @@ class GameStateAnalyzer:
             if temporal_smoothing_window is not None
             else config.game_state.temporal_smoothing_window
         )
-        self._classifier = None
+        self._classifier: Any = None
 
-    def _get_classifier(self):
+    def _get_classifier(self) -> Any:
         """Lazy load the classifier."""
         if self._classifier is None:
             from lib.volleyball_ml.video_mae import GameStateClassifier
@@ -78,7 +79,7 @@ class GameStateAnalyzer:
         target_size = config.game_state.analysis_size
 
         classifier = self._get_classifier()
-        results = []
+        results: list[GameStateResult] = []
 
         total_frames = video.info.frame_count
         fps = video.info.fps
@@ -238,6 +239,7 @@ class GameStateAnalyzer:
             results = self._smooth_results(results, self.temporal_smoothing_window)
 
         if return_raw:
+            assert raw_results is not None
             return results, raw_results
         return results
 

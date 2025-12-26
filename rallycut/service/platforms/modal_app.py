@@ -12,7 +12,7 @@ Environment setup:
     3. Create Modal secrets for cloud storage credentials (optional)
 """
 
-import modal
+import modal  # type: ignore[import-not-found]
 
 # Define the Modal app
 app = modal.App("rallycut-detection")

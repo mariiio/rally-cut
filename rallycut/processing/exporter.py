@@ -15,7 +15,7 @@ class FFmpegExporter:
         self.ffmpeg_path = ffmpeg_path
         self._check_ffmpeg()
 
-    def _check_ffmpeg(self):
+    def _check_ffmpeg(self) -> None:
         """Verify FFmpeg is available."""
         try:
             subprocess.run(
@@ -98,7 +98,7 @@ class FFmpegExporter:
         output_path: Path,
         start_time: float,
         end_time: float,
-    ):
+    ) -> None:
         """Extract a single segment from the video."""
         duration = end_time - start_time
 
@@ -146,7 +146,7 @@ class FFmpegExporter:
                     f"FFmpeg segment extraction failed: {result.stderr}"
                 )
 
-    def _concatenate(self, concat_file: Path, output_path: Path):
+    def _concatenate(self, concat_file: Path, output_path: Path) -> None:
         """Concatenate segments using FFmpeg concat demuxer."""
         cmd = [
             self.ffmpeg_path,

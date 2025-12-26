@@ -111,7 +111,7 @@ class HighlightGenerator:
     Generates highlight videos from scored segments.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.exporter = FFmpegExporter()
         self.scorer = HighlightScorer()
 
