@@ -134,7 +134,7 @@ def parse_time(time_str: str) -> float:
 
 @app.callback(invoke_without_command=True)
 @handle_errors
-def cut(
+def cut(  # noqa: C901
     video: Path = typer.Argument(
         ...,
         help="Path to input video file",
@@ -147,23 +147,23 @@ def cut(
         "--output", "-o",
         help="Output video path (default: {video}_cut.mp4)",
     ),
-    padding: float = typer.Option(
-        3.0,
+    padding: float | None = typer.Option(
+        None,
         "--padding", "-p",
-        help="Seconds of padding before play segments",
+        help="Seconds of padding before play segments (default: from config)",
     ),
     padding_end: float | None = typer.Option(
         None,
         "--padding-end",
         help="Seconds of padding after play segments (default: padding + 0.5s)",
     ),
-    min_play: float = typer.Option(
-        1.0,
+    min_play: float | None = typer.Option(
+        None,
         "--min-play",
-        help="Minimum play duration in seconds to keep",
+        help="Minimum play duration in seconds to keep (default: from config)",
     ),
-    stride: int = typer.Option(
-        32,
+    stride: int | None = typer.Option(
+        None,
         "--stride", "-s",
         help="Frames to skip between analyses (higher = faster, less accurate)",
     ),
@@ -202,10 +202,10 @@ def cut(
         "--proxy/--no-proxy",
         help="Use 480p@30fps proxy for faster ML analysis (default: on)",
     ),
-    min_gap: float = typer.Option(
-        5.0,
+    min_gap: float | None = typer.Option(
+        None,
         "--min-gap",
-        help="Min NO_PLAY gap (seconds) before ending a rally (higher = longer rallies)",
+        help="Min NO_PLAY gap (seconds) before ending a rally (default: from config)",
     ),
     auto_stride: bool = typer.Option(
         True,
@@ -227,7 +227,7 @@ def cut(
         "--debug",
         help="Show detailed ML classification diagnostics",
     ),
-):
+) -> None:
     """
     Automatically remove no-play segments from beach volleyball recordings.
 
@@ -254,6 +254,12 @@ def cut(
     else:
         device = config.device
 
+    # Resolve None parameters from config
+    effective_padding = padding if padding is not None else config.segment.padding_seconds
+    effective_min_play = min_play if min_play is not None else config.segment.min_play_duration
+    effective_stride_base = stride if stride is not None else config.game_state.stride
+    effective_min_gap = min_gap if min_gap is not None else config.segment.min_gap_seconds
+
     console.print("\n[bold]RallyCut[/bold] - Dead Time Removal")
     console.print(f"Input: [cyan]{video}[/cyan]")
     if not dry_run:
@@ -269,15 +275,15 @@ def cut(
     # Calculate effective stride (FPS-normalized)
     reference_fps = 30.0
     if auto_stride:
-        effective_stride = int(round(stride * (video_info.fps / reference_fps)))
+        effective_stride = int(round(effective_stride_base * (video_info.fps / reference_fps)))
         effective_stride = max(1, effective_stride)
-        if effective_stride != stride:
-            console.print(f"Stride: [yellow]{stride} → {effective_stride} frames[/yellow] (auto-adjusted for {video_info.fps:.0f}fps)")
+        if effective_stride != effective_stride_base:
+            console.print(f"Stride: [yellow]{effective_stride_base} → {effective_stride} frames[/yellow] (auto-adjusted for {video_info.fps:.0f}fps)")
         else:
-            console.print(f"Stride: [yellow]{stride} frames[/yellow]")
+            console.print(f"Stride: [yellow]{effective_stride_base} frames[/yellow]")
     else:
-        effective_stride = stride
-        console.print(f"Stride: [yellow]{stride} frames[/yellow]")
+        effective_stride = effective_stride_base
+        console.print(f"Stride: [yellow]{effective_stride_base} frames[/yellow]")
 
     if limit:
         console.print(f"Limit: [yellow]{format_time(limit)} ({limit:.1f}s)[/yellow]")
@@ -304,13 +310,13 @@ def cut(
     # Create cutter
     cutter = VideoCutter(
         device=device,
-        padding_seconds=padding,
+        padding_seconds=effective_padding,
         padding_end_seconds=padding_end,
-        min_play_duration=min_play,
-        stride=stride,
+        min_play_duration=effective_min_play,
+        stride=effective_stride_base,
         limit_seconds=limit,
         use_proxy=proxy,
-        min_gap_seconds=min_gap,
+        min_gap_seconds=effective_min_gap,
         auto_stride=auto_stride,
     )
 
@@ -324,7 +330,7 @@ def cut(
     ) as progress:
         task = progress.add_task("Processing...", total=100)
 
-        def update_progress(pct: float, msg: str):
+        def update_progress(pct: float, msg: str) -> None:
             progress.update(task, completed=int(pct * 100), description=msg)
 
         # Initialize diagnostic_data (may be populated in debug mode)
@@ -385,7 +391,7 @@ def cut(
             segments = None
 
             if not no_cache and limit is None and not debug:
-                segments = cache.get(video, stride, proxy)
+                segments = cache.get(video, effective_stride_base, proxy)
                 if segments:
                     console.print("[dim]Using cached analysis[/dim]")
 
@@ -414,7 +420,7 @@ def cut(
                 )
                 # Cache results (only if not using --limit)
                 if limit is None and segments:
-                    cache.set(video, stride, segments, proxy)
+                    cache.set(video, effective_stride_base, segments, proxy)
             else:
                 # Full processing
                 output_path, segments = cutter.cut_video(
@@ -424,9 +430,13 @@ def cut(
                 )
                 # Cache results (only if not using --limit)
                 if limit is None and segments:
-                    cache.set(video, stride, segments, proxy)
+                    cache.set(video, effective_stride_base, segments, proxy)
 
         progress.update(task, completed=100, description="Complete!")
+
+    # Ensure segments is not None for stats calculation
+    if segments is None:
+        segments = []
 
     # Print statistics
     stats = cutter.get_cut_stats(video_info.duration, segments)
