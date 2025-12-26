@@ -132,7 +132,7 @@ class StatisticsAggregator:
         Returns:
             Dict mapping ActionType to ActionCount
         """
-        counts = {
+        counts: dict[ActionType, ActionCount] = {
             action_type: ActionCount(count=0)
             for action_type in ActionType
             if action_type != ActionType.BALL

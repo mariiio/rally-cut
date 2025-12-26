@@ -6,18 +6,29 @@ Supports:
 - Falls back to software decoding if hardware unavailable
 """
 
+from __future__ import annotations
+
 from collections.abc import Iterator
+from fractions import Fraction
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
 # Optional PyAV import
 try:
     import av
+    from av.container import InputContainer
+    from av.video.stream import VideoStream
 
     PYAV_AVAILABLE = True
 except ImportError:
     PYAV_AVAILABLE = False
+    InputContainer = Any  # type: ignore[misc,assignment]
+    VideoStream = Any  # type: ignore[misc,assignment]
+
+if TYPE_CHECKING:
+    from types import TracebackType
 
 
 def get_hwaccel_type(device: str) -> str | None:
@@ -61,8 +72,8 @@ class HWAccelDecoder:
             raise ImportError("PyAV is not installed. Install with: pip install av")
 
         self.path = Path(path)
-        self._container = None
-        self._stream = None
+        self._container: InputContainer | None = None
+        self._stream: VideoStream | None = None
         self._hwaccel_type = hwaccel_type
         self._device = device
         self._using_hwaccel = False
@@ -74,12 +85,13 @@ class HWAccelDecoder:
 
         self._container = av.open(str(self.path))
         self._stream = self._container.streams.video[0]
+        stream = self._stream  # Local reference for type narrowing
 
         # Try to enable hardware acceleration
         if self._hwaccel_type:
             try:
                 # Configure hardware acceleration context
-                self._stream.codec_context.hwaccel = self._hwaccel_type
+                stream.codec_context.hwaccel = self._hwaccel_type  # type: ignore[attr-defined]
                 self._using_hwaccel = True
             except Exception:
                 # Hardware acceleration not available, use software
@@ -87,20 +99,25 @@ class HWAccelDecoder:
 
         # Set threading for software decode
         if not self._using_hwaccel:
-            self._stream.thread_type = "AUTO"
+            stream.thread_type = "AUTO"
 
-    def get_info(self) -> dict:
+    def get_info(self) -> dict[str, Any]:
         """Get video information."""
         self._open()
         stream = self._stream
+        assert stream is not None  # Set by _open()
+
+        time_base: Fraction = stream.time_base or Fraction(1, 30)
+        duration = stream.duration or 0
+        frame_count = stream.frames or int(duration * time_base)
 
         return {
             "fps": float(stream.average_rate or stream.guessed_rate or 30),
-            "frame_count": stream.frames or int(stream.duration * stream.time_base),
+            "frame_count": frame_count,
             "width": stream.width,
             "height": stream.height,
             "codec": stream.codec_context.name,
-            "duration": float(stream.duration * stream.time_base) if stream.duration else 0,
+            "duration": float(duration * time_base) if duration else 0,
         }
 
     def iter_frames(
@@ -121,10 +138,13 @@ class HWAccelDecoder:
             Tuple of (frame_index, frame_as_numpy_array)
         """
         self._open()
+        assert self._container is not None  # Set by _open()
+        assert self._stream is not None  # Set by _open()
 
         info = self.get_info()
         fps = info["fps"]
         total_frames = info["frame_count"]
+        time_base: Fraction = self._stream.time_base or Fraction(1, 30)
 
         if end_frame is None:
             end_frame = total_frames
@@ -140,7 +160,7 @@ class HWAccelDecoder:
         for frame in self._container.decode(video=0):
             # Estimate frame index from pts
             if frame.pts is not None:
-                frame_idx = int(frame.pts * self._stream.time_base * fps)
+                frame_idx = int(frame.pts * time_base * fps)
             else:
                 frame_idx += 1
 
@@ -162,6 +182,8 @@ class HWAccelDecoder:
     def read_frame(self, frame_idx: int) -> np.ndarray | None:
         """Read a specific frame by index."""
         self._open()
+        assert self._container is not None  # Set by _open()
+        assert self._stream is not None  # Set by _open()
 
         info = self.get_info()
         fps = info["fps"]
@@ -172,7 +194,7 @@ class HWAccelDecoder:
 
         # Read frame
         for frame in self._container.decode(video=0):
-            np_frame = frame.to_ndarray(format="bgr24")
+            np_frame: np.ndarray = frame.to_ndarray(format="bgr24")
             return np_frame
 
         return None
@@ -184,10 +206,15 @@ class HWAccelDecoder:
             self._container = None
             self._stream = None
 
-    def __enter__(self):
+    def __enter__(self) -> HWAccelDecoder:
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> Literal[False]:
         self.close()
         return False
 

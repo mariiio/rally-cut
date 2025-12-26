@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Full, Queue
 from threading import Event, Thread
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -230,11 +230,16 @@ class AsyncFrameDecoder:
             except Full:
                 pass
 
-    def __enter__(self):
+    def __enter__(self) -> "AsyncFrameDecoder":
         self.start()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> Literal[False]:
         self.stop()
         return False
 

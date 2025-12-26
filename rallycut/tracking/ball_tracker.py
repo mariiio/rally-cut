@@ -3,9 +3,10 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
-from filterpy.kalman import KalmanFilter
+from filterpy.kalman import KalmanFilter  # type: ignore[import-untyped]
 
 from rallycut.core.config import get_config
 from rallycut.core.models import BallPosition
@@ -54,10 +55,10 @@ class BallTracker:
         self.confidence_threshold = confidence_threshold or config.ball_tracking.confidence_threshold
         self.max_missing_frames = max_missing_frames or config.ball_tracking.max_missing_frames
         self.use_predictions = use_predictions
-        self._detector = None
-        self._kalman = None
+        self._detector: Any = None
+        self._kalman: KalmanFilter | None = None
 
-    def _get_detector(self):
+    def _get_detector(self) -> Any:
         """Lazy load the YOLO detector."""
         if self._detector is None:
             from lib.volleyball_ml.yolo_detector import BallDetector

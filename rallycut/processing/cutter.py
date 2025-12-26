@@ -1,12 +1,19 @@
 """Video cutting functionality for RallyCut."""
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from rallycut.core.config import get_config, get_recommended_batch_size
 from rallycut.core.models import GameStateResult, TimeSegment
 from rallycut.core.video import Video
 from rallycut.processing.exporter import FFmpegExporter
+
+if TYPE_CHECKING:
+    from rallycut.analysis.game_state import GameStateAnalyzer
+    from rallycut.core.proxy import ProxyGenerator
 
 # Confidence threshold for treating NO_PLAY as PLAY in boundary regions
 # If play_confidence + service_confidence > threshold, extend the segment
@@ -56,8 +63,8 @@ class VideoCutter:
         self.auto_stride = auto_stride
         self.min_segment_start_seconds = min_segment_start_seconds if min_segment_start_seconds is not None else MIN_SEGMENT_START_SECONDS
 
-        self._analyzer = None
-        self._proxy_generator = None
+        self._analyzer: GameStateAnalyzer | None = None
+        self._proxy_generator: ProxyGenerator | None = None
         self.exporter = FFmpegExporter()
 
     def _normalize_stride(self, fps: float) -> int:
@@ -75,7 +82,7 @@ class VideoCutter:
         # Ensure minimum stride of 1
         return max(1, normalized)
 
-    def _get_analyzer(self):
+    def _get_analyzer(self) -> GameStateAnalyzer:
         """Lazy load the game state analyzer."""
         if self._analyzer is None:
             from rallycut.analysis.game_state import GameStateAnalyzer
@@ -83,7 +90,7 @@ class VideoCutter:
             self._analyzer = GameStateAnalyzer(device=self.device)
         return self._analyzer
 
-    def _get_proxy_generator(self):
+    def _get_proxy_generator(self) -> ProxyGenerator:
         """Lazy load proxy generator."""
         if self._proxy_generator is None:
             from rallycut.core.proxy import ProxyConfig, ProxyGenerator
@@ -175,7 +182,9 @@ class VideoCutter:
         service_count = 0
         total_confidence = 0.0
         for r in results:
-            if r.end_frame >= start_frame and r.start_frame <= end_frame:
+            r_start = r.start_frame if r.start_frame is not None else 0
+            r_end = r.end_frame if r.end_frame is not None else 0
+            if r_end >= start_frame and r_start <= end_frame:
                 if r.state == GameState.PLAY:
                     play_count += 1
                     total_confidence += r.confidence
@@ -186,7 +195,9 @@ class VideoCutter:
         avg_confidence = total_confidence / active_count if active_count > 0 else 0.0
         return play_count, service_count, avg_confidence
 
-    def _get_segments_from_results(self, results, fps) -> list[TimeSegment]:
+    def _get_segments_from_results(
+        self, results: list[GameStateResult], fps: float
+    ) -> list[TimeSegment]:
         """Convert analysis results to merged play segments with hysteresis."""
         from rallycut.core.models import GameState
 
@@ -201,14 +212,14 @@ class VideoCutter:
         min_no_play_frames = int(self.min_gap_seconds * fps)
 
         # First pass: merge adjacent same-state results
-        raw_segments = []
+        raw_segments: list[TimeSegment] = []
         current_state = extended_results[0].state
-        current_start = extended_results[0].start_frame
-        current_end = extended_results[0].end_frame
+        current_start = extended_results[0].start_frame or 0
+        current_end = extended_results[0].end_frame or 0
 
         for result in extended_results[1:]:
             if result.state == current_state:
-                current_end = result.end_frame
+                current_end = result.end_frame or current_end
             else:
                 raw_segments.append(
                     TimeSegment(
@@ -220,8 +231,8 @@ class VideoCutter:
                     )
                 )
                 current_state = result.state
-                current_start = result.start_frame
-                current_end = result.end_frame
+                current_start = result.start_frame or 0
+                current_end = result.end_frame or 0
 
         raw_segments.append(
             TimeSegment(
@@ -439,21 +450,23 @@ class VideoCutter:
                     if progress_callback:
                         progress_callback(0.1 + pct * 0.9, msg)
 
-                proxy_results = analyzer.analyze_video(
+                proxy_results_raw = analyzer.analyze_video(
                     proxy_video,
                     stride=effective_stride,
                     progress_callback=analysis_progress,
                     limit_seconds=self.limit_seconds,
                     batch_size=batch_size,
                 )
+                # When return_raw=False (default), returns list[GameStateResult]
+                proxy_results: list[GameStateResult] = proxy_results_raw  # type: ignore[assignment]
 
             # Map results back to source frame space
             results = [
                 GameStateResult(
                     state=r.state,
                     confidence=r.confidence,
-                    start_frame=mapper.proxy_to_source(r.start_frame),
-                    end_frame=mapper.proxy_to_source(r.end_frame),
+                    start_frame=mapper.proxy_to_source(r.start_frame or 0),
+                    end_frame=mapper.proxy_to_source(r.end_frame or 0),
                     play_confidence=r.play_confidence,
                     service_confidence=r.service_confidence,
                     no_play_confidence=r.no_play_confidence,
@@ -468,13 +481,15 @@ class VideoCutter:
                 effective_stride = self._normalize_stride(fps)
                 batch_size = get_recommended_batch_size(self.device)
 
-                results = analyzer.analyze_video(
+                direct_results = analyzer.analyze_video(
                     video,
                     stride=effective_stride,
                     progress_callback=progress_callback,
                     limit_seconds=self.limit_seconds,
                     batch_size=batch_size,
                 )
+                # When return_raw=False (default), returns list[GameStateResult]
+                results = direct_results  # type: ignore[assignment]
 
         # Convert to merged segments
         merged_segments = self._get_segments_from_results(results, fps)
@@ -525,7 +540,7 @@ class VideoCutter:
                     if progress_callback:
                         progress_callback(0.1 + pct * 0.9, msg)
 
-                smoothed_proxy, raw_proxy = analyzer.analyze_video(
+                result_tuple = analyzer.analyze_video(
                     proxy_video,
                     stride=effective_stride,
                     progress_callback=analysis_progress,
@@ -533,14 +548,18 @@ class VideoCutter:
                     batch_size=batch_size,
                     return_raw=True,
                 )
+                # When return_raw=True, returns tuple[list, list]
+                assert isinstance(result_tuple, tuple)
+                smoothed_proxy = result_tuple[0]
+                raw_proxy = result_tuple[1]
 
             # Map results back to source frame space
             raw_results = [
                 GameStateResult(
                     state=r.state,
                     confidence=r.confidence,
-                    start_frame=mapper.proxy_to_source(r.start_frame),
-                    end_frame=mapper.proxy_to_source(r.end_frame),
+                    start_frame=mapper.proxy_to_source(r.start_frame or 0),
+                    end_frame=mapper.proxy_to_source(r.end_frame or 0),
                     play_confidence=r.play_confidence,
                     service_confidence=r.service_confidence,
                     no_play_confidence=r.no_play_confidence,
@@ -551,8 +570,8 @@ class VideoCutter:
                 GameStateResult(
                     state=r.state,
                     confidence=r.confidence,
-                    start_frame=mapper.proxy_to_source(r.start_frame),
-                    end_frame=mapper.proxy_to_source(r.end_frame),
+                    start_frame=mapper.proxy_to_source(r.start_frame or 0),
+                    end_frame=mapper.proxy_to_source(r.end_frame or 0),
                     play_confidence=r.play_confidence,
                     service_confidence=r.service_confidence,
                     no_play_confidence=r.no_play_confidence,
@@ -566,7 +585,7 @@ class VideoCutter:
                 effective_stride = self._normalize_stride(fps)
                 batch_size = get_recommended_batch_size(self.device)
 
-                smoothed_results, raw_results = analyzer.analyze_video(
+                result_tuple = analyzer.analyze_video(
                     video,
                     stride=effective_stride,
                     progress_callback=progress_callback,
@@ -574,6 +593,10 @@ class VideoCutter:
                     batch_size=batch_size,
                     return_raw=True,
                 )
+                # When return_raw=True, returns tuple[list, list]
+                assert isinstance(result_tuple, tuple)
+                smoothed_results = result_tuple[0]
+                raw_results = result_tuple[1]
 
         # Get segments before min_duration filter (by temporarily setting it to 0)
         original_min_play = self.min_play_duration
@@ -610,7 +633,7 @@ class VideoCutter:
             Tuple of (output_path, list of kept segments)
         """
         # Phase 1: Analyze video (0-70% of progress)
-        def analysis_progress(pct: float, msg: str):
+        def analysis_progress(pct: float, msg: str) -> None:
             if progress_callback:
                 progress_callback(pct * 0.7, f"Analyzing: {msg}")
 
@@ -620,7 +643,7 @@ class VideoCutter:
             raise ValueError("No play segments detected in video")
 
         # Phase 2: Export video (70-100% of progress)
-        def export_progress(pct: float, msg: str):
+        def export_progress(pct: float, msg: str) -> None:
             if progress_callback:
                 progress_callback(0.7 + pct * 0.3, f"Exporting: {msg}")
 

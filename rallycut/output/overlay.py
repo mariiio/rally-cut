@@ -238,7 +238,7 @@ class OverlayRenderer:
             end_frame = video.info.frame_count
 
         # Setup video writer
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        fourcc: int = cv2.VideoWriter.fourcc(*'mp4v')
         writer = cv2.VideoWriter(
             str(output_path),
             fourcc,

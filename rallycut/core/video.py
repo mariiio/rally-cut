@@ -1,20 +1,33 @@
 """Video abstraction layer for RallyCut."""
 
-from collections.abc import Iterator
+from __future__ import annotations
+
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
 
 from rallycut.core.models import VideoInfo
 
+if TYPE_CHECKING:
+    from types import TracebackType
+
+    from rallycut.core.hwaccel import HWAccelDecoder
+
 # Optional hardware acceleration
 try:
-    from rallycut.core.hwaccel import PYAV_AVAILABLE, HWAccelDecoder, get_hwaccel_type
+    from rallycut.core.hwaccel import PYAV_AVAILABLE
+    from rallycut.core.hwaccel import HWAccelDecoder as _HWAccelDecoder
+    from rallycut.core.hwaccel import get_hwaccel_type as _get_hwaccel_type
+
+    HWAccelDecoderClass: type[HWAccelDecoder] | None = _HWAccelDecoder
+    get_hwaccel_type_fn: Callable[[str], str | None] | None = _get_hwaccel_type
 except ImportError:
     PYAV_AVAILABLE = False
-    HWAccelDecoder = None
-    get_hwaccel_type = None
+    HWAccelDecoderClass = None
+    get_hwaccel_type_fn = None
 
 
 class Video:
@@ -45,10 +58,10 @@ class Video:
             raise FileNotFoundError(f"Video file not found: {self.path}")
 
         # Initialize hardware-accelerated decoder if requested
-        if self._use_hwaccel:
+        if self._use_hwaccel and HWAccelDecoderClass is not None:
             try:
-                hwaccel_type = get_hwaccel_type(device) if get_hwaccel_type else None
-                self._hwaccel_decoder = HWAccelDecoder(
+                hwaccel_type = get_hwaccel_type_fn(device) if get_hwaccel_type_fn and device else None
+                self._hwaccel_decoder = HWAccelDecoderClass(
                     self.path, hwaccel_type=hwaccel_type, device=device
                 )
             except Exception:
@@ -239,7 +252,7 @@ class Video:
 
             start_frame += stride
 
-    def close(self):
+    def close(self) -> None:
         """Release video capture resources."""
         if self._cap is not None:
             self._cap.release()
@@ -248,12 +261,16 @@ class Video:
             self._hwaccel_decoder.close()
             self._hwaccel_decoder = None
 
-    def __enter__(self):
+    def __enter__(self) -> Video:
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         self.close()
-        return False
 
-    def __del__(self):
+    def __del__(self) -> None:
         self.close()

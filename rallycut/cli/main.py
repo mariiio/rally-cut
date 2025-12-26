@@ -26,7 +26,7 @@ app.command(name="profile")(profile_command)
 @app.callback()
 def main(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose output"),
-):
+) -> None:
     """RallyCut - Beach volleyball video analysis CLI."""
     if verbose:
         console.print("[dim]Verbose mode enabled[/dim]")

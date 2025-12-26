@@ -63,7 +63,7 @@ def overlay(
         "--gpu/--no-gpu",
         help="Force GPU/CPU for inference",
     ),
-):
+) -> None:
     """
     Add ball trajectory overlay to video.
 
@@ -128,7 +128,7 @@ def overlay(
         # Tracking phase
         track_task = progress.add_task("Tracking ball...", total=100)
 
-        def track_progress(pct: float, msg: str):
+        def track_progress(pct: float, msg: str) -> None:
             progress.update(track_task, completed=int(pct * 100))
 
         result = tracker.track_segment(
@@ -172,7 +172,7 @@ def overlay(
     ) as progress:
         render_task = progress.add_task("Rendering overlay...", total=100)
 
-        def render_progress(pct: float, msg: str):
+        def render_progress(pct: float, msg: str) -> None:
             progress.update(render_task, completed=int(pct * 100))
 
         renderer.render_segment(
