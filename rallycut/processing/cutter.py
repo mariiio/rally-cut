@@ -26,10 +26,6 @@ MIN_ACTIVE_WINDOWS = 1
 # This filters segments that span large time ranges but have sparse detections
 MIN_ACTIVE_DENSITY = 0.25
 
-# Minimum video start time for segments (seconds)
-# Filters early-video false positives (warmup/setup that looks like play)
-MIN_SEGMENT_START_SECONDS = 10.0
-
 
 class VideoCutter:
     """Cuts video to remove dead time segments."""
@@ -48,7 +44,7 @@ class VideoCutter:
         use_proxy: bool | None = None,
         min_gap_seconds: float | None = None,
         auto_stride: bool = True,
-        min_segment_start_seconds: float | None = None,
+        rally_continuation_seconds: float | None = None,
     ):
         config = get_config()
         self.device = device or config.device
@@ -61,7 +57,7 @@ class VideoCutter:
         self.use_proxy = use_proxy if use_proxy is not None else config.proxy.enabled
         self.min_gap_seconds = min_gap_seconds if min_gap_seconds is not None else config.segment.min_gap_seconds
         self.auto_stride = auto_stride
-        self.min_segment_start_seconds = min_segment_start_seconds if min_segment_start_seconds is not None else MIN_SEGMENT_START_SECONDS
+        self.rally_continuation_seconds = rally_continuation_seconds if rally_continuation_seconds is not None else config.segment.rally_continuation_seconds
 
         self._analyzer: GameStateAnalyzer | None = None
         self._proxy_generator: ProxyGenerator | None = None
@@ -168,6 +164,106 @@ class VideoCutter:
 
         return extended
 
+    def _apply_rally_continuation(
+        self, results: list[GameStateResult], fps: float
+    ) -> list[GameStateResult]:
+        """
+        Apply rally continuation heuristic.
+
+        Once PLAY/SERVICE is detected, keep it active until we see
+        rally_continuation_seconds of consecutive NO_PLAY predictions.
+        This bridges gaps where the ML model incorrectly predicts NO_PLAY mid-rally.
+
+        The heuristic works on a frame-level basis:
+        1. Track whether we're "in a rally" (saw recent PLAY/SERVICE)
+        2. Count consecutive NO_PLAY frames
+        3. Only end the rally when NO_PLAY count exceeds threshold
+        4. Convert NO_PLAY results to PLAY while in active rally
+
+        Args:
+            results: List of GameStateResult from ML analysis
+            fps: Video frames per second
+
+        Returns:
+            Modified list with rally continuation applied
+        """
+        from rallycut.core.models import GameState
+
+        if self.rally_continuation_seconds <= 0 or not results:
+            return results
+
+        # Convert continuation threshold from seconds to frames
+        min_no_play_frames = int(self.rally_continuation_seconds * fps)
+
+        # Build a frame -> result mapping for efficient lookup
+        # Each result covers start_frame to end_frame
+        frame_to_result: dict[int, int] = {}  # frame -> result index
+        for idx, r in enumerate(results):
+            if r.start_frame is not None and r.end_frame is not None:
+                for f in range(r.start_frame, r.end_frame + 1):
+                    frame_to_result[f] = idx
+
+        if not frame_to_result:
+            return results
+
+        max_frame = max(frame_to_result.keys())
+
+        # Track rally state
+        in_rally = False
+        consecutive_no_play = 0
+
+        # Track which results should be converted to PLAY
+        results_to_extend: set[int] = set()
+
+        for frame in range(max_frame + 1):
+            result_idx = frame_to_result.get(frame)
+            if result_idx is None:
+                # No prediction for this frame - treat as continuation
+                if in_rally:
+                    consecutive_no_play += 1
+                    if consecutive_no_play >= min_no_play_frames:
+                        in_rally = False
+                continue
+
+            result = results[result_idx]
+            is_active = result.state in (GameState.PLAY, GameState.SERVICE)
+
+            if is_active:
+                # Active prediction - we're in a rally
+                in_rally = True
+                consecutive_no_play = 0
+            else:
+                # NO_PLAY prediction
+                if in_rally:
+                    consecutive_no_play += 1
+                    if consecutive_no_play >= min_no_play_frames:
+                        # Enough consecutive NO_PLAY - end the rally
+                        in_rally = False
+                    else:
+                        # Still in rally - mark this result for extension
+                        results_to_extend.add(result_idx)
+
+        # Create modified results list
+        extended = []
+        for idx, result in enumerate(results):
+            if idx in results_to_extend:
+                # Convert NO_PLAY to PLAY
+                extended.append(
+                    GameStateResult(
+                        state=GameState.PLAY,
+                        confidence=result.confidence * 0.8,  # Reduce confidence for extended frames
+                        start_frame=result.start_frame,
+                        end_frame=result.end_frame,
+                        play_confidence=result.play_confidence,
+                        service_confidence=result.service_confidence,
+                        no_play_confidence=result.no_play_confidence,
+                    )
+                )
+            else:
+                extended.append(result)
+
+        return extended
+
     def _count_active_windows_in_range(
         self, results: list[GameStateResult], start_frame: int, end_frame: int
     ) -> tuple[int, int, float]:
@@ -206,6 +302,9 @@ class VideoCutter:
 
         # Apply confidence-based boundary extension before segment creation
         extended_results = self._apply_confidence_extension(results)
+
+        # Apply rally continuation heuristic - keeps rallies active until N seconds of NO_PLAY
+        extended_results = self._apply_rally_continuation(extended_results, fps)
 
         # Minimum NO_PLAY duration (in frames) before ending a PLAY segment
         # This prevents early rally termination from brief misclassifications
@@ -348,10 +447,6 @@ class VideoCutter:
 
             # Require minimum number of active windows
             if active_window_count < MIN_ACTIVE_WINDOWS:
-                continue
-
-            # Filter early-video segments (often warmup/setup that looks like play)
-            if segment.start_time < self.min_segment_start_seconds:
                 continue
 
             # Apply min_play_duration only to multi-window segments
