@@ -269,6 +269,7 @@ class BallTracker:
         start_time: float,
         end_time: float,
         stride: int = 1,
+        progress_callback: Callable[[float, str], None] | None = None,
     ) -> TrackingResult:
         """
         Track ball in a time segment.
@@ -278,6 +279,7 @@ class BallTracker:
             start_time: Start time in seconds
             end_time: End time in seconds
             stride: Frame stride
+            progress_callback: Callback for progress updates
 
         Returns:
             TrackingResult with positions
@@ -291,4 +293,5 @@ class BallTracker:
             stride=stride,
             start_frame=start_frame,
             end_frame=end_frame,
+            progress_callback=progress_callback,
         )
