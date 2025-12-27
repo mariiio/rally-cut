@@ -49,8 +49,7 @@ class VideoCutter:
         config = get_config()
         self.device = device or config.device
         self.padding_seconds = padding_seconds if padding_seconds is not None else config.segment.padding_seconds
-        # End padding defaults to start padding + 1.5s for smoother endings
-        self.padding_end_seconds = padding_end_seconds if padding_end_seconds is not None else (self.padding_seconds + 1.5)
+        self.padding_end_seconds = padding_end_seconds if padding_end_seconds is not None else config.segment.padding_end_seconds
         self.min_play_duration = min_play_duration if min_play_duration is not None else config.segment.min_play_duration
         self.base_stride = stride if stride is not None else config.game_state.stride
         self.limit_seconds = limit_seconds

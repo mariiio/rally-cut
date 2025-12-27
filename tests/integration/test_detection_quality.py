@@ -21,7 +21,7 @@ VIDEO_PATH_MATCH3 = FIXTURES_DIR / "match-3-first-2min.MOV"
 
 # Tolerance for rally boundary matching (seconds)
 # Set to 6.0 to account for:
-# - Padding: 2s start, 3.5s end (added to detected segments)
+# - Padding: 2s start, 3.0s end (added to detected segments)
 # - Rally continuation heuristic (may extend by ~2s)
 # - ML model boundary variance
 TOLERANCE_SECONDS = 6.0

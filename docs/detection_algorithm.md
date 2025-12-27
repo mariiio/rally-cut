@@ -159,11 +159,11 @@ If only 1 active window → density = 1/6 = 16% < 25% → filtered
 
 **Parameters in `SegmentConfig`:**
 - `padding_seconds` (default: 2.0) - Added before segment start
-- End padding is automatically `padding_seconds + 1.5` (default: 3.5s)
+- `padding_end_seconds` (default: 3.0) - Added after segment end
 
 ```
 Raw segment:  [10.0s - 20.0s]
-With padding: [8.0s - 23.5s]
+With padding: [8.0s - 23.0s]
 ```
 
 ### Overlapping Segment Merge
@@ -270,6 +270,7 @@ Merged:    [8.0s - 35.0s]
 |-----------|---------|----------|--------|
 | `min_play_duration` | 1.0s | `--min-play` | Minimum segment length |
 | `padding_seconds` | 2.0s | `--padding` | Start padding |
+| `padding_end_seconds` | 3.0s | `--padding-end` | End padding |
 | `min_gap_seconds` | 5.0s | `--min-gap` | Max bridgeable NO_PLAY gap |
 | `rally_continuation_seconds` | 2.0s | `--rally-continuation` | NO_PLAY duration to end rally |
 
