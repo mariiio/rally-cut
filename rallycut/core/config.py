@@ -148,8 +148,10 @@ class SegmentConfig(BaseModel):
 
     # Reduced from 5.0 to 1.0 to detect shorter/partially-detected rallies
     min_play_duration: float = 1.0
-    # Increased from 1.0 to 3.0 to compensate for ML model under-detecting rally boundaries
+    # Padding added before segment start
     padding_seconds: float = 2.0
+    # Padding added after segment end
+    padding_end_seconds: float = 3.0
     # Increased from 3.0 to 5.0 to bridge larger gaps in fragmented detections
     min_gap_seconds: float = 5.0
     # Rally continuation: keep rally active until N consecutive seconds of NO_PLAY
