@@ -136,6 +136,7 @@ def overlay(
             start_time=start_time,
             end_time=end_time,
             stride=stride,
+            progress_callback=track_progress,
         )
         progress.update(track_task, completed=100)
 
