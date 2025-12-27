@@ -55,6 +55,10 @@ tests/
 - **Sequential reading**: Use `video.iter_frames()` not seeking
 - **Config**: Nested Pydantic BaseSettings with YAML/env var support
 
+## Algorithm Documentation
+
+- **[Detection Algorithm](docs/detection_algorithm.md)**: Full pipeline documentation including ML classification, post-processing heuristics, segment filtering, and tuning guide
+
 ## Testing
 
 - Mark slow tests: `@pytest.mark.slow` for ML inference

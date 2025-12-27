@@ -207,6 +207,11 @@ def cut(  # noqa: C901
         "--min-gap",
         help="Min NO_PLAY gap (seconds) before ending a rally (default: from config)",
     ),
+    rally_continuation: float | None = typer.Option(
+        None,
+        "--rally-continuation",
+        help="Seconds of consecutive NO_PLAY required to end a rally (default: from config)",
+    ),
     auto_stride: bool = typer.Option(
         True,
         "--auto-stride/--no-auto-stride",
@@ -318,6 +323,7 @@ def cut(  # noqa: C901
         use_proxy=proxy,
         min_gap_seconds=effective_min_gap,
         auto_stride=auto_stride,
+        rally_continuation_seconds=rally_continuation,
     )
 
     # Progress tracking
@@ -382,7 +388,7 @@ def cut(  # noqa: C901
                 exporter = FFmpegExporter()
                 exporter.export_segments(
                     video, output, segments,
-                    progress_callback=lambda p, m: progress.update(task, completed=int(50 + p * 50), description=m)
+                    progress_callback=lambda p, m: progress.update(task, completed=int(50 + p * 50), description=m),
                 )
             progress.update(task, completed=100, description="Complete!")
         else:
@@ -402,7 +408,7 @@ def cut(  # noqa: C901
                     exporter = FFmpegExporter()
                     exporter.export_segments(
                         video, output, segments,
-                        progress_callback=lambda p, m: progress.update(task, completed=int(p * 100), description=m)
+                        progress_callback=lambda p, m: progress.update(task, completed=int(p * 100), description=m),
                     )
             elif debug:
                 # Debug mode - get full diagnostic data
