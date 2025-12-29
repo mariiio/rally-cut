@@ -1,10 +1,7 @@
 'use client';
 
 import { useMemo, useCallback, useState, useEffect, useRef } from 'react';
-import { Box, Typography, IconButton, Stack, Tooltip, Switch, FormControlLabel } from '@mui/material';
-import ZoomInIcon from '@mui/icons-material/ZoomIn';
-import ZoomOutIcon from '@mui/icons-material/ZoomOut';
-import FitScreenIcon from '@mui/icons-material/FitScreen';
+import { Box, Typography, IconButton, Stack, Tooltip, Popover } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from '@mui/icons-material/Pause';
 import SkipPreviousIcon from '@mui/icons-material/SkipPrevious';
@@ -16,6 +13,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import KeyboardIcon from '@mui/icons-material/Keyboard';
 import {
   Timeline as TimelineEditor,
   TimelineRow,
@@ -40,20 +38,96 @@ const SCALE_WIDTH = 160; // pixels per scale unit
 // Zoom limits - will be calculated based on video duration
 const MIN_SCALE = 5; // 5 seconds per marker (very zoomed in)
 
+// Hotkey row component for the legend
+function HotkeyRow({ keys, description, secondary }: { keys: string[]; description: string; secondary?: boolean }) {
+  return (
+    <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2}>
+      <Stack direction="row" spacing={0.5}>
+        {keys.map((key, i) => (
+          <Box
+            key={i}
+            sx={{
+              px: 0.75,
+              py: 0.25,
+              bgcolor: 'action.selected',
+              borderRadius: 0.5,
+              fontSize: 11,
+              fontFamily: 'monospace',
+              fontWeight: 500,
+              minWidth: 24,
+              textAlign: 'center',
+            }}
+          >
+            {key}
+          </Box>
+        ))}
+      </Stack>
+      <Typography
+        variant="caption"
+        sx={{
+          color: secondary ? 'text.disabled' : 'text.secondary',
+          fontSize: 12,
+          fontStyle: secondary ? 'italic' : 'normal',
+        }}
+      >
+        {description}
+      </Typography>
+    </Stack>
+  );
+}
+
 export function Timeline() {
   const { segments, updateSegment, selectSegment, selectedSegmentId, adjustSegmentStart, adjustSegmentEnd, createSegmentAtTime, removeSegment, videoMetadata } =
     useEditorStore();
-  const { currentTime, duration, seek, isPlaying, pause, togglePlay, playOnlyRallies, togglePlayOnlyRallies } = usePlayerStore();
+  const { currentTime, duration, seek, isPlaying, pause, play, playOnlyRallies, togglePlayOnlyRallies } = usePlayerStore();
   const timelineRef = useRef<TimelineState>(null);
   const timelineContainerRef = useRef<HTMLDivElement>(null);
   const [scrollLeft, setScrollLeft] = useState(0);
   const [isDraggingCursor, setIsDraggingCursor] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [hotkeysAnchorEl, setHotkeysAnchorEl] = useState<HTMLButtonElement | null>(null);
+
+  // Track if we auto-paused at segment end (for restart behavior)
+  const autoPausedAtEndRef = useRef<string | null>(null); // stores segment ID if auto-paused
 
   // Clear delete confirmation when selection changes
   useEffect(() => {
     setDeleteConfirmId(null);
   }, [selectedSegmentId]);
+
+  // Helper to check if current time is inside the selected segment
+  const isInsideSelectedSegment = useCallback(() => {
+    if (!selectedSegmentId) return false;
+    const segment = segments.find(s => s.id === selectedSegmentId);
+    if (!segment) return false;
+    return currentTime >= segment.start_time && currentTime <= segment.end_time;
+  }, [selectedSegmentId, segments, currentTime]);
+
+  // Get selected segment
+  const getSelectedSegment = useCallback(() => {
+    if (!selectedSegmentId) return null;
+    return segments.find(s => s.id === selectedSegmentId) || null;
+  }, [selectedSegmentId, segments]);
+
+  // Navigate to previous segment and select it
+  const goToPrevSegment = useCallback(() => {
+    const sorted = [...segments].sort((a, b) => a.start_time - b.start_time);
+    const prev = sorted.reverse().find(s => s.start_time < currentTime - 0.5);
+    if (prev) {
+      selectSegment(prev.id);
+      seek(prev.start_time);
+    }
+  }, [segments, currentTime, seek, selectSegment]);
+
+  // Navigate to next segment and select it
+  const goToNextSegment = useCallback(() => {
+    const sorted = [...segments].sort((a, b) => a.start_time - b.start_time);
+    const next = sorted.find(s => s.start_time > currentTime + 0.5);
+    if (next) {
+      selectSegment(next.id);
+      seek(next.start_time);
+    }
+  }, [segments, currentTime, seek, selectSegment]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -61,19 +135,103 @@ export function Timeline() {
       const target = e.target as HTMLElement;
       if (target.matches('input, textarea')) return;
 
+      const isMod = e.metaKey || e.ctrlKey;
+
       switch (e.code) {
         case 'Space':
           e.preventDefault();
-          togglePlay();
+
+          if (isPlaying) {
+            // Simply pause
+            pause();
+          } else {
+            // Playing from paused state
+            const selectedSegment = getSelectedSegment();
+
+            if (autoPausedAtEndRef.current && selectedSegment && autoPausedAtEndRef.current === selectedSegment.id) {
+              // Auto-paused at segment end: restart from segment start
+              seek(selectedSegment.start_time);
+              autoPausedAtEndRef.current = null;
+              play();
+            } else if (selectedSegmentId) {
+              // Has a selected segment
+              if (isInsideSelectedSegment()) {
+                // Inside segment: play from current position
+                play();
+              } else {
+                // Outside segment: deselect and play
+                selectSegment(null);
+                play();
+              }
+            } else {
+              // No segment selected: just play
+              play();
+            }
+          }
           break;
+
         case 'ArrowLeft':
           e.preventDefault();
-          seek(Math.max(0, currentTime - 5));
+          if (isMod) {
+            // Cmd/Ctrl + Left: go to previous segment
+            goToPrevSegment();
+          } else {
+            // Arrow Left: seek back 5 seconds
+            seek(Math.max(0, currentTime - 5));
+            // Clear auto-pause flag when manually seeking
+            autoPausedAtEndRef.current = null;
+          }
           break;
+
         case 'ArrowRight':
           e.preventDefault();
-          seek(Math.min(duration, currentTime + 5));
+          if (isMod) {
+            // Cmd/Ctrl + Right: go to next segment
+            goToNextSegment();
+          } else {
+            // Arrow Right: seek forward 5 seconds
+            seek(Math.min(duration, currentTime + 5));
+            // Clear auto-pause flag when manually seeking
+            autoPausedAtEndRef.current = null;
+          }
           break;
+
+        case 'ArrowUp':
+          if (selectedSegmentId) {
+            e.preventDefault();
+            const segUp = getSelectedSegment();
+            if (e.shiftKey) {
+              // Shift + Up: expand end (+0.5s)
+              if (adjustSegmentEnd(selectedSegmentId, 0.5) && segUp) {
+                seek(segUp.end_time + 0.5);
+              }
+            } else {
+              // Up: expand start (-0.5s)
+              if (adjustSegmentStart(selectedSegmentId, -0.5) && segUp) {
+                seek(segUp.start_time - 0.5);
+              }
+            }
+          }
+          break;
+
+        case 'ArrowDown':
+          if (selectedSegmentId) {
+            e.preventDefault();
+            const segDown = getSelectedSegment();
+            if (e.shiftKey) {
+              // Shift + Down: shrink end (-0.5s)
+              if (adjustSegmentEnd(selectedSegmentId, -0.5) && segDown) {
+                seek(segDown.end_time - 0.5);
+              }
+            } else {
+              // Down: shrink start (+0.5s)
+              if (adjustSegmentStart(selectedSegmentId, 0.5) && segDown) {
+                seek(segDown.start_time + 0.5);
+              }
+            }
+          }
+          break;
+
         case 'Delete':
         case 'Backspace':
           if (selectedSegmentId) {
@@ -89,6 +247,7 @@ export function Timeline() {
             }
           }
           break;
+
         case 'Escape':
           if (deleteConfirmId) {
             setDeleteConfirmId(null);
@@ -96,11 +255,24 @@ export function Timeline() {
             selectSegment(null);
           }
           break;
+
+        case 'Enter':
+          // Cmd/Ctrl + Enter: Create new segment at cursor (if not inside existing segment)
+          if (isMod && videoMetadata) {
+            const insideSegment = segments.some(
+              (s) => currentTime >= s.start_time && currentTime <= s.end_time
+            );
+            if (!insideSegment) {
+              e.preventDefault();
+              createSegmentAtTime(currentTime);
+            }
+          }
+          break;
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay, seek, currentTime, duration, selectedSegmentId, deleteConfirmId, removeSegment, selectSegment]);
+  }, [isPlaying, play, pause, seek, currentTime, duration, selectedSegmentId, deleteConfirmId, removeSegment, selectSegment, isInsideSelectedSegment, getSelectedSegment, goToPrevSegment, goToNextSegment, adjustSegmentStart, adjustSegmentEnd, videoMetadata, segments, createSegmentAtTime]);
 
   // Jump to previous/next segment
   const jumpToPrevSegment = useCallback(() => {
@@ -142,33 +314,22 @@ export function Timeline() {
 
     // Pause when reaching the end of the selected segment (with small tolerance)
     if (currentTime >= selectedSegment.end_time - 0.05) {
+      autoPausedAtEndRef.current = selectedSegmentId; // Mark that we auto-paused
       pause();
     }
   }, [currentTime, isPlaying, selectedSegmentId, segments, pause]);
 
-  // Calculate min/max scale based on video duration
-  const minScale = MIN_SCALE; // 5 seconds per marker (zoomed in)
-
-  // Estimate visible markers based on wide screen
-  // Container ~2500px wide, scaleWidth=160px = ~16 markers visible
+  // Calculate optimal scale based on video duration
+  // Estimate visible markers: Container ~2500px wide, scaleWidth=160px = ~16 markers visible
   const estimatedVisibleMarkers = 16;
 
-  const maxScale = useMemo(() => {
-    if (duration > 0) {
-      // Max: video fills the visible area exactly
-      return Math.max(minScale * 2, Math.ceil(duration / estimatedVisibleMarkers));
-    }
-    return 300;
-  }, [duration, minScale]);
-
-  // Calculate optimal scale - video should fill visible area with minimal overflow
   const getAutoScale = useCallback(() => {
     if (duration > 0) {
       // Fit entire video to fill visible markers
-      return Math.max(minScale, Math.ceil(duration / estimatedVisibleMarkers));
+      return Math.max(MIN_SCALE, Math.ceil(duration / estimatedVisibleMarkers));
     }
     return 30;
-  }, [duration, minScale]);
+  }, [duration]);
 
   const [scale, setScale] = useState(() => 30);
 
@@ -379,44 +540,6 @@ export function Timeline() {
     return !insideSegment;
   }, [segments, currentTime, videoMetadata, isDraggingCursor, selectedSegmentId]);
 
-  // Scroll to current time position
-  const scrollToCurrentTime = useCallback(() => {
-    if (timelineRef.current && currentTime > 0) {
-      // Calculate scroll position based on current time and scale
-      const pixelsPerSecond = SCALE_WIDTH / scale;
-      const scrollLeft = Math.max(0, currentTime * pixelsPerSecond - 200); // 200px offset to center
-      timelineRef.current.setScrollLeft(scrollLeft);
-    }
-  }, [currentTime, scale]);
-
-  // Zoom handlers with sensible limits based on video duration
-  const handleZoomIn = () => {
-    setScale((s) => {
-      const newScale = Math.round(s / 1.5);
-      return Math.max(minScale, newScale);
-    });
-    setTimeout(scrollToCurrentTime, 50);
-  };
-
-  const handleZoomOut = () => {
-    setScale((s) => {
-      const newScale = Math.round(s * 1.5);
-      return Math.min(maxScale, newScale);
-    });
-    setTimeout(scrollToCurrentTime, 50);
-  };
-
-  const handleFitToScreen = () => {
-    setScale(getAutoScale());
-    if (timelineRef.current) {
-      timelineRef.current.setScrollLeft(0);
-    }
-  };
-
-  // Check if zoom limits reached
-  const canZoomIn = scale > minScale;
-  const canZoomOut = scale < maxScale;
-
   if (segments.length === 0) {
     return (
       <Box
@@ -446,12 +569,12 @@ export function Timeline() {
         justifyContent="space-between"
         sx={{ px: 1, py: 0.5, borderBottom: 1, borderColor: 'divider' }}
       >
-        {/* Playback controls */}
-        <Stack direction="row" alignItems="center" spacing={0.5}>
+        {/* Playback controls - Left */}
+        <Stack direction="row" alignItems="center" spacing={0.5} sx={{ flex: 1 }}>
           <IconButton size="small" onClick={jumpToPrevSegment} title="Previous segment">
             <SkipPreviousIcon fontSize="small" />
           </IconButton>
-          <IconButton size="small" onClick={togglePlay} title="Play/Pause (Space)">
+          <IconButton size="small" onClick={() => isPlaying ? pause() : play()} title="Play/Pause (Space)">
             {isPlaying ? <PauseIcon /> : <PlayArrowIcon />}
           </IconButton>
           <IconButton size="small" onClick={jumpToNextSegment} title="Next segment">
@@ -473,59 +596,86 @@ export function Timeline() {
               </IconButton>
             </span>
           </Tooltip>
-          <Tooltip title="Skip dead time between rallies" arrow>
-            <Stack direction="row" alignItems="center" sx={{ ml: 1 }}>
-              <IconButton
-                size="small"
-                onClick={togglePlayOnlyRallies}
-                color={playOnlyRallies ? 'primary' : 'default'}
-                title="Play rallies only"
-              >
-                <FastForwardIcon fontSize="small" />
-              </IconButton>
-              <Typography
-                variant="caption"
-                sx={{
-                  color: playOnlyRallies ? 'primary.main' : 'text.secondary',
-                  cursor: 'pointer',
-                  ml: 0.5,
-                }}
-                onClick={togglePlayOnlyRallies}
-              >
-                Rallies only
-              </Typography>
-            </Stack>
-          </Tooltip>
         </Stack>
 
-        {/* Info and zoom controls */}
-        <Stack direction="row" alignItems="center" spacing={1}>
+        {/* Rallies only toggle - Center */}
+        <Tooltip title="Skip dead time between rallies" arrow>
+          <Box
+            onClick={togglePlayOnlyRallies}
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.75,
+              px: 1.5,
+              py: 0.5,
+              borderRadius: 2,
+              cursor: 'pointer',
+              bgcolor: playOnlyRallies ? 'primary.main' : 'action.hover',
+              color: playOnlyRallies ? 'primary.contrastText' : 'text.secondary',
+              transition: 'all 0.2s ease',
+              '&:hover': {
+                bgcolor: playOnlyRallies ? 'primary.dark' : 'action.selected',
+              },
+            }}
+          >
+            <FastForwardIcon sx={{ fontSize: 16 }} />
+            <Typography
+              variant="caption"
+              sx={{
+                fontWeight: 500,
+                fontSize: 12,
+                userSelect: 'none',
+              }}
+            >
+              Rallies only
+            </Typography>
+          </Box>
+        </Tooltip>
+
+        {/* Info and controls - Right */}
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ flex: 1, justifyContent: 'flex-end' }}>
           <Typography variant="caption" sx={{ color: 'text.secondary' }}>
             {segments.length} segments
           </Typography>
-          <Stack direction="row" spacing={0.5}>
+          <Tooltip title="Keyboard shortcuts">
             <IconButton
               size="small"
-              onClick={handleZoomOut}
-              disabled={!canZoomOut}
-              title="Zoom out (show more time)"
+              onClick={(e) => setHotkeysAnchorEl(e.currentTarget)}
+              sx={{ color: 'text.secondary' }}
             >
-              <ZoomOutIcon fontSize="small" />
+              <KeyboardIcon fontSize="small" />
             </IconButton>
-            <IconButton
-              size="small"
-              onClick={handleZoomIn}
-              disabled={!canZoomIn}
-              title="Zoom in (show less time)"
-            >
-              <ZoomInIcon fontSize="small" />
-            </IconButton>
-            <IconButton size="small" onClick={handleFitToScreen} title="Fit to screen">
-              <FitScreenIcon fontSize="small" />
-            </IconButton>
-          </Stack>
+          </Tooltip>
         </Stack>
       </Stack>
+
+      {/* Hotkeys Legend Popover */}
+      <Popover
+        open={Boolean(hotkeysAnchorEl)}
+        anchorEl={hotkeysAnchorEl}
+        onClose={() => setHotkeysAnchorEl(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <Box sx={{ p: 2, minWidth: 280 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1.5, fontWeight: 600 }}>
+            Keyboard Shortcuts
+          </Typography>
+          <Stack spacing={1}>
+            <HotkeyRow keys={['Space']} description="Play / Pause" />
+            <HotkeyRow keys={['←', '→']} description="Seek ±5 seconds" />
+            <HotkeyRow keys={['⌘/Ctrl', '←']} description="Previous segment" />
+            <HotkeyRow keys={['⌘/Ctrl', '→']} description="Next segment" />
+            <HotkeyRow keys={['↑', '↓']} description="Adjust start ±0.5s (selected)" />
+            <HotkeyRow keys={['⇧', '↑', '↓']} description="Adjust end ±0.5s (selected)" />
+            <HotkeyRow keys={['⌘/Ctrl', '↵']} description="New segment at cursor" />
+            <HotkeyRow keys={['Delete']} description="Delete segment (press twice)" />
+            <HotkeyRow keys={['⌘/Ctrl', 'Z']} description="Undo" />
+            <HotkeyRow keys={['⌘/Ctrl', '⇧', 'Z']} description="Redo" />
+            <HotkeyRow keys={['Esc']} description="Deselect segment" />
+          </Stack>
+        </Box>
+      </Popover>
 
       {/* Timeline editor */}
       <Box
