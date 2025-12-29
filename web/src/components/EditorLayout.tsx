@@ -15,7 +15,37 @@ import { FileControls } from './FileControls';
 import { useEditorStore } from '@/stores/editorStore';
 
 export function EditorLayout() {
-  const { segments, setVideoUrl, loadSegmentsFromJson } = useEditorStore();
+  const { segments, setVideoUrl, loadSegmentsFromJson, undo, redo, canUndo, canRedo } = useEditorStore();
+
+  // Keyboard shortcuts for undo/redo
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Check for Cmd/Ctrl modifier
+      const isMod = e.metaKey || e.ctrlKey;
+      if (!isMod) return;
+
+      // Undo: Cmd/Ctrl + Z (without Shift)
+      if (e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        if (canUndo()) {
+          undo();
+        }
+        return;
+      }
+
+      // Redo: Cmd/Ctrl + Shift + Z or Cmd/Ctrl + Y
+      if ((e.key === 'z' && e.shiftKey) || e.key === 'y') {
+        e.preventDefault();
+        if (canRedo()) {
+          redo();
+        }
+        return;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [undo, redo, canUndo, canRedo]);
 
   // Auto-load sample data in development
   useEffect(() => {
