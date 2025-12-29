@@ -116,6 +116,9 @@ disallow_untyped_defs = true
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore:invalid escape sequence:SyntaxWarning:filterpy",
+]
 
 [dependency-groups]
 dev = [
