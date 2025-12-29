@@ -9,6 +9,31 @@ import {
   calculateStats,
 } from '@/types/segment';
 
+// History management types
+interface HistoryEntry {
+  segments: Rally[];
+  timestamp: number;
+}
+
+interface PersistedHistory {
+  videoPath: string | null;
+  segments: Rally[];
+  past: HistoryEntry[];
+  future: HistoryEntry[];
+  originalSegments: Rally[];
+  savedAt: number;
+}
+
+const STORAGE_KEY = 'rallycut_editor_history_v1';
+const MAX_HISTORY_SIZE = 50;
+
+// Debounce helper
+let saveTimeout: ReturnType<typeof setTimeout> | null = null;
+const debouncedSave = (fn: () => void) => {
+  if (saveTimeout) clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(fn, 500);
+};
+
 interface EditorState {
   // Video state
   videoFile: File | null;
@@ -22,6 +47,11 @@ interface EditorState {
 
   // Original JSON (for preserving non-edited fields)
   originalJson: SegmentFile | null;
+
+  // History state
+  past: HistoryEntry[];
+  future: HistoryEntry[];
+  originalSegments: Rally[];
 
   // Actions
   setVideoFile: (file: File) => void;
@@ -38,6 +68,20 @@ interface EditorState {
   selectSegment: (id: string | null) => void;
   exportToJson: () => SegmentFile | null;
   clearAll: () => void;
+
+  // History actions
+  pushHistory: () => void;
+  undo: () => void;
+  redo: () => void;
+  resetToOriginal: () => void;
+  saveToStorage: () => void;
+  loadFromStorage: () => boolean;
+  clearHistory: () => void;
+
+  // Computed helpers (called as functions since Zustand doesn't have computed)
+  canUndo: () => boolean;
+  canRedo: () => boolean;
+  hasChangesFromOriginal: () => boolean;
 }
 
 export const useEditorStore = create<EditorState>((set, get) => ({
@@ -49,6 +93,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   selectedSegmentId: null,
   hasUnsavedChanges: false,
   originalJson: null,
+
+  // History state
+  past: [],
+  future: [],
+  originalSegments: [],
 
   setVideoFile: (file: File) => {
     const state = get();
@@ -88,17 +137,49 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   loadSegmentsFromJson: (json: SegmentFile) => {
+    const state = get();
+
+    // Store original segments for reset functionality
+    const originalSegments = [...json.rallies];
+
+    // Try to load persisted state for this video
+    let segments = json.rallies;
+    let past: HistoryEntry[] = [];
+    let future: HistoryEntry[] = [];
+
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem(STORAGE_KEY);
+        if (stored) {
+          const persisted: PersistedHistory = JSON.parse(stored);
+          // Only restore if it's for the same video
+          if (persisted.videoPath === json.video.path) {
+            segments = persisted.segments;
+            past = persisted.past;
+            future = persisted.future;
+          }
+        }
+      } catch {
+        // localStorage unavailable or corrupted, continue with fresh state
+      }
+    }
+
     set({
-      segments: json.rallies,
+      segments,
       videoMetadata: json.video,
       originalJson: json,
-      hasUnsavedChanges: false,
+      originalSegments,
+      past,
+      future,
+      hasUnsavedChanges: past.length > 0,
       selectedSegmentId: null,
     });
   },
 
   addSegment: (startTime: number, endTime: number) => {
     const state = get();
+    state.pushHistory();
+
     const fps = state.videoMetadata?.fps ?? 30;
 
     // Generate unique ID
@@ -116,10 +197,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       segments: [...state.segments, newRally],
       hasUnsavedChanges: true,
     });
+
+    debouncedSave(() => get().saveToStorage());
   },
 
   updateSegment: (id: string, updates: Partial<Rally>) => {
     const state = get();
+    state.pushHistory();
+
     const fps = state.videoMetadata?.fps ?? 30;
 
     set({
@@ -134,6 +219,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }),
       hasUnsavedChanges: true,
     });
+
+    debouncedSave(() => get().saveToStorage());
   },
 
   adjustSegmentStart: (id: string, delta: number) => {
@@ -234,16 +321,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   removeSegment: (id: string) => {
     const state = get();
+    state.pushHistory();
+
     set({
       segments: state.segments.filter((s) => s.id !== id),
       selectedSegmentId:
         state.selectedSegmentId === id ? null : state.selectedSegmentId,
       hasUnsavedChanges: true,
     });
+
+    debouncedSave(() => get().saveToStorage());
   },
 
   reorderSegments: (fromIndex: number, toIndex: number) => {
     const state = get();
+    state.pushHistory();
+
     const segments = [...state.segments];
     const [removed] = segments.splice(fromIndex, 1);
     segments.splice(toIndex, 0, removed);
@@ -251,6 +344,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       segments,
       hasUnsavedChanges: true,
     });
+
+    debouncedSave(() => get().saveToStorage());
   },
 
   selectSegment: (id: string | null) => {
@@ -288,6 +383,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (state.videoUrl) {
       URL.revokeObjectURL(state.videoUrl);
     }
+
+    // Clear localStorage
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {
+        // Ignore localStorage errors
+      }
+    }
+
     set({
       videoFile: null,
       videoUrl: null,
@@ -296,6 +401,161 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       selectedSegmentId: null,
       hasUnsavedChanges: false,
       originalJson: null,
+      past: [],
+      future: [],
+      originalSegments: [],
     });
+  },
+
+  // History management actions
+  pushHistory: () => {
+    const state = get();
+    const entry: HistoryEntry = {
+      segments: [...state.segments],
+      timestamp: Date.now(),
+    };
+
+    // Limit history size
+    const past = [...state.past, entry].slice(-MAX_HISTORY_SIZE);
+
+    set({
+      past,
+      future: [], // Clear redo stack on new action
+    });
+  },
+
+  undo: () => {
+    const state = get();
+    if (state.past.length === 0) return;
+
+    const past = [...state.past];
+    const entry = past.pop()!;
+
+    const futureEntry: HistoryEntry = {
+      segments: [...state.segments],
+      timestamp: Date.now(),
+    };
+
+    set({
+      segments: entry.segments,
+      past,
+      future: [...state.future, futureEntry],
+      hasUnsavedChanges: past.length > 0 || state.future.length > 0,
+    });
+
+    debouncedSave(() => get().saveToStorage());
+  },
+
+  redo: () => {
+    const state = get();
+    if (state.future.length === 0) return;
+
+    const future = [...state.future];
+    const entry = future.pop()!;
+
+    const pastEntry: HistoryEntry = {
+      segments: [...state.segments],
+      timestamp: Date.now(),
+    };
+
+    set({
+      segments: entry.segments,
+      past: [...state.past, pastEntry],
+      future,
+      hasUnsavedChanges: true,
+    });
+
+    debouncedSave(() => get().saveToStorage());
+  },
+
+  resetToOriginal: () => {
+    const state = get();
+    if (state.originalSegments.length === 0) return;
+
+    // Push current state to history before resetting
+    state.pushHistory();
+
+    set({
+      segments: [...state.originalSegments],
+      future: [], // Clear redo stack
+      hasUnsavedChanges: false,
+    });
+
+    // Clear localStorage since we're back to original
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {
+        // Ignore localStorage errors
+      }
+    }
+  },
+
+  saveToStorage: () => {
+    const state = get();
+    if (!state.videoMetadata) return;
+
+    if (typeof window !== 'undefined') {
+      try {
+        const data: PersistedHistory = {
+          videoPath: state.videoMetadata.path,
+          segments: state.segments,
+          past: state.past,
+          future: state.future,
+          originalSegments: state.originalSegments,
+          savedAt: Date.now(),
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      } catch {
+        // localStorage unavailable or quota exceeded
+        // Could trim history here if needed
+      }
+    }
+  },
+
+  loadFromStorage: () => {
+    if (typeof window === 'undefined') return false;
+
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (!stored) return false;
+
+      const persisted: PersistedHistory = JSON.parse(stored);
+      set({
+        segments: persisted.segments,
+        past: persisted.past,
+        future: persisted.future,
+        originalSegments: persisted.originalSegments,
+        hasUnsavedChanges: persisted.past.length > 0,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
+  clearHistory: () => {
+    set({
+      past: [],
+      future: [],
+    });
+
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {
+        // Ignore localStorage errors
+      }
+    }
+  },
+
+  // Computed helpers
+  canUndo: () => get().past.length > 0,
+  canRedo: () => get().future.length > 0,
+  hasChangesFromOriginal: () => {
+    const state = get();
+    if (state.originalSegments.length === 0) return false;
+    if (state.segments.length !== state.originalSegments.length) return true;
+    return JSON.stringify(state.segments) !== JSON.stringify(state.originalSegments);
   },
 }));
