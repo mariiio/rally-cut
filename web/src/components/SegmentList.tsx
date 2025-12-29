@@ -16,11 +16,10 @@ import { usePlayerStore } from '@/stores/playerStore';
 import { formatTime, formatDuration } from '@/utils/timeFormat';
 
 interface SegmentListProps {
-  onEdit?: (id: string) => void;
   onDelete?: (id: string) => void;
 }
 
-export function SegmentList({ onEdit, onDelete }: SegmentListProps) {
+export function SegmentList({ onDelete }: SegmentListProps) {
   const { segments, selectedSegmentId, selectSegment } = useEditorStore();
   const { currentTime, seek } = usePlayerStore();
 
@@ -82,7 +81,6 @@ export function SegmentList({ onEdit, onDelete }: SegmentListProps) {
             <ListItemButton
               selected={isSelected}
               onClick={() => handleClick(segment.id, segment.start_time)}
-              onDoubleClick={() => onEdit?.(segment.id)}
             >
               <ListItemText
                 primary={

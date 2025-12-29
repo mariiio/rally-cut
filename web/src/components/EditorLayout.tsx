@@ -1,39 +1,49 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Box,
   AppBar,
   Toolbar,
   Typography,
   Paper,
-  Button,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogContentText,
   DialogActions,
+  Button,
 } from '@mui/material';
-import AddIcon from '@mui/icons-material/Add';
 import { VideoPlayer } from './VideoPlayer';
-import { PlayerControls } from './PlayerControls';
 import { Timeline } from './Timeline';
 import { SegmentList } from './SegmentList';
 import { FileControls } from './FileControls';
-import { SegmentForm } from './SegmentForm';
 import { useEditorStore } from '@/stores/editorStore';
 import { formatDuration } from '@/utils/timeFormat';
 
 export function EditorLayout() {
-  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
-  const [editingSegmentId, setEditingSegmentId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
-  const { segments, removeSegment, videoMetadata } = useEditorStore();
+  const { segments, removeSegment, setVideoUrl, loadSegmentsFromJson } = useEditorStore();
 
-  const handleEdit = (id: string) => {
-    setEditingSegmentId(id);
-  };
+  // Auto-load sample data in development
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'development' && segments.length === 0) {
+      const loadSampleData = async () => {
+        try {
+          const response = await fetch('/samples/segments.json');
+          if (response.ok) {
+            const json = await response.json();
+            loadSegmentsFromJson(json);
+            setVideoUrl('/samples/video.mov');
+          }
+        } catch (e) {
+          // Sample files not available, ignore
+        }
+      };
+      loadSampleData();
+    }
+  }, []);
 
   const handleDeleteConfirm = () => {
     if (deleteConfirmId) {
@@ -59,11 +69,10 @@ export function EditorLayout() {
       {/* Main content */}
       <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 2, gap: 2, overflow: 'hidden' }}>
         {/* Video section */}
-        <Box sx={{ display: 'flex', gap: 2 }}>
+        <Box sx={{ flex: 1, display: 'flex', gap: 2, minHeight: 0 }}>
           {/* Video player */}
-          <Box sx={{ flex: 2 }}>
+          <Box sx={{ flex: 2, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
             <VideoPlayer />
-            <PlayerControls />
           </Box>
 
           {/* Segment list */}
@@ -74,6 +83,7 @@ export function EditorLayout() {
               flexDirection: 'column',
               overflow: 'hidden',
               minWidth: 280,
+              maxWidth: 350,
             }}
           >
             <Box
@@ -81,9 +91,6 @@ export function EditorLayout() {
                 p: 1,
                 borderBottom: 1,
                 borderColor: 'divider',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
               }}
             >
               <Typography variant="subtitle2">
@@ -99,18 +106,9 @@ export function EditorLayout() {
                   </Typography>
                 )}
               </Typography>
-              <Button
-                size="small"
-                startIcon={<AddIcon />}
-                onClick={() => setIsAddDialogOpen(true)}
-                disabled={!videoMetadata}
-              >
-                Add
-              </Button>
             </Box>
             <Box sx={{ flex: 1, overflow: 'auto' }}>
               <SegmentList
-                onEdit={handleEdit}
                 onDelete={(id) => setDeleteConfirmId(id)}
               />
             </Box>
@@ -118,20 +116,10 @@ export function EditorLayout() {
         </Box>
 
         {/* Timeline */}
-        <Paper sx={{ p: 1 }}>
+        <Paper sx={{ flexShrink: 0 }}>
           <Timeline />
         </Paper>
       </Box>
-
-      {/* Add/Edit Segment Dialog */}
-      <SegmentForm
-        open={isAddDialogOpen || editingSegmentId !== null}
-        segmentId={editingSegmentId}
-        onClose={() => {
-          setIsAddDialogOpen(false);
-          setEditingSegmentId(null);
-        }}
-      />
 
       {/* Delete Confirmation Dialog */}
       <Dialog
