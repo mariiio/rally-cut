@@ -6,6 +6,7 @@ interface PlayerState {
   duration: number;
   isReady: boolean;
   seekTo: number | null; // When set, player should seek to this time
+  playOnlyRallies: boolean; // Skip dead time between rallies
 
   // Actions
   play: () => void;
@@ -16,6 +17,7 @@ interface PlayerState {
   setCurrentTime: (time: number) => void;
   setDuration: (duration: number) => void;
   setReady: (ready: boolean) => void;
+  togglePlayOnlyRallies: () => void;
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -24,6 +26,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   duration: 0,
   isReady: false,
   seekTo: null,
+  playOnlyRallies: false,
 
   play: () => set({ isPlaying: true }),
   pause: () => set({ isPlaying: false }),
@@ -41,4 +44,5 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   setCurrentTime: (time: number) => set({ currentTime: time }),
   setDuration: (duration: number) => set({ duration }),
   setReady: (ready: boolean) => set({ isReady: ready }),
+  togglePlayOnlyRallies: () => set((state) => ({ playOnlyRallies: !state.playOnlyRallies })),
 }));
