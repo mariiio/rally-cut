@@ -118,20 +118,6 @@ def _print_diagnostics(console: Console, diagnostic_data: dict, fps: float) -> N
     console.print("  Legend: P=PLAY, S=SERVICE, N=NO_PLAY, -=unknown")
 
 
-def parse_time(time_str: str) -> float:
-    """Parse time string like '0:12', '1:30', '1:02:30' to seconds."""
-    parts = time_str.strip().split(":")
-    if len(parts) == 2:
-        # MM:SS
-        return int(parts[0]) * 60 + float(parts[1])
-    elif len(parts) == 3:
-        # HH:MM:SS
-        return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
-    else:
-        # Assume it's already seconds
-        return float(time_str)
-
-
 @app.callback(invoke_without_command=True)
 @handle_errors
 def cut(  # noqa: C901
@@ -350,36 +336,19 @@ def cut(  # noqa: C901
 
             from rallycut.core.models import GameState, TimeSegment
 
-            raw_segments = data if isinstance(data, list) else data.get("segments", [])
+            raw_rallies = data["rallies"]
             segments = []
 
-            for s in raw_segments:
-                # Support multiple formats:
-                # 1. Simple: "0:12-0:19" or "0:12,0:19"
-                # 2. Object with time strings: {"start": "0:12", "end": "0:19"}
-                # 3. Object with seconds: {"start_time": 12, "end_time": 19}
-
-                if isinstance(s, str):
-                    # Parse "0:12-0:19" or "0:12,0:19" format
-                    sep = "-" if "-" in s else ","
-                    start_str, end_str = s.split(sep)
-                    start_time = parse_time(start_str)
-                    end_time = parse_time(end_str)
-                elif "start" in s:
-                    # {"start": "0:12", "end": "0:19"} format
-                    start_time = parse_time(str(s["start"]))
-                    end_time = parse_time(str(s["end"]))
-                else:
-                    # {"start_time": 12, "end_time": 19} format
-                    start_time = float(s["start_time"])
-                    end_time = float(s["end_time"])
+            for rally in raw_rallies:
+                start_time = float(rally["start_time"])
+                end_time = float(rally["end_time"])
 
                 segments.append(TimeSegment(
                     start_frame=int(start_time * video_info.fps),
                     end_frame=int(end_time * video_info.fps),
                     start_time=start_time,
                     end_time=end_time,
-                    state=GameState(s.get("state", "play") if isinstance(s, dict) else "play"),
+                    state=GameState.PLAY,
                 ))
 
             if not dry_run:
@@ -484,21 +453,35 @@ def cut(  # noqa: C901
 
     # Output JSON if requested
     if output_json:
+        # Build rally list with unique IDs and metadata for frontend video editor
+        rallies = []
+        for i, seg in enumerate(segments, 1):
+            rally_id = f"rally_{i}"
+            # Calculate thumbnail timestamp (midpoint of segment)
+            thumbnail_time = seg.start_time + (seg.duration / 2)
+
+            rallies.append({
+                "id": rally_id,
+                "start_time": seg.start_time,
+                "end_time": seg.end_time,
+                "start_frame": seg.start_frame,
+                "end_frame": seg.end_frame,
+                "duration": seg.duration,
+                "type": "rally",
+                "thumbnail_time": thumbnail_time,
+            })
+
         json_data = {
-            "video": str(video),
-            "duration": video_info.duration,
-            "fps": video_info.fps,
-            "segments": [
-                {
-                    "start_time": seg.start_time,
-                    "end_time": seg.end_time,
-                    "start_frame": seg.start_frame,
-                    "end_frame": seg.end_frame,
-                    "duration": seg.duration,
-                    "state": seg.state.value,
-                }
-                for seg in segments
-            ],
+            "version": "1.0",
+            "video": {
+                "path": str(video),
+                "duration": video_info.duration,
+                "fps": video_info.fps,
+                "width": video_info.width,
+                "height": video_info.height,
+                "frame_count": video_info.frame_count,
+            },
+            "rallies": rallies,
             "stats": stats,
         }
         with open(output_json, "w") as f:
