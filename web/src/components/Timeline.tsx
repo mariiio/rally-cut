@@ -14,6 +14,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import KeyboardIcon from '@mui/icons-material/Keyboard';
+import StarIcon from '@mui/icons-material/Star';
 import {
   Timeline as TimelineEditor,
   TimelineRow,
@@ -77,12 +78,40 @@ function HotkeyRow({ keys, description, secondary }: { keys: string[]; descripti
 }
 
 export function Timeline() {
-  const { segments, updateSegment, selectSegment, selectedSegmentId, adjustSegmentStart, adjustSegmentEnd, createSegmentAtTime, removeSegment, videoMetadata } =
-    useEditorStore();
-  const { currentTime, duration, seek, isPlaying, pause, play, playOnlyRallies, togglePlayOnlyRallies } = usePlayerStore();
+  const {
+    segments,
+    updateSegment,
+    selectSegment,
+    selectedSegmentId,
+    adjustSegmentStart,
+    adjustSegmentEnd,
+    createSegmentAtTime,
+    removeSegment,
+    videoMetadata,
+    highlights,
+    selectedHighlightId,
+    createHighlight,
+    addSegmentToHighlight,
+    removeSegmentFromHighlight,
+    selectHighlight,
+    getHighlightsForSegment,
+  } = useEditorStore();
+  const {
+    currentTime,
+    duration,
+    seek,
+    isPlaying,
+    pause,
+    play,
+    playOnlyRallies,
+    togglePlayOnlyRallies,
+    playingHighlightId,
+    highlightSegmentIndex,
+    advanceHighlightPlayback,
+    stopHighlightPlayback,
+  } = usePlayerStore();
   const timelineRef = useRef<TimelineState>(null);
   const timelineContainerRef = useRef<HTMLDivElement>(null);
-  const [scrollLeft, setScrollLeft] = useState(0);
   const [isDraggingCursor, setIsDraggingCursor] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [hotkeysAnchorEl, setHotkeysAnchorEl] = useState<HTMLButtonElement | null>(null);
@@ -128,6 +157,35 @@ export function Timeline() {
       seek(next.start_time);
     }
   }, [segments, currentTime, seek, selectSegment]);
+
+  // Check if segment is in selected highlight
+  const isSegmentInSelectedHighlight = useMemo(() => {
+    if (!selectedSegmentId || !selectedHighlightId) return false;
+    const highlight = highlights.find(h => h.id === selectedHighlightId);
+    return highlight?.segmentIds.includes(selectedSegmentId) ?? false;
+  }, [selectedSegmentId, selectedHighlightId, highlights]);
+
+  // Toggle segment in highlight (add if not present, remove if present)
+  const handleToggleHighlight = useCallback(() => {
+    if (!selectedSegmentId) return;
+
+    if (selectedHighlightId) {
+      // Check if segment is already in the selected highlight
+      const highlight = highlights.find(h => h.id === selectedHighlightId);
+      if (highlight?.segmentIds.includes(selectedSegmentId)) {
+        // Remove from highlight
+        removeSegmentFromHighlight(selectedSegmentId, selectedHighlightId);
+      } else {
+        // Add to highlight
+        addSegmentToHighlight(selectedSegmentId, selectedHighlightId);
+      }
+    } else {
+      // Create new highlight and add segment
+      const newId = createHighlight();
+      addSegmentToHighlight(selectedSegmentId, newId);
+      selectHighlight(newId);
+    }
+  }, [selectedSegmentId, selectedHighlightId, highlights, addSegmentToHighlight, removeSegmentFromHighlight, createHighlight, selectHighlight]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -175,6 +233,20 @@ export function Timeline() {
           if (isMod) {
             // Cmd/Ctrl + Left: go to previous segment
             goToPrevSegment();
+          } else if (selectedSegmentId) {
+            // Left with segment selected: adjust segment
+            const segLeft = getSelectedSegment();
+            if (e.shiftKey) {
+              // Shift + Left: shrink end (-0.5s)
+              if (adjustSegmentEnd(selectedSegmentId, -0.5) && segLeft) {
+                seek(segLeft.end_time - 0.5);
+              }
+            } else {
+              // Left: expand start (-0.5s)
+              if (adjustSegmentStart(selectedSegmentId, -0.5) && segLeft) {
+                seek(segLeft.start_time - 0.5);
+              }
+            }
           } else {
             // Arrow Left: seek back 5 seconds
             seek(Math.max(0, currentTime - 5));
@@ -188,47 +260,25 @@ export function Timeline() {
           if (isMod) {
             // Cmd/Ctrl + Right: go to next segment
             goToNextSegment();
+          } else if (selectedSegmentId) {
+            // Right with segment selected: adjust segment
+            const segRight = getSelectedSegment();
+            if (e.shiftKey) {
+              // Shift + Right: expand end (+0.5s)
+              if (adjustSegmentEnd(selectedSegmentId, 0.5) && segRight) {
+                seek(segRight.end_time + 0.5);
+              }
+            } else {
+              // Right: shrink start (+0.5s)
+              if (adjustSegmentStart(selectedSegmentId, 0.5) && segRight) {
+                seek(segRight.start_time + 0.5);
+              }
+            }
           } else {
             // Arrow Right: seek forward 5 seconds
             seek(Math.min(duration, currentTime + 5));
             // Clear auto-pause flag when manually seeking
             autoPausedAtEndRef.current = null;
-          }
-          break;
-
-        case 'ArrowUp':
-          if (selectedSegmentId) {
-            e.preventDefault();
-            const segUp = getSelectedSegment();
-            if (e.shiftKey) {
-              // Shift + Up: expand end (+0.5s)
-              if (adjustSegmentEnd(selectedSegmentId, 0.5) && segUp) {
-                seek(segUp.end_time + 0.5);
-              }
-            } else {
-              // Up: expand start (-0.5s)
-              if (adjustSegmentStart(selectedSegmentId, -0.5) && segUp) {
-                seek(segUp.start_time - 0.5);
-              }
-            }
-          }
-          break;
-
-        case 'ArrowDown':
-          if (selectedSegmentId) {
-            e.preventDefault();
-            const segDown = getSelectedSegment();
-            if (e.shiftKey) {
-              // Shift + Down: shrink end (-0.5s)
-              if (adjustSegmentEnd(selectedSegmentId, -0.5) && segDown) {
-                seek(segDown.end_time - 0.5);
-              }
-            } else {
-              // Down: shrink start (+0.5s)
-              if (adjustSegmentStart(selectedSegmentId, 0.5) && segDown) {
-                seek(segDown.start_time + 0.5);
-              }
-            }
           }
           break;
 
@@ -257,22 +307,28 @@ export function Timeline() {
           break;
 
         case 'Enter':
-          // Cmd/Ctrl + Enter: Create new segment at cursor (if not inside existing segment)
-          if (isMod && videoMetadata) {
-            const insideSegment = segments.some(
-              (s) => currentTime >= s.start_time && currentTime <= s.end_time
-            );
-            if (!insideSegment) {
-              e.preventDefault();
-              createSegmentAtTime(currentTime);
+          if (isMod) {
+            // Cmd/Ctrl + Enter: Create new segment at cursor (if not inside existing segment)
+            if (videoMetadata) {
+              const insideSegment = segments.some(
+                (s) => currentTime >= s.start_time && currentTime <= s.end_time
+              );
+              if (!insideSegment) {
+                e.preventDefault();
+                createSegmentAtTime(currentTime);
+              }
             }
+          } else if (selectedSegmentId) {
+            // Enter (without modifier): Toggle segment in highlight
+            e.preventDefault();
+            handleToggleHighlight();
           }
           break;
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, play, pause, seek, currentTime, duration, selectedSegmentId, deleteConfirmId, removeSegment, selectSegment, isInsideSelectedSegment, getSelectedSegment, goToPrevSegment, goToNextSegment, adjustSegmentStart, adjustSegmentEnd, videoMetadata, segments, createSegmentAtTime]);
+  }, [isPlaying, play, pause, seek, currentTime, duration, selectedSegmentId, deleteConfirmId, removeSegment, selectSegment, isInsideSelectedSegment, getSelectedSegment, goToPrevSegment, goToNextSegment, adjustSegmentStart, adjustSegmentEnd, videoMetadata, segments, createSegmentAtTime, handleToggleHighlight]);
 
   // Jump to previous/next segment
   const jumpToPrevSegment = useCallback(() => {
@@ -319,6 +375,53 @@ export function Timeline() {
     }
   }, [currentTime, isPlaying, selectedSegmentId, segments, pause]);
 
+  // Highlight playback - auto-advance through segments
+  useEffect(() => {
+    if (!isPlaying || !playingHighlightId) return;
+
+    const highlight = highlights.find(h => h.id === playingHighlightId);
+    if (!highlight || highlight.segmentIds.length === 0) {
+      stopHighlightPlayback();
+      return;
+    }
+
+    // Get sorted segments for this highlight
+    const highlightSegments = segments
+      .filter(s => highlight.segmentIds.includes(s.id))
+      .sort((a, b) => a.start_time - b.start_time);
+
+    if (highlightSegmentIndex >= highlightSegments.length) {
+      // End of highlight - stop playback
+      stopHighlightPlayback();
+      return;
+    }
+
+    const currentSegment = highlightSegments[highlightSegmentIndex];
+    if (!currentSegment) {
+      stopHighlightPlayback();
+      return;
+    }
+
+    // Check if we need to jump to segment start (if we're before it or in dead time)
+    if (currentTime < currentSegment.start_time - 0.1) {
+      seek(currentSegment.start_time);
+      return;
+    }
+
+    // Check if we reached the end of current segment
+    if (currentTime >= currentSegment.end_time - 0.05) {
+      const nextIndex = highlightSegmentIndex + 1;
+      if (nextIndex < highlightSegments.length) {
+        // Advance to next segment
+        advanceHighlightPlayback();
+        seek(highlightSegments[nextIndex].start_time);
+      } else {
+        // End of highlight
+        stopHighlightPlayback();
+      }
+    }
+  }, [currentTime, isPlaying, playingHighlightId, highlightSegmentIndex, highlights, segments, seek, advanceHighlightPlayback, stopHighlightPlayback]);
+
   // Calculate optimal scale based on video duration
   // Estimate visible markers: Container ~2500px wide, scaleWidth=160px = ~16 markers visible
   const estimatedVisibleMarkers = 16;
@@ -347,42 +450,32 @@ export function Timeline() {
     }
   }, [currentTime]);
 
-  // Track scroll position and cursor dragging for button positioning
+  // Track cursor dragging for button visibility
   useEffect(() => {
     const container = timelineContainerRef.current;
     if (!container) return;
 
-    const editArea = container.querySelector('.timeline-editor-edit-area');
-    if (!editArea) return;
-
-    const handleScroll = () => {
-      setScrollLeft(editArea.scrollLeft);
-    };
-
-    // Track cursor dragging
     const cursorTop = container.querySelector('.timeline-editor-cursor-top');
     const handleMouseDown = () => setIsDraggingCursor(true);
     const handleMouseUp = () => setIsDraggingCursor(false);
 
-    editArea.addEventListener('scroll', handleScroll);
     cursorTop?.addEventListener('mousedown', handleMouseDown);
     window.addEventListener('mouseup', handleMouseUp);
 
     return () => {
-      editArea.removeEventListener('scroll', handleScroll);
       cursorTop?.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [segments.length]); // Re-attach when segments load
 
-  // Calculate cursor pixel position
+  // Calculate cursor pixel position (no scrollLeft since scrolling is disabled)
   const cursorPixelPosition = useMemo(() => {
     const pixelsPerSecond = SCALE_WIDTH / scale;
     const startLeft = 10; // matches startLeft prop
-    return startLeft + (currentTime * pixelsPerSecond) - scrollLeft;
-  }, [currentTime, scale, scrollLeft]);
+    return startLeft + (currentTime * pixelsPerSecond);
+  }, [currentTime, scale]);
 
-  // Calculate selected segment position for delete button overlay
+  // Calculate selected segment position for delete button overlay (no scrollLeft since scrolling is disabled)
   const selectedSegmentPosition = useMemo(() => {
     if (!selectedSegmentId) return null;
     const segment = segments.find(s => s.id === selectedSegmentId);
@@ -390,12 +483,12 @@ export function Timeline() {
 
     const pixelsPerSecond = SCALE_WIDTH / scale;
     const startLeft = 10;
-    const left = startLeft + (segment.start_time * pixelsPerSecond) - scrollLeft;
+    const left = startLeft + (segment.start_time * pixelsPerSecond);
     const width = (segment.end_time - segment.start_time) * pixelsPerSecond;
     const center = left + (width / 2);
 
     return { left, width, center };
-  }, [selectedSegmentId, segments, scale, scrollLeft]);
+  }, [selectedSegmentId, segments, scale]);
 
   // Convert Rally[] to TimelineRow[] format
   const editorData: TimelineRow[] = useMemo(() => {
@@ -663,11 +756,11 @@ export function Timeline() {
           </Typography>
           <Stack spacing={1}>
             <HotkeyRow keys={['Space']} description="Play / Pause" />
-            <HotkeyRow keys={['←', '→']} description="Seek ±5 seconds" />
+            <HotkeyRow keys={['←', '→']} description="Seek ±5s / Adjust start (selected)" />
+            <HotkeyRow keys={['⇧', '←', '→']} description="Adjust end ±0.5s (selected)" />
             <HotkeyRow keys={['⌘/Ctrl', '←']} description="Previous segment" />
             <HotkeyRow keys={['⌘/Ctrl', '→']} description="Next segment" />
-            <HotkeyRow keys={['↑', '↓']} description="Adjust start ±0.5s (selected)" />
-            <HotkeyRow keys={['⇧', '↑', '↓']} description="Adjust end ±0.5s (selected)" />
+            <HotkeyRow keys={['↵']} description="Toggle highlight (selected)" />
             <HotkeyRow keys={['⌘/Ctrl', '↵']} description="New segment at cursor" />
             <HotkeyRow keys={['Delete']} description="Delete segment (press twice)" />
             <HotkeyRow keys={['⌘/Ctrl', 'Z']} description="Undo" />
@@ -699,6 +792,7 @@ export function Timeline() {
           },
           '& .timeline-editor-edit-area': {
             width: '100% !important',
+            overflowX: 'hidden !important',
           },
           '& .timeline-editor-time-area': {
             background: '#1a1a1a !important',
@@ -767,8 +861,9 @@ export function Timeline() {
           rowHeight={100}
           gridSnap={true}
           dragLine={true}
-          autoScroll={true}
+          autoScroll={false}
           autoReRender={true}
+          maxScaleCount={duration > 0 ? Math.ceil(duration / scale) + 1 : 100}
           getScaleRender={getScaleRender}
           getActionRender={(action) => {
             const segment = segments.find((s) => s.id === action.id);
@@ -911,6 +1006,50 @@ export function Timeline() {
                     </IconButton>
                   </Stack>
                 )}
+
+                {/* Highlight color dots */}
+                {(() => {
+                  const segmentHighlights = getHighlightsForSegment(action.id);
+                  if (segmentHighlights.length === 0) return null;
+                  return (
+                    <Stack
+                      direction="row"
+                      spacing={0.25}
+                      sx={{
+                        position: 'absolute',
+                        bottom: 4,
+                        left: 4,
+                        pointerEvents: 'none',
+                      }}
+                    >
+                      {segmentHighlights.slice(0, 4).map((h) => (
+                        <Box
+                          key={h.id}
+                          sx={{
+                            width: 8,
+                            height: 8,
+                            borderRadius: '50%',
+                            bgcolor: h.color,
+                            border: '1px solid rgba(0,0,0,0.3)',
+                            boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
+                          }}
+                        />
+                      ))}
+                      {segmentHighlights.length > 4 && (
+                        <Typography
+                          sx={{
+                            fontSize: 9,
+                            fontWeight: 600,
+                            color: 'white',
+                            textShadow: '0 1px 2px rgba(0,0,0,0.5)',
+                          }}
+                        >
+                          +{segmentHighlights.length - 4}
+                        </Typography>
+                      )}
+                    </Stack>
+                  );
+                })()}
 
               </Box>
             );
@@ -1101,30 +1240,75 @@ export function Timeline() {
                 </IconButton>
               </Stack>
             ) : (
-              // Delete button
-              <IconButton
-                size="small"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setDeleteConfirmId(selectedSegmentId);
-                }}
-                sx={{
-                  width: 28,
-                  height: 28,
-                  bgcolor: 'rgba(20,20,20,0.9)',
-                  color: 'rgba(255,255,255,0.8)',
-                  border: '1px solid rgba(255,255,255,0.15)',
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
-                  '&:hover': {
-                    bgcolor: '#d32f2f',
-                    color: 'white',
-                    border: '1px solid transparent',
-                  },
-                  transition: 'all 0.15s ease',
-                }}
-              >
-                <DeleteIcon sx={{ fontSize: 16 }} />
-              </IconButton>
+              // Toggle highlight and Delete buttons
+              <Stack direction="row" spacing={0.5}>
+                <Tooltip title={
+                  isSegmentInSelectedHighlight
+                    ? `Remove from ${highlights.find(h => h.id === selectedHighlightId)?.name}`
+                    : selectedHighlightId
+                      ? `Add to ${highlights.find(h => h.id === selectedHighlightId)?.name}`
+                      : 'Add to new highlight'
+                }>
+                  <IconButton
+                    size="small"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleToggleHighlight();
+                    }}
+                    sx={{
+                      width: 28,
+                      height: 28,
+                      bgcolor: isSegmentInSelectedHighlight
+                        ? highlights.find(h => h.id === selectedHighlightId)?.color || '#FFE66D'
+                        : 'rgba(20,20,20,0.9)',
+                      color: isSegmentInSelectedHighlight
+                        ? 'rgba(0,0,0,0.8)'
+                        : selectedHighlightId
+                          ? highlights.find(h => h.id === selectedHighlightId)?.color || 'rgba(255,255,255,0.8)'
+                          : 'rgba(255,255,255,0.8)',
+                      border: '1px solid rgba(255,255,255,0.15)',
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+                      '&:hover': {
+                        bgcolor: isSegmentInSelectedHighlight
+                          ? 'rgba(20,20,20,0.9)'
+                          : selectedHighlightId
+                            ? highlights.find(h => h.id === selectedHighlightId)?.color || '#FFE66D'
+                            : '#FFE66D',
+                        color: isSegmentInSelectedHighlight
+                          ? highlights.find(h => h.id === selectedHighlightId)?.color || 'rgba(255,255,255,0.8)'
+                          : 'rgba(0,0,0,0.8)',
+                        border: '1px solid transparent',
+                      },
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <StarIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
+                <IconButton
+                  size="small"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDeleteConfirmId(selectedSegmentId);
+                  }}
+                  sx={{
+                    width: 28,
+                    height: 28,
+                    bgcolor: 'rgba(20,20,20,0.9)',
+                    color: 'rgba(255,255,255,0.8)',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+                    '&:hover': {
+                      bgcolor: '#d32f2f',
+                      color: 'white',
+                      border: '1px solid transparent',
+                    },
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  <DeleteIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </Stack>
             )}
           </Box>
         )}

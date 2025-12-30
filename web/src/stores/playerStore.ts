@@ -8,6 +8,10 @@ interface PlayerState {
   seekTo: number | null; // When set, player should seek to this time
   playOnlyRallies: boolean; // Skip dead time between rallies
 
+  // Highlight playback state
+  playingHighlightId: string | null; // Currently playing highlight
+  highlightSegmentIndex: number; // Current segment index in highlight playback
+
   // Actions
   play: () => void;
   pause: () => void;
@@ -18,6 +22,11 @@ interface PlayerState {
   setDuration: (duration: number) => void;
   setReady: (ready: boolean) => void;
   togglePlayOnlyRallies: () => void;
+
+  // Highlight playback actions
+  startHighlightPlayback: (highlightId: string) => void;
+  advanceHighlightPlayback: () => void;
+  stopHighlightPlayback: () => void;
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -27,6 +36,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   isReady: false,
   seekTo: null,
   playOnlyRallies: false,
+
+  // Highlight playback state
+  playingHighlightId: null,
+  highlightSegmentIndex: 0,
 
   play: () => set({ isPlaying: true }),
   pause: () => set({ isPlaying: false }),
@@ -45,4 +58,27 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   setDuration: (duration: number) => set({ duration }),
   setReady: (ready: boolean) => set({ isReady: ready }),
   togglePlayOnlyRallies: () => set((state) => ({ playOnlyRallies: !state.playOnlyRallies })),
+
+  // Highlight playback actions
+  startHighlightPlayback: (highlightId: string) => {
+    set({
+      playingHighlightId: highlightId,
+      highlightSegmentIndex: 0,
+      isPlaying: true,
+    });
+  },
+
+  advanceHighlightPlayback: () => {
+    set((state) => ({
+      highlightSegmentIndex: state.highlightSegmentIndex + 1,
+    }));
+  },
+
+  stopHighlightPlayback: () => {
+    set({
+      playingHighlightId: null,
+      highlightSegmentIndex: 0,
+      isPlaying: false,
+    });
+  },
 }));
