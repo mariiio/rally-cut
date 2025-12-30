@@ -2,29 +2,29 @@ import { create } from 'zustand';
 import {
   Rally,
   VideoMetadata,
-  SegmentFile,
-  SegmentStats,
+  RallyFile,
+  RallyStats,
   Highlight,
   HIGHLIGHT_COLORS,
   createRally,
   recalculateRally,
   calculateStats,
-} from '@/types/segment';
+} from '@/types/rally';
 
 // History management types
 interface HistoryEntry {
-  segments: Rally[];
+  rallies: Rally[];
   highlights: Highlight[];
   timestamp: number;
 }
 
 interface PersistedHistory {
   videoPath: string | null;
-  segments: Rally[];
+  rallies: Rally[];
   highlights: Highlight[];
   past: HistoryEntry[];
   future: HistoryEntry[];
-  originalSegments: Rally[];
+  originalRallies: Rally[];
   originalHighlights: Highlight[];
   savedAt: number;
 }
@@ -45,18 +45,18 @@ interface EditorState {
   videoUrl: string | null;
   videoMetadata: VideoMetadata | null;
 
-  // Segment state
-  segments: Rally[];
-  selectedSegmentId: string | null;
+  // Rally state
+  rallies: Rally[];
+  selectedRallyId: string | null;
   hasUnsavedChanges: boolean;
 
   // Original JSON (for preserving non-edited fields)
-  originalJson: SegmentFile | null;
+  originalJson: RallyFile | null;
 
   // History state
   past: HistoryEntry[];
   future: HistoryEntry[];
-  originalSegments: Rally[];
+  originalRallies: Rally[];
   originalHighlights: Highlight[];
 
   // Highlights state
@@ -67,16 +67,16 @@ interface EditorState {
   setVideoFile: (file: File) => void;
   setVideoUrl: (url: string) => void;
   clearVideo: () => void;
-  loadSegmentsFromJson: (json: SegmentFile) => void;
-  addSegment: (startTime: number, endTime: number) => void;
-  updateSegment: (id: string, updates: Partial<Rally>) => void;
-  adjustSegmentStart: (id: string, delta: number) => boolean;
-  adjustSegmentEnd: (id: string, delta: number) => boolean;
-  createSegmentAtTime: (time: number, duration?: number) => void;
-  removeSegment: (id: string) => void;
-  reorderSegments: (fromIndex: number, toIndex: number) => void;
-  selectSegment: (id: string | null) => void;
-  exportToJson: () => SegmentFile | null;
+  loadRalliesFromJson: (json: RallyFile) => void;
+  addRally: (startTime: number, endTime: number) => void;
+  updateRally: (id: string, updates: Partial<Rally>) => void;
+  adjustRallyStart: (id: string, delta: number) => boolean;
+  adjustRallyEnd: (id: string, delta: number) => boolean;
+  createRallyAtTime: (time: number, duration?: number) => void;
+  removeRally: (id: string) => void;
+  reorderRallies: (fromIndex: number, toIndex: number) => void;
+  selectRally: (id: string | null) => void;
+  exportToJson: () => RallyFile | null;
   clearAll: () => void;
 
   // History actions
@@ -92,8 +92,8 @@ interface EditorState {
   createHighlight: (name?: string) => string;
   deleteHighlight: (id: string) => void;
   renameHighlight: (id: string, name: string) => void;
-  addSegmentToHighlight: (segmentId: string, highlightId: string) => void;
-  removeSegmentFromHighlight: (segmentId: string, highlightId: string) => void;
+  addRallyToHighlight: (rallyId: string, highlightId: string) => void;
+  removeRallyFromHighlight: (rallyId: string, highlightId: string) => void;
   selectHighlight: (id: string | null) => void;
 
   // Computed helpers (called as functions since Zustand doesn't have computed)
@@ -102,7 +102,7 @@ interface EditorState {
   hasChangesFromOriginal: () => boolean;
   canCreateHighlight: () => boolean;
   getNextHighlightColor: () => string;
-  getHighlightsForSegment: (segmentId: string) => Highlight[];
+  getHighlightsForRally: (rallyId: string) => Highlight[];
 }
 
 export const useEditorStore = create<EditorState>((set, get) => ({
@@ -110,15 +110,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   videoFile: null,
   videoUrl: null,
   videoMetadata: null,
-  segments: [],
-  selectedSegmentId: null,
+  rallies: [],
+  selectedRallyId: null,
   hasUnsavedChanges: false,
   originalJson: null,
 
   // History state
   past: [],
   future: [],
-  originalSegments: [],
+  originalRallies: [],
   originalHighlights: [],
 
   // Highlights state
@@ -162,13 +162,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     });
   },
 
-  loadSegmentsFromJson: (json: SegmentFile) => {
+  loadRalliesFromJson: (json: RallyFile) => {
     // Store original data for reset functionality
-    const originalSegments = [...json.rallies];
+    const originalRallies = [...json.rallies];
     const originalHighlights = json.highlights ? [...json.highlights] : [];
 
     // Try to load persisted state for this video
-    let segments = json.rallies;
+    let rallies = json.rallies;
     let highlights = json.highlights || [];
     let past: HistoryEntry[] = [];
     let future: HistoryEntry[] = [];
@@ -179,11 +179,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         if (stored) {
           const persisted: PersistedHistory = JSON.parse(stored);
           // Only restore if it's for the same video
-          if (persisted.videoPath === json.video.path) {
-            segments = persisted.segments;
+          if (persisted.videoPath === json.video.path && persisted.rallies) {
+            rallies = persisted.rallies;
             highlights = persisted.highlights || [];
-            past = persisted.past;
-            future = persisted.future;
+            past = persisted.past || [];
+            future = persisted.future || [];
           }
         }
       } catch {
@@ -192,29 +192,29 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
 
     set({
-      segments,
+      rallies,
       highlights,
       videoMetadata: json.video,
       originalJson: json,
-      originalSegments,
+      originalRallies,
       originalHighlights,
       past,
       future,
       hasUnsavedChanges: past.length > 0,
-      selectedSegmentId: null,
+      selectedRallyId: null,
       selectedHighlightId: null,
     });
   },
 
-  addSegment: (startTime: number, endTime: number) => {
+  addRally: (startTime: number, endTime: number) => {
     const state = get();
     state.pushHistory();
 
     const fps = state.videoMetadata?.fps ?? 30;
 
     // Generate unique ID
-    const existingIds = state.segments.map((s) => s.id);
-    let counter = state.segments.length + 1;
+    const existingIds = state.rallies.map((s) => s.id);
+    let counter = state.rallies.length + 1;
     let newId = `rally_${counter}`;
     while (existingIds.includes(newId)) {
       counter++;
@@ -224,23 +224,23 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const newRally = createRally(newId, startTime, endTime, fps);
 
     set({
-      segments: [...state.segments, newRally],
+      rallies: [...state.rallies, newRally],
       hasUnsavedChanges: true,
     });
 
     debouncedSave(() => get().saveToStorage());
   },
 
-  updateSegment: (id: string, updates: Partial<Rally>) => {
+  updateRally: (id: string, updates: Partial<Rally>) => {
     const state = get();
     state.pushHistory();
 
     const fps = state.videoMetadata?.fps ?? 30;
 
     set({
-      segments: state.segments.map((segment) => {
-        if (segment.id !== id) return segment;
-        const updated = { ...segment, ...updates };
+      rallies: state.rallies.map((rally) => {
+        if (rally.id !== id) return rally;
+        const updated = { ...rally, ...updates };
         // Recalculate derived fields if times changed
         if ('start_time' in updates || 'end_time' in updates) {
           return recalculateRally(updated, fps);
@@ -253,80 +253,80 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     debouncedSave(() => get().saveToStorage());
   },
 
-  adjustSegmentStart: (id: string, delta: number) => {
+  adjustRallyStart: (id: string, delta: number) => {
     const state = get();
-    const segment = state.segments.find((s) => s.id === id);
-    if (!segment) return false;
+    const rally = state.rallies.find((s) => s.id === id);
+    if (!rally) return false;
 
-    const newStart = segment.start_time + delta;
+    const newStart = rally.start_time + delta;
 
     // Boundary checks
     if (newStart < 0) return false;
-    if (newStart >= segment.end_time - 0.5) return false; // Min 0.5s duration
+    if (newStart >= rally.end_time - 0.5) return false; // Min 0.5s duration
 
     // Overlap check (only for expanding, i.e., negative delta)
     if (delta < 0) {
-      const prevSegment = state.segments
-        .filter((s) => s.end_time <= segment.start_time)
+      const prevRally = state.rallies
+        .filter((s) => s.end_time <= rally.start_time)
         .sort((a, b) => b.end_time - a.end_time)[0];
-      if (prevSegment && newStart < prevSegment.end_time) return false;
+      if (prevRally && newStart < prevRally.end_time) return false;
     }
 
-    state.updateSegment(id, { start_time: newStart });
+    state.updateRally(id, { start_time: newStart });
     return true;
   },
 
-  adjustSegmentEnd: (id: string, delta: number) => {
+  adjustRallyEnd: (id: string, delta: number) => {
     const state = get();
-    const segment = state.segments.find((s) => s.id === id);
-    if (!segment) return false;
+    const rally = state.rallies.find((s) => s.id === id);
+    if (!rally) return false;
 
-    const newEnd = segment.end_time + delta;
+    const newEnd = rally.end_time + delta;
     const videoDuration = state.videoMetadata?.duration ?? Infinity;
 
     // Boundary checks
     if (newEnd > videoDuration) return false;
-    if (newEnd <= segment.start_time + 0.5) return false; // Min 0.5s duration
+    if (newEnd <= rally.start_time + 0.5) return false; // Min 0.5s duration
 
     // Overlap check (only for expanding, i.e., positive delta)
     if (delta > 0) {
-      const nextSegment = state.segments
-        .filter((s) => s.start_time >= segment.end_time)
+      const nextRally = state.rallies
+        .filter((s) => s.start_time >= rally.end_time)
         .sort((a, b) => a.start_time - b.start_time)[0];
-      if (nextSegment && newEnd > nextSegment.start_time) return false;
+      if (nextRally && newEnd > nextRally.start_time) return false;
     }
 
-    state.updateSegment(id, { end_time: newEnd });
+    state.updateRally(id, { end_time: newEnd });
     return true;
   },
 
-  createSegmentAtTime: (time: number, duration: number = 5) => {
+  createRallyAtTime: (time: number, duration: number = 5) => {
     const state = get();
     const videoDuration = state.videoMetadata?.duration ?? Infinity;
 
-    // Find next segment to avoid overlap
-    const nextSegment = state.segments
+    // Find next rally to avoid overlap
+    const nextRally = state.rallies
       .filter((s) => s.start_time > time)
       .sort((a, b) => a.start_time - b.start_time)[0];
 
-    // Find previous segment to avoid overlap
-    const prevSegment = state.segments
+    // Find previous rally to avoid overlap
+    const prevRally = state.rallies
       .filter((s) => s.end_time <= time)
       .sort((a, b) => b.end_time - a.end_time)[0];
 
-    // Check if we're inside an existing segment
-    const insideSegment = state.segments.find(
+    // Check if we're inside an existing rally
+    const insideRally = state.rallies.find(
       (s) => time >= s.start_time && time <= s.end_time
     );
-    if (insideSegment) return; // Can't create inside existing segment
+    if (insideRally) return; // Can't create inside existing rally
 
     // Calculate start and end with constraints
     let startTime = time;
     let endTime = time + duration;
 
-    // Adjust if overlapping with next segment
-    if (nextSegment && endTime > nextSegment.start_time) {
-      endTime = nextSegment.start_time;
+    // Adjust if overlapping with next rally
+    if (nextRally && endTime > nextRally.start_time) {
+      endTime = nextRally.start_time;
     }
 
     // Ensure we don't exceed video duration
@@ -337,56 +337,56 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     // Ensure minimum duration
     if (endTime - startTime < 0.5) return;
 
-    state.addSegment(startTime, endTime);
+    state.addRally(startTime, endTime);
 
-    // Select the new segment
-    const newSegments = get().segments;
-    const newSegment = newSegments.find(
+    // Select the new rally
+    const newRallies = get().rallies;
+    const newRally = newRallies.find(
       (s) => s.start_time === startTime && s.end_time === endTime
     );
-    if (newSegment) {
-      set({ selectedSegmentId: newSegment.id });
+    if (newRally) {
+      set({ selectedRallyId: newRally.id });
     }
   },
 
-  removeSegment: (id: string) => {
+  removeRally: (id: string) => {
     const state = get();
     state.pushHistory();
 
     // Also remove from all highlights
     const updatedHighlights = state.highlights.map((h) => ({
       ...h,
-      segmentIds: h.segmentIds.filter((sid) => sid !== id),
+      rallyIds: h.rallyIds.filter((rid) => rid !== id),
     }));
 
     set({
-      segments: state.segments.filter((s) => s.id !== id),
+      rallies: state.rallies.filter((s) => s.id !== id),
       highlights: updatedHighlights,
-      selectedSegmentId:
-        state.selectedSegmentId === id ? null : state.selectedSegmentId,
+      selectedRallyId:
+        state.selectedRallyId === id ? null : state.selectedRallyId,
       hasUnsavedChanges: true,
     });
 
     debouncedSave(() => get().saveToStorage());
   },
 
-  reorderSegments: (fromIndex: number, toIndex: number) => {
+  reorderRallies: (fromIndex: number, toIndex: number) => {
     const state = get();
     state.pushHistory();
 
-    const segments = [...state.segments];
-    const [removed] = segments.splice(fromIndex, 1);
-    segments.splice(toIndex, 0, removed);
+    const rallies = [...state.rallies];
+    const [removed] = rallies.splice(fromIndex, 1);
+    rallies.splice(toIndex, 0, removed);
     set({
-      segments,
+      rallies,
       hasUnsavedChanges: true,
     });
 
     debouncedSave(() => get().saveToStorage());
   },
 
-  selectSegment: (id: string | null) => {
-    set({ selectedSegmentId: id });
+  selectRally: (id: string | null) => {
+    set({ selectedRallyId: id });
   },
 
   exportToJson: () => {
@@ -394,20 +394,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (!state.videoMetadata) return null;
 
     const fps = state.videoMetadata.fps;
-    // Recalculate all segments before export
-    const recalculatedSegments = state.segments.map((s) =>
+    // Recalculate all rallies before export
+    const recalculatedRallies = state.rallies.map((s) =>
       recalculateRally(s, fps)
     );
 
     const stats = calculateStats(
-      recalculatedSegments,
+      recalculatedRallies,
       state.videoMetadata.duration
     );
 
-    const result: SegmentFile = {
+    const result: RallyFile = {
       version: '1.0',
       video: state.videoMetadata,
-      rallies: recalculatedSegments,
+      rallies: recalculatedRallies,
       stats,
       highlights: state.highlights.length > 0 ? state.highlights : undefined,
     };
@@ -435,15 +435,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       videoFile: null,
       videoUrl: null,
       videoMetadata: null,
-      segments: [],
+      rallies: [],
       highlights: [],
-      selectedSegmentId: null,
+      selectedRallyId: null,
       selectedHighlightId: null,
       hasUnsavedChanges: false,
       originalJson: null,
       past: [],
       future: [],
-      originalSegments: [],
+      originalRallies: [],
       originalHighlights: [],
     });
   },
@@ -452,7 +452,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   pushHistory: () => {
     const state = get();
     const entry: HistoryEntry = {
-      segments: [...state.segments],
+      rallies: [...state.rallies],
       highlights: [...state.highlights],
       timestamp: Date.now(),
     };
@@ -474,13 +474,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const entry = past.pop()!;
 
     const futureEntry: HistoryEntry = {
-      segments: [...state.segments],
+      rallies: [...state.rallies],
       highlights: [...state.highlights],
       timestamp: Date.now(),
     };
 
     set({
-      segments: entry.segments,
+      rallies: entry.rallies,
       highlights: entry.highlights,
       past,
       future: [...state.future, futureEntry],
@@ -498,13 +498,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const entry = future.pop()!;
 
     const pastEntry: HistoryEntry = {
-      segments: [...state.segments],
+      rallies: [...state.rallies],
       highlights: [...state.highlights],
       timestamp: Date.now(),
     };
 
     set({
-      segments: entry.segments,
+      rallies: entry.rallies,
       highlights: entry.highlights,
       past: [...state.past, pastEntry],
       future,
@@ -516,13 +516,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   resetToOriginal: () => {
     const state = get();
-    if (state.originalSegments.length === 0) return;
+    if (state.originalRallies.length === 0) return;
 
     // Push current state to history before resetting
     state.pushHistory();
 
     set({
-      segments: [...state.originalSegments],
+      rallies: [...state.originalRallies],
       highlights: [...state.originalHighlights],
       future: [], // Clear redo stack
       hasUnsavedChanges: false,
@@ -546,11 +546,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       try {
         const data: PersistedHistory = {
           videoPath: state.videoMetadata.path,
-          segments: state.segments,
+          rallies: state.rallies,
           highlights: state.highlights,
           past: state.past,
           future: state.future,
-          originalSegments: state.originalSegments,
+          originalRallies: state.originalRallies,
           originalHighlights: state.originalHighlights,
           savedAt: Date.now(),
         };
@@ -570,14 +570,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (!stored) return false;
 
       const persisted: PersistedHistory = JSON.parse(stored);
+      if (!persisted.rallies) return false;
+
       set({
-        segments: persisted.segments,
+        rallies: persisted.rallies,
         highlights: persisted.highlights || [],
-        past: persisted.past,
-        future: persisted.future,
-        originalSegments: persisted.originalSegments,
+        past: persisted.past || [],
+        future: persisted.future || [],
+        originalRallies: persisted.originalRallies || [],
         originalHighlights: persisted.originalHighlights || [],
-        hasUnsavedChanges: persisted.past.length > 0,
+        hasUnsavedChanges: (persisted.past?.length ?? 0) > 0,
       });
       return true;
     } catch {
@@ -621,7 +623,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       id: newId,
       name: name || `Highlight ${counter}`,
       color,
-      segmentIds: [],
+      rallyIds: [],
       createdAt: Date.now(),
     };
 
@@ -662,20 +664,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     debouncedSave(() => get().saveToStorage());
   },
 
-  addSegmentToHighlight: (segmentId: string, highlightId: string) => {
+  addRallyToHighlight: (rallyId: string, highlightId: string) => {
     const state = get();
     const highlight = state.highlights.find((h) => h.id === highlightId);
     if (!highlight) return;
 
     // Don't add if already in highlight
-    if (highlight.segmentIds.includes(segmentId)) return;
+    if (highlight.rallyIds.includes(rallyId)) return;
 
     state.pushHistory();
 
     set({
       highlights: state.highlights.map((h) =>
         h.id === highlightId
-          ? { ...h, segmentIds: [...h.segmentIds, segmentId] }
+          ? { ...h, rallyIds: [...h.rallyIds, rallyId] }
           : h
       ),
       hasUnsavedChanges: true,
@@ -684,14 +686,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     debouncedSave(() => get().saveToStorage());
   },
 
-  removeSegmentFromHighlight: (segmentId: string, highlightId: string) => {
+  removeRallyFromHighlight: (rallyId: string, highlightId: string) => {
     const state = get();
     state.pushHistory();
 
     set({
       highlights: state.highlights.map((h) =>
         h.id === highlightId
-          ? { ...h, segmentIds: h.segmentIds.filter((id) => id !== segmentId) }
+          ? { ...h, rallyIds: h.rallyIds.filter((id) => id !== rallyId) }
           : h
       ),
       hasUnsavedChanges: true,
@@ -705,33 +707,35 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   // Computed helpers
-  canUndo: () => get().past.length > 0,
-  canRedo: () => get().future.length > 0,
+  canUndo: () => (get().past?.length ?? 0) > 0,
+  canRedo: () => (get().future?.length ?? 0) > 0,
   hasChangesFromOriginal: () => {
     const state = get();
-    if (state.originalSegments.length === 0) return false;
-    if (state.segments.length !== state.originalSegments.length) return true;
-    return JSON.stringify(state.segments) !== JSON.stringify(state.originalSegments);
+    if (!state.originalRallies || state.originalRallies.length === 0) return false;
+    if (!state.rallies) return false;
+    if (state.rallies.length !== state.originalRallies.length) return true;
+    return JSON.stringify(state.rallies) !== JSON.stringify(state.originalRallies);
   },
 
   canCreateHighlight: () => {
     const state = get();
-    // Can create if no highlights OR all existing highlights have at least one segment
-    if (state.highlights.length === 0) return true;
-    return state.highlights.every((h) => h.segmentIds.length > 0);
+    // Can create if no highlights OR all existing highlights have at least one rally
+    if (!state.highlights || state.highlights.length === 0) return true;
+    return state.highlights.every((h) => h.rallyIds?.length > 0);
   },
 
   getNextHighlightColor: () => {
     const state = get();
-    const usedColors = state.highlights.map((h) => h.color);
+    const highlights = state.highlights ?? [];
+    const usedColors = highlights.map((h) => h.color);
     // Find first unused color
     const available = HIGHLIGHT_COLORS.find((c) => !usedColors.includes(c));
     // If all used, cycle through
-    return available || HIGHLIGHT_COLORS[state.highlights.length % HIGHLIGHT_COLORS.length];
+    return available || HIGHLIGHT_COLORS[highlights.length % HIGHLIGHT_COLORS.length];
   },
 
-  getHighlightsForSegment: (segmentId: string) => {
+  getHighlightsForRally: (rallyId: string) => {
     const state = get();
-    return state.highlights.filter((h) => h.segmentIds.includes(segmentId));
+    return (state.highlights ?? []).filter((h) => h.rallyIds?.includes(rallyId));
   },
 }));

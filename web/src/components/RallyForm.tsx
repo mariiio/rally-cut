@@ -17,37 +17,37 @@ import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { formatTime, parseTime } from '@/utils/timeFormat';
 
-interface SegmentFormProps {
+interface RallyFormProps {
   open: boolean;
-  segmentId: string | null; // null = add mode, string = edit mode
+  rallyId: string | null; // null = add mode, string = edit mode
   onClose: () => void;
 }
 
-export function SegmentForm({ open, segmentId, onClose }: SegmentFormProps) {
+export function RallyForm({ open, rallyId, onClose }: RallyFormProps) {
   const [startTimeStr, setStartTimeStr] = useState('');
   const [endTimeStr, setEndTimeStr] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  const { segments, addSegment, updateSegment, videoMetadata } = useEditorStore();
+  const { rallies, addRally, updateRally, videoMetadata } = useEditorStore();
   const { currentTime } = usePlayerStore();
 
-  const isEditing = segmentId !== null;
-  const segment = isEditing ? segments.find((s) => s.id === segmentId) : null;
+  const isEditing = rallyId !== null;
+  const rally = isEditing ? rallies?.find((s) => s.id === rallyId) : null;
 
   // Initialize form when opened
   useEffect(() => {
     if (open) {
-      if (isEditing && segment) {
-        setStartTimeStr(formatTime(segment.start_time));
-        setEndTimeStr(formatTime(segment.end_time));
+      if (isEditing && rally) {
+        setStartTimeStr(formatTime(rally.start_time));
+        setEndTimeStr(formatTime(rally.end_time));
       } else {
-        // Default to current time for new segments
+        // Default to current time for new rallies
         setStartTimeStr(formatTime(currentTime));
-        setEndTimeStr(formatTime(currentTime + 10)); // Default 10 second segment
+        setEndTimeStr(formatTime(currentTime + 10)); // Default 10 second rally
       }
       setError(null);
     }
-  }, [open, isEditing, segment, currentTime]);
+  }, [open, isEditing, rally, currentTime]);
 
   const handleSetStartToCurrent = () => {
     setStartTimeStr(formatTime(currentTime));
@@ -74,13 +74,13 @@ export function SegmentForm({ open, segmentId, onClose }: SegmentFormProps) {
       return;
     }
 
-    if (isEditing && segmentId) {
-      updateSegment(segmentId, {
+    if (isEditing && rallyId) {
+      updateRally(rallyId, {
         start_time: startTime,
         end_time: endTime,
       });
     } else {
-      addSegment(startTime, endTime);
+      addRally(startTime, endTime);
     }
 
     onClose();
@@ -88,7 +88,7 @@ export function SegmentForm({ open, segmentId, onClose }: SegmentFormProps) {
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>{isEditing ? 'Edit Segment' : 'Add Segment'}</DialogTitle>
+      <DialogTitle>{isEditing ? 'Edit Rally' : 'Add Rally'}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           {error && (

@@ -90,8 +90,7 @@ class TestSegmentMerging:
         from rallycut.processing.cutter import VideoCutter
 
         # Use low min_play_duration to not filter out short segments
-        # Disable early-video filter for unit tests
-        cutter = VideoCutter(min_play_duration=0.1, padding_seconds=0, min_segment_start_seconds=0)
+        cutter = VideoCutter(min_play_duration=0.1, padding_seconds=0, rally_continuation_seconds=0)
 
         results = [
             GameStateResult(start_frame=0, end_frame=29, state=GameState.PLAY, confidence=0.9),
@@ -109,7 +108,7 @@ class TestSegmentMerging:
         """Test that different states create separate segments."""
         from rallycut.processing.cutter import VideoCutter
 
-        cutter = VideoCutter(min_play_duration=0.1, min_gap_seconds=0.1, min_segment_start_seconds=0)
+        cutter = VideoCutter(min_play_duration=0.1, min_gap_seconds=0.1, rally_continuation_seconds=0)
 
         # Need at least 2 PLAY windows to pass MIN_ACTIVE_WINDOWS filter
         results = [
@@ -137,7 +136,7 @@ class TestSegmentMerging:
         """Test handling of two adjacent play results (minimum to pass filter)."""
         from rallycut.processing.cutter import VideoCutter
 
-        cutter = VideoCutter(min_play_duration=0.1, min_segment_start_seconds=0)
+        cutter = VideoCutter(min_play_duration=0.1, rally_continuation_seconds=0)
 
         # Need at least 2 PLAY windows to pass MIN_ACTIVE_WINDOWS filter
         results = [
@@ -154,7 +153,7 @@ class TestSegmentMerging:
         from rallycut.processing.cutter import VideoCutter
 
         # min_gap_seconds=1.5 means gaps shorter than 45 frames (at 30fps) are merged
-        cutter = VideoCutter(min_play_duration=0.1, min_gap_seconds=1.5, min_segment_start_seconds=0)
+        cutter = VideoCutter(min_play_duration=0.1, min_gap_seconds=1.5, rally_continuation_seconds=0)
 
         results = [
             GameStateResult(start_frame=0, end_frame=59, state=GameState.PLAY, confidence=0.9),
@@ -172,18 +171,24 @@ class TestSegmentMerging:
         """Test that long NO_PLAY gaps are not merged."""
         from rallycut.processing.cutter import VideoCutter
 
+        # Use very long gap to ensure it doesn't get merged by any heuristics
         # min_gap_seconds=1.0 means gaps longer than 30 frames are not merged
-        # Use padding_seconds=0 to avoid padding merging segments together
-        cutter = VideoCutter(min_play_duration=0.1, min_gap_seconds=1.0, padding_seconds=0, min_segment_start_seconds=0)
+        cutter = VideoCutter(
+            min_play_duration=0.1,
+            min_gap_seconds=1.0,
+            padding_seconds=0,
+            rally_continuation_seconds=0,
+        )
 
         # Need at least 2 PLAY windows per segment to pass MIN_ACTIVE_WINDOWS filter
+        # Use a very long gap (300 frames = 10 seconds) to ensure no merging
         results = [
             GameStateResult(start_frame=0, end_frame=29, state=GameState.PLAY, confidence=0.9),
             GameStateResult(start_frame=30, end_frame=59, state=GameState.PLAY, confidence=0.88),
-            # Long gap (90 frames = 3 seconds > 1 second threshold)
-            GameStateResult(start_frame=60, end_frame=149, state=GameState.NO_PLAY, confidence=0.8),
-            GameStateResult(start_frame=150, end_frame=179, state=GameState.PLAY, confidence=0.85),
-            GameStateResult(start_frame=180, end_frame=209, state=GameState.PLAY, confidence=0.82),
+            # Very long gap (300 frames = 10 seconds >> threshold)
+            GameStateResult(start_frame=60, end_frame=359, state=GameState.NO_PLAY, confidence=0.8),
+            GameStateResult(start_frame=360, end_frame=389, state=GameState.PLAY, confidence=0.85),
+            GameStateResult(start_frame=390, end_frame=419, state=GameState.PLAY, confidence=0.82),
         ]
 
         segments = cutter._get_segments_from_results(results, fps=30.0)
@@ -196,7 +201,7 @@ class TestSegmentMerging:
         from rallycut.processing.cutter import VideoCutter
 
         # 2 seconds = 60 frames min duration, no padding
-        cutter = VideoCutter(min_play_duration=2.0, padding_seconds=0, min_gap_seconds=5.0)
+        cutter = VideoCutter(min_play_duration=2.0, padding_seconds=0, min_gap_seconds=5.0, rally_continuation_seconds=0)
 
         # Need at least 2 PLAY windows per segment to pass MIN_ACTIVE_WINDOWS filter
         results = [

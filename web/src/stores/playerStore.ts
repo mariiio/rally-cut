@@ -10,7 +10,7 @@ interface PlayerState {
 
   // Highlight playback state
   playingHighlightId: string | null; // Currently playing highlight
-  highlightSegmentIndex: number; // Current segment index in highlight playback
+  highlightRallyIndex: number; // Current rally index in highlight playback
 
   // Actions
   play: () => void;
@@ -39,7 +39,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
   // Highlight playback state
   playingHighlightId: null,
-  highlightSegmentIndex: 0,
+  highlightRallyIndex: 0,
 
   play: () => set({ isPlaying: true }),
   pause: () => set({ isPlaying: false }),
@@ -63,21 +63,21 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   startHighlightPlayback: (highlightId: string) => {
     set({
       playingHighlightId: highlightId,
-      highlightSegmentIndex: 0,
+      highlightRallyIndex: 0,
       isPlaying: true,
     });
   },
 
   advanceHighlightPlayback: () => {
     set((state) => ({
-      highlightSegmentIndex: state.highlightSegmentIndex + 1,
+      highlightRallyIndex: state.highlightRallyIndex + 1,
     }));
   },
 
   stopHighlightPlayback: () => {
     set({
       playingHighlightId: null,
-      highlightSegmentIndex: 0,
+      highlightRallyIndex: 0,
       isPlaying: false,
     });
   },

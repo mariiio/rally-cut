@@ -1,6 +1,6 @@
 /**
- * Video segment types matching RallyCut JSON output format.
- * @see /Users/mario/Desktop/segments.json for example
+ * Video rally types matching RallyCut JSON output format.
+ * @see /Users/mario/Desktop/rallies.json for example
  */
 
 /** Metadata about the loaded video file */
@@ -13,7 +13,7 @@ export interface VideoMetadata {
   frame_count: number;
 }
 
-/** A single segment representing a rally in the video */
+/** A single rally in the video */
 export interface Rally {
   id: string;
   start_time: number;
@@ -25,22 +25,22 @@ export interface Rally {
   thumbnail_time: number;
 }
 
-/** Aggregate statistics about all segments */
-export interface SegmentStats {
+/** Aggregate statistics about all rallies */
+export interface RallyStats {
   original_duration: number;
   kept_duration: number;
   removed_duration: number;
   kept_percentage: number;
   removed_percentage: number;
-  segment_count: number;
+  rally_count: number;
 }
 
-/** A highlight collection of segment IDs */
+/** A highlight collection of rally IDs */
 export interface Highlight {
   id: string;           // Unique identifier (e.g., "highlight_1")
   name: string;         // User-editable name (e.g., "Best Rallies")
   color: string;        // Hex color from palette (e.g., "#FF6B6B")
-  segmentIds: string[]; // Array of segment IDs belonging to this highlight
+  rallyIds: string[];   // Array of rally IDs belonging to this highlight
   createdAt: number;    // Timestamp for ordering
 }
 
@@ -59,11 +59,11 @@ export const HIGHLIGHT_COLORS = [
 ] as const;
 
 /** Complete JSON file structure matching RallyCut output */
-export interface SegmentFile {
+export interface RallyFile {
   version: '1.0';
   video: VideoMetadata;
   rallies: Rally[];
-  stats: SegmentStats;
+  stats: RallyStats;
   highlights?: Highlight[]; // Optional for backwards compatibility
 }
 
@@ -103,7 +103,7 @@ export function recalculateRally(rally: Rally, fps: number): Rally {
 export function calculateStats(
   rallies: Rally[],
   originalDuration: number
-): SegmentStats {
+): RallyStats {
   const keptDuration = rallies.reduce((sum, r) => sum + r.duration, 0);
   const removedDuration = originalDuration - keptDuration;
   return {
@@ -112,6 +112,6 @@ export function calculateStats(
     removed_duration: removedDuration,
     kept_percentage: (keptDuration / originalDuration) * 100,
     removed_percentage: (removedDuration / originalDuration) * 100,
-    segment_count: rallies.length,
+    rally_count: rallies.length,
   };
 }

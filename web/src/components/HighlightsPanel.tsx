@@ -22,7 +22,7 @@ import { usePlayerStore } from '@/stores/playerStore';
 export function HighlightsPanel() {
   const {
     highlights,
-    segments,
+    rallies,
     selectedHighlightId,
     selectHighlight,
     createHighlight,
@@ -50,16 +50,16 @@ export function HighlightsPanel() {
   const handlePlay = (highlightId: string, e: React.MouseEvent) => {
     e.stopPropagation();
 
-    const highlight = highlights.find((h) => h.id === highlightId);
-    if (!highlight || highlight.segmentIds.length === 0) return;
+    const highlight = highlights?.find((h) => h.id === highlightId);
+    if (!highlight || !highlight.rallyIds || highlight.rallyIds.length === 0) return;
 
-    // Get first segment sorted by time
-    const highlightSegments = segments
-      .filter((s) => highlight.segmentIds.includes(s.id))
+    // Get first rally sorted by time
+    const highlightRallies = (rallies ?? [])
+      .filter((s) => highlight.rallyIds.includes(s.id))
       .sort((a, b) => a.start_time - b.start_time);
 
-    if (highlightSegments.length > 0) {
-      seek(highlightSegments[0].start_time);
+    if (highlightRallies.length > 0) {
+      seek(highlightRallies[0].start_time);
       startHighlightPlayback(highlightId);
     }
   };
@@ -145,7 +145,7 @@ export function HighlightsPanel() {
 
       {/* Highlights list */}
       <Box sx={{ flex: 1, overflow: 'auto' }}>
-        {highlights.length === 0 ? (
+        {!highlights || highlights.length === 0 ? (
           <Box
             sx={{
               p: 2,
@@ -166,7 +166,7 @@ export function HighlightsPanel() {
             {highlights.map((highlight) => {
               const isSelected = selectedHighlightId === highlight.id;
               const isPlaying = playingHighlightId === highlight.id;
-              const segmentCount = highlight.segmentIds.length;
+              const rallyCount = highlight.rallyIds?.length ?? 0;
 
               return (
                 <Box
@@ -248,9 +248,9 @@ export function HighlightsPanel() {
                     </Typography>
                   )}
 
-                  {/* Segment count */}
+                  {/* Rally count */}
                   <Chip
-                    label={segmentCount}
+                    label={rallyCount}
                     size="small"
                     sx={{
                       height: 18,
@@ -271,12 +271,12 @@ export function HighlightsPanel() {
                       <StopIcon sx={{ fontSize: 16 }} />
                     </IconButton>
                   ) : (
-                    <Tooltip title={segmentCount === 0 ? 'No segments' : 'Play highlight'}>
+                    <Tooltip title={rallyCount === 0 ? 'No rallies' : 'Play highlight'}>
                       <span>
                         <IconButton
                           size="small"
                           onClick={(e) => handlePlay(highlight.id, e)}
-                          disabled={segmentCount === 0}
+                          disabled={rallyCount === 0}
                           sx={{ color: 'text.secondary' }}
                         >
                           <PlayArrowIcon sx={{ fontSize: 16 }} />

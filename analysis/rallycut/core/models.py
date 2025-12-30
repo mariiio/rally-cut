@@ -146,6 +146,16 @@ class BallPosition:
     y: float
     confidence: float
     is_predicted: bool = False
+    # Bounding box dimensions (optional, for filtering)
+    bbox_width: float | None = None
+    bbox_height: float | None = None
+
+    @property
+    def aspect_ratio(self) -> float | None:
+        """Get aspect ratio of bounding box if available."""
+        if self.bbox_width and self.bbox_height and self.bbox_height > 0:
+            return self.bbox_width / self.bbox_height
+        return None
 
 
 @dataclass

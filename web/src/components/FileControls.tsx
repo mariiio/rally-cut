@@ -23,8 +23,8 @@ import RedoIcon from '@mui/icons-material/Redo';
 import RestoreIcon from '@mui/icons-material/Restore';
 import { useEditorStore } from '@/stores/editorStore';
 import {
-  parseSegmentJson,
-  downloadSegmentJson,
+  parseRallyJson,
+  downloadRallyJson,
   isValidVideoFile,
   isJsonFile,
 } from '@/utils/fileHandlers';
@@ -37,9 +37,9 @@ export function FileControls() {
 
   const {
     setVideoFile,
-    loadSegmentsFromJson,
+    loadRalliesFromJson,
     exportToJson,
-    segments,
+    rallies,
     undo,
     redo,
     resetToOriginal,
@@ -72,8 +72,8 @@ export function FileControls() {
     }
 
     try {
-      const json = await parseSegmentJson(file);
-      loadSegmentsFromJson(json);
+      const json = await parseRallyJson(file);
+      loadRalliesFromJson(json);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to parse JSON');
     }
@@ -85,9 +85,9 @@ export function FileControls() {
   const handleExport = () => {
     const data = exportToJson();
     if (data) {
-      downloadSegmentJson(data, 'segments_edited.json');
+      downloadRallyJson(data, 'rallies_edited.json');
     } else {
-      setError('No data to export. Load a segments JSON first.');
+      setError('No data to export. Load a rallies JSON first.');
     }
   };
 
@@ -139,7 +139,7 @@ export function FileControls() {
           startIcon={<DownloadIcon />}
           onClick={handleExport}
           size="small"
-          disabled={segments.length === 0}
+          disabled={!rallies || rallies.length === 0}
         >
           Export JSON
         </Button>

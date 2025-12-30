@@ -1,9 +1,9 @@
-import { SegmentFile } from '@/types/segment';
+import { RallyFile } from '@/types/rally';
 
 /**
- * Parse a JSON file and validate it's a valid SegmentFile
+ * Parse a JSON file and validate it's a valid RallyFile
  */
-export async function parseSegmentJson(file: File): Promise<SegmentFile> {
+export async function parseRallyJson(file: File): Promise<RallyFile> {
   const text = await file.text();
   const json = JSON.parse(text);
 
@@ -25,13 +25,13 @@ export async function parseSegmentJson(file: File): Promise<SegmentFile> {
     }
   }
 
-  return json as SegmentFile;
+  return json as RallyFile;
 }
 
 /**
- * Download a SegmentFile as JSON
+ * Download a RallyFile as JSON
  */
-export function downloadSegmentJson(data: SegmentFile, filename: string = 'segments.json'): void {
+export function downloadRallyJson(data: RallyFile, filename: string = 'rallies.json'): void {
   const json = JSON.stringify(data, null, 2);
   const blob = new Blob([json], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
