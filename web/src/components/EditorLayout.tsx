@@ -11,6 +11,7 @@ import {
 import { VideoPlayer } from './VideoPlayer';
 import { Timeline } from './Timeline';
 import { SegmentList } from './SegmentList';
+import { HighlightsPanel } from './HighlightsPanel';
 import { FileControls } from './FileControls';
 import { useEditorStore } from '@/stores/editorStore';
 
@@ -95,10 +96,23 @@ export function EditorLayout() {
             <SegmentList />
           </Paper>
 
-          {/* Video player - RIGHT side */}
+          {/* Video player - CENTER */}
           <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
             <VideoPlayer />
           </Box>
+
+          {/* Highlights panel - RIGHT side */}
+          <Paper
+            sx={{
+              width: 240,
+              flexShrink: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }}
+          >
+            <HighlightsPanel />
+          </Paper>
         </Box>
 
         {/* Timeline */}

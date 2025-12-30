@@ -4,6 +4,8 @@ import {
   VideoMetadata,
   SegmentFile,
   SegmentStats,
+  Highlight,
+  HIGHLIGHT_COLORS,
   createRally,
   recalculateRally,
   calculateStats,
@@ -12,15 +14,18 @@ import {
 // History management types
 interface HistoryEntry {
   segments: Rally[];
+  highlights: Highlight[];
   timestamp: number;
 }
 
 interface PersistedHistory {
   videoPath: string | null;
   segments: Rally[];
+  highlights: Highlight[];
   past: HistoryEntry[];
   future: HistoryEntry[];
   originalSegments: Rally[];
+  originalHighlights: Highlight[];
   savedAt: number;
 }
 
@@ -52,6 +57,11 @@ interface EditorState {
   past: HistoryEntry[];
   future: HistoryEntry[];
   originalSegments: Rally[];
+  originalHighlights: Highlight[];
+
+  // Highlights state
+  highlights: Highlight[];
+  selectedHighlightId: string | null;
 
   // Actions
   setVideoFile: (file: File) => void;
@@ -78,10 +88,21 @@ interface EditorState {
   loadFromStorage: () => boolean;
   clearHistory: () => void;
 
+  // Highlights actions
+  createHighlight: (name?: string) => string;
+  deleteHighlight: (id: string) => void;
+  renameHighlight: (id: string, name: string) => void;
+  addSegmentToHighlight: (segmentId: string, highlightId: string) => void;
+  removeSegmentFromHighlight: (segmentId: string, highlightId: string) => void;
+  selectHighlight: (id: string | null) => void;
+
   // Computed helpers (called as functions since Zustand doesn't have computed)
   canUndo: () => boolean;
   canRedo: () => boolean;
   hasChangesFromOriginal: () => boolean;
+  canCreateHighlight: () => boolean;
+  getNextHighlightColor: () => string;
+  getHighlightsForSegment: (segmentId: string) => Highlight[];
 }
 
 export const useEditorStore = create<EditorState>((set, get) => ({
@@ -98,6 +119,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   past: [],
   future: [],
   originalSegments: [],
+  originalHighlights: [],
+
+  // Highlights state
+  highlights: [],
+  selectedHighlightId: null,
 
   setVideoFile: (file: File) => {
     const state = get();
@@ -137,13 +163,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   loadSegmentsFromJson: (json: SegmentFile) => {
-    const state = get();
-
-    // Store original segments for reset functionality
+    // Store original data for reset functionality
     const originalSegments = [...json.rallies];
+    const originalHighlights = json.highlights ? [...json.highlights] : [];
 
     // Try to load persisted state for this video
     let segments = json.rallies;
+    let highlights = json.highlights || [];
     let past: HistoryEntry[] = [];
     let future: HistoryEntry[] = [];
 
@@ -155,6 +181,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           // Only restore if it's for the same video
           if (persisted.videoPath === json.video.path) {
             segments = persisted.segments;
+            highlights = persisted.highlights || [];
             past = persisted.past;
             future = persisted.future;
           }
@@ -166,13 +193,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     set({
       segments,
+      highlights,
       videoMetadata: json.video,
       originalJson: json,
       originalSegments,
+      originalHighlights,
       past,
       future,
       hasUnsavedChanges: past.length > 0,
       selectedSegmentId: null,
+      selectedHighlightId: null,
     });
   },
 
@@ -323,8 +353,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const state = get();
     state.pushHistory();
 
+    // Also remove from all highlights
+    const updatedHighlights = state.highlights.map((h) => ({
+      ...h,
+      segmentIds: h.segmentIds.filter((sid) => sid !== id),
+    }));
+
     set({
       segments: state.segments.filter((s) => s.id !== id),
+      highlights: updatedHighlights,
       selectedSegmentId:
         state.selectedSegmentId === id ? null : state.selectedSegmentId,
       hasUnsavedChanges: true,
@@ -372,6 +409,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       video: state.videoMetadata,
       rallies: recalculatedSegments,
       stats,
+      highlights: state.highlights.length > 0 ? state.highlights : undefined,
     };
 
     set({ hasUnsavedChanges: false });
@@ -398,12 +436,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       videoUrl: null,
       videoMetadata: null,
       segments: [],
+      highlights: [],
       selectedSegmentId: null,
+      selectedHighlightId: null,
       hasUnsavedChanges: false,
       originalJson: null,
       past: [],
       future: [],
       originalSegments: [],
+      originalHighlights: [],
     });
   },
 
@@ -412,6 +453,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const state = get();
     const entry: HistoryEntry = {
       segments: [...state.segments],
+      highlights: [...state.highlights],
       timestamp: Date.now(),
     };
 
@@ -433,11 +475,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     const futureEntry: HistoryEntry = {
       segments: [...state.segments],
+      highlights: [...state.highlights],
       timestamp: Date.now(),
     };
 
     set({
       segments: entry.segments,
+      highlights: entry.highlights,
       past,
       future: [...state.future, futureEntry],
       hasUnsavedChanges: past.length > 0 || state.future.length > 0,
@@ -455,11 +499,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     const pastEntry: HistoryEntry = {
       segments: [...state.segments],
+      highlights: [...state.highlights],
       timestamp: Date.now(),
     };
 
     set({
       segments: entry.segments,
+      highlights: entry.highlights,
       past: [...state.past, pastEntry],
       future,
       hasUnsavedChanges: true,
@@ -477,6 +523,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     set({
       segments: [...state.originalSegments],
+      highlights: [...state.originalHighlights],
       future: [], // Clear redo stack
       hasUnsavedChanges: false,
     });
@@ -500,9 +547,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const data: PersistedHistory = {
           videoPath: state.videoMetadata.path,
           segments: state.segments,
+          highlights: state.highlights,
           past: state.past,
           future: state.future,
           originalSegments: state.originalSegments,
+          originalHighlights: state.originalHighlights,
           savedAt: Date.now(),
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -523,9 +572,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const persisted: PersistedHistory = JSON.parse(stored);
       set({
         segments: persisted.segments,
+        highlights: persisted.highlights || [],
         past: persisted.past,
         future: persisted.future,
         originalSegments: persisted.originalSegments,
+        originalHighlights: persisted.originalHighlights || [],
         hasUnsavedChanges: persisted.past.length > 0,
       });
       return true;
@@ -549,6 +600,110 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
   },
 
+  // Highlights actions
+  createHighlight: (name?: string) => {
+    const state = get();
+    state.pushHistory();
+
+    // Generate unique ID
+    const existingIds = state.highlights.map((h) => h.id);
+    let counter = state.highlights.length + 1;
+    let newId = `highlight_${counter}`;
+    while (existingIds.includes(newId)) {
+      counter++;
+      newId = `highlight_${counter}`;
+    }
+
+    // Get next available color
+    const color = state.getNextHighlightColor();
+
+    const newHighlight: Highlight = {
+      id: newId,
+      name: name || `Highlight ${counter}`,
+      color,
+      segmentIds: [],
+      createdAt: Date.now(),
+    };
+
+    set({
+      highlights: [...state.highlights, newHighlight],
+      hasUnsavedChanges: true,
+    });
+
+    debouncedSave(() => get().saveToStorage());
+    return newId;
+  },
+
+  deleteHighlight: (id: string) => {
+    const state = get();
+    state.pushHistory();
+
+    set({
+      highlights: state.highlights.filter((h) => h.id !== id),
+      selectedHighlightId:
+        state.selectedHighlightId === id ? null : state.selectedHighlightId,
+      hasUnsavedChanges: true,
+    });
+
+    debouncedSave(() => get().saveToStorage());
+  },
+
+  renameHighlight: (id: string, name: string) => {
+    const state = get();
+    state.pushHistory();
+
+    set({
+      highlights: state.highlights.map((h) =>
+        h.id === id ? { ...h, name } : h
+      ),
+      hasUnsavedChanges: true,
+    });
+
+    debouncedSave(() => get().saveToStorage());
+  },
+
+  addSegmentToHighlight: (segmentId: string, highlightId: string) => {
+    const state = get();
+    const highlight = state.highlights.find((h) => h.id === highlightId);
+    if (!highlight) return;
+
+    // Don't add if already in highlight
+    if (highlight.segmentIds.includes(segmentId)) return;
+
+    state.pushHistory();
+
+    set({
+      highlights: state.highlights.map((h) =>
+        h.id === highlightId
+          ? { ...h, segmentIds: [...h.segmentIds, segmentId] }
+          : h
+      ),
+      hasUnsavedChanges: true,
+    });
+
+    debouncedSave(() => get().saveToStorage());
+  },
+
+  removeSegmentFromHighlight: (segmentId: string, highlightId: string) => {
+    const state = get();
+    state.pushHistory();
+
+    set({
+      highlights: state.highlights.map((h) =>
+        h.id === highlightId
+          ? { ...h, segmentIds: h.segmentIds.filter((id) => id !== segmentId) }
+          : h
+      ),
+      hasUnsavedChanges: true,
+    });
+
+    debouncedSave(() => get().saveToStorage());
+  },
+
+  selectHighlight: (id: string | null) => {
+    set({ selectedHighlightId: id });
+  },
+
   // Computed helpers
   canUndo: () => get().past.length > 0,
   canRedo: () => get().future.length > 0,
@@ -557,5 +712,26 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (state.originalSegments.length === 0) return false;
     if (state.segments.length !== state.originalSegments.length) return true;
     return JSON.stringify(state.segments) !== JSON.stringify(state.originalSegments);
+  },
+
+  canCreateHighlight: () => {
+    const state = get();
+    // Can create if no highlights OR all existing highlights have at least one segment
+    if (state.highlights.length === 0) return true;
+    return state.highlights.every((h) => h.segmentIds.length > 0);
+  },
+
+  getNextHighlightColor: () => {
+    const state = get();
+    const usedColors = state.highlights.map((h) => h.color);
+    // Find first unused color
+    const available = HIGHLIGHT_COLORS.find((c) => !usedColors.includes(c));
+    // If all used, cycle through
+    return available || HIGHLIGHT_COLORS[state.highlights.length % HIGHLIGHT_COLORS.length];
+  },
+
+  getHighlightsForSegment: (segmentId: string) => {
+    const state = get();
+    return state.highlights.filter((h) => h.segmentIds.includes(segmentId));
   },
 }));

@@ -1,12 +1,12 @@
 'use client';
 
-import { Box, Typography, Chip } from '@mui/material';
+import { Box, Typography, Chip, Stack } from '@mui/material';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { formatTime, formatDuration } from '@/utils/timeFormat';
 
 export function SegmentList() {
-  const { segments, selectedSegmentId, selectSegment } = useEditorStore();
+  const { segments, selectedSegmentId, selectSegment, getHighlightsForSegment } = useEditorStore();
   const { currentTime, seek } = usePlayerStore();
 
   const handleClick = (id: string, startTime: number) => {
@@ -14,13 +14,16 @@ export function SegmentList() {
     seek(startTime);
   };
 
+  // Sort segments by start time for display
+  const sortedSegments = [...segments].sort((a, b) => a.start_time - b.start_time);
+
   // Find which segment contains the current time
-  const activeSegmentId = segments.find(
+  const activeSegmentId = sortedSegments.find(
     (s) => currentTime >= s.start_time && currentTime <= s.end_time
   )?.id;
 
   // Calculate total duration
-  const totalDuration = segments.reduce((sum, s) => sum + s.duration, 0);
+  const totalDuration = sortedSegments.reduce((sum, s) => sum + s.duration, 0);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -48,7 +51,7 @@ export function SegmentList() {
           >
             Segments
           </Typography>
-          {segments.length > 0 && (
+          {sortedSegments.length > 0 && (
             <Typography
               variant="caption"
               sx={{
@@ -62,9 +65,9 @@ export function SegmentList() {
             </Typography>
           )}
         </Box>
-        {segments.length > 0 && (
+        {sortedSegments.length > 0 && (
           <Chip
-            label={segments.length}
+            label={sortedSegments.length}
             size="small"
             sx={{
               height: 20,
@@ -78,7 +81,7 @@ export function SegmentList() {
 
       {/* Segment list */}
       <Box sx={{ flex: 1, overflow: 'auto' }}>
-        {segments.length === 0 ? (
+        {sortedSegments.length === 0 ? (
           <Box
             sx={{
               p: 2,
@@ -92,7 +95,7 @@ export function SegmentList() {
           </Box>
         ) : (
           <Box sx={{ py: 0.5 }}>
-            {segments.map((segment, index) => {
+            {sortedSegments.map((segment, index) => {
               const isSelected = selectedSegmentId === segment.id;
               const isActive = activeSegmentId === segment.id;
 
@@ -183,6 +186,34 @@ export function SegmentList() {
                   >
                     {segment.duration.toFixed(1)}s
                   </Typography>
+
+                  {/* Highlight color dots */}
+                  {(() => {
+                    const segmentHighlights = getHighlightsForSegment(segment.id);
+                    if (segmentHighlights.length === 0) return null;
+                    return (
+                      <Stack direction="row" spacing={0.25} sx={{ ml: 0.75 }}>
+                        {segmentHighlights.slice(0, 3).map((h) => (
+                          <Box
+                            key={h.id}
+                            sx={{
+                              width: 6,
+                              height: 6,
+                              borderRadius: '50%',
+                              bgcolor: h.color,
+                            }}
+                          />
+                        ))}
+                        {segmentHighlights.length > 3 && (
+                          <Typography
+                            sx={{ fontSize: 8, color: 'text.disabled', lineHeight: 1 }}
+                          >
+                            +{segmentHighlights.length - 3}
+                          </Typography>
+                        )}
+                      </Stack>
+                    );
+                  })()}
                 </Box>
               );
             })}

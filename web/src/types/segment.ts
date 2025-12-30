@@ -35,12 +35,36 @@ export interface SegmentStats {
   segment_count: number;
 }
 
+/** A highlight collection of segment IDs */
+export interface Highlight {
+  id: string;           // Unique identifier (e.g., "highlight_1")
+  name: string;         // User-editable name (e.g., "Best Rallies")
+  color: string;        // Hex color from palette (e.g., "#FF6B6B")
+  segmentIds: string[]; // Array of segment IDs belonging to this highlight
+  createdAt: number;    // Timestamp for ordering
+}
+
+/** Color palette for highlights - designed for dark theme */
+export const HIGHLIGHT_COLORS = [
+  '#FF6B6B', // Coral Red
+  '#4ECDC4', // Teal
+  '#FFE66D', // Yellow
+  '#95E1D3', // Mint
+  '#F38181', // Salmon
+  '#AA96DA', // Lavender
+  '#FCBAD3', // Pink
+  '#A8D8EA', // Sky Blue
+  '#FF9F43', // Orange
+  '#6A89CC', // Periwinkle
+] as const;
+
 /** Complete JSON file structure matching RallyCut output */
 export interface SegmentFile {
   version: '1.0';
   video: VideoMetadata;
   rallies: Rally[];
   stats: SegmentStats;
+  highlights?: Highlight[]; // Optional for backwards compatibility
 }
 
 /** Helper to create a new Rally with auto-generated fields */
