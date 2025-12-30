@@ -79,22 +79,22 @@ function HotkeyRow({ keys, description, secondary }: { keys: string[]; descripti
 
 export function Timeline() {
   const {
-    segments,
-    updateSegment,
-    selectSegment,
-    selectedSegmentId,
-    adjustSegmentStart,
-    adjustSegmentEnd,
-    createSegmentAtTime,
-    removeSegment,
+    rallies,
+    updateRally,
+    selectRally,
+    selectedRallyId,
+    adjustRallyStart,
+    adjustRallyEnd,
+    createRallyAtTime,
+    removeRally,
     videoMetadata,
     highlights,
     selectedHighlightId,
     createHighlight,
-    addSegmentToHighlight,
-    removeSegmentFromHighlight,
+    addRallyToHighlight,
+    removeRallyFromHighlight,
     selectHighlight,
-    getHighlightsForSegment,
+    getHighlightsForRally,
   } = useEditorStore();
   const {
     currentTime,
@@ -106,7 +106,7 @@ export function Timeline() {
     playOnlyRallies,
     togglePlayOnlyRallies,
     playingHighlightId,
-    highlightSegmentIndex,
+    highlightRallyIndex,
     advanceHighlightPlayback,
     stopHighlightPlayback,
   } = usePlayerStore();
@@ -122,70 +122,72 @@ export function Timeline() {
   // Clear delete confirmation when selection changes
   useEffect(() => {
     setDeleteConfirmId(null);
-  }, [selectedSegmentId]);
+  }, [selectedRallyId]);
 
-  // Helper to check if current time is inside the selected segment
-  const isInsideSelectedSegment = useCallback(() => {
-    if (!selectedSegmentId) return false;
-    const segment = segments.find(s => s.id === selectedSegmentId);
-    if (!segment) return false;
-    return currentTime >= segment.start_time && currentTime <= segment.end_time;
-  }, [selectedSegmentId, segments, currentTime]);
+  // Helper to check if current time is inside the selected rally
+  const isInsideSelectedRally = useCallback(() => {
+    if (!selectedRallyId || !rallies) return false;
+    const rally = rallies.find(s => s.id === selectedRallyId);
+    if (!rally) return false;
+    return currentTime >= rally.start_time && currentTime <= rally.end_time;
+  }, [selectedRallyId, rallies, currentTime]);
 
-  // Get selected segment
-  const getSelectedSegment = useCallback(() => {
-    if (!selectedSegmentId) return null;
-    return segments.find(s => s.id === selectedSegmentId) || null;
-  }, [selectedSegmentId, segments]);
+  // Get selected rally
+  const getSelectedRally = useCallback(() => {
+    if (!selectedRallyId || !rallies) return null;
+    return rallies.find(s => s.id === selectedRallyId) || null;
+  }, [selectedRallyId, rallies]);
 
-  // Navigate to previous segment and select it
-  const goToPrevSegment = useCallback(() => {
-    const sorted = [...segments].sort((a, b) => a.start_time - b.start_time);
+  // Navigate to previous rally and select it
+  const goToPrevRally = useCallback(() => {
+    if (!rallies) return;
+    const sorted = [...rallies].sort((a, b) => a.start_time - b.start_time);
     const prev = sorted.reverse().find(s => s.start_time < currentTime - 0.5);
     if (prev) {
-      selectSegment(prev.id);
+      selectRally(prev.id);
       seek(prev.start_time);
     }
-  }, [segments, currentTime, seek, selectSegment]);
+  }, [rallies, currentTime, seek, selectRally]);
 
-  // Navigate to next segment and select it
-  const goToNextSegment = useCallback(() => {
-    const sorted = [...segments].sort((a, b) => a.start_time - b.start_time);
+  // Navigate to next rally and select it
+  const goToNextRally = useCallback(() => {
+    if (!rallies) return;
+    const sorted = [...rallies].sort((a, b) => a.start_time - b.start_time);
     const next = sorted.find(s => s.start_time > currentTime + 0.5);
     if (next) {
-      selectSegment(next.id);
+      selectRally(next.id);
       seek(next.start_time);
     }
-  }, [segments, currentTime, seek, selectSegment]);
+  }, [rallies, currentTime, seek, selectRally]);
 
-  // Check if segment is in selected highlight
-  const isSegmentInSelectedHighlight = useMemo(() => {
-    if (!selectedSegmentId || !selectedHighlightId) return false;
+  // Check if rally is in selected highlight
+  const isRallyInSelectedHighlight = useMemo(() => {
+    if (!selectedRallyId || !selectedHighlightId) return false;
     const highlight = highlights.find(h => h.id === selectedHighlightId);
-    return highlight?.segmentIds.includes(selectedSegmentId) ?? false;
-  }, [selectedSegmentId, selectedHighlightId, highlights]);
+    return highlight?.rallyIds.includes(selectedRallyId) ?? false;
+  }, [selectedRallyId, selectedHighlightId, highlights]);
 
-  // Toggle segment in highlight (add if not present, remove if present)
+  // Toggle rally in highlight (add if not present, remove if present)
   const handleToggleHighlight = useCallback(() => {
-    if (!selectedSegmentId) return;
+    if (!selectedRallyId) return;
 
     if (selectedHighlightId) {
-      // Check if segment is already in the selected highlight
+      // Check if rally is already in the selected highlight
       const highlight = highlights.find(h => h.id === selectedHighlightId);
-      if (highlight?.segmentIds.includes(selectedSegmentId)) {
+      if (highlight?.rallyIds.includes(selectedRallyId)) {
         // Remove from highlight
-        removeSegmentFromHighlight(selectedSegmentId, selectedHighlightId);
+        removeRallyFromHighlight(selectedRallyId, selectedHighlightId);
       } else {
         // Add to highlight
-        addSegmentToHighlight(selectedSegmentId, selectedHighlightId);
+        addRallyToHighlight(selectedRallyId, selectedHighlightId);
       }
     } else {
-      // Create new highlight and add segment
+      // Create new highlight and add rally
       const newId = createHighlight();
-      addSegmentToHighlight(selectedSegmentId, newId);
+      addRallyToHighlight(selectedRallyId, newId);
       selectHighlight(newId);
     }
-  }, [selectedSegmentId, selectedHighlightId, highlights, addSegmentToHighlight, removeSegmentFromHighlight, createHighlight, selectHighlight]);
+  }, [selectedRallyId, selectedHighlightId, highlights, addRallyToHighlight, removeRallyFromHighlight, createHighlight, selectHighlight]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -204,25 +206,25 @@ export function Timeline() {
             pause();
           } else {
             // Playing from paused state
-            const selectedSegment = getSelectedSegment();
+            const selectedRally = getSelectedRally();
 
-            if (autoPausedAtEndRef.current && selectedSegment && autoPausedAtEndRef.current === selectedSegment.id) {
-              // Auto-paused at segment end: restart from segment start
-              seek(selectedSegment.start_time);
+            if (autoPausedAtEndRef.current && selectedRally && autoPausedAtEndRef.current === selectedRally.id) {
+              // Auto-paused at rally end: restart from rally start
+              seek(selectedRally.start_time);
               autoPausedAtEndRef.current = null;
               play();
-            } else if (selectedSegmentId) {
-              // Has a selected segment
-              if (isInsideSelectedSegment()) {
-                // Inside segment: play from current position
+            } else if (selectedRallyId) {
+              // Has a selected rally
+              if (isInsideSelectedRally()) {
+                // Inside rally: play from current position
                 play();
               } else {
-                // Outside segment: deselect and play
-                selectSegment(null);
+                // Outside rally: deselect and play
+                selectRally(null);
                 play();
               }
             } else {
-              // No segment selected: just play
+              // No rally selected: just play
               play();
             }
           }
@@ -231,20 +233,20 @@ export function Timeline() {
         case 'ArrowLeft':
           e.preventDefault();
           if (isMod) {
-            // Cmd/Ctrl + Left: go to previous segment
-            goToPrevSegment();
-          } else if (selectedSegmentId) {
-            // Left with segment selected: adjust segment
-            const segLeft = getSelectedSegment();
+            // Cmd/Ctrl + Left: go to previous rally
+            goToPrevRally();
+          } else if (selectedRallyId) {
+            // Left with rally selected: adjust rally
+            const rallyLeft = getSelectedRally();
             if (e.shiftKey) {
               // Shift + Left: shrink end (-0.5s)
-              if (adjustSegmentEnd(selectedSegmentId, -0.5) && segLeft) {
-                seek(segLeft.end_time - 0.5);
+              if (adjustRallyEnd(selectedRallyId, -0.5) && rallyLeft) {
+                seek(rallyLeft.end_time - 0.5);
               }
             } else {
               // Left: expand start (-0.5s)
-              if (adjustSegmentStart(selectedSegmentId, -0.5) && segLeft) {
-                seek(segLeft.start_time - 0.5);
+              if (adjustRallyStart(selectedRallyId, -0.5) && rallyLeft) {
+                seek(rallyLeft.start_time - 0.5);
               }
             }
           } else {
@@ -258,20 +260,20 @@ export function Timeline() {
         case 'ArrowRight':
           e.preventDefault();
           if (isMod) {
-            // Cmd/Ctrl + Right: go to next segment
-            goToNextSegment();
-          } else if (selectedSegmentId) {
-            // Right with segment selected: adjust segment
-            const segRight = getSelectedSegment();
+            // Cmd/Ctrl + Right: go to next rally
+            goToNextRally();
+          } else if (selectedRallyId) {
+            // Right with rally selected: adjust rally
+            const rallyRight = getSelectedRally();
             if (e.shiftKey) {
               // Shift + Right: expand end (+0.5s)
-              if (adjustSegmentEnd(selectedSegmentId, 0.5) && segRight) {
-                seek(segRight.end_time + 0.5);
+              if (adjustRallyEnd(selectedRallyId, 0.5) && rallyRight) {
+                seek(rallyRight.end_time + 0.5);
               }
             } else {
               // Right: shrink start (+0.5s)
-              if (adjustSegmentStart(selectedSegmentId, 0.5) && segRight) {
-                seek(segRight.start_time + 0.5);
+              if (adjustRallyStart(selectedRallyId, 0.5) && rallyRight) {
+                seek(rallyRight.start_time + 0.5);
               }
             }
           } else {
@@ -284,16 +286,16 @@ export function Timeline() {
 
         case 'Delete':
         case 'Backspace':
-          if (selectedSegmentId) {
+          if (selectedRallyId) {
             e.preventDefault();
-            if (deleteConfirmId === selectedSegmentId) {
+            if (deleteConfirmId === selectedRallyId) {
               // Confirm delete on second press
-              removeSegment(selectedSegmentId);
+              removeRally(selectedRallyId);
               setDeleteConfirmId(null);
-              selectSegment(null);
+              selectRally(null);
             } else {
               // Show confirmation on first press
-              setDeleteConfirmId(selectedSegmentId);
+              setDeleteConfirmId(selectedRallyId);
             }
           }
           break;
@@ -301,25 +303,25 @@ export function Timeline() {
         case 'Escape':
           if (deleteConfirmId) {
             setDeleteConfirmId(null);
-          } else if (selectedSegmentId) {
-            selectSegment(null);
+          } else if (selectedRallyId) {
+            selectRally(null);
           }
           break;
 
         case 'Enter':
           if (isMod) {
-            // Cmd/Ctrl + Enter: Create new segment at cursor (if not inside existing segment)
-            if (videoMetadata) {
-              const insideSegment = segments.some(
+            // Cmd/Ctrl + Enter: Create new rally at cursor (if not inside existing rally)
+            if (videoMetadata && rallies) {
+              const insideRally = rallies.some(
                 (s) => currentTime >= s.start_time && currentTime <= s.end_time
               );
-              if (!insideSegment) {
+              if (!insideRally) {
                 e.preventDefault();
-                createSegmentAtTime(currentTime);
+                createRallyAtTime(currentTime);
               }
             }
-          } else if (selectedSegmentId) {
-            // Enter (without modifier): Toggle segment in highlight
+          } else if (selectedRallyId) {
+            // Enter (without modifier): Toggle rally in highlight
             e.preventDefault();
             handleToggleHighlight();
           }
@@ -328,99 +330,101 @@ export function Timeline() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, play, pause, seek, currentTime, duration, selectedSegmentId, deleteConfirmId, removeSegment, selectSegment, isInsideSelectedSegment, getSelectedSegment, goToPrevSegment, goToNextSegment, adjustSegmentStart, adjustSegmentEnd, videoMetadata, segments, createSegmentAtTime, handleToggleHighlight]);
+  }, [isPlaying, play, pause, seek, currentTime, duration, selectedRallyId, deleteConfirmId, removeRally, selectRally, isInsideSelectedRally, getSelectedRally, goToPrevRally, goToNextRally, adjustRallyStart, adjustRallyEnd, videoMetadata, rallies, createRallyAtTime, handleToggleHighlight]);
 
-  // Jump to previous/next segment
-  const jumpToPrevSegment = useCallback(() => {
-    const sorted = [...segments].sort((a, b) => a.start_time - b.start_time);
+  // Jump to previous/next rally
+  const jumpToPrevRally = useCallback(() => {
+    if (!rallies) return;
+    const sorted = [...rallies].sort((a, b) => a.start_time - b.start_time);
     const prev = sorted.reverse().find(s => s.start_time < currentTime - 0.5);
     if (prev) seek(prev.start_time);
-  }, [segments, currentTime, seek]);
+  }, [rallies, currentTime, seek]);
 
-  const jumpToNextSegment = useCallback(() => {
-    const sorted = [...segments].sort((a, b) => a.start_time - b.start_time);
+  const jumpToNextRally = useCallback(() => {
+    if (!rallies) return;
+    const sorted = [...rallies].sort((a, b) => a.start_time - b.start_time);
     const next = sorted.find(s => s.start_time > currentTime + 0.5);
     if (next) seek(next.start_time);
-  }, [segments, currentTime, seek]);
+  }, [rallies, currentTime, seek]);
 
-  // Skip dead time - when playOnlyRallies is enabled, jump to next segment if in dead time
+  // Skip dead time - when playOnlyRallies is enabled, jump to next rally if in dead time
   useEffect(() => {
-    if (!isPlaying || !playOnlyRallies || segments.length === 0) return;
+    if (!isPlaying || !playOnlyRallies || !rallies || rallies.length === 0) return;
 
-    const sorted = [...segments].sort((a, b) => a.start_time - b.start_time);
+    const sorted = [...rallies].sort((a, b) => a.start_time - b.start_time);
 
-    // Check if current time is within any segment
-    const inSegment = sorted.some(s => currentTime >= s.start_time && currentTime <= s.end_time);
+    // Check if current time is within any rally
+    const inRally = sorted.some(s => currentTime >= s.start_time && currentTime <= s.end_time);
 
-    if (!inSegment) {
-      // Find next segment to jump to
-      const nextSegment = sorted.find(s => s.start_time > currentTime);
-      if (nextSegment) {
-        seek(nextSegment.start_time);
+    if (!inRally) {
+      // Find next rally to jump to
+      const nextRally = sorted.find(s => s.start_time > currentTime);
+      if (nextRally) {
+        seek(nextRally.start_time);
       }
     }
-  }, [currentTime, isPlaying, playOnlyRallies, segments, seek]);
+  }, [currentTime, isPlaying, playOnlyRallies, rallies, seek]);
 
-  // Stop playback at end of selected segment
+  // Stop playback at end of selected rally
   useEffect(() => {
-    if (!isPlaying || !selectedSegmentId) return;
+    if (!isPlaying || !selectedRallyId || !rallies) return;
 
-    const selectedSegment = segments.find(s => s.id === selectedSegmentId);
-    if (!selectedSegment) return;
+    const selectedRally = rallies.find(s => s.id === selectedRallyId);
+    if (!selectedRally) return;
 
-    // Pause when reaching the end of the selected segment (with small tolerance)
-    if (currentTime >= selectedSegment.end_time - 0.05) {
-      autoPausedAtEndRef.current = selectedSegmentId; // Mark that we auto-paused
+    // Pause when reaching the end of the selected rally (with small tolerance)
+    if (currentTime >= selectedRally.end_time - 0.05) {
+      autoPausedAtEndRef.current = selectedRallyId; // Mark that we auto-paused
       pause();
     }
-  }, [currentTime, isPlaying, selectedSegmentId, segments, pause]);
+  }, [currentTime, isPlaying, selectedRallyId, rallies, pause]);
 
-  // Highlight playback - auto-advance through segments
+  // Highlight playback - auto-advance through rallies
   useEffect(() => {
     if (!isPlaying || !playingHighlightId) return;
 
     const highlight = highlights.find(h => h.id === playingHighlightId);
-    if (!highlight || highlight.segmentIds.length === 0) {
+    if (!highlight || highlight.rallyIds.length === 0) {
       stopHighlightPlayback();
       return;
     }
 
-    // Get sorted segments for this highlight
-    const highlightSegments = segments
-      .filter(s => highlight.segmentIds.includes(s.id))
+    // Get sorted rallies for this highlight
+    const highlightRallies = rallies
+      .filter(s => highlight.rallyIds.includes(s.id))
       .sort((a, b) => a.start_time - b.start_time);
 
-    if (highlightSegmentIndex >= highlightSegments.length) {
+    if (highlightRallyIndex >= highlightRallies.length) {
       // End of highlight - stop playback
       stopHighlightPlayback();
       return;
     }
 
-    const currentSegment = highlightSegments[highlightSegmentIndex];
-    if (!currentSegment) {
+    const currentRally = highlightRallies[highlightRallyIndex];
+    if (!currentRally) {
       stopHighlightPlayback();
       return;
     }
 
-    // Check if we need to jump to segment start (if we're before it or in dead time)
-    if (currentTime < currentSegment.start_time - 0.1) {
-      seek(currentSegment.start_time);
+    // Check if we need to jump to rally start (if we're before it or in dead time)
+    if (currentTime < currentRally.start_time - 0.1) {
+      seek(currentRally.start_time);
       return;
     }
 
-    // Check if we reached the end of current segment
-    if (currentTime >= currentSegment.end_time - 0.05) {
-      const nextIndex = highlightSegmentIndex + 1;
-      if (nextIndex < highlightSegments.length) {
-        // Advance to next segment
+    // Check if we reached the end of current rally
+    if (currentTime >= currentRally.end_time - 0.05) {
+      const nextIndex = highlightRallyIndex + 1;
+      if (nextIndex < highlightRallies.length) {
+        // Advance to next rally
         advanceHighlightPlayback();
-        seek(highlightSegments[nextIndex].start_time);
+        seek(highlightRallies[nextIndex].start_time);
       } else {
         // End of highlight
         stopHighlightPlayback();
       }
     }
-  }, [currentTime, isPlaying, playingHighlightId, highlightSegmentIndex, highlights, segments, seek, advanceHighlightPlayback, stopHighlightPlayback]);
+  }, [currentTime, isPlaying, playingHighlightId, highlightRallyIndex, highlights, rallies, seek, advanceHighlightPlayback, stopHighlightPlayback]);
 
   // Calculate optimal scale based on video duration
   // Estimate visible markers: Container ~2500px wide, scaleWidth=160px = ~16 markers visible
@@ -466,7 +470,7 @@ export function Timeline() {
       cursorTop?.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [segments.length]); // Re-attach when segments load
+  }, [rallies?.length]); // Re-attach when rallies load
 
   // Calculate cursor pixel position (no scrollLeft since scrolling is disabled)
   const cursorPixelPosition = useMemo(() => {
@@ -475,64 +479,65 @@ export function Timeline() {
     return startLeft + (currentTime * pixelsPerSecond);
   }, [currentTime, scale]);
 
-  // Calculate selected segment position for delete button overlay (no scrollLeft since scrolling is disabled)
-  const selectedSegmentPosition = useMemo(() => {
-    if (!selectedSegmentId) return null;
-    const segment = segments.find(s => s.id === selectedSegmentId);
-    if (!segment) return null;
+  // Calculate selected rally position for delete button overlay (no scrollLeft since scrolling is disabled)
+  const selectedRallyPosition = useMemo(() => {
+    if (!selectedRallyId || !rallies) return null;
+    const rally = rallies.find(s => s.id === selectedRallyId);
+    if (!rally) return null;
 
     const pixelsPerSecond = SCALE_WIDTH / scale;
     const startLeft = 10;
-    const left = startLeft + (segment.start_time * pixelsPerSecond);
-    const width = (segment.end_time - segment.start_time) * pixelsPerSecond;
+    const left = startLeft + (rally.start_time * pixelsPerSecond);
+    const width = (rally.end_time - rally.start_time) * pixelsPerSecond;
     const center = left + (width / 2);
 
     return { left, width, center };
-  }, [selectedSegmentId, segments, scale]);
+  }, [selectedRallyId, rallies, scale]);
 
   // Convert Rally[] to TimelineRow[] format
   const editorData: TimelineRow[] = useMemo(() => {
     return [
       {
-        id: 'segments',
-        actions: segments.map((seg) => ({
-          id: seg.id,
-          start: seg.start_time,
-          end: seg.end_time,
+        id: 'rallies',
+        actions: (rallies ?? []).map((rally) => ({
+          id: rally.id,
+          start: rally.start_time,
+          end: rally.end_time,
           effectId: 'rally',
-          selected: seg.id === selectedSegmentId,
+          selected: rally.id === selectedRallyId,
           flexible: false,
           movable: false,
         })),
       },
     ];
-  }, [segments, selectedSegmentId]);
+  }, [rallies, selectedRallyId]);
 
   // Check if a move/resize would cause overlap
   const checkOverlap = useCallback(
     (actionId: string, newStart: number, newEnd: number) => {
-      return segments.some(
-        (seg) =>
-          seg.id !== actionId &&
-          newStart < seg.end_time &&
-          newEnd > seg.start_time
+      return (rallies ?? []).some(
+        (rally) =>
+          rally.id !== actionId &&
+          newStart < rally.end_time &&
+          newEnd > rally.start_time
       );
     },
-    [segments]
+    [rallies]
   );
 
-  // Handle segment changes (resize/move)
+  // Handle rally changes (resize/move)
   const handleChange = useCallback(
     (data: TimelineRow[]) => {
+      if (!rallies) return;
       const actions = data[0]?.actions || [];
       actions.forEach((action: TimelineAction) => {
-        const segment = segments.find((s) => s.id === action.id);
-        if (segment) {
+        const rally = rallies.find((s) => s.id === action.id);
+        if (rally) {
           if (
-            segment.start_time !== action.start ||
-            segment.end_time !== action.end
+            rally.start_time !== action.start ||
+            rally.end_time !== action.end
           ) {
-            updateSegment(action.id, {
+            updateRally(action.id, {
               start_time: action.start,
               end_time: action.end,
             });
@@ -540,7 +545,7 @@ export function Timeline() {
         }
       });
     },
-    [segments, updateSegment]
+    [rallies, updateRally]
   );
 
   // Prevent overlapping during move
@@ -562,44 +567,44 @@ export function Timeline() {
   // Persist changes after resize ends
   const handleActionResizeEnd = useCallback(
     (params: { action: TimelineAction; start: number; end: number }) => {
-      updateSegment(params.action.id, {
+      updateRally(params.action.id, {
         start_time: params.start,
         end_time: params.end,
       });
       return true;
     },
-    [updateSegment]
+    [updateRally]
   );
 
   // Persist changes after move ends
   const handleActionMoveEnd = useCallback(
     (params: { action: TimelineAction; start: number; end: number }) => {
-      updateSegment(params.action.id, {
+      updateRally(params.action.id, {
         start_time: params.start,
         end_time: params.end,
       });
       return true;
     },
-    [updateSegment]
+    [updateRally]
   );
 
   // Handle clicking on timeline to seek and deselect
   const handleClickTimeArea = useCallback(
     (time: number) => {
       seek(time);
-      selectSegment(null);
+      selectRally(null);
       return true;
     },
-    [seek, selectSegment]
+    [seek, selectRally]
   );
 
   // Handle clicking on an action to select it
   const handleClickAction = useCallback(
     (_e: React.MouseEvent, action: { action: TimelineAction }) => {
-      selectSegment(action.action.id);
+      selectRally(action.action.id);
       seek(action.action.start);
     },
-    [selectSegment, seek]
+    [selectRally, seek]
   );
 
   // Custom scale rendering
@@ -607,33 +612,33 @@ export function Timeline() {
     return <span>{formatTimeShort(scaleValue)}</span>;
   }, []);
 
-  // Create segment at current playhead position
-  const handleCreateSegment = useCallback(() => {
-    createSegmentAtTime(currentTime);
-  }, [createSegmentAtTime, currentTime]);
+  // Create rally at current playhead position
+  const handleCreateRally = useCallback(() => {
+    createRallyAtTime(currentTime);
+  }, [createRallyAtTime, currentTime]);
 
-  // Check if we can create a segment at current time (for toolbar button)
-  const canCreateSegmentToolbar = useMemo(() => {
-    if (!videoMetadata) return false;
-    const insideSegment = segments.some(
+  // Check if we can create a rally at current time (for toolbar button)
+  const canCreateRallyToolbar = useMemo(() => {
+    if (!videoMetadata || !rallies) return false;
+    const insideRally = rallies.some(
       (s) => currentTime >= s.start_time && currentTime <= s.end_time
     );
-    return !insideSegment;
-  }, [segments, currentTime, videoMetadata]);
+    return !insideRally;
+  }, [rallies, currentTime, videoMetadata]);
 
   // Check if we should show the floating + button on cursor
   const showFloatingAddButton = useMemo(() => {
-    if (!videoMetadata) return false;
+    if (!videoMetadata || !rallies) return false;
     if (isDraggingCursor) return false;
-    if (selectedSegmentId) return false; // Hide when a segment is selected
-    // Check if we're inside an existing segment
-    const insideSegment = segments.some(
+    if (selectedRallyId) return false; // Hide when a rally is selected
+    // Check if we're inside an existing rally
+    const insideRally = rallies.some(
       (s) => currentTime >= s.start_time && currentTime <= s.end_time
     );
-    return !insideSegment;
-  }, [segments, currentTime, videoMetadata, isDraggingCursor, selectedSegmentId]);
+    return !insideRally;
+  }, [rallies, currentTime, videoMetadata, isDraggingCursor, selectedRallyId]);
 
-  if (segments.length === 0) {
+  if (!rallies || rallies.length === 0) {
     return (
       <Box
         sx={{
@@ -664,24 +669,24 @@ export function Timeline() {
       >
         {/* Playback controls - Left */}
         <Stack direction="row" alignItems="center" spacing={0.5} sx={{ flex: 1 }}>
-          <IconButton size="small" onClick={jumpToPrevSegment} title="Previous segment">
+          <IconButton size="small" onClick={jumpToPrevRally} title="Previous rally">
             <SkipPreviousIcon fontSize="small" />
           </IconButton>
           <IconButton size="small" onClick={() => isPlaying ? pause() : play()} title="Play/Pause (Space)">
             {isPlaying ? <PauseIcon /> : <PlayArrowIcon />}
           </IconButton>
-          <IconButton size="small" onClick={jumpToNextSegment} title="Next segment">
+          <IconButton size="small" onClick={jumpToNextRally} title="Next rally">
             <SkipNextIcon fontSize="small" />
           </IconButton>
           <Typography variant="body2" sx={{ ml: 1, fontFamily: 'monospace', minWidth: 130 }}>
             {formatTime(currentTime)} / {formatTime(duration)}
           </Typography>
-          <Tooltip title={canCreateSegmentToolbar ? "Create segment at playhead" : "Cannot create segment here (inside existing segment)"} arrow>
+          <Tooltip title={canCreateRallyToolbar ? "Create rally at playhead" : "Cannot create rally here (inside existing rally)"} arrow>
             <span>
               <IconButton
                 size="small"
-                onClick={handleCreateSegment}
-                disabled={!canCreateSegmentToolbar}
+                onClick={handleCreateRally}
+                disabled={!canCreateRallyToolbar}
                 color="primary"
                 sx={{ ml: 1 }}
               >
@@ -728,7 +733,7 @@ export function Timeline() {
         {/* Info and controls - Right */}
         <Stack direction="row" alignItems="center" spacing={1} sx={{ flex: 1, justifyContent: 'flex-end' }}>
           <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-            {segments.length} segments
+            {rallies?.length ?? 0} rallies
           </Typography>
           <Tooltip title="Keyboard shortcuts">
             <IconButton
@@ -774,10 +779,10 @@ export function Timeline() {
       <Box
         ref={timelineContainerRef}
         onClick={(e) => {
-          // Deselect if clicking on empty area (not on a segment)
+          // Deselect if clicking on empty area (not on a rally)
           const target = e.target as HTMLElement;
           if (!target.closest('.timeline-editor-action')) {
-            selectSegment(null);
+            selectRally(null);
           }
         }}
         sx={{
@@ -805,7 +810,7 @@ export function Timeline() {
             zIndex: '10 !important',
             transition: 'all 0.2s ease !important',
             // Dim non-selected when there's a selection
-            ...(selectedSegmentId && {
+            ...(selectedRallyId && {
               opacity: '0.4 !important',
               filter: 'saturate(0.5) !important',
             }),
@@ -866,8 +871,8 @@ export function Timeline() {
           maxScaleCount={duration > 0 ? Math.ceil(duration / scale) + 1 : 100}
           getScaleRender={getScaleRender}
           getActionRender={(action) => {
-            const segment = segments.find((s) => s.id === action.id);
-            const isSelected = selectedSegmentId === action.id;
+            const rally = rallies?.find((s) => s.id === action.id);
+            const isSelected = selectedRallyId === action.id;
 
             const edgeButtonStyle = {
               p: 0,
@@ -887,14 +892,14 @@ export function Timeline() {
             };
 
             const handleAdjustStart = (delta: number) => {
-              if (adjustSegmentStart(action.id, delta) && segment) {
-                seek(segment.start_time + delta);
+              if (adjustRallyStart(action.id, delta) && rally) {
+                seek(rally.start_time + delta);
               }
             };
 
             const handleAdjustEnd = (delta: number) => {
-              if (adjustSegmentEnd(action.id, delta) && segment) {
-                seek(segment.end_time + delta);
+              if (adjustRallyEnd(action.id, delta) && rally) {
+                seek(rally.end_time + delta);
               }
             };
 
@@ -931,7 +936,7 @@ export function Timeline() {
                       px: 1,
                     }}
                   >
-                    {segment?.id}
+                    {rally?.id}
                   </Typography>
                 </Box>
 
@@ -1009,8 +1014,8 @@ export function Timeline() {
 
                 {/* Highlight color dots */}
                 {(() => {
-                  const segmentHighlights = getHighlightsForSegment(action.id);
-                  if (segmentHighlights.length === 0) return null;
+                  const rallyHighlights = getHighlightsForRally(action.id);
+                  if (rallyHighlights.length === 0) return null;
                   return (
                     <Stack
                       direction="row"
@@ -1022,7 +1027,7 @@ export function Timeline() {
                         pointerEvents: 'none',
                       }}
                     >
-                      {segmentHighlights.slice(0, 4).map((h) => (
+                      {rallyHighlights.slice(0, 4).map((h) => (
                         <Box
                           key={h.id}
                           sx={{
@@ -1035,7 +1040,7 @@ export function Timeline() {
                           }}
                         />
                       ))}
-                      {segmentHighlights.length > 4 && (
+                      {rallyHighlights.length > 4 && (
                         <Typography
                           sx={{
                             fontSize: 9,
@@ -1044,7 +1049,7 @@ export function Timeline() {
                             textShadow: '0 1px 2px rgba(0,0,0,0.5)',
                           }}
                         >
-                          +{segmentHighlights.length - 4}
+                          +{rallyHighlights.length - 4}
                         </Typography>
                       )}
                     </Stack>
@@ -1133,12 +1138,12 @@ export function Timeline() {
                 window.addEventListener('mouseup', handleMouseUp);
               }}
             />
-            {/* Add button - only when in non-segment area */}
+            {/* Add button - only when in non-rally area */}
             {showFloatingAddButton && (
               <IconButton
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleCreateSegment();
+                  handleCreateRally();
                 }}
                 size="small"
                 sx={{
@@ -1166,19 +1171,19 @@ export function Timeline() {
           </Box>
         )}
 
-        {/* Delete button overlay for selected segment */}
-        {selectedSegmentId && selectedSegmentPosition && selectedSegmentPosition.center > 0 && (
+        {/* Delete button overlay for selected rally */}
+        {selectedRallyId && selectedRallyPosition && selectedRallyPosition.center > 0 && (
           <Box
             sx={{
               position: 'absolute',
-              left: selectedSegmentPosition.center,
+              left: selectedRallyPosition.center,
               top: 36,
               transform: 'translateX(-50%)',
               zIndex: 100,
               pointerEvents: 'auto',
             }}
           >
-            {deleteConfirmId === selectedSegmentId ? (
+            {deleteConfirmId === selectedRallyId ? (
               // Confirmation UI
               <Stack
                 direction="row"
@@ -1208,9 +1213,9 @@ export function Timeline() {
                   size="small"
                   onClick={(e) => {
                     e.stopPropagation();
-                    removeSegment(selectedSegmentId);
+                    removeRally(selectedRallyId);
                     setDeleteConfirmId(null);
-                    selectSegment(null);
+                    selectRally(null);
                   }}
                   sx={{
                     width: 26,
@@ -1243,7 +1248,7 @@ export function Timeline() {
               // Toggle highlight and Delete buttons
               <Stack direction="row" spacing={0.5}>
                 <Tooltip title={
-                  isSegmentInSelectedHighlight
+                  isRallyInSelectedHighlight
                     ? `Remove from ${highlights.find(h => h.id === selectedHighlightId)?.name}`
                     : selectedHighlightId
                       ? `Add to ${highlights.find(h => h.id === selectedHighlightId)?.name}`
@@ -1258,10 +1263,10 @@ export function Timeline() {
                     sx={{
                       width: 28,
                       height: 28,
-                      bgcolor: isSegmentInSelectedHighlight
+                      bgcolor: isRallyInSelectedHighlight
                         ? highlights.find(h => h.id === selectedHighlightId)?.color || '#FFE66D'
                         : 'rgba(20,20,20,0.9)',
-                      color: isSegmentInSelectedHighlight
+                      color: isRallyInSelectedHighlight
                         ? 'rgba(0,0,0,0.8)'
                         : selectedHighlightId
                           ? highlights.find(h => h.id === selectedHighlightId)?.color || 'rgba(255,255,255,0.8)'
@@ -1269,12 +1274,12 @@ export function Timeline() {
                       border: '1px solid rgba(255,255,255,0.15)',
                       boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
                       '&:hover': {
-                        bgcolor: isSegmentInSelectedHighlight
+                        bgcolor: isRallyInSelectedHighlight
                           ? 'rgba(20,20,20,0.9)'
                           : selectedHighlightId
                             ? highlights.find(h => h.id === selectedHighlightId)?.color || '#FFE66D'
                             : '#FFE66D',
-                        color: isSegmentInSelectedHighlight
+                        color: isRallyInSelectedHighlight
                           ? highlights.find(h => h.id === selectedHighlightId)?.color || 'rgba(255,255,255,0.8)'
                           : 'rgba(0,0,0,0.8)',
                         border: '1px solid transparent',
@@ -1289,7 +1294,7 @@ export function Timeline() {
                   size="small"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setDeleteConfirmId(selectedSegmentId);
+                    setDeleteConfirmId(selectedRallyId);
                   }}
                   sx={{
                     width: 28,

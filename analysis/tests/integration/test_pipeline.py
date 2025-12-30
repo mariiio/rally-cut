@@ -169,7 +169,7 @@ class TestCLICommands:
         command_names = [cmd.name for cmd in app.registered_commands]
 
         # Check that key commands exist
-        expected_commands = ["cut", "stats", "overlay", "highlights"]
+        expected_commands = ["cut", "overlay", "highlights", "profile"]
         for cmd in expected_commands:
             assert cmd in command_names, f"Command '{cmd}' not found in CLI"
 
@@ -239,11 +239,13 @@ class TestCutterIntegration:
             padding_seconds=1.0,
             min_play_duration=2.0,
             stride=16,
+            min_gap_seconds=3.0,  # Lower than default 5.0 to prevent merging
+            rally_continuation_seconds=0,  # Disable to prevent merging
         )
 
         segments = cutter._get_segments_from_results(results, fps)
 
-        # Should have 2 play segments
+        # Should have 2 play segments (with short gap between them)
         assert len(segments) == 2
 
         # Check first segment has padding

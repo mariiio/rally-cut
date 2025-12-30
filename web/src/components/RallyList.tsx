@@ -5,25 +5,25 @@ import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { formatTime, formatDuration } from '@/utils/timeFormat';
 
-export function SegmentList() {
-  const { segments, selectedSegmentId, selectSegment, getHighlightsForSegment } = useEditorStore();
+export function RallyList() {
+  const { rallies, selectedRallyId, selectRally, getHighlightsForRally } = useEditorStore();
   const { currentTime, seek } = usePlayerStore();
 
   const handleClick = (id: string, startTime: number) => {
-    selectSegment(id);
+    selectRally(id);
     seek(startTime);
   };
 
-  // Sort segments by start time for display
-  const sortedSegments = [...segments].sort((a, b) => a.start_time - b.start_time);
+  // Sort rallies by start time for display
+  const sortedRallies = [...(rallies ?? [])].sort((a, b) => a.start_time - b.start_time);
 
-  // Find which segment contains the current time
-  const activeSegmentId = sortedSegments.find(
+  // Find which rally contains the current time
+  const activeRallyId = sortedRallies.find(
     (s) => currentTime >= s.start_time && currentTime <= s.end_time
   )?.id;
 
   // Calculate total duration
-  const totalDuration = sortedSegments.reduce((sum, s) => sum + s.duration, 0);
+  const totalDuration = sortedRallies.reduce((sum, s) => sum + s.duration, 0);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -49,9 +49,9 @@ export function SegmentList() {
               color: 'text.secondary',
             }}
           >
-            Segments
+            Rallies
           </Typography>
-          {sortedSegments.length > 0 && (
+          {sortedRallies.length > 0 && (
             <Typography
               variant="caption"
               sx={{
@@ -65,9 +65,9 @@ export function SegmentList() {
             </Typography>
           )}
         </Box>
-        {sortedSegments.length > 0 && (
+        {sortedRallies.length > 0 && (
           <Chip
-            label={sortedSegments.length}
+            label={sortedRallies.length}
             size="small"
             sx={{
               height: 20,
@@ -79,9 +79,9 @@ export function SegmentList() {
         )}
       </Box>
 
-      {/* Segment list */}
+      {/* Rally list */}
       <Box sx={{ flex: 1, overflow: 'auto' }}>
-        {sortedSegments.length === 0 ? (
+        {sortedRallies.length === 0 ? (
           <Box
             sx={{
               p: 2,
@@ -90,19 +90,19 @@ export function SegmentList() {
             }}
           >
             <Typography variant="caption">
-              No segments loaded
+              No rallies loaded
             </Typography>
           </Box>
         ) : (
           <Box sx={{ py: 0.5 }}>
-            {sortedSegments.map((segment, index) => {
-              const isSelected = selectedSegmentId === segment.id;
-              const isActive = activeSegmentId === segment.id;
+            {sortedRallies.map((rally, index) => {
+              const isSelected = selectedRallyId === rally.id;
+              const isActive = activeRallyId === rally.id;
 
               return (
                 <Box
-                  key={segment.id}
-                  onClick={() => handleClick(segment.id, segment.start_time)}
+                  key={rally.id}
+                  onClick={() => handleClick(rally.id, rally.start_time)}
                   sx={{
                     display: 'flex',
                     alignItems: 'center',
@@ -141,7 +141,7 @@ export function SegmentList() {
                     {isActive ? '●' : isSelected ? '▸' : ''}
                   </Box>
 
-                  {/* Segment number */}
+                  {/* Rally number */}
                   <Typography
                     sx={{
                       fontFamily: 'monospace',
@@ -165,14 +165,14 @@ export function SegmentList() {
                       mx: 1,
                     }}
                   >
-                    {formatTime(segment.start_time)}
+                    {formatTime(rally.start_time)}
                     <Box
                       component="span"
                       sx={{ color: 'text.disabled', mx: 0.5 }}
                     >
                       →
                     </Box>
-                    {formatTime(segment.end_time)}
+                    {formatTime(rally.end_time)}
                   </Typography>
 
                   {/* Duration */}
@@ -184,16 +184,16 @@ export function SegmentList() {
                       flexShrink: 0,
                     }}
                   >
-                    {segment.duration.toFixed(1)}s
+                    {rally.duration.toFixed(1)}s
                   </Typography>
 
                   {/* Highlight color dots */}
                   {(() => {
-                    const segmentHighlights = getHighlightsForSegment(segment.id);
-                    if (segmentHighlights.length === 0) return null;
+                    const rallyHighlights = getHighlightsForRally(rally.id);
+                    if (rallyHighlights.length === 0) return null;
                     return (
                       <Stack direction="row" spacing={0.25} sx={{ ml: 0.75 }}>
-                        {segmentHighlights.slice(0, 3).map((h) => (
+                        {rallyHighlights.slice(0, 3).map((h) => (
                           <Box
                             key={h.id}
                             sx={{
@@ -204,11 +204,11 @@ export function SegmentList() {
                             }}
                           />
                         ))}
-                        {segmentHighlights.length > 3 && (
+                        {rallyHighlights.length > 3 && (
                           <Typography
                             sx={{ fontSize: 8, color: 'text.disabled', lineHeight: 1 }}
                           >
-                            +{segmentHighlights.length - 3}
+                            +{rallyHighlights.length - 3}
                           </Typography>
                         )}
                       </Stack>

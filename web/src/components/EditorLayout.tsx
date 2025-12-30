@@ -10,13 +10,13 @@ import {
 } from '@mui/material';
 import { VideoPlayer } from './VideoPlayer';
 import { Timeline } from './Timeline';
-import { SegmentList } from './SegmentList';
+import { RallyList } from './RallyList';
 import { HighlightsPanel } from './HighlightsPanel';
 import { FileControls } from './FileControls';
 import { useEditorStore } from '@/stores/editorStore';
 
 export function EditorLayout() {
-  const { segments, setVideoUrl, loadSegmentsFromJson, undo, redo, canUndo, canRedo } = useEditorStore();
+  const { rallies, setVideoUrl, loadRalliesFromJson, undo, redo, canUndo, canRedo } = useEditorStore();
 
   // Keyboard shortcuts for undo/redo
   useEffect(() => {
@@ -50,13 +50,13 @@ export function EditorLayout() {
 
   // Auto-load sample data in development
   useEffect(() => {
-    if (process.env.NODE_ENV === 'development' && segments.length === 0) {
+    if (process.env.NODE_ENV === 'development' && (!rallies || rallies.length === 0)) {
       const loadSampleData = async () => {
         try {
           const response = await fetch('/samples/segments.json');
           if (response.ok) {
             const json = await response.json();
-            loadSegmentsFromJson(json);
+            loadRalliesFromJson(json);
             setVideoUrl('/samples/video.mov');
           }
         } catch (e) {
@@ -83,7 +83,7 @@ export function EditorLayout() {
       <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 2, gap: 2, overflow: 'hidden' }}>
         {/* Video section */}
         <Box sx={{ flex: 1, display: 'flex', gap: 2, minHeight: 0 }}>
-          {/* Segment list - LEFT side */}
+          {/* Rally list - LEFT side */}
           <Paper
             sx={{
               width: 280,
@@ -93,7 +93,7 @@ export function EditorLayout() {
               overflow: 'hidden',
             }}
           >
-            <SegmentList />
+            <RallyList />
           </Paper>
 
           {/* Video player - CENTER */}

@@ -97,20 +97,28 @@ class GameStateConfig(BaseModel):
 class BallTrackingConfig(BaseModel):
     """Ball tracking configuration."""
 
-    confidence_threshold: float = 0.3
-    max_missing_frames: int = 10
-    edge_margin: int = 80
+    confidence_threshold: float = 0.35  # Lower threshold - model confidence varies
+    max_missing_frames: int = 30  # Increased from 10 to bridge longer gaps
+    edge_margin: int = 30  # Reduced from 80 to avoid rejecting valid edge detections
     # Kalman filter parameters
-    kalman_measurement_noise: float = 10.0
-    kalman_process_noise: float = 5.0
+    kalman_measurement_noise: float = 5.0  # Reduced from 10.0 for tighter tracking
+    kalman_process_noise: float = 2.0  # Reduced from 5.0 for smoother trajectories
+    # Multi-candidate detection settings
+    max_candidates: int = 5  # Return top N candidates per frame
+    min_aspect_ratio: float = 0.6  # Allow slightly non-circular detections
+    max_aspect_ratio: float = 1.7  # Volleyballs can appear oblong in fast motion
+    # Temporal validation
+    max_velocity_pixels: float = 150.0  # Max ball movement per frame (pixels)
 
 
 class TrajectoryConfig(BaseModel):
     """Trajectory processing configuration."""
 
-    max_gap_frames: int = 15
+    max_gap_frames: int = 30  # Match max_missing_frames for consistency
     smooth_sigma: float = 1.5
     trail_length: int = 15
+    interpolation_method: str = "parabolic"  # "linear", "parabolic", "spline"
+    adaptive_smoothing: bool = True  # Use Savitzky-Golay instead of Gaussian
 
 
 class OverlayConfig(BaseModel):
@@ -187,8 +195,9 @@ class RallyCutConfig(BaseSettings):
     )
 
     # YOLO settings (default to local weights if available)
+    # Uses volleyball-specific YOLOv8 model from volleyball_analytics project
     ball_detector_path: Path | None = Field(
-        default_factory=lambda: _find_local_weights("weights/yolov8/ball_detector/best.pt")
+        default_factory=lambda: _find_local_weights("weights/yolov8_ball/best.pt")
     )
     yolo_confidence: float = 0.25
 
