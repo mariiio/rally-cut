@@ -868,7 +868,8 @@ export function Timeline() {
           dragLine={true}
           autoScroll={false}
           autoReRender={true}
-          maxScaleCount={duration > 0 ? Math.ceil(duration / scale) + 1 : 100}
+          minScaleCount={1}
+          maxScaleCount={Math.max(1, duration > 0 ? Math.ceil(duration / scale) + 1 : 100)}
           getScaleRender={getScaleRender}
           getActionRender={(action) => {
             const rally = rallies?.find((s) => s.id === action.id);
