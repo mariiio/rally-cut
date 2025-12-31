@@ -7,9 +7,12 @@ import {
   IconButton,
   Snackbar,
   Alert,
+  CircularProgress,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { useExportStore } from '@/stores/exportStore';
+import { designTokens } from '@/app/theme';
 
 export function ExportProgress() {
   const { isExporting, progress, currentStep, error, clearError, reset } = useExportStore();
@@ -21,7 +24,8 @@ export function ExportProgress() {
         open={true}
         autoHideDuration={6000}
         onClose={clearError}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        sx={{ mb: 1, mr: 1 }}
       >
         <Alert severity="error" onClose={clearError} sx={{ width: '100%' }}>
           {error}
@@ -30,7 +34,7 @@ export function ExportProgress() {
     );
   }
 
-  // Show progress bar when exporting
+  // Show nothing when not exporting
   if (!isExporting && progress === 0) {
     return null;
   }
@@ -38,57 +42,135 @@ export function ExportProgress() {
   // Show success message briefly
   if (!isExporting && progress === 100) {
     return (
-      <Snackbar
-        open={true}
-        autoHideDuration={2000}
-        onClose={reset}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      <Box
+        sx={{
+          position: 'fixed',
+          bottom: 16,
+          right: 16,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1,
+          bgcolor: 'success.main',
+          color: 'success.contrastText',
+          borderRadius: 2,
+          px: 2,
+          py: 1,
+          boxShadow: designTokens.shadows.lg,
+          zIndex: 1300,
+          animation: 'slideIn 0.2s ease-out',
+          '@keyframes slideIn': {
+            from: { opacity: 0, transform: 'translateY(8px)' },
+            to: { opacity: 1, transform: 'translateY(0)' },
+          },
+        }}
+        onClick={reset}
       >
-        <Alert severity="success" sx={{ width: '100%' }}>
-          Download complete
-        </Alert>
-      </Snackbar>
+        <CheckCircleIcon sx={{ fontSize: 18 }} />
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+          Export complete
+        </Typography>
+      </Box>
     );
   }
 
+  // Compact progress indicator in bottom-right corner
   return (
     <Box
       sx={{
         position: 'fixed',
         bottom: 16,
-        left: '50%',
-        transform: 'translateX(-50%)',
-        bgcolor: 'background.paper',
+        right: 16,
+        bgcolor: designTokens.colors.surface[3],
         borderRadius: 2,
-        boxShadow: 3,
-        px: 3,
-        py: 2,
-        minWidth: 320,
-        maxWidth: 400,
+        boxShadow: designTokens.shadows.lg,
+        border: '1px solid',
+        borderColor: 'divider',
+        overflow: 'hidden',
+        minWidth: 240,
+        maxWidth: 280,
         zIndex: 1300,
+        animation: 'slideIn 0.2s ease-out',
+        '@keyframes slideIn': {
+          from: { opacity: 0, transform: 'translateY(8px)' },
+          to: { opacity: 1, transform: 'translateY(0)' },
+        },
       }}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-        <Typography variant="body2" sx={{ flex: 1, fontWeight: 500 }}>
-          Exporting Video
-        </Typography>
-        <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>
-          {progress}%
-        </Typography>
-        <IconButton size="small" onClick={reset} sx={{ ml: 0.5 }}>
-          <CloseIcon fontSize="small" />
-        </IconButton>
-      </Box>
-
+      {/* Progress bar at top */}
       <LinearProgress
         variant="determinate"
         value={progress}
-        sx={{ mb: 1, borderRadius: 1 }}
+        sx={{
+          height: 3,
+          bgcolor: 'rgba(255,255,255,0.1)',
+          '& .MuiLinearProgress-bar': {
+            background: designTokens.gradients.primary,
+          },
+        }}
       />
 
-      <Typography variant="caption" color="text.secondary">
-        {currentStep}
-      </Typography>
+      {/* Content */}
+      <Box sx={{ px: 1.5, py: 1, display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        {/* Spinner */}
+        <CircularProgress
+          size={20}
+          thickness={4}
+          sx={{ color: 'primary.main' }}
+        />
+
+        {/* Text */}
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Typography
+              variant="caption"
+              sx={{
+                fontWeight: 600,
+                color: 'text.primary',
+                fontSize: '0.75rem',
+              }}
+            >
+              Exporting
+            </Typography>
+            <Typography
+              variant="caption"
+              sx={{
+                fontFamily: 'monospace',
+                color: 'primary.main',
+                fontWeight: 600,
+                fontSize: '0.75rem',
+              }}
+            >
+              {progress}%
+            </Typography>
+          </Box>
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.secondary',
+              fontSize: '0.6875rem',
+              display: 'block',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {currentStep}
+          </Typography>
+        </Box>
+
+        {/* Close button */}
+        <IconButton
+          size="small"
+          onClick={reset}
+          sx={{
+            p: 0.25,
+            color: 'text.secondary',
+            '&:hover': { color: 'text.primary' },
+          }}
+        >
+          <CloseIcon sx={{ fontSize: 16 }} />
+        </IconButton>
+      </Box>
     </Box>
   );
 }
