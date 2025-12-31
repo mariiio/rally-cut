@@ -78,6 +78,33 @@ function parseDragId(dragId: string): { highlightId: string; rallyId: string } |
   return { highlightId: parts[0], rallyId: parts[1] };
 }
 
+// Droppable wrapper for highlight title row
+interface DroppableHighlightTitleProps {
+  highlightId: string;
+  highlightColor: string;
+  children: React.ReactNode;
+}
+
+function DroppableHighlightTitle({ highlightId, highlightColor, children }: DroppableHighlightTitleProps) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: `title-droppable::${highlightId}`,
+  });
+
+  return (
+    <Box
+      ref={setNodeRef}
+      sx={{
+        borderRadius: 1,
+        border: isOver ? `2px dashed ${highlightColor}` : '2px dashed transparent',
+        bgcolor: isOver ? `${highlightColor}15` : 'transparent',
+        transition: 'all 0.15s ease',
+      }}
+    >
+      {children}
+    </Box>
+  );
+}
+
 // Droppable zone for a highlight's rally list
 interface DroppableHighlightZoneProps {
   highlightId: string;
@@ -291,8 +318,24 @@ export function HighlightsPanel() {
 
     const { highlightId: sourceHighlightId, rallyId } = activeData;
 
-    // Check if dropped on a droppable zone (empty highlight or between items)
+    // Check if dropped on a droppable zone (title, empty highlight, or between items)
     const overId = over.id as string;
+
+    // Handle drop on highlight title
+    if (overId.startsWith('title-droppable::')) {
+      const targetHighlightId = overId.replace('title-droppable::', '');
+      if (targetHighlightId !== sourceHighlightId) {
+        // Move to the end of the target highlight
+        const targetHighlight = highlights?.find((h) => h.id === targetHighlightId);
+        const targetIndex = targetHighlight?.rallyIds.length ?? 0;
+        moveRallyBetweenHighlights(rallyId, sourceHighlightId, targetHighlightId, targetIndex);
+        // Auto-expand the target highlight
+        setExpandedHighlights((prev) => new Set(prev).add(targetHighlightId));
+      }
+      return;
+    }
+
+    // Handle drop on rally list zone
     if (overId.startsWith('droppable::')) {
       const targetHighlightId = overId.replace('droppable::', '');
       if (targetHighlightId !== sourceHighlightId) {
@@ -498,9 +541,13 @@ export function HighlightsPanel() {
 
             return (
               <Box key={highlight.id}>
-                {/* Highlight row */}
-                <Box
-                  onClick={() => {
+                {/* Highlight row - wrapped in droppable zone */}
+                <DroppableHighlightTitle
+                  highlightId={highlight.id}
+                  highlightColor={highlight.color}
+                >
+                  <Box
+                    onClick={() => {
                     if (isSelected) {
                       // Deselect and collapse
                       selectHighlight(null);
@@ -713,7 +760,8 @@ export function HighlightsPanel() {
                       <DeleteIcon sx={{ fontSize: 18 }} />
                     </IconButton>
                   )}
-                </Box>
+                  </Box>
+                </DroppableHighlightTitle>
 
                 {/* Collapsible rally list with droppable zone */}
                 <Collapse in={isExpanded}>
