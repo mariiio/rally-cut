@@ -68,18 +68,49 @@ export function ExportProgress() {
       }}
     >
       {/* Progress bar */}
-      <LinearProgress
-        variant="determinate"
-        value={progress}
-        sx={{
-          height: 3,
-          bgcolor: 'rgba(255, 255, 255, 0.06)',
-          '& .MuiLinearProgress-bar': {
-            bgcolor: isComplete ? 'success.main' : 'primary.main',
-            transition: 'transform 0.2s ease',
-          },
-        }}
-      />
+      <Box sx={{ position: 'relative', height: 3 }}>
+        <LinearProgress
+          variant="determinate"
+          value={progress}
+          sx={{
+            height: 3,
+            bgcolor: 'rgba(255, 255, 255, 0.06)',
+            '& .MuiLinearProgress-bar': {
+              bgcolor: isComplete ? 'success.main' : 'primary.main',
+              transition: 'transform 0.2s ease',
+            },
+          }}
+        />
+        {/* Glow sweep */}
+        {!isComplete && progress > 0 && (
+          <Box
+            sx={{
+              position: 'absolute',
+              top: 0,
+              bottom: 0,
+              left: 0,
+              width: `${progress}%`,
+              overflow: 'hidden',
+              pointerEvents: 'none',
+            }}
+          >
+            <Box
+              sx={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                width: 40,
+                background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent)',
+                animation: 'sweep 1.5s ease-in-out infinite',
+                '@keyframes sweep': {
+                  '0%': { left: '-40px' },
+                  '100%': { left: '100%' },
+                },
+              }}
+            />
+          </Box>
+        )}
+      </Box>
 
       {/* Status text */}
       <Box
