@@ -76,6 +76,7 @@ interface EditorState {
   future: HistoryEntry[];
   originalRallies: Rally[];
   originalHighlights: Highlight[];
+  originalRalliesPerMatch: Record<string, Rally[]>;
 
   // Highlights state
   highlights: Highlight[];
@@ -147,6 +148,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   future: [],
   originalRallies: [],
   originalHighlights: [],
+  originalRalliesPerMatch: {},
 
   // Highlights state
   highlights: [],
@@ -177,6 +179,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }
 
       // Load all match data in parallel
+      // Store original rallies per match for reset functionality
+      const originalRalliesPerMatch: Record<string, Rally[]> = {};
+
       const matches: Match[] = await Promise.all(
         manifest.session.matches.map(async (matchRef) => {
           const dataRes = await fetch(`/samples/session_${sessionId}/${matchRef.dataFile}`);
@@ -184,12 +189,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
           // Rally IDs should already be prefixed in the JSON files
           // But if they're not, prefix them here for safety
-          let rallies = matchData.rallies.map((rally) => ({
+          const originalRallies = matchData.rallies.map((rally) => ({
             ...rally,
             id: rally.id.startsWith(matchRef.id) ? rally.id : `${matchRef.id}_${rally.id}`,
           }));
 
+          // Store the original rallies before applying localStorage edits
+          originalRalliesPerMatch[matchRef.id] = originalRallies;
+
           // Apply saved edits from localStorage if available
+          let rallies = originalRallies;
           if (savedData?.matchRallies?.[matchRef.id]) {
             rallies = savedData.matchRallies[matchRef.id];
           }
@@ -203,6 +212,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           };
         })
       );
+
+      // Get all original rallies flattened for the active match comparison
+      const firstMatchOriginalRallies = originalRalliesPerMatch[matches[0]?.id] || [];
 
       // Build session object with restored highlights
       // Use the URL sessionId for consistency (not manifest.session.id which may differ)
@@ -227,6 +239,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         selectedHighlightId: null,
         past: [],
         future: [],
+        originalRallies: firstMatchOriginalRallies,
+        originalHighlights: [],
+        originalRalliesPerMatch,
         hasUnsavedChanges: savedData !== null,
       });
     } catch (error) {
@@ -263,6 +278,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       videoUrl: match.videoUrl,
       videoMetadata: match.video,
       rallies: match.rallies,
+      originalRallies: state.originalRalliesPerMatch[matchId] || [],
       selectedRallyId: null,
     });
   },
@@ -591,6 +607,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       future: [],
       originalRallies: [],
       originalHighlights: [],
+      originalRalliesPerMatch: {},
     });
   },
 
@@ -667,7 +684,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     // Push current state to history before resetting
     state.pushHistory();
 
+    // In session mode, also reset all matches to their original rallies
+    let updatedSession = state.session;
+    if (state.session && Object.keys(state.originalRalliesPerMatch).length > 0) {
+      const updatedMatches = state.session.matches.map((m) => ({
+        ...m,
+        rallies: state.originalRalliesPerMatch[m.id] || m.rallies,
+      }));
+      updatedSession = { ...state.session, matches: updatedMatches, highlights: [] };
+    }
+
     set({
+      session: updatedSession,
       rallies: [...state.originalRallies],
       highlights: [...state.originalHighlights],
       future: [], // Clear redo stack
