@@ -30,13 +30,27 @@ function reportProgress(progress: number, step: string) {
 /**
  * Beach volleyball-themed progress messages
  */
+const rallyVerbs = [
+  'Spiking',
+  'Setting',
+  'Bumping',
+  'Serving',
+  'Blocking',
+  'Diving for',
+  'Smashing',
+  'Poking',
+];
+
 const messages = {
   loadingFFmpeg: 'Warming up...',
   ffmpegLoaded: 'Ready to play',
   loadingVideo: 'Setting up the court...',
   loadingVideos: (current: number, total: number) => `Loading match ${current}/${total}...`,
   extractingClip: (current: number, total: number) => `Digging rally ${current} of ${total}...`,
-  encodingClip: (current: number, total: number) => `Spiking rally ${current} of ${total}...`,
+  encodingClip: (current: number, total: number) => {
+    const verb = rallyVerbs[current % rallyVerbs.length];
+    return `${verb} rally ${current} of ${total}...`;
+  },
   joiningClips: 'Running the play...',
   applyingFade: 'Adding smooth transitions...',
   finalizing: 'Match point...',
