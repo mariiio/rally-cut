@@ -120,6 +120,7 @@ interface EditorState {
   renameHighlight: (id: string, name: string) => void;
   addRallyToHighlight: (rallyId: string, highlightId: string) => void;
   removeRallyFromHighlight: (rallyId: string, highlightId: string) => void;
+  reorderHighlightRallies: (highlightId: string, fromIndex: number, toIndex: number) => void;
   selectHighlight: (id: string | null) => void;
 
   // Computed helpers (called as functions since Zustand doesn't have computed)
@@ -878,6 +879,27 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         h.id === highlightId
           ? { ...h, rallyIds: h.rallyIds.filter((id) => id !== rallyId) }
           : h
+      ),
+      hasUnsavedChanges: true,
+    });
+
+    debouncedSave(() => get().saveToStorage());
+  },
+
+  reorderHighlightRallies: (highlightId: string, fromIndex: number, toIndex: number) => {
+    const state = get();
+    const highlight = state.highlights.find((h) => h.id === highlightId);
+    if (!highlight) return;
+
+    state.pushHistory();
+
+    const rallyIds = [...highlight.rallyIds];
+    const [removed] = rallyIds.splice(fromIndex, 1);
+    rallyIds.splice(toIndex, 0, removed);
+
+    set({
+      highlights: state.highlights.map((h) =>
+        h.id === highlightId ? { ...h, rallyIds } : h
       ),
       hasUnsavedChanges: true,
     });
