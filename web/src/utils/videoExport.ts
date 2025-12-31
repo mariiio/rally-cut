@@ -503,8 +503,8 @@ export async function exportMultiSourceConcatenated(
 }
 
 /**
- * Apply fade transitions for multi-source export (clips already extracted)
- * Uses fade in/out on each clip then concatenates - more compatible than xfade
+ * Apply crossfade transitions for multi-source export (clips already extracted)
+ * Uses xfade filter for smooth blending between clips
  */
 async function exportMultiSourceWithFade(
   ff: any,
@@ -512,67 +512,64 @@ async function exportMultiSourceWithFade(
   outputName: string,
   rallies: Rally[]
 ): Promise<void> {
-  const fadeDuration = 0.3;
-  const fadedClipNames: string[] = [];
+  const fadeDuration = 0.5;
 
-  // Apply fade out to all clips except the last, fade in to all except the first
-  for (let i = 0; i < clipNames.length; i++) {
-    const clipName = clipNames[i];
-    const fadedClipName = `faded_${i}.mp4`;
-    fadedClipNames.push(fadedClipName);
-
-    const duration = rallies[i].duration;
-    const fadeOutStart = Math.max(0, duration - fadeDuration);
-
-    // Build filter for this clip
-    let videoFilter = '';
-    let audioFilter = '';
-
-    if (i === 0) {
-      // First clip: fade out only
-      videoFilter = `fade=t=out:st=${fadeOutStart}:d=${fadeDuration}`;
-      audioFilter = `afade=t=out:st=${fadeOutStart}:d=${fadeDuration}`;
-    } else if (i === clipNames.length - 1) {
-      // Last clip: fade in only
-      videoFilter = `fade=t=in:st=0:d=${fadeDuration}`;
-      audioFilter = `afade=t=in:st=0:d=${fadeDuration}`;
-    } else {
-      // Middle clips: fade in and fade out
-      videoFilter = `fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${fadeOutStart}:d=${fadeDuration}`;
-      audioFilter = `afade=t=in:st=0:d=${fadeDuration},afade=t=out:st=${fadeOutStart}:d=${fadeDuration}`;
-    }
+  // For 2 clips, use simple xfade
+  if (clipNames.length === 2) {
+    const offset = Math.max(0, rallies[0].duration - fadeDuration);
 
     await ff.exec([
-      '-i', clipName,
-      '-vf', videoFilter,
-      '-af', audioFilter,
+      '-i', clipNames[0],
+      '-i', clipNames[1],
+      '-filter_complex',
+      `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${offset},format=yuv420p[v];[0:a][1:a]acrossfade=d=${fadeDuration}[a]`,
+      '-map', '[v]',
+      '-map', '[a]',
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
-      '-crf', '28',
-      '-pix_fmt', 'yuv420p',
+      '-crf', '23',
       '-c:a', 'aac',
+      '-movflags', '+faststart',
       '-y',
-      fadedClipName,
+      outputName,
     ]);
+    return;
   }
 
-  // Concatenate all faded clips
-  const concatList = fadedClipNames.map((name) => `file '${name}'`).join('\n');
-  await ff.writeFile('concat_fade.txt', concatList);
+  // For 3+ clips, chain xfade operations iteratively (process pairs)
+  let currentInput = clipNames[0];
+  let currentDuration = rallies[0].duration;
 
-  await ff.exec([
-    '-f', 'concat',
-    '-safe', '0',
-    '-i', 'concat_fade.txt',
-    '-c', 'copy',
-    '-movflags', '+faststart',
-    outputName,
-  ]);
+  for (let i = 1; i < clipNames.length; i++) {
+    const nextClip = clipNames[i];
+    const isLast = i === clipNames.length - 1;
+    const tempOutput = isLast ? outputName : `xfade_temp_${i}.mp4`;
+    const offset = Math.max(0, currentDuration - fadeDuration);
 
-  // Cleanup
-  await ff.deleteFile('concat_fade.txt');
-  for (const name of fadedClipNames) {
-    await ff.deleteFile(name);
+    await ff.exec([
+      '-i', currentInput,
+      '-i', nextClip,
+      '-filter_complex',
+      `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${offset},format=yuv420p[v];[0:a][1:a]acrossfade=d=${fadeDuration}[a]`,
+      '-map', '[v]',
+      '-map', '[a]',
+      '-c:v', 'libx264',
+      '-preset', 'ultrafast',
+      '-crf', '23',
+      '-c:a', 'aac',
+      '-movflags', '+faststart',
+      '-y',
+      tempOutput,
+    ]);
+
+    // Clean up previous temp file (not the original clips)
+    if (i > 1) {
+      await ff.deleteFile(currentInput);
+    }
+
+    currentInput = tempOutput;
+    // New duration = previous duration + next clip duration - fade overlap
+    currentDuration = currentDuration + rallies[i].duration - fadeDuration;
   }
 }
 
@@ -630,8 +627,8 @@ async function exportWithConcat(
 }
 
 /**
- * Export with fade transitions (requires re-encoding)
- * Uses fade in/out on each clip then concatenates - more compatible than xfade
+ * Export with crossfade transitions (requires re-encoding)
+ * Uses xfade filter for smooth blending between clips
  */
 async function exportWithFade(
   ff: any,
@@ -639,86 +636,102 @@ async function exportWithFade(
   outputName: string,
   rallies: Rally[]
 ): Promise<void> {
-  const fadeDuration = 0.3;
+  const fadeDuration = 0.5;
 
-  // Extract and apply fade effects to each clip
-  const fadedClipNames: string[] = [];
+  // First extract all clips with consistent format
+  const clipNames: string[] = [];
 
   for (let i = 0; i < rallies.length; i++) {
     const rally = rallies[i];
-    const fadedClipName = `faded_${i}.mp4`;
-    fadedClipNames.push(fadedClipName);
+    const clipName = `clip_${i}.mp4`;
+    clipNames.push(clipName);
 
-    const progressBase = 10 + (i / rallies.length) * 60;
+    const progressBase = 10 + (i / rallies.length) * 40;
     reportProgress(Math.round(progressBase), messages.encodingClip(i + 1, rallies.length));
 
-    const duration = rally.duration;
-    const fadeOutStart = Math.max(0, duration - fadeDuration);
-
-    // Build filter for this clip
-    let videoFilter = '';
-    let audioFilter = '';
-
-    if (i === 0 && rallies.length > 1) {
-      // First clip: fade out only
-      videoFilter = `fade=t=out:st=${fadeOutStart}:d=${fadeDuration}`;
-      audioFilter = `afade=t=out:st=${fadeOutStart}:d=${fadeDuration}`;
-    } else if (i === rallies.length - 1 && rallies.length > 1) {
-      // Last clip: fade in only
-      videoFilter = `fade=t=in:st=0:d=${fadeDuration}`;
-      audioFilter = `afade=t=in:st=0:d=${fadeDuration}`;
-    } else if (rallies.length > 2) {
-      // Middle clips: fade in and fade out
-      videoFilter = `fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${fadeOutStart}:d=${fadeDuration}`;
-      audioFilter = `afade=t=in:st=0:d=${fadeDuration},afade=t=out:st=${fadeOutStart}:d=${fadeDuration}`;
-    }
-
-    // Build ffmpeg command
-    const args = [
+    await ff.exec([
       '-ss', rally.start_time.toString(),
       '-i', inputName,
       '-t', rally.duration.toString(),
-    ];
-
-    if (videoFilter) {
-      args.push('-vf', videoFilter);
-      args.push('-af', audioFilter);
-    }
-
-    args.push(
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
-      '-crf', '28',
+      '-crf', '23',
       '-pix_fmt', 'yuv420p',
       '-c:a', 'aac',
       '-b:a', '128k',
       '-avoid_negative_ts', 'make_zero',
       '-y',
-      fadedClipName,
-    );
-
-    await ff.exec(args);
+      clipName,
+    ]);
   }
 
-  reportProgress(75, messages.joiningClips);
+  reportProgress(55, messages.applyingFade);
 
-  // Concatenate all faded clips
-  const concatList = fadedClipNames.map((name) => `file '${name}'`).join('\n');
-  await ff.writeFile('concat_fade.txt', concatList);
+  // For 2 clips, use simple xfade
+  if (clipNames.length === 2) {
+    const offset = Math.max(0, rallies[0].duration - fadeDuration);
 
-  await ff.exec([
-    '-f', 'concat',
-    '-safe', '0',
-    '-i', 'concat_fade.txt',
-    '-c', 'copy',
-    '-movflags', '+faststart',
-    outputName,
-  ]);
+    await ff.exec([
+      '-i', clipNames[0],
+      '-i', clipNames[1],
+      '-filter_complex',
+      `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${offset},format=yuv420p[v];[0:a][1:a]acrossfade=d=${fadeDuration}[a]`,
+      '-map', '[v]',
+      '-map', '[a]',
+      '-c:v', 'libx264',
+      '-preset', 'ultrafast',
+      '-crf', '23',
+      '-c:a', 'aac',
+      '-movflags', '+faststart',
+      '-y',
+      outputName,
+    ]);
+  } else {
+    // For 3+ clips, chain xfade operations iteratively
+    let currentInput = clipNames[0];
+    let currentDuration = rallies[0].duration;
 
-  // Cleanup
-  await ff.deleteFile('concat_fade.txt');
-  for (const name of fadedClipNames) {
-    await ff.deleteFile(name);
+    for (let i = 1; i < clipNames.length; i++) {
+      const nextClip = clipNames[i];
+      const isLast = i === clipNames.length - 1;
+      const tempOutput = isLast ? outputName : `xfade_temp_${i}.mp4`;
+      const offset = Math.max(0, currentDuration - fadeDuration);
+
+      reportProgress(55 + Math.round((i / clipNames.length) * 35), messages.applyingFade);
+
+      await ff.exec([
+        '-i', currentInput,
+        '-i', nextClip,
+        '-filter_complex',
+        `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${offset},format=yuv420p[v];[0:a][1:a]acrossfade=d=${fadeDuration}[a]`,
+        '-map', '[v]',
+        '-map', '[a]',
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-crf', '23',
+        '-c:a', 'aac',
+        '-movflags', '+faststart',
+        '-y',
+        tempOutput,
+      ]);
+
+      // Clean up previous temp file (not original clips yet)
+      if (i > 1) {
+        await ff.deleteFile(currentInput);
+      }
+
+      currentInput = tempOutput;
+      currentDuration = currentDuration + rallies[i].duration - fadeDuration;
+    }
+  }
+
+  // Cleanup original clips
+  for (const clipName of clipNames) {
+    try {
+      await ff.deleteFile(clipName);
+    } catch {
+      // Ignore if already deleted
+    }
   }
 }
 
