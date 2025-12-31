@@ -218,7 +218,7 @@ function SortableRallyItem({ rally, highlightId, matchName, isActive, onClick, o
             <Typography component="span" sx={{ fontSize: '0.75rem', color: 'text.secondary', fontWeight: 600 }}>
               {matchName}
             </Typography>
-            <Typography component="span" sx={{ fontSize: '0.8rem', fontWeight: 500 }}>
+            <Typography component="span" sx={{ fontSize: '0.8rem' }}>
               Rally {rallyNumber}
             </Typography>
             <Typography component="span" sx={{ fontSize: '0.7rem', color: 'text.disabled', fontFamily: 'monospace' }}>
