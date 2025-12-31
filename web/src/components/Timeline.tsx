@@ -106,9 +106,6 @@ export function Timeline() {
     playOnlyRallies,
     togglePlayOnlyRallies,
     playingHighlightId,
-    highlightRallyIndex,
-    advanceHighlightPlayback,
-    stopHighlightPlayback,
   } = usePlayerStore();
   const timelineRef = useRef<TimelineState>(null);
   const timelineContainerRef = useRef<HTMLDivElement>(null);
@@ -381,52 +378,8 @@ export function Timeline() {
     }
   }, [currentTime, isPlaying, selectedRallyId, rallies, pause]);
 
-  // Highlight playback - auto-advance through rallies
-  useEffect(() => {
-    if (!isPlaying || !playingHighlightId) return;
-
-    const highlight = highlights.find(h => h.id === playingHighlightId);
-    if (!highlight || highlight.rallyIds.length === 0) {
-      stopHighlightPlayback();
-      return;
-    }
-
-    // Get sorted rallies for this highlight
-    const highlightRallies = rallies
-      .filter(s => highlight.rallyIds.includes(s.id))
-      .sort((a, b) => a.start_time - b.start_time);
-
-    if (highlightRallyIndex >= highlightRallies.length) {
-      // End of highlight - stop playback
-      stopHighlightPlayback();
-      return;
-    }
-
-    const currentRally = highlightRallies[highlightRallyIndex];
-    if (!currentRally) {
-      stopHighlightPlayback();
-      return;
-    }
-
-    // Check if we need to jump to rally start (if we're before it or in dead time)
-    if (currentTime < currentRally.start_time - 0.1) {
-      seek(currentRally.start_time);
-      return;
-    }
-
-    // Check if we reached the end of current rally
-    if (currentTime >= currentRally.end_time - 0.05) {
-      const nextIndex = highlightRallyIndex + 1;
-      if (nextIndex < highlightRallies.length) {
-        // Advance to next rally
-        advanceHighlightPlayback();
-        seek(highlightRallies[nextIndex].start_time);
-      } else {
-        // End of highlight
-        stopHighlightPlayback();
-      }
-    }
-  }, [currentTime, isPlaying, playingHighlightId, highlightRallyIndex, highlights, rallies, seek, advanceHighlightPlayback, stopHighlightPlayback]);
+  // Note: Highlight playback (including cross-match) is now handled by VideoPlayer
+  // using a stable playlist stored in playerStore
 
   // Calculate optimal scale based on video duration
   // Estimate visible markers: Container ~2500px wide, scaleWidth=160px = ~16 markers visible

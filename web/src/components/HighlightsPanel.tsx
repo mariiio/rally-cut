@@ -29,7 +29,6 @@ import { useExportStore } from '@/stores/exportStore';
 export function HighlightsPanel() {
   const {
     highlights,
-    rallies,
     selectedHighlightId,
     selectHighlight,
     createHighlight,
@@ -38,7 +37,28 @@ export function HighlightsPanel() {
     canCreateHighlight,
     videoFile,
     videoUrl,
+    getAllRallies,
+    getRallyMatch,
+    setActiveMatch,
+    session,
   } = useEditorStore();
+
+  // Get all rallies across all matches for cross-match highlights
+  const allRallies = getAllRallies();
+
+  // Helper to sort rallies by match order, then by start_time within each match
+  const sortRalliesByMatchOrder = (rallies: typeof allRallies) => {
+    if (!session) return rallies.sort((a, b) => a.start_time - b.start_time);
+    const matchOrder = new Map(session.matches.map((m, i) => [m.id, i]));
+    return rallies.sort((a, b) => {
+      const aMatch = getRallyMatch(a.id);
+      const bMatch = getRallyMatch(b.id);
+      const aMatchIndex = aMatch ? (matchOrder.get(aMatch.id) ?? 999) : 999;
+      const bMatchIndex = bMatch ? (matchOrder.get(bMatch.id) ?? 999) : 999;
+      if (aMatchIndex !== bMatchIndex) return aMatchIndex - bMatchIndex;
+      return a.start_time - b.start_time;
+    });
+  };
 
   // Use File if available, otherwise use URL
   const videoSource = videoFile || videoUrl;
@@ -73,14 +93,30 @@ export function HighlightsPanel() {
     const highlight = highlights?.find((h) => h.id === highlightId);
     if (!highlight || !highlight.rallyIds || highlight.rallyIds.length === 0) return;
 
-    // Get first rally sorted by time
-    const highlightRallies = (rallies ?? [])
-      .filter((s) => highlight.rallyIds.includes(s.id))
-      .sort((a, b) => a.start_time - b.start_time);
+    // Get rallies from ALL matches, sorted by match order then by time
+    const highlightRallies = sortRalliesByMatchOrder(
+      allRallies.filter((s) => highlight.rallyIds.includes(s.id))
+    );
 
     if (highlightRallies.length > 0) {
-      seek(highlightRallies[0].start_time);
-      startHighlightPlayback(highlightId);
+      // Build playlist with match IDs for the player store
+      const playlist = highlightRallies.map((rally) => {
+        const match = getRallyMatch(rally.id);
+        return {
+          id: rally.id,
+          matchId: match?.id || '',
+          start_time: rally.start_time,
+          end_time: rally.end_time,
+        };
+      });
+
+      const firstRally = playlist[0];
+      // Switch to the match containing the first rally if needed
+      if (firstRally.matchId) {
+        setActiveMatch(firstRally.matchId);
+      }
+      seek(firstRally.start_time);
+      startHighlightPlayback(highlightId, playlist);
     }
   };
 
@@ -129,10 +165,13 @@ export function HighlightsPanel() {
     const highlight = highlights?.find((h) => h.id === downloadAnchor.id);
     if (!highlight) return;
 
-    const highlightRallies = (rallies ?? [])
-      .filter((r) => highlight.rallyIds?.includes(r.id))
-      .sort((a, b) => a.start_time - b.start_time);
+    // Get rallies from ALL matches for cross-match highlight export, sorted by match order
+    const highlightRallies = sortRalliesByMatchOrder(
+      allRallies.filter((r) => highlight.rallyIds?.includes(r.id))
+    );
 
+    // Note: Cross-match export would need special handling in exportStore
+    // For now, this will only export rallies from the current video source
     downloadHighlight(videoSource, highlightRallies, highlight.id, highlight.name, withFade);
     setDownloadAnchor(null);
   };

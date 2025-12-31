@@ -1,5 +1,13 @@
 import { create } from 'zustand';
 
+// Minimal rally info needed for playback
+interface PlaylistRally {
+  id: string;
+  matchId: string;
+  start_time: number;
+  end_time: number;
+}
+
 interface PlayerState {
   isPlaying: boolean;
   currentTime: number;
@@ -9,8 +17,10 @@ interface PlayerState {
   playOnlyRallies: boolean; // Skip dead time between rallies
 
   // Highlight playback state
-  playingHighlightId: string | null; // Currently playing highlight
-  highlightRallyIndex: number; // Current rally index in highlight playback
+  playingHighlightId: string | null;
+  highlightPlaylist: PlaylistRally[]; // Stable list of rallies to play
+  highlightRallyIndex: number;
+  pendingMatchSwitch: string | null; // Match ID we're switching to
 
   // Actions
   play: () => void;
@@ -24,9 +34,11 @@ interface PlayerState {
   togglePlayOnlyRallies: () => void;
 
   // Highlight playback actions
-  startHighlightPlayback: (highlightId: string) => void;
-  advanceHighlightPlayback: () => void;
+  startHighlightPlayback: (highlightId: string, playlist: PlaylistRally[]) => void;
+  advanceHighlightPlayback: () => PlaylistRally | null; // Returns next rally or null if done
+  clearPendingMatchSwitch: () => void;
   stopHighlightPlayback: () => void;
+  getCurrentPlaylistRally: () => PlaylistRally | null;
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -39,7 +51,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
   // Highlight playback state
   playingHighlightId: null,
+  highlightPlaylist: [],
   highlightRallyIndex: 0,
+  pendingMatchSwitch: null,
 
   play: () => set({ isPlaying: true }),
   pause: () => set({ isPlaying: false }),
@@ -60,25 +74,48 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   togglePlayOnlyRallies: () => set((state) => ({ playOnlyRallies: !state.playOnlyRallies })),
 
   // Highlight playback actions
-  startHighlightPlayback: (highlightId: string) => {
+  startHighlightPlayback: (highlightId: string, playlist: PlaylistRally[]) => {
     set({
       playingHighlightId: highlightId,
+      highlightPlaylist: playlist,
       highlightRallyIndex: 0,
+      pendingMatchSwitch: null,
       isPlaying: true,
     });
   },
 
   advanceHighlightPlayback: () => {
-    set((state) => ({
-      highlightRallyIndex: state.highlightRallyIndex + 1,
-    }));
+    const state = get();
+    const nextIndex = state.highlightRallyIndex + 1;
+    const nextRally = state.highlightPlaylist[nextIndex] || null;
+
+    if (nextRally) {
+      const currentRally = state.highlightPlaylist[state.highlightRallyIndex];
+      const needsMatchSwitch = currentRally && nextRally.matchId !== currentRally.matchId;
+
+      set({
+        highlightRallyIndex: nextIndex,
+        pendingMatchSwitch: needsMatchSwitch ? nextRally.matchId : null,
+      });
+    }
+
+    return nextRally;
   },
+
+  clearPendingMatchSwitch: () => set({ pendingMatchSwitch: null }),
 
   stopHighlightPlayback: () => {
     set({
       playingHighlightId: null,
+      highlightPlaylist: [],
       highlightRallyIndex: 0,
+      pendingMatchSwitch: null,
       isPlaying: false,
     });
+  },
+
+  getCurrentPlaylistRally: () => {
+    const state = get();
+    return state.highlightPlaylist[state.highlightRallyIndex] || null;
   },
 }));

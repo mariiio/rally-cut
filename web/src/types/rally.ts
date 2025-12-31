@@ -44,6 +44,38 @@ export interface Highlight {
   createdAt: number;    // Timestamp for ordering
 }
 
+/** A single match (video) within a session */
+export interface Match {
+  id: string;           // e.g., "match_1"
+  name: string;         // Display name, e.g., "Match 1"
+  videoUrl: string;     // Runtime URL (public path or blob URL)
+  video: VideoMetadata; // Video metadata (fps, duration, dimensions)
+  rallies: Rally[];     // Rallies for this match
+}
+
+/** A session containing multiple matches */
+export interface Session {
+  id: string;           // e.g., "session_1"
+  name: string;         // Display name
+  matches: Match[];     // Collection of matches (videos)
+  highlights: Highlight[]; // Cross-match highlights
+}
+
+/** Session manifest file structure (used for loading from static files) */
+export interface SessionManifest {
+  version: '2.0';
+  session: {
+    id: string;
+    name: string;
+    matches: {
+      id: string;
+      name: string;
+      dataFile: string;
+      videoFile: string;
+    }[];
+  };
+}
+
 /** Color palette for highlights - designed for dark theme */
 export const HIGHLIGHT_COLORS = [
   '#FF6B6B', // Coral Red
