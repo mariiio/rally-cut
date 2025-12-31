@@ -215,7 +215,7 @@ function SortableRallyItem({ rally, highlightId, matchName, isActive, onClick, o
       <ListItemText
         primary={
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-            <Typography component="span" sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
+            <Typography component="span" sx={{ fontSize: '0.75rem', color: 'text.secondary', fontWeight: 600 }}>
               {matchName}
             </Typography>
             <Typography component="span" sx={{ fontSize: '0.8rem', fontWeight: 500 }}>
