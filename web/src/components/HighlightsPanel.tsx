@@ -512,9 +512,7 @@ export function HighlightsPanel() {
                     } else {
                       // Select and expand
                       selectHighlight(highlight.id);
-                      if (rallyCount > 0) {
-                        setExpandedHighlights((prev) => new Set(prev).add(highlight.id));
-                      }
+                      setExpandedHighlights((prev) => new Set(prev).add(highlight.id));
                     }
                   }}
                   sx={{
@@ -543,7 +541,7 @@ export function HighlightsPanel() {
                     {isExpanded ? (
                       <ExpandMoreIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
                     ) : (
-                      <ChevronRightIcon sx={{ fontSize: 18, color: rallyCount === 0 ? 'text.disabled' : 'text.secondary' }} />
+                      <ChevronRightIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
                     )}
                   </Box>
 
