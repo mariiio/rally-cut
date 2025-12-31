@@ -115,6 +115,8 @@ export function Timeline() {
   const [isDraggingCursor, setIsDraggingCursor] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [hotkeysAnchorEl, setHotkeysAnchorEl] = useState<HTMLButtonElement | null>(null);
+  const [scrollLeft, setScrollLeft] = useState(0);
+  const [containerWidth, setContainerWidth] = useState(0);
 
   // Track if we auto-paused at segment end (for restart behavior)
   const autoPausedAtEndRef = useRef<string | null>(null); // stores segment ID if auto-paused
@@ -472,14 +474,63 @@ export function Timeline() {
     };
   }, [rallies?.length]); // Re-attach when rallies load
 
-  // Calculate cursor pixel position (no scrollLeft since scrolling is disabled)
+  // Handle scroll events from the timeline library
+  const handleScroll = useCallback((params: { scrollLeft: number }) => {
+    setScrollLeft(params.scrollLeft);
+  }, []);
+
+  // Also listen directly to scroll events on the ReactVirtualized Grid elements
+  useEffect(() => {
+    const container = timelineContainerRef.current;
+    if (!container) return;
+
+    // The actual scrollable elements are the ReactVirtualized Grids in both edit area and time area
+    const editGrid = container.querySelector('.timeline-editor-edit-area .ReactVirtualized__Grid');
+    const timeGrid = container.querySelector('.timeline-editor-time-area .ReactVirtualized__Grid');
+
+    const handleDirectScroll = (e: Event) => {
+      const target = e.target as HTMLElement;
+      setScrollLeft(target.scrollLeft);
+    };
+
+    // Set initial scroll position
+    if (editGrid) {
+      setScrollLeft(editGrid.scrollLeft);
+    }
+
+    editGrid?.addEventListener('scroll', handleDirectScroll);
+    timeGrid?.addEventListener('scroll', handleDirectScroll);
+    return () => {
+      editGrid?.removeEventListener('scroll', handleDirectScroll);
+      timeGrid?.removeEventListener('scroll', handleDirectScroll);
+    };
+  }, [rallies?.length]); // Re-attach when rallies load
+
+  // Track container width for cursor visibility
+  useEffect(() => {
+    const container = timelineContainerRef.current;
+    if (!container) return;
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setContainerWidth(entry.contentRect.width);
+      }
+    });
+
+    setContainerWidth(container.clientWidth);
+    resizeObserver.observe(container);
+
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  // Calculate cursor pixel position (accounting for scroll offset)
   const cursorPixelPosition = useMemo(() => {
     const pixelsPerSecond = SCALE_WIDTH / scale;
     const startLeft = 10; // matches startLeft prop
-    return startLeft + (currentTime * pixelsPerSecond);
-  }, [currentTime, scale]);
+    return startLeft + (currentTime * pixelsPerSecond) - scrollLeft;
+  }, [currentTime, scale, scrollLeft]);
 
-  // Calculate selected rally position for delete button overlay (no scrollLeft since scrolling is disabled)
+  // Calculate selected rally position for delete button overlay (accounting for scroll offset)
   const selectedRallyPosition = useMemo(() => {
     if (!selectedRallyId || !rallies) return null;
     const rally = rallies.find(s => s.id === selectedRallyId);
@@ -487,12 +538,12 @@ export function Timeline() {
 
     const pixelsPerSecond = SCALE_WIDTH / scale;
     const startLeft = 10;
-    const left = startLeft + (rally.start_time * pixelsPerSecond);
+    const left = startLeft + (rally.start_time * pixelsPerSecond) - scrollLeft;
     const width = (rally.end_time - rally.start_time) * pixelsPerSecond;
     const center = left + (width / 2);
 
     return { left, width, center };
-  }, [selectedRallyId, rallies, scale]);
+  }, [selectedRallyId, rallies, scale, scrollLeft]);
 
   // Convert Rally[] to TimelineRow[] format
   const editorData: TimelineRow[] = useMemo(() => {
@@ -797,7 +848,7 @@ export function Timeline() {
           },
           '& .timeline-editor-edit-area': {
             width: '100% !important',
-            overflowX: 'hidden !important',
+            overflowX: 'auto !important',
           },
           '& .timeline-editor-time-area': {
             background: '#1a1a1a !important',
@@ -870,6 +921,7 @@ export function Timeline() {
           autoReRender={true}
           minScaleCount={1}
           maxScaleCount={Math.max(1, duration > 0 ? Math.ceil(duration / scale) + 1 : 100)}
+          onScroll={handleScroll}
           getScaleRender={getScaleRender}
           getActionRender={(action) => {
             const rally = rallies?.find((s) => s.id === action.id);
@@ -1063,7 +1115,7 @@ export function Timeline() {
         />
 
         {/* Custom cursor - line, head, and optional add button */}
-        {cursorPixelPosition > 0 && cursorPixelPosition < (timelineContainerRef.current?.clientWidth || 9999) && (
+        {cursorPixelPosition > 0 && cursorPixelPosition < (containerWidth || 9999) && (
           <Box
             sx={{
               position: 'absolute',
