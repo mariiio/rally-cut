@@ -38,6 +38,12 @@ import {
   useSensor,
   useSensors,
   DragEndEvent,
+  DragStartEvent,
+  DragOverEvent,
+  useDroppable,
+  DragOverlay,
+  pointerWithin,
+  rectIntersection,
 } from '@dnd-kit/core';
 import {
   SortableContext,
@@ -60,9 +66,68 @@ function formatTime(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
+// Helper to create composite ID for drag and drop
+function createDragId(highlightId: string, rallyId: string): string {
+  return `${highlightId}::${rallyId}`;
+}
+
+// Helper to parse composite ID
+function parseDragId(dragId: string): { highlightId: string; rallyId: string } | null {
+  const parts = dragId.split('::');
+  if (parts.length !== 2) return null;
+  return { highlightId: parts[0], rallyId: parts[1] };
+}
+
+// Droppable zone for a highlight's rally list
+interface DroppableHighlightZoneProps {
+  highlightId: string;
+  children: React.ReactNode;
+  isEmpty: boolean;
+  highlightColor: string;
+}
+
+function DroppableHighlightZone({ highlightId, children, isEmpty, highlightColor }: DroppableHighlightZoneProps) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: `droppable::${highlightId}`,
+  });
+
+  return (
+    <Box
+      ref={setNodeRef}
+      sx={{
+        px: 1,
+        py: 0.5,
+        bgcolor: isOver ? `${highlightColor}15` : designTokens.colors.surface[2],
+        minHeight: isEmpty ? 40 : 'auto',
+        borderRadius: 1,
+        border: isOver ? `1px dashed ${highlightColor}` : '1px dashed transparent',
+        transition: 'all 0.15s ease',
+      }}
+    >
+      {isEmpty ? (
+        <Typography
+          variant="caption"
+          sx={{
+            color: isOver ? highlightColor : 'text.disabled',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: 32,
+          }}
+        >
+          {isOver ? 'Drop here' : 'No rallies'}
+        </Typography>
+      ) : (
+        children
+      )}
+    </Box>
+  );
+}
+
 // Sortable rally item component
 interface SortableRallyItemProps {
   rally: Rally;
+  highlightId: string;
   index: number;
   matchName: string;
   isActive: boolean;
@@ -70,7 +135,8 @@ interface SortableRallyItemProps {
   onRemove: () => void;
 }
 
-function SortableRallyItem({ rally, index, matchName, isActive, onClick, onRemove }: SortableRallyItemProps) {
+function SortableRallyItem({ rally, highlightId, index, matchName, isActive, onClick, onRemove }: SortableRallyItemProps) {
+  const dragId = createDragId(highlightId, rally.id);
   const {
     attributes,
     listeners,
@@ -78,7 +144,7 @@ function SortableRallyItem({ rally, index, matchName, isActive, onClick, onRemov
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: rally.id });
+  } = useSortable({ id: dragId });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -157,6 +223,7 @@ export function HighlightsPanel() {
     setActiveMatch,
     activeMatchId,
     reorderHighlightRallies,
+    moveRallyBetweenHighlights,
     removeRallyFromHighlight,
   } = useEditorStore();
 
@@ -186,6 +253,7 @@ export function HighlightsPanel() {
   const [downloadAnchor, setDownloadAnchor] = useState<{ el: HTMLButtonElement; id: string } | null>(null);
   const [withFade, setWithFade] = useState(false);
   const [expandedHighlights, setExpandedHighlights] = useState<Set<string>>(new Set());
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
 
   // DnD sensors
   const sensors = useSensors(
@@ -197,34 +265,83 @@ export function HighlightsPanel() {
     })
   );
 
-  const toggleExpanded = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setExpandedHighlights((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
+  // Custom collision detection that prefers droppable zones
+  const collisionDetection = (args: Parameters<typeof closestCenter>[0]) => {
+    // First check if we're over a droppable zone
+    const pointerCollisions = pointerWithin(args);
+    if (pointerCollisions.length > 0) {
+      return pointerCollisions;
+    }
+    // Fall back to rect intersection
+    return rectIntersection(args);
   };
 
-  const handleDragEnd = (highlightId: string, event: DragEndEvent) => {
-    const { active, over } = event;
+  const handleDragStart = (event: DragStartEvent) => {
+    setActiveDragId(event.active.id as string);
+  };
 
-    if (over && active.id !== over.id) {
-      const highlight = highlights?.find((h) => h.id === highlightId);
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    setActiveDragId(null);
+
+    if (!over) return;
+
+    const activeData = parseDragId(active.id as string);
+    if (!activeData) return;
+
+    const { highlightId: sourceHighlightId, rallyId } = activeData;
+
+    // Check if dropped on a droppable zone (empty highlight or between items)
+    const overId = over.id as string;
+    if (overId.startsWith('droppable::')) {
+      const targetHighlightId = overId.replace('droppable::', '');
+      if (targetHighlightId !== sourceHighlightId) {
+        // Move to the end of the target highlight
+        const targetHighlight = highlights?.find((h) => h.id === targetHighlightId);
+        const targetIndex = targetHighlight?.rallyIds.length ?? 0;
+        moveRallyBetweenHighlights(rallyId, sourceHighlightId, targetHighlightId, targetIndex);
+        // Auto-expand the target highlight
+        setExpandedHighlights((prev) => new Set(prev).add(targetHighlightId));
+      }
+      return;
+    }
+
+    // Check if dropped on another rally item
+    const overData = parseDragId(overId);
+    if (!overData) return;
+
+    const { highlightId: targetHighlightId, rallyId: overRallyId } = overData;
+
+    if (sourceHighlightId === targetHighlightId) {
+      // Reordering within the same highlight
+      const highlight = highlights?.find((h) => h.id === sourceHighlightId);
       if (!highlight) return;
 
-      const oldIndex = highlight.rallyIds.indexOf(active.id as string);
-      const newIndex = highlight.rallyIds.indexOf(over.id as string);
+      const oldIndex = highlight.rallyIds.indexOf(rallyId);
+      const newIndex = highlight.rallyIds.indexOf(overRallyId);
 
-      if (oldIndex !== -1 && newIndex !== -1) {
-        reorderHighlightRallies(highlightId, oldIndex, newIndex);
+      if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
+        reorderHighlightRallies(sourceHighlightId, oldIndex, newIndex);
+      }
+    } else {
+      // Moving between highlights
+      const targetHighlight = highlights?.find((h) => h.id === targetHighlightId);
+      if (!targetHighlight) return;
+
+      const targetIndex = targetHighlight.rallyIds.indexOf(overRallyId);
+      if (targetIndex !== -1) {
+        moveRallyBetweenHighlights(rallyId, sourceHighlightId, targetHighlightId, targetIndex);
+        // Auto-expand the target highlight
+        setExpandedHighlights((prev) => new Set(prev).add(targetHighlightId));
       }
     }
   };
+
+  // Get active drag item info for overlay
+  const activeDragData = activeDragId ? parseDragId(activeDragId) : null;
+  const activeDragRally = activeDragData
+    ? allRallies.find((r) => r.id === activeDragData.rallyId)
+    : null;
 
   const handleRallyClick = (rally: Rally) => {
     const match = getRallyMatch(rally.id);
@@ -357,244 +474,258 @@ export function HighlightsPanel() {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Highlights list */}
-      <Box sx={{ flex: 1, overflow: 'auto', py: 0.5 }}>
-        {highlights.map((highlight) => {
-          const isSelected = selectedHighlightId === highlight.id;
-          const isPlaying = playingHighlightId === highlight.id;
-          const rallyCount = highlight.rallyIds?.length ?? 0;
-          const isExpanded = expandedHighlights.has(highlight.id);
+      {/* Highlights list with shared DndContext for cross-highlight dragging */}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={collisionDetection}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+      >
+        <Box sx={{ flex: 1, overflow: 'auto', py: 0.5 }}>
+          {highlights.map((highlight) => {
+            const isSelected = selectedHighlightId === highlight.id;
+            const isPlaying = playingHighlightId === highlight.id;
+            const rallyCount = highlight.rallyIds?.length ?? 0;
+            const isExpanded = expandedHighlights.has(highlight.id);
 
-          // Get rallies in custom order (rallyIds order)
-          const orderedRallies = highlight.rallyIds
-            .map((id) => allRallies.find((r) => r.id === id))
-            .filter((r): r is Rally => r !== undefined);
+            // Get rallies in custom order (rallyIds order)
+            const orderedRallies = highlight.rallyIds
+              .map((id) => allRallies.find((r) => r.id === id))
+              .filter((r): r is Rally => r !== undefined);
 
-          // Get current playing rally for this highlight
-          const currentPlaylistRally = getCurrentPlaylistRally();
+            // Get current playing rally for this highlight
+            const currentPlaylistRally = getCurrentPlaylistRally();
 
-          return (
-            <Box key={highlight.id}>
-              {/* Highlight row */}
-              <Box
-                onClick={() =>
-                  selectHighlight(isSelected ? null : highlight.id)
-                }
-                sx={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  px: 1.5,
-                  py: 1,
-                  cursor: 'pointer',
-                  borderLeft: '3px solid',
-                  borderColor: isSelected ? highlight.color : 'transparent',
-                  bgcolor: isSelected
-                    ? 'action.selected'
-                    : isPlaying
-                    ? 'rgba(0, 212, 170, 0.08)'
-                    : 'transparent',
-                  transition: designTokens.transitions.fast,
-                  '&:hover': {
+            return (
+              <Box key={highlight.id}>
+                {/* Highlight row */}
+                <Box
+                  onClick={() => {
+                    if (isSelected) {
+                      // Deselect and collapse
+                      selectHighlight(null);
+                      setExpandedHighlights((prev) => {
+                        const next = new Set(prev);
+                        next.delete(highlight.id);
+                        return next;
+                      });
+                    } else {
+                      // Select and expand
+                      selectHighlight(highlight.id);
+                      if (rallyCount > 0) {
+                        setExpandedHighlights((prev) => new Set(prev).add(highlight.id));
+                      }
+                    }
+                  }}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    px: 1.5,
+                    py: 1,
+                    cursor: 'pointer',
+                    borderLeft: '3px solid',
+                    borderColor: isSelected ? highlight.color : 'transparent',
                     bgcolor: isSelected
                       ? 'action.selected'
-                      : 'action.hover',
-                  },
-                }}
-              >
-                {/* Expand/collapse icon */}
-                <IconButton
-                  size="small"
-                  onClick={(e) => toggleExpanded(highlight.id, e)}
-                  disabled={rallyCount === 0}
-                  sx={{ p: 0.25, mr: 0.5 }}
-                >
-                  {isExpanded ? (
-                    <ExpandMoreIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
-                  ) : (
-                    <ChevronRightIcon sx={{ fontSize: 18, color: rallyCount === 0 ? 'text.disabled' : 'text.secondary' }} />
-                  )}
-                </IconButton>
-
-                {/* Color dot */}
-                <Box
-                  sx={{
-                    width: 14,
-                    height: 14,
-                    borderRadius: '50%',
-                    bgcolor: highlight.color,
-                    mr: 1.5,
-                    flexShrink: 0,
-                    boxShadow: isPlaying
-                      ? `0 0 12px ${highlight.color}`
-                      : 'none',
-                    transition: 'box-shadow 0.3s ease',
+                      : isPlaying
+                      ? 'rgba(0, 212, 170, 0.08)'
+                      : 'transparent',
+                    transition: designTokens.transitions.fast,
+                    '&:hover': {
+                      bgcolor: isSelected
+                        ? 'action.selected'
+                        : 'action.hover',
+                    },
                   }}
-                />
+                >
+                  {/* Expand/collapse icon - visual indicator only, clicking row handles selection+expansion */}
+                  <Box sx={{ p: 0.25, mr: 0.5, display: 'flex', alignItems: 'center' }}>
+                    {isExpanded ? (
+                      <ExpandMoreIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
+                    ) : (
+                      <ChevronRightIcon sx={{ fontSize: 18, color: rallyCount === 0 ? 'text.disabled' : 'text.secondary' }} />
+                    )}
+                  </Box>
 
-                {/* Name (editable) */}
-                {editingId === highlight.id ? (
-                  <TextField
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    onBlur={handleSaveEdit}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') handleSaveEdit();
-                      if (e.key === 'Escape') setEditingId(null);
-                      e.stopPropagation();
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    size="small"
-                    autoFocus
+                  {/* Color dot */}
+                  <Box
                     sx={{
-                      flex: 1,
-                      '& .MuiInputBase-input': {
-                        fontSize: '0.875rem',
-                        py: 0.25,
-                      },
+                      width: 14,
+                      height: 14,
+                      borderRadius: '50%',
+                      bgcolor: highlight.color,
+                      mr: 1.5,
+                      flexShrink: 0,
+                      boxShadow: isPlaying
+                        ? `0 0 12px ${highlight.color}`
+                        : 'none',
+                      transition: 'box-shadow 0.3s ease',
                     }}
                   />
-                ) : (
-                  <Typography
-                    onDoubleClick={(e) => handleStartEdit(highlight, e)}
-                    sx={{
-                      flex: 1,
-                      fontSize: '0.875rem',
-                      fontWeight: isSelected ? 600 : 400,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {highlight.name}
-                  </Typography>
-                )}
 
-                {/* Edit button */}
-                {editingId !== highlight.id && (
-                  <Tooltip title="Rename">
+                  {/* Name (editable) */}
+                  {editingId === highlight.id ? (
+                    <TextField
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      onBlur={handleSaveEdit}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleSaveEdit();
+                        if (e.key === 'Escape') setEditingId(null);
+                        e.stopPropagation();
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      size="small"
+                      autoFocus
+                      sx={{
+                        flex: 1,
+                        '& .MuiInputBase-input': {
+                          fontSize: '0.875rem',
+                          py: 0.25,
+                        },
+                      }}
+                    />
+                  ) : (
+                    <Typography
+                      onDoubleClick={(e) => handleStartEdit(highlight, e)}
+                      sx={{
+                        flex: 1,
+                        fontSize: '0.875rem',
+                        fontWeight: isSelected ? 600 : 400,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {highlight.name}
+                    </Typography>
+                  )}
+
+                  {/* Edit button */}
+                  {editingId !== highlight.id && (
+                    <Tooltip title="Rename">
+                      <IconButton
+                        size="small"
+                        onClick={(e) => handleStartEdit(highlight, e)}
+                        sx={{ opacity: isSelected ? 1 : 0.5, '&:hover': { opacity: 1 } }}
+                      >
+                        <EditIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    </Tooltip>
+                  )}
+
+                  {/* Rally count */}
+                  <Chip
+                    label={rallyCount}
+                    size="small"
+                    sx={{
+                      height: 20,
+                      fontSize: '0.6875rem',
+                      fontWeight: 600,
+                      mx: 0.5,
+                      bgcolor: `${highlight.color}20`,
+                      color: highlight.color,
+                    }}
+                  />
+
+                  {/* Download button */}
+                  {videoSource && (
+                    <Tooltip title={rallyCount === 0 ? 'No rallies' : 'Download highlight'}>
+                      <span>
+                        <IconButton
+                          size="small"
+                          onClick={(e) => handleDownloadClick(highlight.id, e)}
+                          disabled={rallyCount === 0 || isExporting}
+                          sx={{
+                            opacity: isSelected || exportingHighlightId === highlight.id ? 1 : 0.5,
+                            '&:hover': { opacity: 1 },
+                          }}
+                        >
+                          {exportingHighlightId === highlight.id ? (
+                            <CircularProgress size={16} />
+                          ) : (
+                            <FileDownloadIcon sx={{ fontSize: 18 }} />
+                          )}
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  )}
+
+                  {/* Play/Stop button */}
+                  {isPlaying ? (
                     <IconButton
                       size="small"
-                      onClick={(e) => handleStartEdit(highlight, e)}
-                      sx={{ opacity: isSelected ? 1 : 0.5, '&:hover': { opacity: 1 } }}
+                      onClick={handleStop}
+                      sx={{ color: highlight.color }}
                     >
-                      <EditIcon sx={{ fontSize: 16 }} />
+                      <StopIcon sx={{ fontSize: 18 }} />
                     </IconButton>
-                  </Tooltip>
-                )}
-
-                {/* Rally count */}
-                <Chip
-                  label={rallyCount}
-                  size="small"
-                  sx={{
-                    height: 20,
-                    fontSize: '0.6875rem',
-                    fontWeight: 600,
-                    mx: 0.5,
-                    bgcolor: `${highlight.color}20`,
-                    color: highlight.color,
-                  }}
-                />
-
-                {/* Download button */}
-                {videoSource && (
-                  <Tooltip title={rallyCount === 0 ? 'No rallies' : 'Download highlight'}>
-                    <span>
-                      <IconButton
-                        size="small"
-                        onClick={(e) => handleDownloadClick(highlight.id, e)}
-                        disabled={rallyCount === 0 || isExporting}
-                        sx={{
-                          opacity: isSelected || exportingHighlightId === highlight.id ? 1 : 0.5,
-                          '&:hover': { opacity: 1 },
-                        }}
-                      >
-                        {exportingHighlightId === highlight.id ? (
-                          <CircularProgress size={16} />
-                        ) : (
-                          <FileDownloadIcon sx={{ fontSize: 18 }} />
-                        )}
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                )}
-
-                {/* Play/Stop button */}
-                {isPlaying ? (
-                  <IconButton
-                    size="small"
-                    onClick={handleStop}
-                    sx={{ color: highlight.color }}
-                  >
-                    <StopIcon sx={{ fontSize: 18 }} />
-                  </IconButton>
-                ) : (
-                  <Tooltip title={rallyCount === 0 ? 'No rallies' : 'Play highlight'}>
-                    <span>
-                      <IconButton
-                        size="small"
-                        onClick={(e) => handlePlay(highlight.id, e)}
-                        disabled={rallyCount === 0}
-                        color="secondary"
-                      >
-                        <PlayArrowIcon sx={{ fontSize: 18 }} />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                )}
-
-                {/* Delete button with confirmation */}
-                {deleteConfirmId === highlight.id ? (
-                  <Stack direction="row" spacing={0.25}>
-                    <Tooltip title="Confirm delete">
-                      <IconButton
-                        size="small"
-                        onClick={(e) => handleConfirmDelete(highlight.id, e)}
-                        sx={{
-                          color: 'white',
-                          bgcolor: 'error.main',
-                          width: 24,
-                          height: 24,
-                          '&:hover': { bgcolor: 'error.light' },
-                        }}
-                      >
-                        <CheckIcon sx={{ fontSize: 14 }} />
-                      </IconButton>
+                  ) : (
+                    <Tooltip title={rallyCount === 0 ? 'No rallies' : 'Play highlight'}>
+                      <span>
+                        <IconButton
+                          size="small"
+                          onClick={(e) => handlePlay(highlight.id, e)}
+                          disabled={rallyCount === 0}
+                          color="secondary"
+                        >
+                          <PlayArrowIcon sx={{ fontSize: 18 }} />
+                        </IconButton>
+                      </span>
                     </Tooltip>
-                    <Tooltip title="Cancel">
-                      <IconButton
-                        size="small"
-                        onClick={handleCancelDelete}
-                        sx={{ width: 24, height: 24 }}
-                      >
-                        <CloseIcon sx={{ fontSize: 14 }} />
-                      </IconButton>
-                    </Tooltip>
-                  </Stack>
-                ) : (
-                  <IconButton
-                    size="small"
-                    onClick={(e) => handleDeleteClick(highlight.id, e)}
-                    sx={{
-                      opacity: isSelected ? 1 : 0.5,
-                      '&:hover': { opacity: 1, color: 'error.main' },
-                    }}
-                  >
-                    <DeleteIcon sx={{ fontSize: 18 }} />
-                  </IconButton>
-                )}
-              </Box>
+                  )}
 
-              {/* Collapsible rally list */}
-              <Collapse in={isExpanded && rallyCount > 0}>
-                <Box sx={{ px: 1, py: 0.5, bgcolor: designTokens.colors.surface[2] }}>
-                  <DndContext
-                    sensors={sensors}
-                    collisionDetection={closestCenter}
-                    onDragEnd={(event) => handleDragEnd(highlight.id, event)}
+                  {/* Delete button with confirmation */}
+                  {deleteConfirmId === highlight.id ? (
+                    <Stack direction="row" spacing={0.25}>
+                      <Tooltip title="Confirm delete">
+                        <IconButton
+                          size="small"
+                          onClick={(e) => handleConfirmDelete(highlight.id, e)}
+                          sx={{
+                            color: 'white',
+                            bgcolor: 'error.main',
+                            width: 24,
+                            height: 24,
+                            '&:hover': { bgcolor: 'error.light' },
+                          }}
+                        >
+                          <CheckIcon sx={{ fontSize: 14 }} />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Cancel">
+                        <IconButton
+                          size="small"
+                          onClick={handleCancelDelete}
+                          sx={{ width: 24, height: 24 }}
+                        >
+                          <CloseIcon sx={{ fontSize: 14 }} />
+                        </IconButton>
+                      </Tooltip>
+                    </Stack>
+                  ) : (
+                    <IconButton
+                      size="small"
+                      onClick={(e) => handleDeleteClick(highlight.id, e)}
+                      sx={{
+                        opacity: isSelected ? 1 : 0.5,
+                        '&:hover': { opacity: 1, color: 'error.main' },
+                      }}
+                    >
+                      <DeleteIcon sx={{ fontSize: 18 }} />
+                    </IconButton>
+                  )}
+                </Box>
+
+                {/* Collapsible rally list with droppable zone */}
+                <Collapse in={isExpanded}>
+                  <DroppableHighlightZone
+                    highlightId={highlight.id}
+                    isEmpty={rallyCount === 0}
+                    highlightColor={highlight.color}
                   >
                     <SortableContext
-                      items={orderedRallies.map((r) => r.id)}
+                      items={orderedRallies.map((r) => createDragId(highlight.id, r.id))}
                       strategy={verticalListSortingStrategy}
                     >
                       <List dense disablePadding>
@@ -602,6 +733,7 @@ export function HighlightsPanel() {
                           <SortableRallyItem
                             key={rally.id}
                             rally={rally}
+                            highlightId={highlight.id}
                             index={index}
                             matchName={getRallyMatch(rally.id)?.name ?? 'Unknown'}
                             isActive={isPlaying && currentPlaylistRally?.id === rally.id}
@@ -611,13 +743,37 @@ export function HighlightsPanel() {
                         ))}
                       </List>
                     </SortableContext>
-                  </DndContext>
-                </Box>
-              </Collapse>
+                  </DroppableHighlightZone>
+                </Collapse>
+              </Box>
+            );
+          })}
+        </Box>
+
+        {/* Drag overlay for visual feedback */}
+        <DragOverlay>
+          {activeDragRally && activeDragData ? (
+            <Box
+              sx={{
+                py: 0.5,
+                px: 1,
+                minHeight: 32,
+                bgcolor: 'background.paper',
+                borderRadius: 1,
+                boxShadow: 3,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+              }}
+            >
+              <DragIndicatorIcon sx={{ fontSize: 16, color: 'text.disabled' }} />
+              <Typography sx={{ fontSize: '0.75rem', fontFamily: 'monospace' }}>
+                {formatTime(activeDragRally.start_time)}→{formatTime(activeDragRally.end_time)}
+              </Typography>
             </Box>
-          );
-        })}
-      </Box>
+          ) : null}
+        </DragOverlay>
+      </DndContext>
 
       {/* Download Popover */}
       <Popover

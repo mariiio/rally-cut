@@ -122,6 +122,7 @@ interface EditorState {
   addRallyToHighlight: (rallyId: string, highlightId: string) => void;
   removeRallyFromHighlight: (rallyId: string, highlightId: string) => void;
   reorderHighlightRallies: (highlightId: string, fromIndex: number, toIndex: number) => void;
+  moveRallyBetweenHighlights: (rallyId: string, fromHighlightId: string, toHighlightId: string, toIndex: number) => void;
   selectHighlight: (id: string | null) => void;
 
   // Computed helpers (called as functions since Zustand doesn't have computed)
@@ -902,6 +903,38 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       highlights: state.highlights.map((h) =>
         h.id === highlightId ? { ...h, rallyIds } : h
       ),
+      hasUnsavedChanges: true,
+    });
+
+    debouncedSave(() => get().saveToStorage());
+  },
+
+  moveRallyBetweenHighlights: (rallyId: string, fromHighlightId: string, toHighlightId: string, toIndex: number) => {
+    const state = get();
+    const fromHighlight = state.highlights.find((h) => h.id === fromHighlightId);
+    const toHighlight = state.highlights.find((h) => h.id === toHighlightId);
+    if (!fromHighlight || !toHighlight) return;
+    if (!fromHighlight.rallyIds.includes(rallyId)) return;
+
+    state.pushHistory();
+
+    set({
+      highlights: state.highlights.map((h) => {
+        if (h.id === fromHighlightId) {
+          // Remove from source highlight
+          return { ...h, rallyIds: h.rallyIds.filter((id) => id !== rallyId) };
+        }
+        if (h.id === toHighlightId) {
+          // Add to target highlight at specified index
+          const newRallyIds = [...h.rallyIds];
+          // Don't add if already exists (shouldn't happen but safety check)
+          if (!newRallyIds.includes(rallyId)) {
+            newRallyIds.splice(toIndex, 0, rallyId);
+          }
+          return { ...h, rallyIds: newRallyIds };
+        }
+        return h;
+      }),
       hasUnsavedChanges: true,
     });
 
