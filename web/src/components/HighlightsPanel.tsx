@@ -27,6 +27,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
+import EditIcon from '@mui/icons-material/Edit';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
@@ -497,6 +498,19 @@ export function HighlightsPanel() {
                       >
                         {highlight.name}
                       </Typography>
+                    )}
+
+                    {/* Edit button */}
+                    {editingId !== highlight.id && (
+                      <Tooltip title="Rename">
+                        <IconButton
+                          size="small"
+                          onClick={(e) => handleStartEdit(highlight, e)}
+                          sx={{ color: 'text.secondary' }}
+                        >
+                          <EditIcon sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </Tooltip>
                     )}
 
                     {/* Rally count */}
