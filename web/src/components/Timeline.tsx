@@ -159,12 +159,19 @@ export function Timeline() {
     }
   }, [rallies, currentTime, seek, selectRally]);
 
-  // Check if rally is in selected highlight
-  const isRallyInSelectedHighlight = useMemo(() => {
-    if (!selectedRallyId || !selectedHighlightId) return false;
-    const highlight = highlights.find(h => h.id === selectedHighlightId);
-    return highlight?.rallyIds.includes(selectedRallyId) ?? false;
-  }, [selectedRallyId, selectedHighlightId, highlights]);
+  // Get the target highlight for toggle action (selected or last one)
+  const targetHighlight = useMemo(() => {
+    if (selectedHighlightId) {
+      return highlights.find(h => h.id === selectedHighlightId) ?? null;
+    }
+    return highlights.length > 0 ? highlights[highlights.length - 1] : null;
+  }, [selectedHighlightId, highlights]);
+
+  // Check if rally is in the target highlight
+  const isRallyInTargetHighlight = useMemo(() => {
+    if (!selectedRallyId || !targetHighlight) return false;
+    return targetHighlight.rallyIds.includes(selectedRallyId);
+  }, [selectedRallyId, targetHighlight]);
 
   // Toggle rally in highlight (add if not present, remove if present)
   const handleToggleHighlight = useCallback(() => {
@@ -1272,59 +1279,49 @@ export function Timeline() {
             ) : (
               // Toggle highlight and Delete buttons
               <Stack direction="row" spacing={0.5}>
-                {(() => {
-                  // Determine target highlight for add action
-                  const targetHighlight = selectedHighlightId
-                    ? highlights.find(h => h.id === selectedHighlightId)
-                    : highlights.length > 0
-                      ? highlights[highlights.length - 1]
-                      : null;
-                  return (
-                    <Tooltip title={
-                      isRallyInSelectedHighlight
-                        ? `Remove from ${highlights.find(h => h.id === selectedHighlightId)?.name}`
+                <Tooltip title={
+                  isRallyInTargetHighlight
+                    ? `Remove from ${targetHighlight?.name}`
+                    : targetHighlight
+                      ? `Add to ${targetHighlight.name}`
+                      : 'Add to new highlight'
+                }>
+                  <IconButton
+                    size="small"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleToggleHighlight();
+                    }}
+                    sx={{
+                      width: 28,
+                      height: 28,
+                      bgcolor: isRallyInTargetHighlight
+                        ? targetHighlight?.color || '#FFE66D'
+                        : 'rgba(20,20,20,0.9)',
+                      color: isRallyInTargetHighlight
+                        ? 'rgba(0,0,0,0.8)'
                         : targetHighlight
-                          ? `Add to ${targetHighlight.name}`
-                          : 'Add to new highlight'
-                    }>
-                      <IconButton
-                        size="small"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleToggleHighlight();
-                        }}
-                        sx={{
-                          width: 28,
-                          height: 28,
-                          bgcolor: isRallyInSelectedHighlight
-                            ? highlights.find(h => h.id === selectedHighlightId)?.color || '#FFE66D'
-                            : 'rgba(20,20,20,0.9)',
-                          color: isRallyInSelectedHighlight
-                            ? 'rgba(0,0,0,0.8)'
-                            : targetHighlight
-                              ? targetHighlight.color
-                              : 'rgba(255,255,255,0.8)',
-                          border: '1px solid rgba(255,255,255,0.15)',
-                          boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
-                          '&:hover': {
-                            bgcolor: isRallyInSelectedHighlight
-                              ? 'rgba(20,20,20,0.9)'
-                              : targetHighlight
-                                ? targetHighlight.color
-                                : '#FFE66D',
-                            color: isRallyInSelectedHighlight
-                              ? highlights.find(h => h.id === selectedHighlightId)?.color || 'rgba(255,255,255,0.8)'
-                              : 'rgba(0,0,0,0.8)',
-                            border: '1px solid transparent',
-                          },
-                          transition: 'all 0.15s ease',
-                        }}
-                      >
-                        <StarIcon sx={{ fontSize: 16 }} />
-                      </IconButton>
-                    </Tooltip>
-                  );
-                })()}
+                          ? targetHighlight.color
+                          : 'rgba(255,255,255,0.8)',
+                      border: '1px solid rgba(255,255,255,0.15)',
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+                      '&:hover': {
+                        bgcolor: isRallyInTargetHighlight
+                          ? 'rgba(20,20,20,0.9)'
+                          : targetHighlight
+                            ? targetHighlight.color
+                            : '#FFE66D',
+                        color: isRallyInTargetHighlight
+                          ? targetHighlight?.color || 'rgba(255,255,255,0.8)'
+                          : 'rgba(0,0,0,0.8)',
+                        border: '1px solid transparent',
+                      },
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <StarIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
                 <IconButton
                   size="small"
                   onClick={(e) => {
