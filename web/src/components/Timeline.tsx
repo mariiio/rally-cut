@@ -955,19 +955,23 @@ export function Timeline() {
                     fontWeight: 500,
                     color: 'white',
                     userSelect: 'none',
+                    position: 'relative',
+                    zIndex: 1,
                   }}
                 >
                   <Typography
                     variant="caption"
                     sx={{
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      fontWeight: 500,
-                      px: 1,
+                      fontWeight: 600,
+                      fontSize: 12,
+                      textShadow: '0 1px 2px rgba(0,0,0,0.5)',
                     }}
                   >
-                    {rally?.id}
+                    {(() => {
+                      const sortedRallies = [...(rallies ?? [])].sort((a, b) => a.start_time - b.start_time);
+                      const index = sortedRallies.findIndex(r => r.id === action.id);
+                      return index >= 0 ? index + 1 : '';
+                    })()}
                   </Typography>
                 </Box>
 
@@ -1043,47 +1047,33 @@ export function Timeline() {
                   </Stack>
                 )}
 
-                {/* Highlight color dots */}
+                {/* Highlight color bar on left edge */}
                 {(() => {
                   const rallyHighlights = getHighlightsForRally(action.id);
                   if (rallyHighlights.length === 0) return null;
+
+                  const colors = rallyHighlights.map(h => h.color);
+                  // Create vertical gradient with equal stops for each color
+                  const gradientStops = colors.map((color, i) => {
+                    const start = (i / colors.length) * 100;
+                    const end = ((i + 1) / colors.length) * 100;
+                    return `${color} ${start}%, ${color} ${end}%`;
+                  }).join(', ');
+
                   return (
-                    <Stack
-                      direction="row"
-                      spacing={0.25}
+                    <Box
                       sx={{
                         position: 'absolute',
-                        bottom: 4,
-                        left: 4,
-                        pointerEvents: 'none',
+                        top: 0,
+                        left: 0,
+                        bottom: 0,
+                        width: 4,
+                        background: colors.length === 1
+                          ? colors[0]
+                          : `linear-gradient(180deg, ${gradientStops})`,
+                        borderRadius: '4px 0 0 4px',
                       }}
-                    >
-                      {rallyHighlights.slice(0, 4).map((h) => (
-                        <Box
-                          key={h.id}
-                          sx={{
-                            width: 8,
-                            height: 8,
-                            borderRadius: '50%',
-                            bgcolor: h.color,
-                            border: '1px solid rgba(0,0,0,0.3)',
-                            boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
-                          }}
-                        />
-                      ))}
-                      {rallyHighlights.length > 4 && (
-                        <Typography
-                          sx={{
-                            fontSize: 9,
-                            fontWeight: 600,
-                            color: 'white',
-                            textShadow: '0 1px 2px rgba(0,0,0,0.5)',
-                          }}
-                        >
-                          +{rallyHighlights.length - 4}
-                        </Typography>
-                      )}
-                    </Stack>
+                    />
                   );
                 })()}
 
