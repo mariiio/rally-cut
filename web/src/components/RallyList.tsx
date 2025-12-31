@@ -1,17 +1,55 @@
 'use client';
 
-import { Box, Typography, Chip, Stack } from '@mui/material';
+import { useState } from 'react';
+import {
+  Box,
+  Typography,
+  Chip,
+  Stack,
+  IconButton,
+  Popover,
+  Switch,
+  FormControlLabel,
+  Button,
+  Tooltip,
+  CircularProgress,
+} from '@mui/material';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
+import { useExportStore } from '@/stores/exportStore';
 import { formatTime, formatDuration } from '@/utils/timeFormat';
 
 export function RallyList() {
-  const { rallies, selectedRallyId, selectRally, getHighlightsForRally } = useEditorStore();
+  const { rallies, selectedRallyId, selectRally, getHighlightsForRally, videoFile, videoUrl } = useEditorStore();
   const { currentTime, seek } = usePlayerStore();
+  const { isExporting, exportingRallyId, exportingAll, downloadRally, downloadAllRallies } = useExportStore();
+
+  // Use File if available, otherwise use URL
+  const videoSource = videoFile || videoUrl;
+
+  // Popover state for Download All
+  const [downloadAllAnchor, setDownloadAllAnchor] = useState<HTMLButtonElement | null>(null);
+  const [withFade, setWithFade] = useState(false);
 
   const handleClick = (id: string, startTime: number) => {
     selectRally(id);
     seek(startTime);
+  };
+
+  const handleDownloadRally = (e: React.MouseEvent, rallyId: string) => {
+    e.stopPropagation();
+    if (!videoSource) return;
+    const rally = rallies?.find((r) => r.id === rallyId);
+    if (rally) {
+      downloadRally(videoSource, rally);
+    }
+  };
+
+  const handleDownloadAll = () => {
+    if (!videoSource || !sortedRallies.length) return;
+    downloadAllRallies(videoSource, sortedRallies, withFade);
+    setDownloadAllAnchor(null);
   };
 
   // Sort rallies by start time for display
@@ -66,18 +104,74 @@ export function RallyList() {
           )}
         </Box>
         {sortedRallies.length > 0 && (
-          <Chip
-            label={sortedRallies.length}
-            size="small"
-            sx={{
-              height: 20,
-              fontSize: 11,
-              fontWeight: 600,
-              bgcolor: 'action.selected',
-            }}
-          />
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            <Chip
+              label={sortedRallies.length}
+              size="small"
+              sx={{
+                height: 20,
+                fontSize: 11,
+                fontWeight: 600,
+                bgcolor: 'action.selected',
+              }}
+            />
+            <Tooltip title={!videoSource ? 'Load a video first' : 'Download all rallies'}>
+              <span>
+                <IconButton
+                  size="small"
+                  disabled={!videoSource || isExporting}
+                  onClick={(e) => setDownloadAllAnchor(e.currentTarget)}
+                  sx={{
+                    p: 0.5,
+                    color: exportingAll ? 'primary.main' : 'text.secondary',
+                  }}
+                >
+                  {exportingAll ? (
+                    <CircularProgress size={14} />
+                  ) : (
+                    <FileDownloadIcon sx={{ fontSize: 16 }} />
+                  )}
+                </IconButton>
+              </span>
+            </Tooltip>
+          </Stack>
         )}
       </Box>
+
+      {/* Download All Popover */}
+      <Popover
+        open={Boolean(downloadAllAnchor)}
+        anchorEl={downloadAllAnchor}
+        onClose={() => setDownloadAllAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <Box sx={{ p: 2, minWidth: 180 }}>
+          <FormControlLabel
+            control={
+              <Switch
+                size="small"
+                checked={withFade}
+                onChange={(e) => setWithFade(e.target.checked)}
+              />
+            }
+            label={
+              <Typography variant="body2">Add fade (0.5s)</Typography>
+            }
+          />
+          <Button
+            fullWidth
+            variant="contained"
+            size="small"
+            startIcon={<FileDownloadIcon />}
+            onClick={handleDownloadAll}
+            disabled={isExporting}
+            sx={{ mt: 1.5 }}
+          >
+            Download
+          </Button>
+        </Box>
+      </Popover>
 
       {/* Rally list */}
       <Box sx={{ flex: 1, overflow: 'auto' }}>
@@ -214,6 +308,31 @@ export function RallyList() {
                       </Stack>
                     );
                   })()}
+
+                  {/* Download button */}
+                  {videoSource && (
+                    <Tooltip title="Download rally">
+                      <IconButton
+                        size="small"
+                        onClick={(e) => handleDownloadRally(e, rally.id)}
+                        disabled={isExporting}
+                        sx={{
+                          ml: 0.5,
+                          p: 0.25,
+                          opacity: isSelected || exportingRallyId === rally.id ? 1 : 0,
+                          transition: 'opacity 0.15s',
+                          '.MuiBox-root:hover &': { opacity: 1 },
+                          color: exportingRallyId === rally.id ? 'primary.main' : 'text.secondary',
+                        }}
+                      >
+                        {exportingRallyId === rally.id ? (
+                          <CircularProgress size={12} />
+                        ) : (
+                          <FileDownloadIcon sx={{ fontSize: 14 }} />
+                        )}
+                      </IconButton>
+                    </Tooltip>
+                  )}
                 </Box>
               );
             })}

@@ -5,10 +5,15 @@ import {
   Box,
   Typography,
   IconButton,
-  Stack,
   Chip,
   TextField,
   Tooltip,
+  Popover,
+  Switch,
+  FormControlLabel,
+  Button,
+  CircularProgress,
+  Stack,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -16,8 +21,10 @@ import StopIcon from '@mui/icons-material/Stop';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
+import { useExportStore } from '@/stores/exportStore';
 
 export function HighlightsPanel() {
   const {
@@ -29,7 +36,12 @@ export function HighlightsPanel() {
     deleteHighlight,
     renameHighlight,
     canCreateHighlight,
+    videoFile,
+    videoUrl,
   } = useEditorStore();
+
+  // Use File if available, otherwise use URL
+  const videoSource = videoFile || videoUrl;
 
   const {
     playingHighlightId,
@@ -38,9 +50,17 @@ export function HighlightsPanel() {
     seek,
   } = usePlayerStore();
 
+  const {
+    isExporting,
+    exportingHighlightId,
+    downloadHighlight,
+  } = useExportStore();
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [downloadAnchor, setDownloadAnchor] = useState<{ el: HTMLButtonElement; id: string } | null>(null);
+  const [withFade, setWithFade] = useState(false);
 
   const handleCreate = () => {
     const newId = createHighlight();
@@ -96,6 +116,25 @@ export function HighlightsPanel() {
   const handleCancelDelete = (e: React.MouseEvent) => {
     e.stopPropagation();
     setDeleteConfirmId(null);
+  };
+
+  const handleDownloadClick = (highlightId: string, e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    setDownloadAnchor({ el: e.currentTarget, id: highlightId });
+  };
+
+  const handleDownload = () => {
+    if (!videoSource || !downloadAnchor) return;
+
+    const highlight = highlights?.find((h) => h.id === downloadAnchor.id);
+    if (!highlight) return;
+
+    const highlightRallies = (rallies ?? [])
+      .filter((r) => highlight.rallyIds?.includes(r.id))
+      .sort((a, b) => a.start_time - b.start_time);
+
+    downloadHighlight(videoSource, highlightRallies, highlight.id, highlight.name, withFade);
+    setDownloadAnchor(null);
   };
 
   return (
@@ -261,6 +300,26 @@ export function HighlightsPanel() {
                     }}
                   />
 
+                  {/* Download button */}
+                  {videoSource && (
+                    <Tooltip title={rallyCount === 0 ? 'No rallies' : 'Download highlight'}>
+                      <span>
+                        <IconButton
+                          size="small"
+                          onClick={(e) => handleDownloadClick(highlight.id, e)}
+                          disabled={rallyCount === 0 || isExporting}
+                          sx={{ color: exportingHighlightId === highlight.id ? 'primary.main' : 'text.secondary' }}
+                        >
+                          {exportingHighlightId === highlight.id ? (
+                            <CircularProgress size={14} />
+                          ) : (
+                            <FileDownloadIcon sx={{ fontSize: 16 }} />
+                          )}
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  )}
+
                   {/* Play/Stop button */}
                   {isPlaying ? (
                     <IconButton
@@ -333,6 +392,41 @@ export function HighlightsPanel() {
           </Box>
         )}
       </Box>
+
+      {/* Download Popover */}
+      <Popover
+        open={Boolean(downloadAnchor)}
+        anchorEl={downloadAnchor?.el}
+        onClose={() => setDownloadAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <Box sx={{ p: 2, minWidth: 180 }}>
+          <FormControlLabel
+            control={
+              <Switch
+                size="small"
+                checked={withFade}
+                onChange={(e) => setWithFade(e.target.checked)}
+              />
+            }
+            label={
+              <Typography variant="body2">Add fade (0.5s)</Typography>
+            }
+          />
+          <Button
+            fullWidth
+            variant="contained"
+            size="small"
+            startIcon={<FileDownloadIcon />}
+            onClick={handleDownload}
+            disabled={isExporting}
+            sx={{ mt: 1.5 }}
+          >
+            Download
+          </Button>
+        </Box>
+      </Popover>
     </Box>
   );
 }

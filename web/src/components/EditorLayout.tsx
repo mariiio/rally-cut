@@ -13,6 +13,7 @@ import { Timeline } from './Timeline';
 import { RallyList } from './RallyList';
 import { HighlightsPanel } from './HighlightsPanel';
 import { FileControls } from './FileControls';
+import { ExportProgress } from './ExportProgress';
 import { useEditorStore } from '@/stores/editorStore';
 
 export function EditorLayout() {
@@ -120,6 +121,9 @@ export function EditorLayout() {
           <Timeline />
         </Paper>
       </Box>
+
+      {/* Export progress indicator */}
+      <ExportProgress />
     </Box>
   );
 }
