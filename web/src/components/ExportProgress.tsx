@@ -5,15 +5,11 @@ import {
   Box,
   LinearProgress,
   Typography,
-  IconButton,
   Snackbar,
   Alert,
-  CircularProgress,
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import CheckIcon from '@mui/icons-material/Check';
 import { useExportStore } from '@/stores/exportStore';
-import { designTokens } from '@/app/theme';
 
 export function ExportProgress() {
   const { isExporting, progress, currentStep, error, clearError, reset } = useExportStore();
@@ -23,7 +19,6 @@ export function ExportProgress() {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (isExporting) {
         e.preventDefault();
-        // Modern browsers require returnValue to be set
         e.returnValue = 'Export in progress. Are you sure you want to leave?';
         return e.returnValue;
       }
@@ -33,6 +28,14 @@ export function ExportProgress() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [isExporting]);
 
+  // Auto-reset after success
+  useEffect(() => {
+    if (!isExporting && progress === 100) {
+      const timer = setTimeout(() => reset(), 2500);
+      return () => clearTimeout(timer);
+    }
+  }, [isExporting, progress, reset]);
+
   // Show error snackbar
   if (error) {
     return (
@@ -40,8 +43,7 @@ export function ExportProgress() {
         open={true}
         autoHideDuration={6000}
         onClose={clearError}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-        sx={{ mb: 1, mr: 1 }}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >
         <Alert severity="error" onClose={clearError} sx={{ width: '100%' }}>
           {error}
@@ -55,137 +57,67 @@ export function ExportProgress() {
     return null;
   }
 
-  // Show success message briefly
-  if (!isExporting && progress === 100) {
-    return (
-      <Box
-        sx={{
-          position: 'fixed',
-          bottom: 16,
-          right: 16,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 1,
-          bgcolor: 'success.main',
-          color: 'success.contrastText',
-          borderRadius: 2,
-          px: 2,
-          py: 1,
-          boxShadow: designTokens.shadows.lg,
-          zIndex: 1300,
-          animation: 'slideIn 0.2s ease-out',
-          '@keyframes slideIn': {
-            from: { opacity: 0, transform: 'translateY(8px)' },
-            to: { opacity: 1, transform: 'translateY(0)' },
-          },
-        }}
-        onClick={reset}
-      >
-        <CheckCircleIcon sx={{ fontSize: 18 }} />
-        <Typography variant="body2" sx={{ fontWeight: 500 }}>
-          Export complete
-        </Typography>
-      </Box>
-    );
-  }
+  const isComplete = !isExporting && progress === 100;
 
-  // Compact progress indicator in bottom-right corner
   return (
     <Box
       sx={{
-        position: 'fixed',
-        bottom: 16,
-        right: 16,
-        bgcolor: designTokens.colors.surface[3],
-        borderRadius: 2,
-        boxShadow: designTokens.shadows.lg,
-        border: '1px solid',
-        borderColor: 'divider',
-        overflow: 'hidden',
-        minWidth: 240,
-        maxWidth: 280,
-        zIndex: 1300,
-        animation: 'slideIn 0.2s ease-out',
-        '@keyframes slideIn': {
-          from: { opacity: 0, transform: 'translateY(8px)' },
-          to: { opacity: 1, transform: 'translateY(0)' },
-        },
+        width: '100%',
+        opacity: isExporting || isComplete ? 1 : 0,
+        transition: 'opacity 0.2s ease',
       }}
     >
-      {/* Progress bar at top */}
+      {/* Progress bar */}
       <LinearProgress
         variant="determinate"
         value={progress}
         sx={{
           height: 3,
-          bgcolor: 'rgba(255,255,255,0.1)',
+          bgcolor: 'rgba(255, 255, 255, 0.06)',
           '& .MuiLinearProgress-bar': {
-            background: designTokens.gradients.primary,
+            bgcolor: isComplete ? 'success.main' : 'primary.main',
+            transition: 'transform 0.2s ease',
           },
         }}
       />
 
-      {/* Content */}
-      <Box sx={{ px: 1.5, py: 1, display: 'flex', alignItems: 'center', gap: 1.5 }}>
-        {/* Spinner */}
-        <CircularProgress
-          size={20}
-          thickness={4}
-          sx={{ color: 'primary.main' }}
-        />
-
-        {/* Text */}
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Typography
-              variant="caption"
-              sx={{
-                fontWeight: 600,
-                color: 'text.primary',
-                fontSize: '0.75rem',
-              }}
-            >
-              Exporting
-            </Typography>
-            <Typography
-              variant="caption"
-              sx={{
-                fontFamily: 'monospace',
-                color: 'primary.main',
-                fontWeight: 600,
-                fontSize: '0.75rem',
-              }}
-            >
-              {progress}%
-            </Typography>
-          </Box>
+      {/* Status text */}
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          px: 1,
+          py: 0.5,
+          bgcolor: 'rgba(0, 0, 0, 0.3)',
+        }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+          {isComplete && (
+            <CheckIcon sx={{ fontSize: 12, color: 'success.main' }} />
+          )}
+          <Typography
+            variant="caption"
+            sx={{
+              color: isComplete ? 'success.main' : 'text.secondary',
+              fontSize: 11,
+            }}
+          >
+            {isComplete ? 'Export complete' : currentStep}
+          </Typography>
+        </Box>
+        {!isComplete && (
           <Typography
             variant="caption"
             sx={{
               color: 'text.secondary',
-              fontSize: '0.6875rem',
-              display: 'block',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
+              fontSize: 11,
+              fontFamily: 'monospace',
             }}
           >
-            {currentStep}
+            {progress}%
           </Typography>
-        </Box>
-
-        {/* Close button */}
-        <IconButton
-          size="small"
-          onClick={reset}
-          sx={{
-            p: 0.25,
-            color: 'text.secondary',
-            '&:hover': { color: 'text.primary' },
-          }}
-        >
-          <CloseIcon sx={{ fontSize: 16 }} />
-        </IconButton>
+        )}
       </Box>
     </Box>
   );

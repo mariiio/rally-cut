@@ -4,9 +4,11 @@ import {
   isFFmpegSupported,
   exportSingleRally,
   exportConcatenated,
+  exportMultiSourceConcatenated,
   downloadBlob,
   getVideoName,
   VideoSource,
+  RallyWithSource,
 } from '@/utils/videoExport';
 
 interface ExportState {
@@ -25,8 +27,7 @@ interface ExportState {
   downloadRally: (videoSource: VideoSource, rally: Rally) => Promise<void>;
   downloadAllRallies: (videoSource: VideoSource, rallies: Rally[], withFade: boolean) => Promise<void>;
   downloadHighlight: (
-    videoSource: VideoSource,
-    rallies: Rally[],
+    ralliesWithSource: RallyWithSource[],
     highlightId: string,
     highlightName: string,
     withFade: boolean
@@ -157,8 +158,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
   },
 
   downloadHighlight: async (
-    videoSource: VideoSource,
-    rallies: Rally[],
+    ralliesWithSource: RallyWithSource[],
     highlightId: string,
     highlightName: string,
     withFade: boolean
@@ -172,7 +172,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
       return;
     }
 
-    if (rallies.length === 0) {
+    if (ralliesWithSource.length === 0) {
       set({ error: 'No rallies in this highlight' });
       return;
     }
@@ -188,11 +188,12 @@ export const useExportStore = create<ExportState>((set, get) => ({
     });
 
     try {
-      const blob = await exportConcatenated(videoSource, rallies, withFade, (progress, step) => {
+      const blob = await exportMultiSourceConcatenated(ralliesWithSource, withFade, (progress, step) => {
         set({ progress, currentStep: step });
       });
 
-      const baseName = getVideoName(videoSource);
+      // Use the first rally's video source for the filename base
+      const baseName = getVideoName(ralliesWithSource[0].videoSource);
       const safeName = highlightName.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
       const fadeLabel = withFade ? '_fade' : '';
       const filename = `${baseName}_${safeName}${fadeLabel}.mp4`;
