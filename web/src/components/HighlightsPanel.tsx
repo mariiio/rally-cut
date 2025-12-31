@@ -150,18 +150,23 @@ function ExpandedRallySection({ isEmpty, highlightColor, isOverHighlight, childr
   );
 }
 
+// Helper to extract rally number from rally ID (e.g., "match_1_rally_5" -> 5)
+function getRallyNumber(rallyId: string): number {
+  const match = rallyId.match(/_rally_(\d+)$/);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
 // Sortable rally item component
 interface SortableRallyItemProps {
   rally: Rally;
   highlightId: string;
-  index: number;
   matchName: string;
   isActive: boolean;
   onClick: () => void;
   onRemove: () => void;
 }
 
-function SortableRallyItem({ rally, highlightId, index, matchName, isActive, onClick, onRemove }: SortableRallyItemProps) {
+function SortableRallyItem({ rally, highlightId, matchName, isActive, onClick, onRemove }: SortableRallyItemProps) {
   const dragId = createDragId(highlightId, rally.id);
   const {
     attributes,
@@ -177,6 +182,9 @@ function SortableRallyItem({ rally, highlightId, index, matchName, isActive, onC
     transition,
     opacity: isDragging ? 0.5 : 1,
   };
+
+  const rallyNumber = getRallyNumber(rally.id);
+  const duration = (rally.end_time - rally.start_time).toFixed(1);
 
   return (
     <ListItem
@@ -206,13 +214,8 @@ function SortableRallyItem({ rally, highlightId, index, matchName, isActive, onC
 
       <ListItemText
         primary={
-          <Typography component="span" sx={{ fontSize: '0.75rem', fontFamily: 'monospace' }}>
-            {String(index + 1).padStart(2, '0')} {formatTime(rally.start_time)}→{formatTime(rally.end_time)}
-          </Typography>
-        }
-        secondary={
-          <Typography component="span" sx={{ fontSize: '0.625rem', color: 'text.disabled' }}>
-            {matchName} ({(rally.end_time - rally.start_time).toFixed(1)}s)
+          <Typography component="span" sx={{ fontSize: '0.8rem' }}>
+            {matchName} Rally {rallyNumber} ({duration}s)
           </Typography>
         }
         sx={{ my: 0 }}
@@ -792,12 +795,11 @@ export function HighlightsPanel() {
                       strategy={verticalListSortingStrategy}
                     >
                       <List dense disablePadding>
-                        {orderedRallies.map((rally, index) => (
+                        {orderedRallies.map((rally) => (
                           <SortableRallyItem
                             key={rally.id}
                             rally={rally}
                             highlightId={highlight.id}
-                            index={index}
                             matchName={getRallyMatch(rally.id)?.name ?? 'Unknown'}
                             isActive={isPlaying && currentPlaylistRally?.id === rally.id}
                             onClick={() => handleRallyClick(rally)}
