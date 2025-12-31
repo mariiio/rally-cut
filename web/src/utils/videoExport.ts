@@ -2,6 +2,12 @@ import { Rally } from '@/types/rally';
 
 export type VideoSource = File | string;
 
+// For multi-source exports (highlights with rallies from different matches)
+export interface RallyWithSource {
+  rally: Rally;
+  videoSource: VideoSource;
+}
+
 // Singleton FFmpeg instance
 let ffmpeg: any = null;
 let loadPromise: Promise<void> | null = null;
@@ -20,6 +26,23 @@ function reportProgress(progress: number, step: string) {
   minProgress = Math.max(minProgress, clampedProgress);
   currentProgressCallback?.(minProgress, step);
 }
+
+/**
+ * Beach volleyball-themed progress messages
+ */
+const messages = {
+  loadingFFmpeg: 'Warming up...',
+  ffmpegLoaded: 'Ready to play',
+  loadingVideo: 'Setting up the court...',
+  loadingVideos: (current: number, total: number) => `Loading match ${current}/${total}...`,
+  extractingClip: (current: number, total: number) => `Digging rally ${current} of ${total}...`,
+  encodingClip: (current: number, total: number) => `Spiking rally ${current} of ${total}...`,
+  joiningClips: 'Running the play...',
+  applyingFade: 'Adding smooth transitions...',
+  finalizing: 'Match point...',
+  complete: 'Game, set, match!',
+  processing: 'In play...',
+};
 
 /**
  * Reset progress tracking for a new export
@@ -78,7 +101,7 @@ async function getFFmpeg(onProgress?: ProgressCallback): Promise<any> {
   }
 
   loadPromise = (async () => {
-    onProgress?.(0, 'Loading FFmpeg...');
+    onProgress?.(0, messages.loadingFFmpeg);
 
     try {
       // Load FFmpeg script via script tag
@@ -100,7 +123,7 @@ async function getFFmpeg(onProgress?: ProgressCallback): Promise<any> {
         }
         const ffmpegProgress = Math.round(progress * 100);
         if (ffmpegProgress > minProgress && ffmpegProgress <= 100) {
-          currentProgressCallback?.(ffmpegProgress, 'Processing...');
+          currentProgressCallback?.(ffmpegProgress, messages.processing);
         }
       });
 
@@ -115,7 +138,7 @@ async function getFFmpeg(onProgress?: ProgressCallback): Promise<any> {
         wasmURL: FFMPEG_WASM_URL,
       });
 
-      onProgress?.(5, 'FFmpeg loaded');
+      onProgress?.(5, messages.ffmpegLoaded);
     } catch (err) {
       console.error('Failed to load FFmpeg:', err);
       loadPromise = null;
@@ -195,7 +218,7 @@ export async function exportSingleRally(
   const inputName = `input.${ext}`;
   const outputName = `output.${ext}`;
 
-  reportProgress(10, 'Loading video...');
+  reportProgress(10, messages.loadingVideo);
 
   // Write input file to FFmpeg virtual filesystem
   try {
@@ -206,7 +229,7 @@ export async function exportSingleRally(
     throw new Error('Failed to load video. The file may be too large for browser processing (max ~500MB recommended).');
   }
 
-  reportProgress(30, 'Extracting clip...');
+  reportProgress(30, messages.extractingClip(1, 1));
 
   // Extract the clip using stream copy (fast, no re-encoding)
   await ff.exec([
@@ -218,7 +241,7 @@ export async function exportSingleRally(
     outputName,
   ]);
 
-  reportProgress(90, 'Finalizing...');
+  reportProgress(90, messages.finalizing);
 
   // Read output file
   const data = await ff.readFile(outputName);
@@ -227,7 +250,7 @@ export async function exportSingleRally(
   await ff.deleteFile(inputName);
   await ff.deleteFile(outputName);
 
-  reportProgress(100, 'Complete');
+  reportProgress(100, messages.complete);
 
   // Convert to regular Uint8Array to satisfy TypeScript (FFmpeg returns Uint8Array with SharedArrayBuffer)
   const uint8Data = data instanceof Uint8Array ? new Uint8Array(data) : data;
@@ -262,7 +285,7 @@ export async function exportConcatenated(
   const inputName = `input.${ext}`;
   const outputName = `output.${ext}`;
 
-  reportProgress(5, 'Loading video...');
+  reportProgress(5, messages.loadingVideo);
 
   // Write input file
   try {
@@ -281,7 +304,7 @@ export async function exportConcatenated(
     await exportWithConcat(ff, inputName, outputName, ext, rallies);
   }
 
-  reportProgress(95, 'Finalizing...');
+  reportProgress(95, messages.finalizing);
 
   // Read output file
   const data = await ff.readFile(outputName);
@@ -290,11 +313,230 @@ export async function exportConcatenated(
   await ff.deleteFile(inputName);
   await ff.deleteFile(outputName);
 
-  reportProgress(100, 'Complete');
+  reportProgress(100, messages.complete);
 
   // Convert to regular Uint8Array to satisfy TypeScript (FFmpeg returns Uint8Array with SharedArrayBuffer)
   const uint8Data = data instanceof Uint8Array ? new Uint8Array(data) : data;
   return new Blob([uint8Data], { type: `video/${ext}` });
+}
+
+/**
+ * Export rallies from multiple video sources concatenated into a single video
+ */
+export async function exportMultiSourceConcatenated(
+  ralliesWithSource: RallyWithSource[],
+  withFade: boolean,
+  onProgress?: ProgressCallback
+): Promise<Blob> {
+  if (!isFFmpegSupported()) {
+    throw new Error('Your browser does not support video export. Please use Chrome, Firefox, or Edge.');
+  }
+
+  if (ralliesWithSource.length === 0) {
+    throw new Error('No rallies to export');
+  }
+
+  // For single rally, use simpler method
+  if (ralliesWithSource.length === 1) {
+    const { rally, videoSource } = ralliesWithSource[0];
+    return exportSingleRally(videoSource, rally, onProgress);
+  }
+
+  // Check if all rallies are from the same source
+  const firstSource = ralliesWithSource[0].videoSource;
+  const allSameSource = ralliesWithSource.every(
+    (r) => r.videoSource === firstSource
+  );
+
+  if (allSameSource) {
+    // Use optimized single-source export
+    return exportConcatenated(
+      firstSource,
+      ralliesWithSource.map((r) => r.rally),
+      withFade,
+      onProgress
+    );
+  }
+
+  // Multi-source export: need to load each video and extract clips
+  resetProgress();
+  const ff = await getFFmpeg(onProgress);
+
+  reportProgress(5, messages.loadingVideo);
+
+  // Group rallies by their video source for efficient loading
+  const sourceToRallies = new Map<VideoSource, { rally: Rally; index: number }[]>();
+  ralliesWithSource.forEach(({ rally, videoSource }, index) => {
+    const existing = sourceToRallies.get(videoSource) || [];
+    existing.push({ rally, index });
+    sourceToRallies.set(videoSource, existing);
+  });
+
+  // Load all unique video sources and extract clips
+  const clipNames: string[] = new Array(ralliesWithSource.length);
+  let processedCount = 0;
+  const totalRallies = ralliesWithSource.length;
+
+  for (const [videoSource, rallies] of sourceToRallies) {
+    const ext = getVideoExtension(videoSource);
+    const inputName = `input_${processedCount}.${ext}`;
+
+    // Load this video source
+    const sourceIndex = Array.from(sourceToRallies.keys()).indexOf(videoSource) + 1;
+    reportProgress(
+      Math.round(5 + (processedCount / totalRallies) * 10),
+      messages.loadingVideos(sourceIndex, sourceToRallies.size)
+    );
+
+    try {
+      const videoData = await fetchFileData(videoSource);
+      await ff.writeFile(inputName, videoData);
+    } catch (err) {
+      console.error('Failed to load video:', err);
+      throw new Error('Failed to load video. The file may be too large for browser processing.');
+    }
+
+    // Extract clips from this video
+    // Always re-encode for multi-source to ensure consistent format and keyframe alignment
+    for (const { rally, index } of rallies) {
+      const clipName = `clip_${index}.mp4`;
+      clipNames[index] = clipName;
+
+      const progressBase = 15 + ((processedCount + rallies.indexOf({ rally, index })) / totalRallies) * 50;
+      reportProgress(Math.round(progressBase), messages.encodingClip(processedCount + 1, totalRallies));
+
+      // Re-encode to ensure consistent format across different source videos
+      // and proper keyframe alignment to avoid flickering
+      await ff.exec([
+        '-ss', rally.start_time.toString(),
+        '-i', inputName,
+        '-t', rally.duration.toString(),
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-crf', '23',
+        '-c:a', 'aac',
+        '-b:a', '128k',
+        '-avoid_negative_ts', 'make_zero',
+        '-y',
+        clipName,
+      ]);
+      processedCount++;
+    }
+
+    // Cleanup this input file to save memory
+    await ff.deleteFile(inputName);
+  }
+
+  // Now concatenate all clips
+  const outputName = 'output.mp4';
+
+  if (withFade) {
+    reportProgress(70, messages.applyingFade);
+    await exportMultiSourceWithFade(ff, clipNames, outputName, ralliesWithSource.map((r) => r.rally));
+  } else {
+    reportProgress(70, messages.joiningClips);
+    // Use concat demuxer with stream copy since all clips are now in consistent format
+    const concatList = clipNames.map((name) => `file '${name}'`).join('\n');
+    await ff.writeFile('concat.txt', concatList);
+
+    await ff.exec([
+      '-f', 'concat',
+      '-safe', '0',
+      '-i', 'concat.txt',
+      '-c', 'copy',
+      outputName,
+    ]);
+
+    await ff.deleteFile('concat.txt');
+  }
+
+  reportProgress(95, messages.finalizing);
+
+  // Read output
+  const data = await ff.readFile(outputName);
+
+  // Cleanup clips
+  for (const clipName of clipNames) {
+    await ff.deleteFile(clipName);
+  }
+  await ff.deleteFile(outputName);
+
+  reportProgress(100, messages.complete);
+
+  const uint8Data = data instanceof Uint8Array ? new Uint8Array(data) : data;
+  return new Blob([uint8Data], { type: 'video/mp4' });
+}
+
+/**
+ * Apply fade transitions for multi-source export (clips already extracted)
+ */
+async function exportMultiSourceWithFade(
+  ff: any,
+  clipNames: string[],
+  outputName: string,
+  rallies: Rally[]
+): Promise<void> {
+  const fadeDuration = 0.5;
+
+  if (clipNames.length === 2) {
+    // Simple case: two clips
+    const clip0Duration = rallies[0].duration;
+    const offset = Math.max(0, clip0Duration - fadeDuration);
+    const filterComplex = `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${offset}[v];[0:a][1:a]acrossfade=d=${fadeDuration}[a]`;
+
+    await ff.exec([
+      '-i', clipNames[0],
+      '-i', clipNames[1],
+      '-filter_complex', filterComplex,
+      '-map', '[v]',
+      '-map', '[a]',
+      '-c:v', 'libx264',
+      '-preset', 'ultrafast',
+      '-crf', '28',
+      '-c:a', 'aac',
+      '-y',
+      outputName,
+    ]);
+  } else {
+    // Multiple clips: chain xfade operations
+    const inputs: string[] = [];
+    for (const clipName of clipNames) {
+      inputs.push('-i', clipName);
+    }
+
+    let filterComplex = '';
+    let videoLabel = '0:v';
+    let audioLabel = '0:a';
+    let cumulativeDuration = rallies[0].duration;
+
+    for (let i = 1; i < clipNames.length; i++) {
+      const offset = Math.max(0, cumulativeDuration - fadeDuration);
+      const outVideoLabel = i === clipNames.length - 1 ? '[v]' : `[v${i}]`;
+      const outAudioLabel = i === clipNames.length - 1 ? '[a]' : `[a${i}]`;
+
+      filterComplex += `[${videoLabel}][${i}:v]xfade=transition=fade:duration=${fadeDuration}:offset=${offset}${outVideoLabel};`;
+      filterComplex += `[${audioLabel}][${i}:a]acrossfade=d=${fadeDuration}${outAudioLabel};`;
+
+      videoLabel = outVideoLabel.replace('[', '').replace(']', '');
+      audioLabel = outAudioLabel.replace('[', '').replace(']', '');
+      cumulativeDuration += rallies[i].duration - fadeDuration;
+    }
+
+    filterComplex = filterComplex.slice(0, -1);
+
+    await ff.exec([
+      ...inputs,
+      '-filter_complex', filterComplex,
+      '-map', '[v]',
+      '-map', '[a]',
+      '-c:v', 'libx264',
+      '-preset', 'ultrafast',
+      '-crf', '28',
+      '-c:a', 'aac',
+      '-y',
+      outputName,
+    ]);
+  }
 }
 
 /**
@@ -316,7 +558,7 @@ async function exportWithConcat(
     clipNames.push(clipName);
 
     const progressBase = 10 + (i / rallies.length) * 60;
-    reportProgress(Math.round(progressBase), `Extracting clip ${i + 1}/${rallies.length}...`);
+    reportProgress(Math.round(progressBase), messages.extractingClip(i + 1, rallies.length));
 
     await ff.exec([
       '-ss', rally.start_time.toString(),
@@ -328,7 +570,7 @@ async function exportWithConcat(
     ]);
   }
 
-  reportProgress(75, 'Joining clips...');
+  reportProgress(75, messages.joiningClips);
 
   // Create concat list file
   const concatList = clipNames.map(name => `file '${name}'`).join('\n');
@@ -373,7 +615,7 @@ async function exportWithFade(
     clipNames.push(clipName);
 
     const progressBase = 10 + (i / rallies.length) * 40;
-    reportProgress(Math.round(progressBase), `Encoding clip ${i + 1}/${rallies.length}...`);
+    reportProgress(Math.round(progressBase), messages.encodingClip(i + 1, rallies.length));
     console.log(`[exportWithFade] Encoding clip ${i + 1}/${rallies.length}, start: ${rally.start_time}, duration: ${rally.duration}`);
 
     // Re-encode to ensure consistent format for xfade
@@ -394,7 +636,7 @@ async function exportWithFade(
     console.log(`[exportWithFade] Clip ${i + 1} encoding result:`, ret);
   }
 
-  reportProgress(55, 'Applying fade transitions...');
+  reportProgress(55, messages.applyingFade);
   console.log('[exportWithFade] Applying xfade transitions...');
 
   // Build xfade filter chain
@@ -452,7 +694,7 @@ async function exportWithFade(
     filterComplex = filterComplex.slice(0, -1);
     console.log('[exportWithFade] Multi-clip filter:', filterComplex);
 
-    reportProgress(60, 'Applying fade transitions...');
+    reportProgress(60, messages.applyingFade);
 
     const ret = await ff.exec([
       ...inputs,

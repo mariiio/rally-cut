@@ -50,6 +50,7 @@ import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useExportStore } from '@/stores/exportStore';
 import { Rally } from '@/types/rally';
+import { RallyWithSource } from '@/utils/videoExport';
 import { designTokens } from '@/app/theme';
 
 // Helper to format time as MM:SS
@@ -306,17 +307,27 @@ export function HighlightsPanel() {
   };
 
   const handleDownload = () => {
-    if (!videoSource || !downloadAnchor) return;
+    if (!downloadAnchor) return;
 
     const highlight = highlights?.find((h) => h.id === downloadAnchor.id);
     if (!highlight) return;
 
-    // Get rallies in custom order (rallyIds order)
-    const highlightRallies = highlight.rallyIds
-      .map((id) => allRallies.find((r) => r.id === id))
-      .filter((r): r is Rally => r !== undefined);
+    // Build rallies with their video sources from their respective matches
+    const ralliesWithSource: RallyWithSource[] = highlight.rallyIds
+      .map((id) => {
+        const rally = allRallies.find((r) => r.id === id);
+        if (!rally) return null;
+        const match = getRallyMatch(rally.id);
+        // Use match's video URL, or fall back to active video source
+        const source = match?.videoUrl || videoSource;
+        if (!source) return null;
+        return { rally, videoSource: source };
+      })
+      .filter((r): r is RallyWithSource => r !== null);
 
-    downloadHighlight(videoSource, highlightRallies, highlight.id, highlight.name, withFade);
+    if (ralliesWithSource.length === 0) return;
+
+    downloadHighlight(ralliesWithSource, highlight.id, highlight.name, withFade);
     setDownloadAnchor(null);
   };
 

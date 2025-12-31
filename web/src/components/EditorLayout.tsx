@@ -186,6 +186,7 @@ export function EditorLayout({ sessionId }: EditorLayoutProps) {
               flexDirection: 'column',
             }}
           >
+            <ExportProgress />
             <VideoPlayer />
           </Box>
         </Box>
@@ -259,9 +260,6 @@ export function EditorLayout({ sessionId }: EditorLayoutProps) {
       >
         <Timeline />
       </Box>
-
-      {/* Export progress indicator */}
-      <ExportProgress />
     </Box>
   );
 }
