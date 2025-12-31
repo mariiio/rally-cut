@@ -7,6 +7,7 @@ import {
   exportMultiSourceConcatenated,
   downloadBlob,
   getVideoName,
+  cancelExport,
   VideoSource,
   RallyWithSource,
 } from '@/utils/videoExport';
@@ -32,6 +33,7 @@ interface ExportState {
     highlightName: string,
     withFade: boolean
   ) => Promise<void>;
+  cancel: () => void;
   clearError: () => void;
   reset: () => void;
 }
@@ -216,6 +218,19 @@ export const useExportStore = create<ExportState>((set, get) => ({
         exportingHighlightId: null,
       });
     }
+  },
+
+  cancel: () => {
+    cancelExport();
+    set({
+      isExporting: false,
+      progress: 0,
+      currentStep: '',
+      error: null,
+      exportingRallyId: null,
+      exportingHighlightId: null,
+      exportingAll: false,
+    });
   },
 
   clearError: () => {
