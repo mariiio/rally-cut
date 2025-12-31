@@ -9,7 +9,11 @@ import {
   createRally,
   recalculateRally,
   calculateStats,
+  Session,
+  Match,
+  SessionManifest,
 } from '@/types/rally';
+import { usePlayerStore } from './playerStore';
 
 // History management types
 interface HistoryEntry {
@@ -29,8 +33,18 @@ interface PersistedHistory {
   savedAt: number;
 }
 
-const STORAGE_KEY = 'rallycut_editor_history_v1';
+// Session-aware storage format
+interface PersistedSession {
+  sessionId: string;
+  matchRallies: Record<string, Rally[]>; // matchId -> rallies
+  highlights: Highlight[];
+  savedAt: number;
+}
+
+const STORAGE_KEY_PREFIX = 'rallycut_session_';
 const MAX_HISTORY_SIZE = 50;
+
+const getStorageKey = (sessionId: string) => `${STORAGE_KEY_PREFIX}${sessionId}_v1`;
 
 // Debounce helper
 let saveTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -40,12 +54,16 @@ const debouncedSave = (fn: () => void) => {
 };
 
 interface EditorState {
-  // Video state
+  // Session state
+  session: Session | null;
+  activeMatchId: string | null;
+
+  // Video state (derived from active match when in session mode)
   videoFile: File | null;
   videoUrl: string | null;
   videoMetadata: VideoMetadata | null;
 
-  // Rally state
+  // Rally state (derived from active match when in session mode)
   rallies: Rally[];
   selectedRallyId: string | null;
   hasUnsavedChanges: boolean;
@@ -62,6 +80,13 @@ interface EditorState {
   // Highlights state
   highlights: Highlight[];
   selectedHighlightId: string | null;
+
+  // Session actions
+  loadSession: (sessionId: string) => Promise<void>;
+  setActiveMatch: (matchId: string) => void;
+  getActiveMatch: () => Match | null;
+  getAllRallies: () => Rally[];
+  getRallyMatch: (rallyId: string) => Match | null;
 
   // Actions
   setVideoFile: (file: File) => void;
@@ -107,6 +132,8 @@ interface EditorState {
 
 export const useEditorStore = create<EditorState>((set, get) => ({
   // Initial state
+  session: null,
+  activeMatchId: null,
   videoFile: null,
   videoUrl: null,
   videoMetadata: null,
@@ -124,6 +151,147 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   // Highlights state
   highlights: [],
   selectedHighlightId: null,
+
+  // Session actions
+  loadSession: async (sessionId: string) => {
+    try {
+      // Fetch session manifest
+      const manifestRes = await fetch(`/samples/session_${sessionId}/session.json`);
+      if (!manifestRes.ok) {
+        console.error('Failed to load session manifest');
+        return;
+      }
+      const manifest: SessionManifest = await manifestRes.json();
+
+      // Check localStorage for saved edits
+      let savedData: PersistedSession | null = null;
+      if (typeof window !== 'undefined') {
+        try {
+          const stored = localStorage.getItem(getStorageKey(sessionId));
+          if (stored) {
+            savedData = JSON.parse(stored);
+          }
+        } catch {
+          // Ignore localStorage errors
+        }
+      }
+
+      // Load all match data in parallel
+      const matches: Match[] = await Promise.all(
+        manifest.session.matches.map(async (matchRef) => {
+          const dataRes = await fetch(`/samples/session_${sessionId}/${matchRef.dataFile}`);
+          const matchData: RallyFile = await dataRes.json();
+
+          // Rally IDs should already be prefixed in the JSON files
+          // But if they're not, prefix them here for safety
+          let rallies = matchData.rallies.map((rally) => ({
+            ...rally,
+            id: rally.id.startsWith(matchRef.id) ? rally.id : `${matchRef.id}_${rally.id}`,
+          }));
+
+          // Apply saved edits from localStorage if available
+          if (savedData?.matchRallies?.[matchRef.id]) {
+            rallies = savedData.matchRallies[matchRef.id];
+          }
+
+          return {
+            id: matchRef.id,
+            name: matchRef.name,
+            videoUrl: `/samples/session_${sessionId}/${matchRef.videoFile}`,
+            video: matchData.video,
+            rallies,
+          };
+        })
+      );
+
+      // Build session object with restored highlights
+      // Use the URL sessionId for consistency (not manifest.session.id which may differ)
+      const session: Session = {
+        id: sessionId,
+        name: manifest.session.name,
+        matches,
+        highlights: savedData?.highlights || [],
+      };
+
+      // Set first match as active
+      const firstMatch = matches[0];
+
+      set({
+        session,
+        activeMatchId: firstMatch?.id || null,
+        videoUrl: firstMatch?.videoUrl || null,
+        videoMetadata: firstMatch?.video || null,
+        rallies: firstMatch?.rallies || [],
+        highlights: session.highlights,
+        selectedRallyId: null,
+        selectedHighlightId: null,
+        past: [],
+        future: [],
+        hasUnsavedChanges: savedData !== null,
+      });
+    } catch (error) {
+      console.error('Error loading session:', error);
+    }
+  },
+
+  setActiveMatch: (matchId: string) => {
+    const state = get();
+    if (!state.session) return;
+
+    const match = state.session.matches.find((m) => m.id === matchId);
+    if (!match) return;
+
+    // Sync current rallies back to the session before switching
+    const updatedMatches = state.session.matches.map((m) => {
+      if (m.id === state.activeMatchId) {
+        return { ...m, rallies: state.rallies };
+      }
+      return m;
+    });
+
+    // Only reset player state if NOT in the middle of highlight playback
+    // During highlight playback, VideoPlayer handles seeking after video loads
+    const playerState = usePlayerStore.getState();
+    if (!playerState.playingHighlightId) {
+      playerState.pause();
+      playerState.seek(0);
+    }
+
+    set({
+      session: { ...state.session, matches: updatedMatches },
+      activeMatchId: matchId,
+      videoUrl: match.videoUrl,
+      videoMetadata: match.video,
+      rallies: match.rallies,
+      selectedRallyId: null,
+    });
+  },
+
+  getActiveMatch: () => {
+    const state = get();
+    if (!state.session || !state.activeMatchId) return null;
+    return state.session.matches.find((m) => m.id === state.activeMatchId) || null;
+  },
+
+  getAllRallies: () => {
+    const state = get();
+    if (!state.session) return state.rallies;
+    // Return rallies from all matches, with current active match's edited rallies
+    return state.session.matches.flatMap((m) => {
+      if (m.id === state.activeMatchId) {
+        return state.rallies; // Use current edited rallies for active match
+      }
+      return m.rallies;
+    });
+  },
+
+  getRallyMatch: (rallyId: string) => {
+    const state = get();
+    if (!state.session) return null;
+    // Extract match ID from rally ID prefix (e.g., "match_1_rally_5" -> "match_1")
+    const matchId = rallyId.replace(/_rally_\d+$/, '');
+    return state.session.matches.find((m) => m.id === matchId) || null;
+  },
 
   setVideoFile: (file: File) => {
     const state = get();
@@ -167,40 +335,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const originalRallies = [...json.rallies];
     const originalHighlights = json.highlights ? [...json.highlights] : [];
 
-    // Try to load persisted state for this video
-    let rallies = json.rallies;
-    let highlights = json.highlights || [];
-    let past: HistoryEntry[] = [];
-    let future: HistoryEntry[] = [];
-
-    if (typeof window !== 'undefined') {
-      try {
-        const stored = localStorage.getItem(STORAGE_KEY);
-        if (stored) {
-          const persisted: PersistedHistory = JSON.parse(stored);
-          // Only restore if it's for the same video
-          if (persisted.videoPath === json.video.path && persisted.rallies) {
-            rallies = persisted.rallies;
-            highlights = persisted.highlights || [];
-            past = persisted.past || [];
-            future = persisted.future || [];
-          }
-        }
-      } catch {
-        // localStorage unavailable or corrupted, continue with fresh state
-      }
-    }
-
     set({
-      rallies,
-      highlights,
+      rallies: json.rallies,
+      highlights: json.highlights || [],
       videoMetadata: json.video,
       originalJson: json,
       originalRallies,
       originalHighlights,
-      past,
-      future,
-      hasUnsavedChanges: past.length > 0,
+      past: [],
+      future: [],
+      hasUnsavedChanges: false,
       selectedRallyId: null,
       selectedHighlightId: null,
     });
@@ -422,16 +566,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       URL.revokeObjectURL(state.videoUrl);
     }
 
-    // Clear localStorage
-    if (typeof window !== 'undefined') {
+    // Clear localStorage for current session
+    if (typeof window !== 'undefined' && state.session) {
       try {
-        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(getStorageKey(state.session.id));
       } catch {
         // Ignore localStorage errors
       }
     }
 
     set({
+      session: null,
+      activeMatchId: null,
       videoFile: null,
       videoUrl: null,
       videoMetadata: null,
@@ -529,9 +675,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     });
 
     // Clear localStorage since we're back to original
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && state.session) {
       try {
-        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(getStorageKey(state.session.id));
       } catch {
         // Ignore localStorage errors
       }
@@ -540,33 +686,41 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   saveToStorage: () => {
     const state = get();
-    if (!state.videoMetadata) return;
+    if (!state.session) return;
 
     if (typeof window !== 'undefined') {
       try {
-        const data: PersistedHistory = {
-          videoPath: state.videoMetadata.path,
-          rallies: state.rallies,
+        // Build matchRallies from session, with current active match's rallies updated
+        const matchRallies: Record<string, Rally[]> = {};
+        for (const match of state.session.matches) {
+          if (match.id === state.activeMatchId) {
+            // Use the current edited rallies for active match
+            matchRallies[match.id] = state.rallies;
+          } else {
+            // Use the session's stored rallies for other matches
+            matchRallies[match.id] = match.rallies;
+          }
+        }
+
+        const data: PersistedSession = {
+          sessionId: state.session.id,
+          matchRallies,
           highlights: state.highlights,
-          past: state.past,
-          future: state.future,
-          originalRallies: state.originalRallies,
-          originalHighlights: state.originalHighlights,
           savedAt: Date.now(),
         };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        localStorage.setItem(getStorageKey(state.session.id), JSON.stringify(data));
       } catch {
-        // localStorage unavailable or quota exceeded
-        // Could trim history here if needed
+        // Ignore localStorage errors
       }
     }
   },
 
   loadFromStorage: () => {
-    if (typeof window === 'undefined') return false;
+    const state = get();
+    if (typeof window === 'undefined' || !state.session) return false;
 
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
+      const stored = localStorage.getItem(getStorageKey(state.session.id));
       if (!stored) return false;
 
       const persisted: PersistedHistory = JSON.parse(stored);
@@ -588,14 +742,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   clearHistory: () => {
+    const state = get();
     set({
       past: [],
       future: [],
     });
 
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && state.session) {
       try {
-        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(getStorageKey(state.session.id));
       } catch {
         // Ignore localStorage errors
       }

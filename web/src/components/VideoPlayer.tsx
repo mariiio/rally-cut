@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
+import { useRef, useEffect, useCallback, useState } from 'react';
 import { Box, CircularProgress } from '@mui/material';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useEditorStore } from '@/stores/editorStore';
@@ -8,11 +8,10 @@ import { useEditorStore } from '@/stores/editorStore';
 export function VideoPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const transitioningRef = useRef(false);
 
   const videoUrl = useEditorStore((state) => state.videoUrl);
-  const highlights = useEditorStore((state) => state.highlights);
-  const rallies = useEditorStore((state) => state.rallies);
+  const activeMatchId = useEditorStore((state) => state.activeMatchId);
+  const setActiveMatch = useEditorStore((state) => state.setActiveMatch);
 
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const seekTo = usePlayerStore((state) => state.seekTo);
@@ -20,27 +19,12 @@ export function VideoPlayer() {
   const setCurrentTime = usePlayerStore((state) => state.setCurrentTime);
   const setDuration = usePlayerStore((state) => state.setDuration);
   const setReady = usePlayerStore((state) => state.setReady);
-  const playingHighlightId = usePlayerStore((state) => state.playingHighlightId);
-  const highlightRallyIndex = usePlayerStore((state) => state.highlightRallyIndex);
-  const advanceHighlightPlayback = usePlayerStore((state) => state.advanceHighlightPlayback);
-  const stopHighlightPlayback = usePlayerStore((state) => state.stopHighlightPlayback);
 
-  const highlightRallies = useMemo(() => {
-    if (!playingHighlightId || !highlights || !rallies) return [];
-    const highlight = highlights.find((h) => h.id === playingHighlightId);
-    if (!highlight) return [];
-    return rallies
-      .filter((r) => highlight.rallyIds?.includes(r.id))
-      .sort((a, b) => a.start_time - b.start_time);
-  }, [playingHighlightId, highlights, rallies]);
-
-  const currentRally = highlightRallies[highlightRallyIndex];
-  const nextRally = highlightRallies[highlightRallyIndex + 1];
-
-  // Play/pause
+  // Play/pause based on isPlaying state
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || transitioningRef.current) return;
+    if (!video) return;
+
     if (isPlaying) {
       video.play().catch(() => {});
     } else {
@@ -48,7 +32,7 @@ export function VideoPlayer() {
     }
   }, [isPlaying]);
 
-  // Manual seek
+  // Handle manual seek requests
   useEffect(() => {
     if (seekTo !== null && videoRef.current) {
       videoRef.current.currentTime = seekTo;
@@ -56,41 +40,69 @@ export function VideoPlayer() {
     }
   }, [seekTo, clearSeek]);
 
-  // Start highlight playback
-  useEffect(() => {
-    if (playingHighlightId && highlightRallies.length > 0 && videoRef.current) {
-      transitioningRef.current = false;
-      videoRef.current.currentTime = highlightRallies[0].start_time;
-      videoRef.current.play().catch(() => {});
-    }
-  }, [playingHighlightId, highlightRallies]);
+  // Track if we're in the middle of a match switch
+  const switchingMatchRef = useRef(false);
 
-  // Time update
+  // Time update handler - check for rally end during highlight playback
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
 
     setCurrentTime(video.currentTime);
 
-    if (!playingHighlightId || !currentRally || transitioningRef.current) return;
+    // Skip if we're in the middle of switching matches
+    if (switchingMatchRef.current) return;
 
-    if (video.currentTime >= currentRally.end_time) {
-      if (nextRally) {
-        transitioningRef.current = true;
-        advanceHighlightPlayback();
-        video.currentTime = nextRally.start_time;
-        transitioningRef.current = false;
-      } else {
-        stopHighlightPlayback();
+    // Read fresh values from stores to avoid stale closures
+    const playerState = usePlayerStore.getState();
+    const editorState = useEditorStore.getState();
+
+    // Handle highlight playback
+    if (playerState.playingHighlightId) {
+      const currentRally = playerState.getCurrentPlaylistRally();
+      // Verify the current rally belongs to the active match
+      if (currentRally && currentRally.matchId === editorState.activeMatchId && video.currentTime >= currentRally.end_time) {
+        const nextRally = playerState.advanceHighlightPlayback();
+        if (nextRally) {
+          if (nextRally.matchId === editorState.activeMatchId) {
+            // Same match, just seek
+            video.currentTime = nextRally.start_time;
+          } else {
+            // Different match - switch to that match's video
+            switchingMatchRef.current = true;
+            setActiveMatch(nextRally.matchId);
+          }
+        } else {
+          // No more rallies, stop playback
+          playerState.stopHighlightPlayback();
+        }
       }
     }
-  }, [playingHighlightId, currentRally, nextRally, setCurrentTime, advanceHighlightPlayback, stopHighlightPlayback]);
+  }, [setCurrentTime, setActiveMatch]);
 
+  // Handle video metadata loaded
   const handleLoadedMetadata = useCallback(() => {
-    if (videoRef.current) {
-      setDuration(videoRef.current.duration);
-      setReady(true);
-      setIsLoading(false);
+    const video = videoRef.current;
+    if (!video) return;
+
+    setDuration(video.duration);
+    setReady(true);
+    setIsLoading(false);
+
+    // Read fresh values from stores to avoid stale closures
+    const playerState = usePlayerStore.getState();
+    const editorState = useEditorStore.getState();
+
+    // If we just loaded a new video during highlight playback, seek to current rally
+    if (switchingMatchRef.current && playerState.playingHighlightId) {
+      const currentRally = playerState.getCurrentPlaylistRally();
+      if (currentRally && currentRally.matchId === editorState.activeMatchId) {
+        switchingMatchRef.current = false;
+        video.currentTime = currentRally.start_time;
+        video.play().catch(() => {});
+      }
+    } else {
+      switchingMatchRef.current = false;
     }
   }, [setDuration, setReady]);
 

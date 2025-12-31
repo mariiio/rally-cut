@@ -16,8 +16,12 @@ import { FileControls } from './FileControls';
 import { ExportProgress } from './ExportProgress';
 import { useEditorStore } from '@/stores/editorStore';
 
-export function EditorLayout() {
-  const { rallies, setVideoUrl, loadRalliesFromJson, undo, redo, canUndo, canRedo } = useEditorStore();
+interface EditorLayoutProps {
+  sessionId?: string;
+}
+
+export function EditorLayout({ sessionId }: EditorLayoutProps) {
+  const { loadSession, session, undo, redo, canUndo, canRedo } = useEditorStore();
 
   // Keyboard shortcuts for undo/redo
   useEffect(() => {
@@ -49,24 +53,12 @@ export function EditorLayout() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [undo, redo, canUndo, canRedo]);
 
-  // Auto-load sample data in development
+  // Load session data
   useEffect(() => {
-    if (process.env.NODE_ENV === 'development' && (!rallies || rallies.length === 0)) {
-      const loadSampleData = async () => {
-        try {
-          const response = await fetch('/samples/segments.json');
-          if (response.ok) {
-            const json = await response.json();
-            loadRalliesFromJson(json);
-            setVideoUrl('/samples/video.mov');
-          }
-        } catch (e) {
-          // Sample files not available, ignore
-        }
-      };
-      loadSampleData();
+    if (sessionId && !session) {
+      loadSession(sessionId);
     }
-  }, []);
+  }, [sessionId, session, loadSession]);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
