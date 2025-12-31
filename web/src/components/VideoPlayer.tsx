@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useEffect, useCallback, useState } from 'react';
+import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { Box, CircularProgress } from '@mui/material';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useEditorStore } from '@/stores/editorStore';
@@ -8,27 +8,47 @@ import { useEditorStore } from '@/stores/editorStore';
 export function VideoPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const videoUrl = useEditorStore((state) => state.videoUrl);
-  const {
-    isPlaying,
-    seekTo,
-    clearSeek,
-    setCurrentTime,
-    setDuration,
-    setReady,
-  } = usePlayerStore();
+  const transitioningRef = useRef(false);
 
-  // Handle play/pause
+  const videoUrl = useEditorStore((state) => state.videoUrl);
+  const highlights = useEditorStore((state) => state.highlights);
+  const rallies = useEditorStore((state) => state.rallies);
+
+  const isPlaying = usePlayerStore((state) => state.isPlaying);
+  const seekTo = usePlayerStore((state) => state.seekTo);
+  const clearSeek = usePlayerStore((state) => state.clearSeek);
+  const setCurrentTime = usePlayerStore((state) => state.setCurrentTime);
+  const setDuration = usePlayerStore((state) => state.setDuration);
+  const setReady = usePlayerStore((state) => state.setReady);
+  const playingHighlightId = usePlayerStore((state) => state.playingHighlightId);
+  const highlightRallyIndex = usePlayerStore((state) => state.highlightRallyIndex);
+  const advanceHighlightPlayback = usePlayerStore((state) => state.advanceHighlightPlayback);
+  const stopHighlightPlayback = usePlayerStore((state) => state.stopHighlightPlayback);
+
+  const highlightRallies = useMemo(() => {
+    if (!playingHighlightId || !highlights || !rallies) return [];
+    const highlight = highlights.find((h) => h.id === playingHighlightId);
+    if (!highlight) return [];
+    return rallies
+      .filter((r) => highlight.rallyIds?.includes(r.id))
+      .sort((a, b) => a.start_time - b.start_time);
+  }, [playingHighlightId, highlights, rallies]);
+
+  const currentRally = highlightRallies[highlightRallyIndex];
+  const nextRally = highlightRallies[highlightRallyIndex + 1];
+
+  // Play/pause
   useEffect(() => {
-    if (!videoRef.current) return;
+    const video = videoRef.current;
+    if (!video || transitioningRef.current) return;
     if (isPlaying) {
-      videoRef.current.play().catch(() => {});
+      video.play().catch(() => {});
     } else {
-      videoRef.current.pause();
+      video.pause();
     }
   }, [isPlaying]);
 
-  // Handle seek requests from store
+  // Manual seek
   useEffect(() => {
     if (seekTo !== null && videoRef.current) {
       videoRef.current.currentTime = seekTo;
@@ -36,11 +56,35 @@ export function VideoPlayer() {
     }
   }, [seekTo, clearSeek]);
 
-  const handleTimeUpdate = useCallback(() => {
-    if (videoRef.current) {
-      setCurrentTime(videoRef.current.currentTime);
+  // Start highlight playback
+  useEffect(() => {
+    if (playingHighlightId && highlightRallies.length > 0 && videoRef.current) {
+      transitioningRef.current = false;
+      videoRef.current.currentTime = highlightRallies[0].start_time;
+      videoRef.current.play().catch(() => {});
     }
-  }, [setCurrentTime]);
+  }, [playingHighlightId, highlightRallies]);
+
+  // Time update
+  const handleTimeUpdate = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    setCurrentTime(video.currentTime);
+
+    if (!playingHighlightId || !currentRally || transitioningRef.current) return;
+
+    if (video.currentTime >= currentRally.end_time) {
+      if (nextRally) {
+        transitioningRef.current = true;
+        advanceHighlightPlayback();
+        video.currentTime = nextRally.start_time;
+        transitioningRef.current = false;
+      } else {
+        stopHighlightPlayback();
+      }
+    }
+  }, [playingHighlightId, currentRally, nextRally, setCurrentTime, advanceHighlightPlayback, stopHighlightPlayback]);
 
   const handleLoadedMetadata = useCallback(() => {
     if (videoRef.current) {
@@ -92,12 +136,13 @@ export function VideoPlayer() {
             top: '50%',
             left: '50%',
             transform: 'translate(-50%, -50%)',
-            zIndex: 1,
+            zIndex: 2,
           }}
         >
           <CircularProgress />
         </Box>
       )}
+
       <video
         ref={videoRef}
         src={videoUrl}
