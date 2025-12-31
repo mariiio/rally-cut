@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect } from 'react';
 import {
   Box,
   LinearProgress,
@@ -16,6 +17,21 @@ import { designTokens } from '@/app/theme';
 
 export function ExportProgress() {
   const { isExporting, progress, currentStep, error, clearError, reset } = useExportStore();
+
+  // Warn user before leaving page during export
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isExporting) {
+        e.preventDefault();
+        // Modern browsers require returnValue to be set
+        e.returnValue = 'Export in progress. Are you sure you want to leave?';
+        return e.returnValue;
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isExporting]);
 
   // Show error snackbar
   if (error) {
