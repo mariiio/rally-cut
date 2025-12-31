@@ -311,28 +311,36 @@ export function HighlightsPanel() {
   };
 
   const handleDragOver = (event: DragOverEvent) => {
-    const { over } = event;
+    const { active, over } = event;
     if (!over) {
       setOverHighlightId(null);
       return;
     }
 
+    // Get the source highlight ID from the dragged item
+    const activeData = parseDragId(active.id as string);
+    const sourceHighlightId = activeData?.highlightId;
+
     const overId = over.id as string;
+    let targetHighlightId: string | null = null;
 
     // Check if over a droppable highlight container
     if (overId.startsWith('droppable::')) {
-      setOverHighlightId(overId.replace('droppable::', ''));
-      return;
+      targetHighlightId = overId.replace('droppable::', '');
+    } else {
+      // Check if over a sortable rally item - extract the highlight ID
+      const parsed = parseDragId(overId);
+      if (parsed) {
+        targetHighlightId = parsed.highlightId;
+      }
     }
 
-    // Check if over a sortable rally item - extract the highlight ID
-    const parsed = parseDragId(overId);
-    if (parsed) {
-      setOverHighlightId(parsed.highlightId);
-      return;
+    // Only set overHighlightId if we're over a DIFFERENT highlight
+    if (targetHighlightId && targetHighlightId !== sourceHighlightId) {
+      setOverHighlightId(targetHighlightId);
+    } else {
+      setOverHighlightId(null);
     }
-
-    setOverHighlightId(null);
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
@@ -555,17 +563,15 @@ export function HighlightsPanel() {
             // Get current playing rally for this highlight
             const currentPlaylistRally = getCurrentPlaylistRally();
 
-            // Check if a rally from another highlight is being dragged over this one
-            const activeDragData = activeDragId ? parseDragId(activeDragId) : null;
-            const isDraggingFromOther = activeDragData && activeDragData.highlightId !== highlight.id;
-            const isOverThis = overHighlightId === highlight.id && isDraggingFromOther;
+            // overHighlightId is only set when dragging over a DIFFERENT highlight
+            const isOverThis = overHighlightId === highlight.id;
 
             return (
               <DroppableHighlightWrapper
                 key={highlight.id}
                 highlightId={highlight.id}
                 highlightColor={highlight.color}
-                isOverHighlight={isOverThis ?? false}
+                isOverHighlight={isOverThis}
               >
                 {/* Highlight row */}
                 <Box
@@ -789,7 +795,7 @@ export function HighlightsPanel() {
                   <ExpandedRallySection
                     isEmpty={rallyCount === 0}
                     highlightColor={highlight.color}
-                    isOverHighlight={isOverThis ?? false}
+                    isOverHighlight={isOverThis}
                   >
                     <SortableContext
                       items={orderedRallies.map((r) => createDragId(highlight.id, r.id))}
