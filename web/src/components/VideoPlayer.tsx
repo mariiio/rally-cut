@@ -1,9 +1,11 @@
 'use client';
 
 import { useRef, useEffect, useCallback, useState } from 'react';
-import { Box, CircularProgress } from '@mui/material';
+import { Box, CircularProgress, Typography } from '@mui/material';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useEditorStore } from '@/stores/editorStore';
+import { designTokens } from '@/app/theme';
 
 export function VideoPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -117,15 +119,30 @@ export function VideoPlayer() {
         sx={{
           width: '100%',
           aspectRatio: '16/9',
-          bgcolor: 'background.paper',
+          bgcolor: designTokens.colors.surface[2],
           display: 'flex',
+          flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          borderRadius: 1,
+          borderRadius: 2,
+          border: '2px dashed',
+          borderColor: 'divider',
           color: 'text.secondary',
+          gap: 2,
+          transition: designTokens.transitions.normal,
+          '&:hover': {
+            borderColor: 'primary.main',
+            bgcolor: designTokens.colors.surface[3],
+          },
         }}
       >
-        Upload a video to get started
+        <UploadFileIcon sx={{ fontSize: 48, color: 'text.disabled' }} />
+        <Typography variant="body1" sx={{ color: 'text.secondary' }}>
+          Upload a video to get started
+        </Typography>
+        <Typography variant="caption" sx={{ color: 'text.disabled' }}>
+          Supports MP4, MOV, and WebM
+        </Typography>
       </Box>
     );
   }
@@ -135,23 +152,40 @@ export function VideoPlayer() {
       sx={{
         width: '100%',
         aspectRatio: '16/9',
-        bgcolor: 'black',
-        borderRadius: 1,
+        bgcolor: '#000',
+        borderRadius: 2,
         overflow: 'hidden',
         position: 'relative',
+        boxShadow: designTokens.colors.video.shadow,
+        // Premium border effect
+        '&::before': {
+          content: '""',
+          position: 'absolute',
+          inset: 0,
+          borderRadius: 2,
+          padding: '1px',
+          background: 'linear-gradient(135deg, rgba(255,255,255,0.1) 0%, transparent 50%, rgba(255,255,255,0.05) 100%)',
+          WebkitMask: 'linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)',
+          WebkitMaskComposite: 'xor',
+          maskComposite: 'exclude',
+          pointerEvents: 'none',
+        },
       }}
     >
+      {/* Loading overlay */}
       {isLoading && (
         <Box
           sx={{
             position: 'absolute',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            bgcolor: 'rgba(0, 0, 0, 0.7)',
             zIndex: 2,
           }}
         >
-          <CircularProgress />
+          <CircularProgress color="primary" />
         </Box>
       )}
 

@@ -681,7 +681,16 @@ export function Timeline() {
           <IconButton size="small" onClick={jumpToPrevRally} title="Previous rally">
             <SkipPreviousIcon fontSize="small" />
           </IconButton>
-          <IconButton size="small" onClick={() => isPlaying ? pause() : play()} title="Play/Pause (Space)">
+          <IconButton
+            size="small"
+            onClick={() => isPlaying ? pause() : play()}
+            title="Play/Pause (Space)"
+            sx={{
+              bgcolor: 'primary.main',
+              color: 'primary.contrastText',
+              '&:hover': { bgcolor: 'primary.dark' },
+            }}
+          >
             {isPlaying ? <PauseIcon /> : <PlayArrowIcon />}
           </IconButton>
           <IconButton size="small" onClick={jumpToNextRally} title="Next rally">
@@ -809,23 +818,26 @@ export function Timeline() {
             overflowX: 'auto !important',
           },
           '& .timeline-editor-time-area': {
-            background: '#1a1a1a !important',
+            background: '#0F1116 !important',
           },
           '& .timeline-editor-action': {
-            background: '#1976d2 !important',
+            background: 'linear-gradient(180deg, #3B82F6 0%, #2563EB 100%) !important',
             borderRadius: '4px !important',
             cursor: 'pointer',
             overflow: 'visible !important',
             zIndex: '10 !important',
             transition: 'all 0.2s ease !important',
+            border: '1px solid rgba(255,255,255,0.1) !important',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.2) !important',
             // Dim non-selected when there's a selection
             ...(selectedRallyId && {
               opacity: '0.4 !important',
               filter: 'saturate(0.5) !important',
             }),
             '&:hover': {
-              background: '#1565c0 !important',
+              background: 'linear-gradient(180deg, #60A5FA 0%, #3B82F6 100%) !important',
               opacity: '0.7 !important',
+              boxShadow: '0 4px 8px rgba(59, 130, 246, 0.3) !important',
             },
           },
           // Allow resize cursor on edges
@@ -833,16 +845,17 @@ export function Timeline() {
             cursor: 'ew-resize !important',
           },
           '& .timeline-editor-action-selected': {
-            background: '#2196f3 !important',
-            boxShadow: '0 0 0 2px rgba(255,255,255,0.8), 0 4px 12px rgba(33,150,243,0.4) !important',
+            background: 'linear-gradient(180deg, #FF6B4A 0%, #E55235 100%) !important',
+            boxShadow: '0 0 0 2px rgba(255,107,74,0.5), 0 4px 12px rgba(255,107,74,0.4) !important',
             zIndex: '20 !important',
             opacity: '1 !important',
             filter: 'saturate(1) !important',
             transform: 'scale(1.02)',
+            border: '1px solid rgba(255,255,255,0.3) !important',
             '&:hover': {
-              background: '#42a5f5 !important',
+              background: 'linear-gradient(180deg, #FF8A6F 0%, #FF6B4A 100%) !important',
               opacity: '1 !important',
-              boxShadow: '0 0 0 2px rgba(255,255,255,0.9), 0 6px 16px rgba(33,150,243,0.5) !important',
+              boxShadow: '0 0 0 2px rgba(255,107,74,0.6), 0 6px 16px rgba(255,107,74,0.5) !important',
             },
           },
           // Hide the default cursor completely
@@ -1092,7 +1105,8 @@ export function Timeline() {
                 top: 28,
                 bottom: 0,
                 width: 2,
-                bgcolor: '#ef5350',
+                bgcolor: '#FF6B4A',
+                boxShadow: '0 0 8px rgba(255, 107, 74, 0.6)',
               }}
             />
             {/* Cursor head */}
@@ -1104,13 +1118,13 @@ export function Timeline() {
                 transform: 'translateX(-50%)',
                 width: 14,
                 height: 22,
-                bgcolor: '#ef5350',
+                bgcolor: '#FF6B4A',
                 borderRadius: '3px 3px 0 0',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
+                boxShadow: '0 2px 6px rgba(255, 107, 74, 0.4)',
                 cursor: 'ew-resize',
                 pointerEvents: 'auto',
                 '&:hover': {
-                  bgcolor: '#f44336',
+                  bgcolor: '#FF8A6F',
                 },
                 '&::after': {
                   content: '""',
@@ -1122,7 +1136,7 @@ export function Timeline() {
                   height: 0,
                   borderLeft: '5px solid transparent',
                   borderRight: '5px solid transparent',
-                  borderTop: '6px solid #ef5350',
+                  borderTop: '6px solid #FF6B4A',
                 },
               }}
               onMouseDown={(e) => {
@@ -1165,12 +1179,12 @@ export function Timeline() {
                   pointerEvents: 'auto',
                   width: 28,
                   height: 28,
-                  bgcolor: '#ef5350',
+                  bgcolor: '#FF6B4A',
                   color: 'white',
                   border: '2px solid white',
-                  boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+                  boxShadow: '0 2px 8px rgba(255, 107, 74, 0.5)',
                   '&:hover': {
-                    bgcolor: '#f44336',
+                    bgcolor: '#FF8A6F',
                     transform: 'translate(-50%, -50%) scale(1.1)',
                   },
                   transition: 'transform 0.15s, background-color 0.15s',

@@ -76,18 +76,18 @@ export interface SessionManifest {
   };
 }
 
-/** Color palette for highlights - designed for dark theme */
+/** Color palette for highlights - beach volleyball theme */
 export const HIGHLIGHT_COLORS = [
-  '#FF6B6B', // Coral Red
-  '#4ECDC4', // Teal
-  '#FFE66D', // Yellow
-  '#95E1D3', // Mint
-  '#F38181', // Salmon
-  '#AA96DA', // Lavender
-  '#FCBAD3', // Pink
-  '#A8D8EA', // Sky Blue
-  '#FF9F43', // Orange
-  '#6A89CC', // Periwinkle
+  '#FFE66D', // Sand Gold
+  '#FF6B4A', // Coral (Primary)
+  '#00D4AA', // Teal (Secondary)
+  '#FF8A6F', // Sunset Peach
+  '#4DDFBF', // Aqua Mint
+  '#F5BC3C', // Warm Gold
+  '#60A5FA', // Sky Blue
+  '#FB7185', // Rose
+  '#A78BFA', // Lavender
+  '#34D399', // Emerald
 ] as const;
 
 /** Complete JSON file structure matching RallyCut output */

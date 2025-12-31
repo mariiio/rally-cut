@@ -20,7 +20,6 @@ import {
   ListItemIcon,
   ListItemText,
 } from '@mui/material';
-import AddIcon from '@mui/icons-material/Add';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -51,6 +50,7 @@ import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useExportStore } from '@/stores/exportStore';
 import { Rally } from '@/types/rally';
+import { designTokens } from '@/app/theme';
 
 // Helper to format time as MM:SS
 function formatTime(seconds: number): string {
@@ -91,31 +91,34 @@ function SortableRallyItem({ rally, index, matchName, isActive, onClick, onRemov
       style={style}
       onClick={onClick}
       sx={{
-        py: 0.25,
-        px: 0.5,
-        minHeight: 28,
+        py: 0.5,
+        px: 1,
+        minHeight: 32,
         cursor: 'pointer',
-        bgcolor: isActive ? 'rgba(255, 255, 255, 0.12)' : 'transparent',
-        '&:hover': { bgcolor: 'rgba(255, 255, 255, 0.06)' },
+        bgcolor: isActive ? 'action.selected' : 'transparent',
+        borderRadius: 1,
+        mb: 0.25,
+        transition: designTokens.transitions.fast,
+        '&:hover': { bgcolor: isActive ? 'action.selected' : 'action.hover' },
         '&:hover .remove-btn': { opacity: 1 },
       }}
     >
       <ListItemIcon
         {...attributes}
         {...listeners}
-        sx={{ minWidth: 20, cursor: 'grab' }}
+        sx={{ minWidth: 24, cursor: 'grab' }}
       >
-        <DragIndicatorIcon sx={{ fontSize: 14, color: 'text.disabled' }} />
+        <DragIndicatorIcon sx={{ fontSize: 16, color: 'text.disabled' }} />
       </ListItemIcon>
 
       <ListItemText
         primary={
-          <Typography component="span" sx={{ fontSize: 11, fontFamily: 'monospace' }}>
-            {String(index + 1).padStart(2, '0')} {formatTime(rally.start_time)}-{formatTime(rally.end_time)}
+          <Typography component="span" sx={{ fontSize: '0.75rem', fontFamily: 'monospace' }}>
+            {String(index + 1).padStart(2, '0')} {formatTime(rally.start_time)}→{formatTime(rally.end_time)}
           </Typography>
         }
         secondary={
-          <Typography component="span" sx={{ fontSize: 9, color: 'text.disabled' }}>
+          <Typography component="span" sx={{ fontSize: '0.625rem', color: 'text.disabled' }}>
             {matchName} ({(rally.end_time - rally.start_time).toFixed(1)}s)
           </Typography>
         }
@@ -130,9 +133,10 @@ function SortableRallyItem({ rally, index, matchName, isActive, onClick, onRemov
           opacity: 0,
           p: 0.25,
           transition: 'opacity 0.15s',
+          '&:hover': { color: 'error.main' },
         }}
       >
-        <CloseIcon sx={{ fontSize: 12 }} />
+        <CloseIcon sx={{ fontSize: 14 }} />
       </IconButton>
     </ListItem>
   );
@@ -143,10 +147,8 @@ export function HighlightsPanel() {
     highlights,
     selectedHighlightId,
     selectHighlight,
-    createHighlight,
     deleteHighlight,
     renameHighlight,
-    canCreateHighlight,
     videoFile,
     videoUrl,
     getAllRallies,
@@ -168,7 +170,6 @@ export function HighlightsPanel() {
     startHighlightPlayback,
     stopHighlightPlayback,
     seek,
-    highlightRallyIndex,
     getCurrentPlaylistRally,
   } = usePlayerStore();
 
@@ -230,11 +231,6 @@ export function HighlightsPanel() {
       setActiveMatch(match.id);
     }
     seek(rally.start_time);
-  };
-
-  const handleCreate = () => {
-    const newId = createHighlight();
-    selectHighlight(newId);
   };
 
   const handlePlay = (highlightId: string, e: React.MouseEvent) => {
@@ -320,334 +316,296 @@ export function HighlightsPanel() {
       .map((id) => allRallies.find((r) => r.id === id))
       .filter((r): r is Rally => r !== undefined);
 
-    // Note: Cross-match export would need special handling in exportStore
-    // For now, this will only export rallies from the current video source
     downloadHighlight(videoSource, highlightRallies, highlight.id, highlight.name, withFade);
     setDownloadAnchor(null);
   };
 
-  return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Header */}
+  // Empty state
+  if (!highlights || highlights.length === 0) {
+    return (
       <Box
         sx={{
-          px: 1.5,
-          py: 1,
-          borderBottom: 1,
-          borderColor: 'divider',
+          flex: 1,
           display: 'flex',
+          flexDirection: 'column',
           alignItems: 'center',
-          justifyContent: 'space-between',
+          justifyContent: 'center',
+          p: 3,
+          textAlign: 'center',
         }}
       >
-        <Typography
-          variant="overline"
-          sx={{
-            fontSize: 11,
-            fontWeight: 600,
-            letterSpacing: 1,
-            color: 'text.secondary',
-          }}
-        >
-          Highlights
+        <Typography variant="body2" sx={{ color: 'text.disabled', mb: 1 }}>
+          No highlights yet
         </Typography>
-        <Tooltip
-          title={
-            canCreateHighlight()
-              ? 'Create highlight'
-              : 'All highlights must have segments first'
-          }
-        >
-          <span>
-            <IconButton
-              size="small"
-              onClick={handleCreate}
-              disabled={!canCreateHighlight()}
-              color="primary"
-            >
-              <AddIcon fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
+        <Typography variant="caption" sx={{ color: 'text.disabled' }}>
+          Select a rally and press Enter to add to a highlight
+        </Typography>
       </Box>
+    );
+  }
 
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Highlights list */}
-      <Box sx={{ flex: 1, overflow: 'auto' }}>
-        {!highlights || highlights.length === 0 ? (
-          <Box
-            sx={{
-              p: 2,
-              textAlign: 'center',
-              color: 'text.disabled',
-            }}
-          >
-            <Typography variant="caption">No highlights yet</Typography>
-            <Typography
-              variant="caption"
-              sx={{ display: 'block', mt: 0.5, fontSize: 10 }}
-            >
-              Select a segment and press Enter
-            </Typography>
-          </Box>
-        ) : (
-          <Box sx={{ py: 0.5 }}>
-            {highlights.map((highlight) => {
-              const isSelected = selectedHighlightId === highlight.id;
-              const isPlaying = playingHighlightId === highlight.id;
-              const rallyCount = highlight.rallyIds?.length ?? 0;
-              const isExpanded = expandedHighlights.has(highlight.id);
+      <Box sx={{ flex: 1, overflow: 'auto', py: 0.5 }}>
+        {highlights.map((highlight) => {
+          const isSelected = selectedHighlightId === highlight.id;
+          const isPlaying = playingHighlightId === highlight.id;
+          const rallyCount = highlight.rallyIds?.length ?? 0;
+          const isExpanded = expandedHighlights.has(highlight.id);
 
-              // Get rallies in custom order (rallyIds order)
-              const orderedRallies = highlight.rallyIds
-                .map((id) => allRallies.find((r) => r.id === id))
-                .filter((r): r is Rally => r !== undefined);
+          // Get rallies in custom order (rallyIds order)
+          const orderedRallies = highlight.rallyIds
+            .map((id) => allRallies.find((r) => r.id === id))
+            .filter((r): r is Rally => r !== undefined);
 
-              // Get current playing rally for this highlight
-              const currentPlaylistRally = getCurrentPlaylistRally();
+          // Get current playing rally for this highlight
+          const currentPlaylistRally = getCurrentPlaylistRally();
 
-              return (
-                <Box key={highlight.id}>
-                  {/* Highlight row */}
-                  <Box
-                    onClick={() =>
-                      selectHighlight(isSelected ? null : highlight.id)
-                    }
+          return (
+            <Box key={highlight.id}>
+              {/* Highlight row */}
+              <Box
+                onClick={() =>
+                  selectHighlight(isSelected ? null : highlight.id)
+                }
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  px: 1.5,
+                  py: 1,
+                  cursor: 'pointer',
+                  borderLeft: '3px solid',
+                  borderColor: isSelected ? highlight.color : 'transparent',
+                  bgcolor: isSelected
+                    ? 'action.selected'
+                    : isPlaying
+                    ? 'rgba(0, 212, 170, 0.08)'
+                    : 'transparent',
+                  transition: designTokens.transitions.fast,
+                  '&:hover': {
+                    bgcolor: isSelected
+                      ? 'action.selected'
+                      : 'action.hover',
+                  },
+                }}
+              >
+                {/* Expand/collapse icon */}
+                <IconButton
+                  size="small"
+                  onClick={(e) => toggleExpanded(highlight.id, e)}
+                  disabled={rallyCount === 0}
+                  sx={{ p: 0.25, mr: 0.5 }}
+                >
+                  {isExpanded ? (
+                    <ExpandMoreIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
+                  ) : (
+                    <ChevronRightIcon sx={{ fontSize: 18, color: rallyCount === 0 ? 'text.disabled' : 'text.secondary' }} />
+                  )}
+                </IconButton>
+
+                {/* Color dot */}
+                <Box
+                  sx={{
+                    width: 14,
+                    height: 14,
+                    borderRadius: '50%',
+                    bgcolor: highlight.color,
+                    mr: 1.5,
+                    flexShrink: 0,
+                    boxShadow: isPlaying
+                      ? `0 0 12px ${highlight.color}`
+                      : 'none',
+                    transition: 'box-shadow 0.3s ease',
+                  }}
+                />
+
+                {/* Name (editable) */}
+                {editingId === highlight.id ? (
+                  <TextField
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    onBlur={handleSaveEdit}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSaveEdit();
+                      if (e.key === 'Escape') setEditingId(null);
+                      e.stopPropagation();
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    size="small"
+                    autoFocus
                     sx={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      px: 1,
-                      py: 0.75,
-                      cursor: 'pointer',
-                      borderLeft: '3px solid',
-                      borderColor: isSelected ? highlight.color : 'transparent',
-                      bgcolor: isSelected
-                        ? 'rgba(255, 255, 255, 0.08)'
-                        : isPlaying
-                        ? 'rgba(255, 255, 255, 0.04)'
-                        : 'transparent',
-                      transition: 'all 0.15s ease',
-                      '&:hover': {
-                        bgcolor: isSelected
-                          ? 'rgba(255, 255, 255, 0.12)'
-                          : 'rgba(255, 255, 255, 0.04)',
+                      flex: 1,
+                      '& .MuiInputBase-input': {
+                        fontSize: '0.875rem',
+                        py: 0.25,
                       },
                     }}
+                  />
+                ) : (
+                  <Typography
+                    onDoubleClick={(e) => handleStartEdit(highlight, e)}
+                    sx={{
+                      flex: 1,
+                      fontSize: '0.875rem',
+                      fontWeight: isSelected ? 600 : 400,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
                   >
-                    {/* Expand/collapse icon */}
+                    {highlight.name}
+                  </Typography>
+                )}
+
+                {/* Edit button */}
+                {editingId !== highlight.id && (
+                  <Tooltip title="Rename">
                     <IconButton
                       size="small"
-                      onClick={(e) => toggleExpanded(highlight.id, e)}
-                      disabled={rallyCount === 0}
-                      sx={{ p: 0.25, mr: 0.5 }}
+                      onClick={(e) => handleStartEdit(highlight, e)}
+                      sx={{ opacity: isSelected ? 1 : 0.5, '&:hover': { opacity: 1 } }}
                     >
-                      {isExpanded ? (
-                        <ExpandMoreIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
-                      ) : (
-                        <ChevronRightIcon sx={{ fontSize: 16, color: rallyCount === 0 ? 'text.disabled' : 'text.secondary' }} />
-                      )}
+                      <EditIcon sx={{ fontSize: 16 }} />
                     </IconButton>
+                  </Tooltip>
+                )}
 
-                    {/* Color dot */}
-                    <Box
-                      sx={{
-                        width: 12,
-                        height: 12,
-                        borderRadius: '50%',
-                        bgcolor: highlight.color,
-                        mr: 1,
-                        flexShrink: 0,
-                        boxShadow: isPlaying
-                          ? `0 0 8px ${highlight.color}`
-                          : 'none',
-                      }}
-                    />
+                {/* Rally count */}
+                <Chip
+                  label={rallyCount}
+                  size="small"
+                  sx={{
+                    height: 20,
+                    fontSize: '0.6875rem',
+                    fontWeight: 600,
+                    mx: 0.5,
+                    bgcolor: `${highlight.color}20`,
+                    color: highlight.color,
+                  }}
+                />
 
-                    {/* Name (editable) */}
-                    {editingId === highlight.id ? (
-                      <TextField
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                        onBlur={handleSaveEdit}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') handleSaveEdit();
-                          if (e.key === 'Escape') setEditingId(null);
-                          e.stopPropagation();
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                        size="small"
-                        autoFocus
-                        sx={{
-                          flex: 1,
-                          '& .MuiInputBase-input': {
-                            fontSize: 13,
-                            py: 0.25,
-                          },
-                        }}
-                      />
-                    ) : (
-                      <Typography
-                        onDoubleClick={(e) => handleStartEdit(highlight, e)}
-                        sx={{
-                          flex: 1,
-                          fontSize: 13,
-                          fontWeight: isSelected ? 500 : 400,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {highlight.name}
-                      </Typography>
-                    )}
-
-                    {/* Edit button */}
-                    {editingId !== highlight.id && (
-                      <Tooltip title="Rename">
-                        <IconButton
-                          size="small"
-                          onClick={(e) => handleStartEdit(highlight, e)}
-                          sx={{ color: 'text.secondary' }}
-                        >
-                          <EditIcon sx={{ fontSize: 16 }} />
-                        </IconButton>
-                      </Tooltip>
-                    )}
-
-                    {/* Rally count */}
-                    <Chip
-                      label={rallyCount}
-                      size="small"
-                      sx={{
-                        height: 18,
-                        fontSize: 10,
-                        fontWeight: 600,
-                        mx: 0.5,
-                        bgcolor: 'action.selected',
-                      }}
-                    />
-
-                    {/* Download button */}
-                    {videoSource && (
-                      <Tooltip title={rallyCount === 0 ? 'No rallies' : 'Download highlight'}>
-                        <span>
-                          <IconButton
-                            size="small"
-                            onClick={(e) => handleDownloadClick(highlight.id, e)}
-                            disabled={rallyCount === 0 || isExporting}
-                            sx={{ color: exportingHighlightId === highlight.id ? 'primary.main' : 'text.secondary' }}
-                          >
-                            {exportingHighlightId === highlight.id ? (
-                              <CircularProgress size={14} />
-                            ) : (
-                              <FileDownloadIcon sx={{ fontSize: 16 }} />
-                            )}
-                          </IconButton>
-                        </span>
-                      </Tooltip>
-                    )}
-
-                    {/* Play/Stop button */}
-                    {isPlaying ? (
+                {/* Download button */}
+                {videoSource && (
+                  <Tooltip title={rallyCount === 0 ? 'No rallies' : 'Download highlight'}>
+                    <span>
                       <IconButton
                         size="small"
-                        onClick={handleStop}
-                        sx={{ color: highlight.color }}
+                        onClick={(e) => handleDownloadClick(highlight.id, e)}
+                        disabled={rallyCount === 0 || isExporting}
+                        sx={{
+                          opacity: isSelected || exportingHighlightId === highlight.id ? 1 : 0.5,
+                          '&:hover': { opacity: 1 },
+                        }}
                       >
-                        <StopIcon sx={{ fontSize: 16 }} />
+                        {exportingHighlightId === highlight.id ? (
+                          <CircularProgress size={16} />
+                        ) : (
+                          <FileDownloadIcon sx={{ fontSize: 18 }} />
+                        )}
                       </IconButton>
-                    ) : (
-                      <Tooltip title={rallyCount === 0 ? 'No rallies' : 'Play highlight'}>
-                        <span>
-                          <IconButton
-                            size="small"
-                            onClick={(e) => handlePlay(highlight.id, e)}
-                            disabled={rallyCount === 0}
-                            sx={{ color: 'text.secondary' }}
-                          >
-                            <PlayArrowIcon sx={{ fontSize: 16 }} />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
-                    )}
+                    </span>
+                  </Tooltip>
+                )}
 
-                    {/* Delete button with confirmation */}
-                    {deleteConfirmId === highlight.id ? (
-                      <Stack direction="row" spacing={0.25}>
-                        <Tooltip title="Confirm delete">
-                          <IconButton
-                            size="small"
-                            onClick={(e) => handleConfirmDelete(highlight.id, e)}
-                            sx={{
-                              color: 'white',
-                              bgcolor: '#d32f2f',
-                              width: 22,
-                              height: 22,
-                              '&:hover': { bgcolor: '#f44336' },
-                            }}
-                          >
-                            <CheckIcon sx={{ fontSize: 14 }} />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Cancel">
-                          <IconButton
-                            size="small"
-                            onClick={handleCancelDelete}
-                            sx={{
-                              color: 'text.secondary',
-                              width: 22,
-                              height: 22,
-                              '&:hover': { bgcolor: 'action.hover' },
-                            }}
-                          >
-                            <CloseIcon sx={{ fontSize: 14 }} />
-                          </IconButton>
-                        </Tooltip>
-                      </Stack>
-                    ) : (
+                {/* Play/Stop button */}
+                {isPlaying ? (
+                  <IconButton
+                    size="small"
+                    onClick={handleStop}
+                    sx={{ color: highlight.color }}
+                  >
+                    <StopIcon sx={{ fontSize: 18 }} />
+                  </IconButton>
+                ) : (
+                  <Tooltip title={rallyCount === 0 ? 'No rallies' : 'Play highlight'}>
+                    <span>
                       <IconButton
                         size="small"
-                        onClick={(e) => handleDeleteClick(highlight.id, e)}
-                        sx={{ color: 'text.secondary' }}
+                        onClick={(e) => handlePlay(highlight.id, e)}
+                        disabled={rallyCount === 0}
+                        color="secondary"
                       >
-                        <DeleteIcon sx={{ fontSize: 16 }} />
+                        <PlayArrowIcon sx={{ fontSize: 18 }} />
                       </IconButton>
-                    )}
-                  </Box>
+                    </span>
+                  </Tooltip>
+                )}
 
-                  {/* Collapsible rally list */}
-                  <Collapse in={isExpanded && rallyCount > 0}>
-                    <Box sx={{ pl: 4, pr: 1, bgcolor: 'rgba(0, 0, 0, 0.15)' }}>
-                      <DndContext
-                        sensors={sensors}
-                        collisionDetection={closestCenter}
-                        onDragEnd={(event) => handleDragEnd(highlight.id, event)}
+                {/* Delete button with confirmation */}
+                {deleteConfirmId === highlight.id ? (
+                  <Stack direction="row" spacing={0.25}>
+                    <Tooltip title="Confirm delete">
+                      <IconButton
+                        size="small"
+                        onClick={(e) => handleConfirmDelete(highlight.id, e)}
+                        sx={{
+                          color: 'white',
+                          bgcolor: 'error.main',
+                          width: 24,
+                          height: 24,
+                          '&:hover': { bgcolor: 'error.light' },
+                        }}
                       >
-                        <SortableContext
-                          items={orderedRallies.map((r) => r.id)}
-                          strategy={verticalListSortingStrategy}
-                        >
-                          <List dense disablePadding>
-                            {orderedRallies.map((rally, index) => (
-                              <SortableRallyItem
-                                key={rally.id}
-                                rally={rally}
-                                index={index}
-                                matchName={getRallyMatch(rally.id)?.name ?? 'Unknown'}
-                                isActive={isPlaying && currentPlaylistRally?.id === rally.id}
-                                onClick={() => handleRallyClick(rally)}
-                                onRemove={() => removeRallyFromHighlight(rally.id, highlight.id)}
-                              />
-                            ))}
-                          </List>
-                        </SortableContext>
-                      </DndContext>
-                    </Box>
-                  </Collapse>
+                        <CheckIcon sx={{ fontSize: 14 }} />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Cancel">
+                      <IconButton
+                        size="small"
+                        onClick={handleCancelDelete}
+                        sx={{ width: 24, height: 24 }}
+                      >
+                        <CloseIcon sx={{ fontSize: 14 }} />
+                      </IconButton>
+                    </Tooltip>
+                  </Stack>
+                ) : (
+                  <IconButton
+                    size="small"
+                    onClick={(e) => handleDeleteClick(highlight.id, e)}
+                    sx={{
+                      opacity: isSelected ? 1 : 0.5,
+                      '&:hover': { opacity: 1, color: 'error.main' },
+                    }}
+                  >
+                    <DeleteIcon sx={{ fontSize: 18 }} />
+                  </IconButton>
+                )}
+              </Box>
+
+              {/* Collapsible rally list */}
+              <Collapse in={isExpanded && rallyCount > 0}>
+                <Box sx={{ px: 1, py: 0.5, bgcolor: designTokens.colors.surface[2] }}>
+                  <DndContext
+                    sensors={sensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={(event) => handleDragEnd(highlight.id, event)}
+                  >
+                    <SortableContext
+                      items={orderedRallies.map((r) => r.id)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      <List dense disablePadding>
+                        {orderedRallies.map((rally, index) => (
+                          <SortableRallyItem
+                            key={rally.id}
+                            rally={rally}
+                            index={index}
+                            matchName={getRallyMatch(rally.id)?.name ?? 'Unknown'}
+                            isActive={isPlaying && currentPlaylistRally?.id === rally.id}
+                            onClick={() => handleRallyClick(rally)}
+                            onRemove={() => removeRallyFromHighlight(rally.id, highlight.id)}
+                          />
+                        ))}
+                      </List>
+                    </SortableContext>
+                  </DndContext>
                 </Box>
-              );
-            })}
-          </Box>
-        )}
+              </Collapse>
+            </Box>
+          );
+        })}
       </Box>
 
       {/* Download Popover */}
@@ -658,7 +616,10 @@ export function HighlightsPanel() {
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
         transformOrigin={{ vertical: 'top', horizontal: 'right' }}
       >
-        <Box sx={{ p: 2, minWidth: 180 }}>
+        <Box sx={{ p: 2, minWidth: 200 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1.5 }}>
+            Export Options
+          </Typography>
           <FormControlLabel
             control={
               <Switch
@@ -678,7 +639,7 @@ export function HighlightsPanel() {
             startIcon={<FileDownloadIcon />}
             onClick={handleDownload}
             disabled={isExporting}
-            sx={{ mt: 1.5 }}
+            sx={{ mt: 2 }}
           >
             Download
           </Button>
