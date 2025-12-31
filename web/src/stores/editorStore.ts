@@ -43,6 +43,7 @@ interface PersistedSession {
 
 const STORAGE_KEY_PREFIX = 'rallycut_session_';
 const MAX_HISTORY_SIZE = 50;
+const DEFAULT_RALLY_DURATION = 7;
 
 const getStorageKey = (sessionId: string) => `${STORAGE_KEY_PREFIX}${sessionId}_v1`;
 
@@ -461,7 +462,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     return true;
   },
 
-  createRallyAtTime: (time: number, duration: number = 5) => {
+  createRallyAtTime: (time: number, duration: number = DEFAULT_RALLY_DURATION) => {
     const state = get();
     const videoDuration = state.videoMetadata?.duration ?? Infinity;
 
