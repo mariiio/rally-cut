@@ -35,6 +35,7 @@ import {
   isJsonFile,
 } from '@/utils/fileHandlers';
 import { designTokens } from '@/app/theme';
+import { ConfirmDialog } from './ConfirmDialog';
 
 export function EditorHeader() {
   const videoInputRef = useRef<HTMLInputElement>(null);
@@ -42,6 +43,7 @@ export function EditorHeader() {
   const [error, setError] = useState<string | null>(null);
   const [importAnchorEl, setImportAnchorEl] = useState<null | HTMLElement>(null);
   const [exportAnchorEl, setExportAnchorEl] = useState<null | HTMLElement>(null);
+  const [showResetDialog, setShowResetDialog] = useState(false);
 
   const {
     session,
@@ -157,20 +159,6 @@ export function EditorHeader() {
         <Stack direction="row" alignItems="center" spacing={2} sx={{ flex: 1, minWidth: 0 }}>
           {session ? (
             <>
-              <Typography
-                variant="body2"
-                sx={{
-                  color: 'text.secondary',
-                  fontWeight: 500,
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  maxWidth: 200,
-                }}
-              >
-                {session.name || 'Untitled Session'}
-              </Typography>
-
               {session.matches.length > 1 && (
                 <Select
                   value={activeMatchId || ''}
@@ -242,7 +230,7 @@ export function EditorHeader() {
             <span>
               <IconButton
                 size="small"
-                onClick={resetToOriginal}
+                onClick={() => setShowResetDialog(true)}
                 disabled={!hasChangesFromOriginal()}
               >
                 <RestoreIcon fontSize="small" />
@@ -349,6 +337,17 @@ export function EditorHeader() {
           {error}
         </Alert>
       </Snackbar>
+
+      {/* Reset confirmation dialog */}
+      <ConfirmDialog
+        open={showResetDialog}
+        title="Reset all changes?"
+        message="This will discard all your edits and restore the original rally data. This action cannot be undone."
+        confirmLabel="Reset"
+        cancelLabel="Keep editing"
+        onConfirm={resetToOriginal}
+        onCancel={() => setShowResetDialog(false)}
+      />
     </>
   );
 }
