@@ -42,8 +42,6 @@ import {
   DragOverEvent,
   useDroppable,
   DragOverlay,
-  pointerWithin,
-  rectIntersection,
 } from '@dnd-kit/core';
 import {
   SortableContext,
@@ -294,16 +292,8 @@ export function HighlightsPanel() {
     })
   );
 
-  // Custom collision detection that prefers droppable zones
-  const collisionDetection = (args: Parameters<typeof closestCenter>[0]) => {
-    // First check if we're over a droppable zone
-    const pointerCollisions = pointerWithin(args);
-    if (pointerCollisions.length > 0) {
-      return pointerCollisions;
-    }
-    // Fall back to rect intersection
-    return rectIntersection(args);
-  };
+  // Use closestCenter for reliable collision detection in vertical list
+  const collisionDetection = closestCenter;
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveDragId(event.active.id as string);
