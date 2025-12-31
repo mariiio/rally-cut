@@ -8,16 +8,11 @@ import {
   Snackbar,
   Alert,
   IconButton,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogContentText,
-  DialogActions,
-  Button,
 } from '@mui/material';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import { useExportStore } from '@/stores/exportStore';
+import { ConfirmDialog } from './ConfirmDialog';
 
 export function ExportProgress() {
   const { isExporting, progress, currentStep, error, clearError, reset, cancel } = useExportStore();
@@ -176,44 +171,15 @@ export function ExportProgress() {
       </Box>
 
       {/* Cancel confirmation dialog */}
-      <Dialog
+      <ConfirmDialog
         open={showCancelDialog}
-        onClose={() => setShowCancelDialog(false)}
-      >
-        <DialogTitle>Cancel export?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            The export is {progress}% complete. Are you sure you want to cancel?
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
-          <Button
-            onClick={() => setShowCancelDialog(false)}
-            variant="contained"
-            color="primary"
-          >
-            Continue
-          </Button>
-          <Button
-            onClick={() => {
-              setShowCancelDialog(false);
-              cancel();
-            }}
-            variant="outlined"
-            sx={{
-              color: 'text.secondary',
-              borderColor: 'divider',
-              '&:hover': {
-                borderColor: 'error.main',
-                color: 'error.main',
-                bgcolor: 'rgba(239, 68, 68, 0.08)',
-              },
-            }}
-          >
-            Cancel export
-          </Button>
-        </DialogActions>
-      </Dialog>
+        title="Cancel export?"
+        message={`The export is ${progress}% complete. Are you sure you want to cancel?`}
+        confirmLabel="Cancel export"
+        cancelLabel="Continue"
+        onConfirm={cancel}
+        onCancel={() => setShowCancelDialog(false)}
+      />
     </Box>
   );
 }

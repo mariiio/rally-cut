@@ -12,6 +12,11 @@ import {
   RallyWithSource,
 } from '@/utils/videoExport';
 
+const BROWSER_NOT_SUPPORTED_ERROR =
+  'Your browser does not support video export. Please use a modern browser like Chrome, Firefox, or Edge.';
+
+const AUTO_RESET_DELAY_MS = 2000;
+
 interface ExportState {
   // Export status
   isExporting: boolean;
@@ -49,7 +54,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
 
   downloadRally: async (videoSource: VideoSource, rally: Rally) => {
     if (!isFFmpegSupported()) {
-      set({ error: 'Your browser does not support video export. Please use a modern browser like Chrome, Firefox, or Edge.' });
+      set({ error: BROWSER_NOT_SUPPORTED_ERROR });
       return;
     }
 
@@ -86,7 +91,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
       // Auto-reset after success
       setTimeout(() => {
         set({ progress: 0, currentStep: '' });
-      }, 2000);
+      }, AUTO_RESET_DELAY_MS);
     } catch (err) {
       console.error('Export error:', err);
       let errorMessage = 'Export failed';
@@ -107,7 +112,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
 
   downloadAllRallies: async (videoSource: VideoSource, rallies: Rally[], withFade: boolean) => {
     if (!isFFmpegSupported()) {
-      set({ error: 'Your browser does not support video export. Please use a modern browser like Chrome, Firefox, or Edge.' });
+      set({ error: BROWSER_NOT_SUPPORTED_ERROR });
       return;
     }
 
@@ -149,7 +154,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
 
       setTimeout(() => {
         set({ progress: 0, currentStep: '' });
-      }, 2000);
+      }, AUTO_RESET_DELAY_MS);
     } catch (err) {
       set({
         isExporting: false,
@@ -166,7 +171,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
     withFade: boolean
   ) => {
     if (!isFFmpegSupported()) {
-      set({ error: 'Your browser does not support video export. Please use a modern browser like Chrome, Firefox, or Edge.' });
+      set({ error: BROWSER_NOT_SUPPORTED_ERROR });
       return;
     }
 
@@ -210,7 +215,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
 
       setTimeout(() => {
         set({ progress: 0, currentStep: '' });
-      }, 2000);
+      }, AUTO_RESET_DELAY_MS);
     } catch (err) {
       set({
         isExporting: false,

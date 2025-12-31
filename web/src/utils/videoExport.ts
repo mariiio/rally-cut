@@ -1,4 +1,5 @@
 import { Rally } from '@/types/rally';
+import type { FFmpegInstance } from '@/types/ffmpeg';
 
 export type VideoSource = File | string;
 
@@ -8,8 +9,14 @@ export interface RallyWithSource {
   videoSource: VideoSource;
 }
 
+// FFmpeg encoding settings - extracted to avoid duplication
+const FFMPEG_VIDEO_CODEC = ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23'];
+const FFMPEG_PIXEL_FORMAT = ['-pix_fmt', 'yuv420p'];
+const FFMPEG_AUDIO_CODEC = ['-c:a', 'aac', '-b:a', '128k'];
+const FFMPEG_ENCODE_SETTINGS = [...FFMPEG_VIDEO_CODEC, ...FFMPEG_PIXEL_FORMAT, ...FFMPEG_AUDIO_CODEC];
+
 // Singleton FFmpeg instance
-let ffmpeg: any = null;
+let ffmpeg: FFmpegInstance | null = null;
 let loadPromise: Promise<void> | null = null;
 let currentProgressCallback: ProgressCallback | null = null;
 // Track minimum progress to prevent FFmpeg from resetting our stage-based progress
@@ -104,7 +111,7 @@ export function isFFmpegSupported(): boolean {
  */
 async function loadFFmpegScript(): Promise<void> {
   // Check if already loaded
-  if ((window as any).FFmpegWASM) {
+  if (window.FFmpegWASM) {
     return;
   }
 
@@ -120,7 +127,7 @@ async function loadFFmpegScript(): Promise<void> {
 /**
  * Initialize FFmpeg.wasm (lazy load on first use)
  */
-async function getFFmpeg(onProgress?: ProgressCallback): Promise<any> {
+async function getFFmpeg(onProgress?: ProgressCallback): Promise<FFmpegInstance> {
   // Always update the current progress callback so new exports use the right callback
   currentProgressCallback = onProgress || null;
 
@@ -140,12 +147,11 @@ async function getFFmpeg(onProgress?: ProgressCallback): Promise<any> {
       // Load FFmpeg script via script tag
       await loadFFmpegScript();
 
-      const FFmpegWASM = (window as any).FFmpegWASM;
-      if (!FFmpegWASM || !FFmpegWASM.FFmpeg) {
+      if (!window.FFmpegWASM?.FFmpeg) {
         throw new Error('FFmpeg not available after script load');
       }
 
-      ffmpeg = new FFmpegWASM.FFmpeg();
+      ffmpeg = new window.FFmpegWASM.FFmpeg();
 
       // Use indirect callback so we can update it for each export
       // Only report FFmpeg progress if it's valid and higher than our current minimum
@@ -440,17 +446,11 @@ export async function exportMultiSourceConcatenated(
 
       // Re-encode to ensure consistent format across different source videos
       // and proper keyframe alignment to avoid flickering
-      // yuv420p is required for consistent pixel format across clips
       await ff.exec([
         '-ss', rally.start_time.toString(),
         '-i', inputName,
         '-t', rally.duration.toString(),
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-crf', '23',
-        '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac',
-        '-b:a', '128k',
+        ...FFMPEG_ENCODE_SETTINGS,
         '-avoid_negative_ts', 'make_zero',
         '-y',
         clipName,
@@ -507,7 +507,7 @@ export async function exportMultiSourceConcatenated(
  * Uses xfade filter for smooth blending between clips
  */
 async function exportMultiSourceWithFade(
-  ff: any,
+  ff: FFmpegInstance,
   clipNames: string[],
   outputName: string,
   rallies: Rally[]
@@ -525,9 +525,7 @@ async function exportMultiSourceWithFade(
       `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${offset},format=yuv420p[v];[0:a][1:a]acrossfade=d=${fadeDuration}[a]`,
       '-map', '[v]',
       '-map', '[a]',
-      '-c:v', 'libx264',
-      '-preset', 'ultrafast',
-      '-crf', '23',
+      ...FFMPEG_VIDEO_CODEC,
       '-c:a', 'aac',
       '-movflags', '+faststart',
       '-y',
@@ -553,9 +551,7 @@ async function exportMultiSourceWithFade(
       `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${offset},format=yuv420p[v];[0:a][1:a]acrossfade=d=${fadeDuration}[a]`,
       '-map', '[v]',
       '-map', '[a]',
-      '-c:v', 'libx264',
-      '-preset', 'ultrafast',
-      '-crf', '23',
+      ...FFMPEG_VIDEO_CODEC,
       '-c:a', 'aac',
       '-movflags', '+faststart',
       '-y',
@@ -577,7 +573,7 @@ async function exportMultiSourceWithFade(
  * Export with concat demuxer (fast, no re-encoding)
  */
 async function exportWithConcat(
-  ff: any,
+  ff: FFmpegInstance,
   inputName: string,
   outputName: string,
   ext: string,
@@ -631,7 +627,7 @@ async function exportWithConcat(
  * Uses xfade filter for smooth blending between clips
  */
 async function exportWithFade(
-  ff: any,
+  ff: FFmpegInstance,
   inputName: string,
   outputName: string,
   rallies: Rally[]
@@ -653,12 +649,7 @@ async function exportWithFade(
       '-ss', rally.start_time.toString(),
       '-i', inputName,
       '-t', rally.duration.toString(),
-      '-c:v', 'libx264',
-      '-preset', 'ultrafast',
-      '-crf', '23',
-      '-pix_fmt', 'yuv420p',
-      '-c:a', 'aac',
-      '-b:a', '128k',
+      ...FFMPEG_ENCODE_SETTINGS,
       '-avoid_negative_ts', 'make_zero',
       '-y',
       clipName,
@@ -678,9 +669,7 @@ async function exportWithFade(
       `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${offset},format=yuv420p[v];[0:a][1:a]acrossfade=d=${fadeDuration}[a]`,
       '-map', '[v]',
       '-map', '[a]',
-      '-c:v', 'libx264',
-      '-preset', 'ultrafast',
-      '-crf', '23',
+      ...FFMPEG_VIDEO_CODEC,
       '-c:a', 'aac',
       '-movflags', '+faststart',
       '-y',
@@ -706,9 +695,7 @@ async function exportWithFade(
         `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${offset},format=yuv420p[v];[0:a][1:a]acrossfade=d=${fadeDuration}[a]`,
         '-map', '[v]',
         '-map', '[a]',
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-crf', '23',
+        ...FFMPEG_VIDEO_CODEC,
         '-c:a', 'aac',
         '-movflags', '+faststart',
         '-y',
@@ -747,17 +734,6 @@ export function downloadBlob(blob: Blob, filename: string): void {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-}
-
-/**
- * Format a filename for download
- */
-export function formatExportFilename(baseName: string, rallies: Rally[]): string {
-  const date = new Date().toISOString().split('T')[0];
-  if (rallies.length === 1) {
-    return `${baseName}_rally_${rallies[0].id}_${date}.mp4`;
-  }
-  return `${baseName}_${rallies.length}rallies_${date}.mp4`;
 }
 
 export { getVideoName };

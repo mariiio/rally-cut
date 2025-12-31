@@ -101,7 +101,6 @@ interface EditorState {
   adjustRallyEnd: (id: string, delta: number) => boolean;
   createRallyAtTime: (time: number, duration?: number) => void;
   removeRally: (id: string) => void;
-  reorderRallies: (fromIndex: number, toIndex: number) => void;
   selectRally: (id: string | null) => void;
   exportToJson: () => RallyFile | null;
   clearAll: () => void;
@@ -113,7 +112,6 @@ interface EditorState {
   resetToOriginal: () => void;
   saveToStorage: () => void;
   loadFromStorage: () => boolean;
-  clearHistory: () => void;
 
   // Highlights actions
   createHighlight: (name?: string) => string;
@@ -533,21 +531,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     debouncedSave(() => get().saveToStorage());
   },
 
-  reorderRallies: (fromIndex: number, toIndex: number) => {
-    const state = get();
-    state.pushHistory();
-
-    const rallies = [...state.rallies];
-    const [removed] = rallies.splice(fromIndex, 1);
-    rallies.splice(toIndex, 0, removed);
-    set({
-      rallies,
-      hasUnsavedChanges: true,
-    });
-
-    debouncedSave(() => get().saveToStorage());
-  },
-
   selectRally: (id: string | null) => {
     set({ selectedRallyId: id });
   },
@@ -769,22 +752,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return true;
     } catch {
       return false;
-    }
-  },
-
-  clearHistory: () => {
-    const state = get();
-    set({
-      past: [],
-      future: [],
-    });
-
-    if (typeof window !== 'undefined' && state.session) {
-      try {
-        localStorage.removeItem(getStorageKey(state.session.id));
-      } catch {
-        // Ignore localStorage errors
-      }
     }
   },
 
