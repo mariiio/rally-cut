@@ -214,9 +214,17 @@ function SortableRallyItem({ rally, highlightId, matchName, isActive, onClick, o
 
       <ListItemText
         primary={
-          <Typography component="span" sx={{ fontSize: '0.8rem' }}>
-            {matchName} Rally {rallyNumber} ({duration}s)
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+            <Typography component="span" sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
+              {matchName}
+            </Typography>
+            <Typography component="span" sx={{ fontSize: '0.8rem', fontWeight: 500 }}>
+              Rally {rallyNumber}
+            </Typography>
+            <Typography component="span" sx={{ fontSize: '0.7rem', color: 'text.disabled', fontFamily: 'monospace' }}>
+              {duration}s
+            </Typography>
+          </Box>
         }
         sx={{ my: 0 }}
       />
