@@ -78,43 +78,21 @@ function parseDragId(dragId: string): { highlightId: string; rallyId: string } |
   return { highlightId: parts[0], rallyId: parts[1] };
 }
 
-// Droppable wrapper for highlight title row
-interface DroppableHighlightTitleProps {
+// Droppable wrapper for entire highlight (uses useDroppable hook)
+interface DroppableHighlightWrapperProps {
   highlightId: string;
   highlightColor: string;
+  isOverHighlight: boolean;
   children: React.ReactNode;
 }
 
-function DroppableHighlightTitle({ highlightId, highlightColor, children }: DroppableHighlightTitleProps) {
-  const { setNodeRef, isOver } = useDroppable({
-    id: `title-droppable::${highlightId}`,
-  });
-
-  return (
-    <Box
-      ref={setNodeRef}
-      sx={{
-        borderRadius: 1,
-        border: isOver ? `2px dashed ${highlightColor}` : '2px dashed transparent',
-        bgcolor: isOver ? `${highlightColor}15` : 'transparent',
-        transition: 'all 0.15s ease',
-      }}
-    >
-      {children}
-    </Box>
-  );
-}
-
-// Droppable zone for a highlight's rally list
-interface DroppableHighlightZoneProps {
-  highlightId: string;
-  children: React.ReactNode;
-  isEmpty: boolean;
-  highlightColor: string;
-}
-
-function DroppableHighlightZone({ highlightId, children, isEmpty, highlightColor }: DroppableHighlightZoneProps) {
-  const { setNodeRef, isOver } = useDroppable({
+function DroppableHighlightWrapper({
+  highlightId,
+  highlightColor,
+  isOverHighlight,
+  children
+}: DroppableHighlightWrapperProps) {
+  const { setNodeRef } = useDroppable({
     id: `droppable::${highlightId}`,
   });
 
@@ -122,27 +100,50 @@ function DroppableHighlightZone({ highlightId, children, isEmpty, highlightColor
     <Box
       ref={setNodeRef}
       sx={{
+        borderRadius: 1,
+        border: isOverHighlight ? `2px dashed ${highlightColor}` : '2px dashed transparent',
+        bgcolor: isOverHighlight ? `${highlightColor}10` : 'transparent',
+        transition: 'all 0.15s ease',
+        mb: 0.5,
+      }}
+    >
+      {children}
+    </Box>
+  );
+}
+
+// Expanded rally list section (no droppable - parent handles it)
+interface ExpandedRallySectionProps {
+  isEmpty: boolean;
+  highlightColor: string;
+  isOverHighlight: boolean;
+  children: React.ReactNode;
+}
+
+function ExpandedRallySection({ isEmpty, highlightColor, isOverHighlight, children }: ExpandedRallySectionProps) {
+  return (
+    <Box
+      sx={{
         px: 1,
         py: 0.5,
-        bgcolor: isOver ? `${highlightColor}15` : designTokens.colors.surface[2],
+        bgcolor: designTokens.colors.surface[2],
         minHeight: isEmpty ? 40 : 'auto',
-        borderRadius: 1,
-        border: isOver ? `1px dashed ${highlightColor}` : '1px dashed transparent',
-        transition: 'all 0.15s ease',
+        borderBottomLeftRadius: 4,
+        borderBottomRightRadius: 4,
       }}
     >
       {isEmpty ? (
         <Typography
           variant="caption"
           sx={{
-            color: isOver ? highlightColor : 'text.disabled',
+            color: isOverHighlight ? highlightColor : 'text.disabled',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             height: 32,
           }}
         >
-          {isOver ? 'Drop here' : 'No rallies'}
+          {isOverHighlight ? 'Drop here' : 'No rallies'}
         </Typography>
       ) : (
         children
@@ -281,6 +282,7 @@ export function HighlightsPanel() {
   const [withFade, setWithFade] = useState(false);
   const [expandedHighlights, setExpandedHighlights] = useState<Set<string>>(new Set());
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [overHighlightId, setOverHighlightId] = useState<string | null>(null);
 
   // DnD sensors
   const sensors = useSensors(
@@ -305,11 +307,38 @@ export function HighlightsPanel() {
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveDragId(event.active.id as string);
+    setOverHighlightId(null);
+  };
+
+  const handleDragOver = (event: DragOverEvent) => {
+    const { over } = event;
+    if (!over) {
+      setOverHighlightId(null);
+      return;
+    }
+
+    const overId = over.id as string;
+
+    // Check if over a droppable highlight container
+    if (overId.startsWith('droppable::')) {
+      setOverHighlightId(overId.replace('droppable::', ''));
+      return;
+    }
+
+    // Check if over a sortable rally item - extract the highlight ID
+    const parsed = parseDragId(overId);
+    if (parsed) {
+      setOverHighlightId(parsed.highlightId);
+      return;
+    }
+
+    setOverHighlightId(null);
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     setActiveDragId(null);
+    setOverHighlightId(null);
 
     if (!over) return;
 
@@ -318,24 +347,10 @@ export function HighlightsPanel() {
 
     const { highlightId: sourceHighlightId, rallyId } = activeData;
 
-    // Check if dropped on a droppable zone (title, empty highlight, or between items)
+    // Check if dropped on a droppable zone (highlight container)
     const overId = over.id as string;
 
-    // Handle drop on highlight title
-    if (overId.startsWith('title-droppable::')) {
-      const targetHighlightId = overId.replace('title-droppable::', '');
-      if (targetHighlightId !== sourceHighlightId) {
-        // Move to the end of the target highlight
-        const targetHighlight = highlights?.find((h) => h.id === targetHighlightId);
-        const targetIndex = targetHighlight?.rallyIds.length ?? 0;
-        moveRallyBetweenHighlights(rallyId, sourceHighlightId, targetHighlightId, targetIndex);
-        // Auto-expand the target highlight
-        setExpandedHighlights((prev) => new Set(prev).add(targetHighlightId));
-      }
-      return;
-    }
-
-    // Handle drop on rally list zone
+    // Handle drop on highlight container
     if (overId.startsWith('droppable::')) {
       const targetHighlightId = overId.replace('droppable::', '');
       if (targetHighlightId !== sourceHighlightId) {
@@ -522,6 +537,7 @@ export function HighlightsPanel() {
         sensors={sensors}
         collisionDetection={collisionDetection}
         onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
         onDragEnd={handleDragEnd}
       >
         <Box sx={{ flex: 1, overflow: 'auto', py: 0.5 }}>
@@ -539,15 +555,21 @@ export function HighlightsPanel() {
             // Get current playing rally for this highlight
             const currentPlaylistRally = getCurrentPlaylistRally();
 
+            // Check if a rally from another highlight is being dragged over this one
+            const activeDragData = activeDragId ? parseDragId(activeDragId) : null;
+            const isDraggingFromOther = activeDragData && activeDragData.highlightId !== highlight.id;
+            const isOverThis = overHighlightId === highlight.id && isDraggingFromOther;
+
             return (
-              <Box key={highlight.id}>
-                {/* Highlight row - wrapped in droppable zone */}
-                <DroppableHighlightTitle
-                  highlightId={highlight.id}
-                  highlightColor={highlight.color}
-                >
-                  <Box
-                    onClick={() => {
+              <DroppableHighlightWrapper
+                key={highlight.id}
+                highlightId={highlight.id}
+                highlightColor={highlight.color}
+                isOverHighlight={isOverThis ?? false}
+              >
+                {/* Highlight row */}
+                <Box
+                  onClick={() => {
                     if (isSelected) {
                       // Deselect and collapse
                       selectHighlight(null);
@@ -760,15 +782,14 @@ export function HighlightsPanel() {
                       <DeleteIcon sx={{ fontSize: 18 }} />
                     </IconButton>
                   )}
-                  </Box>
-                </DroppableHighlightTitle>
+                </Box>
 
-                {/* Collapsible rally list with droppable zone */}
+                {/* Collapsible rally list */}
                 <Collapse in={isExpanded}>
-                  <DroppableHighlightZone
-                    highlightId={highlight.id}
+                  <ExpandedRallySection
                     isEmpty={rallyCount === 0}
                     highlightColor={highlight.color}
+                    isOverHighlight={isOverThis ?? false}
                   >
                     <SortableContext
                       items={orderedRallies.map((r) => createDragId(highlight.id, r.id))}
@@ -789,9 +810,9 @@ export function HighlightsPanel() {
                         ))}
                       </List>
                     </SortableContext>
-                  </DroppableHighlightZone>
+                  </ExpandedRallySection>
                 </Collapse>
-              </Box>
+              </DroppableHighlightWrapper>
             );
           })}
         </Box>
