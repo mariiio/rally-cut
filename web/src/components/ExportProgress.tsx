@@ -1,18 +1,27 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Box,
   LinearProgress,
   Typography,
   Snackbar,
   Alert,
+  IconButton,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
+  Button,
 } from '@mui/material';
 import CheckIcon from '@mui/icons-material/Check';
+import CloseIcon from '@mui/icons-material/Close';
 import { useExportStore } from '@/stores/exportStore';
 
 export function ExportProgress() {
-  const { isExporting, progress, currentStep, error, clearError, reset } = useExportStore();
+  const { isExporting, progress, currentStep, error, clearError, reset, cancel } = useExportStore();
+  const [showCancelDialog, setShowCancelDialog] = useState(false);
 
   // Warn user before leaving page during export
   useEffect(() => {
@@ -138,18 +147,73 @@ export function ExportProgress() {
           </Typography>
         </Box>
         {!isComplete && (
-          <Typography
-            variant="caption"
-            sx={{
-              color: 'text.secondary',
-              fontSize: 11,
-              fontFamily: 'monospace',
-            }}
-          >
-            {progress}%
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'text.secondary',
+                fontSize: 11,
+                fontFamily: 'monospace',
+              }}
+            >
+              {progress}%
+            </Typography>
+            <IconButton
+              size="small"
+              onClick={() => setShowCancelDialog(true)}
+              sx={{
+                p: 0.25,
+                color: 'text.secondary',
+                '&:hover': {
+                  color: 'error.main',
+                },
+              }}
+            >
+              <CloseIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Box>
         )}
       </Box>
+
+      {/* Cancel confirmation dialog */}
+      <Dialog
+        open={showCancelDialog}
+        onClose={() => setShowCancelDialog(false)}
+      >
+        <DialogTitle>Cancel export?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            The export is {progress}% complete. Are you sure you want to cancel?
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
+          <Button
+            onClick={() => setShowCancelDialog(false)}
+            variant="contained"
+            color="primary"
+          >
+            Continue
+          </Button>
+          <Button
+            onClick={() => {
+              setShowCancelDialog(false);
+              cancel();
+            }}
+            variant="outlined"
+            sx={{
+              color: 'text.secondary',
+              borderColor: 'divider',
+              '&:hover': {
+                borderColor: 'error.main',
+                color: 'error.main',
+                bgcolor: 'rgba(239, 68, 68, 0.08)',
+              },
+            }}
+          >
+            Cancel export
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

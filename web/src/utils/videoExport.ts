@@ -14,8 +14,26 @@ let loadPromise: Promise<void> | null = null;
 let currentProgressCallback: ProgressCallback | null = null;
 // Track minimum progress to prevent FFmpeg from resetting our stage-based progress
 let minProgress = 0;
+// Cancellation flag
+let isCancelled = false;
 
 export type ProgressCallback = (progress: number, step: string) => void;
+
+/**
+ * Cancel the current export operation
+ */
+export function cancelExport(): void {
+  isCancelled = true;
+}
+
+/**
+ * Check if export was cancelled and throw if so
+ */
+function checkCancelled(): void {
+  if (isCancelled) {
+    throw new Error('Export cancelled');
+  }
+}
 
 /**
  * Report progress and update minimum to prevent FFmpeg from going backwards
@@ -63,6 +81,7 @@ const messages = {
  */
 function resetProgress() {
   minProgress = 0;
+  isCancelled = false;
 }
 
 // Local FFmpeg core files (served from public folder to avoid CORS issues with COOP/COEP)
@@ -232,17 +251,20 @@ export async function exportSingleRally(
   const inputName = `input.${ext}`;
   const outputName = `output.${ext}`;
 
+  checkCancelled();
   reportProgress(10, messages.loadingVideo);
 
   // Write input file to FFmpeg virtual filesystem
   try {
     const videoData = await fetchFileData(videoSource);
+    checkCancelled();
     await ff.writeFile(inputName, videoData);
   } catch (err) {
     console.error('Failed to load video:', err);
     throw new Error('Failed to load video. The file may be too large for browser processing (max ~500MB recommended).');
   }
 
+  checkCancelled();
   reportProgress(30, messages.extractingClip(1, 1));
 
   // Extract the clip using stream copy (fast, no re-encoding)
@@ -255,6 +277,7 @@ export async function exportSingleRally(
     outputName,
   ]);
 
+  checkCancelled();
   reportProgress(90, messages.finalizing);
 
   // Read output file
@@ -421,6 +444,7 @@ export async function exportMultiSourceConcatenated(
 
       // Re-encode to ensure consistent format across different source videos
       // and proper keyframe alignment to avoid flickering
+      // yuv420p is required for consistent pixel format across clips
       await ff.exec([
         '-ss', rally.start_time.toString(),
         '-i', inputName,
@@ -428,6 +452,7 @@ export async function exportMultiSourceConcatenated(
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
         '-crf', '23',
+        '-pix_fmt', 'yuv420p',
         '-c:a', 'aac',
         '-b:a', '128k',
         '-avoid_negative_ts', 'make_zero',
@@ -507,7 +532,9 @@ async function exportMultiSourceWithFade(
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
       '-crf', '28',
+      '-pix_fmt', 'yuv420p',
       '-c:a', 'aac',
+      '-movflags', '+faststart',
       '-y',
       outputName,
     ]);
@@ -546,7 +573,9 @@ async function exportMultiSourceWithFade(
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
       '-crf', '28',
+      '-pix_fmt', 'yuv420p',
       '-c:a', 'aac',
+      '-movflags', '+faststart',
       '-y',
       outputName,
     ]);
@@ -634,6 +663,7 @@ async function exportWithFade(
 
     // Re-encode to ensure consistent format for xfade
     // Use ultrafast preset for better browser performance
+    // yuv420p is required for consistent pixel format across clips
     const ret = await ff.exec([
       '-ss', rally.start_time.toString(),
       '-i', inputName,
@@ -641,6 +671,7 @@ async function exportWithFade(
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
       '-crf', '28',
+      '-pix_fmt', 'yuv420p',
       '-c:a', 'aac',
       '-b:a', '128k',
       '-avoid_negative_ts', 'make_zero',
@@ -672,7 +703,9 @@ async function exportWithFade(
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
       '-crf', '28',
+      '-pix_fmt', 'yuv420p',
       '-c:a', 'aac',
+      '-movflags', '+faststart',
       '-y',
       outputName,
     ]);
@@ -718,7 +751,9 @@ async function exportWithFade(
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
       '-crf', '28',
+      '-pix_fmt', 'yuv420p',
       '-c:a', 'aac',
+      '-movflags', '+faststart',
       '-y',
       outputName,
     ]);
