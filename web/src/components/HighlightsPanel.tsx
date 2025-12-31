@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo, useCallback, memo } from 'react';
 import {
   Box,
   Typography,
@@ -166,7 +166,7 @@ interface SortableRallyItemProps {
   onRemove: () => void;
 }
 
-function SortableRallyItem({ rally, highlightId, matchName, isActive, onClick, onRemove }: SortableRallyItemProps) {
+const SortableRallyItem = memo(function SortableRallyItem({ rally, highlightId, matchName, isActive, onClick, onRemove }: SortableRallyItemProps) {
   const dragId = createDragId(highlightId, rally.id);
   const {
     attributes,
@@ -244,7 +244,7 @@ function SortableRallyItem({ rally, highlightId, matchName, isActive, onClick, o
       </IconButton>
     </ListItem>
   );
-}
+});
 
 export function HighlightsPanel() {
   const {
@@ -265,7 +265,8 @@ export function HighlightsPanel() {
   } = useEditorStore();
 
   // Get all rallies across all matches for cross-match highlights
-  const allRallies = getAllRallies();
+  // Memoize to avoid recomputing on every render
+  const allRallies = useMemo(() => getAllRallies(), [getAllRallies]);
 
   // Use File if available, otherwise use URL
   const videoSource = videoFile || videoUrl;
@@ -404,21 +405,25 @@ export function HighlightsPanel() {
     }
   };
 
-  // Get active drag item info for overlay
-  const activeDragData = activeDragId ? parseDragId(activeDragId) : null;
-  const activeDragRally = activeDragData
-    ? allRallies.find((r) => r.id === activeDragData.rallyId)
-    : null;
+  // Get active drag item info for overlay - memoized
+  const activeDragData = useMemo(
+    () => (activeDragId ? parseDragId(activeDragId) : null),
+    [activeDragId]
+  );
+  const activeDragRally = useMemo(
+    () => (activeDragData ? allRallies.find((r) => r.id === activeDragData.rallyId) : null),
+    [activeDragData, allRallies]
+  );
 
-  const handleRallyClick = (rally: Rally) => {
+  const handleRallyClick = useCallback((rally: Rally) => {
     const match = getRallyMatch(rally.id);
     if (match && match.id !== activeMatchId) {
       setActiveMatch(match.id);
     }
     seek(rally.start_time);
-  };
+  }, [getRallyMatch, activeMatchId, setActiveMatch, seek]);
 
-  const handlePlay = (highlightId: string, e: React.MouseEvent) => {
+  const handlePlay = useCallback((highlightId: string, e: React.MouseEvent) => {
     e.stopPropagation();
 
     const highlight = highlights?.find((h) => h.id === highlightId);
@@ -449,48 +454,48 @@ export function HighlightsPanel() {
       seek(firstRally.start_time);
       startHighlightPlayback(highlightId, playlist);
     }
-  };
+  }, [highlights, allRallies, getRallyMatch, setActiveMatch, seek, startHighlightPlayback]);
 
-  const handleStop = (e: React.MouseEvent) => {
+  const handleStop = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     stopHighlightPlayback();
-  };
+  }, [stopHighlightPlayback]);
 
-  const handleStartEdit = (highlight: { id: string; name: string }, e: React.MouseEvent) => {
+  const handleStartEdit = useCallback((highlight: { id: string; name: string }, e: React.MouseEvent) => {
     e.stopPropagation();
     setEditingId(highlight.id);
     setEditName(highlight.name);
-  };
+  }, []);
 
-  const handleSaveEdit = () => {
+  const handleSaveEdit = useCallback(() => {
     if (editingId && editName.trim()) {
       renameHighlight(editingId, editName.trim());
     }
     setEditingId(null);
-  };
+  }, [editingId, editName, renameHighlight]);
 
-  const handleDeleteClick = (id: string, e: React.MouseEvent) => {
+  const handleDeleteClick = useCallback((id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setDeleteConfirmId(id);
-  };
+  }, []);
 
-  const handleConfirmDelete = (id: string, e: React.MouseEvent) => {
+  const handleConfirmDelete = useCallback((id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     deleteHighlight(id);
     setDeleteConfirmId(null);
-  };
+  }, [deleteHighlight]);
 
-  const handleCancelDelete = (e: React.MouseEvent) => {
+  const handleCancelDelete = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     setDeleteConfirmId(null);
-  };
+  }, []);
 
-  const handleDownloadClick = (highlightId: string, e: React.MouseEvent<HTMLButtonElement>) => {
+  const handleDownloadClick = useCallback((highlightId: string, e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
     setDownloadAnchor({ el: e.currentTarget, id: highlightId });
-  };
+  }, []);
 
-  const handleDownload = () => {
+  const handleDownload = useCallback(() => {
     if (!downloadAnchor) return;
 
     const highlight = highlights?.find((h) => h.id === downloadAnchor.id);
@@ -513,7 +518,7 @@ export function HighlightsPanel() {
 
     downloadHighlight(ralliesWithSource, highlight.id, highlight.name, withFade);
     setDownloadAnchor(null);
-  };
+  }, [downloadAnchor, highlights, allRallies, getRallyMatch, videoSource, withFade, downloadHighlight]);
 
   // Empty state
   if (!highlights || highlights.length === 0) {

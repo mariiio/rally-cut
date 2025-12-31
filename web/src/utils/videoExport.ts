@@ -192,7 +192,9 @@ async function getFFmpeg(onProgress?: ProgressCallback): Promise<FFmpegInstance>
   })();
 
   await loadPromise;
-  return ffmpeg;
+  // ffmpeg is guaranteed to be set after loadPromise resolves successfully
+  // (if it failed, loadPromise would have thrown)
+  return ffmpeg!;
 }
 
 /**
