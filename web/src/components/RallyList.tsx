@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import {
   Box,
   Typography,
@@ -65,7 +65,7 @@ export function RallyList() {
     });
   };
 
-  const handleRallyClick = (matchId: string, rally: Rally) => {
+  const handleRallyClick = useCallback((matchId: string, rally: Rally) => {
     // Switch match if needed
     if (matchId !== activeMatchId) {
       setActiveMatch(matchId);
@@ -74,30 +74,37 @@ export function RallyList() {
     }
     selectRally(rally.id);
     seek(rally.start_time);
-  };
+  }, [activeMatchId, setActiveMatch, selectRally, seek]);
 
-  const handleDownloadRally = (e: React.MouseEvent, rally: Rally) => {
+  const handleDownloadRally = useCallback((e: React.MouseEvent, rally: Rally) => {
     e.stopPropagation();
     if (!videoSource) return;
     downloadRally(videoSource, rally);
-  };
+  }, [videoSource, downloadRally]);
 
-  const handleDownloadAll = () => {
+  // Sort active match rallies by start time - memoized
+  const sortedRallies = useMemo(
+    () => [...(rallies ?? [])].sort((a, b) => a.start_time - b.start_time),
+    [rallies]
+  );
+
+  // Find which rally contains the current time (for active match only) - memoized
+  const activeRallyId = useMemo(
+    () => sortedRallies.find((s) => currentTime >= s.start_time && currentTime <= s.end_time)?.id,
+    [sortedRallies, currentTime]
+  );
+
+  // Calculate total duration for active match - memoized
+  const totalDuration = useMemo(
+    () => sortedRallies.reduce((sum, s) => sum + s.duration, 0),
+    [sortedRallies]
+  );
+
+  const handleDownloadAll = useCallback(() => {
     if (!videoSource || !sortedRallies.length) return;
     downloadAllRallies(videoSource, sortedRallies, withFade);
     setDownloadAllAnchor(null);
-  };
-
-  // Sort active match rallies by start time
-  const sortedRallies = [...(rallies ?? [])].sort((a, b) => a.start_time - b.start_time);
-
-  // Find which rally contains the current time (for active match only)
-  const activeRallyId = sortedRallies.find(
-    (s) => currentTime >= s.start_time && currentTime <= s.end_time
-  )?.id;
-
-  // Calculate total duration for active match
-  const totalDuration = sortedRallies.reduce((sum, s) => sum + s.duration, 0);
+  }, [videoSource, sortedRallies, withFade, downloadAllRallies]);
 
   // If no session, show empty state
   if (!session) {

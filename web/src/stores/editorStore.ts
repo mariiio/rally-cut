@@ -174,8 +174,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (stored) {
             savedData = JSON.parse(stored);
           }
-        } catch {
-          // Ignore localStorage errors
+        } catch (e) {
+          console.warn('Failed to load from localStorage:', e);
         }
       }
 
@@ -572,8 +572,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (typeof window !== 'undefined' && state.session) {
       try {
         localStorage.removeItem(getStorageKey(state.session.id));
-      } catch {
-        // Ignore localStorage errors
+      } catch (e) {
+        console.warn('Failed to clear localStorage:', e);
       }
     }
 
@@ -692,8 +692,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (typeof window !== 'undefined' && state.session) {
       try {
         localStorage.removeItem(getStorageKey(state.session.id));
-      } catch {
-        // Ignore localStorage errors
+      } catch (e) {
+        console.warn('Failed to clear localStorage on reset:', e);
       }
     }
   },
@@ -723,8 +723,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           savedAt: Date.now(),
         };
         localStorage.setItem(getStorageKey(state.session.id), JSON.stringify(data));
-      } catch {
-        // Ignore localStorage errors
+      } catch (e) {
+        console.warn('Failed to save to localStorage:', e);
       }
     }
   },
@@ -750,7 +750,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         hasUnsavedChanges: (persisted.past?.length ?? 0) > 0,
       });
       return true;
-    } catch {
+    } catch (e) {
+      console.warn('Failed to load from localStorage:', e);
       return false;
     }
   },
