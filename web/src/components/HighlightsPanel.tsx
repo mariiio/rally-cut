@@ -54,7 +54,7 @@ import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useExportStore } from '@/stores/exportStore';
 import { Rally } from '@/types/rally';
-import { RallyWithSource } from '@/utils/videoExport';
+import { RallyWithSource, FADE_DURATION } from '@/utils/videoExport';
 import { designTokens } from '@/app/theme';
 
 // Helper to format time as MM:SS
@@ -162,11 +162,12 @@ interface SortableRallyItemProps {
   highlightId: string;
   matchName: string;
   isActive: boolean;
+  isPreselected: boolean;
   onClick: () => void;
   onRemove: () => void;
 }
 
-const SortableRallyItem = memo(function SortableRallyItem({ rally, highlightId, matchName, isActive, onClick, onRemove }: SortableRallyItemProps) {
+const SortableRallyItem = memo(function SortableRallyItem({ rally, highlightId, matchName, isActive, isPreselected, onClick, onRemove }: SortableRallyItemProps) {
   const dragId = createDragId(highlightId, rally.id);
   const {
     attributes,
@@ -186,6 +187,8 @@ const SortableRallyItem = memo(function SortableRallyItem({ rally, highlightId, 
   const rallyNumber = getRallyNumber(rally.id);
   const duration = (rally.end_time - rally.start_time).toFixed(1);
 
+  const showHighlight = isActive || isPreselected;
+
   return (
     <ListItem
       ref={setNodeRef}
@@ -196,11 +199,11 @@ const SortableRallyItem = memo(function SortableRallyItem({ rally, highlightId, 
         px: 1,
         minHeight: 32,
         cursor: 'pointer',
-        bgcolor: isActive ? 'action.selected' : 'transparent',
+        bgcolor: showHighlight ? 'action.selected' : 'transparent',
         borderRadius: 1,
         mb: 0.25,
         transition: designTokens.transitions.fast,
-        '&:hover': { bgcolor: isActive ? 'action.selected' : 'action.hover' },
+        '&:hover': { bgcolor: showHighlight ? 'action.selected' : 'action.hover' },
         '&:hover .remove-btn': { opacity: 1 },
       }}
     >
@@ -276,6 +279,7 @@ export function HighlightsPanel() {
     stopHighlightPlayback,
     seek,
     getCurrentPlaylistRally,
+    jumpToPlaylistRally,
   } = usePlayerStore();
 
   const {
@@ -292,6 +296,8 @@ export function HighlightsPanel() {
   const [expandedHighlights, setExpandedHighlights] = useState<Set<string>>(new Set());
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [overHighlightId, setOverHighlightId] = useState<string | null>(null);
+  // Track preselected rally per highlight (highlightId -> rallyId)
+  const [preselectedRallies, setPreselectedRallies] = useState<Record<string, string>>({});
 
   // DnD sensors
   const sensors = useSensors(
@@ -414,13 +420,30 @@ export function HighlightsPanel() {
     [activeDragData, allRallies]
   );
 
-  const handleRallyClick = useCallback((rally: Rally) => {
+  const handleRallyClick = useCallback((rally: Rally, highlightId: string) => {
+    // If this highlight is currently playing, jump to the rally within the playlist
+    if (playingHighlightId === highlightId) {
+      const targetRally = jumpToPlaylistRally(rally.id);
+      if (targetRally) {
+        // Handle match switch if needed
+        const match = getRallyMatch(rally.id);
+        if (match && match.id !== activeMatchId) {
+          setActiveMatch(match.id);
+        }
+        return;
+      }
+    }
+
+    // Preselect this rally for when play is pressed
+    setPreselectedRallies((prev) => ({ ...prev, [highlightId]: rally.id }));
+
+    // Normal behavior: switch match if needed and seek
     const match = getRallyMatch(rally.id);
     if (match && match.id !== activeMatchId) {
       setActiveMatch(match.id);
     }
     seek(rally.start_time);
-  }, [getRallyMatch, activeMatchId, setActiveMatch, seek]);
+  }, [playingHighlightId, jumpToPlaylistRally, getRallyMatch, activeMatchId, setActiveMatch, seek]);
 
   const handlePlay = useCallback((highlightId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -445,15 +468,23 @@ export function HighlightsPanel() {
         };
       });
 
-      const firstRally = playlist[0];
-      // Switch to the match containing the first rally if needed
-      if (firstRally.matchId) {
-        setActiveMatch(firstRally.matchId);
+      // Find start index from preselected rally
+      const preselectedId = preselectedRallies[highlightId];
+      let startIndex = 0;
+      if (preselectedId) {
+        const idx = playlist.findIndex((r) => r.id === preselectedId);
+        if (idx !== -1) startIndex = idx;
       }
-      seek(firstRally.start_time);
-      startHighlightPlayback(highlightId, playlist);
+
+      const startRally = playlist[startIndex];
+      // Switch to the match containing the start rally if needed
+      if (startRally.matchId) {
+        setActiveMatch(startRally.matchId);
+      }
+      seek(startRally.start_time);
+      startHighlightPlayback(highlightId, playlist, startIndex);
     }
-  }, [highlights, allRallies, getRallyMatch, setActiveMatch, seek, startHighlightPlayback]);
+  }, [highlights, allRallies, getRallyMatch, setActiveMatch, seek, startHighlightPlayback, preselectedRallies]);
 
   const handleStop = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -814,7 +845,8 @@ export function HighlightsPanel() {
                             highlightId={highlight.id}
                             matchName={getRallyMatch(rally.id)?.name ?? 'Unknown'}
                             isActive={isPlaying && currentPlaylistRally?.id === rally.id}
-                            onClick={() => handleRallyClick(rally)}
+                            isPreselected={!isPlaying && preselectedRallies[highlight.id] === rally.id}
+                            onClick={() => handleRallyClick(rally, highlight.id)}
                             onRemove={() => removeRallyFromHighlight(rally.id, highlight.id)}
                           />
                         ))}
@@ -884,7 +916,7 @@ export function HighlightsPanel() {
               />
             }
             label={
-              <Typography variant="body2">Add fade (0.5s)</Typography>
+              <Typography variant="body2">Add fade ({FADE_DURATION}s)</Typography>
             }
           />
           <Button
