@@ -175,10 +175,8 @@ class ProxyGenerator:
 
         # Build filter chain
         if should_normalize_fps:
-            proxy_desc = f"{self.config.height}p@{self.config.fps}fps"
             vf_filter = f"scale=-2:{self.config.height},fps={self.config.fps}"
         else:
-            proxy_desc = f"{self.config.height}p"
             vf_filter = f"scale=-2:{self.config.height}"
 
         if progress_callback:
