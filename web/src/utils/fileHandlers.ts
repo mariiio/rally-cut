@@ -67,3 +67,32 @@ export function isValidVideoFile(file: File): boolean {
 export function isJsonFile(file: File): boolean {
   return file.type === 'application/json' || file.name.toLowerCase().endsWith('.json');
 }
+
+/**
+ * Generate a SHA-256 hash of a file (for deduplication)
+ */
+export async function hashFile(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Get video duration using a hidden video element
+ */
+export function getVideoDuration(file: File): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.onloadedmetadata = () => {
+      URL.revokeObjectURL(video.src);
+      resolve(video.duration * 1000); // Return milliseconds
+    };
+    video.onerror = () => {
+      URL.revokeObjectURL(video.src);
+      reject(new Error('Failed to load video metadata'));
+    };
+    video.src = URL.createObjectURL(file);
+  });
+}

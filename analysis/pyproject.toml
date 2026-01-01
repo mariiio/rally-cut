@@ -51,6 +51,7 @@ dependencies = [
     "onnxruntime>=1.23.2",
     "onnxscript>=0.5.7",
     "pytorchvideo>=0.1.5",
+    "boto3>=1.42.19",
 ]
 
 [project.optional-dependencies]

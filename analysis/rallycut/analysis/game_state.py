@@ -124,7 +124,6 @@ class GameStateAnalyzer:
         for frame_idx, frame in video.iter_frames(end_frame=max_frames, step=frame_step):
             # Check on first frame if resize is needed
             if needs_resize is None and target_size:
-                import cv2
                 h, w = frame.shape[:2]
                 needs_resize = (w != target_size[0] or h != target_size[1])
             elif needs_resize is None:
@@ -190,7 +189,8 @@ class GameStateAnalyzer:
                     # Report progress
                     if progress_callback and windows_processed % batch_size == 0:
                         progress = windows_processed / total_windows
-                        progress_callback(progress, f"Window {windows_processed}/{total_windows}")
+                        pct = int(progress * 100)
+                        progress_callback(progress, f"Reading the game... {pct}%")
                 else:
                     break
 
@@ -229,7 +229,7 @@ class GameStateAnalyzer:
             next_window_start += effective_stride
 
         if progress_callback:
-            progress_callback(1.0, f"Window {windows_processed}/{total_windows}")
+            progress_callback(1.0, "Game analysis complete!")
 
         # Store raw results before smoothing (for diagnostics)
         raw_results = list(results) if return_raw else None

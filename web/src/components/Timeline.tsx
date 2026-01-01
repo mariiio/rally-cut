@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useCallback, useState, useEffect, useRef } from 'react';
-import { Box, Typography, IconButton, Stack, Tooltip, Popover } from '@mui/material';
+import { Box, Typography, IconButton, Stack, Tooltip, Popover, Button, CircularProgress } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from '@mui/icons-material/Pause';
 import SkipPreviousIcon from '@mui/icons-material/SkipPrevious';
@@ -15,6 +15,7 @@ import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import KeyboardIcon from '@mui/icons-material/Keyboard';
 import StarIcon from '@mui/icons-material/Star';
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import {
   Timeline as TimelineEditor,
   TimelineRow,
@@ -25,6 +26,7 @@ import {
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { formatTimeShort, formatTime } from '@/utils/timeFormat';
+import { triggerRallyDetection, getDetectionStatus } from '@/services/api';
 
 // Custom effect for rally segments
 const effects: Record<string, TimelineEffect> = {
@@ -95,7 +97,20 @@ export function Timeline() {
     removeRallyFromHighlight,
     selectHighlight,
     getHighlightsForRally,
+    activeMatchId,
+    reloadCurrentMatch,
   } = useEditorStore();
+
+  // Detection state
+  const [isDetecting, setIsDetecting] = useState(false);
+  const [detectionStatus, setDetectionStatus] = useState<string | null>(null);
+  const [detectionError, setDetectionError] = useState<string | null>(null);
+  const [detectionProgress, setDetectionProgress] = useState(0);
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const [videoDetectionStatus, setVideoDetectionStatus] = useState<string | null>(null); // UPLOADED, DETECTING, DETECTED
+  const [detectionResult, setDetectionResult] = useState<{ ralliesCount: number } | null>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const {
     currentTime,
     duration,
@@ -393,26 +408,29 @@ export function Timeline() {
   // Note: Highlight playback (including cross-match) is now handled by VideoPlayer
   // using a stable playlist stored in playerStore
 
-  // Calculate optimal scale based on video duration
-  // Estimate visible markers: Container ~2500px wide, scaleWidth=160px = ~16 markers visible
-  const estimatedVisibleMarkers = 16;
-
+  // Calculate optimal scale based on video duration and container width
+  // scale = seconds per marker, SCALE_WIDTH = pixels per marker
+  // totalWidth = (duration / scale) * SCALE_WIDTH
+  // We want totalWidth = containerWidth, so scale = duration * SCALE_WIDTH / containerWidth
   const getAutoScale = useCallback(() => {
-    if (duration > 0) {
-      // Fit entire video to fill visible markers
-      return Math.max(MIN_SCALE, Math.ceil(duration / estimatedVisibleMarkers));
+    if (duration > 0 && containerWidth > 0) {
+      // Calculate exact scale to fit entire duration in container width
+      const exactScale = (duration * SCALE_WIDTH) / containerWidth;
+      // Return as-is (no rounding) to maintain exact fit, but respect min
+      return Math.max(MIN_SCALE, exactScale);
     }
     return 30;
-  }, [duration]);
+  }, [duration, containerWidth]);
 
   const [scale, setScale] = useState(() => 30);
 
-  // Auto-fit scale when duration changes
+  // Auto-fit scale when duration or container width changes
   useEffect(() => {
-    if (duration > 0) {
-      setScale(getAutoScale());
+    if (duration > 0 && containerWidth > 0) {
+      const newScale = getAutoScale();
+      setScale(newScale);
     }
-  }, [duration, getAutoScale]);
+  }, [duration, containerWidth, getAutoScale]);
 
   // Sync timeline cursor with video playback position
   useEffect(() => {
@@ -654,25 +672,139 @@ export function Timeline() {
     return !insideRally;
   }, [rallies, currentTime, videoMetadata, isDraggingCursor, selectedRallyId]);
 
-  if (!rallies || rallies.length === 0) {
-    return (
-      <Box
-        sx={{
-          height: 150,
-          bgcolor: 'background.paper',
-          borderRadius: 1,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: 'text.secondary',
-        }}
-      >
-        <Typography variant="body2">
-          Load a JSON file to see the timeline
-        </Typography>
-      </Box>
-    );
-  }
+  // Format elapsed time as MM:SS
+  const formatElapsed = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // Start polling for detection status
+  const startPolling = useCallback((startTime?: number) => {
+    if (!activeMatchId) return;
+
+    // Set up elapsed time tracking
+    const start = startTime || Date.now();
+    setElapsedTime(Math.floor((Date.now() - start) / 1000));
+
+    // Clear any existing intervals
+    if (elapsedIntervalRef.current) clearInterval(elapsedIntervalRef.current);
+    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+
+    // Update elapsed time every second
+    elapsedIntervalRef.current = setInterval(() => {
+      setElapsedTime(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+
+    // Poll for status every 5 seconds
+    pollIntervalRef.current = setInterval(async () => {
+      try {
+        const status = await getDetectionStatus(activeMatchId);
+        if (status.job?.status === 'COMPLETED') {
+          stopPolling();
+          setDetectionProgress(100);
+          setDetectionStatus('Loading results...');
+          // Reload match data from API instead of page reload
+          const result = await reloadCurrentMatch();
+          setIsDetecting(false);
+          setVideoDetectionStatus('DETECTED');
+          if (result) {
+            setDetectionResult(result);
+            if (result.ralliesCount > 0) {
+              setDetectionStatus(`Found ${result.ralliesCount} rallies!`);
+            } else {
+              setDetectionStatus('No rallies detected');
+              setDetectionError('The ML model did not find any rallies in this video. You can add them manually.');
+            }
+          } else {
+            setDetectionStatus('Detection complete');
+          }
+          // Clear success message after 5 seconds
+          setTimeout(() => {
+            setDetectionStatus(null);
+            setDetectionResult(null);
+          }, 5000);
+        } else if (status.job?.status === 'FAILED') {
+          stopPolling();
+          setIsDetecting(false);
+          setDetectionError(status.job.errorMessage || 'Detection failed');
+          setDetectionStatus(null);
+        } else {
+          // Update progress from server
+          const progress = status.job?.progress ?? 0;
+          const message = status.job?.progressMessage || (status.job?.status === 'RUNNING' ? 'Processing video' : 'Preparing');
+          setDetectionProgress(progress);
+          setDetectionStatus(message);
+        }
+      } catch {
+        // Ignore polling errors, keep trying
+      }
+    }, 5000);
+  }, [activeMatchId]);
+
+  // Stop polling
+  const stopPolling = useCallback(() => {
+    if (elapsedIntervalRef.current) {
+      clearInterval(elapsedIntervalRef.current);
+      elapsedIntervalRef.current = null;
+    }
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  }, []);
+
+  // Check detection status on mount
+  useEffect(() => {
+    if (!activeMatchId) return;
+
+    const checkInitialStatus = async () => {
+      try {
+        const status = await getDetectionStatus(activeMatchId);
+        setVideoDetectionStatus(status.status);
+        if (status.status === 'DETECTING' && status.job?.status === 'RUNNING') {
+          // Detection is already in progress - resume polling
+          setIsDetecting(true);
+          setDetectionProgress(status.job.progress ?? 0);
+          setDetectionStatus(status.job.progressMessage || 'Processing video');
+          setDetectionError(null);
+          // Use job start time if available
+          const startTime = status.job.startedAt ? new Date(status.job.startedAt).getTime() : Date.now();
+          startPolling(startTime);
+        }
+      } catch {
+        // Ignore errors on initial check
+      }
+    };
+
+    checkInitialStatus();
+
+    // Cleanup on unmount
+    return () => stopPolling();
+  }, [activeMatchId, startPolling, stopPolling]);
+
+  // Handle starting rally detection
+  const handleStartDetection = async () => {
+    if (!activeMatchId) return;
+
+    setIsDetecting(true);
+    setDetectionStatus('Starting analysis...');
+    setDetectionProgress(0);
+    setDetectionError(null);
+    setElapsedTime(0);
+
+    try {
+      await triggerRallyDetection(activeMatchId);
+      setDetectionStatus('Processing video');
+      startPolling(Date.now());
+    } catch (err) {
+      setIsDetecting(false);
+      setDetectionError(err instanceof Error ? err.message : 'Failed to start detection');
+      setDetectionStatus(null);
+    }
+  };
+
+  const hasRallies = rallies && rallies.length > 0;
 
   return (
     <Box sx={{ bgcolor: 'background.paper', borderRadius: 1, overflow: 'hidden' }}>
@@ -757,7 +889,78 @@ export function Timeline() {
 
         {/* Info and controls - Right */}
         <Stack direction="row" alignItems="center" spacing={1} sx={{ flex: 1, justifyContent: 'flex-end' }}>
-          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+          {/* Detection status or button */}
+          {isDetecting ? (
+            <Stack direction="row" alignItems="center" spacing={1} sx={{
+              bgcolor: 'action.hover',
+              px: 1.5,
+              py: 0.5,
+              borderRadius: 2,
+            }}>
+              <CircularProgress
+                size={18}
+                variant={detectionProgress > 0 ? "determinate" : "indeterminate"}
+                value={detectionProgress}
+                color="primary"
+              />
+              <Stack spacing={0}>
+                <Typography variant="caption" sx={{ color: 'text.primary', fontWeight: 500, lineHeight: 1.2 }}>
+                  {detectionStatus || 'Analyzing...'}
+                </Typography>
+                <Typography variant="caption" sx={{
+                  color: 'text.secondary',
+                  fontFamily: 'monospace',
+                  fontSize: 10,
+                  lineHeight: 1.2,
+                }}>
+                  {detectionProgress > 0 ? `${Math.round(detectionProgress)}%` : ''} • {formatElapsed(elapsedTime)}
+                </Typography>
+              </Stack>
+            </Stack>
+          ) : detectionResult ? (
+            // Show success/result message
+            <Stack direction="row" alignItems="center" spacing={1} sx={{
+              bgcolor: detectionResult.ralliesCount > 0 ? 'success.main' : 'warning.main',
+              color: 'white',
+              px: 1.5,
+              py: 0.5,
+              borderRadius: 2,
+            }}>
+              <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                {detectionStatus}
+              </Typography>
+            </Stack>
+          ) : detectionError ? (
+            <Stack direction="row" alignItems="center" spacing={0.5}>
+              <Typography variant="caption" sx={{ color: 'warning.main', maxWidth: 200 }}>
+                {detectionError}
+              </Typography>
+              <Button size="small" onClick={() => setDetectionError(null)} sx={{ minWidth: 'auto', px: 1 }}>
+                OK
+              </Button>
+            </Stack>
+          ) : videoDetectionStatus === 'DETECTED' ? (
+            // Video already detected - show nothing or a small indicator
+            null
+          ) : (
+            <Tooltip title="Use ML to automatically detect rallies in this video">
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<AutoFixHighIcon sx={{ fontSize: 16 }} />}
+                onClick={handleStartDetection}
+                disabled={!activeMatchId}
+                sx={{
+                  fontSize: 12,
+                  py: 0.25,
+                  textTransform: 'none',
+                }}
+              >
+                Detect Rallies
+              </Button>
+            </Tooltip>
+          )}
+          <Typography variant="caption" sx={{ color: 'text.secondary', ml: 1 }}>
             {rallies?.length ?? 0} rallies
           </Typography>
           <Tooltip title="Keyboard shortcuts">
@@ -897,8 +1100,8 @@ export function Timeline() {
           dragLine={true}
           autoScroll={false}
           autoReRender={true}
-          minScaleCount={1}
-          maxScaleCount={Math.max(1, duration > 0 ? Math.ceil(duration / scale) + 1 : 100)}
+          minScaleCount={Math.max(1, duration > 0 ? Math.ceil(duration / scale) + 2 : 1)}
+          maxScaleCount={Math.max(100, duration > 0 ? Math.ceil(duration / scale) + 10 : 100)}
           onScroll={handleScroll}
           getScaleRender={getScaleRender}
           getActionRender={(action) => {

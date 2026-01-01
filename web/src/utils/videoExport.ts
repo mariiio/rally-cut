@@ -15,6 +15,9 @@ const FFMPEG_PIXEL_FORMAT = ['-pix_fmt', 'yuv420p'];
 const FFMPEG_AUDIO_CODEC = ['-c:a', 'aac', '-b:a', '128k'];
 const FFMPEG_ENCODE_SETTINGS = [...FFMPEG_VIDEO_CODEC, ...FFMPEG_PIXEL_FORMAT, ...FFMPEG_AUDIO_CODEC];
 
+// Fade transition duration in seconds
+export const FADE_DURATION = 0.5;
+
 // Singleton FFmpeg instance
 let ffmpeg: FFmpegInstance | null = null;
 let loadPromise: Promise<void> | null = null;
@@ -514,7 +517,7 @@ async function exportMultiSourceWithFade(
   outputName: string,
   rallies: Rally[]
 ): Promise<void> {
-  const fadeDuration = 0.5;
+  const fadeDuration = FADE_DURATION;
 
   // For 2 clips, use simple xfade
   if (clipNames.length === 2) {
@@ -634,7 +637,7 @@ async function exportWithFade(
   outputName: string,
   rallies: Rally[]
 ): Promise<void> {
-  const fadeDuration = 0.5;
+  const fadeDuration = FADE_DURATION;
 
   // First extract all clips with consistent format
   const clipNames: string[] = [];

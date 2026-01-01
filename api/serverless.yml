@@ -1,0 +1,65 @@
+service: rallycut-api
+
+frameworkVersion: "3"
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: ${opt:region, 'us-east-1'}
+  stage: ${opt:stage, 'dev'}
+  memorySize: 512
+  timeout: 29
+  environment:
+    NODE_ENV: production
+    DATABASE_URL: ${env:DATABASE_URL}
+    S3_BUCKET_NAME: ${self:custom.bucketName}
+    CLOUDFRONT_DOMAIN: ${env:CLOUDFRONT_DOMAIN}
+    CLOUDFRONT_KEY_PAIR_ID: ${env:CLOUDFRONT_KEY_PAIR_ID}
+    CLOUDFRONT_PRIVATE_KEY: ${env:CLOUDFRONT_PRIVATE_KEY}
+    MODAL_WEBHOOK_SECRET: ${env:MODAL_WEBHOOK_SECRET}
+    MODAL_FUNCTION_URL: ${env:MODAL_FUNCTION_URL}
+    CORS_ORIGIN: ${env:CORS_ORIGIN, 'https://rallycut.app'}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - s3:GetObject
+            - s3:PutObject
+            - s3:DeleteObject
+          Resource:
+            - arn:aws:s3:::${self:custom.bucketName}/*
+
+custom:
+  bucketName: rallycut-${self:provider.stage}
+
+functions:
+  api:
+    handler: dist/lambda.handler
+    events:
+      - http:
+          path: /
+          method: ANY
+          cors:
+            origin: ${self:provider.environment.CORS_ORIGIN}
+            headers:
+              - Content-Type
+              - Authorization
+            allowCredentials: true
+      - http:
+          path: /{proxy+}
+          method: ANY
+          cors:
+            origin: ${self:provider.environment.CORS_ORIGIN}
+            headers:
+              - Content-Type
+              - Authorization
+            allowCredentials: true
+
+package:
+  individually: true
+  patterns:
+    - "!**/*"
+    - "dist/**"
+    - "node_modules/.prisma/**"
+    - "node_modules/@prisma/client/**"

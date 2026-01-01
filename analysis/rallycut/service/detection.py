@@ -68,7 +68,7 @@ class DetectionService:
         try:
             # Phase 1: Download video (0-10% progress)
             if progress_callback:
-                progress_callback(0.0, "Downloading video...")
+                progress_callback(0.0, "Receiving the serve...")
 
             local_path = download_video(
                 request.video_url,
@@ -113,7 +113,7 @@ class DetectionService:
 
             # Phase 3: Score highlights (90-95% progress)
             if progress_callback:
-                progress_callback(0.9, "Scoring highlights...")
+                progress_callback(0.9, "Finding the best plays...")
 
             scored_segments = self.scorer.score_segments(segments)
 
@@ -122,7 +122,7 @@ class DetectionService:
 
             # Phase 4: Build response (95-100% progress)
             if progress_callback:
-                progress_callback(0.95, "Building response...")
+                progress_callback(0.95, "Wrapping up the match...")
 
             detected_segments = []
             for i, seg in enumerate(segments):
@@ -169,7 +169,7 @@ class DetectionService:
             processing_time = time.time() - start_time
 
             if progress_callback:
-                progress_callback(1.0, "Complete!")
+                progress_callback(1.0, "Match point!")
 
             return DetectionResponse(
                 job_id=job_id,

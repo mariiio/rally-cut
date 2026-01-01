@@ -12,6 +12,7 @@ import { HighlightsPanel } from './HighlightsPanel';
 import { EditorHeader } from './EditorHeader';
 import { CollapsiblePanel } from './CollapsiblePanel';
 import { ExportProgress } from './ExportProgress';
+import { UploadProgress } from './UploadProgress';
 import { useEditorStore } from '@/stores/editorStore';
 import { designTokens } from '@/app/theme';
 
@@ -186,6 +187,7 @@ export function EditorLayout({ sessionId }: EditorLayoutProps) {
               flexDirection: 'column',
             }}
           >
+            <UploadProgress />
             <ExportProgress />
             <VideoPlayer />
           </Box>
