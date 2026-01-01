@@ -14,7 +14,7 @@ class SegmentType(str, Enum):
 
 
 class DetectedSegment(BaseModel):
-    """A detected video segment with highlight scoring."""
+    """A detected video segment."""
 
     segment_id: int = Field(description="Sequential segment identifier (1-indexed)")
     segment_type: SegmentType = Field(description="Type of segment (rally or dead_time)")
@@ -23,10 +23,6 @@ class DetectedSegment(BaseModel):
     start_frame: int = Field(description="Start frame number")
     end_frame: int = Field(description="End frame number")
     duration: float = Field(description="Duration in seconds")
-    highlight_score: float = Field(
-        ge=0.0, le=1.0, description="Highlight score (0.0-1.0, higher = better)"
-    )
-    highlight_rank: int = Field(description="Highlight rank (1 = best)")
 
 
 class VideoMetadata(BaseModel):
@@ -101,7 +97,7 @@ class DetectionResponse(BaseModel):
         default=None, description="Source video metadata"
     )
     segments: list[DetectedSegment] = Field(
-        default_factory=list, description="Detected rally segments with scores"
+        default_factory=list, description="Detected rally segments"
     )
     statistics: MatchStatistics | None = Field(
         default=None, description="Aggregated match statistics"

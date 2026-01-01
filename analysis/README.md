@@ -1,11 +1,10 @@
 # RallyCut
 
-Beach volleyball video analysis CLI - auto-cut dead time, generate highlights, and add ball tracking overlays.
+Beach volleyball video analysis CLI - auto-cut dead time and add ball tracking overlays.
 
 ## Features
 
 - **Auto-cut dead time**: Automatically remove no-play segments from recordings using VideoMAE ML model
-- **Highlight generation**: Auto-generate highlight reels from the longest rallies
 - **Ball tracking overlay**: Visual ball trajectory overlay on exported videos
 - **Proxy mode**: 480p proxy videos for faster ML processing
 
@@ -32,8 +31,8 @@ uv run rallycut cut match.mp4
 # Preview detected segments without generating output
 uv run rallycut cut match.mp4 --dry-run
 
-# Generate highlight reel (top 5 rallies)
-uv run rallycut highlights match.mp4 -n 5
+# Add ball tracking overlay
+uv run rallycut overlay match.mp4
 ```
 
 ## Commands
@@ -74,27 +73,6 @@ uv run rallycut cut match.mp4 --stride 32
 uv run rallycut cut match.mp4 --limit 120
 ```
 
-### Highlight Generation (`highlights`)
-
-Generate highlight reel from top rallies:
-
-```bash
-# Generate top 5 highlights
-uv run rallycut highlights match.mp4 -n 5
-
-# Preview rankings without generating video
-uv run rallycut highlights match.mp4 --dry-run
-
-# Export as individual clips
-uv run rallycut highlights match.mp4 --individual -o clips/
-
-# Order by score instead of chronologically
-uv run rallycut highlights match.mp4 --by-score
-
-# Adjust padding around rallies
-uv run rallycut highlights match.mp4 --padding-start 1.0 --padding-end 2.0
-```
-
 ### Ball Tracking Overlay (`overlay`)
 
 Add ball trajectory visualization:
@@ -130,7 +108,6 @@ uv run rallycut profile match.mp4 --limit 60
 | Command | Description |
 |---------|-------------|
 | `rallycut cut <video>` | Remove dead time from video |
-| `rallycut highlights <video>` | Generate highlight reel |
 | `rallycut overlay <video>` | Add ball tracking overlay |
 | `rallycut profile <video>` | Analyze processing performance |
 
@@ -158,7 +135,7 @@ rallycut/
 ├── cli/              # Typer CLI commands
 ├── core/             # Domain models, config, video handling
 ├── analysis/         # ML pipeline, game state classification
-├── processing/       # Video cutting, highlights
+├── processing/       # Video cutting, FFmpeg export
 ├── tracking/         # Ball tracking with Kalman filter
 ├── statistics/       # Stats aggregation
 └── output/           # Overlay rendering

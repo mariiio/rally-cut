@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 import tempfile
 import time
 from pathlib import Path
@@ -196,7 +195,6 @@ def run_detection(
                 rallies.append({
                     "start_ms": int(segment.start_time * 1000),
                     "end_ms": int(segment.end_time * 1000),
-                    "confidence": segment.highlight_score,
                 })
 
         # Build full results for S3 storage
@@ -214,8 +212,6 @@ def run_detection(
                     "start_frame": seg.start_frame,
                     "end_frame": seg.end_frame,
                     "duration": seg.duration,
-                    "highlight_score": seg.highlight_score,
-                    "highlight_rank": seg.highlight_rank,
                 }
                 for seg in response.segments
             ],

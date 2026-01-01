@@ -1,6 +1,6 @@
 # RallyCut
 
-Beach volleyball video analysis CLI. Uses ML (VideoMAE, YOLOv8) to detect game states, remove dead time, generate highlights, and track ball trajectories.
+Beach volleyball video analysis CLI. Uses ML (VideoMAE, YOLOv8) to detect game states, remove dead time, and track ball trajectories.
 
 ## Stack
 
@@ -13,7 +13,6 @@ Beach volleyball video analysis CLI. Uses ML (VideoMAE, YOLOv8) to detect game s
 ```bash
 # Run CLI
 uv run rallycut cut <video.mp4>        # Remove dead time
-uv run rallycut highlights <video.mp4> # Extract top rallies
 uv run rallycut overlay <video.mp4>    # Ball tracking overlay
 uv run rallycut profile <video.mp4>    # Performance profiling
 
@@ -28,10 +27,10 @@ uv run ruff check rallycut/            # Lint
 
 ```
 rallycut/
-├── cli/commands/    # Typer commands (cut, highlights, overlay, profile)
+├── cli/commands/    # Typer commands (cut, overlay, profile)
 ├── core/            # Config (Pydantic), models, Video wrapper, caching
 ├── analysis/        # GameStateAnalyzer (VideoMAE ML classifier)
-├── processing/      # VideoCutter, HighlightScorer, FFmpegExporter
+├── processing/      # VideoCutter, FFmpegExporter
 ├── tracking/        # BallTracker (YOLO + Kalman filter)
 ├── service/         # Cloud detection service (Modal deployment)
 lib/volleyball_ml/   # ML model wrappers (VideoMAE, YOLO)
