@@ -363,4 +363,18 @@ export async function deleteVideo(videoId: string): Promise<void> {
   }
 }
 
+// Rename video
+export async function renameVideo(videoId: string, name: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to rename video: ${response.status}`);
+  }
+}
+
 export { API_BASE_URL };
