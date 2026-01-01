@@ -1,0 +1,133 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  videos     Video[]
+  highlights Highlight[]
+
+  @@map("sessions")
+}
+
+model Video {
+  id            String      @id @default(uuid())
+  sessionId     String      @map("session_id")
+  name          String
+  filename      String
+  s3Key         String      @map("s3_key")
+  contentHash   String      @map("content_hash")
+  status        VideoStatus @default(PENDING)
+  durationMs    Int?        @map("duration_ms")
+  width         Int?
+  height        Int?
+  fileSizeBytes BigInt?     @map("file_size_bytes")
+  order         Int         @default(0)
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+
+  session       Session             @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  rallies       Rally[]
+  detectionJobs RallyDetectionJob[]
+
+  @@index([contentHash])
+  @@index([sessionId])
+  @@map("videos")
+}
+
+enum VideoStatus {
+  PENDING
+  UPLOADED
+  DETECTING
+  DETECTED
+  ERROR
+}
+
+model Rally {
+  id          String       @id @default(uuid())
+  videoId     String       @map("video_id")
+  startMs     Int          @map("start_ms")
+  endMs       Int          @map("end_ms")
+  confidence  Float?
+  scoreA      Int?         @map("score_a")
+  scoreB      Int?         @map("score_b")
+  servingTeam ServingTeam? @map("serving_team")
+  notes       String?
+  order       Int          @default(0)
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  video           Video            @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  highlightRallies HighlightRally[]
+
+  @@index([videoId])
+  @@map("rallies")
+}
+
+enum ServingTeam {
+  A
+  B
+}
+
+model Highlight {
+  id        String   @id @default(uuid())
+  sessionId String   @map("session_id")
+  name      String
+  color     String   @default("#FF6B6B")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  session          Session          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  highlightRallies HighlightRally[]
+
+  @@index([sessionId])
+  @@map("highlights")
+}
+
+model HighlightRally {
+  id          String @id @default(uuid())
+  highlightId String @map("highlight_id")
+  rallyId     String @map("rally_id")
+  order       Int    @default(0)
+
+  highlight Highlight @relation(fields: [highlightId], references: [id], onDelete: Cascade)
+  rally     Rally     @relation(fields: [rallyId], references: [id], onDelete: Cascade)
+
+  @@unique([highlightId, rallyId])
+  @@map("highlight_rallies")
+}
+
+model RallyDetectionJob {
+  id              String             @id @default(uuid())
+  videoId         String             @map("video_id")
+  contentHash     String             @map("content_hash")
+  status          DetectionJobStatus @default(PENDING)
+  progress        Float?             @default(0) // 0-100 percentage
+  progressMessage String?            @map("progress_message")
+  resultS3Key     String?            @map("result_s3_key")
+  errorMessage    String?            @map("error_message")
+  startedAt       DateTime?          @map("started_at")
+  completedAt     DateTime?          @map("completed_at")
+  createdAt       DateTime           @default(now()) @map("created_at")
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([contentHash, status])
+  @@map("rally_detection_jobs")
+}
+
+enum DetectionJobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}

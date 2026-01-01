@@ -14,6 +14,8 @@ import {
   SessionManifest,
 } from '@/types/rally';
 import { usePlayerStore } from './playerStore';
+import { fetchSession as fetchSessionFromApi } from '@/services/api';
+import { syncService } from '@/services/syncService';
 
 // History management types
 interface HistoryEntry {
@@ -54,6 +56,17 @@ const debouncedSave = (fn: () => void) => {
   saveTimeout = setTimeout(fn, 500);
 };
 
+// Sync subscription cleanup
+let syncUnsubscribe: (() => void) | null = null;
+
+// Sync status type
+interface SyncStatus {
+  isSyncing: boolean;
+  pendingCount: number;
+  error: string | null;
+  lastSyncAt: number;
+}
+
 interface EditorState {
   // Session state
   session: Session | null;
@@ -68,6 +81,9 @@ interface EditorState {
   rallies: Rally[];
   selectedRallyId: string | null;
   hasUnsavedChanges: boolean;
+
+  // Sync state
+  syncStatus: SyncStatus;
 
   // Original JSON (for preserving non-edited fields)
   originalJson: RallyFile | null;
@@ -85,6 +101,7 @@ interface EditorState {
 
   // Session actions
   loadSession: (sessionId: string) => Promise<void>;
+  reloadCurrentMatch: () => Promise<{ ralliesCount: number } | null>;
   setActiveMatch: (matchId: string) => void;
   getActiveMatch: () => Match | null;
   getAllRallies: () => Rally[];
@@ -112,6 +129,10 @@ interface EditorState {
   resetToOriginal: () => void;
   saveToStorage: () => void;
   loadFromStorage: () => boolean;
+
+  // Sync actions
+  syncNow: () => Promise<boolean>;
+  updateSyncStatus: (status: SyncStatus) => void;
 
   // Highlights actions
   createHighlight: (name?: string) => string;
@@ -144,6 +165,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   hasUnsavedChanges: false,
   originalJson: null,
 
+  // Sync state
+  syncStatus: {
+    isSyncing: false,
+    pendingCount: 0,
+    error: null,
+    lastSyncAt: 0,
+  },
+
   // History state
   past: [],
   future: [],
@@ -158,76 +187,139 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   // Session actions
   loadSession: async (sessionId: string) => {
     try {
-      // Fetch session manifest
-      const manifestRes = await fetch(`/samples/session_${sessionId}/session.json`);
-      if (!manifestRes.ok) {
-        console.error('Failed to load session manifest');
-        return;
-      }
-      const manifest: SessionManifest = await manifestRes.json();
+      let session: Session;
+      let originalRalliesPerMatch: Record<string, Rally[]> = {};
 
-      // Check localStorage for saved edits
-      let savedData: PersistedSession | null = null;
-      if (typeof window !== 'undefined') {
-        try {
-          const stored = localStorage.getItem(getStorageKey(sessionId));
-          if (stored) {
-            savedData = JSON.parse(stored);
-          }
-        } catch (e) {
-          console.warn('Failed to load from localStorage:', e);
+      // Try to load from API first
+      const useApi = process.env.NEXT_PUBLIC_API_URL && !sessionId.startsWith('local_');
+
+      if (useApi) {
+        // Fetch from backend API
+        console.log('Loading session from API...');
+        session = await fetchSessionFromApi(sessionId);
+
+        // Initialize sync service
+        syncService.init(sessionId);
+
+        // Store original rallies per match
+        for (const match of session.matches) {
+          originalRalliesPerMatch[match.id] = [...match.rallies];
         }
-      }
 
-      // Load all match data in parallel
-      // Store original rallies per match for reset functionality
-      const originalRalliesPerMatch: Record<string, Rally[]> = {};
-
-      const matches: Match[] = await Promise.all(
-        manifest.session.matches.map(async (matchRef) => {
-          const dataRes = await fetch(`/samples/session_${sessionId}/${matchRef.dataFile}`);
-          const matchData: RallyFile = await dataRes.json();
-
-          // Rally IDs should already be prefixed in the JSON files
-          // But if they're not, prefix them here for safety
-          const originalRallies = matchData.rallies.map((rally) => ({
-            ...rally,
-            id: rally.id.startsWith(matchRef.id) ? rally.id : `${matchRef.id}_${rally.id}`,
-          }));
-
-          // Store the original rallies before applying localStorage edits
-          originalRalliesPerMatch[matchRef.id] = originalRallies;
-
-          // Apply saved edits from localStorage if available
-          let rallies = originalRallies;
-          if (savedData?.matchRallies?.[matchRef.id]) {
-            rallies = savedData.matchRallies[matchRef.id];
+        // Check localStorage for unsaved local edits
+        // Local edits take priority over backend data
+        let savedData: PersistedSession | null = null;
+        if (typeof window !== 'undefined') {
+          try {
+            const stored = localStorage.getItem(getStorageKey(sessionId));
+            if (stored) {
+              savedData = JSON.parse(stored);
+              console.log('Found local edits, applying over backend data...');
+            }
+          } catch (e) {
+            console.warn('Failed to load from localStorage:', e);
           }
+        }
 
-          return {
-            id: matchRef.id,
-            name: matchRef.name,
-            videoUrl: `/samples/session_${sessionId}/${matchRef.videoFile}`,
-            video: matchData.video,
-            rallies,
+        // Apply local edits if available
+        if (savedData?.matchRallies) {
+          session = {
+            ...session,
+            matches: session.matches.map((match) => {
+              const localRallies = savedData?.matchRallies?.[match.id];
+              if (localRallies && localRallies.length > 0) {
+                return { ...match, rallies: localRallies };
+              }
+              return match;
+            }),
+            highlights: savedData.highlights || session.highlights,
           };
-        })
-      );
+        }
+
+        // Set up state getter for sync service
+        syncService.setStateGetter(() => ({
+          session: get().session,
+          rallies: get().rallies,
+          highlights: get().highlights,
+          activeMatchId: get().activeMatchId,
+        }));
+
+        // Subscribe to sync status updates (store unsubscribe for cleanup)
+        if (syncUnsubscribe) {
+          syncUnsubscribe();
+        }
+        syncUnsubscribe = syncService.subscribe((status) => {
+          get().updateSyncStatus(status);
+        });
+      } else {
+        // Fallback to static files (for local development without backend)
+        console.log('Loading session from static files...');
+        const manifestRes = await fetch(`/samples/session_${sessionId}/session.json`);
+        if (!manifestRes.ok) {
+          console.error('Failed to load session manifest');
+          return;
+        }
+        const manifest: SessionManifest = await manifestRes.json();
+
+        // Check localStorage for saved edits
+        let savedData: PersistedSession | null = null;
+        if (typeof window !== 'undefined') {
+          try {
+            const stored = localStorage.getItem(getStorageKey(sessionId));
+            if (stored) {
+              savedData = JSON.parse(stored);
+            }
+          } catch (e) {
+            console.warn('Failed to load from localStorage:', e);
+          }
+        }
+
+        // Load all match data in parallel
+        const matches: Match[] = await Promise.all(
+          manifest.session.matches.map(async (matchRef) => {
+            const dataRes = await fetch(`/samples/session_${sessionId}/${matchRef.dataFile}`);
+            const matchData: RallyFile = await dataRes.json();
+
+            // Rally IDs should already be prefixed in the JSON files
+            // But if they're not, prefix them here for safety
+            const originalRallies = matchData.rallies.map((rally) => ({
+              ...rally,
+              id: rally.id.startsWith(matchRef.id) ? rally.id : `${matchRef.id}_${rally.id}`,
+            }));
+
+            // Store the original rallies before applying localStorage edits
+            originalRalliesPerMatch[matchRef.id] = originalRallies;
+
+            // Apply saved edits from localStorage if available
+            let rallies = originalRallies;
+            if (savedData?.matchRallies?.[matchRef.id]) {
+              rallies = savedData.matchRallies[matchRef.id];
+            }
+
+            return {
+              id: matchRef.id,
+              name: matchRef.name,
+              videoUrl: `/samples/session_${sessionId}/${matchRef.videoFile}`,
+              video: matchData.video,
+              rallies,
+            };
+          })
+        );
+
+        // Build session object with restored highlights
+        session = {
+          id: sessionId,
+          name: manifest.session.name,
+          matches,
+          highlights: savedData?.highlights || [],
+        };
+      }
 
       // Get all original rallies flattened for the active match comparison
-      const firstMatchOriginalRallies = originalRalliesPerMatch[matches[0]?.id] || [];
-
-      // Build session object with restored highlights
-      // Use the URL sessionId for consistency (not manifest.session.id which may differ)
-      const session: Session = {
-        id: sessionId,
-        name: manifest.session.name,
-        matches,
-        highlights: savedData?.highlights || [],
-      };
+      const firstMatchOriginalRallies = originalRalliesPerMatch[session.matches[0]?.id] || [];
 
       // Set first match as active
-      const firstMatch = matches[0];
+      const firstMatch = session.matches[0];
 
       set({
         session,
@@ -243,10 +335,49 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         originalRallies: firstMatchOriginalRallies,
         originalHighlights: [],
         originalRalliesPerMatch,
-        hasUnsavedChanges: savedData !== null,
+        hasUnsavedChanges: false,
       });
     } catch (error) {
       console.error('Error loading session:', error);
+    }
+  },
+
+  reloadCurrentMatch: async () => {
+    const state = get();
+    if (!state.session || !state.activeMatchId) return null;
+
+    try {
+      // Fetch fresh session data from API
+      const freshSession = await fetchSessionFromApi(state.session.id);
+      const freshMatch = freshSession.matches.find((m) => m.id === state.activeMatchId);
+
+      if (!freshMatch) return null;
+
+      // Update the session with fresh match data
+      const updatedMatches = state.session.matches.map((m) =>
+        m.id === state.activeMatchId ? freshMatch : m
+      );
+
+      // Update original rallies for this match
+      const newOriginalRalliesPerMatch = {
+        ...state.originalRalliesPerMatch,
+        [state.activeMatchId]: [...freshMatch.rallies],
+      };
+
+      set({
+        session: { ...state.session, matches: updatedMatches },
+        rallies: freshMatch.rallies,
+        originalRallies: freshMatch.rallies,
+        originalRalliesPerMatch: newOriginalRalliesPerMatch,
+        past: [],
+        future: [],
+        hasUnsavedChanges: false,
+      });
+
+      return { ralliesCount: freshMatch.rallies.length };
+    } catch (error) {
+      console.error('Error reloading match:', error);
+      return null;
     }
   },
 
@@ -373,13 +504,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     const fps = state.videoMetadata?.fps ?? 30;
 
-    // Generate unique ID
+    // Generate unique ID with match prefix for session mode
+    const matchPrefix = state.activeMatchId ? `${state.activeMatchId}_` : '';
     const existingIds = state.rallies.map((s) => s.id);
     let counter = state.rallies.length + 1;
-    let newId = `rally_${counter}`;
+    let newId = `${matchPrefix}rally_${counter}`;
     while (existingIds.includes(newId)) {
       counter++;
-      newId = `rally_${counter}`;
+      newId = `${matchPrefix}rally_${counter}`;
     }
 
     const newRally = createRally(newId, startTime, endTime, fps);
@@ -388,6 +520,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       rallies: [...state.rallies, newRally],
       hasUnsavedChanges: true,
     });
+
+    // Mark dirty for backend sync
+    syncService.markDirty();
 
     debouncedSave(() => get().saveToStorage());
   },
@@ -410,6 +545,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }),
       hasUnsavedChanges: true,
     });
+
+    // Mark dirty for backend sync
+    syncService.markDirty();
 
     debouncedSave(() => get().saveToStorage());
   },
@@ -528,6 +666,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       hasUnsavedChanges: true,
     });
 
+    // Mark dirty for backend sync
+    syncService.markDirty();
+
     debouncedSave(() => get().saveToStorage());
   },
 
@@ -577,6 +718,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }
     }
 
+    // Clean up sync subscription and reset service
+    if (syncUnsubscribe) {
+      syncUnsubscribe();
+      syncUnsubscribe = null;
+    }
+    syncService.reset();
+
     set({
       session: null,
       activeMatchId: null,
@@ -594,6 +742,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       originalRallies: [],
       originalHighlights: [],
       originalRalliesPerMatch: {},
+      syncStatus: {
+        isSyncing: false,
+        pendingCount: 0,
+        error: null,
+        lastSyncAt: 0,
+      },
     });
   },
 
@@ -636,6 +790,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       hasUnsavedChanges: past.length > 0 || state.future.length > 0,
     });
 
+    // Mark dirty for backend sync
+    syncService.markDirty();
+
     debouncedSave(() => get().saveToStorage());
   },
 
@@ -659,6 +816,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       future,
       hasUnsavedChanges: true,
     });
+
+    // Mark dirty for backend sync
+    syncService.markDirty();
 
     debouncedSave(() => get().saveToStorage());
   },
@@ -687,6 +847,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       future: [], // Clear redo stack
       hasUnsavedChanges: false,
     });
+
+    // Mark dirty for backend sync (to sync the reset state)
+    syncService.markDirty();
 
     // Clear localStorage since we're back to original
     if (typeof window !== 'undefined' && state.session) {
@@ -756,6 +919,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
   },
 
+  // Sync actions
+  syncNow: async () => {
+    return syncService.syncNow();
+  },
+
+  updateSyncStatus: (status: SyncStatus) => {
+    set({ syncStatus: status });
+  },
+
   // Highlights actions
   createHighlight: (name?: string) => {
     const state = get();
@@ -786,6 +958,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       hasUnsavedChanges: true,
     });
 
+    // Mark dirty for backend sync
+    syncService.markDirty();
+
     debouncedSave(() => get().saveToStorage());
     return newId;
   },
@@ -801,6 +976,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       hasUnsavedChanges: true,
     });
 
+    // Mark dirty for backend sync
+    syncService.markDirty();
+
     debouncedSave(() => get().saveToStorage());
   },
 
@@ -814,6 +992,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       ),
       hasUnsavedChanges: true,
     });
+
+    // Mark dirty for backend sync
+    syncService.markDirty();
 
     debouncedSave(() => get().saveToStorage());
   },
@@ -837,11 +1018,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       hasUnsavedChanges: true,
     });
 
+    // Mark dirty for backend sync
+    syncService.markDirty();
+
     debouncedSave(() => get().saveToStorage());
   },
 
   removeRallyFromHighlight: (rallyId: string, highlightId: string) => {
     const state = get();
+
     state.pushHistory();
 
     set({
@@ -852,6 +1037,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       ),
       hasUnsavedChanges: true,
     });
+
+    // Mark dirty for backend sync
+    syncService.markDirty();
 
     debouncedSave(() => get().saveToStorage());
   },
@@ -873,6 +1061,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       ),
       hasUnsavedChanges: true,
     });
+
+    // Mark dirty for backend sync
+    syncService.markDirty();
 
     debouncedSave(() => get().saveToStorage());
   },
@@ -905,6 +1096,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }),
       hasUnsavedChanges: true,
     });
+
+    // Mark dirty for backend sync
+    syncService.markDirty();
 
     debouncedSave(() => get().saveToStorage());
   },
