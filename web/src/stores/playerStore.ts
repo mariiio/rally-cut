@@ -34,8 +34,9 @@ interface PlayerState {
   togglePlayOnlyRallies: () => void;
 
   // Highlight playback actions
-  startHighlightPlayback: (highlightId: string, playlist: PlaylistRally[]) => void;
+  startHighlightPlayback: (highlightId: string, playlist: PlaylistRally[], startIndex?: number) => void;
   advanceHighlightPlayback: () => PlaylistRally | null; // Returns next rally or null if done
+  jumpToPlaylistRally: (rallyId: string) => PlaylistRally | null; // Jump to specific rally in playlist
   clearPendingMatchSwitch: () => void;
   stopHighlightPlayback: () => void;
   getCurrentPlaylistRally: () => PlaylistRally | null;
@@ -74,11 +75,11 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   togglePlayOnlyRallies: () => set((state) => ({ playOnlyRallies: !state.playOnlyRallies })),
 
   // Highlight playback actions
-  startHighlightPlayback: (highlightId: string, playlist: PlaylistRally[]) => {
+  startHighlightPlayback: (highlightId: string, playlist: PlaylistRally[], startIndex = 0) => {
     set({
       playingHighlightId: highlightId,
       highlightPlaylist: playlist,
-      highlightRallyIndex: 0,
+      highlightRallyIndex: startIndex,
       pendingMatchSwitch: null,
       isPlaying: true,
     });
@@ -100,6 +101,26 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }
 
     return nextRally;
+  },
+
+  jumpToPlaylistRally: (rallyId: string) => {
+    const state = get();
+    const targetIndex = state.highlightPlaylist.findIndex((r) => r.id === rallyId);
+    if (targetIndex === -1) return null;
+
+    const targetRally = state.highlightPlaylist[targetIndex];
+    const currentRally = state.highlightPlaylist[state.highlightRallyIndex];
+    const needsMatchSwitch = currentRally && targetRally.matchId !== currentRally.matchId;
+
+    set({
+      highlightRallyIndex: targetIndex,
+      pendingMatchSwitch: needsMatchSwitch ? targetRally.matchId : null,
+      seekTo: targetRally.start_time,
+      currentTime: targetRally.start_time,
+      isPlaying: true,
+    });
+
+    return targetRally;
   },
 
   clearPendingMatchSwitch: () => set({ pendingMatchSwitch: null }),

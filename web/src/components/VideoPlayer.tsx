@@ -39,8 +39,12 @@ export function VideoPlayer() {
     if (seekTo !== null && videoRef.current) {
       videoRef.current.currentTime = seekTo;
       clearSeek();
+      // Resume playback if we're supposed to be playing
+      if (isPlaying) {
+        videoRef.current.play().catch(() => {});
+      }
     }
-  }, [seekTo, clearSeek]);
+  }, [seekTo, clearSeek, isPlaying]);
 
   // Track if we're in the middle of a match switch
   const switchingMatchRef = useRef(false);
