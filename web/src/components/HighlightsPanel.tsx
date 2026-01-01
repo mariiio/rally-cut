@@ -829,26 +829,37 @@ export function HighlightsPanel() {
 
         {/* Drag overlay for visual feedback */}
         <DragOverlay>
-          {activeDragRally && activeDragData ? (
-            <Box
-              sx={{
-                py: 0.5,
-                px: 1,
-                minHeight: 32,
-                bgcolor: 'background.paper',
-                borderRadius: 1,
-                boxShadow: 3,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1,
-              }}
-            >
-              <DragIndicatorIcon sx={{ fontSize: 16, color: 'text.disabled' }} />
-              <Typography sx={{ fontSize: '0.75rem', fontFamily: 'monospace' }}>
-                {formatTime(activeDragRally.start_time)}→{formatTime(activeDragRally.end_time)}
-              </Typography>
-            </Box>
-          ) : null}
+          {activeDragRally && activeDragData ? (() => {
+            const matchName = getRallyMatch(activeDragRally.id)?.name ?? 'Unknown';
+            const rallyNumber = getRallyNumber(activeDragRally.id);
+            const duration = (activeDragRally.end_time - activeDragRally.start_time).toFixed(1);
+            return (
+              <Box
+                sx={{
+                  py: 0.5,
+                  px: 1,
+                  minHeight: 32,
+                  bgcolor: 'background.paper',
+                  borderRadius: 1,
+                  boxShadow: 3,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 0.75,
+                }}
+              >
+                <DragIndicatorIcon sx={{ fontSize: 16, color: 'text.disabled' }} />
+                <Typography component="span" sx={{ fontSize: '0.75rem', color: 'text.secondary', fontWeight: 600 }}>
+                  {matchName}
+                </Typography>
+                <Typography component="span" sx={{ fontSize: '0.8rem' }}>
+                  Rally {rallyNumber}
+                </Typography>
+                <Typography component="span" sx={{ fontSize: '0.7rem', color: 'text.disabled', fontFamily: 'monospace' }}>
+                  {duration}s
+                </Typography>
+              </Box>
+            );
+          })() : null}
         </DragOverlay>
       </DndContext>
 
