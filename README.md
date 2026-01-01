@@ -27,28 +27,47 @@ RallyCut is a monorepo containing three projects:
 
 - Node.js 20+
 - Python 3.11+ with [uv](https://github.com/astral-sh/uv)
-- PostgreSQL (or Docker)
+- Docker (for PostgreSQL)
 - FFmpeg
 
-### Development
+### First-Time Setup
 
 ```bash
 # Clone the repository
 git clone https://github.com/yourusername/rallycut.git
 cd rallycut
 
-# Start the database
-cd api && docker-compose up -d
+# Install dependencies, start database, run migrations
+make setup
 
-# Start the API server
-npm install && npm run dev
+# Copy environment files
+cp api/.env.example api/.env
+```
 
-# In another terminal, start the web app
-cd ../web && npm install && npm run dev
+### Development
 
-# For ML analysis (separate from web app)
-cd ../analysis && uv sync
-uv run rallycut cut <video.mp4>
+```bash
+# Start everything (database, API, web)
+make dev
+
+# Or start services individually:
+make dev-db     # PostgreSQL only
+make dev-api    # API server only (in separate terminal)
+make dev-web    # Web frontend only (in separate terminal)
+make dev-runner # Local ML runner (optional)
+
+# Stop all services
+make stop
+```
+
+Open [http://localhost:3000](http://localhost:3000) for the web app, [http://localhost:4000](http://localhost:4000) for the API.
+
+### ML Analysis CLI
+
+```bash
+cd analysis && uv sync
+uv run rallycut cut <video.mp4>      # Remove dead time
+uv run rallycut highlights <video>   # Extract highlights
 ```
 
 ## Architecture
