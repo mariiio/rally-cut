@@ -52,3 +52,6 @@ secrets/
 
 # Node
 node_modules/
+
+# Speckit
+.speckit/
