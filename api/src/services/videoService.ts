@@ -13,6 +13,15 @@ import type {
 
 const MAX_VIDEOS_PER_SESSION = 5;
 
+// Helper to convert BigInt fields to strings for JSON serialization
+function serializeBigInts<T>(obj: T): T {
+  return JSON.parse(
+    JSON.stringify(obj, (_key, value) =>
+      typeof value === "bigint" ? value.toString() : value
+    )
+  );
+}
+
 export async function requestUploadUrl(
   sessionId: string,
   data: RequestUploadUrlInput
@@ -113,10 +122,12 @@ export async function updateVideo(id: string, data: UpdateVideoInput) {
     throw new NotFoundError("Video", id);
   }
 
-  return prisma.video.update({
+  const updated = await prisma.video.update({
     where: { id },
     data,
   });
+
+  return serializeBigInts(updated);
 }
 
 export async function deleteVideo(id: string) {
