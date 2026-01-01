@@ -9,7 +9,6 @@ from pathlib import Path
 from rallycut.core.models import GameState
 from rallycut.core.video import Video
 from rallycut.processing.cutter import VideoCutter
-from rallycut.processing.highlights import HighlightScorer
 from rallycut.service.schemas import (
     DetectedSegment,
     DetectionConfig,
@@ -26,7 +25,7 @@ class DetectionService:
     """
     Cloud detection service - analysis only, no video cutting.
 
-    Wraps VideoCutter.analyze_only() and HighlightScorer for cloud deployment.
+    Wraps VideoCutter.analyze_only() for cloud deployment.
     Downloads video from cloud storage, runs detection, returns JSON results.
     """
 
@@ -45,7 +44,6 @@ class DetectionService:
         self.device = device
         self.temp_dir = temp_dir or Path("/tmp/rallycut")
         self.temp_dir.mkdir(parents=True, exist_ok=True)
-        self.scorer = HighlightScorer()
 
     def detect(
         self,
@@ -111,24 +109,12 @@ class DetectionService:
 
             segments = cutter.analyze_only(local_path, analysis_progress)
 
-            # Phase 3: Score highlights (90-95% progress)
+            # Phase 3: Build response (90-100% progress)
             if progress_callback:
-                progress_callback(0.9, "Finding the best plays...")
-
-            scored_segments = self.scorer.score_segments(segments)
-
-            # Build segment lookup for scores
-            score_lookup = {id(s.segment): s for s in scored_segments}
-
-            # Phase 4: Build response (95-100% progress)
-            if progress_callback:
-                progress_callback(0.95, "Wrapping up the match...")
+                progress_callback(0.9, "Wrapping up the match...")
 
             detected_segments = []
             for i, seg in enumerate(segments):
-                # Get score info if available
-                score_info = score_lookup.get(id(seg))
-
                 # Map GameState to SegmentType
                 if seg.state in (GameState.PLAY, GameState.SERVICE):
                     seg_type = SegmentType.RALLY
@@ -144,8 +130,6 @@ class DetectionService:
                         start_frame=seg.start_frame,
                         end_frame=seg.end_frame,
                         duration=seg.duration,
-                        highlight_score=score_info.score if score_info else 0.0,
-                        highlight_rank=score_info.rank if score_info else len(segments),
                     )
                 )
 

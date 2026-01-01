@@ -1,6 +1,6 @@
 # RallyCut
 
-Beach volleyball video analysis and editing platform. Automatically detects rallies, removes dead time, and creates highlight reels using machine learning.
+Beach volleyball video analysis and editing platform. Automatically detects rallies and removes dead time using machine learning.
 
 ## Overview
 
@@ -67,7 +67,7 @@ Open [http://localhost:3000](http://localhost:3000) for the web app, [http://loc
 ```bash
 cd analysis && uv sync
 uv run rallycut cut <video.mp4>      # Remove dead time
-uv run rallycut highlights <video>   # Extract highlights
+uv run rallycut overlay <video.mp4>  # Ball tracking overlay
 ```
 
 ## Architecture
@@ -100,7 +100,7 @@ rallycut/
 │   │   ├── cli/        # Typer commands
 │   │   ├── core/       # Config, models, video wrapper
 │   │   ├── analysis/   # GameStateAnalyzer (VideoMAE)
-│   │   ├── processing/ # VideoCutter, HighlightScorer
+│   │   ├── processing/ # VideoCutter, FFmpegExporter
 │   │   ├── tracking/   # BallTracker (YOLO)
 │   │   └── service/    # Cloud detection service
 │   └── tests/          # Unit and integration tests

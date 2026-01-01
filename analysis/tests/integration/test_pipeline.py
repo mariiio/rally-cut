@@ -59,7 +59,7 @@ class TestPipelineIntegration:
 
     @pytest.fixture
     def mock_segments(self):
-        """Create mock segments for highlights."""
+        """Create mock segments for statistics tests."""
         return [
             TimeSegment(150, 600, 5.0, 20.0, GameState.PLAY),
             TimeSegment(750, 1200, 25.0, 40.0, GameState.PLAY),
@@ -118,18 +118,6 @@ class TestPipelineIntegration:
         assert "rallies" in result
         assert result["actions"]["serves"] == 2
 
-    def test_highlight_scoring_flow(self, mock_segments):
-        """Test highlight scoring flow."""
-        from rallycut.processing.highlights import HighlightScorer
-
-        scorer = HighlightScorer(min_duration=1.0)
-        top_highlights = scorer.get_top_highlights(mock_segments, count=5)
-
-        # Verify scoring
-        assert len(top_highlights) == 2
-        assert all(h.score > 0 for h in top_highlights)
-        assert all(h.rank > 0 for h in top_highlights)
-
     def test_trajectory_processing_flow(self, mock_ball_positions):
         """Test trajectory processing flow."""
         from rallycut.tracking.trajectory import TrajectoryProcessor
@@ -169,7 +157,7 @@ class TestCLICommands:
         command_names = [cmd.name for cmd in app.registered_commands]
 
         # Check that key commands exist
-        expected_commands = ["cut", "overlay", "highlights", "profile"]
+        expected_commands = ["cut", "overlay", "profile"]
         for cmd in expected_commands:
             assert cmd in command_names, f"Command '{cmd}' not found in CLI"
 
@@ -183,32 +171,6 @@ class TestErrorHandling:
 
         with pytest.raises(FileNotFoundError):
             Video(Path("/nonexistent/video.mp4"))
-
-    def test_empty_segment_list_for_highlights(self):
-        """Test handling empty segment list for highlights."""
-        from rallycut.processing.highlights import HighlightScorer
-
-        scorer = HighlightScorer()
-        result = scorer.get_top_highlights([], count=10)
-
-        # Should return empty list, not raise
-        assert result == []
-
-    def test_highlight_scorer_with_short_segments(self):
-        """Test that short segments are filtered."""
-        from rallycut.processing.highlights import HighlightScorer
-
-        segments = [
-            TimeSegment(0, 30, 0.0, 1.0, GameState.PLAY),  # 1s - too short
-            TimeSegment(60, 180, 2.0, 6.0, GameState.PLAY),  # 4s - long enough
-        ]
-
-        scorer = HighlightScorer(min_duration=3.0)
-        result = scorer.get_top_highlights(segments, count=10)
-
-        # Only the longer segment should be included
-        assert len(result) == 1
-        assert result[0].duration == 4.0
 
 
 class TestCutterIntegration:
