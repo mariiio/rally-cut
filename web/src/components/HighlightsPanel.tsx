@@ -265,8 +265,7 @@ export function HighlightsPanel() {
   } = useEditorStore();
 
   // Get all rallies across all matches for cross-match highlights
-  // Memoize to avoid recomputing on every render
-  const allRallies = useMemo(() => getAllRallies(), [getAllRallies]);
+  const allRallies = getAllRallies();
 
   // Use File if available, otherwise use URL
   const videoSource = videoFile || videoUrl;
