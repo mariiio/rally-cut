@@ -528,7 +528,7 @@ class VideoCutter:
 
             def proxy_progress(pct: float, msg: str) -> None:
                 if progress_callback:
-                    progress_callback(pct * 0.1, f"Proxy: {msg}")
+                    progress_callback(pct * 0.1, msg)
 
             proxy_path, mapper = proxy_gen.get_or_create(
                 input_path, source_fps, proxy_progress
@@ -620,7 +620,7 @@ class VideoCutter:
 
             def proxy_progress(pct: float, msg: str) -> None:
                 if progress_callback:
-                    progress_callback(pct * 0.1, f"Proxy: {msg}")
+                    progress_callback(pct * 0.1, msg)
 
             proxy_path, mapper = proxy_gen.get_or_create(
                 input_path, source_fps, proxy_progress

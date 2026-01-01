@@ -22,12 +22,12 @@ import SportsVolleyballIcon from '@mui/icons-material/SportsVolleyball';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
 import DownloadIcon from '@mui/icons-material/Download';
-import UploadFileIcon from '@mui/icons-material/UploadFile';
 import FileOpenIcon from '@mui/icons-material/FileOpen';
 import RestoreIcon from '@mui/icons-material/Restore';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
-import SettingsIcon from '@mui/icons-material/Settings';
+import HomeIcon from '@mui/icons-material/Home';
 import { useEditorStore } from '@/stores/editorStore';
+import { useUploadStore } from '@/stores/uploadStore';
 import {
   parseRallyJson,
   downloadRallyJson,
@@ -36,12 +36,12 @@ import {
 } from '@/utils/fileHandlers';
 import { designTokens } from '@/app/theme';
 import { ConfirmDialog } from './ConfirmDialog';
+import { SyncStatus } from './SyncStatus';
 
 export function EditorHeader() {
   const videoInputRef = useRef<HTMLInputElement>(null);
   const jsonInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
-  const [importAnchorEl, setImportAnchorEl] = useState<null | HTMLElement>(null);
   const [exportAnchorEl, setExportAnchorEl] = useState<null | HTMLElement>(null);
   const [showResetDialog, setShowResetDialog] = useState(false);
 
@@ -49,7 +49,6 @@ export function EditorHeader() {
     session,
     activeMatchId,
     setActiveMatch,
-    setVideoFile,
     loadRalliesFromJson,
     exportToJson,
     rallies,
@@ -61,7 +60,9 @@ export function EditorHeader() {
     hasChangesFromOriginal,
   } = useEditorStore();
 
-  const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const { isUploading, uploadVideo } = useUploadStore();
+
+  const handleVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -70,10 +71,31 @@ export function EditorHeader() {
       return;
     }
 
-    setVideoFile(file);
+    if (!session) {
+      setError('No session loaded. Please create or open a session first.');
+      return;
+    }
+
     e.target.value = '';
-    setImportAnchorEl(null);
+
+    const success = await uploadVideo(session.id, file);
+    if (success) {
+      // Reload page to fetch updated session with new video
+      window.location.reload();
+    }
   };
+
+  // Expose upload trigger for VideoPlayer empty state
+  const triggerVideoUpload = () => {
+    if (!isUploading) {
+      videoInputRef.current?.click();
+    }
+  };
+
+  // Store the trigger function globally so VideoPlayer can access it
+  if (typeof window !== 'undefined') {
+    (window as unknown as { triggerVideoUpload?: () => void }).triggerVideoUpload = triggerVideoUpload;
+  }
 
   const handleJsonUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -92,7 +114,6 @@ export function EditorHeader() {
     }
 
     e.target.value = '';
-    setImportAnchorEl(null);
   };
 
   const handleExport = () => {
@@ -192,6 +213,9 @@ export function EditorHeader() {
                   {session.matches[0].name}
                 </Typography>
               )}
+
+              {/* Sync Status Indicator */}
+              <SyncStatus />
             </>
           ) : (
             <Typography variant="body2" sx={{ color: 'text.disabled' }}>
@@ -241,48 +265,17 @@ export function EditorHeader() {
 
         <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
 
-        {/* Import/Export Actions */}
+        {/* Actions */}
         <Stack direction="row" spacing={1} alignItems="center">
-          {/* Import Menu */}
-          <Button
-            variant="outlined"
-            size="small"
-            onClick={(e) => setImportAnchorEl(e.currentTarget)}
-            endIcon={<KeyboardArrowDownIcon />}
-            sx={{ minWidth: 100 }}
-          >
-            Import
-          </Button>
-          <Menu
-            anchorEl={importAnchorEl}
-            open={Boolean(importAnchorEl)}
-            onClose={() => setImportAnchorEl(null)}
-            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-            transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-          >
-            <MenuItem onClick={() => videoInputRef.current?.click()}>
-              <ListItemIcon>
-                <UploadFileIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText>Upload Video</ListItemText>
-            </MenuItem>
-            <MenuItem onClick={() => jsonInputRef.current?.click()}>
-              <ListItemIcon>
-                <FileOpenIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText>Load JSON</ListItemText>
-            </MenuItem>
-          </Menu>
-
           {/* Export Button */}
           <Button
-            variant="contained"
+            variant="outlined"
             size="small"
             onClick={(e) => setExportAnchorEl(e.currentTarget)}
             disabled={!rallies || rallies.length === 0}
             startIcon={<DownloadIcon />}
             endIcon={<KeyboardArrowDownIcon />}
-            sx={{ minWidth: 110 }}
+            sx={{ minWidth: 100 }}
           >
             Export
           </Button>
@@ -301,10 +294,14 @@ export function EditorHeader() {
             </MenuItem>
           </Menu>
 
-          {/* Settings */}
-          <Tooltip title="Settings">
-            <IconButton size="small">
-              <SettingsIcon fontSize="small" />
+          {/* Home Button */}
+          <Tooltip title="Back to sessions">
+            <IconButton
+              size="small"
+              onClick={() => window.location.href = '/'}
+              sx={{ color: 'text.secondary' }}
+            >
+              <HomeIcon fontSize="small" />
             </IconButton>
           </Tooltip>
         </Stack>

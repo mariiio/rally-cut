@@ -43,3 +43,12 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Secrets
+secrets/
+.env
+.env.local
+.env.*.local
+
+# Node
+node_modules/

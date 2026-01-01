@@ -18,6 +18,7 @@ def download_video(
     Download video from cloud storage URL to local temp directory.
 
     Supports:
+    - Local file paths (file:///path/to/video.mp4)
     - S3 presigned URLs (https://bucket.s3.amazonaws.com/...)
     - GCS signed URLs (https://storage.googleapis.com/...)
     - Public HTTP/HTTPS URLs
@@ -33,8 +34,19 @@ def download_video(
 
     Raises:
         httpx.HTTPError: If download fails
+        FileNotFoundError: If local file doesn't exist
     """
     parsed = urlparse(url)
+
+    # Handle file:// URLs - just return the local path directly
+    if parsed.scheme == "file":
+        local_file = Path(parsed.path)
+        if not local_file.exists():
+            raise FileNotFoundError(f"Local video file not found: {local_file}")
+        if progress_callback:
+            progress_callback(1.0, "Ball in play!")
+        return local_file
+
     # Extract filename from path, removing query params
     path_part = parsed.path.split("/")[-1] if parsed.path else "video.mp4"
     # Remove any query string from filename
@@ -42,7 +54,7 @@ def download_video(
     local_path = temp_dir / filename
 
     if progress_callback:
-        progress_callback(0.0, f"Downloading {filename}...")
+        progress_callback(0.0, "Receiving the serve...")
 
     # Stream download with progress tracking
     with httpx.stream(
@@ -62,15 +74,11 @@ def download_video(
 
                 if progress_callback and total > 0:
                     progress = downloaded / total
-                    mb_downloaded = downloaded / (1024 * 1024)
-                    mb_total = total / (1024 * 1024)
-                    progress_callback(
-                        progress,
-                        f"Downloading: {mb_downloaded:.1f}MB / {mb_total:.1f}MB",
-                    )
+                    pct = int(progress * 100)
+                    progress_callback(progress, f"Receiving the serve... {pct}%")
 
     if progress_callback:
-        progress_callback(1.0, "Download complete")
+        progress_callback(1.0, "Ball in play!")
 
     return local_path
 

@@ -1,8 +1,14 @@
 import type { NextConfig } from "next";
 
+const isProd = process.env.NODE_ENV === 'production';
+
 const nextConfig: NextConfig = {
-  // Required for FFmpeg.wasm SharedArrayBuffer support
+  // Required for FFmpeg.wasm SharedArrayBuffer support (production only)
+  // In development, we skip COEP to allow loading videos from CloudFront without CORS issues
   async headers() {
+    if (!isProd) {
+      return [];
+    }
     return [
       {
         source: '/:path*',

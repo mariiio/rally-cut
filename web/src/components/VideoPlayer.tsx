@@ -117,9 +117,18 @@ export function VideoPlayer() {
     setReady(false);
   }, [setReady]);
 
+  const handleEmptyStateClick = () => {
+    // Trigger file upload via EditorHeader's exposed function
+    const triggerFn = (window as unknown as { triggerVideoUpload?: () => void }).triggerVideoUpload;
+    if (triggerFn) {
+      triggerFn();
+    }
+  };
+
   if (!videoUrl) {
     return (
       <Box
+        onClick={handleEmptyStateClick}
         sx={{
           width: '100%',
           aspectRatio: '16/9',
@@ -133,6 +142,7 @@ export function VideoPlayer() {
           borderColor: 'divider',
           color: 'text.secondary',
           gap: 2,
+          cursor: 'pointer',
           transition: designTokens.transitions.normal,
           '&:hover': {
             borderColor: 'primary.main',
@@ -140,9 +150,22 @@ export function VideoPlayer() {
           },
         }}
       >
-        <UploadFileIcon sx={{ fontSize: 48, color: 'text.disabled' }} />
-        <Typography variant="body1" sx={{ color: 'text.secondary' }}>
-          Upload a video to get started
+        <Box
+          sx={{
+            width: 64,
+            height: 64,
+            borderRadius: '50%',
+            bgcolor: 'rgba(255,255,255,0.05)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            mb: 1,
+          }}
+        >
+          <UploadFileIcon sx={{ fontSize: 32, color: 'text.secondary' }} />
+        </Box>
+        <Typography variant="body1" sx={{ color: 'text.secondary', fontWeight: 500 }}>
+          Click to upload a video
         </Typography>
         <Typography variant="caption" sx={{ color: 'text.disabled' }}>
           Supports MP4, MOV, and WebM
@@ -196,6 +219,7 @@ export function VideoPlayer() {
       <video
         ref={videoRef}
         src={videoUrl}
+        crossOrigin={process.env.NODE_ENV === 'production' ? 'anonymous' : undefined}
         style={{
           width: '100%',
           height: '100%',

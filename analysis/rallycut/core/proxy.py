@@ -170,7 +170,7 @@ class ProxyGenerator:
         # Skip if already exists
         if proxy_path.exists():
             if progress_callback:
-                progress_callback(1.0, "Using cached proxy")
+                progress_callback(1.0, "Court already set up!")
             return proxy_path
 
         # Build filter chain
@@ -182,7 +182,7 @@ class ProxyGenerator:
             vf_filter = f"scale=-2:{self.config.height}"
 
         if progress_callback:
-            progress_callback(0.0, f"Creating {proxy_desc} proxy...")
+            progress_callback(0.0, "Setting up the court...")
 
         # Build ffmpeg command with optimized settings
         cmd = [
@@ -218,7 +218,7 @@ class ProxyGenerator:
                 raise RuntimeError(f"ffmpeg failed: {stderr.decode()}")
 
             if progress_callback:
-                progress_callback(1.0, "Proxy created")
+                progress_callback(1.0, "Court is ready!")
 
             return proxy_path
 
