@@ -14,23 +14,29 @@ import {
   Tooltip,
   CircularProgress,
   Collapse,
+  TextField,
 } from '@mui/material';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import DeleteIcon from '@mui/icons-material/Delete';
+import EditIcon from '@mui/icons-material/Edit';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useExportStore } from '@/stores/exportStore';
 import { formatTime, formatDuration } from '@/utils/timeFormat';
-import { Rally } from '@/types/rally';
+import { Rally, Match } from '@/types/rally';
 import { designTokens } from '@/app/theme';
+import { ConfirmDialog } from './ConfirmDialog';
+import { deleteVideo, renameVideo } from '@/services/api';
 
 export function RallyList() {
   const {
     session,
     activeMatchId,
     setActiveMatch,
+    renameMatch,
     rallies,
     selectedRallyId,
     selectRally,
@@ -52,6 +58,16 @@ export function RallyList() {
   // Popover state for Download All
   const [downloadAllAnchor, setDownloadAllAnchor] = useState<HTMLButtonElement | null>(null);
   const [withFade, setWithFade] = useState(false);
+
+  // Delete video dialog state
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [matchToDelete, setMatchToDelete] = useState<Match | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Rename video state
+  const [editingMatchId, setEditingMatchId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [isRenaming, setIsRenaming] = useState(false);
 
   const toggleMatchExpanded = (matchId: string) => {
     setExpandedMatches((prev) => {
@@ -105,6 +121,57 @@ export function RallyList() {
     downloadAllRallies(videoSource, sortedRallies, withFade);
     setDownloadAllAnchor(null);
   }, [videoSource, sortedRallies, withFade, downloadAllRallies]);
+
+  const handleDeleteClick = useCallback((e: React.MouseEvent, match: Match) => {
+    e.stopPropagation(); // Don't toggle expand/collapse
+    setMatchToDelete(match);
+    setShowDeleteDialog(true);
+  }, []);
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (!matchToDelete) return;
+
+    setIsDeleting(true);
+    try {
+      await deleteVideo(matchToDelete.id);
+      // Reload page to fetch updated session
+      window.location.reload();
+    } catch (error) {
+      console.error('Failed to delete video:', error);
+      setIsDeleting(false);
+      setShowDeleteDialog(false);
+      setMatchToDelete(null);
+    }
+  }, [matchToDelete]);
+
+  const handleStartRename = useCallback((e: React.MouseEvent, match: Match) => {
+    e.stopPropagation();
+    setEditingMatchId(match.id);
+    setEditName(match.name);
+  }, []);
+
+  const handleSaveRename = useCallback(async () => {
+    if (!editingMatchId || !editName.trim()) {
+      setEditingMatchId(null);
+      return;
+    }
+
+    setIsRenaming(true);
+    try {
+      await renameVideo(editingMatchId, editName.trim());
+      renameMatch(editingMatchId, editName.trim());
+    } catch (error) {
+      console.error('Failed to rename video:', error);
+    } finally {
+      setIsRenaming(false);
+      setEditingMatchId(null);
+    }
+  }, [editingMatchId, editName, renameMatch]);
+
+  const handleCancelRename = useCallback(() => {
+    setEditingMatchId(null);
+    setEditName('');
+  }, []);
 
   // If no session, show empty state
   if (!session) {
@@ -231,6 +298,7 @@ export function RallyList() {
                       ? 'action.selected'
                       : 'action.hover',
                   },
+                  '&:hover .delete-btn, &:hover .edit-btn': { opacity: 1 },
                 }}
               >
                 {/* Expand/collapse icon */}
@@ -242,17 +310,54 @@ export function RallyList() {
                   )}
                 </Box>
 
-                {/* Match name */}
-                <Typography
-                  sx={{
-                    flex: 1,
-                    fontSize: '0.875rem',
-                    fontWeight: isActiveMatch ? 600 : 400,
-                    color: isActiveMatch ? 'text.primary' : 'text.secondary',
-                  }}
-                >
-                  {match.name}
-                </Typography>
+                {/* Match name - inline editing */}
+                {editingMatchId === match.id ? (
+                  <TextField
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    onBlur={handleSaveRename}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSaveRename();
+                      }
+                      if (e.key === 'Escape') {
+                        handleCancelRename();
+                      }
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    autoFocus
+                    size="small"
+                    disabled={isRenaming}
+                    sx={{
+                      flex: 1,
+                      '& .MuiInputBase-input': {
+                        fontSize: '0.875rem',
+                        fontWeight: isActiveMatch ? 600 : 400,
+                        py: 0.25,
+                        px: 0.5,
+                      },
+                      '& .MuiOutlinedInput-root': {
+                        '& fieldset': {
+                          borderColor: 'primary.main',
+                        },
+                      },
+                    }}
+                  />
+                ) : (
+                  <Typography
+                    onDoubleClick={(e) => handleStartRename(e, match)}
+                    sx={{
+                      flex: 1,
+                      fontSize: '0.875rem',
+                      fontWeight: isActiveMatch ? 600 : 400,
+                      color: isActiveMatch ? 'text.primary' : 'text.secondary',
+                      cursor: 'text',
+                    }}
+                  >
+                    {match.name}
+                  </Typography>
+                )}
 
                 {/* Rally count chip */}
                 <Chip
@@ -277,6 +382,70 @@ export function RallyList() {
                 >
                   {formatDuration(matchDuration)}
                 </Typography>
+
+                {/* Edit button */}
+                <Tooltip title="Rename video">
+                  <IconButton
+                    className="edit-btn"
+                    size="small"
+                    onClick={(e) => handleStartRename(e, match)}
+                    disabled={isRenaming || editingMatchId === match.id}
+                    sx={{
+                      ml: 0.5,
+                      p: 0.25,
+                      opacity: 0,
+                      transition: 'opacity 0.15s',
+                      color: 'text.secondary',
+                      '&:hover': {
+                        color: 'primary.main',
+                      },
+                    }}
+                  >
+                    <EditIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
+
+                {/* Delete button */}
+                {session.matches.length > 1 ? (
+                  <Tooltip title="Delete video">
+                    <IconButton
+                      className="delete-btn"
+                      size="small"
+                      onClick={(e) => handleDeleteClick(e, match)}
+                      disabled={isDeleting}
+                      sx={{
+                        ml: 0.5,
+                        p: 0.25,
+                        opacity: 0,
+                        transition: 'opacity 0.15s',
+                        color: 'text.secondary',
+                        '&:hover': {
+                          color: 'error.main',
+                        },
+                      }}
+                    >
+                      <DeleteIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Tooltip>
+                ) : (
+                  <Tooltip title="Cannot delete the only video">
+                    <span>
+                      <IconButton
+                        className="delete-btn"
+                        size="small"
+                        disabled
+                        sx={{
+                          ml: 0.5,
+                          p: 0.25,
+                          opacity: 0,
+                          transition: 'opacity 0.15s',
+                        }}
+                      >
+                        <DeleteIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                )}
               </Box>
 
               {/* Collapsible rally list */}
@@ -430,6 +599,20 @@ export function RallyList() {
           );
         })}
       </Box>
+
+      {/* Delete video confirmation dialog */}
+      <ConfirmDialog
+        open={showDeleteDialog}
+        title="Delete video?"
+        message={`This will permanently delete "${matchToDelete?.name}" and all its rallies. This action cannot be undone.`}
+        confirmLabel="Delete"
+        cancelLabel="Keep video"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => {
+          setShowDeleteDialog(false);
+          setMatchToDelete(null);
+        }}
+      />
     </Box>
   );
 }
