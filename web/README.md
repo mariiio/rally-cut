@@ -1,36 +1,137 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# RallyCut Web
+
+Rally editor web application for beach volleyball video editing.
+
+## Stack
+
+- **Framework**: Next.js 15 (App Router)
+- **UI**: React 19, MUI v7, Emotion
+- **State**: Zustand with localStorage persistence
+- **Drag & Drop**: @dnd-kit/core
+- **Video**: HTML5 video with custom controls
 
 ## Getting Started
 
-First, run the development server:
-
 ```bash
+# Install dependencies
+npm install
+
+# Start development server
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+
+# Type check
+npx tsc --noEmit
+
+# Lint
+npm run lint
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) to view the app.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Environment Variables
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Create `.env.local`:
 
-## Learn More
+```bash
+NEXT_PUBLIC_API_URL=http://localhost:4000  # Backend API URL
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Project Structure
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```
+src/
+├── app/                    # Next.js App Router
+│   ├── page.tsx            # Sessions list (home)
+│   ├── editor/[id]/        # Editor page
+│   └── theme.ts            # MUI theme + design tokens
+├── components/
+│   ├── EditorLayout.tsx    # Main editor layout
+│   ├── EditorHeader.tsx    # Toolbar with undo/redo/export
+│   ├── VideoPlayer.tsx     # Video player with keyboard controls
+│   ├── Timeline.tsx        # Rally timeline with drag handles
+│   ├── RalliesPanel.tsx    # Rally list sidebar
+│   ├── HighlightsPanel.tsx # Highlights management
+│   ├── SyncStatus.tsx      # Cloud sync indicator
+│   └── UploadProgress.tsx  # Video upload progress
+├── stores/
+│   ├── editorStore.ts      # Main state (rallies, highlights, history)
+│   ├── playerStore.ts      # Video playback state
+│   └── uploadStore.ts      # Upload progress state
+├── services/
+│   ├── api.ts              # REST API client
+│   └── syncService.ts      # State sync to backend
+├── types/
+│   └── rally.ts            # TypeScript types
+└── utils/
+    ├── fileHandlers.ts     # JSON import/export
+    └── videoExport.ts      # FFmpeg video export
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Key Features
 
-## Deploy on Vercel
+### Timeline Editor
+- Drag rally boundaries to adjust start/end times
+- Click to seek, double-click to play rally
+- Zoom in/out with scroll wheel
+- Keyboard shortcuts (J/K/L for playback, arrow keys for frame stepping)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### Undo/Redo
+- Full history with Cmd+Z / Cmd+Shift+Z
+- Persisted to localStorage
+- Reset to original detection results
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Highlights
+- Create highlight reels from selected rallies
+- Drag rallies between highlights
+- Reorder rallies within highlights
+- Color-coded for visual distinction
+
+### Sync
+- Auto-sync to backend every 5 seconds after changes
+- localStorage for immediate persistence
+- Visual indicator for sync status
+
+## Code Patterns
+
+### State Management
+```typescript
+// Zustand store with history
+const useEditorStore = create<EditorState>((set, get) => ({
+  rallies: [],
+  past: [],      // Undo stack
+  future: [],    // Redo stack
+
+  updateRally: (id, updates) => {
+    get().pushHistory();  // Save current state first
+    set({ rallies: ... });
+    syncService.markDirty();  // Schedule backend sync
+  },
+}));
+```
+
+### Video Player
+```typescript
+// Keyboard shortcuts
+useEffect(() => {
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key === ' ') togglePlay();
+    if (e.key === 'ArrowLeft') seek(currentTime - 5);
+    if (e.key === 'ArrowRight') seek(currentTime + 5);
+  };
+  window.addEventListener('keydown', handleKeyDown);
+  return () => window.removeEventListener('keydown', handleKeyDown);
+}, []);
+```
+
+## Testing
+
+```bash
+# Type check
+npx tsc --noEmit
+
+# Lint
+npm run lint
+
+# Build
+npm run build
+```
