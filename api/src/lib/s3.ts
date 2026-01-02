@@ -63,3 +63,18 @@ export function getVideoS3Key(
 export function getAnalysisS3Key(videoId: string): string {
   return `analysis/${videoId}/results.json`;
 }
+
+/**
+ * Get object from S3 and return the stream/metadata.
+ * Used for proxying video content in local development.
+ * Supports range requests for video seeking.
+ */
+export async function getObject(key: string, range?: string) {
+  const command = new GetObjectCommand({
+    Bucket: env.S3_BUCKET_NAME,
+    Key: key,
+    Range: range,
+  });
+
+  return s3Client.send(command);
+}

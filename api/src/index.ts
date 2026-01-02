@@ -8,6 +8,7 @@ import { errorHandler } from "./middleware/errorHandler.js";
 import { requestLogger } from "./middleware/requestLogger.js";
 import { resolveUser } from "./middleware/resolveUser.js";
 import detectionRouter from "./routes/detection.js";
+import exportsRouter from "./routes/exports.js";
 import healthRouter from "./routes/health.js";
 import highlightsRouter from "./routes/highlights.js";
 import identityRouter from "./routes/identity.js";
@@ -48,6 +49,7 @@ app.use(sessionsRouter);
 app.use(sharesRouter);
 app.use(videosRouter);
 app.use(detectionRouter);
+app.use(exportsRouter);
 app.use(ralliesRouter);
 app.use(highlightsRouter);
 

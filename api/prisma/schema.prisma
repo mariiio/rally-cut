@@ -91,6 +91,7 @@ model Session {
   sessionVideos SessionVideo[]
   highlights    Highlight[]
   share         SessionShare?
+  exportJobs    ExportJob[]
 
   @@unique([userId, type])
   @@index([userId])
@@ -234,6 +235,43 @@ model RallyDetectionJob {
 enum DetectionJobStatus {
   PENDING
   RUNNING
+  COMPLETED
+  FAILED
+}
+
+// ============================================================================
+// Export Jobs
+// ============================================================================
+
+model ExportJob {
+  id        String       @id @default(uuid())
+  sessionId String       @map("session_id")
+  userId    String       @map("user_id")
+  tier      ExportTier   @default(FREE)
+  status    ExportStatus @default(PENDING)
+  progress  Int          @default(0)
+  outputKey String?      @map("output_key")
+  error     String?
+  config    Json
+  rallies   Json
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([userId])
+  @@map("export_jobs")
+}
+
+enum ExportTier {
+  FREE
+  PREMIUM
+}
+
+enum ExportStatus {
+  PENDING
+  PROCESSING
   COMPLETED
   FAILED
 }

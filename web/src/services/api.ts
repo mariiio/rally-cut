@@ -130,10 +130,12 @@ function apiVideoToMatch(apiVideo: ApiVideo, cloudfrontDomain?: string): Match {
   const fps = 30;
   const duration = apiVideo.durationMs ? apiVideo.durationMs / 1000 : 0;
 
-  // Build video URL - use CloudFront if available, otherwise S3 key for local dev
-  // s3Key already includes the full path (e.g., "videos/sessionId/videoId/filename.mp4")
+  // Build video URL
+  // In production: use CloudFront for global CDN delivery
+  // In development: always use relative URL (proxied to backend) to avoid CORS issues with fetch()
+  const isProd = process.env.NODE_ENV === 'production';
   let videoUrl = `/${apiVideo.s3Key}`;
-  if (cloudfrontDomain) {
+  if (isProd && cloudfrontDomain) {
     videoUrl = `https://${cloudfrontDomain}/${apiVideo.s3Key}`;
   }
 
@@ -735,6 +737,84 @@ export async function listSharedSessions(): Promise<{ data: SharedSession[] }> {
 
   if (!response.ok) {
     throw new Error(`Failed to list shared sessions: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// ============================================================================
+// Export Jobs API
+// ============================================================================
+
+export type ExportTier = 'FREE' | 'PREMIUM';
+export type ExportStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+
+export interface ExportJobResponse {
+  id: string;
+  status: ExportStatus;
+  tier: ExportTier;
+  progress: number;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateExportJobRequest {
+  sessionId: string;
+  tier?: ExportTier;
+  config?: {
+    format?: 'mp4' | 'webm';
+  };
+  rallies: Array<{
+    videoId: string;
+    videoS3Key: string;
+    startMs: number;
+    endMs: number;
+  }>;
+}
+
+// Create a server-side export job
+export async function createExportJob(
+  request: CreateExportJobRequest
+): Promise<ExportJobResponse> {
+  const response = await fetch(`${API_BASE_URL}/v1/export-jobs`, {
+    method: 'POST',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to create export job: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Get export job status
+export async function getExportJobStatus(jobId: string): Promise<ExportJobResponse> {
+  const response = await fetch(`${API_BASE_URL}/v1/export-jobs/${jobId}`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to get export job status: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Get export download URL
+export async function getExportDownloadUrl(
+  jobId: string
+): Promise<{ id: string; status: ExportStatus; downloadUrl: string | null }> {
+  const response = await fetch(`${API_BASE_URL}/v1/export-jobs/${jobId}/download`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get download URL: ${response.status}`);
   }
 
   return response.json();

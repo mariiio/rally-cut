@@ -19,6 +19,8 @@ provider:
     MODAL_WEBHOOK_SECRET: ${env:MODAL_WEBHOOK_SECRET}
     MODAL_FUNCTION_URL: ${env:MODAL_FUNCTION_URL}
     CORS_ORIGIN: ${env:CORS_ORIGIN, 'https://rallycut.app'}
+    EXPORT_LAMBDA_FUNCTION_NAME: ${env:EXPORT_LAMBDA_FUNCTION_NAME, ''}
+    API_BASE_URL: ${env:API_BASE_URL, 'https://api.rallycut.app'}
   iam:
     role:
       statements:
@@ -29,6 +31,11 @@ provider:
             - s3:DeleteObject
           Resource:
             - arn:aws:s3:::${self:custom.bucketName}/*
+        - Effect: Allow
+          Action:
+            - lambda:InvokeFunction
+          Resource:
+            - arn:aws:lambda:${self:provider.region}:*:function:rallycut-video-export-*
 
 custom:
   bucketName: rallycut-${self:provider.stage}

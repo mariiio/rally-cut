@@ -11,6 +11,7 @@ RallyCut is a monorepo containing three projects:
 | **[analysis/](analysis/)** | ML-powered video analysis CLI | Python, PyTorch, VideoMAE, YOLO |
 | **[web/](web/)** | Rally editor web application | Next.js 15, React 19, MUI, Zustand |
 | **[api/](api/)** | Backend REST API | Express, Prisma, PostgreSQL, S3 |
+| **[lambda/](lambda/)** | Serverless video processing | AWS Lambda, FFmpeg, ARM64 |
 
 ## Features
 
@@ -83,12 +84,12 @@ uv run rallycut overlay <video.mp4>  # Ball tracking overlay
        │            │  S3 + CDN   │
        │            │ (CloudFront)│
        │            └─────────────┘
-       │
-       ▼
-┌─────────────┐     ┌─────────────┐
-│   Upload    │────▶│ Modal (GPU) │
-│   Webhook   │     │  ML Service │
-└─────────────┘     └─────────────┘
+       │                   │
+       ▼                   ▼
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Upload    │────▶│ Modal (GPU) │     │   Lambda    │
+│   Webhook   │     │  ML Service │     │ Video Export│
+└─────────────┘     └─────────────┘     └─────────────┘
 ```
 
 ## Project Structure
@@ -116,6 +117,8 @@ rallycut/
 │       ├── services/   # Business logic
 │       ├── schemas/    # Zod validation
 │       └── lib/        # S3, CloudFront, Prisma
+├── lambda/             # Serverless functions
+│   └── video-export/   # FFmpeg video processing (ARM64)
 └── docs/               # Setup guides
 ```
 
@@ -123,6 +126,7 @@ rallycut/
 
 - [Analysis CLI README](analysis/README.md) - ML pipeline and CLI usage
 - [Detection Algorithm](analysis/docs/detection_algorithm.md) - How rally detection works
+- [Video Export Lambda](lambda/video-export/README.md) - Server-side video processing
 - [AWS Setup](docs/aws-setup.md) - S3 and CloudFront configuration
 - [Modal Setup](docs/modal-setup.md) - GPU cloud deployment
 
