@@ -6,6 +6,7 @@ import {
   requestVideoUploadUrl,
   confirmVideoUpload,
 } from '@/services/api';
+import { useTierStore } from './tierStore';
 
 interface UploadResult {
   success: boolean;
@@ -35,6 +36,37 @@ const PROGRESS_ANALYZE = 10;
 const PROGRESS_UPLOAD_START = 15;
 const PROGRESS_UPLOAD_RANGE = 75; // 15-90%
 const PROGRESS_FINALIZE = 95;
+
+/**
+ * Validate upload against tier limits.
+ * Returns error message if validation fails, null if valid.
+ */
+function validateUploadLimits(fileSize: number, durationMs: number): string | null {
+  const tierStore = useTierStore.getState();
+  const { limits, usage, tier } = tierStore;
+
+  // Check upload quota
+  if (usage.uploadsRemaining !== null && usage.uploadsRemaining <= 0) {
+    return `Monthly upload limit reached (${usage.uploadsThisMonth}/${usage.uploadsLimit}). Upgrade to Premium for unlimited uploads, or wait until next month.`;
+  }
+
+  // Check file size
+  if (fileSize > limits.maxFileSizeBytes) {
+    const fileSizeMB = Math.round(fileSize / (1024 * 1024));
+    const limitMB = Math.round(limits.maxFileSizeBytes / (1024 * 1024));
+    const limitStr = limitMB >= 1024 ? `${limitMB / 1024} GB` : `${limitMB} MB`;
+    return `File size (${fileSizeMB} MB) exceeds ${limitStr} limit for ${tier} tier.${tier === 'FREE' ? ' Upgrade to Premium for 2 GB uploads.' : ''}`;
+  }
+
+  // Check duration
+  if (durationMs > limits.maxVideoDurationMs) {
+    const durationMin = Math.round(durationMs / 60000);
+    const limitMin = Math.round(limits.maxVideoDurationMs / 60000);
+    return `Video duration (${durationMin} min) exceeds ${limitMin} minute limit for ${tier} tier.${tier === 'FREE' ? ' Upgrade to Premium for 25 minute videos.' : ''}`;
+  }
+
+  return null;
+}
 
 /**
  * Upload a file to S3 with progress tracking.
@@ -112,6 +144,12 @@ export const useUploadStore = create<UploadState>((set, get) => ({
 
       if (abortController.signal.aborted) throw new Error('Upload cancelled');
 
+      // Pre-validate against tier limits
+      const validationError = validateUploadLimits(file.size, durationMs);
+      if (validationError) {
+        throw new Error(validationError);
+      }
+
       // Request presigned upload URL
       set({ progress: PROGRESS_ANALYZE, currentStep: 'Preparing upload...' });
       const { uploadUrl, videoId } = await requestUploadUrl(
@@ -182,6 +220,12 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       ]);
 
       if (abortController.signal.aborted) throw new Error('Upload cancelled');
+
+      // Pre-validate against tier limits
+      const validationError = validateUploadLimits(file.size, durationMs);
+      if (validationError) {
+        throw new Error(validationError);
+      }
 
       // Request presigned upload URL (user-scoped, no session)
       set({ progress: PROGRESS_ANALYZE, currentStep: 'Preparing upload...' });

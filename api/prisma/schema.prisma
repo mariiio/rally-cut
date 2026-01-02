@@ -11,21 +11,43 @@ datasource db {
 // User & Identity
 // ============================================================================
 
+enum UserTier {
+  FREE
+  PREMIUM
+}
+
 model User {
-  id          String    @id @default(uuid())
-  email       String?   @unique
-  name        String?
-  avatarUrl   String?   @map("avatar_url")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  convertedAt DateTime? @map("converted_at")
+  id            String    @id @default(uuid())
+  email         String?   @unique
+  name          String?
+  avatarUrl     String?   @map("avatar_url")
+  tier          UserTier  @default(FREE)
+  tierExpiresAt DateTime? @map("tier_expires_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  convertedAt   DateTime? @map("converted_at")
 
   videos              Video[]
   sessions            Session[]
   anonymousIdentities AnonymousIdentity[]
   sessionMemberships  SessionMember[]
   highlights          Highlight[]
+  usageQuota          UserUsageQuota?
 
+  @@index([tier])
   @@map("users")
+}
+
+model UserUsageQuota {
+  id               String   @id @default(uuid())
+  userId           String   @unique @map("user_id")
+  periodStart      DateTime @map("period_start")
+  detectionsUsed   Int      @default(0) @map("detections_used")
+  uploadsThisMonth Int      @default(0) @map("uploads_this_month")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_usage_quotas")
 }
 
 model AnonymousIdentity {
@@ -84,6 +106,8 @@ model Session {
   userId    String?     @map("user_id")
   name      String
   type      SessionType @default(REGULAR)
+  expiresAt DateTime?   @map("expires_at")
+  deletedAt DateTime?   @map("deleted_at")
   createdAt DateTime    @default(now()) @map("created_at")
   updatedAt DateTime    @updatedAt @map("updated_at")
 
@@ -95,6 +119,8 @@ model Session {
 
   @@unique([userId, type])
   @@index([userId])
+  @@index([expiresAt])
+  @@index([deletedAt])
   @@map("sessions")
 }
 
@@ -110,6 +136,7 @@ model Video {
   width         Int?
   height        Int?
   fileSizeBytes BigInt?     @map("file_size_bytes")
+  expiresAt     DateTime?   @map("expires_at")
   deletedAt     DateTime?   @map("deleted_at")
   createdAt     DateTime    @default(now()) @map("created_at")
   updatedAt     DateTime    @updatedAt @map("updated_at")
@@ -118,9 +145,12 @@ model Video {
   sessionVideos SessionVideo[]
   rallies       Rally[]
   detectionJobs RallyDetectionJob[]
+  confirmation  RallyConfirmation?
 
   @@index([userId])
   @@index([contentHash])
+  @@index([expiresAt])
+  @@index([deletedAt])
   @@map("videos")
 }
 
@@ -247,7 +277,7 @@ model ExportJob {
   id        String       @id @default(uuid())
   sessionId String       @map("session_id")
   userId    String       @map("user_id")
-  tier      ExportTier   @default(FREE)
+  tier      UserTier     @default(FREE)
   status    ExportStatus @default(PENDING)
   progress  Int          @default(0)
   outputKey String?      @map("output_key")
@@ -264,14 +294,48 @@ model ExportJob {
   @@map("export_jobs")
 }
 
-enum ExportTier {
-  FREE
-  PREMIUM
-}
-
 enum ExportStatus {
   PENDING
   PROCESSING
   COMPLETED
   FAILED
+}
+
+// ============================================================================
+// Rally Confirmation (Trimmed Video Generation)
+// ============================================================================
+
+enum ConfirmationStatus {
+  PENDING
+  PROCESSING
+  CONFIRMED
+  FAILED
+}
+
+model RallyConfirmation {
+  id                 String             @id @default(uuid())
+  videoId            String             @unique @map("video_id")
+  status             ConfirmationStatus @default(PENDING)
+
+  // Original video (preserved)
+  originalS3Key      String             @map("original_s3_key")
+  originalDurationMs Int                @map("original_duration_ms")
+
+  // Trimmed video (generated)
+  trimmedS3Key       String?            @map("trimmed_s3_key")
+  trimmedDurationMs  Int?               @map("trimmed_duration_ms")
+
+  // Timestamp mapping: [{rallyId, originalStartMs, originalEndMs, trimmedStartMs, trimmedEndMs}]
+  timestampMappings  Json               @map("timestamp_mappings")
+
+  progress           Int                @default(0)
+  error              String?
+
+  createdAt          DateTime           @default(now()) @map("created_at")
+  confirmedAt        DateTime?          @map("confirmed_at")
+
+  video              Video              @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId])
+  @@map("rally_confirmations")
 }

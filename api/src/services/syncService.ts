@@ -2,6 +2,7 @@ import { prisma } from "../lib/prisma.js";
 import { ForbiddenError, NotFoundError } from "../middleware/errorHandler.js";
 import type { SyncStateInput } from "../schemas/sync.js";
 import { canAccessSession } from "./shareService.js";
+import { getUserTier, getTierLimits } from "./tierService.js";
 
 /**
  * Sync the full state from the frontend.
@@ -11,12 +12,23 @@ import { canAccessSession } from "./shareService.js";
  * - Only owners can modify rallies
  * - Members can create new highlights (they become the owner)
  * - Users can only edit/delete highlights they created
+ * - FREE tier users cannot sync to server (localStorage only)
  */
 export async function syncState(
   sessionId: string,
   userId: string | undefined,
   input: SyncStateInput
 ): Promise<{ success: boolean; syncedAt: string }> {
+  // Check tier restrictions
+  const tier = await getUserTier(userId);
+  const limits = getTierLimits(tier);
+
+  if (!limits.serverSyncEnabled) {
+    throw new ForbiddenError(
+      "Cross-device sync requires Premium tier. Your changes are saved locally."
+    );
+  }
+
   // Check access
   let userRole: "owner" | "member" | null = null;
   if (userId) {
@@ -161,26 +173,29 @@ export async function syncState(
             },
           });
 
-          // Sync highlight rallies
+          // Sync highlight rallies - use batch insert for performance
           await tx.highlightRally.deleteMany({
             where: { highlightId: highlight.id },
           });
 
-          for (let order = 0; order < highlight.rallyIds.length; order++) {
-            const frontendRallyId = highlight.rallyIds[order];
-            if (!frontendRallyId) continue;
+          // Build batch of highlight rallies to create
+          const highlightRalliesToCreate = highlight.rallyIds
+            .map((frontendRallyId, order) => {
+              if (!frontendRallyId) return null;
+              const backendRallyId = rallyIdMap.get(frontendRallyId);
+              if (!backendRallyId) return null;
+              return {
+                highlightId: highlight.id!,
+                rallyId: backendRallyId,
+                order,
+              };
+            })
+            .filter((r): r is NonNullable<typeof r> => r !== null);
 
-            // Map frontend ID to backend ID
-            const backendRallyId = rallyIdMap.get(frontendRallyId);
-            if (backendRallyId) {
-              await tx.highlightRally.create({
-                data: {
-                  highlightId: highlight.id!,
-                  rallyId: backendRallyId,
-                  order,
-                },
-              });
-            }
+          if (highlightRalliesToCreate.length > 0) {
+            await tx.highlightRally.createMany({
+              data: highlightRalliesToCreate,
+            });
           }
         }
         seenHighlightIds.add(highlight.id!);
@@ -196,21 +211,24 @@ export async function syncState(
         });
         seenHighlightIds.add(created.id);
 
-        // Add highlight rallies
-        for (let order = 0; order < highlight.rallyIds.length; order++) {
-          const frontendRallyId = highlight.rallyIds[order];
-          if (!frontendRallyId) continue;
+        // Add highlight rallies - use batch insert for performance
+        const newHighlightRallies = highlight.rallyIds
+          .map((frontendRallyId, order) => {
+            if (!frontendRallyId) return null;
+            const backendRallyId = rallyIdMap.get(frontendRallyId);
+            if (!backendRallyId) return null;
+            return {
+              highlightId: created.id,
+              rallyId: backendRallyId,
+              order,
+            };
+          })
+          .filter((r): r is NonNullable<typeof r> => r !== null);
 
-          const backendRallyId = rallyIdMap.get(frontendRallyId);
-          if (backendRallyId) {
-            await tx.highlightRally.create({
-              data: {
-                highlightId: created.id,
-                rallyId: backendRallyId,
-                order,
-              },
-            });
-          }
+        if (newHighlightRallies.length > 0) {
+          await tx.highlightRally.createMany({
+            data: newHighlightRallies,
+          });
         }
       }
     }

@@ -99,7 +99,11 @@ export function Timeline() {
     getHighlightsForRally,
     activeMatchId,
     reloadCurrentMatch,
+    isRallyEditingLocked,
   } = useEditorStore();
+
+  // Check if rally editing is locked (after confirmation)
+  const isLocked = isRallyEditingLocked();
 
   // Detection state
   const [isDetecting, setIsDetecting] = useState(false);
@@ -261,8 +265,8 @@ export function Timeline() {
           if (isMod) {
             // Cmd/Ctrl + Left: go to previous rally
             goToPrevRally();
-          } else if (selectedRallyId) {
-            // Left with rally selected: adjust rally
+          } else if (selectedRallyId && !isLocked) {
+            // Left with rally selected: adjust rally (disabled when locked)
             const rallyLeft = getSelectedRally();
             if (e.shiftKey) {
               // Shift + Left: shrink end (-0.5s)
@@ -288,8 +292,8 @@ export function Timeline() {
           if (isMod) {
             // Cmd/Ctrl + Right: go to next rally
             goToNextRally();
-          } else if (selectedRallyId) {
-            // Right with rally selected: adjust rally
+          } else if (selectedRallyId && !isLocked) {
+            // Right with rally selected: adjust rally (disabled when locked)
             const rallyRight = getSelectedRally();
             if (e.shiftKey) {
               // Shift + Right: expand end (+0.5s)
@@ -312,7 +316,8 @@ export function Timeline() {
 
         case 'Delete':
         case 'Backspace':
-          if (selectedRallyId) {
+          // Disable delete when locked
+          if (selectedRallyId && !isLocked) {
             e.preventDefault();
             if (deleteConfirmId === selectedRallyId) {
               // Confirm delete on second press
@@ -336,8 +341,8 @@ export function Timeline() {
 
         case 'Enter':
           if (isMod) {
-            // Cmd/Ctrl + Enter: Create new rally at cursor (if not inside existing rally)
-            if (videoMetadata && rallies) {
+            // Cmd/Ctrl + Enter: Create new rally at cursor (disabled when locked)
+            if (videoMetadata && rallies && !isLocked) {
               const insideRally = rallies.some(
                 (s) => currentTime >= s.start_time && currentTime <= s.end_time
               );
@@ -356,7 +361,7 @@ export function Timeline() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, play, pause, seek, currentTime, duration, selectedRallyId, deleteConfirmId, removeRally, selectRally, isInsideSelectedRally, getSelectedRally, goToPrevRally, goToNextRally, adjustRallyStart, adjustRallyEnd, videoMetadata, rallies, createRallyAtTime, handleToggleHighlight]);
+  }, [isPlaying, play, pause, seek, currentTime, duration, selectedRallyId, deleteConfirmId, removeRally, selectRally, isInsideSelectedRally, getSelectedRally, goToPrevRally, goToNextRally, adjustRallyStart, adjustRallyEnd, videoMetadata, rallies, createRallyAtTime, handleToggleHighlight, isLocked]);
 
   // Jump to previous/next rally
   const jumpToPrevRally = useCallback(() => {
@@ -582,20 +587,22 @@ export function Timeline() {
     [rallies, updateRally]
   );
 
-  // Prevent overlapping during move
+  // Prevent overlapping during move (also disable when locked)
   const handleActionMoving = useCallback(
     (params: { action: TimelineAction; start: number; end: number }) => {
+      if (isLocked) return false;
       return !checkOverlap(params.action.id, params.start, params.end);
     },
-    [checkOverlap]
+    [checkOverlap, isLocked]
   );
 
-  // Prevent overlapping during resize
+  // Prevent overlapping during resize (also disable when locked)
   const handleActionResizing = useCallback(
     (params: { action: TimelineAction; start: number; end: number }) => {
+      if (isLocked) return false;
       return !checkOverlap(params.action.id, params.start, params.end);
     },
-    [checkOverlap]
+    [checkOverlap, isLocked]
   );
 
   // Persist changes after resize ends
@@ -653,16 +660,16 @@ export function Timeline() {
 
   // Check if we can create a rally at current time (for toolbar button)
   const canCreateRallyToolbar = useMemo(() => {
-    if (!videoMetadata || !rallies) return false;
+    if (!videoMetadata || !rallies || isLocked) return false;
     const insideRally = rallies.some(
       (s) => currentTime >= s.start_time && currentTime <= s.end_time
     );
     return !insideRally;
-  }, [rallies, currentTime, videoMetadata]);
+  }, [rallies, currentTime, videoMetadata, isLocked]);
 
   // Check if we should show the floating + button on cursor
   const showFloatingAddButton = useMemo(() => {
-    if (!videoMetadata || !rallies) return false;
+    if (!videoMetadata || !rallies || isLocked) return false;
     if (isDraggingCursor) return false;
     if (selectedRallyId) return false; // Hide when a rally is selected
     // Check if we're inside an existing rally
@@ -670,7 +677,7 @@ export function Timeline() {
       (s) => currentTime >= s.start_time && currentTime <= s.end_time
     );
     return !insideRally;
-  }, [rallies, currentTime, videoMetadata, isDraggingCursor, selectedRallyId]);
+  }, [rallies, currentTime, videoMetadata, isDraggingCursor, selectedRallyId, isLocked]);
 
   // Format elapsed time as MM:SS
   const formatElapsed = (seconds: number) => {
@@ -1050,9 +1057,10 @@ export function Timeline() {
               boxShadow: '0 4px 8px rgba(59, 130, 246, 0.3) !important',
             },
           },
-          // Allow resize cursor on edges
+          // Allow resize cursor on edges (disabled when locked)
           '& .timeline-editor-action-left-stretch, & .timeline-editor-action-right-stretch': {
-            cursor: 'ew-resize !important',
+            cursor: isLocked ? 'default !important' : 'ew-resize !important',
+            pointerEvents: isLocked ? 'none !important' : 'auto !important',
           },
           '& .timeline-editor-action-selected': {
             background: 'linear-gradient(180deg, #FF6B4A 0%, #E55235 100%) !important',
@@ -1178,8 +1186,8 @@ export function Timeline() {
                   </Typography>
                 </Box>
 
-                {/* Left edge controls - only show when selected */}
-                {isSelected && (
+                {/* Left edge controls - only show when selected and not locked */}
+                {isSelected && !isLocked && (
                   <Stack
                     direction="column"
                     spacing={0.5}
@@ -1214,8 +1222,8 @@ export function Timeline() {
                   </Stack>
                 )}
 
-                {/* Right edge controls - only show when selected */}
-                {isSelected && (
+                {/* Right edge controls - only show when selected and not locked */}
+                {isSelected && !isLocked && (
                   <Stack
                     direction="column"
                     spacing={0.5}
@@ -1398,8 +1406,8 @@ export function Timeline() {
           </Box>
         )}
 
-        {/* Delete button overlay for selected rally */}
-        {selectedRallyId && selectedRallyPosition && selectedRallyPosition.center > 0 && (
+        {/* Delete button overlay for selected rally (hidden when locked) */}
+        {selectedRallyId && selectedRallyPosition && selectedRallyPosition.center > 0 && !isLocked && (
           <Box
             sx={{
               position: 'absolute',

@@ -5,10 +5,15 @@
  * - localStorage handles immediate persistence and undo/redo history (via editorStore)
  * - This service periodically syncs the current state to the backend
  * - No operation tracking - just pushes the final rally/highlight state
+ *
+ * Tier restrictions:
+ * - FREE tier: localStorage only, no server sync
+ * - PREMIUM tier: Full server sync enabled
  */
 
 import { API_BASE_URL } from './api';
 import type { Rally, Highlight } from '@/types/rally';
+import { useTierStore } from '@/stores/tierStore';
 
 // Sync configuration
 const SYNC_DEBOUNCE_MS = 5000; // Sync 5 seconds after last change
@@ -158,6 +163,20 @@ class SyncService {
 
   private async performSync(): Promise<boolean> {
     if (!this.state || !this.state.isDirty || this.state.isSyncing || !this.getState) {
+      return true;
+    }
+
+    // Check tier - FREE users cannot sync to server
+    const canSync = useTierStore.getState().canSyncToServer();
+    if (!canSync) {
+      // Clear dirty flag since we can't sync anyway
+      this.state.isDirty = false;
+      this.state.error = 'Sync disabled for FREE tier';
+      this.saveMeta(this.state.sessionId, {
+        lastSyncAt: this.state.lastSyncAt,
+        isDirty: false,
+      });
+      this.notifyListeners();
       return true;
     }
 

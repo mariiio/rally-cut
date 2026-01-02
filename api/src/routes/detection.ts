@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { requireUser } from "../middleware/resolveUser.js";
 import { validateRequest } from "../middleware/validateRequest.js";
 import { uuidSchema } from "../schemas/common.js";
 import {
@@ -11,10 +12,11 @@ const router = Router();
 
 router.post(
   "/v1/videos/:id/detect-rallies",
+  requireUser,
   validateRequest({ params: z.object({ id: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      const result = await triggerRallyDetection(req.params.id);
+      const result = await triggerRallyDetection(req.params.id, req.userId!);
       res.status(202).json(result);
     } catch (error) {
       next(error);

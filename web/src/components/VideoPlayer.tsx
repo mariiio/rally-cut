@@ -10,10 +10,12 @@ import { designTokens } from '@/app/theme';
 export function VideoPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [bufferProgress, setBufferProgress] = useState(0);
 
   const videoUrl = useEditorStore((state) => state.videoUrl);
   const activeMatchId = useEditorStore((state) => state.activeMatchId);
   const setActiveMatch = useEditorStore((state) => state.setActiveMatch);
+  const isLoadingSession = useEditorStore((state) => state.isLoadingSession);
 
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const seekTo = usePlayerStore((state) => state.seekTo);
@@ -114,8 +116,21 @@ export function VideoPlayer() {
 
   const handleLoadStart = useCallback(() => {
     setIsLoading(true);
+    setBufferProgress(0);
     setReady(false);
   }, [setReady]);
+
+  // Track video buffering progress
+  const handleProgress = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || video.buffered.length === 0) return;
+
+    const bufferedEnd = video.buffered.end(video.buffered.length - 1);
+    const duration = video.duration;
+    if (duration > 0) {
+      setBufferProgress(Math.round((bufferedEnd / duration) * 100));
+    }
+  }, []);
 
   const handleEmptyStateClick = () => {
     // Trigger file upload via EditorHeader's exposed function
@@ -124,6 +139,27 @@ export function VideoPlayer() {
       triggerFn();
     }
   };
+
+  // Show loading skeleton during session fetch
+  if (isLoadingSession) {
+    return (
+      <Box
+        sx={{
+          width: '100%',
+          aspectRatio: '16/9',
+          bgcolor: '#000',
+          borderRadius: 2,
+          overflow: 'hidden',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          boxShadow: designTokens.colors.video.shadow,
+        }}
+      >
+        <CircularProgress color="primary" size={48} />
+      </Box>
+    );
+  }
 
   if (!videoUrl) {
     return (
@@ -206,19 +242,27 @@ export function VideoPlayer() {
             position: 'absolute',
             inset: 0,
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
             bgcolor: 'rgba(0, 0, 0, 0.7)',
             zIndex: 2,
+            gap: 1.5,
           }}
         >
           <CircularProgress color="primary" />
+          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+            {bufferProgress > 0 && bufferProgress < 100
+              ? `Loading video... ${bufferProgress}%`
+              : 'Loading video...'}
+          </Typography>
         </Box>
       )}
 
       <video
         ref={videoRef}
         src={videoUrl}
+        preload="metadata"
         crossOrigin={process.env.NODE_ENV === 'production' ? 'anonymous' : undefined}
         style={{
           width: '100%',
@@ -228,6 +272,7 @@ export function VideoPlayer() {
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         onLoadStart={handleLoadStart}
+        onProgress={handleProgress}
         playsInline
       />
     </Box>

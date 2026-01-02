@@ -29,6 +29,7 @@ import {
   MenuItem,
   ListItemIcon,
   ListItemText,
+  TextField,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -90,6 +91,9 @@ export default function HomePage() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [creatingSession, setCreatingSession] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState<string>(NEW_SESSION_VALUE);
+  const [newSessionName, setNewSessionName] = useState<string>('');
+  const [uploadQueue, setUploadQueue] = useState<File[]>([]);
+  const [currentUploadIndex, setCurrentUploadIndex] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { isUploading, progress, currentStep, uploadVideoToLibrary } = useUploadStore();
@@ -215,6 +219,9 @@ export default function HomePage() {
     setUploadError(null);
     // Default to "new session" when opening
     setSelectedSessionId(NEW_SESSION_VALUE);
+    setNewSessionName(generateSessionName());
+    setUploadQueue([]);
+    setCurrentUploadIndex(0);
   };
 
   const handleUploadDialogClose = () => {
@@ -224,68 +231,85 @@ export default function HomePage() {
     }
   };
 
-  const processUpload = async (file: File) => {
-    if (!isValidVideoFile(file)) {
-      setUploadError('Invalid video format. Please use MP4, MOV, or WebM.');
+  const processMultipleUploads = async (files: File[]) => {
+    // Validate all files first
+    const validFiles = files.filter(isValidVideoFile);
+    if (validFiles.length === 0) {
+      setUploadError('No valid video files. Please use MP4, MOV, or WebM.');
       return;
+    }
+    if (validFiles.length !== files.length) {
+      // Don't show error, just skip invalid files
+      console.log(`Skipped ${files.length - validFiles.length} invalid file(s)`);
     }
 
     setUploadError(null);
+    setUploadQueue(validFiles);
+    setCurrentUploadIndex(0);
 
-    // Upload video to library first
-    const result = await uploadVideoToLibrary(file);
-    if (!result.success || !result.videoId) {
-      return;
-    }
-
-    // Determine target session
+    // Determine/create target session ONCE before uploads
     let targetSessionId: string;
-
     if (selectedSessionId === NEW_SESSION_VALUE) {
-      // Create new session
       setCreatingSession(true);
       try {
-        const sessionName = generateSessionName();
+        const sessionName = newSessionName.trim() || generateSessionName();
         const session = await createSession(sessionName);
         targetSessionId = session.id;
       } catch (err) {
         console.error('Failed to create session:', err);
-        setUploadError('Video uploaded but failed to create session.');
+        setUploadError('Failed to create session.');
         setCreatingSession(false);
-        loadData();
+        setUploadQueue([]);
         return;
       }
+      setCreatingSession(false);
     } else {
       targetSessionId = selectedSessionId;
-      setCreatingSession(true);
     }
 
-    // Add video to session
-    try {
-      await addVideoToSession(targetSessionId, result.videoId);
+    // Upload each file sequentially
+    let uploadedCount = 0;
+    for (let i = 0; i < validFiles.length; i++) {
+      setCurrentUploadIndex(i);
+      const file = validFiles[i];
+
+      const result = await uploadVideoToLibrary(file);
+      if (!result.success || !result.videoId) {
+        console.error(`Failed to upload ${file.name}`);
+        continue; // Continue with next file
+      }
+
+      try {
+        await addVideoToSession(targetSessionId, result.videoId);
+        uploadedCount++;
+      } catch (err) {
+        console.error(`Failed to add ${file.name} to session:`, err);
+      }
+    }
+
+    // All done - redirect if any uploads succeeded
+    setUploadQueue([]);
+    if (uploadedCount > 0) {
       setUploadDialogOpen(false);
       router.push(`/sessions/${targetSessionId}`);
-    } catch (err) {
-      console.error('Failed to add video to session:', err);
-      setUploadError('Video uploaded but failed to add to session.');
+    } else {
+      setUploadError('All uploads failed. Please try again.');
       loadData();
-    } finally {
-      setCreatingSession(false);
     }
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
     e.target.value = '';
-    await processUpload(file);
+    await processMultipleUploads(files);
   };
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (!file) return;
-    await processUpload(file);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+    await processMultipleUploads(files);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -1002,7 +1026,7 @@ export default function HomePage() {
             <Stack direction="row" alignItems="center" spacing={1.5}>
               <CloudUploadIcon sx={{ color: 'primary.main' }} />
               <Typography variant="h6" fontWeight={600}>
-                Upload Video
+                Upload Videos
               </Typography>
             </Stack>
             <IconButton
@@ -1040,13 +1064,20 @@ export default function HomePage() {
                         <Typography variant="body2" fontWeight={500}>
                           New session
                         </Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          ({generateSessionName()})
-                        </Typography>
                       </Stack>
                     }
                     sx={{ mb: 0.5 }}
                   />
+                  {selectedSessionId === NEW_SESSION_VALUE && (
+                    <TextField
+                      value={newSessionName}
+                      onChange={(e) => setNewSessionName(e.target.value)}
+                      placeholder="Session name"
+                      size="small"
+                      fullWidth
+                      sx={{ ml: 4, mb: 1, maxWidth: 280 }}
+                    />
+                  )}
                   {regularSessions.map((session) => (
                     <FormControlLabel
                       key={session.id}
@@ -1075,6 +1106,23 @@ export default function HomePage() {
               </>
             )}
 
+            {/* Session Name - show when no existing sessions */}
+            {regularSessions.length === 0 && !isUploading && !creatingSession && (
+              <>
+                <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5, fontWeight: 500 }}>
+                  Session name
+                </Typography>
+                <TextField
+                  value={newSessionName}
+                  onChange={(e) => setNewSessionName(e.target.value)}
+                  placeholder="Session name"
+                  size="small"
+                  fullWidth
+                  sx={{ mb: 2.5 }}
+                />
+              </>
+            )}
+
             {/* File Drop Zone */}
             <Box
               onDrop={handleDrop}
@@ -1099,7 +1147,11 @@ export default function HomePage() {
                 <Box>
                   <CircularProgress size={56} sx={{ color: 'primary.main' }} />
                   <Typography sx={{ mt: 2, fontWeight: 500 }} color="text.primary">
-                    {creatingSession ? 'Adding to session...' : currentStep}
+                    {creatingSession
+                      ? 'Creating session...'
+                      : uploadQueue.length > 1
+                        ? `Uploading video ${currentUploadIndex + 1} of ${uploadQueue.length}...`
+                        : currentStep}
                   </Typography>
                   {isUploading && (
                     <Box sx={{ mt: 2, mx: 4 }}>
@@ -1139,10 +1191,10 @@ export default function HomePage() {
                     <CloudUploadIcon sx={{ fontSize: 32, color: 'primary.main' }} />
                   </Box>
                   <Typography variant="h6" fontWeight={600} gutterBottom>
-                    Drop video here or click to browse
+                    Drop videos here or click to browse
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
-                    Supported formats: MP4, MOV, WebM
+                    MP4, MOV, WebM (multiple files allowed)
                   </Typography>
                 </>
               )}
@@ -1152,6 +1204,7 @@ export default function HomePage() {
               ref={fileInputRef}
               onChange={handleFileSelect}
               accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
+              multiple
               style={{ display: 'none' }}
             />
           </DialogContent>

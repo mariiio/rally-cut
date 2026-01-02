@@ -1,6 +1,11 @@
 import { prisma } from "../lib/prisma.js";
 import { NotFoundError } from "../middleware/errorHandler.js";
 import type { UserResponse, IdentityResponse } from "../schemas/user.js";
+import {
+  getUserTier,
+  getTierLimits,
+  getOrCreateUsageQuota,
+} from "./tierService.js";
 
 /**
  * Get or create a user from a visitor ID.
@@ -50,7 +55,7 @@ export async function getOrCreateUser(
 }
 
 /**
- * Get user by ID with counts.
+ * Get user by ID with counts and tier information.
  */
 export async function getUserById(id: string): Promise<UserResponse> {
   const user = await prisma.user.findUnique({
@@ -61,7 +66,9 @@ export async function getUserById(id: string): Promise<UserResponse> {
           videos: {
             where: { deletedAt: null },
           },
-          sessions: true,
+          sessions: {
+            where: { deletedAt: null },
+          },
         },
       },
     },
@@ -71,11 +78,34 @@ export async function getUserById(id: string): Promise<UserResponse> {
     throw new NotFoundError("User", id);
   }
 
+  const tier = await getUserTier(id);
+  const tierLimits = getTierLimits(tier);
+  const quota = await getOrCreateUsageQuota(id);
+
+  const uploadsRemaining =
+    tierLimits.monthlyUploadCount === null
+      ? null
+      : Math.max(0, tierLimits.monthlyUploadCount - quota.uploadsThisMonth);
+
   return {
     id: user.id,
     email: user.email,
     name: user.name,
     avatarUrl: user.avatarUrl,
+    tier,
+    tierLimits,
+    usage: {
+      detectionsUsed: quota.detectionsUsed,
+      detectionsLimit: tierLimits.detectionsPerMonth,
+      detectionsRemaining: Math.max(
+        0,
+        tierLimits.detectionsPerMonth - quota.detectionsUsed
+      ),
+      uploadsThisMonth: quota.uploadsThisMonth,
+      uploadsLimit: tierLimits.monthlyUploadCount,
+      uploadsRemaining,
+      periodStart: quota.periodStart.toISOString(),
+    },
     createdAt: user.createdAt.toISOString(),
     convertedAt: user.convertedAt?.toISOString() ?? null,
     videoCount: user._count.videos,
@@ -101,17 +131,42 @@ export async function updateUser(
           videos: {
             where: { deletedAt: null },
           },
-          sessions: true,
+          sessions: {
+            where: { deletedAt: null },
+          },
         },
       },
     },
   });
+
+  const tier = await getUserTier(id);
+  const tierLimits = getTierLimits(tier);
+  const quota = await getOrCreateUsageQuota(id);
+
+  const uploadsRemaining =
+    tierLimits.monthlyUploadCount === null
+      ? null
+      : Math.max(0, tierLimits.monthlyUploadCount - quota.uploadsThisMonth);
 
   return {
     id: user.id,
     email: user.email,
     name: user.name,
     avatarUrl: user.avatarUrl,
+    tier,
+    tierLimits,
+    usage: {
+      detectionsUsed: quota.detectionsUsed,
+      detectionsLimit: tierLimits.detectionsPerMonth,
+      detectionsRemaining: Math.max(
+        0,
+        tierLimits.detectionsPerMonth - quota.detectionsUsed
+      ),
+      uploadsThisMonth: quota.uploadsThisMonth,
+      uploadsLimit: tierLimits.monthlyUploadCount,
+      uploadsRemaining,
+      periodStart: quota.periodStart.toISOString(),
+    },
     createdAt: user.createdAt.toISOString(),
     convertedAt: user.convertedAt?.toISOString() ?? null,
     videoCount: user._count.videos,

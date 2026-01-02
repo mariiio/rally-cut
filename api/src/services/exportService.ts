@@ -1,4 +1,4 @@
-import { ExportStatus, ExportTier } from "@prisma/client";
+import { ExportStatus, UserTier } from "@prisma/client";
 import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 import { spawn } from "child_process";
 import fs from "fs/promises";
@@ -8,7 +8,8 @@ import path from "path";
 import { env } from "../config/env.js";
 import { generateDownloadUrl, generateUploadUrl } from "../lib/s3.js";
 import { prisma } from "../lib/prisma.js";
-import { NotFoundError } from "../middleware/errorHandler.js";
+import { ForbiddenError, NotFoundError } from "../middleware/errorHandler.js";
+import { getUserTier, getTierLimits } from "./tierService.js";
 
 const lambdaClient = new LambdaClient({
   region: env.AWS_REGION,
@@ -29,7 +30,7 @@ function shouldUseLocalExport(): boolean {
 
 interface CreateExportJobInput {
   sessionId: string;
-  tier: "FREE" | "PREMIUM";
+  // tier is NOT in input - determined by backend from user
   config: {
     format: "mp4" | "webm";
   };
@@ -41,14 +42,36 @@ interface CreateExportJobInput {
   }>;
 }
 
+// Internal interface with tier for trigger functions
+interface ExportTriggerInput extends CreateExportJobInput {
+  tier: "FREE" | "PREMIUM";
+}
+
 export async function createExportJob(
   userId: string,
   input: CreateExportJobInput
 ) {
+  // Get user's actual tier - don't trust frontend tier parameter
+  const userTier = await getUserTier(userId);
+  const limits = getTierLimits(userTier);
+
+  // Force tier to match user's actual tier (prevent frontend override)
+  const effectiveTier = userTier;
+
+  // Check if user can use Lambda export
+  const useLocal = shouldUseLocalExport();
+  if (!useLocal && !limits.lambdaExportEnabled) {
+    // FREE users cannot use Lambda export - they must use browser export
+    throw new ForbiddenError(
+      "Server-side export requires Premium tier. Please use browser export instead."
+    );
+  }
+
   // Verify session exists and user has access
   const session = await prisma.session.findFirst({
     where: {
       id: input.sessionId,
+      deletedAt: null,
       OR: [
         { userId },
         { share: { members: { some: { userId } } } },
@@ -60,26 +83,27 @@ export async function createExportJob(
     throw new NotFoundError("Session", input.sessionId);
   }
 
-  // Create the export job
+  // Create the export job with user's actual tier
   const job = await prisma.exportJob.create({
     data: {
       sessionId: input.sessionId,
       userId,
-      tier: input.tier as ExportTier,
+      tier: effectiveTier as UserTier,
       status: ExportStatus.PENDING,
       config: input.config,
       rallies: input.rallies,
     },
   });
 
-  // Choose between local (dev) or Lambda (prod)
-  const useLocal = shouldUseLocalExport();
-  console.log(`[EXPORT] Using ${useLocal ? "LOCAL" : "LAMBDA"} export for job ${job.id}`);
+  console.log(`[EXPORT] Using ${useLocal ? "LOCAL" : "LAMBDA"} export for job ${job.id} (tier: ${effectiveTier})`);
 
   const triggerFn = useLocal ? triggerLocalExport : triggerExportLambda;
 
+  // Use effectiveTier (user's actual tier) instead of input.tier
+  const exportInput = { ...input, tier: effectiveTier };
+
   // Trigger export (async, don't wait)
-  triggerFn(job.id, input).catch((error) => {
+  triggerFn(job.id, exportInput).catch((error) => {
     console.error(`[EXPORT] Failed to trigger export for job ${job.id}:`, error);
     // Update job status to failed
     prisma.exportJob
@@ -107,7 +131,7 @@ export async function createExportJob(
  */
 async function triggerLocalExport(
   jobId: string,
-  input: CreateExportJobInput
+  input: ExportTriggerInput
 ): Promise<void> {
   console.log(`[LOCAL EXPORT] Starting job ${jobId}`);
 
@@ -285,7 +309,7 @@ function runFFmpeg(args: string[]): Promise<void> {
   });
 }
 
-async function triggerExportLambda(jobId: string, input: CreateExportJobInput) {
+async function triggerExportLambda(jobId: string, input: ExportTriggerInput) {
   const functionName = env.EXPORT_LAMBDA_FUNCTION_NAME!;
 
   const payload = {

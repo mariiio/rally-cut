@@ -1,0 +1,325 @@
+'use client';
+
+import { useState, useEffect, useCallback } from 'react';
+import {
+  Box,
+  Button,
+  Typography,
+  LinearProgress,
+  Tooltip,
+  Alert,
+  CircularProgress,
+} from '@mui/material';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import LockIcon from '@mui/icons-material/Lock';
+import RestoreIcon from '@mui/icons-material/Restore';
+import { useEditorStore, ConfirmationStatus } from '@/stores/editorStore';
+import { confirmRallies, getConfirmationStatus, restoreOriginalVideo } from '@/services/api';
+import { ConfirmDialog } from './ConfirmDialog';
+
+interface ConfirmRalliesProps {
+  matchId: string;
+  isPremium: boolean;
+}
+
+export function ConfirmRallies({ matchId, isPremium }: ConfirmRalliesProps) {
+  const {
+    confirmationStatus,
+    setConfirmationStatus,
+    isConfirming,
+    setIsConfirming,
+    updateConfirmationProgress,
+    rallies,
+    reloadCurrentMatch,
+  } = useEditorStore();
+
+  const [error, setError] = useState<string | null>(null);
+  const [showRestoreDialog, setShowRestoreDialog] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+
+  const status = confirmationStatus[matchId];
+  const isLocked = status?.status === 'CONFIRMED';
+  const isProcessing = status?.status === 'PENDING' || status?.status === 'PROCESSING';
+
+  // Poll for status updates when processing
+  useEffect(() => {
+    if (!isProcessing) return;
+
+    const pollStatus = async () => {
+      try {
+        const result = await getConfirmationStatus(matchId);
+        if (result.confirmation) {
+          setConfirmationStatus(matchId, {
+            id: result.confirmation.id,
+            status: result.confirmation.status,
+            progress: result.confirmation.progress,
+            error: result.confirmation.error,
+            confirmedAt: result.confirmation.confirmedAt,
+            originalDurationMs: result.confirmation.originalDurationMs,
+            trimmedDurationMs: result.confirmation.trimmedDurationMs,
+          });
+
+          // If completed or failed, reload match to get updated timestamps
+          if (result.confirmation.status === 'CONFIRMED') {
+            setIsConfirming(false);
+            // Reload the match to get updated rally timestamps
+            await reloadCurrentMatch();
+          } else if (result.confirmation.status === 'FAILED') {
+            setIsConfirming(false);
+            setError(result.confirmation.error || 'Confirmation failed');
+          }
+        }
+      } catch (e) {
+        console.error('Failed to poll confirmation status:', e);
+      }
+    };
+
+    const interval = setInterval(pollStatus, 2000);
+    return () => clearInterval(interval);
+  }, [isProcessing, matchId, setConfirmationStatus, setIsConfirming, reloadCurrentMatch]);
+
+  // Load initial status on mount
+  useEffect(() => {
+    const loadStatus = async () => {
+      try {
+        const result = await getConfirmationStatus(matchId);
+        if (result.confirmation) {
+          setConfirmationStatus(matchId, {
+            id: result.confirmation.id,
+            status: result.confirmation.status,
+            progress: result.confirmation.progress,
+            error: result.confirmation.error,
+            confirmedAt: result.confirmation.confirmedAt,
+            originalDurationMs: result.confirmation.originalDurationMs,
+            trimmedDurationMs: result.confirmation.trimmedDurationMs,
+          });
+        }
+      } catch (e) {
+        // Ignore errors on initial load
+        console.debug('No confirmation status for match:', matchId);
+      }
+    };
+
+    loadStatus();
+  }, [matchId, setConfirmationStatus]);
+
+  const handleConfirm = useCallback(async () => {
+    if (!isPremium) {
+      setError('Rally confirmation requires Premium tier');
+      return;
+    }
+
+    if (rallies.length === 0) {
+      setError('No rallies to confirm');
+      return;
+    }
+
+    setError(null);
+    setIsConfirming(true);
+
+    try {
+      const result = await confirmRallies(matchId);
+      setConfirmationStatus(matchId, {
+        id: result.confirmationId,
+        status: result.status,
+        progress: result.progress,
+        error: null,
+        confirmedAt: null,
+        originalDurationMs: 0, // Will be updated on next poll
+        trimmedDurationMs: null,
+      });
+    } catch (e) {
+      setIsConfirming(false);
+      setError(e instanceof Error ? e.message : 'Failed to confirm rallies');
+    }
+  }, [isPremium, rallies.length, matchId, setConfirmationStatus, setIsConfirming]);
+
+  const handleRestore = useCallback(async () => {
+    setShowRestoreDialog(false);
+    setIsRestoring(true);
+    setError(null);
+
+    try {
+      await restoreOriginalVideo(matchId);
+      setConfirmationStatus(matchId, null);
+      // Reload match to get original rally timestamps
+      await reloadCurrentMatch();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to restore original');
+    } finally {
+      setIsRestoring(false);
+    }
+  }, [matchId, setConfirmationStatus, reloadCurrentMatch]);
+
+  // Not Premium - show disabled button
+  if (!isPremium) {
+    return (
+      <Tooltip title="Rally confirmation requires Premium tier">
+        <span>
+          <Button
+            variant="outlined"
+            size="small"
+            disabled
+            startIcon={<LockIcon />}
+            sx={{ fontSize: 11, py: 0.5 }}
+          >
+            Confirm Rallies
+          </Button>
+        </span>
+      </Tooltip>
+    );
+  }
+
+  // Show error alert
+  if (error) {
+    return (
+      <Alert
+        severity="error"
+        onClose={() => setError(null)}
+        sx={{ py: 0, fontSize: 11 }}
+      >
+        {error}
+      </Alert>
+    );
+  }
+
+  // Processing - show progress
+  if (isProcessing) {
+    return (
+      <Box sx={{ width: '100%' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+          <CircularProgress size={14} />
+          <Typography variant="caption" sx={{ fontSize: 11, color: 'text.secondary' }}>
+            Generating trimmed video...
+          </Typography>
+          <Typography
+            variant="caption"
+            sx={{ fontSize: 11, color: 'text.secondary', fontFamily: 'monospace' }}
+          >
+            {status?.progress ?? 0}%
+          </Typography>
+        </Box>
+        <LinearProgress
+          variant="determinate"
+          value={status?.progress ?? 0}
+          sx={{
+            height: 3,
+            bgcolor: 'rgba(255, 255, 255, 0.06)',
+            '& .MuiLinearProgress-bar': {
+              bgcolor: 'primary.main',
+            },
+          }}
+        />
+      </Box>
+    );
+  }
+
+  // Confirmed - show locked status with restore button
+  if (isLocked) {
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 0.5,
+            px: 1,
+            py: 0.25,
+            bgcolor: 'success.main',
+            borderRadius: 1,
+            opacity: 0.9,
+          }}
+        >
+          <CheckCircleIcon sx={{ fontSize: 14 }} />
+          <Typography variant="caption" sx={{ fontSize: 11, fontWeight: 500 }}>
+            Confirmed
+          </Typography>
+        </Box>
+        <Tooltip title="Restore original video and unlock editing">
+          <Button
+            variant="text"
+            size="small"
+            onClick={() => setShowRestoreDialog(true)}
+            startIcon={isRestoring ? <CircularProgress size={12} /> : <RestoreIcon />}
+            disabled={isRestoring}
+            sx={{
+              fontSize: 11,
+              py: 0.25,
+              px: 1,
+              minWidth: 0,
+              color: 'text.secondary',
+              '&:hover': { color: 'warning.main' },
+            }}
+          >
+            Restore
+          </Button>
+        </Tooltip>
+
+        <ConfirmDialog
+          open={showRestoreDialog}
+          title="Restore original video?"
+          message="This will delete the trimmed video and restore rally timestamps to their original values. You'll need to confirm again to create a new trimmed video."
+          confirmLabel="Restore"
+          cancelLabel="Cancel"
+          onConfirm={handleRestore}
+          onCancel={() => setShowRestoreDialog(false)}
+        />
+      </Box>
+    );
+  }
+
+  // Default - show confirm button
+  return (
+    <Tooltip title="Generate a trimmed video with only rally segments">
+      <Button
+        variant="outlined"
+        size="small"
+        onClick={handleConfirm}
+        disabled={isConfirming || rallies.length === 0}
+        startIcon={isConfirming ? <CircularProgress size={12} /> : <CheckCircleIcon />}
+        sx={{
+          fontSize: 11,
+          py: 0.5,
+          borderColor: 'divider',
+          '&:hover': {
+            borderColor: 'primary.main',
+            bgcolor: 'rgba(144, 202, 249, 0.08)',
+          },
+        }}
+      >
+        Confirm Rallies
+      </Button>
+    </Tooltip>
+  );
+}
+
+/**
+ * Locked Banner - shows when rallies are locked
+ * Display at the top of the rally list to indicate editing is disabled
+ */
+export function LockedRalliesBanner() {
+  const { isRallyEditingLocked } = useEditorStore();
+  const isLocked = isRallyEditingLocked();
+
+  if (!isLocked) return null;
+
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1,
+        px: 1.5,
+        py: 0.75,
+        bgcolor: 'rgba(76, 175, 80, 0.1)',
+        borderBottom: '1px solid',
+        borderColor: 'success.dark',
+      }}
+    >
+      <LockIcon sx={{ fontSize: 14, color: 'success.main' }} />
+      <Typography variant="caption" sx={{ fontSize: 11, color: 'success.main' }}>
+        Rallies confirmed - editing disabled. Restore to make changes.
+      </Typography>
+    </Box>
+  );
+}

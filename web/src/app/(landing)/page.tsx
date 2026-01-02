@@ -2,6 +2,7 @@
 
 import { Box } from '@mui/material';
 import { Navbar } from './components/Navbar';
+import { ReturningUserBanner } from './components/ReturningUserBanner';
 import { Hero } from './components/Hero';
 import { Demo } from './components/Demo';
 import { Features } from './components/Features';
@@ -22,6 +23,7 @@ export default function LandingPage() {
       }}
     >
       <Navbar />
+      <ReturningUserBanner />
       <Hero />
       <Demo />
       <Features />

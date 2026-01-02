@@ -65,6 +65,20 @@ router.get("/v1/sessions/shared", requireUser, async (req, res, next) => {
   }
 });
 
+// Check if user has any content (for returning user banner)
+router.get("/v1/sessions/has-content", async (req, res, next) => {
+  try {
+    if (!req.userId) {
+      res.json({ hasContent: false });
+      return;
+    }
+    const { total } = await listSessions({ page: 1, limit: 1 }, req.userId);
+    res.json({ hasContent: total > 0, sessionCount: total });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get(
   "/v1/sessions/:id",
   validateRequest({ params: z.object({ id: uuidSchema }) }),
