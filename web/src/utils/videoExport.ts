@@ -18,6 +18,10 @@ const FFMPEG_ENCODE_SETTINGS = [...FFMPEG_VIDEO_CODEC, ...FFMPEG_PIXEL_FORMAT, .
 // Fade transition duration in seconds
 export const FADE_DURATION = 0.5;
 
+// Watermark settings
+const WATERMARK_FILENAME = 'watermark.png';
+let watermarkLoaded = false;
+
 // Singleton FFmpeg instance
 let ffmpeg: FFmpegInstance | null = null;
 let loadPromise: Promise<void> | null = null;
@@ -92,6 +96,91 @@ const messages = {
 function resetProgress() {
   minProgress = 0;
   isCancelled = false;
+}
+
+/**
+ * Generate watermark PNG using canvas
+ * Creates a "created with RallyCut" watermark with volleyball icon
+ */
+async function generateWatermarkPng(): Promise<Uint8Array> {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d')!;
+
+  // Watermark dimensions
+  const width = 280;
+  const height = 40;
+  canvas.width = width;
+  canvas.height = height;
+
+  // Clear with transparency
+  ctx.clearRect(0, 0, width, height);
+
+  // Draw volleyball icon (simplified circle with lines)
+  const iconSize = 24;
+  const iconX = 14;
+  const iconY = height / 2;
+
+  ctx.save();
+  ctx.globalAlpha = 0.7;
+
+  // Volleyball circle
+  ctx.beginPath();
+  ctx.arc(iconX, iconY, iconSize / 2, 0, Math.PI * 2);
+  ctx.strokeStyle = 'white';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Volleyball lines (simplified)
+  ctx.beginPath();
+  ctx.moveTo(iconX - iconSize / 2, iconY);
+  ctx.lineTo(iconX + iconSize / 2, iconY);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(iconX, iconY - iconSize / 2, iconSize / 2, 0.3, Math.PI - 0.3);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(iconX, iconY + iconSize / 2, iconSize / 2, Math.PI + 0.3, -0.3);
+  ctx.stroke();
+
+  // Draw text
+  ctx.font = '600 16px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  ctx.fillStyle = 'white';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+  ctx.shadowBlur = 4;
+  ctx.shadowOffsetX = 1;
+  ctx.shadowOffsetY = 1;
+  ctx.fillText('created with RallyCut', iconX + iconSize / 2 + 10, height / 2);
+
+  ctx.restore();
+
+  // Convert canvas to PNG blob
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error('Failed to create watermark'));
+        return;
+      }
+      blob.arrayBuffer().then((buffer) => {
+        resolve(new Uint8Array(buffer));
+      }).catch(reject);
+    }, 'image/png');
+  });
+}
+
+/**
+ * Load watermark into FFmpeg virtual filesystem
+ */
+async function loadWatermark(ff: FFmpegInstance): Promise<void> {
+  if (watermarkLoaded) {
+    return;
+  }
+
+  const watermarkData = await generateWatermarkPng();
+  await ff.writeFile(WATERMARK_FILENAME, watermarkData);
+  watermarkLoaded = true;
 }
 
 // Local FFmpeg core files (served from public folder to avoid CORS issues with COOP/COEP)
@@ -242,10 +331,12 @@ function getVideoName(source: VideoSource): string {
 
 /**
  * Export a single rally from the video
+ * @param withWatermark - Whether to add "created with RallyCut" watermark (default: true)
  */
 export async function exportSingleRally(
   videoSource: VideoSource,
   rally: Rally,
+  withWatermark: boolean = true,
   onProgress?: ProgressCallback
 ): Promise<Blob> {
   if (!isFFmpegSupported()) {
@@ -256,7 +347,7 @@ export async function exportSingleRally(
   const ff = await getFFmpeg(onProgress);
   const ext = getVideoExtension(videoSource);
   const inputName = `input.${ext}`;
-  const outputName = `output.${ext}`;
+  const outputName = 'output.mp4'; // Always output mp4 when re-encoding
 
   checkCancelled();
   reportProgress(10, messages.loadingVideo);
@@ -274,15 +365,47 @@ export async function exportSingleRally(
   checkCancelled();
   reportProgress(30, messages.extractingClip(1, 1));
 
-  // Extract the clip using stream copy (fast, no re-encoding)
-  await ff.exec([
-    '-ss', rally.start_time.toString(),
-    '-i', inputName,
-    '-t', rally.duration.toString(),
-    '-c', 'copy',
-    '-avoid_negative_ts', 'make_zero',
-    outputName,
-  ]);
+  if (withWatermark) {
+    // Load watermark for overlay
+    await loadWatermark(ff);
+
+    // Re-encode with watermark overlay (bottom-right corner with padding)
+    await ff.exec([
+      '-ss', rally.start_time.toString(),
+      '-i', inputName,
+      '-i', WATERMARK_FILENAME,
+      '-t', rally.duration.toString(),
+      '-filter_complex', '[0:v][1:v]overlay=W-w-20:H-h-20:format=auto[v]',
+      '-map', '[v]',
+      '-map', '0:a?',
+      ...FFMPEG_ENCODE_SETTINGS,
+      '-avoid_negative_ts', 'make_zero',
+      '-y',
+      outputName,
+    ]);
+  } else {
+    // Fast path: stream copy without watermark
+    const noWatermarkOutput = `output.${ext}`;
+    await ff.exec([
+      '-ss', rally.start_time.toString(),
+      '-i', inputName,
+      '-t', rally.duration.toString(),
+      '-c', 'copy',
+      '-avoid_negative_ts', 'make_zero',
+      noWatermarkOutput,
+    ]);
+
+    checkCancelled();
+    reportProgress(90, messages.finalizing);
+
+    const data = await ff.readFile(noWatermarkOutput);
+    await ff.deleteFile(inputName);
+    await ff.deleteFile(noWatermarkOutput);
+
+    reportProgress(100, messages.complete);
+    const uint8Data = data instanceof Uint8Array ? new Uint8Array(data) : data;
+    return new Blob([uint8Data], { type: `video/${ext}` });
+  }
 
   checkCancelled();
   reportProgress(90, messages.finalizing);
@@ -298,16 +421,18 @@ export async function exportSingleRally(
 
   // Convert to regular Uint8Array to satisfy TypeScript (FFmpeg returns Uint8Array with SharedArrayBuffer)
   const uint8Data = data instanceof Uint8Array ? new Uint8Array(data) : data;
-  return new Blob([uint8Data], { type: `video/${ext}` });
+  return new Blob([uint8Data], { type: 'video/mp4' });
 }
 
 /**
  * Export multiple rallies concatenated into a single video
+ * @param withWatermark - Whether to add "created with RallyCut" watermark (default: true)
  */
 export async function exportConcatenated(
   videoSource: VideoSource,
   rallies: Rally[],
   withFade: boolean,
+  withWatermark: boolean = true,
   onProgress?: ProgressCallback
 ): Promise<Blob> {
   if (!isFFmpegSupported()) {
@@ -320,14 +445,15 @@ export async function exportConcatenated(
 
   // For single rally, use the simpler method
   if (rallies.length === 1) {
-    return exportSingleRally(videoSource, rallies[0], onProgress);
+    return exportSingleRally(videoSource, rallies[0], withWatermark, onProgress);
   }
 
   resetProgress();
   const ff = await getFFmpeg(onProgress);
   const ext = getVideoExtension(videoSource);
   const inputName = `input.${ext}`;
-  const outputName = `output.${ext}`;
+  // Always output mp4 when using watermark (requires re-encoding)
+  const outputName = withWatermark ? 'output.mp4' : `output.${ext}`;
 
   reportProgress(5, messages.loadingVideo);
 
@@ -340,12 +466,17 @@ export async function exportConcatenated(
     throw new Error('Failed to load video. The file may be too large for browser processing (max ~500MB recommended).');
   }
 
+  // Load watermark if needed
+  if (withWatermark) {
+    await loadWatermark(ff);
+  }
+
   if (withFade) {
     // With fade transitions - requires re-encoding
-    await exportWithFade(ff, inputName, outputName, rallies);
+    await exportWithFade(ff, inputName, outputName, rallies, withWatermark);
   } else {
-    // Without transitions - use concat demuxer (fast, no re-encode)
-    await exportWithConcat(ff, inputName, outputName, ext, rallies);
+    // Without transitions - use concat demuxer (fast if no watermark)
+    await exportWithConcat(ff, inputName, outputName, ext, rallies, withWatermark);
   }
 
   reportProgress(95, messages.finalizing);
@@ -361,15 +492,17 @@ export async function exportConcatenated(
 
   // Convert to regular Uint8Array to satisfy TypeScript (FFmpeg returns Uint8Array with SharedArrayBuffer)
   const uint8Data = data instanceof Uint8Array ? new Uint8Array(data) : data;
-  return new Blob([uint8Data], { type: `video/${ext}` });
+  return new Blob([uint8Data], { type: withWatermark ? 'video/mp4' : `video/${ext}` });
 }
 
 /**
  * Export rallies from multiple video sources concatenated into a single video
+ * @param withWatermark - Whether to add "created with RallyCut" watermark (default: true)
  */
 export async function exportMultiSourceConcatenated(
   ralliesWithSource: RallyWithSource[],
   withFade: boolean,
+  withWatermark: boolean = true,
   onProgress?: ProgressCallback
 ): Promise<Blob> {
   if (!isFFmpegSupported()) {
@@ -383,7 +516,7 @@ export async function exportMultiSourceConcatenated(
   // For single rally, use simpler method
   if (ralliesWithSource.length === 1) {
     const { rally, videoSource } = ralliesWithSource[0];
-    return exportSingleRally(videoSource, rally, onProgress);
+    return exportSingleRally(videoSource, rally, withWatermark, onProgress);
   }
 
   // Check if all rallies are from the same source
@@ -398,6 +531,7 @@ export async function exportMultiSourceConcatenated(
       firstSource,
       ralliesWithSource.map((r) => r.rally),
       withFade,
+      withWatermark,
       onProgress
     );
   }
@@ -405,6 +539,11 @@ export async function exportMultiSourceConcatenated(
   // Multi-source export: need to load each video and extract clips
   resetProgress();
   const ff = await getFFmpeg(onProgress);
+
+  // Load watermark if needed
+  if (withWatermark) {
+    await loadWatermark(ff);
+  }
 
   reportProgress(5, messages.loadingVideo);
 
@@ -472,20 +611,46 @@ export async function exportMultiSourceConcatenated(
 
   if (withFade) {
     reportProgress(70, messages.applyingFade);
-    await exportMultiSourceWithFade(ff, clipNames, outputName, ralliesWithSource.map((r) => r.rally));
+    await exportMultiSourceWithFade(ff, clipNames, outputName, ralliesWithSource.map((r) => r.rally), withWatermark);
   } else {
     reportProgress(70, messages.joiningClips);
-    // Use concat demuxer with stream copy since all clips are now in consistent format
+    // Use concat demuxer - stream copy if no watermark, re-encode with overlay if watermark
     const concatList = clipNames.map((name) => `file '${name}'`).join('\n');
     await ff.writeFile('concat.txt', concatList);
 
-    await ff.exec([
-      '-f', 'concat',
-      '-safe', '0',
-      '-i', 'concat.txt',
-      '-c', 'copy',
-      outputName,
-    ]);
+    if (withWatermark) {
+      // Concatenate with watermark overlay
+      const tempConcat = 'temp_concat.mp4';
+      await ff.exec([
+        '-f', 'concat',
+        '-safe', '0',
+        '-i', 'concat.txt',
+        '-c', 'copy',
+        tempConcat,
+      ]);
+
+      // Apply watermark overlay
+      await ff.exec([
+        '-i', tempConcat,
+        '-i', WATERMARK_FILENAME,
+        '-filter_complex', '[0:v][1:v]overlay=W-w-20:H-h-20:format=auto[v]',
+        '-map', '[v]',
+        '-map', '0:a?',
+        ...FFMPEG_ENCODE_SETTINGS,
+        '-y',
+        outputName,
+      ]);
+
+      await ff.deleteFile(tempConcat);
+    } else {
+      await ff.exec([
+        '-f', 'concat',
+        '-safe', '0',
+        '-i', 'concat.txt',
+        '-c', 'copy',
+        outputName,
+      ]);
+    }
 
     await ff.deleteFile('concat.txt');
   }
@@ -515,9 +680,12 @@ async function exportMultiSourceWithFade(
   ff: FFmpegInstance,
   clipNames: string[],
   outputName: string,
-  rallies: Rally[]
+  rallies: Rally[],
+  withWatermark: boolean
 ): Promise<void> {
   const fadeDuration = FADE_DURATION;
+  // If watermark, output to temp file first, then apply watermark
+  const fadeOutputName = withWatermark ? 'temp_multi_faded.mp4' : outputName;
 
   // For 2 clips, use simple xfade
   if (clipNames.length === 2) {
@@ -534,55 +702,70 @@ async function exportMultiSourceWithFade(
       '-c:a', 'aac',
       '-movflags', '+faststart',
       '-y',
-      outputName,
+      fadeOutputName,
     ]);
-    return;
+  } else {
+    // For 3+ clips, chain xfade operations iteratively (process pairs)
+    let currentInput = clipNames[0];
+    let currentDuration = rallies[0].duration;
+
+    for (let i = 1; i < clipNames.length; i++) {
+      const nextClip = clipNames[i];
+      const isLast = i === clipNames.length - 1;
+      const tempOutput = isLast ? fadeOutputName : `xfade_temp_${i}.mp4`;
+      const offset = Math.max(0, currentDuration - fadeDuration);
+
+      await ff.exec([
+        '-i', currentInput,
+        '-i', nextClip,
+        '-filter_complex',
+        `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${offset},format=yuv420p[v];[0:a][1:a]acrossfade=d=${fadeDuration}[a]`,
+        '-map', '[v]',
+        '-map', '[a]',
+        ...FFMPEG_VIDEO_CODEC,
+        '-c:a', 'aac',
+        '-movflags', '+faststart',
+        '-y',
+        tempOutput,
+      ]);
+
+      // Clean up previous temp file (not the original clips)
+      if (i > 1) {
+        await ff.deleteFile(currentInput);
+      }
+
+      currentInput = tempOutput;
+      // New duration = previous duration + next clip duration - fade overlap
+      currentDuration = currentDuration + rallies[i].duration - fadeDuration;
+    }
   }
 
-  // For 3+ clips, chain xfade operations iteratively (process pairs)
-  let currentInput = clipNames[0];
-  let currentDuration = rallies[0].duration;
-
-  for (let i = 1; i < clipNames.length; i++) {
-    const nextClip = clipNames[i];
-    const isLast = i === clipNames.length - 1;
-    const tempOutput = isLast ? outputName : `xfade_temp_${i}.mp4`;
-    const offset = Math.max(0, currentDuration - fadeDuration);
-
+  // Apply watermark if enabled
+  if (withWatermark) {
     await ff.exec([
-      '-i', currentInput,
-      '-i', nextClip,
-      '-filter_complex',
-      `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${offset},format=yuv420p[v];[0:a][1:a]acrossfade=d=${fadeDuration}[a]`,
+      '-i', fadeOutputName,
+      '-i', WATERMARK_FILENAME,
+      '-filter_complex', '[0:v][1:v]overlay=W-w-20:H-h-20:format=auto[v]',
       '-map', '[v]',
-      '-map', '[a]',
-      ...FFMPEG_VIDEO_CODEC,
-      '-c:a', 'aac',
-      '-movflags', '+faststart',
+      '-map', '0:a?',
+      ...FFMPEG_ENCODE_SETTINGS,
       '-y',
-      tempOutput,
+      outputName,
     ]);
-
-    // Clean up previous temp file (not the original clips)
-    if (i > 1) {
-      await ff.deleteFile(currentInput);
-    }
-
-    currentInput = tempOutput;
-    // New duration = previous duration + next clip duration - fade overlap
-    currentDuration = currentDuration + rallies[i].duration - fadeDuration;
+    await ff.deleteFile(fadeOutputName);
   }
 }
 
 /**
- * Export with concat demuxer (fast, no re-encoding)
+ * Export with concat demuxer (fast if no watermark, re-encode if watermark)
  */
 async function exportWithConcat(
   ff: FFmpegInstance,
   inputName: string,
   outputName: string,
   ext: string,
-  rallies: Rally[]
+  rallies: Rally[],
+  withWatermark: boolean
 ): Promise<void> {
   // First, extract each clip
   const clipNames: string[] = [];
@@ -611,14 +794,40 @@ async function exportWithConcat(
   const concatList = clipNames.map(name => `file '${name}'`).join('\n');
   await ff.writeFile('concat.txt', concatList);
 
-  // Concatenate using concat demuxer
-  await ff.exec([
-    '-f', 'concat',
-    '-safe', '0',
-    '-i', 'concat.txt',
-    '-c', 'copy',
-    outputName,
-  ]);
+  if (withWatermark) {
+    // Concatenate first, then apply watermark overlay
+    const tempConcat = 'temp_concat.mp4';
+    await ff.exec([
+      '-f', 'concat',
+      '-safe', '0',
+      '-i', 'concat.txt',
+      '-c', 'copy',
+      tempConcat,
+    ]);
+
+    // Apply watermark overlay
+    await ff.exec([
+      '-i', tempConcat,
+      '-i', WATERMARK_FILENAME,
+      '-filter_complex', '[0:v][1:v]overlay=W-w-20:H-h-20:format=auto[v]',
+      '-map', '[v]',
+      '-map', '0:a?',
+      ...FFMPEG_ENCODE_SETTINGS,
+      '-y',
+      outputName,
+    ]);
+
+    await ff.deleteFile(tempConcat);
+  } else {
+    // Fast path: just concatenate without re-encoding
+    await ff.exec([
+      '-f', 'concat',
+      '-safe', '0',
+      '-i', 'concat.txt',
+      '-c', 'copy',
+      outputName,
+    ]);
+  }
 
   // Cleanup temp files
   await ff.deleteFile('concat.txt');
@@ -635,9 +844,12 @@ async function exportWithFade(
   ff: FFmpegInstance,
   inputName: string,
   outputName: string,
-  rallies: Rally[]
+  rallies: Rally[],
+  withWatermark: boolean
 ): Promise<void> {
   const fadeDuration = FADE_DURATION;
+  // If watermark, output to temp file first, then apply watermark
+  const fadeOutputName = withWatermark ? 'temp_faded.mp4' : outputName;
 
   // First extract all clips with consistent format
   const clipNames: string[] = [];
@@ -678,7 +890,7 @@ async function exportWithFade(
       '-c:a', 'aac',
       '-movflags', '+faststart',
       '-y',
-      outputName,
+      fadeOutputName,
     ]);
   } else {
     // For 3+ clips, chain xfade operations iteratively
@@ -688,7 +900,7 @@ async function exportWithFade(
     for (let i = 1; i < clipNames.length; i++) {
       const nextClip = clipNames[i];
       const isLast = i === clipNames.length - 1;
-      const tempOutput = isLast ? outputName : `xfade_temp_${i}.mp4`;
+      const tempOutput = isLast ? fadeOutputName : `xfade_temp_${i}.mp4`;
       const offset = Math.max(0, currentDuration - fadeDuration);
 
       reportProgress(55 + Math.round((i / clipNames.length) * 35), messages.applyingFade);
@@ -715,6 +927,21 @@ async function exportWithFade(
       currentInput = tempOutput;
       currentDuration = currentDuration + rallies[i].duration - fadeDuration;
     }
+  }
+
+  // Apply watermark if enabled
+  if (withWatermark) {
+    await ff.exec([
+      '-i', fadeOutputName,
+      '-i', WATERMARK_FILENAME,
+      '-filter_complex', '[0:v][1:v]overlay=W-w-20:H-h-20:format=auto[v]',
+      '-map', '[v]',
+      '-map', '0:a?',
+      ...FFMPEG_ENCODE_SETTINGS,
+      '-y',
+      outputName,
+    ]);
+    await ff.deleteFile(fadeOutputName);
   }
 
   // Cleanup original clips

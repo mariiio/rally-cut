@@ -14,7 +14,7 @@ import {
   SessionManifest,
 } from '@/types/rally';
 import { usePlayerStore } from './playerStore';
-import { fetchSession as fetchSessionFromApi } from '@/services/api';
+import { fetchSession as fetchSessionFromApi, getCurrentUser } from '@/services/api';
 import { syncService } from '@/services/syncService';
 
 // History management types
@@ -71,6 +71,9 @@ interface EditorState {
   // Session state
   session: Session | null;
   activeMatchId: string | null;
+  userRole: 'owner' | 'member' | null;
+  currentUserId: string | null;
+  currentUserName: string | null;
 
   // Video state (derived from active match when in session mode)
   videoFile: File | null;
@@ -101,6 +104,7 @@ interface EditorState {
 
   // Session actions
   loadSession: (sessionId: string) => Promise<void>;
+  reloadSession: () => Promise<void>;
   reloadCurrentMatch: () => Promise<{ ralliesCount: number } | null>;
   setActiveMatch: (matchId: string) => void;
   renameMatch: (matchId: string, name: string) => void;
@@ -145,11 +149,15 @@ interface EditorState {
   moveRallyBetweenHighlights: (rallyId: string, fromHighlightId: string, toHighlightId: string, toIndex: number) => void;
   selectHighlight: (id: string | null) => void;
 
+  // User actions
+  setCurrentUser: (userId: string, userName: string | null) => void;
+
   // Computed helpers (called as functions since Zustand doesn't have computed)
   canUndo: () => boolean;
   canRedo: () => boolean;
   hasChangesFromOriginal: () => boolean;
   canCreateHighlight: () => boolean;
+  canEditHighlight: (highlightId: string) => boolean;
   getNextHighlightColor: () => string;
   getHighlightsForRally: (rallyId: string) => Highlight[];
 }
@@ -158,6 +166,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   // Initial state
   session: null,
   activeMatchId: null,
+  userRole: null,
+  currentUserId: null,
+  currentUserName: null,
   videoFile: null,
   videoUrl: null,
   videoMetadata: null,
@@ -196,8 +207,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       if (useApi) {
         // Fetch from backend API
-        console.log('Loading session from API...');
         session = await fetchSessionFromApi(sessionId);
+
+        // Fetch current user info
+        try {
+          const user = await getCurrentUser();
+          set({ currentUserId: user.id, currentUserName: user.name });
+        } catch (e) {
+          console.warn('Failed to load current user:', e);
+        }
 
         // Initialize sync service
         syncService.init(sessionId);
@@ -215,7 +233,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             const stored = localStorage.getItem(getStorageKey(sessionId));
             if (stored) {
               savedData = JSON.parse(stored);
-              console.log('Found local edits, applying over backend data...');
             }
           } catch (e) {
             console.warn('Failed to load from localStorage:', e);
@@ -254,7 +271,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         });
       } else {
         // Fallback to static files (for local development without backend)
-        console.log('Loading session from static files...');
         const manifestRes = await fetch(`/samples/session_${sessionId}/session.json`);
         if (!manifestRes.ok) {
           console.error('Failed to load session manifest');
@@ -325,6 +341,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       set({
         session,
         activeMatchId: firstMatch?.id || null,
+        userRole: session.userRole || 'owner', // Default to owner if not specified
         videoUrl: firstMatch?.videoUrl || null,
         videoMetadata: firstMatch?.video || null,
         rallies: firstMatch?.rallies || [],
@@ -340,6 +357,44 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       });
     } catch (error) {
       console.error('Error loading session:', error);
+    }
+  },
+
+  reloadSession: async () => {
+    const state = get();
+    if (!state.session) return;
+
+    try {
+      // Fetch fresh session data from API
+      const freshSession = await fetchSessionFromApi(state.session.id);
+
+      // Preserve activeMatchId if the match still exists, otherwise use first match
+      const matchStillExists = freshSession.matches.some((m) => m.id === state.activeMatchId);
+      const activeMatchId = matchStillExists ? state.activeMatchId : freshSession.matches[0]?.id || null;
+      const activeMatch = freshSession.matches.find((m) => m.id === activeMatchId);
+
+      // Update original rallies for all matches
+      const originalRalliesPerMatch: Record<string, Rally[]> = {};
+      for (const match of freshSession.matches) {
+        originalRalliesPerMatch[match.id] = [...match.rallies];
+      }
+
+      set({
+        session: freshSession,
+        activeMatchId,
+        userRole: freshSession.userRole || 'owner',
+        videoUrl: activeMatch?.videoUrl || null,
+        videoMetadata: activeMatch?.video || null,
+        rallies: activeMatch?.rallies || [],
+        highlights: freshSession.highlights,
+        originalRallies: activeMatch?.rallies || [],
+        originalRalliesPerMatch,
+        past: [],
+        future: [],
+        hasUnsavedChanges: false,
+      });
+    } catch (error) {
+      console.error('Error reloading session:', error);
     }
   },
 
@@ -744,6 +799,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({
       session: null,
       activeMatchId: null,
+      userRole: null,
+      currentUserId: null,
+      currentUserName: null,
       videoFile: null,
       videoUrl: null,
       videoMetadata: null,
@@ -944,6 +1002,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({ syncStatus: status });
   },
 
+  // User actions
+  setCurrentUser: (userId: string, userName: string | null) => {
+    set({ currentUserId: userId, currentUserName: userName });
+  },
+
   // Highlights actions
   createHighlight: (name?: string) => {
     const state = get();
@@ -1139,6 +1202,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     // Can create if no highlights OR all existing highlights have at least one rally
     if (!state.highlights || state.highlights.length === 0) return true;
     return state.highlights.every((h) => h.rallyIds?.length > 0);
+  },
+
+  canEditHighlight: (highlightId: string) => {
+    const state = get();
+    const highlight = state.highlights?.find((h) => h.id === highlightId);
+    if (!highlight) return false;
+    // If no creator ID set, anyone can edit (legacy highlights)
+    if (!highlight.createdByUserId) return true;
+    // Only creator can edit
+    return highlight.createdByUserId === state.currentUserId;
   },
 
   getNextHighlightColor: () => {

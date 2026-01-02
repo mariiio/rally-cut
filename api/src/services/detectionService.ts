@@ -16,7 +16,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const MAX_DETECTION_DURATION_MS = 20 * 60 * 1000;
-const MAX_DETECTIONS_PER_SESSION = 1;
 
 // Check if we should use local detection (development mode without Modal)
 function shouldUseLocalDetection(): boolean {
@@ -155,19 +154,13 @@ async function triggerLocalDetection(params: {
   return Promise.resolve();
 }
 
-export async function triggerRallyDetection(videoId: string) {
-  const video = await prisma.video.findUnique({
-    where: { id: videoId },
-    include: {
-      session: {
-        include: {
-          videos: {
-            where: { status: "DETECTED" },
-            select: { id: true },
-          },
-        },
-      },
-    },
+export async function triggerRallyDetection(videoId: string, userId?: string) {
+  const where = userId
+    ? { id: videoId, userId, deletedAt: null }
+    : { id: videoId, deletedAt: null };
+
+  const video = await prisma.video.findFirst({
+    where,
   });
 
   if (video === null) {
@@ -194,15 +187,7 @@ export async function triggerRallyDetection(videoId: string) {
     );
   }
 
-  if (video.session.videos.length >= MAX_DETECTIONS_PER_SESSION) {
-    throw new LimitExceededError(
-      `Maximum of ${MAX_DETECTIONS_PER_SESSION} video(s) with detection per session`,
-      {
-        current: video.session.videos.length,
-        limit: MAX_DETECTIONS_PER_SESSION,
-      }
-    );
-  }
+  // Note: Per-session detection limit removed since videos can now be in multiple sessions
 
   const existingJob = await prisma.rallyDetectionJob.findFirst({
     where: {
@@ -474,13 +459,21 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
       orderBy: { startMs: "asc" },
     });
 
-    for (let i = 0; i < allRallies.length; i++) {
-      if (allRallies[i].order !== i) {
-        await tx.rally.update({
-          where: { id: allRallies[i].id },
-          data: { order: i },
-        });
-      }
+    // Collect rallies that need order updates
+    const updates = allRallies
+      .map((rally, i) => ({ id: rally.id, order: i }))
+      .filter((u, i) => allRallies[i].order !== u.order);
+
+    // Batch update all order changes in a single query
+    if (updates.length > 0) {
+      const ids = updates.map((u) => u.id);
+      const orderCase = updates
+        .map((u) => `WHEN '${u.id}' THEN ${u.order}`)
+        .join(" ");
+      await tx.$executeRawUnsafe(
+        `UPDATE "Rally" SET "order" = CASE id ${orderCase} END WHERE id = ANY($1::uuid[])`,
+        ids
+      );
     }
 
     await tx.rallyDetectionJob.update({

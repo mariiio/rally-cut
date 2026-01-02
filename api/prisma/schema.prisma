@@ -7,21 +7,99 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Session {
+// ============================================================================
+// User & Identity
+// ============================================================================
+
+model User {
+  id          String    @id @default(uuid())
+  email       String?   @unique
+  name        String?
+  avatarUrl   String?   @map("avatar_url")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  convertedAt DateTime? @map("converted_at")
+
+  videos              Video[]
+  sessions            Session[]
+  anonymousIdentities AnonymousIdentity[]
+  sessionMemberships  SessionMember[]
+  highlights          Highlight[]
+
+  @@map("users")
+}
+
+model AnonymousIdentity {
   id        String   @id @default(uuid())
-  name      String
+  visitorId String   @unique @map("visitor_id")
+  userId    String   @map("user_id")
+  userAgent String?  @map("user_agent")
   createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
 
-  videos     Video[]
-  highlights Highlight[]
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@map("anonymous_identities")
+}
+
+// ============================================================================
+// Session Sharing
+// ============================================================================
+
+model SessionShare {
+  id        String   @id @default(uuid())
+  sessionId String   @unique @map("session_id")
+  token     String   @unique @default(uuid())
+  createdAt DateTime @default(now()) @map("created_at")
+
+  session Session         @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  members SessionMember[]
+
+  @@map("session_shares")
+}
+
+model SessionMember {
+  id             String   @id @default(uuid())
+  sessionShareId String   @map("session_share_id")
+  userId         String   @map("user_id")
+  joinedAt       DateTime @default(now()) @map("joined_at")
+
+  sessionShare SessionShare @relation(fields: [sessionShareId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionShareId, userId])
+  @@index([userId])
+  @@map("session_members")
+}
+
+// ============================================================================
+// Session & Video (Many-to-Many via SessionVideo)
+// ============================================================================
+
+enum SessionType {
+  REGULAR
+  ALL_VIDEOS
+}
+
+model Session {
+  id        String      @id @default(uuid())
+  userId    String?     @map("user_id")
+  name      String
+  type      SessionType @default(REGULAR)
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+
+  user          User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  sessionVideos SessionVideo[]
+  highlights    Highlight[]
+  share         SessionShare?
+
+  @@unique([userId, type])
+  @@index([userId])
   @@map("sessions")
 }
 
 model Video {
   id            String      @id @default(uuid())
-  sessionId     String      @map("session_id")
+  userId        String?     @map("user_id")
   name          String
   filename      String
   s3Key         String      @map("s3_key")
@@ -31,17 +109,34 @@ model Video {
   width         Int?
   height        Int?
   fileSizeBytes BigInt?     @map("file_size_bytes")
-  order         Int         @default(0)
+  deletedAt     DateTime?   @map("deleted_at")
   createdAt     DateTime    @default(now()) @map("created_at")
   updatedAt     DateTime    @updatedAt @map("updated_at")
 
-  session       Session             @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user          User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  sessionVideos SessionVideo[]
   rallies       Rally[]
   detectionJobs RallyDetectionJob[]
 
+  @@index([userId])
   @@index([contentHash])
-  @@index([sessionId])
   @@map("videos")
+}
+
+model SessionVideo {
+  id        String   @id @default(uuid())
+  sessionId String   @map("session_id")
+  videoId   String   @map("video_id")
+  order     Int      @default(0)
+  addedAt   DateTime @default(now()) @map("added_at")
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  video   Video   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, videoId])
+  @@index([sessionId])
+  @@index([videoId])
+  @@map("session_videos")
 }
 
 enum VideoStatus {
@@ -51,6 +146,10 @@ enum VideoStatus {
   DETECTED
   ERROR
 }
+
+// ============================================================================
+// Rally & Highlight
+// ============================================================================
 
 model Rally {
   id          String       @id @default(uuid())
@@ -66,7 +165,7 @@ model Rally {
   createdAt   DateTime     @default(now()) @map("created_at")
   updatedAt   DateTime     @updatedAt @map("updated_at")
 
-  video           Video            @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  video            Video            @relation(fields: [videoId], references: [id], onDelete: Cascade)
   highlightRallies HighlightRally[]
 
   @@index([videoId])
@@ -79,17 +178,20 @@ enum ServingTeam {
 }
 
 model Highlight {
-  id        String   @id @default(uuid())
-  sessionId String   @map("session_id")
-  name      String
-  color     String   @default("#FF6B6B")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id              String   @id @default(uuid())
+  sessionId       String   @map("session_id")
+  createdByUserId String?  @map("created_by_user_id")
+  name            String
+  color           String   @default("#FF6B6B")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
 
   session          Session          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  createdByUser    User?            @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
   highlightRallies HighlightRally[]
 
   @@index([sessionId])
+  @@index([createdByUserId])
   @@map("highlights")
 }
 
@@ -106,12 +208,16 @@ model HighlightRally {
   @@map("highlight_rallies")
 }
 
+// ============================================================================
+// Detection Jobs
+// ============================================================================
+
 model RallyDetectionJob {
   id              String             @id @default(uuid())
   videoId         String             @map("video_id")
   contentHash     String             @map("content_hash")
   status          DetectionJobStatus @default(PENDING)
-  progress        Float?             @default(0) // 0-100 percentage
+  progress        Float?             @default(0)
   progressMessage String?            @map("progress_message")
   resultS3Key     String?            @map("result_s3_key")
   errorMessage    String?            @map("error_message")

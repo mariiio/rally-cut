@@ -2,7 +2,38 @@
  * API client for RallyCut backend
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+import { getVisitorId } from '@/utils/visitorId';
+
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
+/**
+ * Get default headers including X-Visitor-Id for user identification.
+ */
+function getHeaders(contentType?: string): HeadersInit {
+  const headers: HeadersInit = {};
+
+  const visitorId = getVisitorId();
+  if (visitorId) {
+    headers['X-Visitor-Id'] = visitorId;
+  }
+
+  if (contentType) {
+    headers['Content-Type'] = contentType;
+  }
+
+  return headers;
+}
+
+/**
+ * Get video stream URL from S3 key.
+ * Uses CloudFront if configured, otherwise falls back to local proxy.
+ */
+export function getVideoStreamUrl(s3Key: string): string {
+  const cloudfrontDomain = process.env.NEXT_PUBLIC_CLOUDFRONT_DOMAIN;
+  return cloudfrontDomain
+    ? `https://${cloudfrontDomain}/${s3Key}`
+    : `/${s3Key}`;
+}
 
 // API response types (from backend)
 interface ApiSession {
@@ -12,6 +43,7 @@ interface ApiSession {
   updatedAt: string;
   videos: ApiVideo[];
   highlights: ApiHighlight[];
+  userRole?: 'owner' | 'member' | null;
 }
 
 interface ApiVideo {
@@ -49,6 +81,8 @@ interface ApiHighlight {
   name: string;
   color: string;
   highlightRallies: ApiHighlightRally[];
+  createdByUserId?: string | null;
+  createdByUser?: { id: string; name: string | null } | null;
 }
 
 interface ApiHighlightRally {
@@ -62,12 +96,12 @@ interface ApiHighlightRally {
 // Frontend types (from @/types/rally)
 import type { Session, Match, Rally, Highlight, VideoMetadata } from '@/types/rally';
 
-// Extended types with backend IDs for sync
-export interface RallyWithBackendId extends Rally {
+// Extended types with backend IDs for sync (internal use only)
+interface RallyWithBackendId extends Rally {
   _backendId: string;
 }
 
-export interface HighlightWithBackendId extends Highlight {
+interface HighlightWithBackendId extends Highlight {
   _backendId: string;
   _rallyBackendIds: Record<string, string>; // frontendRallyId -> highlightRallyId
 }
@@ -146,6 +180,8 @@ function apiHighlightToFrontend(apiHighlight: ApiHighlight): HighlightWithBacken
     color: apiHighlight.color,
     rallyIds,
     createdAt: Date.now(),
+    createdByUserId: apiHighlight.createdByUserId ?? null,
+    createdByUserName: apiHighlight.createdByUser?.name ?? null,
   };
 }
 
@@ -161,12 +197,14 @@ function apiSessionToFrontend(apiSession: ApiSession, cloudfrontDomain?: string)
     name: apiSession.name,
     matches,
     highlights,
+    userRole: apiSession.userRole,
   };
 }
 
 // API client functions
 export async function fetchSession(sessionId: string): Promise<Session> {
   const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}`, {
+    headers: getHeaders(),
     credentials: 'include', // Include cookies for CloudFront signed cookies
   });
 
@@ -185,7 +223,7 @@ export async function fetchSession(sessionId: string): Promise<Session> {
 export async function createSession(name: string): Promise<{ id: string; name: string }> {
   const response = await fetch(`${API_BASE_URL}/v1/sessions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getHeaders('application/json'),
     body: JSON.stringify({ name }),
   });
 
@@ -196,13 +234,17 @@ export async function createSession(name: string): Promise<{ id: string; name: s
   return response.json();
 }
 
+export type SessionType = 'REGULAR' | 'ALL_VIDEOS';
+
 export interface ListSessionsResponse {
   data: Array<{
     id: string;
     name: string;
+    type: SessionType;
     createdAt: string;
     updatedAt: string;
-    _count: { videos: number; highlights: number };
+    videoCount: number;
+    highlightCount: number;
   }>;
   pagination: {
     page: number;
@@ -213,7 +255,9 @@ export interface ListSessionsResponse {
 }
 
 export async function listSessions(page = 1, limit = 20): Promise<ListSessionsResponse> {
-  const response = await fetch(`${API_BASE_URL}/v1/sessions?page=${page}&limit=${limit}`);
+  const response = await fetch(`${API_BASE_URL}/v1/sessions?page=${page}&limit=${limit}`, {
+    headers: getHeaders(),
+  });
 
   if (!response.ok) {
     throw new Error(`Failed to list sessions: ${response.status}`);
@@ -241,7 +285,7 @@ interface BatchResponse {
 export async function batchUpdate(sessionId: string, operations: BatchOperation[]): Promise<BatchResponse> {
   const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/batch`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getHeaders('application/json'),
     body: JSON.stringify({ operations }),
   });
 
@@ -251,14 +295,6 @@ export async function batchUpdate(sessionId: string, operations: BatchOperation[
   }
 
   return response.json();
-}
-
-// Helper to convert frontend rally to API format for batch operations
-export function frontendRallyToApi(rally: Rally): { startMs: number; endMs: number } {
-  return {
-    startMs: Math.round(rally.start_time * 1000),
-    endMs: Math.round(rally.end_time * 1000),
-  };
 }
 
 // Upload URL request
@@ -271,7 +307,7 @@ export async function requestUploadUrl(
 ): Promise<{ uploadUrl: string; videoId: string; s3Key: string }> {
   const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/videos/upload-url`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getHeaders('application/json'),
     body: JSON.stringify({ filename, contentHash, fileSize, durationMs }),
   });
 
@@ -293,7 +329,7 @@ export async function confirmUpload(
 ): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/videos`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getHeaders('application/json'),
     body: JSON.stringify({ videoId, durationMs, width, height }),
   });
 
@@ -306,6 +342,7 @@ export async function confirmUpload(
 export async function triggerRallyDetection(videoId: string): Promise<{ jobId: string; status: string }> {
   const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/detect-rallies`, {
     method: 'POST',
+    headers: getHeaders(),
   });
 
   if (!response.ok) {
@@ -330,7 +367,9 @@ export async function getDetectionStatus(videoId: string): Promise<{
     errorMessage?: string;
   } | null;
 }> {
-  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/detection-status`);
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/detection-status`, {
+    headers: getHeaders(),
+  });
 
   if (!response.ok) {
     throw new Error(`Failed to get detection status: ${response.status}`);
@@ -343,6 +382,7 @@ export async function getDetectionStatus(videoId: string): Promise<{
 export async function deleteSession(sessionId: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}`, {
     method: 'DELETE',
+    headers: getHeaders(),
   });
 
   if (!response.ok) {
@@ -355,6 +395,7 @@ export async function deleteSession(sessionId: string): Promise<void> {
 export async function deleteVideo(videoId: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}`, {
     method: 'DELETE',
+    headers: getHeaders(),
   });
 
   if (!response.ok) {
@@ -367,7 +408,7 @@ export async function deleteVideo(videoId: string): Promise<void> {
 export async function renameVideo(videoId: string, name: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getHeaders('application/json'),
     body: JSON.stringify({ name }),
   });
 
@@ -377,4 +418,324 @@ export async function renameVideo(videoId: string, name: string): Promise<void> 
   }
 }
 
-export { API_BASE_URL };
+// ============================================================================
+// Video Library API (user-scoped videos)
+// ============================================================================
+
+export interface VideoSession {
+  id: string;
+  name: string;
+  type: SessionType;
+}
+
+export interface VideoListItem {
+  id: string;
+  name: string;
+  filename: string;
+  s3Key: string;
+  status: 'PENDING' | 'UPLOADED' | 'DETECTING' | 'DETECTED' | 'ERROR';
+  durationMs: number | null;
+  width: number | null;
+  height: number | null;
+  fileSizeBytes: string | null;
+  createdAt: string;
+  sessionCount: number;
+  sessions?: VideoSession[];
+}
+
+export interface ListVideosResponse {
+  data: VideoListItem[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+// List all videos for current user
+export async function listVideos(
+  page = 1,
+  limit = 20,
+  search?: string
+): Promise<ListVideosResponse> {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  if (search) params.append('search', search);
+
+  const response = await fetch(`${API_BASE_URL}/v1/videos?${params}`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to list videos: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Request upload URL for a new video (not linked to a session)
+export async function requestVideoUploadUrl(params: {
+  filename: string;
+  contentHash: string;
+  fileSize: number;
+  durationMs?: number;
+}): Promise<{ uploadUrl: string; videoId: string; s3Key: string }> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/upload-url`, {
+    method: 'POST',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify(params),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get upload URL: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Confirm video upload (for videos uploaded without a session)
+export async function confirmVideoUpload(
+  videoId: string,
+  params: { durationMs?: number; width?: number; height?: number }
+): Promise<VideoListItem> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/confirm`, {
+    method: 'POST',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify(params),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to confirm upload: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Add video to session (creates junction)
+export async function addVideoToSession(
+  sessionId: string,
+  videoId: string,
+  order?: number
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/v1/sessions/${sessionId}/videos/${videoId}`,
+    {
+      method: 'POST',
+      headers: getHeaders('application/json'),
+      body: JSON.stringify({ order }),
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to add video to session: ${response.status}`);
+  }
+}
+
+// Remove video from session (removes junction only)
+export async function removeVideoFromSession(
+  sessionId: string,
+  videoId: string
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/v1/sessions/${sessionId}/videos/${videoId}`,
+    {
+      method: 'DELETE',
+      headers: getHeaders(),
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to remove video from session: ${response.status}`);
+  }
+}
+
+// Restore a soft-deleted video
+export async function restoreVideo(videoId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/restore`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to restore video: ${response.status}`);
+  }
+}
+
+// ============================================================================
+// User API
+// ============================================================================
+
+export interface UserResponse {
+  id: string;
+  email: string | null;
+  name: string | null;
+  avatarUrl: string | null;
+  createdAt: string;
+  convertedAt: string | null;
+  videoCount: number;
+  sessionCount: number;
+}
+
+// Get current user
+export async function getCurrentUser(): Promise<UserResponse> {
+  const response = await fetch(`${API_BASE_URL}/v1/me`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to get user: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Update current user (e.g., name)
+export async function updateCurrentUser(data: { name?: string }): Promise<UserResponse> {
+  const response = await fetch(`${API_BASE_URL}/v1/me`, {
+    method: 'PATCH',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to update user: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// ============================================================================
+// Session Sharing API
+// ============================================================================
+
+export interface ShareInfo {
+  token: string;
+  createdAt: string;
+  members: Array<{
+    userId: string;
+    name: string | null;
+    email: string | null;
+    avatarUrl: string | null;
+    joinedAt: string;
+  }>;
+}
+
+export interface SharePreview {
+  sessionId: string;
+  sessionName: string;
+  ownerName: string | null;
+}
+
+export interface SharedSession {
+  id: string;
+  name: string;
+  type: SessionType;
+  createdAt: string;
+  updatedAt: string;
+  videoCount: number;
+  highlightCount: number;
+  ownerName: string | null;
+  joinedAt: string;
+}
+
+// Create or get share link for a session (owner only)
+export async function createShare(sessionId: string): Promise<{ token: string; createdAt: string }> {
+  const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/share`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to create share: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Get share info including members (owner only)
+export async function getShare(sessionId: string): Promise<ShareInfo | null> {
+  const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/share`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get share: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Delete share (revokes all access)
+export async function deleteShare(sessionId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/share`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to delete share: ${response.status}`);
+  }
+}
+
+// Remove a member from shared session
+export async function removeShareMember(sessionId: string, userId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/share/members/${userId}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to remove member: ${response.status}`);
+  }
+}
+
+// Get share preview (public - for accept page)
+export async function getSharePreview(token: string): Promise<SharePreview> {
+  const response = await fetch(`${API_BASE_URL}/v1/share/${token}`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get share preview: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Accept a share invite
+export async function acceptShare(token: string): Promise<{ sessionId: string; alreadyOwner?: boolean; alreadyMember?: boolean }> {
+  const response = await fetch(`${API_BASE_URL}/v1/share/${token}/accept`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to accept share: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// List sessions shared with current user
+export async function listSharedSessions(): Promise<{ data: SharedSession[] }> {
+  const response = await fetch(`${API_BASE_URL}/v1/sessions/shared`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to list shared sessions: ${response.status}`);
+  }
+
+  return response.json();
+}

@@ -1,5 +1,9 @@
 import { prisma } from "../lib/prisma.js";
-import { ConflictError, NotFoundError } from "../middleware/errorHandler.js";
+import {
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+} from "../middleware/errorHandler.js";
 import type {
   AddRallyToHighlightInput,
   CreateHighlightInput,
@@ -8,7 +12,8 @@ import type {
 
 export async function createHighlight(
   sessionId: string,
-  data: CreateHighlightInput
+  data: CreateHighlightInput,
+  userId?: string
 ) {
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
@@ -18,16 +23,39 @@ export async function createHighlight(
     throw new NotFoundError("Session", sessionId);
   }
 
+  // Get user name for default highlight name
+  let defaultName = data.name;
+  if (!defaultName && userId) {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { name: true },
+    });
+    if (user?.name) {
+      defaultName = `${user.name}'s Highlight`;
+    }
+  }
+
+  // Fallback name if still not set
+  if (!defaultName) {
+    const count = await prisma.highlight.count({ where: { sessionId } });
+    defaultName = `Highlight ${count + 1}`;
+  }
+
   return prisma.highlight.create({
     data: {
       sessionId,
-      name: data.name,
+      createdByUserId: userId,
+      name: defaultName,
       color: data.color,
     },
   });
 }
 
-export async function updateHighlight(id: string, data: UpdateHighlightInput) {
+export async function updateHighlight(
+  id: string,
+  data: UpdateHighlightInput,
+  userId?: string
+) {
   const highlight = await prisma.highlight.findUnique({
     where: { id },
   });
@@ -36,19 +64,29 @@ export async function updateHighlight(id: string, data: UpdateHighlightInput) {
     throw new NotFoundError("Highlight", id);
   }
 
+  // Only creator can edit (if userId is provided for check)
+  if (userId && highlight.createdByUserId && highlight.createdByUserId !== userId) {
+    throw new ForbiddenError("Only the highlight creator can edit it");
+  }
+
   return prisma.highlight.update({
     where: { id },
     data,
   });
 }
 
-export async function deleteHighlight(id: string) {
+export async function deleteHighlight(id: string, userId?: string) {
   const highlight = await prisma.highlight.findUnique({
     where: { id },
   });
 
   if (highlight === null) {
     throw new NotFoundError("Highlight", id);
+  }
+
+  // Only creator can delete (if userId is provided for check)
+  if (userId && highlight.createdByUserId && highlight.createdByUserId !== userId) {
+    throw new ForbiddenError("Only the highlight creator can delete it");
   }
 
   await prisma.highlight.delete({
@@ -70,15 +108,24 @@ export async function addRallyToHighlight(
 
   const rally = await prisma.rally.findUnique({
     where: { id: data.rallyId },
-    include: { video: true },
+    include: {
+      video: {
+        include: {
+          sessionVideos: {
+            where: { sessionId: highlight.sessionId },
+          },
+        },
+      },
+    },
   });
 
   if (rally === null) {
     throw new NotFoundError("Rally", data.rallyId);
   }
 
-  if (rally.video.sessionId !== highlight.sessionId) {
-    throw new ConflictError("Rally does not belong to the same session");
+  // Check if the video is in the same session as the highlight
+  if (rally.video.sessionVideos.length === 0) {
+    throw new ConflictError("Rally does not belong to a video in this session");
   }
 
   const existing = await prisma.highlightRally.findFirst({

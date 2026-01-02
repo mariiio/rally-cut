@@ -1,6 +1,16 @@
 import { create } from 'zustand';
 import { hashFile, getVideoDuration } from '@/utils/fileHandlers';
-import { requestUploadUrl, confirmUpload } from '@/services/api';
+import {
+  requestUploadUrl,
+  confirmUpload,
+  requestVideoUploadUrl,
+  confirmVideoUpload,
+} from '@/services/api';
+
+interface UploadResult {
+  success: boolean;
+  videoId?: string;
+}
 
 interface UploadState {
   // Upload status
@@ -14,9 +24,62 @@ interface UploadState {
 
   // Actions
   uploadVideo: (sessionId: string, file: File) => Promise<boolean>;
+  uploadVideoToLibrary: (file: File) => Promise<UploadResult>;
   cancel: () => void;
   clearError: () => void;
   reset: () => void;
+}
+
+// Progress constants
+const PROGRESS_ANALYZE = 10;
+const PROGRESS_UPLOAD_START = 15;
+const PROGRESS_UPLOAD_RANGE = 75; // 15-90%
+const PROGRESS_FINALIZE = 95;
+
+/**
+ * Upload a file to S3 with progress tracking.
+ * Returns a promise that resolves when upload is complete.
+ */
+async function uploadToS3(
+  file: File,
+  uploadUrl: string,
+  abortSignal: AbortSignal,
+  onProgress: (percent: number) => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+
+    xhr.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable) {
+        const uploadProgress = Math.round((event.loaded / event.total) * PROGRESS_UPLOAD_RANGE);
+        onProgress(PROGRESS_UPLOAD_START + uploadProgress);
+      }
+    });
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        reject(new Error(`Upload failed with status ${xhr.status}`));
+      }
+    });
+
+    xhr.addEventListener('error', () => {
+      reject(new Error('Network error during upload'));
+    });
+
+    xhr.addEventListener('abort', () => {
+      reject(new Error('Upload cancelled'));
+    });
+
+    abortSignal.addEventListener('abort', () => {
+      xhr.abort();
+    });
+
+    xhr.open('PUT', uploadUrl, true);
+    xhr.setRequestHeader('Content-Type', file.type || 'video/mp4');
+    xhr.send(file);
+  });
 }
 
 export const useUploadStore = create<UploadState>((set, get) => ({
@@ -47,13 +110,10 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         getVideoDuration(file),
       ]);
 
-      // Check if cancelled
-      if (abortController.signal.aborted) {
-        throw new Error('Upload cancelled');
-      }
+      if (abortController.signal.aborted) throw new Error('Upload cancelled');
 
       // Request presigned upload URL
-      set({ progress: 10, currentStep: 'Preparing upload...' });
+      set({ progress: PROGRESS_ANALYZE, currentStep: 'Preparing upload...' });
       const { uploadUrl, videoId } = await requestUploadUrl(
         sessionId,
         file.name,
@@ -62,58 +122,18 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         durationMs
       );
 
-      // Check if cancelled
-      if (abortController.signal.aborted) {
-        throw new Error('Upload cancelled');
-      }
+      if (abortController.signal.aborted) throw new Error('Upload cancelled');
 
-      // Upload to S3 with progress tracking using XMLHttpRequest
-      set({ progress: 15, currentStep: 'Uploading video...' });
-
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-
-        xhr.upload.addEventListener('progress', (event) => {
-          if (event.lengthComputable) {
-            // Map 15-90% of progress bar to actual upload progress
-            const uploadProgress = Math.round((event.loaded / event.total) * 75);
-            set({ progress: 15 + uploadProgress });
-          }
-        });
-
-        xhr.addEventListener('load', () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve();
-          } else {
-            reject(new Error(`Upload failed with status ${xhr.status}`));
-          }
-        });
-
-        xhr.addEventListener('error', () => {
-          reject(new Error('Network error during upload'));
-        });
-
-        xhr.addEventListener('abort', () => {
-          reject(new Error('Upload cancelled'));
-        });
-
-        // Store abort handler
-        abortController.signal.addEventListener('abort', () => {
-          xhr.abort();
-        });
-
-        xhr.open('PUT', uploadUrl, true);
-        xhr.setRequestHeader('Content-Type', file.type || 'video/mp4');
-        xhr.send(file);
+      // Upload to S3 with progress tracking
+      set({ progress: PROGRESS_UPLOAD_START, currentStep: 'Uploading video...' });
+      await uploadToS3(file, uploadUrl, abortController.signal, (progress) => {
+        set({ progress });
       });
 
-      // Check if cancelled
-      if (abortController.signal.aborted) {
-        throw new Error('Upload cancelled');
-      }
+      if (abortController.signal.aborted) throw new Error('Upload cancelled');
 
       // Confirm upload with API
-      set({ progress: 95, currentStep: 'Finalizing...' });
+      set({ progress: PROGRESS_FINALIZE, currentStep: 'Finalizing...' });
       await confirmUpload(sessionId, videoId, durationMs);
 
       set({
@@ -126,27 +146,87 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       return true;
     } catch (err) {
       const isCancelled = err instanceof Error && err.message === 'Upload cancelled';
-
       if (!isCancelled) {
         console.error('Upload error:', err);
-        set({
-          isUploading: false,
-          progress: 0,
-          currentStep: '',
-          error: err instanceof Error ? err.message : 'Upload failed',
-          abortController: null,
-        });
-      } else {
-        set({
-          isUploading: false,
-          progress: 0,
-          currentStep: '',
-          error: null,
-          abortController: null,
-        });
       }
-
+      set({
+        isUploading: false,
+        progress: 0,
+        currentStep: '',
+        error: isCancelled ? null : (err instanceof Error ? err.message : 'Upload failed'),
+        abortController: null,
+      });
       return false;
+    }
+  },
+
+  uploadVideoToLibrary: async (file: File): Promise<UploadResult> => {
+    if (get().isUploading) {
+      return { success: false };
+    }
+
+    const abortController = new AbortController();
+    set({
+      isUploading: true,
+      progress: 0,
+      currentStep: 'Analyzing video...',
+      error: null,
+      abortController,
+    });
+
+    try {
+      // Get file hash and duration in parallel
+      const [contentHash, durationMs] = await Promise.all([
+        hashFile(file),
+        getVideoDuration(file),
+      ]);
+
+      if (abortController.signal.aborted) throw new Error('Upload cancelled');
+
+      // Request presigned upload URL (user-scoped, no session)
+      set({ progress: PROGRESS_ANALYZE, currentStep: 'Preparing upload...' });
+      const { uploadUrl, videoId } = await requestVideoUploadUrl({
+        filename: file.name,
+        contentHash,
+        fileSize: file.size,
+        durationMs,
+      });
+
+      if (abortController.signal.aborted) throw new Error('Upload cancelled');
+
+      // Upload to S3 with progress tracking
+      set({ progress: PROGRESS_UPLOAD_START, currentStep: 'Uploading video...' });
+      await uploadToS3(file, uploadUrl, abortController.signal, (progress) => {
+        set({ progress });
+      });
+
+      if (abortController.signal.aborted) throw new Error('Upload cancelled');
+
+      // Confirm upload with API (user-scoped)
+      set({ progress: PROGRESS_FINALIZE, currentStep: 'Finalizing...' });
+      await confirmVideoUpload(videoId, { durationMs });
+
+      set({
+        isUploading: false,
+        progress: 100,
+        currentStep: 'Upload complete',
+        abortController: null,
+      });
+
+      return { success: true, videoId };
+    } catch (err) {
+      const isCancelled = err instanceof Error && err.message === 'Upload cancelled';
+      if (!isCancelled) {
+        console.error('Upload error:', err);
+      }
+      set({
+        isUploading: false,
+        progress: 0,
+        currentStep: '',
+        error: isCancelled ? null : (err instanceof Error ? err.message : 'Upload failed'),
+        abortController: null,
+      });
+      return { success: false };
     }
   },
 

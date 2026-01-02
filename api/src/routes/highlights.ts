@@ -25,7 +25,11 @@ router.post(
   }),
   async (req, res, next) => {
     try {
-      const highlight = await createHighlight(req.params.sessionId, req.body);
+      const highlight = await createHighlight(
+        req.params.sessionId,
+        req.body,
+        req.userId
+      );
       res.status(201).json(highlight);
     } catch (error) {
       next(error);
@@ -41,7 +45,7 @@ router.patch(
   }),
   async (req, res, next) => {
     try {
-      const highlight = await updateHighlight(req.params.id, req.body);
+      const highlight = await updateHighlight(req.params.id, req.body, req.userId);
       res.json(highlight);
     } catch (error) {
       next(error);
@@ -54,7 +58,7 @@ router.delete(
   validateRequest({ params: z.object({ id: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      await deleteHighlight(req.params.id);
+      await deleteHighlight(req.params.id, req.userId);
       res.status(204).send();
     } catch (error) {
       next(error);

@@ -30,13 +30,14 @@ interface ExportState {
   exportingAll: boolean;
 
   // Actions
-  downloadRally: (videoSource: VideoSource, rally: Rally) => Promise<void>;
-  downloadAllRallies: (videoSource: VideoSource, rallies: Rally[], withFade: boolean) => Promise<void>;
+  downloadRally: (videoSource: VideoSource, rally: Rally, withWatermark?: boolean) => Promise<void>;
+  downloadAllRallies: (videoSource: VideoSource, rallies: Rally[], withFade: boolean, withWatermark?: boolean) => Promise<void>;
   downloadHighlight: (
     ralliesWithSource: RallyWithSource[],
     highlightId: string,
     highlightName: string,
-    withFade: boolean
+    withFade: boolean,
+    withWatermark?: boolean
   ) => Promise<void>;
   cancel: () => void;
   clearError: () => void;
@@ -52,7 +53,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
   exportingHighlightId: null,
   exportingAll: false,
 
-  downloadRally: async (videoSource: VideoSource, rally: Rally) => {
+  downloadRally: async (videoSource: VideoSource, rally: Rally, withWatermark = true) => {
     if (!isFFmpegSupported()) {
       set({ error: BROWSER_NOT_SUPPORTED_ERROR });
       return;
@@ -73,7 +74,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
     });
 
     try {
-      const blob = await exportSingleRally(videoSource, rally, (progress, step) => {
+      const blob = await exportSingleRally(videoSource, rally, withWatermark, (progress, step) => {
         set({ progress, currentStep: step });
       });
 
@@ -110,7 +111,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
     }
   },
 
-  downloadAllRallies: async (videoSource: VideoSource, rallies: Rally[], withFade: boolean) => {
+  downloadAllRallies: async (videoSource: VideoSource, rallies: Rally[], withFade: boolean, withWatermark = true) => {
     if (!isFFmpegSupported()) {
       set({ error: BROWSER_NOT_SUPPORTED_ERROR });
       return;
@@ -136,7 +137,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
     });
 
     try {
-      const blob = await exportConcatenated(videoSource, rallies, withFade, (progress, step) => {
+      const blob = await exportConcatenated(videoSource, rallies, withFade, withWatermark, (progress, step) => {
         set({ progress, currentStep: step });
       });
 
@@ -168,7 +169,8 @@ export const useExportStore = create<ExportState>((set, get) => ({
     ralliesWithSource: RallyWithSource[],
     highlightId: string,
     highlightName: string,
-    withFade: boolean
+    withFade: boolean,
+    withWatermark = true
   ) => {
     if (!isFFmpegSupported()) {
       set({ error: BROWSER_NOT_SUPPORTED_ERROR });
@@ -195,7 +197,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
     });
 
     try {
-      const blob = await exportMultiSourceConcatenated(ralliesWithSource, withFade, (progress, step) => {
+      const blob = await exportMultiSourceConcatenated(ralliesWithSource, withFade, withWatermark, (progress, step) => {
         set({ progress, currentStep: step });
       });
 
