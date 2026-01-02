@@ -118,7 +118,7 @@ export function EditorHeader() {
       setDeleting(true);
       await deleteSession(session.id);
       setShowDeleteDialog(false);
-      router.push('/');
+      router.push('/editor');
     } catch (err) {
       console.error('Failed to delete session:', err);
       setError('Failed to delete session');
@@ -153,7 +153,7 @@ export function EditorHeader() {
             direction="row"
             alignItems="center"
             spacing={1}
-            onClick={() => router.push('/')}
+            onClick={() => router.push('/editor')}
             sx={{
               minWidth: 'fit-content',
               cursor: 'pointer',

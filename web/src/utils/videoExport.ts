@@ -1,5 +1,6 @@
 import { Rally } from '@/types/rally';
 import type { FFmpegInstance } from '@/types/ffmpeg';
+import { getVisitorId } from '@/utils/visitorId';
 
 export type VideoSource = File | string;
 
@@ -28,8 +29,208 @@ let loadPromise: Promise<void> | null = null;
 let currentProgressCallback: ProgressCallback | null = null;
 // Track minimum progress to prevent FFmpeg from resetting our stage-based progress
 let minProgress = 0;
+// Track the current FFmpeg operation's progress range for proper mapping
+let ffmpegProgressRange = { min: 0, max: 100 };
 // Cancellation flag
 let isCancelled = false;
+
+// Video cache to avoid re-downloading the same video for multiple rally exports
+// - Small videos (< 200MB): Persist in IndexedDB across page refreshes
+// - Large videos (>= 200MB): Memory cache only (cleared on refresh)
+const memoryCache = new Map<string, Uint8Array>();
+const MAX_INDEXEDDB_VIDEO_SIZE = 200 * 1024 * 1024; // Only persist videos < 200MB to IndexedDB
+const MAX_INDEXEDDB_TOTAL_SIZE = 500 * 1024 * 1024; // 500MB total IndexedDB cache limit
+const DB_NAME = 'rallycut-video-cache';
+const DB_VERSION = 2; // Bumped to add timestamp index
+const STORE_NAME = 'videos';
+
+let dbPromise: Promise<IDBDatabase> | null = null;
+
+/**
+ * Open IndexedDB connection (lazy, singleton)
+ */
+function openDB(): Promise<IDBDatabase> {
+  if (dbPromise) return dbPromise;
+
+  dbPromise = new Promise((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') {
+      reject(new Error('IndexedDB not available'));
+      return;
+    }
+
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+
+    request.onupgradeneeded = (event) => {
+      const db = (event.target as IDBOpenDBRequest).result;
+      const tx = (event.target as IDBOpenDBRequest).transaction!;
+
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        // Fresh install
+        const store = db.createObjectStore(STORE_NAME, { keyPath: 'key' });
+        store.createIndex('timestamp', 'timestamp', { unique: false });
+      } else {
+        // Upgrading from v1 - add timestamp index and clear old data
+        const store = tx.objectStore(STORE_NAME);
+        if (!store.indexNames.contains('timestamp')) {
+          // Clear old entries (they don't have size/timestamp fields)
+          store.clear();
+          store.createIndex('timestamp', 'timestamp', { unique: false });
+        }
+      }
+    };
+  });
+
+  return dbPromise;
+}
+
+interface CacheEntry {
+  key: string;
+  data: Uint8Array;
+  size: number;
+  timestamp: number;
+}
+
+/**
+ * Get cached video data from IndexedDB or memory
+ */
+async function getCachedVideo(key: string): Promise<Uint8Array | null> {
+  // Check memory cache first (faster)
+  const memCached = memoryCache.get(key);
+  if (memCached) return memCached;
+
+  // Try IndexedDB
+  try {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+      const request = store.get(key);
+
+      request.onsuccess = () => {
+        const result = request.result as CacheEntry | undefined;
+        if (result?.data) {
+          // Also store in memory for faster subsequent access
+          memoryCache.set(key, result.data);
+          resolve(result.data);
+        } else {
+          resolve(null);
+        }
+      };
+      request.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get total size of all cached entries
+ */
+async function getCacheTotalSize(db: IDBDatabase): Promise<number> {
+  return new Promise((resolve) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const request = store.getAll();
+
+    request.onsuccess = () => {
+      const entries = request.result as CacheEntry[];
+      const totalSize = entries.reduce((sum, entry) => sum + (entry.size || 0), 0);
+      resolve(totalSize);
+    };
+    request.onerror = () => resolve(0);
+  });
+}
+
+/**
+ * Evict oldest entries until we're under the size limit
+ */
+async function evictIfNeeded(db: IDBDatabase, newEntrySize: number): Promise<void> {
+  const currentSize = await getCacheTotalSize(db);
+  let sizeToFree = (currentSize + newEntrySize) - MAX_INDEXEDDB_TOTAL_SIZE;
+
+  if (sizeToFree <= 0) return;
+
+  // Get all entries sorted by timestamp (oldest first)
+  return new Promise((resolve) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    const index = store.index('timestamp');
+    const request = index.openCursor();
+
+    request.onsuccess = (event) => {
+      const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result;
+      if (cursor && sizeToFree > 0) {
+        const entry = cursor.value as CacheEntry;
+        sizeToFree -= entry.size || 0;
+        console.log(`[VideoExport] Evicting cached video: ${entry.key.substring(0, 50)}... (${(entry.size / 1024 / 1024).toFixed(1)} MB)`);
+        cursor.delete();
+        cursor.continue();
+      } else {
+        resolve();
+      }
+    };
+    request.onerror = () => resolve();
+  });
+}
+
+/**
+ * Cache video data in memory, and IndexedDB for small videos
+ */
+async function cacheVideo(key: string, data: Uint8Array): Promise<void> {
+  const sizeMB = (data.length / 1024 / 1024).toFixed(1);
+
+  // Always store in memory for current session
+  memoryCache.set(key, data);
+
+  // Only persist small videos to IndexedDB (large videos would fill up storage)
+  if (data.length >= MAX_INDEXEDDB_VIDEO_SIZE) {
+    console.log(`[VideoExport] Cached in memory only (too large for IndexedDB): ${key.substring(0, 50)}... (${sizeMB} MB)`);
+    return;
+  }
+
+  // Store in IndexedDB for persistence across refreshes
+  try {
+    const db = await openDB();
+
+    // Evict old entries if adding this would exceed the limit
+    await evictIfNeeded(db, data.length);
+
+    // Store the new entry
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    const entry: CacheEntry = {
+      key,
+      data,
+      size: data.length,
+      timestamp: Date.now(),
+    };
+    store.put(entry);
+
+    console.log(`[VideoExport] Cached in IndexedDB: ${key.substring(0, 50)}... (${sizeMB} MB)`);
+  } catch (err) {
+    console.warn('[VideoExport] Failed to cache in IndexedDB:', err);
+  }
+}
+
+/**
+ * Clear video cache (IndexedDB and memory)
+ */
+export async function clearVideoCache(): Promise<void> {
+  memoryCache.clear();
+
+  try {
+    const db = await openDB();
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    store.clear();
+    console.log('[VideoExport] Video cache cleared');
+  } catch {
+    // Ignore errors
+  }
+}
 
 export type ProgressCallback = (progress: number, step: string) => void;
 
@@ -95,7 +296,16 @@ const messages = {
  */
 function resetProgress() {
   minProgress = 0;
+  ffmpegProgressRange = { min: 0, max: 100 };
   isCancelled = false;
+}
+
+/**
+ * Set the progress range for the current FFmpeg operation
+ * FFmpeg's 0-100% will be mapped to this range
+ */
+function setFFmpegProgressRange(min: number, max: number) {
+  ffmpegProgressRange = { min, max };
 }
 
 /**
@@ -246,15 +456,18 @@ async function getFFmpeg(onProgress?: ProgressCallback): Promise<FFmpegInstance>
       ffmpeg = new window.FFmpegWASM.FFmpeg();
 
       // Use indirect callback so we can update it for each export
-      // Only report FFmpeg progress if it's valid and higher than our current minimum
+      // Map FFmpeg's 0-1 progress to the current operation's range
       ffmpeg.on('progress', ({ progress }: { progress: number }) => {
         // FFmpeg progress should be between 0 and 1, but can sometimes be invalid
         if (typeof progress !== 'number' || !isFinite(progress) || progress < 0 || progress > 1) {
           return;
         }
-        const ffmpegProgress = Math.round(progress * 100);
-        if (ffmpegProgress > minProgress && ffmpegProgress <= 100) {
-          currentProgressCallback?.(ffmpegProgress, messages.processing);
+        // Map FFmpeg's 0-100% to the current operation's range
+        const { min, max } = ffmpegProgressRange;
+        const mappedProgress = Math.round(min + progress * (max - min));
+        if (mappedProgress > minProgress && mappedProgress <= 100) {
+          minProgress = mappedProgress;
+          currentProgressCallback?.(mappedProgress, messages.processing);
         }
       });
 
@@ -290,16 +503,117 @@ async function getFFmpeg(onProgress?: ProgressCallback): Promise<FFmpegInstance>
 }
 
 /**
- * Fetch file utility - works with File objects and URLs
+ * Get a presigned download URL for a video stored in S3.
+ * This bypasses CORS issues when fetching videos for export.
  */
-async function fetchFileData(source: VideoSource): Promise<Uint8Array> {
+async function getPresignedDownloadUrl(s3Key: string): Promise<string> {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+  const visitorId = getVisitorId();
+
+  const headers: HeadersInit = {};
+  if (visitorId) {
+    headers['X-Visitor-Id'] = visitorId;
+  }
+
+  const response = await fetch(
+    `${apiUrl}/v1/videos/download-url?s3Key=${encodeURIComponent(s3Key)}`,
+    { headers }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to get download URL: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.downloadUrl;
+}
+
+/**
+ * Fetch file utility - works with File objects and URLs
+ * For relative video paths (/videos/...), uses presigned S3 URLs to bypass CORS
+ * Shows download progress for large files
+ * Uses in-memory cache to avoid re-downloading the same video
+ */
+async function fetchFileData(source: VideoSource, onProgress?: (loaded: number, total: number) => void): Promise<Uint8Array> {
   if (source instanceof File) {
+    // For File objects, use the file name as cache key
+    const cacheKey = `file:${source.name}:${source.size}`;
+    const cached = await getCachedVideo(cacheKey);
+    if (cached) {
+      console.log(`[VideoExport] Cache hit for file ${source.name} (${(cached.length / 1024 / 1024).toFixed(1)} MB)`);
+      onProgress?.(cached.length, cached.length);
+      // Return a copy (.slice()) to avoid ArrayBuffer detachment issues with FFmpeg worker
+      return cached.slice();
+    }
+    console.log(`[VideoExport] Cache miss for file ${source.name}, reading...`);
+
     const buffer = await source.arrayBuffer();
-    return new Uint8Array(buffer);
+    const data = new Uint8Array(buffer);
+    await cacheVideo(cacheKey, data);
+    // Return a copy to avoid ArrayBuffer detachment issues
+    return data.slice();
   } else {
-    const response = await fetch(source);
+    // Check cache first using the source URL as key
+    const cacheKey = source;
+    const cached = await getCachedVideo(cacheKey);
+    if (cached) {
+      console.log(`[VideoExport] Cache hit for ${cacheKey.substring(0, 50)}... (${(cached.length / 1024 / 1024).toFixed(1)} MB)`);
+      onProgress?.(cached.length, cached.length);
+      // Return a copy (.slice()) to avoid ArrayBuffer detachment issues with FFmpeg worker
+      return cached.slice();
+    }
+    console.log(`[VideoExport] Cache miss for ${cacheKey.substring(0, 50)}..., downloading...`);
+
+    let url = source;
+
+    // If it's a relative video path, get a presigned S3 URL
+    if (source.startsWith('/videos/')) {
+      // Extract s3Key from the path (remove leading /)
+      const s3Key = source.slice(1);
+      url = await getPresignedDownloadUrl(s3Key);
+    }
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch video: ${response.status}`);
+    }
+
+    // If we have content-length and a body stream, track progress
+    const contentLength = response.headers.get('content-length');
+    if (contentLength && response.body && onProgress) {
+      const total = parseInt(contentLength, 10);
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let loaded = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        chunks.push(value);
+        loaded += value.length;
+        onProgress(loaded, total);
+      }
+
+      // Combine chunks into single Uint8Array
+      const result = new Uint8Array(loaded);
+      let offset = 0;
+      for (const chunk of chunks) {
+        result.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      // Cache the result and return a copy
+      await cacheVideo(cacheKey, result);
+      return result.slice();
+    }
+
+    // Fallback: no progress tracking
     const buffer = await response.arrayBuffer();
-    return new Uint8Array(buffer);
+    const data = new Uint8Array(buffer);
+    await cacheVideo(cacheKey, data);
+    // Return a copy to avoid ArrayBuffer detachment issues
+    return data.slice();
   }
 }
 
@@ -354,8 +668,15 @@ export async function exportSingleRally(
 
   // Write input file to FFmpeg virtual filesystem
   try {
-    const videoData = await fetchFileData(videoSource);
+    const videoData = await fetchFileData(videoSource, (loaded, total) => {
+      // Map download progress from 10% to 25%
+      const downloadProgress = 10 + Math.round((loaded / total) * 15);
+      const mb = (loaded / 1024 / 1024).toFixed(1);
+      const totalMb = (total / 1024 / 1024).toFixed(1);
+      reportProgress(downloadProgress, `Downloading ${mb}/${totalMb} MB...`);
+    });
     checkCancelled();
+    reportProgress(26, 'Loading video into memory...');
     await ff.writeFile(inputName, videoData);
   } catch (err) {
     console.error('Failed to load video:', err);
@@ -364,6 +685,9 @@ export async function exportSingleRally(
 
   checkCancelled();
   reportProgress(30, messages.extractingClip(1, 1));
+
+  // Set progress range for FFmpeg encoding (30% to 90%)
+  setFFmpegProgressRange(30, 90);
 
   if (withWatermark) {
     // Load watermark for overlay
@@ -459,7 +783,14 @@ export async function exportConcatenated(
 
   // Write input file
   try {
-    const videoData = await fetchFileData(videoSource);
+    const videoData = await fetchFileData(videoSource, (loaded, total) => {
+      // Map download progress from 5% to 12%
+      const downloadProgress = 5 + Math.round((loaded / total) * 7);
+      const mb = (loaded / 1024 / 1024).toFixed(1);
+      const totalMb = (total / 1024 / 1024).toFixed(1);
+      reportProgress(downloadProgress, `Downloading ${mb}/${totalMb} MB...`);
+    });
+    reportProgress(13, 'Loading video into memory...');
     await ff.writeFile(inputName, videoData);
   } catch (err) {
     console.error('Failed to load video:', err);
@@ -566,13 +897,15 @@ export async function exportMultiSourceConcatenated(
 
     // Load this video source
     const sourceIndex = Array.from(sourceToRallies.keys()).indexOf(videoSource) + 1;
-    reportProgress(
-      Math.round(5 + (processedCount / totalRallies) * 10),
-      messages.loadingVideos(sourceIndex, sourceToRallies.size)
-    );
+    const baseProgress = Math.round(5 + (processedCount / totalRallies) * 10);
+    reportProgress(baseProgress, messages.loadingVideos(sourceIndex, sourceToRallies.size));
 
     try {
-      const videoData = await fetchFileData(videoSource);
+      const videoData = await fetchFileData(videoSource, (loaded, total) => {
+        const mb = (loaded / 1024 / 1024).toFixed(1);
+        const totalMb = (total / 1024 / 1024).toFixed(1);
+        reportProgress(baseProgress, `Downloading video ${sourceIndex}/${sourceToRallies.size} (${mb}/${totalMb} MB)...`);
+      });
       await ff.writeFile(inputName, videoData);
     } catch (err) {
       console.error('Failed to load video:', err);
@@ -966,6 +1299,190 @@ export function downloadBlob(blob: Blob, filename: string): void {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+// ============================================================================
+// Server-Side Export (for large videos or premium quality)
+// ============================================================================
+
+import {
+  createExportJob,
+  getExportJobStatus,
+  getExportDownloadUrl,
+  type ExportTier,
+  type ExportStatus,
+} from '@/services/api';
+
+export interface ServerExportOptions {
+  sessionId: string;
+  tier?: ExportTier;
+  format?: 'mp4' | 'webm';
+}
+
+export interface ServerExportResult {
+  jobId: string;
+  status: ExportStatus;
+  downloadUrl?: string;
+  error?: string;
+}
+
+/**
+ * Export rallies using server-side processing (Lambda).
+ * Use this for large videos or when premium quality is needed.
+ *
+ * @param rallies - Array of rallies with their video metadata
+ * @param options - Export options including sessionId and tier
+ * @param onProgress - Progress callback (0-100)
+ * @returns Export result with download URL when complete
+ */
+export async function exportServerSide(
+  rallies: Array<{
+    videoId: string;
+    videoS3Key: string;
+    startMs: number;
+    endMs: number;
+  }>,
+  options: ServerExportOptions,
+  onProgress?: ProgressCallback
+): Promise<ServerExportResult> {
+  if (rallies.length === 0) {
+    throw new Error('No rallies to export');
+  }
+
+  onProgress?.(0, 'Submitting export job...');
+
+  // Create the export job
+  const job = await createExportJob({
+    sessionId: options.sessionId,
+    tier: options.tier || 'FREE',
+    config: { format: options.format || 'mp4' },
+    rallies,
+  });
+
+  onProgress?.(5, 'Export job started...');
+
+  // Poll for completion
+  const result = await pollExportJob(job.id, onProgress);
+
+  if (result.status === 'COMPLETED') {
+    // Get download URL
+    const downloadResult = await getExportDownloadUrl(job.id);
+    return {
+      jobId: job.id,
+      status: 'COMPLETED',
+      downloadUrl: downloadResult.downloadUrl || undefined,
+    };
+  }
+
+  if (result.status === 'FAILED') {
+    return {
+      jobId: job.id,
+      status: 'FAILED',
+      error: result.error || 'Export failed',
+    };
+  }
+
+  return {
+    jobId: job.id,
+    status: result.status,
+  };
+}
+
+/**
+ * Poll an export job until completion or failure
+ */
+async function pollExportJob(
+  jobId: string,
+  onProgress?: ProgressCallback,
+  maxAttempts = 300, // 10 minutes at 2s intervals
+  interval = 2000
+): Promise<{ status: ExportStatus; error?: string }> {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    // Check cancellation
+    if (isCancelled) {
+      throw new Error('Export cancelled');
+    }
+
+    const job = await getExportJobStatus(jobId);
+
+    // Map server progress (0-100) to our range (5-95)
+    const mappedProgress = 5 + Math.round((job.progress / 100) * 90);
+    onProgress?.(mappedProgress, getServerProgressMessage(job.progress));
+
+    if (job.status === 'COMPLETED') {
+      onProgress?.(100, 'Export complete!');
+      return { status: 'COMPLETED' };
+    }
+
+    if (job.status === 'FAILED') {
+      return { status: 'FAILED', error: job.error };
+    }
+
+    // Wait before next poll
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+
+  return { status: 'FAILED', error: 'Export timed out' };
+}
+
+/**
+ * Get a beach volleyball-themed progress message for server export
+ */
+function getServerProgressMessage(progress: number): string {
+  if (progress < 10) return 'Warming up on the server...';
+  if (progress < 30) return 'Downloading video clips...';
+  if (progress < 60) return 'Extracting rallies...';
+  if (progress < 80) return 'Processing video...';
+  if (progress < 95) return 'Uploading final video...';
+  return 'Finishing up...';
+}
+
+/**
+ * Download a file from a URL
+ */
+export async function downloadFromUrl(
+  url: string,
+  filename: string,
+  onProgress?: (loaded: number, total: number) => void
+): Promise<void> {
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(`Download failed: ${response.status}`);
+  }
+
+  const contentLength = response.headers.get('content-length');
+  const total = contentLength ? parseInt(contentLength, 10) : 0;
+
+  if (response.body && total > 0 && onProgress) {
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let loaded = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      chunks.push(value);
+      loaded += value.length;
+      onProgress(loaded, total);
+    }
+
+    // Combine chunks
+    const data = new Uint8Array(loaded);
+    let offset = 0;
+    for (const chunk of chunks) {
+      data.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    const blob = new Blob([data], { type: 'video/mp4' });
+    downloadBlob(blob, filename);
+  } else {
+    // No progress tracking
+    const blob = await response.blob();
+    downloadBlob(blob, filename);
+  }
 }
 
 export { getVideoName };

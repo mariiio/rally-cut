@@ -22,6 +22,10 @@ const envSchema = z.object({
   MODAL_FUNCTION_URL: z.string().url(),
 
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
+
+  // Export Lambda (optional - export won't work without it)
+  EXPORT_LAMBDA_FUNCTION_NAME: z.string().optional(),
+  API_BASE_URL: z.string().default("http://localhost:3001"),
 });
 
 function loadEnv(): z.infer<typeof envSchema> {

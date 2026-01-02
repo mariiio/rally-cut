@@ -105,7 +105,7 @@ export default function AcceptSharePage() {
               <Typography color="text.secondary" sx={{ mb: 3 }}>
                 This share link may have expired or been removed.
               </Typography>
-              <Button variant="contained" onClick={() => router.push('/')}>
+              <Button variant="contained" onClick={() => router.push('/editor')}>
                 Go Home
               </Button>
             </CardContent>

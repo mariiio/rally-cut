@@ -7,6 +7,10 @@ import {
   handleDetectionComplete,
   updateDetectionProgress,
 } from "../services/detectionService.js";
+import {
+  handleExportComplete,
+  updateExportProgress,
+} from "../services/exportService.js";
 
 const router = Router();
 
@@ -68,6 +72,60 @@ router.post(
         req.body.progress,
         req.body.message
       );
+      res.json({ success: true });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================================
+// Export Webhooks
+// ============================================================================
+
+const exportCompleteSchema = z.object({
+  job_id: z.string().uuid(),
+  status: z.enum(["completed", "failed"]),
+  error_message: z.string().optional(),
+  output_s3_key: z.string().optional(),
+});
+
+router.post(
+  "/v1/webhooks/export-complete",
+  validateRequest({ body: exportCompleteSchema }),
+  async (req, res, next) => {
+    try {
+      const secret = req.headers["x-webhook-secret"];
+
+      if (secret !== env.MODAL_WEBHOOK_SECRET) {
+        throw new ValidationError("Invalid webhook secret");
+      }
+
+      const result = await handleExportComplete(req.body);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+const exportProgressSchema = z.object({
+  job_id: z.string().uuid(),
+  progress: z.number().min(0).max(100),
+});
+
+router.post(
+  "/v1/webhooks/export-progress",
+  validateRequest({ body: exportProgressSchema }),
+  async (req, res, next) => {
+    try {
+      const secret = req.headers["x-webhook-secret"];
+
+      if (secret !== env.MODAL_WEBHOOK_SECRET) {
+        throw new ValidationError("Invalid webhook secret");
+      }
+
+      await updateExportProgress(req.body.job_id, req.body.progress);
       res.json({ success: true });
     } catch (error) {
       next(error);

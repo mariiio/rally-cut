@@ -31,10 +31,12 @@ src/
 │   ├── rallies.ts     # Rally CRUD
 │   ├── highlights.ts  # Highlight CRUD
 │   ├── detection.ts   # Start ML jobs
-│   └── webhooks.ts    # Modal callbacks
+│   ├── exports.ts     # Video export jobs
+│   └── webhooks.ts    # Modal/Lambda callbacks
 ├── services/          # Business logic
 │   ├── syncService.ts # Full state sync (rallies + highlights)
-│   └── detectionService.ts # ML job management
+│   ├── detectionService.ts # ML job management
+│   └── exportService.ts # Video export (Lambda or local FFmpeg)
 ├── schemas/           # Zod validation schemas
 ├── middleware/        # Error handling, validation
 └── lib/               # S3, CloudFront, Prisma clients
@@ -57,6 +59,14 @@ src/
 - Modal sends progress updates to `POST /v1/webhooks/detection/progress`
 - On completion, sends results to `POST /v1/webhooks/detection/complete`
 - Results stored as rallies with `order` field for sequencing
+
+### Video Export
+- `POST /v1/export-jobs` creates export job and triggers Lambda (or local FFmpeg)
+- `GET /v1/export-jobs/:id` returns job status/progress (polling)
+- `GET /v1/export-jobs/:id/download` returns presigned download URL
+- Lambda sends completion webhook to `POST /v1/webhooks/export-complete`
+- **Tiers**: FREE (720p + watermark), PREMIUM (original quality)
+- **Local fallback**: If `EXPORT_LAMBDA_FUNCTION_NAME` not set, uses local FFmpeg
 
 ## Database Schema
 
@@ -83,3 +93,7 @@ Required in `.env`:
 - `AWS_*` - S3 credentials and bucket
 - `CLOUDFRONT_*` - Optional, for signed cookies
 - `MODAL_WEBHOOK_SECRET` - Webhook authentication
+
+Optional (for server-side export):
+- `EXPORT_LAMBDA_FUNCTION_NAME` - Lambda function name (omit for local FFmpeg)
+- `API_BASE_URL` - Base URL for Lambda callbacks

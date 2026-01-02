@@ -36,7 +36,7 @@ export function MobileEditorHeader() {
 
   const handleHome = () => {
     handleMenuClose();
-    router.push('/');
+    router.push('/editor');
   };
 
   return (

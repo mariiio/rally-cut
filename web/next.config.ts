@@ -1,14 +1,13 @@
 import type { NextConfig } from "next";
 
 const isProd = process.env.NODE_ENV === 'production';
+const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
 const nextConfig: NextConfig = {
-  // Required for FFmpeg.wasm SharedArrayBuffer support (production only)
-  // In development, we skip COEP to allow loading videos from CloudFront without CORS issues
+  // Required for FFmpeg.wasm SharedArrayBuffer support
+  // Using 'credentialless' for COEP allows loading cross-origin resources (CloudFront videos)
+  // while still enabling SharedArrayBuffer
   async headers() {
-    if (!isProd) {
-      return [];
-    }
     return [
       {
         source: '/:path*',
@@ -19,9 +18,27 @@ const nextConfig: NextConfig = {
           },
           {
             key: 'Cross-Origin-Embedder-Policy',
-            value: 'require-corp',
+            // 'credentialless' allows cross-origin resources without CORS headers
+            // while still enabling SharedArrayBuffer (needed for FFmpeg.wasm)
+            value: isProd ? 'require-corp' : 'credentialless',
           },
         ],
+      },
+    ];
+  },
+
+  // Proxy video requests to backend API in local development
+  // In production, CloudFront serves videos directly
+  async rewrites() {
+    // Skip rewrites in production (CloudFront handles videos)
+    if (isProd) {
+      return [];
+    }
+
+    return [
+      {
+        source: '/videos/:path*',
+        destination: `${apiUrl}/videos/:path*`,
       },
     ];
   },

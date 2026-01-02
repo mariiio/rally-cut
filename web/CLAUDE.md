@@ -35,6 +35,8 @@ src/
 ├── services/
 │   ├── api.ts        # REST client
 │   └── syncService   # Backend sync (debounced)
+├── utils/
+│   └── videoExport.ts # Server-side export via API
 └── types/rally.ts    # TypeScript types
 ```
 
@@ -68,3 +70,9 @@ src/
 - `fetchSession()` loads session with videos, rallies, highlights
 - `syncService.markDirty()` schedules state sync to backend
 - Rally IDs: frontend uses `{videoId}_rally_{n}`, backend uses UUIDs
+
+### Video Export
+- `exportServerSide()` in `utils/videoExport.ts` triggers server-side export
+- Creates export job via API, polls for progress, downloads when complete
+- **FREE tier**: 720p + watermark, **PREMIUM tier**: original quality
+- Falls back to local FFmpeg.wasm if server export unavailable
