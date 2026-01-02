@@ -25,10 +25,12 @@ import EditIcon from '@mui/icons-material/Edit';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useExportStore } from '@/stores/exportStore';
+import { useTierStore } from '@/stores/tierStore';
 import { formatTime, formatDuration } from '@/utils/timeFormat';
 import { Rally, Match } from '@/types/rally';
 import { designTokens } from '@/app/theme';
 import { ConfirmDialog } from './ConfirmDialog';
+import { ConfirmRallies, LockedRalliesBanner } from './ConfirmRallies';
 import { deleteVideo, renameVideo } from '@/services/api';
 
 export function RallyList() {
@@ -44,7 +46,9 @@ export function RallyList() {
     videoFile,
     videoUrl,
     reloadSession,
+    isRallyEditingLocked,
   } = useEditorStore();
+  const isPremium = useTierStore((state) => state.isPremium());
   const { currentTime, seek } = usePlayerStore();
   const { isExporting, exportingRallyId, exportingAll, downloadRally, downloadAllRallies } = useExportStore();
 
@@ -232,6 +236,9 @@ export function RallyList() {
           </Tooltip>
         </Box>
       )}
+
+      {/* Locked rallies banner */}
+      <LockedRalliesBanner />
 
       {/* Download All Popover */}
       <Popover
@@ -451,6 +458,12 @@ export function RallyList() {
 
               {/* Collapsible rally list */}
               <Collapse in={isExpanded}>
+                {/* Confirm rallies action for active match */}
+                {isActiveMatch && (
+                  <Box sx={{ px: 1.5, py: 1, borderBottom: '1px solid', borderColor: 'divider' }}>
+                    <ConfirmRallies matchId={match.id} isPremium={isPremium} />
+                  </Box>
+                )}
                 <Box sx={{ pl: 1.5 }}>
                   {matchRallies.map((rally, index) => {
                     const isSelected = selectedRallyId === rally.id;

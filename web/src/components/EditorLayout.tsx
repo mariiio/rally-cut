@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Box, IconButton, Tooltip, Badge } from '@mui/material';
+import { Box, IconButton, Tooltip, Badge, Skeleton, Typography, Stack, LinearProgress } from '@mui/material';
 import ListAltIcon from '@mui/icons-material/ListAlt';
 import StarIcon from '@mui/icons-material/Star';
 import AddIcon from '@mui/icons-material/Add';
+import SportsVolleyballIcon from '@mui/icons-material/SportsVolleyball';
 import { VideoPlayer } from './VideoPlayer';
 import { Timeline } from './Timeline';
 import { RallyList } from './RallyList';
@@ -13,6 +14,7 @@ import { EditorHeader } from './EditorHeader';
 import { CollapsiblePanel } from './CollapsiblePanel';
 import { ExportProgress } from './ExportProgress';
 import { UploadProgress } from './UploadProgress';
+import { SessionLoadingProgress } from './SessionLoadingProgress';
 import { NamePromptModal } from './NamePromptModal';
 import { MobileEditorLayout } from './mobile';
 import { useEditorStore } from '@/stores/editorStore';
@@ -215,6 +217,7 @@ export function EditorLayout({ sessionId }: EditorLayoutProps) {
               flexDirection: 'column',
             }}
           >
+            <SessionLoadingProgress />
             <UploadProgress />
             <ExportProgress />
             <VideoPlayer />

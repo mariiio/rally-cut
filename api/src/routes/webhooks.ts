@@ -11,6 +11,10 @@ import {
   handleExportComplete,
   updateExportProgress,
 } from "../services/exportService.js";
+import {
+  handleConfirmationComplete,
+  updateConfirmationProgress,
+} from "../services/confirmationService.js";
 
 const router = Router();
 
@@ -126,6 +130,64 @@ router.post(
       }
 
       await updateExportProgress(req.body.job_id, req.body.progress);
+      res.json({ success: true });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================================
+// Confirmation Webhooks (Rally Confirmation / Trimmed Video Generation)
+// ============================================================================
+
+const confirmationCompleteSchema = z.object({
+  confirmation_id: z.string().uuid(),
+  status: z.enum(["completed", "failed"]),
+  error_message: z.string().optional(),
+  output_s3_key: z.string().optional(),
+  duration_ms: z.number().int().positive().optional(),
+});
+
+router.post(
+  "/v1/webhooks/confirmation-complete",
+  validateRequest({ body: confirmationCompleteSchema }),
+  async (req, res, next) => {
+    try {
+      const secret = req.headers["x-webhook-secret"];
+
+      if (secret !== env.MODAL_WEBHOOK_SECRET) {
+        throw new ValidationError("Invalid webhook secret");
+      }
+
+      const result = await handleConfirmationComplete(req.body);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+const confirmationProgressSchema = z.object({
+  confirmation_id: z.string().uuid(),
+  progress: z.number().min(0).max(100),
+});
+
+router.post(
+  "/v1/webhooks/confirmation-progress",
+  validateRequest({ body: confirmationProgressSchema }),
+  async (req, res, next) => {
+    try {
+      const secret = req.headers["x-webhook-secret"];
+
+      if (secret !== env.MODAL_WEBHOOK_SECRET) {
+        throw new ValidationError("Invalid webhook secret");
+      }
+
+      await updateConfirmationProgress(
+        req.body.confirmation_id,
+        req.body.progress
+      );
       res.json({ success: true });
     } catch (error) {
       next(error);

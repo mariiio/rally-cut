@@ -67,7 +67,23 @@ interface SyncStatus {
   lastSyncAt: number;
 }
 
+// Confirmation status type (per video/match)
+export interface ConfirmationStatus {
+  id: string;
+  status: 'PENDING' | 'PROCESSING' | 'CONFIRMED' | 'FAILED';
+  progress: number;
+  error?: string | null;
+  confirmedAt?: string | null;
+  originalDurationMs: number;
+  trimmedDurationMs?: number | null;
+}
+
 interface EditorState {
+  // Session loading state
+  isLoadingSession: boolean;
+  sessionLoadStep: string;
+  sessionLoadProgress: number;
+
   // Session state
   session: Session | null;
   activeMatchId: string | null;
@@ -101,6 +117,10 @@ interface EditorState {
   // Highlights state
   highlights: Highlight[];
   selectedHighlightId: string | null;
+
+  // Confirmation state (per match/video)
+  confirmationStatus: Record<string, ConfirmationStatus | null>;
+  isConfirming: boolean;
 
   // Session actions
   loadSession: (sessionId: string) => Promise<void>;
@@ -152,6 +172,11 @@ interface EditorState {
   // User actions
   setCurrentUser: (userId: string, userName: string | null) => void;
 
+  // Confirmation actions
+  setConfirmationStatus: (matchId: string, status: ConfirmationStatus | null) => void;
+  setIsConfirming: (isConfirming: boolean) => void;
+  updateConfirmationProgress: (matchId: string, progress: number) => void;
+
   // Computed helpers (called as functions since Zustand doesn't have computed)
   canUndo: () => boolean;
   canRedo: () => boolean;
@@ -160,10 +185,15 @@ interface EditorState {
   canEditHighlight: (highlightId: string) => boolean;
   getNextHighlightColor: () => string;
   getHighlightsForRally: (rallyId: string) => Highlight[];
+  isRallyEditingLocked: () => boolean;
 }
 
 export const useEditorStore = create<EditorState>((set, get) => ({
   // Initial state
+  isLoadingSession: false,
+  sessionLoadStep: '',
+  sessionLoadProgress: 0,
+
   session: null,
   activeMatchId: null,
   userRole: null,
@@ -196,8 +226,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   highlights: [],
   selectedHighlightId: null,
 
+  // Confirmation state
+  confirmationStatus: {},
+  isConfirming: false,
+
   // Session actions
   loadSession: async (sessionId: string) => {
+    // Start loading
+    set({
+      isLoadingSession: true,
+      sessionLoadStep: 'Loading session...',
+      sessionLoadProgress: 10,
+    });
+
     try {
       let session: Session;
       let originalRalliesPerMatch: Record<string, Rally[]> = {};
@@ -208,6 +249,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (useApi) {
         // Fetch from backend API
         session = await fetchSessionFromApi(sessionId);
+
+        // Update progress
+        set({
+          sessionLoadStep: 'Preparing video...',
+          sessionLoadProgress: 50,
+        });
 
         // Fetch current user info
         try {
@@ -271,6 +318,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         });
       } else {
         // Fallback to static files (for local development without backend)
+        set({
+          sessionLoadStep: 'Loading from local files...',
+          sessionLoadProgress: 20,
+        });
+
         const manifestRes = await fetch(`/samples/session_${sessionId}/session.json`);
         if (!manifestRes.ok) {
           console.error('Failed to load session manifest');
@@ -290,6 +342,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             console.warn('Failed to load from localStorage:', e);
           }
         }
+
+        // Update progress
+        set({
+          sessionLoadStep: 'Loading video data...',
+          sessionLoadProgress: 40,
+        });
 
         // Load all match data in parallel
         const matches: Match[] = await Promise.all(
@@ -338,7 +396,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // Set first match as active
       const firstMatch = session.matches[0];
 
+      // Final progress update before setting session
       set({
+        sessionLoadStep: 'Ready',
+        sessionLoadProgress: 100,
+      });
+
+      set({
+        isLoadingSession: false,
+        sessionLoadStep: '',
+        sessionLoadProgress: 0,
         session,
         activeMatchId: firstMatch?.id || null,
         userRole: session.userRole || 'owner', // Default to owner if not specified
@@ -356,6 +423,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         hasUnsavedChanges: false,
       });
     } catch (error) {
+      // Clear loading state on error
+      set({
+        isLoadingSession: false,
+        sessionLoadStep: '',
+        sessionLoadProgress: 0,
+      });
       console.error('Error loading session:', error);
     }
   },
@@ -797,6 +870,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     syncService.reset();
 
     set({
+      isLoadingSession: false,
+      sessionLoadStep: '',
+      sessionLoadProgress: 0,
       session: null,
       activeMatchId: null,
       userRole: null,
@@ -822,6 +898,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         error: null,
         lastSyncAt: 0,
       },
+      confirmationStatus: {},
+      isConfirming: false,
     });
   },
 
@@ -1227,5 +1305,40 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   getHighlightsForRally: (rallyId: string) => {
     const state = get();
     return (state.highlights ?? []).filter((h) => h.rallyIds?.includes(rallyId));
+  },
+
+  // Confirmation actions
+  setConfirmationStatus: (matchId: string, status: ConfirmationStatus | null) => {
+    set((state) => ({
+      confirmationStatus: {
+        ...state.confirmationStatus,
+        [matchId]: status,
+      },
+    }));
+  },
+
+  setIsConfirming: (isConfirming: boolean) => {
+    set({ isConfirming });
+  },
+
+  updateConfirmationProgress: (matchId: string, progress: number) => {
+    set((state) => {
+      const existing = state.confirmationStatus[matchId];
+      if (!existing) return state;
+      return {
+        confirmationStatus: {
+          ...state.confirmationStatus,
+          [matchId]: { ...existing, progress },
+        },
+      };
+    });
+  },
+
+  // Check if rally editing is locked (video is confirmed)
+  isRallyEditingLocked: () => {
+    const state = get();
+    if (!state.activeMatchId) return false;
+    const confirmation = state.confirmationStatus[state.activeMatchId];
+    return confirmation?.status === 'CONFIRMED';
   },
 }));

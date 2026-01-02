@@ -13,7 +13,7 @@ const router = Router();
 
 const createExportJobSchema = z.object({
   sessionId: uuidSchema,
-  tier: z.enum(["FREE", "PREMIUM"]).default("FREE"),
+  // tier is intentionally NOT accepted from client - determined by backend from user
   config: z.object({
     format: z.enum(["mp4", "webm"]).default("mp4"),
   }),

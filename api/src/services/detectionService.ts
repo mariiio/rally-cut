@@ -7,15 +7,19 @@ import { triggerModalDetection } from "../lib/modal.js";
 import { prisma } from "../lib/prisma.js";
 import {
   ConflictError,
+  ForbiddenError,
   LimitExceededError,
   NotFoundError,
   ValidationError,
 } from "../middleware/errorHandler.js";
+import {
+  getUserTier,
+  getTierLimits,
+  checkAndReserveDetectionQuota,
+} from "./tierService.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-const MAX_DETECTION_DURATION_MS = 20 * 60 * 1000;
 
 // Check if we should use local detection (development mode without Modal)
 function shouldUseLocalDetection(): boolean {
@@ -154,10 +158,15 @@ async function triggerLocalDetection(params: {
   return Promise.resolve();
 }
 
-export async function triggerRallyDetection(videoId: string, userId?: string) {
-  const where = userId
-    ? { id: videoId, userId, deletedAt: null }
-    : { id: videoId, deletedAt: null };
+export async function triggerRallyDetection(videoId: string, userId: string) {
+  // userId is now required - enforced by requireUser middleware
+
+  const tier = await getUserTier(userId);
+  const limits = getTierLimits(tier);
+
+  // First, validate the video exists and is in correct state
+  // We do this BEFORE reserving quota to avoid wasting a slot on invalid requests
+  const where = { id: videoId, userId, deletedAt: null };
 
   const video = await prisma.video.findFirst({
     where,
@@ -173,21 +182,35 @@ export async function triggerRallyDetection(videoId: string, userId?: string) {
     );
   }
 
-  if (
-    video.durationMs !== null &&
-    video.durationMs > MAX_DETECTION_DURATION_MS
-  ) {
+  // Check duration against tier limit
+  if (video.durationMs !== null && video.durationMs > limits.maxVideoDurationMs) {
+    const maxMinutes = limits.maxVideoDurationMs / 60000;
+    const videoMinutes = Math.round(video.durationMs / 60000);
     throw new LimitExceededError(
-      `Video duration exceeds ${MAX_DETECTION_DURATION_MS / 60000} minute limit`,
+      `Video duration (${videoMinutes} min) exceeds ${maxMinutes} minute limit for ${tier} tier`,
       {
         field: "durationMs",
         value: video.durationMs,
-        limit: MAX_DETECTION_DURATION_MS,
+        limit: limits.maxVideoDurationMs,
       }
     );
   }
 
-  // Note: Per-session detection limit removed since videos can now be in multiple sessions
+  // Atomically check and reserve a detection quota slot
+  // This prevents race conditions where concurrent requests bypass quota limits
+  const quota = await checkAndReserveDetectionQuota(userId, limits);
+  if (!quota.allowed) {
+    throw new LimitExceededError(
+      `Monthly detection limit reached (${quota.used}/${quota.limit}). Upgrade to Premium for more detections.`,
+      {
+        field: "detectionsUsed",
+        value: quota.used,
+        limit: quota.limit,
+      }
+    );
+  }
+
+  // Quota is now reserved - proceed with detection
 
   const existingJob = await prisma.rallyDetectionJob.findFirst({
     where: {
@@ -220,6 +243,7 @@ export async function triggerRallyDetection(videoId: string, userId?: string) {
       });
     });
 
+    // Quota was already reserved atomically above - no separate increment needed
     return { jobId: existingJob.id, status: "completed", cached: true };
   }
 
@@ -275,6 +299,7 @@ export async function triggerRallyDetection(videoId: string, userId?: string) {
     data: { status: "RUNNING", startedAt: new Date() },
   });
 
+  // Quota was already reserved atomically above - no separate increment needed
   return { jobId: job.id, status: "pending", cached: false };
 }
 

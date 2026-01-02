@@ -3,7 +3,7 @@ import { z } from "zod";
 export const requestUploadUrlSchema = z.object({
   filename: z.string().min(1).max(255),
   contentHash: z.string().length(64),
-  fileSize: z.number().int().positive().max(2 * 1024 * 1024 * 1024),
+  fileSize: z.number().int().positive(), // Tier-based limit enforced in service
   durationMs: z.number().int().positive().optional(),
   contentType: z
     .string()

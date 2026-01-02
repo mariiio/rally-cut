@@ -268,6 +268,19 @@ export async function listSessions(page = 1, limit = 20): Promise<ListSessionsRe
   return response.json();
 }
 
+// Check if user has any content (for returning user banner)
+export async function checkUserHasContent(): Promise<{ hasContent: boolean; sessionCount?: number }> {
+  const response = await fetch(`${API_BASE_URL}/v1/sessions/has-content`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    return { hasContent: false };
+  }
+
+  return response.json();
+}
+
 // Batch update types
 type BatchOperation =
   | { type: 'create'; entity: 'rally'; tempId: string; data: { videoId: string; startMs: number; endMs: number } }
@@ -571,11 +584,39 @@ export async function restoreVideo(videoId: string): Promise<void> {
 // User API
 // ============================================================================
 
+export type UserTier = 'FREE' | 'PREMIUM';
+
+export interface TierLimits {
+  detectionsPerMonth: number;
+  maxVideoDurationMs: number;
+  maxFileSizeBytes: number;
+  monthlyUploadCount: number | null;
+  exportQuality: '720p' | 'original';
+  exportWatermark: boolean;
+  lambdaExportEnabled: boolean;
+  retentionDays: number | null;
+  serverSyncEnabled: boolean;
+  highlightsEnabled: boolean;
+}
+
+export interface UsageQuota {
+  detectionsUsed: number;
+  detectionsLimit: number;
+  detectionsRemaining: number;
+  uploadsThisMonth: number;
+  uploadsLimit: number | null;
+  uploadsRemaining: number | null;
+  periodStart: string;
+}
+
 export interface UserResponse {
   id: string;
   email: string | null;
   name: string | null;
   avatarUrl: string | null;
+  tier: UserTier;
+  tierLimits: TierLimits;
+  usage: UsageQuota;
   createdAt: string;
   convertedAt: string | null;
   videoCount: number;
@@ -815,6 +856,82 @@ export async function getExportDownloadUrl(
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
     throw new Error(error.error?.message || `Failed to get download URL: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// ============================================================================
+// Rally Confirmation API (Trimmed Video Generation)
+// ============================================================================
+
+export type ConfirmationStatusType = 'PENDING' | 'PROCESSING' | 'CONFIRMED' | 'FAILED';
+
+export interface ConfirmationStatusResponse {
+  videoId: string;
+  confirmation: {
+    id: string;
+    status: ConfirmationStatusType;
+    progress: number;
+    error?: string | null;
+    confirmedAt?: string | null;
+    originalDurationMs: number;
+    trimmedDurationMs?: number | null;
+    timestampMappings?: Array<{
+      rallyId: string;
+      originalStartMs: number;
+      originalEndMs: number;
+      trimmedStartMs: number;
+      trimmedEndMs: number;
+    }>;
+  } | null;
+}
+
+export interface ConfirmationResult {
+  confirmationId: string;
+  status: ConfirmationStatusType;
+  progress: number;
+  createdAt: string;
+}
+
+// Initiate rally confirmation (generates trimmed video)
+export async function confirmRallies(videoId: string): Promise<ConfirmationResult> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/confirm-rallies`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to confirm rallies: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Get confirmation status for a video
+export async function getConfirmationStatus(videoId: string): Promise<ConfirmationStatusResponse> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/confirmation-status`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to get confirmation status: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Restore original video (delete trimmed version)
+export async function restoreOriginalVideo(videoId: string): Promise<{ success: boolean }> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/restore-original`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to restore original: ${response.status}`);
   }
 
   return response.json();

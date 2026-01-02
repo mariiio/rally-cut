@@ -6,6 +6,7 @@ import type {
   UpdateSessionInput,
 } from "../schemas/session.js";
 import { canAccessSession } from "./shareService.js";
+import { getUserTier, calculateExpirationDate } from "./tierService.js";
 
 const ALL_VIDEOS_SESSION_NAME = "All Videos";
 
@@ -19,11 +20,15 @@ function serializeBigInts<T>(obj: T): T {
 }
 
 export async function createSession(data: CreateSessionInput, userId?: string) {
+  const tier = await getUserTier(userId);
+  const expiresAt = calculateExpirationDate(tier);
+
   return prisma.session.create({
     data: {
       name: data.name,
       userId,
       type: "REGULAR",
+      expiresAt,
     },
   });
 }
@@ -35,15 +40,19 @@ export async function createSession(data: CreateSessionInput, userId?: string) {
 export async function getOrCreateAllVideosSession(userId: string) {
   // Try to find existing ALL_VIDEOS session
   let session = await prisma.session.findFirst({
-    where: { userId, type: "ALL_VIDEOS" },
+    where: { userId, type: "ALL_VIDEOS", deletedAt: null },
   });
 
   if (!session) {
+    const tier = await getUserTier(userId);
+    const expiresAt = calculateExpirationDate(tier);
+
     session = await prisma.session.create({
       data: {
         userId,
         name: ALL_VIDEOS_SESSION_NAME,
         type: "ALL_VIDEOS",
+        expiresAt,
       },
     });
   }
@@ -54,7 +63,7 @@ export async function getOrCreateAllVideosSession(userId: string) {
 export async function listSessions(pagination: Pagination, userId?: string) {
   const skip = (pagination.page - 1) * pagination.limit;
 
-  const where = userId ? { userId } : {};
+  const where = userId ? { userId, deletedAt: null } : { deletedAt: null };
 
   const [sessions, total] = await Promise.all([
     prisma.session.findMany({
@@ -97,7 +106,7 @@ export async function getSessionById(id: string, userId?: string) {
   }
 
   const session = await prisma.session.findFirst({
-    where: { id },
+    where: { id, deletedAt: null },
     include: {
       sessionVideos: {
         orderBy: { order: "asc" },
