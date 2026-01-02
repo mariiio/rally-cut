@@ -13,7 +13,10 @@ import { EditorHeader } from './EditorHeader';
 import { CollapsiblePanel } from './CollapsiblePanel';
 import { ExportProgress } from './ExportProgress';
 import { UploadProgress } from './UploadProgress';
+import { NamePromptModal } from './NamePromptModal';
+import { MobileEditorLayout } from './mobile';
 import { useEditorStore } from '@/stores/editorStore';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { designTokens } from '@/app/theme';
 
 interface EditorLayoutProps {
@@ -21,6 +24,7 @@ interface EditorLayoutProps {
 }
 
 export function EditorLayout({ sessionId }: EditorLayoutProps) {
+  const isMobile = useIsMobile();
   const {
     loadSession,
     session,
@@ -33,11 +37,14 @@ export function EditorLayout({ sessionId }: EditorLayoutProps) {
     createHighlight,
     canCreateHighlight,
     selectHighlight,
+    currentUserName,
   } = useEditorStore();
 
   // Panel collapse state
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
+  const [showNamePromptModal, setShowNamePromptModal] = useState(false);
+  const [pendingCreateHighlight, setPendingCreateHighlight] = useState(false);
 
   // Keyboard shortcuts for undo/redo
   useEffect(() => {
@@ -103,10 +110,31 @@ export function EditorLayout({ sessionId }: EditorLayoutProps) {
   }, []);
 
   const handleCreateHighlight = () => {
+    // If user doesn't have a name yet, prompt them first
+    if (!currentUserName) {
+      setPendingCreateHighlight(true);
+      setShowNamePromptModal(true);
+      return;
+    }
     const newId = createHighlight();
     selectHighlight(newId);
   };
 
+  const handleNameSet = (name: string) => {
+    // If there was a pending highlight creation, complete it now
+    if (pendingCreateHighlight) {
+      setPendingCreateHighlight(false);
+      const newId = createHighlight();
+      selectHighlight(newId);
+    }
+  };
+
+  // Render mobile layout for phones
+  if (isMobile) {
+    return <MobileEditorLayout />;
+  }
+
+  // Desktop layout
   return (
     <Box
       sx={{
@@ -262,6 +290,16 @@ export function EditorLayout({ sessionId }: EditorLayoutProps) {
       >
         <Timeline />
       </Box>
+
+      {/* Name Prompt Modal */}
+      <NamePromptModal
+        open={showNamePromptModal}
+        onClose={() => {
+          setShowNamePromptModal(false);
+          setPendingCreateHighlight(false);
+        }}
+        onNameSet={handleNameSet}
+      />
     </Box>
   );
 }

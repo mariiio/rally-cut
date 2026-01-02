@@ -4,6 +4,7 @@ import { ZodError } from "zod";
 export type ErrorCode =
   | "VALIDATION_ERROR"
   | "NOT_FOUND"
+  | "FORBIDDEN"
   | "LIMIT_EXCEEDED"
   | "CONFLICT"
   | "INTERNAL_ERROR";
@@ -65,6 +66,12 @@ export class LimitExceededError extends AppError {
 export class ConflictError extends AppError {
   constructor(message: string, details?: Record<string, unknown>) {
     super("CONFLICT", message, 409, details);
+  }
+}
+
+export class ForbiddenError extends AppError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("FORBIDDEN", message, 403, details);
   }
 }
 

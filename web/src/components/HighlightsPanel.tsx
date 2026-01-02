@@ -56,6 +56,7 @@ import { useExportStore } from '@/stores/exportStore';
 import { Rally } from '@/types/rally';
 import { RallyWithSource, FADE_DURATION } from '@/utils/videoExport';
 import { designTokens } from '@/app/theme';
+import { NamePromptModal } from './NamePromptModal';
 
 // Helper to format time as MM:SS
 function formatTime(seconds: number): string {
@@ -265,6 +266,9 @@ export function HighlightsPanel() {
     reorderHighlightRallies,
     moveRallyBetweenHighlights,
     removeRallyFromHighlight,
+    canEditHighlight,
+    currentUserName,
+    currentUserId,
   } = useEditorStore();
 
   // Get all rallies across all matches for cross-match highlights
@@ -298,6 +302,7 @@ export function HighlightsPanel() {
   const [overHighlightId, setOverHighlightId] = useState<string | null>(null);
   // Track preselected rally per highlight (highlightId -> rallyId)
   const [preselectedRallies, setPreselectedRallies] = useState<Record<string, string>>({});
+  const [showNamePromptModal, setShowNamePromptModal] = useState(false);
 
   // DnD sensors
   const sensors = useSensors(
@@ -590,6 +595,9 @@ export function HighlightsPanel() {
             const isPlaying = playingHighlightId === highlight.id;
             const rallyCount = highlight.rallyIds?.length ?? 0;
             const isExpanded = expandedHighlights.has(highlight.id);
+            const canEdit = canEditHighlight(highlight.id);
+            const creatorName = highlight.createdByUserName;
+            const isOwnHighlight = highlight.createdByUserId === currentUserId;
 
             // Get rallies in custom order (rallyIds order)
             const orderedRallies = highlight.rallyIds
@@ -696,7 +704,7 @@ export function HighlightsPanel() {
                     />
                   ) : (
                     <Typography
-                      onDoubleClick={(e) => handleStartEdit(highlight, e)}
+                      onDoubleClick={(e) => canEdit && handleStartEdit(highlight, e)}
                       sx={{
                         flex: 1,
                         fontSize: '0.875rem',
@@ -710,8 +718,25 @@ export function HighlightsPanel() {
                     </Typography>
                   )}
 
-                  {/* Edit button */}
-                  {editingId !== highlight.id && (
+                  {/* Creator badge - only show for other users' highlights */}
+                  {creatorName && !isOwnHighlight && (
+                    <Tooltip title={`Created by ${creatorName}`}>
+                      <Chip
+                        label={creatorName}
+                        size="small"
+                        sx={{
+                          height: 18,
+                          fontSize: '0.625rem',
+                          ml: 0.5,
+                          bgcolor: 'action.hover',
+                          color: 'text.secondary',
+                        }}
+                      />
+                    </Tooltip>
+                  )}
+
+                  {/* Edit button - only show if user can edit */}
+                  {editingId !== highlight.id && canEdit && (
                     <Tooltip title="Rename">
                       <IconButton
                         size="small"
@@ -784,45 +809,47 @@ export function HighlightsPanel() {
                     </Tooltip>
                   )}
 
-                  {/* Delete button with confirmation */}
-                  {deleteConfirmId === highlight.id ? (
-                    <Stack direction="row" spacing={0.25}>
-                      <Tooltip title="Confirm delete">
-                        <IconButton
-                          size="small"
-                          onClick={(e) => handleConfirmDelete(highlight.id, e)}
-                          sx={{
-                            color: 'white',
-                            bgcolor: 'error.main',
-                            width: 24,
-                            height: 24,
-                            '&:hover': { bgcolor: 'error.light' },
-                          }}
-                        >
-                          <CheckIcon sx={{ fontSize: 14 }} />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Cancel">
-                        <IconButton
-                          size="small"
-                          onClick={handleCancelDelete}
-                          sx={{ width: 24, height: 24 }}
-                        >
-                          <CloseIcon sx={{ fontSize: 14 }} />
-                        </IconButton>
-                      </Tooltip>
-                    </Stack>
-                  ) : (
-                    <IconButton
-                      size="small"
-                      onClick={(e) => handleDeleteClick(highlight.id, e)}
-                      sx={{
-                        opacity: isSelected ? 1 : 0.5,
-                        '&:hover': { opacity: 1, color: 'error.main' },
-                      }}
-                    >
-                      <DeleteIcon sx={{ fontSize: 18 }} />
-                    </IconButton>
+                  {/* Delete button with confirmation - only show if user can edit */}
+                  {canEdit && (
+                    deleteConfirmId === highlight.id ? (
+                      <Stack direction="row" spacing={0.25}>
+                        <Tooltip title="Confirm delete">
+                          <IconButton
+                            size="small"
+                            onClick={(e) => handleConfirmDelete(highlight.id, e)}
+                            sx={{
+                              color: 'white',
+                              bgcolor: 'error.main',
+                              width: 24,
+                              height: 24,
+                              '&:hover': { bgcolor: 'error.light' },
+                            }}
+                          >
+                            <CheckIcon sx={{ fontSize: 14 }} />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Cancel">
+                          <IconButton
+                            size="small"
+                            onClick={handleCancelDelete}
+                            sx={{ width: 24, height: 24 }}
+                          >
+                            <CloseIcon sx={{ fontSize: 14 }} />
+                          </IconButton>
+                        </Tooltip>
+                      </Stack>
+                    ) : (
+                      <IconButton
+                        size="small"
+                        onClick={(e) => handleDeleteClick(highlight.id, e)}
+                        sx={{
+                          opacity: isSelected ? 1 : 0.5,
+                          '&:hover': { opacity: 1, color: 'error.main' },
+                        }}
+                      >
+                        <DeleteIcon sx={{ fontSize: 18 }} />
+                      </IconButton>
+                    )
                   )}
                 </Box>
 
@@ -932,6 +959,15 @@ export function HighlightsPanel() {
           </Button>
         </Box>
       </Popover>
+
+      {/* Name Prompt Modal */}
+      <NamePromptModal
+        open={showNamePromptModal}
+        onClose={() => setShowNamePromptModal(false)}
+        onNameSet={() => {
+          // Name was set, modal will close automatically
+        }}
+      />
     </Box>
   );
 }

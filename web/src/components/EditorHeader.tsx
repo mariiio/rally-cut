@@ -1,63 +1,71 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Box,
   Typography,
   IconButton,
-  Button,
   Stack,
   Tooltip,
   Divider,
-  Menu,
-  MenuItem,
-  ListItemIcon,
-  ListItemText,
   Select,
   SelectChangeEvent,
   Snackbar,
   Alert,
+  Menu,
+  MenuItem,
+  ListItemIcon,
+  ListItemText,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
 } from '@mui/material';
 import SportsVolleyballIcon from '@mui/icons-material/SportsVolleyball';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
-import DownloadIcon from '@mui/icons-material/Download';
-import FileOpenIcon from '@mui/icons-material/FileOpen';
 import RestoreIcon from '@mui/icons-material/Restore';
-import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
-import HomeIcon from '@mui/icons-material/Home';
+import AddIcon from '@mui/icons-material/Add';
+import ShareIcon from '@mui/icons-material/Share';
+import PeopleIcon from '@mui/icons-material/People';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
+import DeleteIcon from '@mui/icons-material/Delete';
+import Chip from '@mui/material/Chip';
 import { useEditorStore } from '@/stores/editorStore';
 import { useUploadStore } from '@/stores/uploadStore';
-import {
-  parseRallyJson,
-  downloadRallyJson,
-  isValidVideoFile,
-  isJsonFile,
-} from '@/utils/fileHandlers';
+import { isValidVideoFile } from '@/utils/fileHandlers';
+import { deleteSession } from '@/services/api';
 import { designTokens } from '@/app/theme';
 import { ConfirmDialog } from './ConfirmDialog';
 import { SyncStatus } from './SyncStatus';
+import { AddVideoModal } from './AddVideoModal';
+import { ShareModal } from './ShareModal';
 
 export function EditorHeader() {
+  const router = useRouter();
   const videoInputRef = useRef<HTMLInputElement>(null);
-  const jsonInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
-  const [exportAnchorEl, setExportAnchorEl] = useState<null | HTMLElement>(null);
   const [showResetDialog, setShowResetDialog] = useState(false);
+  const [showAddVideoModal, setShowAddVideoModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const {
     session,
     activeMatchId,
+    userRole,
     setActiveMatch,
-    loadRalliesFromJson,
-    exportToJson,
-    rallies,
     undo,
     redo,
     resetToOriginal,
     canUndo,
     canRedo,
     hasChangesFromOriginal,
+    reloadSession,
   } = useEditorStore();
 
   const { isUploading, uploadVideo } = useUploadStore();
@@ -80,50 +88,8 @@ export function EditorHeader() {
 
     const success = await uploadVideo(session.id, file);
     if (success) {
-      // Reload page to fetch updated session with new video
-      window.location.reload();
+      await reloadSession();
     }
-  };
-
-  // Expose upload trigger for VideoPlayer empty state
-  const triggerVideoUpload = () => {
-    if (!isUploading) {
-      videoInputRef.current?.click();
-    }
-  };
-
-  // Store the trigger function globally so VideoPlayer can access it
-  if (typeof window !== 'undefined') {
-    (window as unknown as { triggerVideoUpload?: () => void }).triggerVideoUpload = triggerVideoUpload;
-  }
-
-  const handleJsonUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!isJsonFile(file)) {
-      setError('Please select a JSON file.');
-      return;
-    }
-
-    try {
-      const json = await parseRallyJson(file);
-      loadRalliesFromJson(json);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to parse JSON');
-    }
-
-    e.target.value = '';
-  };
-
-  const handleExport = () => {
-    const data = exportToJson();
-    if (data) {
-      downloadRallyJson(data, 'rallies_edited.json');
-    } else {
-      setError('No data to export. Load a rallies JSON first.');
-    }
-    setExportAnchorEl(null);
   };
 
   const handleMatchChange = (event: SelectChangeEvent<string>) => {
@@ -132,6 +98,37 @@ export function EditorHeader() {
 
   const isMac = typeof navigator !== 'undefined' && navigator.platform.includes('Mac');
   const modKey = isMac ? '⌘' : 'Ctrl';
+
+  const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
+    setMenuAnchor(event.currentTarget);
+  };
+
+  const handleMenuClose = () => {
+    setMenuAnchor(null);
+  };
+
+  const handleDeleteClick = () => {
+    handleMenuClose();
+    setShowDeleteDialog(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!session) return;
+    try {
+      setDeleting(true);
+      await deleteSession(session.id);
+      setShowDeleteDialog(false);
+      router.push('/');
+    } catch (err) {
+      console.error('Failed to delete session:', err);
+      setError('Failed to delete session');
+      setDeleting(false);
+    }
+  };
+
+  const handleDeleteCancel = () => {
+    setShowDeleteDialog(false);
+  };
 
   return (
     <>
@@ -150,29 +147,48 @@ export function EditorHeader() {
           flexShrink: 0,
         }}
       >
-        {/* Brand */}
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ minWidth: 'fit-content' }}>
-          <SportsVolleyballIcon
+        {/* Brand - Clickable to go home */}
+        <Tooltip title="Back to home">
+          <Stack
+            direction="row"
+            alignItems="center"
+            spacing={1}
+            onClick={() => router.push('/')}
             sx={{
-              fontSize: 28,
-              color: 'primary.main',
-              filter: 'drop-shadow(0 2px 4px rgba(255, 107, 74, 0.3))',
-            }}
-          />
-          <Typography
-            variant="h6"
-            sx={{
-              fontWeight: 700,
-              background: designTokens.gradients.primary,
-              backgroundClip: 'text',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              letterSpacing: '-0.02em',
+              minWidth: 'fit-content',
+              cursor: 'pointer',
+              borderRadius: 1,
+              px: 1,
+              py: 0.5,
+              mx: -1,
+              transition: 'background-color 0.2s',
+              '&:hover': {
+                bgcolor: 'action.hover',
+              },
             }}
           >
-            RallyCut
-          </Typography>
-        </Stack>
+            <SportsVolleyballIcon
+              sx={{
+                fontSize: 28,
+                color: 'primary.main',
+                filter: 'drop-shadow(0 2px 4px rgba(255, 107, 74, 0.3))',
+              }}
+            />
+            <Typography
+              variant="h6"
+              sx={{
+                fontWeight: 700,
+                background: designTokens.gradients.primary,
+                backgroundClip: 'text',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                letterSpacing: '-0.02em',
+              }}
+            >
+              RallyCut
+            </Typography>
+          </Stack>
+        </Tooltip>
 
         <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
 
@@ -214,8 +230,33 @@ export function EditorHeader() {
                 </Typography>
               )}
 
+              {/* Add Video Button */}
+              <Tooltip title="Add video">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={() => setShowAddVideoModal(true)}
+                    disabled={isUploading}
+                    sx={{ color: 'text.secondary' }}
+                  >
+                    <AddIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+
               {/* Sync Status Indicator */}
               <SyncStatus />
+
+              {/* Shared badge for members */}
+              {userRole === 'member' && (
+                <Chip
+                  icon={<PeopleIcon />}
+                  label="Shared"
+                  size="small"
+                  variant="outlined"
+                  sx={{ ml: 1 }}
+                />
+              )}
             </>
           ) : (
             <Typography variant="body2" sx={{ color: 'text.disabled' }}>
@@ -223,6 +264,22 @@ export function EditorHeader() {
             </Typography>
           )}
         </Stack>
+
+        {/* Share Button (only for owners) */}
+        {session && userRole === 'owner' && (
+          <>
+            <Tooltip title="Share session">
+              <IconButton
+                size="small"
+                onClick={() => setShowShareModal(true)}
+                sx={{ color: 'text.secondary' }}
+              >
+                <ShareIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
+          </>
+        )}
 
         {/* History Controls */}
         <Stack direction="row" spacing={0.5} alignItems="center">
@@ -265,61 +322,24 @@ export function EditorHeader() {
 
         <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
 
-        {/* Actions */}
-        <Stack direction="row" spacing={1} alignItems="center">
-          {/* Export Button */}
-          <Button
-            variant="outlined"
+        {/* Options Menu */}
+        <Tooltip title="Options">
+          <IconButton
             size="small"
-            onClick={(e) => setExportAnchorEl(e.currentTarget)}
-            disabled={!rallies || rallies.length === 0}
-            startIcon={<DownloadIcon />}
-            endIcon={<KeyboardArrowDownIcon />}
-            sx={{ minWidth: 100 }}
+            onClick={handleMenuOpen}
+            sx={{ color: 'text.secondary' }}
           >
-            Export
-          </Button>
-          <Menu
-            anchorEl={exportAnchorEl}
-            open={Boolean(exportAnchorEl)}
-            onClose={() => setExportAnchorEl(null)}
-            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-            transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-          >
-            <MenuItem onClick={handleExport}>
-              <ListItemIcon>
-                <FileOpenIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText>Export JSON</ListItemText>
-            </MenuItem>
-          </Menu>
-
-          {/* Home Button */}
-          <Tooltip title="Back to sessions">
-            <IconButton
-              size="small"
-              onClick={() => window.location.href = '/'}
-              sx={{ color: 'text.secondary' }}
-            >
-              <HomeIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </Stack>
+            <MoreVertIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
       </Box>
 
-      {/* Hidden file inputs */}
+      {/* Hidden file input */}
       <input
         type="file"
         ref={videoInputRef}
         onChange={handleVideoUpload}
         accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
-        style={{ display: 'none' }}
-      />
-      <input
-        type="file"
-        ref={jsonInputRef}
-        onChange={handleJsonUpload}
-        accept="application/json,.json"
         style={{ display: 'none' }}
       />
 
@@ -345,6 +365,91 @@ export function EditorHeader() {
         onConfirm={resetToOriginal}
         onCancel={() => setShowResetDialog(false)}
       />
+
+      {/* Add Video Modal */}
+      {session && (
+        <AddVideoModal
+          open={showAddVideoModal}
+          onClose={() => setShowAddVideoModal(false)}
+          sessionId={session.id}
+          existingVideoIds={session.matches.map((m) => m.id)}
+          onVideoAdded={() => reloadSession()}
+        />
+      )}
+
+      {/* Share Modal */}
+      {session && (
+        <ShareModal
+          open={showShareModal}
+          onClose={() => setShowShareModal(false)}
+          sessionId={session.id}
+          sessionName={session.name}
+        />
+      )}
+
+      {/* Options Menu */}
+      <Menu
+        anchorEl={menuAnchor}
+        open={Boolean(menuAnchor)}
+        onClose={handleMenuClose}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+        slotProps={{
+          paper: {
+            sx: {
+              minWidth: 180,
+              bgcolor: designTokens.colors.surface[3],
+              border: '1px solid',
+              borderColor: 'divider',
+            },
+          },
+        }}
+      >
+        <MenuItem
+          onClick={handleDeleteClick}
+          sx={{
+            color: 'error.main',
+            '&:hover': {
+              bgcolor: 'rgba(239, 68, 68, 0.1)',
+            },
+          }}
+        >
+          <ListItemIcon>
+            <DeleteIcon fontSize="small" sx={{ color: 'error.main' }} />
+          </ListItemIcon>
+          <ListItemText>Delete session</ListItemText>
+        </MenuItem>
+      </Menu>
+
+      {/* Delete Session Confirmation Dialog */}
+      <Dialog
+        open={showDeleteDialog}
+        onClose={handleDeleteCancel}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle sx={{ pb: 1 }}>
+          Delete session?
+        </DialogTitle>
+        <DialogContent>
+          <Typography color="text.secondary">
+            Are you sure you want to delete <strong>{session?.name}</strong>? This action cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={handleDeleteCancel} disabled={deleting}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleDeleteConfirm}
+            variant="contained"
+            color="error"
+            disabled={deleting}
+          >
+            {deleting ? 'Deleting...' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 }

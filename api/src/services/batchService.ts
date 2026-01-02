@@ -1,31 +1,31 @@
 import { prisma } from "../lib/prisma.js";
-import { deleteObject } from "../lib/s3.js";
 import { NotFoundError, ValidationError } from "../middleware/errorHandler.js";
 import type { BatchOperation, BatchResponse } from "../schemas/batch.js";
 
 export async function processBatch(
   sessionId: string,
+  userId: string | undefined,
   operations: BatchOperation[]
 ): Promise<BatchResponse> {
-  const session = await prisma.session.findUnique({
-    where: { id: sessionId },
-  });
+  const where = userId ? { id: sessionId, userId } : { id: sessionId };
+
+  const session = await prisma.session.findFirst({ where });
 
   if (session === null) {
     throw new NotFoundError("Session", sessionId);
   }
 
   const created: Record<string, string> = {};
-  const s3KeysToDelete: string[] = [];
 
   await prisma.$transaction(async (tx) => {
     for (const op of operations) {
       if (op.type === "create") {
         if (op.entity === "rally") {
-          const video = await tx.video.findFirst({
-            where: { id: op.data.videoId, sessionId },
+          // Check video is in this session via junction
+          const sessionVideo = await tx.sessionVideo.findFirst({
+            where: { sessionId, videoId: op.data.videoId },
           });
-          if (video === null) {
+          if (sessionVideo === null) {
             throw new ValidationError(
               `Video ${op.data.videoId} not found in session`
             );
@@ -60,10 +60,11 @@ export async function processBatch(
         }
       } else if (op.type === "update") {
         if (op.entity === "video") {
-          const video = await tx.video.findFirst({
-            where: { id: op.id, sessionId },
+          // Check video is in this session via junction
+          const sessionVideo = await tx.sessionVideo.findFirst({
+            where: { sessionId, videoId: op.id },
           });
-          if (video === null) {
+          if (sessionVideo === null) {
             throw new ValidationError(`Video ${op.id} not found in session`);
           }
           await tx.video.update({
@@ -74,7 +75,9 @@ export async function processBatch(
           const rally = await tx.rally.findFirst({
             where: {
               id: op.id,
-              video: { sessionId },
+              video: {
+                sessionVideos: { some: { sessionId } },
+              },
             },
           });
           if (rally === null) {
@@ -100,19 +103,22 @@ export async function processBatch(
         }
       } else if (op.type === "delete") {
         if (op.entity === "video") {
-          const video = await tx.video.findFirst({
-            where: { id: op.id, sessionId },
+          // In batch context, delete = remove from session (not delete video)
+          const sessionVideo = await tx.sessionVideo.findFirst({
+            where: { sessionId, videoId: op.id },
           });
-          if (video === null) {
+          if (sessionVideo === null) {
             throw new ValidationError(`Video ${op.id} not found in session`);
           }
-          s3KeysToDelete.push(video.s3Key);
-          await tx.video.delete({ where: { id: op.id } });
+          // Remove from session, video remains in library
+          await tx.sessionVideo.delete({ where: { id: sessionVideo.id } });
         } else if (op.entity === "rally") {
           const rally = await tx.rally.findFirst({
             where: {
               id: op.id,
-              video: { sessionId },
+              video: {
+                sessionVideos: { some: { sessionId } },
+              },
             },
           });
           if (rally === null) {
@@ -145,19 +151,21 @@ export async function processBatch(
         }
       } else if (op.type === "reorder") {
         if (op.entity === "video") {
+          // Reorder updates SessionVideo.order, not Video.order
           for (let i = 0; i < op.order.length; i++) {
             const videoId = op.order[i];
             if (videoId === undefined) continue;
-            await tx.video.updateMany({
-              where: { id: videoId, sessionId },
+            await tx.sessionVideo.updateMany({
+              where: { sessionId, videoId },
               data: { order: i },
             });
           }
         } else if (op.entity === "rally") {
-          const video = await tx.video.findFirst({
-            where: { id: op.parentId, sessionId },
+          // Check video is in session
+          const sessionVideo = await tx.sessionVideo.findFirst({
+            where: { sessionId, videoId: op.parentId },
           });
-          if (video === null) {
+          if (sessionVideo === null) {
             throw new ValidationError(
               `Video ${op.parentId} not found in session`
             );
@@ -200,7 +208,9 @@ export async function processBatch(
         const rally = await tx.rally.findFirst({
           where: {
             id: op.rallyId,
-            video: { sessionId },
+            video: {
+              sessionVideos: { some: { sessionId } },
+            },
           },
         });
         if (rally === null) {
@@ -228,8 +238,6 @@ export async function processBatch(
       data: { updatedAt: new Date() },
     });
   });
-
-  await Promise.all(s3KeysToDelete.map((key) => deleteObject(key)));
 
   return {
     success: true,

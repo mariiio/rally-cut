@@ -48,12 +48,16 @@ export async function deleteObject(key: string): Promise<void> {
   await s3Client.send(command);
 }
 
+/**
+ * Generate S3 key for a video file.
+ * Pattern: videos/{userId}/{videoId}/{filename}
+ */
 export function getVideoS3Key(
-  sessionId: string,
+  userId: string,
   videoId: string,
   filename: string
 ): string {
-  return `videos/${sessionId}/${videoId}/${filename}`;
+  return `videos/${userId}/${videoId}/${filename}`;
 }
 
 export function getAnalysisS3Key(videoId: string): string {

@@ -2,6 +2,18 @@
 
 import { createTheme, alpha } from '@mui/material/styles';
 
+// Extend MUI breakpoints with custom 'mobile' breakpoint
+declare module '@mui/material/styles' {
+  interface BreakpointOverrides {
+    xs: true;
+    mobile: true; // Custom phone-only breakpoint at 640px
+    sm: true;
+    md: true;
+    lg: true;
+    xl: true;
+  }
+}
+
 // Beach volleyball theme - Dark with sunset/ocean accents
 export const theme = createTheme({
   palette: {
@@ -177,6 +189,7 @@ export const theme = createTheme({
   breakpoints: {
     values: {
       xs: 0,
+      mobile: 640, // Phone-only breakpoint
       sm: 768,
       md: 1024,
       lg: 1440,
@@ -825,6 +838,26 @@ export const designTokens = {
     timeline: {
       normal: 240,
       expanded: 320,
+    },
+  },
+  // Mobile-specific design tokens
+  mobile: {
+    breakpoint: 640,
+    touchTarget: 44, // Minimum touch target size (Apple HIG)
+    bottomNav: {
+      height: 56,
+      safeAreaPadding: 'env(safe-area-inset-bottom)',
+    },
+    header: {
+      height: 56,
+    },
+    rallyItem: {
+      minHeight: 52,
+    },
+    miniTimeline: {
+      height: 80,
+      handleSize: 44,
+      windowDuration: 30, // seconds
     },
   },
 };

@@ -42,6 +42,8 @@ export interface Highlight {
   color: string;        // Hex color from palette (e.g., "#FF6B6B")
   rallyIds: string[];   // Array of rally IDs belonging to this highlight
   createdAt: number;    // Timestamp for ordering
+  createdByUserId?: string | null;  // User who created this highlight
+  createdByUserName?: string | null; // Name of user who created this highlight
 }
 
 /** A single match (video) within a session */
@@ -59,6 +61,7 @@ export interface Session {
   name: string;         // Display name
   matches: Match[];     // Collection of matches (videos)
   highlights: Highlight[]; // Cross-match highlights
+  userRole?: 'owner' | 'member' | null; // User's role in this session
 }
 
 /** Session manifest file structure (used for loading from static files) */

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { generateSignedCookies } from "../lib/cloudfront.js";
-import { deleteObject } from "../lib/s3.js";
+import { requireUser } from "../middleware/resolveUser.js";
 import { validateRequest } from "../middleware/validateRequest.js";
 import { batchRequestSchema } from "../schemas/batch.js";
 import { paginate, paginationSchema, uuidSchema } from "../schemas/common.js";
@@ -18,7 +18,13 @@ import {
   listSessions,
   updateSession,
 } from "../services/sessionService.js";
+import { listSharedSessions } from "../services/shareService.js";
 import { syncState } from "../services/syncService.js";
+import {
+  addVideoToSession,
+  removeVideoFromSession,
+  reorderSessionVideos,
+} from "../services/videoService.js";
 
 const router = Router();
 
@@ -27,7 +33,7 @@ router.post(
   validateRequest({ body: createSessionSchema }),
   async (req, res, next) => {
     try {
-      const session = await createSession(req.body);
+      const session = await createSession(req.body, req.userId);
       res.status(201).json(session);
     } catch (error) {
       next(error);
@@ -41,7 +47,7 @@ router.get(
   async (req, res, next) => {
     try {
       const pagination = paginationSchema.parse(req.query);
-      const { sessions, total } = await listSessions(pagination);
+      const { sessions, total } = await listSessions(pagination, req.userId);
       res.json(paginate(sessions, total, pagination));
     } catch (error) {
       next(error);
@@ -49,12 +55,22 @@ router.get(
   }
 );
 
+// Must be before /v1/sessions/:id to avoid route conflict
+router.get("/v1/sessions/shared", requireUser, async (req, res, next) => {
+  try {
+    const sessions = await listSharedSessions(req.userId!);
+    res.json({ data: sessions });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get(
   "/v1/sessions/:id",
   validateRequest({ params: z.object({ id: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      const session = await getSessionById(req.params.id);
+      const session = await getSessionById(req.params.id, req.userId);
       const cookies = generateSignedCookies(session.id);
 
       if (cookies !== null) {
@@ -84,7 +100,7 @@ router.patch(
   }),
   async (req, res, next) => {
     try {
-      const session = await updateSession(req.params.id, req.body);
+      const session = await updateSession(req.params.id, req.body, req.userId);
       res.json(session);
     } catch (error) {
       next(error);
@@ -97,10 +113,9 @@ router.delete(
   validateRequest({ params: z.object({ id: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      const s3Keys = await deleteSession(req.params.id);
-
-      await Promise.all(s3Keys.map((key) => deleteObject(key)));
-
+      // Note: Videos are NOT deleted when session is deleted
+      // They remain in the user's library
+      await deleteSession(req.params.id, req.userId);
       res.status(204).send();
     } catch (error) {
       next(error);
@@ -116,7 +131,11 @@ router.post(
   }),
   async (req, res, next) => {
     try {
-      const result = await processBatch(req.params.id, req.body.operations);
+      const result = await processBatch(
+        req.params.id,
+        req.userId,
+        req.body.operations
+      );
       res.json(result);
     } catch (error) {
       next(error);
@@ -132,8 +151,88 @@ router.post(
   }),
   async (req, res, next) => {
     try {
-      const result = await syncState(req.params.id, req.body);
+      const result = await syncState(req.params.id, req.userId, req.body);
       res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Session-Video junction management
+router.post(
+  "/v1/sessions/:sessionId/videos/:videoId",
+  validateRequest({
+    params: z.object({ sessionId: uuidSchema, videoId: uuidSchema }),
+    body: z.object({ order: z.number().int().nonnegative().optional() }).optional(),
+  }),
+  async (req, res, next) => {
+    try {
+      if (!req.userId) {
+        res.status(400).json({ error: "X-Visitor-Id header required" });
+        return;
+      }
+      const sessionVideo = await addVideoToSession(
+        req.params.sessionId,
+        req.params.videoId,
+        req.userId,
+        req.body?.order
+      );
+      res.status(201).json(sessionVideo);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.delete(
+  "/v1/sessions/:sessionId/videos/:videoId",
+  validateRequest({
+    params: z.object({ sessionId: uuidSchema, videoId: uuidSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      if (!req.userId) {
+        res.status(400).json({ error: "X-Visitor-Id header required" });
+        return;
+      }
+      await removeVideoFromSession(
+        req.params.sessionId,
+        req.params.videoId,
+        req.userId
+      );
+      res.status(204).send();
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.put(
+  "/v1/sessions/:sessionId/videos/reorder",
+  validateRequest({
+    params: z.object({ sessionId: uuidSchema }),
+    body: z.object({
+      videos: z.array(
+        z.object({
+          videoId: uuidSchema,
+          order: z.number().int().nonnegative(),
+        })
+      ),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      if (!req.userId) {
+        res.status(400).json({ error: "X-Visitor-Id header required" });
+        return;
+      }
+      await reorderSessionVideos(
+        req.params.sessionId,
+        req.userId,
+        req.body.videos
+      );
+      res.json({ success: true });
     } catch (error) {
       next(error);
     }

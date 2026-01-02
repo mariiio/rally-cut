@@ -43,6 +43,7 @@ export function RallyList() {
     getHighlightsForRally,
     videoFile,
     videoUrl,
+    reloadSession,
   } = useEditorStore();
   const { currentTime, seek } = usePlayerStore();
   const { isExporting, exportingRallyId, exportingAll, downloadRally, downloadAllRallies } = useExportStore();
@@ -134,15 +135,15 @@ export function RallyList() {
     setIsDeleting(true);
     try {
       await deleteVideo(matchToDelete.id);
-      // Reload page to fetch updated session
-      window.location.reload();
-    } catch (error) {
-      console.error('Failed to delete video:', error);
-      setIsDeleting(false);
+      await reloadSession();
       setShowDeleteDialog(false);
       setMatchToDelete(null);
+    } catch (error) {
+      console.error('Failed to delete video:', error);
+    } finally {
+      setIsDeleting(false);
     }
-  }, [matchToDelete]);
+  }, [matchToDelete, reloadSession]);
 
   const handleStartRename = useCallback((e: React.MouseEvent, match: Match) => {
     e.stopPropagation();
