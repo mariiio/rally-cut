@@ -57,6 +57,18 @@ src/
 - Keyboard shortcuts: Space (play/pause), J/K/L (speed), arrows (seek)
 - Highlight playback switches videos automatically
 
+### Video Loading Optimization
+For fast editing of large videos (15-20 min iPhone recordings):
+
+- **Local blob URL**: After upload, video plays instantly from browser memory
+- **720p proxy**: After processing (~30-60s), uses lightweight proxy for editing
+- **Poster**: 1280px thumbnail shown while video loads
+- **preload="metadata"**: Only fetches video metadata, not full file
+
+Priority in `VideoPlayer.tsx`: `localBlobUrl` → `proxyUrl` → `videoUrl`
+
+The `uploadStore` maintains `localVideoUrls` map (videoId → blob URL) for instant playback after upload. Cleared on page refresh, then proxy is used.
+
 ## Code Style
 
 - TypeScript strict mode
