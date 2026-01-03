@@ -22,11 +22,18 @@ export function VideoPlayer() {
   const isLoadingSession = useEditorStore((state) => state.isLoadingSession);
 
   // Get local blob URL if available (from recent upload)
-  const getLocalVideoUrl = useUploadStore((state) => state.getLocalVideoUrl);
-  const localVideoUrl = activeMatchId ? getLocalVideoUrl(activeMatchId) : undefined;
+  // Subscribe to localVideoUrls directly so component re-renders when it changes
+  const localVideoUrls = useUploadStore((state) => state.localVideoUrls);
+  const localVideoUrl = activeMatchId ? localVideoUrls.get(activeMatchId) : undefined;
 
   // Priority: local blob (instant) > proxy (fast) > full video
   const effectiveVideoUrl = localVideoUrl || proxyUrl || videoUrl;
+
+  // Debug: log which URL source is being used
+  if (process.env.NODE_ENV === 'development' && effectiveVideoUrl) {
+    const source = localVideoUrl ? 'LOCAL_BLOB' : proxyUrl ? 'PROXY' : 'ORIGINAL';
+    console.log(`[VideoPlayer] Using ${source}:`, effectiveVideoUrl?.substring(0, 50));
+  }
 
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const seekTo = usePlayerStore((state) => state.seekTo);
