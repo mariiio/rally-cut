@@ -158,25 +158,21 @@ def process_video(
         f"({reduction:.1f}% reduction)"
     )
 
-    # Generate proxy for PREMIUM tier (eager generation)
-    proxy_key = None
-    proxy_size_bytes = None
-    if tier == "PREMIUM":
-        proxy_path = tmpdir / "proxy.mp4"
-        proxy_key = f"{base_key}_proxy.mp4"
-        generate_proxy(output_path, proxy_path)
-        proxy_size_bytes = proxy_path.stat().st_size
-        print(f"Uploading proxy to {proxy_key}...")
-        s3_client.upload_file(
-            str(proxy_path),
-            s3_bucket,
-            proxy_key,
-            ExtraArgs={
-                "ContentType": "video/mp4",
-                "CacheControl": "public, max-age=31536000",
-                "Tagging": "tier=premium",
-            },
-        )
+    # Generate 720p proxy for fast editing (all tiers)
+    proxy_path = tmpdir / "proxy.mp4"
+    proxy_key = f"{base_key}_proxy.mp4"
+    generate_proxy(output_path, proxy_path)
+    proxy_size_bytes = proxy_path.stat().st_size
+    print(f"Uploading proxy to {proxy_key}...")
+    s3_client.upload_file(
+        str(proxy_path),
+        s3_bucket,
+        proxy_key,
+        ExtraArgs={
+            "ContentType": "video/mp4",
+            "CacheControl": "public, max-age=31536000",
+        },
+    )
 
     return {
         "status": "completed",

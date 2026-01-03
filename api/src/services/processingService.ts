@@ -10,7 +10,6 @@ import {
   generateDownloadUrl,
   uploadProcessedVideo,
   uploadPoster,
-  uploadProxyVideo,
 } from "../lib/s3.js";
 import { prisma } from "../lib/prisma.js";
 import { NotFoundError } from "../middleware/errorHandler.js";
@@ -391,30 +390,25 @@ async function triggerLocalProcessing(
     const outputData = await fs.readFile(outputPath);
     await uploadProcessedVideo(processedKey, outputData);
 
-    // Generate proxy for PREMIUM tier (eager generation)
-    let proxyKey: string | undefined;
-    let proxySizeBytes: number | undefined;
+    // Generate 720p proxy for fast editing (all tiers)
+    console.log(`[LOCAL PROCESSING] Generating 720p proxy...`);
+    await runFFmpeg([
+      "-i", outputPath,
+      "-vf", "scale=-2:720",
+      "-c:v", "libx264",
+      "-crf", "28",
+      "-preset", "fast",
+      "-movflags", "+faststart",
+      "-c:a", "aac",
+      "-b:a", "96k",
+      "-y", proxyPath,
+    ]);
 
-    if (tier === "PREMIUM") {
-      console.log(`[LOCAL PROCESSING] Generating 720p proxy for PREMIUM tier...`);
-      await runFFmpeg([
-        "-i", outputPath,
-        "-vf", "scale=-2:720",
-        "-c:v", "libx264",
-        "-crf", "28",
-        "-preset", "fast",
-        "-movflags", "+faststart",
-        "-c:a", "aac",
-        "-b:a", "96k",
-        "-y", proxyPath,
-      ]);
-
-      proxyKey = `${baseKey}_proxy.mp4`;
-      const proxyData = await fs.readFile(proxyPath);
-      proxySizeBytes = proxyData.length;
-      await uploadProxyVideo(proxyKey, proxyData, tier);
-      console.log(`[LOCAL PROCESSING] Uploaded proxy to ${proxyKey} (${(proxySizeBytes / 1024 / 1024).toFixed(1)} MB)`);
-    }
+    const proxyKey = `${baseKey}_proxy.mp4`;
+    const proxyData = await fs.readFile(proxyPath);
+    const proxySizeBytes = proxyData.length;
+    await uploadProcessedVideo(proxyKey, proxyData);
+    console.log(`[LOCAL PROCESSING] Uploaded proxy to ${proxyKey} (${(proxySizeBytes / 1024 / 1024).toFixed(1)} MB)`);
 
     // Update via webhook handler
     await handleProcessingComplete({

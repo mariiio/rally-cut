@@ -122,26 +122,3 @@ export async function uploadPoster(key: string, data: Buffer): Promise<void> {
 
   await upload.done();
 }
-
-/**
- * Upload a proxy video to S3 with tier tagging.
- */
-export async function uploadProxyVideo(
-  key: string,
-  data: Buffer,
-  tier: string
-): Promise<void> {
-  const upload = new Upload({
-    client: s3Client,
-    params: {
-      Bucket: env.S3_BUCKET_NAME,
-      Key: key,
-      Body: data,
-      ContentType: "video/mp4",
-      CacheControl: "public, max-age=31536000", // 1 year
-      Tagging: `tier=${tier.toLowerCase()}`,
-    },
-  });
-
-  await upload.done();
-}
