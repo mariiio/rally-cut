@@ -125,6 +125,7 @@ export function Timeline() {
     playOnlyRallies,
     togglePlayOnlyRallies,
     playingHighlightId,
+    bufferedRanges,
   } = usePlayerStore();
   const timelineRef = useRef<TimelineState>(null);
   const timelineContainerRef = useRef<HTMLDivElement>(null);
@@ -1089,6 +1090,54 @@ export function Timeline() {
           },
         }}
       >
+        {/* Buffer progress bar - shows which parts of video are loaded */}
+        {duration > 0 && (
+          <Box
+            sx={{
+              position: 'absolute',
+              left: 10, // matches startLeft
+              right: 10,
+              top: 32, // below the time markers
+              height: 3,
+              bgcolor: 'rgba(255,255,255,0.08)',
+              borderRadius: 1,
+              overflow: 'hidden',
+              zIndex: 5,
+            }}
+          >
+            {bufferedRanges.map((range, index) => {
+              const startPercent = (range.start / duration) * 100;
+              const widthPercent = ((range.end - range.start) / duration) * 100;
+              return (
+                <Box
+                  key={index}
+                  sx={{
+                    position: 'absolute',
+                    left: `${startPercent}%`,
+                    width: `${widthPercent}%`,
+                    height: '100%',
+                    bgcolor: 'rgba(255,255,255,0.25)',
+                    borderRadius: 1,
+                    transition: 'width 0.3s ease-out',
+                  }}
+                />
+              );
+            })}
+            {/* Played progress overlay */}
+            <Box
+              sx={{
+                position: 'absolute',
+                left: 0,
+                width: `${(currentTime / duration) * 100}%`,
+                height: '100%',
+                bgcolor: 'primary.main',
+                opacity: 0.6,
+                borderRadius: 1,
+              }}
+            />
+          </Box>
+        )}
+
         <TimelineEditor
           ref={timelineRef}
           editorData={editorData}

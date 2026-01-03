@@ -8,6 +8,12 @@ interface PlaylistRally {
   end_time: number;
 }
 
+// Buffered time range
+interface BufferedRange {
+  start: number;
+  end: number;
+}
+
 interface PlayerState {
   isPlaying: boolean;
   currentTime: number;
@@ -15,6 +21,7 @@ interface PlayerState {
   isReady: boolean;
   seekTo: number | null; // When set, player should seek to this time
   playOnlyRallies: boolean; // Skip dead time between rallies
+  bufferedRanges: BufferedRange[]; // Which parts of the video are buffered
 
   // Highlight playback state
   playingHighlightId: string | null;
@@ -31,6 +38,7 @@ interface PlayerState {
   setCurrentTime: (time: number) => void;
   setDuration: (duration: number) => void;
   setReady: (ready: boolean) => void;
+  setBufferedRanges: (ranges: BufferedRange[]) => void;
   togglePlayOnlyRallies: () => void;
 
   // Highlight playback actions
@@ -49,6 +57,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   isReady: false,
   seekTo: null,
   playOnlyRallies: false,
+  bufferedRanges: [],
 
   // Highlight playback state
   playingHighlightId: null,
@@ -72,6 +81,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   setCurrentTime: (time: number) => set({ currentTime: time }),
   setDuration: (duration: number) => set({ duration }),
   setReady: (ready: boolean) => set({ isReady: ready }),
+  setBufferedRanges: (ranges) => set({ bufferedRanges: ranges }),
   togglePlayOnlyRallies: () => set((state) => ({ playOnlyRallies: !state.playOnlyRallies })),
 
   // Highlight playback actions
