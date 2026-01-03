@@ -26,23 +26,26 @@ export async function createRally(videoId: string, data: CreateRallyInput) {
     throw new NotFoundError("Video", videoId);
   }
 
-  const maxOrder = await prisma.rally.aggregate({
-    where: { videoId },
-    _max: { order: true },
-  });
+  // Use MAX(order) + 1 in a transaction to prevent order collisions
+  return prisma.$transaction(async (tx) => {
+    const maxOrder = await tx.rally.aggregate({
+      where: { videoId },
+      _max: { order: true },
+    });
 
-  return prisma.rally.create({
-    data: {
-      videoId,
-      startMs: data.startMs,
-      endMs: data.endMs,
-      confidence: data.confidence,
-      scoreA: data.scoreA,
-      scoreB: data.scoreB,
-      servingTeam: data.servingTeam,
-      notes: data.notes,
-      order: (maxOrder._max.order ?? -1) + 1,
-    },
+    return tx.rally.create({
+      data: {
+        videoId,
+        startMs: data.startMs,
+        endMs: data.endMs,
+        confidence: data.confidence,
+        scoreA: data.scoreA,
+        scoreB: data.scoreB,
+        servingTeam: data.servingTeam,
+        notes: data.notes,
+        order: (maxOrder._max.order ?? -1) + 1,
+      },
+    });
   });
 }
 

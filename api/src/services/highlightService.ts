@@ -136,18 +136,21 @@ export async function addRallyToHighlight(
     throw new ConflictError("Rally already in highlight");
   }
 
-  const maxOrder = await prisma.highlightRally.aggregate({
-    where: { highlightId },
-    _max: { order: true },
-  });
+  // Use MAX(order) + 1 in a transaction to prevent order collisions
+  return prisma.$transaction(async (tx) => {
+    const maxOrder = await tx.highlightRally.aggregate({
+      where: { highlightId },
+      _max: { order: true },
+    });
 
-  return prisma.highlightRally.create({
-    data: {
-      highlightId,
-      rallyId: data.rallyId,
-      order: data.order ?? (maxOrder._max.order ?? -1) + 1,
-    },
-    include: { rally: true },
+    return tx.highlightRally.create({
+      data: {
+        highlightId,
+        rallyId: data.rallyId,
+        order: data.order ?? (maxOrder._max.order ?? -1) + 1,
+      },
+      include: { rally: true },
+    });
   });
 }
 

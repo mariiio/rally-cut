@@ -5,7 +5,6 @@ import type {
   CreateSessionInput,
   UpdateSessionInput,
 } from "../schemas/session.js";
-import { canAccessSession } from "./shareService.js";
 import { getUserTier, calculateExpirationDate } from "./tierService.js";
 
 const ALL_VIDEOS_SESSION_NAME = "All Videos";
@@ -95,16 +94,7 @@ export async function listSessions(pagination: Pagination, userId?: string) {
 }
 
 export async function getSessionById(id: string, userId?: string) {
-  // Check access if userId is provided
-  let userRole: "owner" | "member" | null = null;
-  if (userId) {
-    const access = await canAccessSession(id, userId);
-    if (!access.hasAccess) {
-      throw new NotFoundError("Session", id);
-    }
-    userRole = access.role;
-  }
-
+  // Combined query: fetch session with all related data + access check in one query
   const session = await prisma.session.findFirst({
     where: { id, deletedAt: null },
     include: {
@@ -143,11 +133,35 @@ export async function getSessionById(id: string, userId?: string) {
           name: true,
         },
       },
+      // Include share membership check for access validation (always include for consistent type)
+      share: {
+        include: {
+          members: userId
+            ? {
+                where: { userId },
+                select: { id: true },
+              }
+            : false,
+        },
+      },
     },
   });
 
   if (session === null) {
     throw new NotFoundError("Session", id);
+  }
+
+  // Compute user role from combined query result
+  let userRole: "owner" | "member" | null = null;
+  if (userId) {
+    if (session.userId === userId) {
+      userRole = "owner";
+    } else if (session.share?.members && session.share.members.length > 0) {
+      userRole = "member";
+    } else {
+      // User has no access
+      throw new NotFoundError("Session", id);
+    }
   }
 
   // Transform to expected format with videos array
@@ -160,8 +174,8 @@ export async function getSessionById(id: string, userId?: string) {
     })),
   };
 
-  // Remove sessionVideos from response (replaced by videos)
-  const { sessionVideos: _, ...result } = transformed;
+  // Remove sessionVideos and share from response (sessionVideos replaced by videos, share was for access check)
+  const { sessionVideos: _, share: __, ...result } = transformed;
 
   // Convert BigInt fields to strings for JSON serialization
   return serializeBigInts(result);

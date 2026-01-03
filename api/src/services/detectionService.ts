@@ -212,10 +212,12 @@ export async function triggerRallyDetection(videoId: string, userId: string) {
 
   // Quota is now reserved - proceed with detection
 
+  // Check for existing job with same contentHash (completed, pending, or running)
+  // This prevents duplicate ML processing for the same content
   const existingJob = await prisma.rallyDetectionJob.findFirst({
     where: {
       contentHash: video.contentHash,
-      status: "COMPLETED",
+      status: { in: ["COMPLETED", "PENDING", "RUNNING"] },
     },
     include: {
       video: {
@@ -224,27 +226,45 @@ export async function triggerRallyDetection(videoId: string, userId: string) {
         },
       },
     },
+    orderBy: { createdAt: "desc" },
   });
 
   if (existingJob !== null) {
-    await prisma.$transaction(async (tx) => {
-      const rallies = existingJob.video.rallies.map((r, index) => ({
-        videoId,
-        startMs: r.startMs,
-        endMs: r.endMs,
-        confidence: r.confidence,
-        order: index,
-      }));
+    if (existingJob.status === "COMPLETED") {
+      // Reuse cached results from completed job
+      await prisma.$transaction(async (tx) => {
+        const rallies = existingJob.video.rallies.map((r, index) => ({
+          videoId,
+          startMs: r.startMs,
+          endMs: r.endMs,
+          confidence: r.confidence,
+          order: index,
+        }));
 
-      await tx.rally.createMany({ data: rallies });
-      await tx.video.update({
-        where: { id: videoId },
-        data: { status: "DETECTED" },
+        await tx.rally.createMany({ data: rallies });
+        await tx.video.update({
+          where: { id: videoId },
+          data: { status: "DETECTED" },
+        });
       });
+
+      // Quota was already reserved atomically above - no separate increment needed
+      return { jobId: existingJob.id, status: "completed", cached: true };
+    }
+
+    // Job is PENDING or RUNNING - link this video to the existing job
+    // Update video status to DETECTING and return the existing job
+    await prisma.video.update({
+      where: { id: videoId },
+      data: { status: "DETECTING" },
     });
 
-    // Quota was already reserved atomically above - no separate increment needed
-    return { jobId: existingJob.id, status: "completed", cached: true };
+    return {
+      jobId: existingJob.id,
+      status: existingJob.status.toLowerCase() as "pending" | "running",
+      cached: false,
+      shared: true, // Indicates this video is sharing detection with another
+    };
   }
 
   const job = await prisma.$transaction(async (tx) => {

@@ -280,3 +280,85 @@ export async function incrementUploadUsage(userId: string): Promise<void> {
     },
   });
 }
+
+/**
+ * Atomically check quota and reserve an upload slot.
+ * Returns the quota result with the reserved slot already counted.
+ *
+ * This prevents race conditions where two concurrent uploads both pass
+ * the quota check before either increments.
+ */
+export async function checkAndReserveUploadQuota(
+  userId: string,
+  tierLimits: TierLimits
+): Promise<UploadQuotaResult> {
+  // Use a transaction to atomically check and reserve
+  return prisma.$transaction(async (tx) => {
+    const monthStart = getMonthStart();
+
+    // Get or create quota, resetting if new month
+    let quota = await tx.userUsageQuota.findUnique({
+      where: { userId },
+    });
+
+    if (!quota) {
+      quota = await tx.userUsageQuota.create({
+        data: {
+          userId,
+          periodStart: monthStart,
+          uploadsThisMonth: 0,
+        },
+      });
+    } else if (quota.periodStart < monthStart) {
+      // Reset for new month
+      quota = await tx.userUsageQuota.update({
+        where: { userId },
+        data: {
+          periodStart: monthStart,
+          uploadsThisMonth: 0,
+        },
+      });
+    }
+
+    // Null limit means unlimited - just increment and return
+    if (tierLimits.monthlyUploadCount === null) {
+      const updated = await tx.userUsageQuota.update({
+        where: { userId },
+        data: {
+          uploadsThisMonth: { increment: 1 },
+        },
+      });
+      return {
+        allowed: true,
+        used: updated.uploadsThisMonth,
+        limit: null,
+        remaining: null,
+      };
+    }
+
+    // Check if we can reserve a slot
+    if (quota.uploadsThisMonth >= tierLimits.monthlyUploadCount) {
+      return {
+        allowed: false,
+        used: quota.uploadsThisMonth,
+        limit: tierLimits.monthlyUploadCount,
+        remaining: 0,
+      };
+    }
+
+    // Atomically increment and return the updated quota
+    const updated = await tx.userUsageQuota.update({
+      where: { userId },
+      data: {
+        uploadsThisMonth: { increment: 1 },
+      },
+    });
+
+    return {
+      allowed: true,
+      used: updated.uploadsThisMonth,
+      limit: tierLimits.monthlyUploadCount,
+      remaining: Math.max(0, tierLimits.monthlyUploadCount - updated.uploadsThisMonth),
+    };
+  });
+}

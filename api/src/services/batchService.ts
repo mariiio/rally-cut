@@ -18,18 +18,25 @@ export async function processBatch(
   const created: Record<string, string> = {};
 
   await prisma.$transaction(async (tx) => {
+    // Pre-fetch all sessionVideos for this session to avoid N+1 queries
+    const sessionVideos = await tx.sessionVideo.findMany({
+      where: { sessionId },
+      select: { videoId: true },
+    });
+    const sessionVideoIds = new Set(sessionVideos.map((sv) => sv.videoId));
+
+    // Helper to validate video is in session (O(1) lookup)
+    const validateVideoInSession = (videoId: string) => {
+      if (!sessionVideoIds.has(videoId)) {
+        throw new ValidationError(`Video ${videoId} not found in session`);
+      }
+    };
+
     for (const op of operations) {
       if (op.type === "create") {
         if (op.entity === "rally") {
-          // Check video is in this session via junction
-          const sessionVideo = await tx.sessionVideo.findFirst({
-            where: { sessionId, videoId: op.data.videoId },
-          });
-          if (sessionVideo === null) {
-            throw new ValidationError(
-              `Video ${op.data.videoId} not found in session`
-            );
-          }
+          // Check video is in this session via pre-fetched set
+          validateVideoInSession(op.data.videoId);
           const maxOrder = await tx.rally.aggregate({
             where: { videoId: op.data.videoId },
             _max: { order: true },
@@ -60,13 +67,8 @@ export async function processBatch(
         }
       } else if (op.type === "update") {
         if (op.entity === "video") {
-          // Check video is in this session via junction
-          const sessionVideo = await tx.sessionVideo.findFirst({
-            where: { sessionId, videoId: op.id },
-          });
-          if (sessionVideo === null) {
-            throw new ValidationError(`Video ${op.id} not found in session`);
-          }
+          // Check video is in this session via pre-fetched set
+          validateVideoInSession(op.id);
           await tx.video.update({
             where: { id: op.id },
             data: op.data,
@@ -104,14 +106,11 @@ export async function processBatch(
       } else if (op.type === "delete") {
         if (op.entity === "video") {
           // In batch context, delete = remove from session (not delete video)
-          const sessionVideo = await tx.sessionVideo.findFirst({
-            where: { sessionId, videoId: op.id },
-          });
-          if (sessionVideo === null) {
-            throw new ValidationError(`Video ${op.id} not found in session`);
-          }
+          validateVideoInSession(op.id);
           // Remove from session, video remains in library
-          await tx.sessionVideo.delete({ where: { id: sessionVideo.id } });
+          await tx.sessionVideo.deleteMany({ where: { sessionId, videoId: op.id } });
+          // Update our cached set
+          sessionVideoIds.delete(op.id);
         } else if (op.entity === "rally") {
           const rally = await tx.rally.findFirst({
             where: {
@@ -161,15 +160,8 @@ export async function processBatch(
             });
           }
         } else if (op.entity === "rally") {
-          // Check video is in session
-          const sessionVideo = await tx.sessionVideo.findFirst({
-            where: { sessionId, videoId: op.parentId },
-          });
-          if (sessionVideo === null) {
-            throw new ValidationError(
-              `Video ${op.parentId} not found in session`
-            );
-          }
+          // Check video is in session via pre-fetched set
+          validateVideoInSession(op.parentId);
           for (let i = 0; i < op.order.length; i++) {
             const rallyId = op.order[i];
             if (rallyId === undefined) continue;
