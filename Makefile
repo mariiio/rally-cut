@@ -91,6 +91,8 @@ dev:
 		echo "Created api/.env from .env.local.example"; \
 	fi
 	@make dev-db dev-minio
+	@echo "Running database migrations..."
+	@cd api && npx prisma migrate deploy
 	@echo ""
 	@echo "Starting RallyCut (local mode)..."
 	@echo ""

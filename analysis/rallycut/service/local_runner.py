@@ -27,12 +27,15 @@ import httpx
 
 def download_from_s3(s3_key: str, bucket: str, temp_dir: Path) -> Path:
     """Download video from S3 to temp directory."""
-    s3 = boto3.client(
-        "s3",
-        aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
-        region_name=os.environ.get("AWS_REGION", "us-east-1"),
-    )
+    s3_config = {
+        "aws_access_key_id": os.environ.get("AWS_ACCESS_KEY_ID"),
+        "aws_secret_access_key": os.environ.get("AWS_SECRET_ACCESS_KEY"),
+        "region_name": os.environ.get("AWS_REGION", "us-east-1"),
+    }
+    # Support MinIO/local S3 endpoint
+    if os.environ.get("S3_ENDPOINT"):
+        s3_config["endpoint_url"] = os.environ["S3_ENDPOINT"]
+    s3 = boto3.client("s3", **s3_config)
 
     filename = Path(s3_key).name
     local_path = temp_dir / filename
@@ -94,12 +97,15 @@ def save_results_to_s3(
 ) -> str | None:
     """Save detection results JSON to S3 alongside the video."""
     try:
-        s3 = boto3.client(
-            "s3",
-            aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
-            aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
-            region_name=os.environ.get("AWS_REGION", "us-east-1"),
-        )
+        s3_config = {
+            "aws_access_key_id": os.environ.get("AWS_ACCESS_KEY_ID"),
+            "aws_secret_access_key": os.environ.get("AWS_SECRET_ACCESS_KEY"),
+            "region_name": os.environ.get("AWS_REGION", "us-east-1"),
+        }
+        # Support MinIO/local S3 endpoint
+        if os.environ.get("S3_ENDPOINT"):
+            s3_config["endpoint_url"] = os.environ["S3_ENDPOINT"]
+        s3 = boto3.client("s3", **s3_config)
 
         # Store results in same folder as video
         video_dir = str(Path(video_s3_key).parent)

@@ -23,7 +23,8 @@ const envSchema = z.object({
   CLOUDFRONT_PRIVATE_KEY: z.string().default(""),
 
   MODAL_WEBHOOK_SECRET: z.string(),
-  MODAL_FUNCTION_URL: z.string().url(),
+  // Optional for local development (uses local Python subprocess)
+  MODAL_FUNCTION_URL: z.string().url().optional(),
 
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
 
