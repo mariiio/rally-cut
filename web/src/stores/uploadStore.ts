@@ -51,6 +51,45 @@ const MULTIPART_THRESHOLD = 100 * 1024 * 1024; // 100MB - use multipart above th
 const MAX_CONCURRENT_PARTS = 4; // Upload 4 parts in parallel
 
 /**
+ * Format file size for display (e.g., "1.2 GB", "350 MB")
+ */
+function formatFileSize(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  }
+  return `${Math.round(bytes / (1024 * 1024))} MB`;
+}
+
+/**
+ * Get a friendly upload message based on progress
+ */
+function getUploadMessage(progress: number, fileName: string, isMultipart: boolean, partsComplete?: number, totalParts?: number): string {
+  const shortName = fileName.length > 25 ? fileName.slice(0, 22) + '...' : fileName;
+
+  if (isMultipart && partsComplete !== undefined && totalParts !== undefined) {
+    // Multipart: show parts progress
+    if (partsComplete === 0) {
+      return `Starting upload for "${shortName}"`;
+    } else if (partsComplete < totalParts) {
+      return `Sending "${shortName}" (${partsComplete} of ${totalParts} parts)`;
+    } else {
+      return `Assembling "${shortName}"`;
+    }
+  }
+
+  // Single upload: vary message by progress
+  if (progress < 30) {
+    return `Starting upload for "${shortName}"`;
+  } else if (progress < 60) {
+    return `Sending "${shortName}"`;
+  } else if (progress < 85) {
+    return `Almost there with "${shortName}"`;
+  } else {
+    return `Finishing "${shortName}"`;
+  }
+}
+
+/**
  * Validate upload against tier limits.
  * Returns error message if validation fails, null if valid.
  */
@@ -136,7 +175,7 @@ async function uploadToS3Multipart(
   partUrls: string[],
   partSize: number,
   abortSignal: AbortSignal,
-  onProgress: (percent: number) => void
+  onProgress: (percent: number, partsComplete: number, totalParts: number) => void
 ): Promise<{ partNumber: number; etag: string }[]> {
   const parts: { partNumber: number; etag: string }[] = [];
   const totalParts = partUrls.length;
@@ -166,7 +205,7 @@ async function uploadToS3Multipart(
 
     completedParts++;
     const uploadProgress = Math.round((completedParts / totalParts) * PROGRESS_UPLOAD_RANGE);
-    onProgress(PROGRESS_UPLOAD_START + uploadProgress);
+    onProgress(PROGRESS_UPLOAD_START + uploadProgress, completedParts, totalParts);
   };
 
   // Process parts with concurrency limit
@@ -283,10 +322,13 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     }
 
     const abortController = new AbortController();
+    const shortName = file.name.length > 25 ? file.name.slice(0, 22) + '...' : file.name;
+    const fileSize = formatFileSize(file.size);
+
     set({
       isUploading: true,
       progress: 0,
-      currentStep: 'Analyzing video...',
+      currentStep: `Reading "${shortName}" (${fileSize})`,
       error: null,
       abortController,
     });
@@ -311,7 +353,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       // Choose upload method based on file size
       if (file.size > MULTIPART_THRESHOLD) {
         // Multipart upload for large files (100MB+)
-        set({ progress: PROGRESS_ANALYZE, currentStep: 'Preparing multipart upload...' });
+        set({ progress: PROGRESS_ANALYZE, currentStep: `Preparing "${shortName}" for upload` });
         const { videoId: vid, uploadId, partSize, partUrls } = await initiateMultipartUpload({
           filename: file.name,
           contentHash,
@@ -323,20 +365,27 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         if (abortController.signal.aborted) throw new Error('Upload cancelled');
 
         // Upload parts in parallel
-        set({ progress: PROGRESS_UPLOAD_START, currentStep: 'Uploading video...' });
+        const totalParts = partUrls.length;
+        set({
+          progress: PROGRESS_UPLOAD_START,
+          currentStep: getUploadMessage(PROGRESS_UPLOAD_START, file.name, true, 0, totalParts),
+        });
         try {
           const parts = await uploadToS3Multipart(
             file,
             partUrls,
             partSize,
             abortController.signal,
-            (progress) => set({ progress })
+            (progress, partsComplete, total) => set({
+              progress,
+              currentStep: getUploadMessage(progress, file.name, true, partsComplete, total),
+            })
           );
 
           if (abortController.signal.aborted) throw new Error('Upload cancelled');
 
           // Complete the multipart upload
-          set({ progress: PROGRESS_FINALIZE, currentStep: 'Finalizing...' });
+          set({ progress: PROGRESS_FINALIZE, currentStep: `Assembling "${shortName}"` });
           await completeMultipartUpload(videoId, uploadId, parts);
         } catch (err) {
           // Abort multipart upload on any error (cleanup S3 parts)
@@ -345,7 +394,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         }
       } else {
         // Single PUT upload for smaller files
-        set({ progress: PROGRESS_ANALYZE, currentStep: 'Preparing upload...' });
+        set({ progress: PROGRESS_ANALYZE, currentStep: `Preparing "${shortName}" for upload` });
         const { uploadUrl, videoId: vid } = await requestVideoUploadUrl({
           filename: file.name,
           contentHash,
@@ -357,13 +406,19 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         if (abortController.signal.aborted) throw new Error('Upload cancelled');
 
         // Upload to S3 with progress tracking
-        set({ progress: PROGRESS_UPLOAD_START, currentStep: 'Uploading video...' });
+        set({
+          progress: PROGRESS_UPLOAD_START,
+          currentStep: getUploadMessage(PROGRESS_UPLOAD_START, file.name, false),
+        });
         await uploadToS3(file, uploadUrl, abortController.signal, (progress) => {
-          set({ progress });
+          set({
+            progress,
+            currentStep: getUploadMessage(progress, file.name, false),
+          });
         });
 
         if (abortController.signal.aborted) throw new Error('Upload cancelled');
-        set({ progress: PROGRESS_FINALIZE, currentStep: 'Finalizing...' });
+        set({ progress: PROGRESS_FINALIZE, currentStep: `Saving "${shortName}"` });
       }
 
       // Confirm upload with API (user-scoped)
@@ -378,7 +433,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       set({
         isUploading: false,
         progress: 100,
-        currentStep: 'Upload complete',
+        currentStep: `"${shortName}" uploaded successfully`,
         abortController: null,
       });
 
