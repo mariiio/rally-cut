@@ -19,6 +19,7 @@ import {
   checkUploadQuota,
   incrementUploadUsage,
 } from "./tierService.js";
+import { queueVideoProcessing } from "./processingService.js";
 
 const MAX_VIDEOS_PER_SESSION = 5;
 
@@ -266,6 +267,12 @@ export async function confirmVideoUpload(
       },
     });
   }
+
+  // Queue video for optimization processing (async, non-blocking)
+  // Video is immediately playable; processing happens in background
+  queueVideoProcessing(videoId, userId).catch((error) => {
+    console.error(`[UPLOAD] Failed to queue processing for video ${videoId}:`, error);
+  });
 
   return serializeBigInts(updated);
 }
@@ -600,6 +607,11 @@ export async function confirmUpload(
       },
     });
   }
+
+  // Queue video for optimization processing (async, non-blocking)
+  queueVideoProcessing(data.videoId, userId).catch((error) => {
+    console.error(`[UPLOAD] Failed to queue processing for video ${data.videoId}:`, error);
+  });
 
   return serializeBigInts(updated);
 }

@@ -26,6 +26,9 @@ const envSchema = z.object({
   // Export Lambda (optional - export won't work without it)
   EXPORT_LAMBDA_FUNCTION_NAME: z.string().optional(),
   API_BASE_URL: z.string().default("http://localhost:3001"),
+
+  // Video Processing Lambda (optional - local FFmpeg used if not set)
+  PROCESSING_LAMBDA_FUNCTION_NAME: z.string().optional(),
 });
 
 function loadEnv(): z.infer<typeof envSchema> {

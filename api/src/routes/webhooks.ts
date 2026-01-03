@@ -15,6 +15,7 @@ import {
   handleConfirmationComplete,
   updateConfirmationProgress,
 } from "../services/confirmationService.js";
+import { handleProcessingComplete } from "../services/processingService.js";
 
 const router = Router();
 
@@ -169,6 +170,33 @@ router.post(
         req.body.progress
       );
       res.json({ success: true });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================================
+// Video Processing Webhooks (Upload Optimization)
+// ============================================================================
+
+const processingCompleteSchema = z.object({
+  video_id: z.string().uuid(),
+  status: z.enum(["completed", "failed", "skipped"]),
+  processed_s3_key: z.string().optional(),
+  processed_size_bytes: z.number().int().positive().optional(),
+  was_optimized: z.boolean().optional(),
+  error_message: z.string().optional(),
+});
+
+router.post(
+  "/v1/webhooks/processing-complete",
+  requireWebhookSecret,
+  validateRequest({ body: processingCompleteSchema }),
+  async (req, res, next) => {
+    try {
+      const result = await handleProcessingComplete(req.body);
+      res.json(result);
     } catch (error) {
       next(error);
     }
