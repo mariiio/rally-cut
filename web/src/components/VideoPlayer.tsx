@@ -29,12 +29,6 @@ export function VideoPlayer() {
   // Priority: local blob (instant) > proxy (fast) > full video
   const effectiveVideoUrl = localVideoUrl || proxyUrl || videoUrl;
 
-  // Debug: log which URL source is being used
-  if (process.env.NODE_ENV === 'development' && effectiveVideoUrl) {
-    const source = localVideoUrl ? 'LOCAL_BLOB' : proxyUrl ? 'PROXY' : 'ORIGINAL';
-    console.log(`[VideoPlayer] Using ${source}:`, effectiveVideoUrl?.substring(0, 50));
-  }
-
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const seekTo = usePlayerStore((state) => state.seekTo);
   const clearSeek = usePlayerStore((state) => state.clearSeek);
