@@ -148,24 +148,46 @@ async function triggerLocalExport(
   try {
     const clipPaths: string[] = [];
 
-    // Process each rally
-    for (let i = 0; i < input.rallies.length; i++) {
-      const rally = input.rallies[i];
-      const progress = Math.round((i / input.rallies.length) * 80);
-      await updateExportProgress(jobId, progress);
+    // Pre-download all unique videos in parallel for better performance
+    const uniqueS3Keys = [...new Set(input.rallies.map((r) => r.videoS3Key))];
+    const videoPathMap = new Map<string, string>();
 
-      // Download video from S3 using presigned URL
-      const downloadUrl = await generateDownloadUrl(rally.videoS3Key);
-      const videoPath = path.join(tmpDir, `input_${i}.mp4`);
-      const clipPath = path.join(tmpDir, `clip_${i}.mp4`);
+    console.log(`[LOCAL EXPORT] Downloading ${uniqueS3Keys.length} unique videos in parallel...`);
+    await updateExportProgress(jobId, 5);
 
-      console.log(`[LOCAL EXPORT] Downloading ${rally.videoS3Key}...`);
+    // Download videos in parallel with concurrency limit of 3
+    const downloadVideo = async (s3Key: string, index: number): Promise<void> => {
+      const downloadUrl = await generateDownloadUrl(s3Key);
+      const videoPath = path.join(tmpDir, `video_${index}.mp4`);
+
       const response = await fetch(downloadUrl);
       if (!response.ok) {
-        throw new Error(`Failed to download video: ${response.status}`);
+        throw new Error(`Failed to download video ${s3Key}: ${response.status}`);
       }
       const buffer = await response.arrayBuffer();
       await fs.writeFile(videoPath, Buffer.from(buffer));
+      videoPathMap.set(s3Key, videoPath);
+    };
+
+    // Parallel download with concurrency limit
+    const CONCURRENCY_LIMIT = 3;
+    for (let i = 0; i < uniqueS3Keys.length; i += CONCURRENCY_LIMIT) {
+      const batch = uniqueS3Keys.slice(i, i + CONCURRENCY_LIMIT);
+      await Promise.all(batch.map((key, idx) => downloadVideo(key, i + idx)));
+      const downloadProgress = Math.round(((i + batch.length) / uniqueS3Keys.length) * 30);
+      await updateExportProgress(jobId, 5 + downloadProgress);
+    }
+
+    console.log(`[LOCAL EXPORT] All videos downloaded, extracting ${input.rallies.length} clips...`);
+
+    // Process each rally clip sequentially (FFmpeg is CPU-intensive)
+    for (let i = 0; i < input.rallies.length; i++) {
+      const rally = input.rallies[i];
+      const progress = 35 + Math.round((i / input.rallies.length) * 45);
+      await updateExportProgress(jobId, progress);
+
+      const videoPath = videoPathMap.get(rally.videoS3Key)!;
+      const clipPath = path.join(tmpDir, `clip_${i}.mp4`);
 
       // Extract clip with FFmpeg
       const startSec = rally.startMs / 1000;
@@ -201,9 +223,11 @@ async function triggerLocalExport(
       }
 
       clipPaths.push(clipPath);
+    }
 
-      // Clean up input to save space
-      await fs.unlink(videoPath);
+    // Clean up downloaded videos
+    for (const videoPath of videoPathMap.values()) {
+      await fs.unlink(videoPath).catch(() => {});
     }
 
     await updateExportProgress(jobId, 85);

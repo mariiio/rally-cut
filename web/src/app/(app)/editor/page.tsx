@@ -243,23 +243,63 @@ export default function HomePage() {
       console.log(`Skipped ${files.length - validFiles.length} invalid file(s)`);
     }
 
+    // Check for duplicate session name before starting uploads
+    const isNewSession = selectedSessionId === NEW_SESSION_VALUE;
+    const sessionName = isNewSession ? (newSessionName.trim() || generateSessionName()) : '';
+    if (isNewSession) {
+      const existingSession = sessions.find(
+        (s) => s.name.toLowerCase() === sessionName.toLowerCase() && s.type === 'REGULAR'
+      );
+      if (existingSession) {
+        setUploadError(`A session named "${sessionName}" already exists. Please choose a different name.`);
+        return;
+      }
+    }
+
     setUploadError(null);
     setUploadQueue(validFiles);
     setCurrentUploadIndex(0);
 
-    // Determine/create target session ONCE before uploads
+    // Upload videos first (before creating session)
+    const uploadedVideoIds: string[] = [];
+    let lastUploadError: string | null = null;
+    for (let i = 0; i < validFiles.length; i++) {
+      setCurrentUploadIndex(i);
+      const file = validFiles[i];
+
+      const result = await uploadVideoToLibrary(file);
+      if (!result.success || !result.videoId) {
+        // Get the error from the store after the failed upload
+        const storeError = useUploadStore.getState().error;
+        if (storeError) {
+          lastUploadError = storeError;
+        }
+        console.error(`Failed to upload ${file.name}`);
+        continue; // Continue with next file
+      }
+      uploadedVideoIds.push(result.videoId);
+    }
+
+    // If no uploads succeeded, show error and don't create session
+    if (uploadedVideoIds.length === 0) {
+      setUploadQueue([]);
+      setUploadError(lastUploadError || 'All uploads failed. Please try again.');
+      return;
+    }
+
+    // Now create session (only if uploads succeeded)
     let targetSessionId: string;
-    if (selectedSessionId === NEW_SESSION_VALUE) {
+    if (isNewSession) {
       setCreatingSession(true);
       try {
-        const sessionName = newSessionName.trim() || generateSessionName();
         const session = await createSession(sessionName);
         targetSessionId = session.id;
       } catch (err) {
         console.error('Failed to create session:', err);
-        setUploadError('Failed to create session.');
+        setUploadError('Videos uploaded but failed to create session. Your videos are in your library.');
         setCreatingSession(false);
         setUploadQueue([]);
+        loadData();
         return;
       }
       setCreatingSession(false);
@@ -267,35 +307,19 @@ export default function HomePage() {
       targetSessionId = selectedSessionId;
     }
 
-    // Upload each file sequentially
-    let uploadedCount = 0;
-    for (let i = 0; i < validFiles.length; i++) {
-      setCurrentUploadIndex(i);
-      const file = validFiles[i];
-
-      const result = await uploadVideoToLibrary(file);
-      if (!result.success || !result.videoId) {
-        console.error(`Failed to upload ${file.name}`);
-        continue; // Continue with next file
-      }
-
+    // Add uploaded videos to session
+    for (const videoId of uploadedVideoIds) {
       try {
-        await addVideoToSession(targetSessionId, result.videoId);
-        uploadedCount++;
+        await addVideoToSession(targetSessionId, videoId);
       } catch (err) {
-        console.error(`Failed to add ${file.name} to session:`, err);
+        console.error(`Failed to add video ${videoId} to session:`, err);
       }
     }
 
-    // All done - redirect if any uploads succeeded
+    // All done - redirect
     setUploadQueue([]);
-    if (uploadedCount > 0) {
-      setUploadDialogOpen(false);
-      router.push(`/sessions/${targetSessionId}`);
-    } else {
-      setUploadError('All uploads failed. Please try again.');
-      loadData();
-    }
+    setUploadDialogOpen(false);
+    router.push(`/sessions/${targetSessionId}`);
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {

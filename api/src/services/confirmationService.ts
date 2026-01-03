@@ -293,15 +293,19 @@ export async function restoreOriginal(
 
   // Use a transaction to revert timestamps and clean up
   await prisma.$transaction(async (tx) => {
-    // Revert rally timestamps to original values
-    for (const mapping of mappings) {
-      await tx.rally.updateMany({
-        where: { id: mapping.rallyId },
-        data: {
-          startMs: mapping.originalStartMs,
-          endMs: mapping.originalEndMs,
-        },
-      });
+    // Batch update rally timestamps to original values in a single query
+    if (mappings.length > 0) {
+      const ids = mappings.map((m) => m.rallyId);
+      const startCase = mappings
+        .map((m) => `WHEN '${m.rallyId}' THEN ${m.originalStartMs}`)
+        .join(" ");
+      const endCase = mappings
+        .map((m) => `WHEN '${m.rallyId}' THEN ${m.originalEndMs}`)
+        .join(" ");
+      await tx.$executeRawUnsafe(
+        `UPDATE "Rally" SET "start_ms" = CASE id ${startCase} END, "end_ms" = CASE id ${endCase} END WHERE id = ANY($1::uuid[])`,
+        ids
+      );
     }
 
     // Update video to use original s3Key and duration
@@ -420,15 +424,19 @@ export async function handleConfirmationComplete(
       return { ignored: true };
     }
 
-    // Apply trimmed timestamps to rallies
-    for (const mapping of mappings) {
-      await tx.rally.updateMany({
-        where: { id: mapping.rallyId },
-        data: {
-          startMs: mapping.trimmedStartMs,
-          endMs: mapping.trimmedEndMs,
-        },
-      });
+    // Batch update rally timestamps to trimmed values in a single query
+    if (mappings.length > 0) {
+      const ids = mappings.map((m) => m.rallyId);
+      const startCase = mappings
+        .map((m) => `WHEN '${m.rallyId}' THEN ${m.trimmedStartMs}`)
+        .join(" ");
+      const endCase = mappings
+        .map((m) => `WHEN '${m.rallyId}' THEN ${m.trimmedEndMs}`)
+        .join(" ");
+      await tx.$executeRawUnsafe(
+        `UPDATE "Rally" SET "start_ms" = CASE id ${startCase} END, "end_ms" = CASE id ${endCase} END WHERE id = ANY($1::uuid[])`,
+        ids
+      );
     }
 
     // Update video to use trimmed s3Key and duration

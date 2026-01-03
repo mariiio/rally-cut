@@ -65,17 +65,28 @@ export async function syncState(
   await prisma.$transaction(async (tx) => {
     // Sync rallies for each video (only if user is owner)
     if (isOwner) {
+      // Pre-fetch all rallies for all session videos in one query to avoid N+1
+      const allExistingRallies = await tx.rally.findMany({
+        where: { videoId: { in: [...videoIds] } },
+        select: { id: true, videoId: true },
+      });
+
+      // Group by videoId for O(1) lookups
+      const existingRalliesByVideo = new Map<string, Set<string>>();
+      for (const rally of allExistingRallies) {
+        if (!existingRalliesByVideo.has(rally.videoId)) {
+          existingRalliesByVideo.set(rally.videoId, new Set());
+        }
+        existingRalliesByVideo.get(rally.videoId)!.add(rally.id);
+      }
+
       for (const [videoId, rallies] of Object.entries(input.ralliesPerVideo)) {
         if (!videoIds.has(videoId)) {
           continue; // Skip unknown videos
         }
 
-        // Get existing rallies for this video
-        const existingRallies = await tx.rally.findMany({
-          where: { videoId },
-          select: { id: true },
-        });
-        const existingIds = new Set(existingRallies.map((r) => r.id));
+        // Get existing rally IDs from pre-fetched data
+        const existingIds = existingRalliesByVideo.get(videoId) ?? new Set<string>();
 
         // Track which IDs we've seen
         const seenIds = new Set<string>();

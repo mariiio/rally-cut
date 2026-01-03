@@ -17,7 +17,7 @@ import {
   calculateExpirationDate,
   getTierLimits,
   checkUploadQuota,
-  incrementUploadUsage,
+  checkAndReserveUploadQuota,
 } from "./tierService.js";
 import { queueVideoProcessing } from "./processingService.js";
 
@@ -73,7 +73,7 @@ async function validateUploadRequest(
     );
   }
 
-  // Check upload quota
+  // Check upload quota (quick fail for UX - actual atomic reservation happens at confirm)
   const uploadQuota = await checkUploadQuota(params.userId);
   if (!uploadQuota.allowed) {
     throw new LimitExceededError(
@@ -82,20 +82,8 @@ async function validateUploadRequest(
     );
   }
 
-  // Check for duplicate content hash for this user
-  const existingVideo = await prisma.video.findFirst({
-    where: {
-      userId: params.userId,
-      contentHash: params.contentHash,
-      deletedAt: null,
-    },
-  });
-
-  if (existingVideo) {
-    throw new ConflictError("Video with this content already exists", {
-      existingVideoId: existingVideo.id,
-    });
-  }
+  // Note: Duplicate content hash check is done atomically in createVideoUploadUrl/requestUploadUrl
+  // to prevent TOCTOU race conditions
 
   const expiresAt = calculateExpirationDate(tier);
 
@@ -132,11 +120,9 @@ export async function listUserVideos(userId: string, params: VideoListParams = {
       skip,
       take: limit,
       include: {
-        _count: {
-          select: { sessionVideos: true },
-        },
+        // Only fetch session id, name, type - no need for separate _count
         sessionVideos: {
-          include: {
+          select: {
             session: {
               select: { id: true, name: true, type: true },
             },
@@ -150,7 +136,7 @@ export async function listUserVideos(userId: string, params: VideoListParams = {
   return {
     data: videos.map((v) => ({
       ...serializeBigInts(v),
-      sessionCount: v._count.sessionVideos,
+      sessionCount: v.sessionVideos.length, // Use array length instead of extra _count query
       sessions: v.sessionVideos.map((sv) => ({
         id: sv.session.id,
         name: sv.session.name,
@@ -180,7 +166,7 @@ export interface CreateVideoUploadParams {
 }
 
 export async function createVideoUploadUrl(params: CreateVideoUploadParams) {
-  // Validate upload request (size, duration, quota, duplicates)
+  // Validate upload request (size, duration, quota - NOT duplicates, that's atomic below)
   const { expiresAt } = await validateUploadRequest({
     userId: params.userId,
     fileSize: params.fileSize,
@@ -191,18 +177,39 @@ export async function createVideoUploadUrl(params: CreateVideoUploadParams) {
   const videoId = crypto.randomUUID();
   const s3Key = getVideoS3Key(params.userId, videoId, params.filename);
 
-  const video = await prisma.video.create({
-    data: {
-      id: videoId,
-      userId: params.userId,
-      name: params.filename.replace(/\.[^.]+$/, ""),
-      filename: params.filename,
-      s3Key,
-      contentHash: params.contentHash,
-      fileSizeBytes: params.fileSize,
-      durationMs: params.durationMs,
-      expiresAt,
-    },
+  // Use transaction to atomically check for duplicates and create video
+  // This prevents TOCTOU race condition where two uploads with same content
+  // could both pass the duplicate check before either creates the record
+  const video = await prisma.$transaction(async (tx) => {
+    // Check for duplicate content hash within transaction
+    const existingVideo = await tx.video.findFirst({
+      where: {
+        userId: params.userId,
+        contentHash: params.contentHash,
+        deletedAt: null,
+      },
+    });
+
+    if (existingVideo) {
+      throw new ConflictError("Video with this content already exists", {
+        existingVideoId: existingVideo.id,
+      });
+    }
+
+    // Create video atomically after duplicate check
+    return tx.video.create({
+      data: {
+        id: videoId,
+        userId: params.userId,
+        name: params.filename.replace(/\.[^.]+$/, ""),
+        filename: params.filename,
+        s3Key,
+        contentHash: params.contentHash,
+        fileSizeBytes: params.fileSize,
+        durationMs: params.durationMs,
+        expiresAt,
+      },
+    });
   });
 
   const uploadUrl = await generateUploadUrl({
@@ -231,6 +238,18 @@ export async function confirmVideoUpload(
     throw new NotFoundError("Video", videoId);
   }
 
+  // Atomically check and reserve upload quota (prevents race conditions)
+  const tier = await getUserTier(userId);
+  const limits = getTierLimits(tier);
+  const quotaResult = await checkAndReserveUploadQuota(userId, limits);
+
+  if (!quotaResult.allowed) {
+    throw new LimitExceededError(
+      `Monthly upload limit reached (${quotaResult.used}/${quotaResult.limit}). Upgrade to Premium for unlimited uploads, or wait until next month.`,
+      { used: quotaResult.used, limit: quotaResult.limit }
+    );
+  }
+
   const updated = await prisma.video.update({
     where: { id: videoId },
     data: {
@@ -240,9 +259,6 @@ export async function confirmVideoUpload(
       height: data.height,
     },
   });
-
-  // Increment upload usage quota
-  await incrementUploadUsage(userId);
 
   // Auto-add to "All Videos" session
   const allVideosSession = await getOrCreateAllVideosSession(userId);
@@ -255,16 +271,19 @@ export async function confirmVideoUpload(
   });
 
   if (!existingLink) {
-    const videoCount = await prisma.sessionVideo.count({
-      where: { sessionId: allVideosSession.id },
-    });
-
-    await prisma.sessionVideo.create({
-      data: {
-        sessionId: allVideosSession.id,
-        videoId,
-        order: videoCount,
-      },
+    // Use MAX(order) + 1 in a transaction to prevent order collisions
+    await prisma.$transaction(async (tx) => {
+      const maxOrder = await tx.sessionVideo.aggregate({
+        where: { sessionId: allVideosSession.id },
+        _max: { order: true },
+      });
+      await tx.sessionVideo.create({
+        data: {
+          sessionId: allVideosSession.id,
+          videoId,
+          order: (maxOrder._max.order ?? -1) + 1,
+        },
+      });
     });
   }
 
@@ -392,12 +411,19 @@ export async function addVideoToSession(
     throw new ConflictError("Video already in session", { sessionId, videoId });
   }
 
-  const sessionVideo = await prisma.sessionVideo.create({
-    data: {
-      sessionId,
-      videoId,
-      order: order ?? session._count.sessionVideos,
-    },
+  // Use MAX(order) + 1 in a transaction to prevent order collisions
+  const sessionVideo = await prisma.$transaction(async (tx) => {
+    const maxOrder = await tx.sessionVideo.aggregate({
+      where: { sessionId },
+      _max: { order: true },
+    });
+    return tx.sessionVideo.create({
+      data: {
+        sessionId,
+        videoId,
+        order: order ?? (maxOrder._max.order ?? -1) + 1,
+      },
+    });
   });
 
   return sessionVideo;
@@ -510,7 +536,23 @@ export async function requestUploadUrl(
   const s3Key = getVideoS3Key(userId, videoId, data.filename);
 
   // Create video and link to session in transaction
+  // Also check for duplicate content hash atomically to prevent TOCTOU race
   const result = await prisma.$transaction(async (tx) => {
+    // Check for duplicate content hash within transaction
+    const existingVideo = await tx.video.findFirst({
+      where: {
+        userId,
+        contentHash: data.contentHash,
+        deletedAt: null,
+      },
+    });
+
+    if (existingVideo) {
+      throw new ConflictError("Video with this content already exists", {
+        existingVideoId: existingVideo.id,
+      });
+    }
+
     const video = await tx.video.create({
       data: {
         id: videoId,
@@ -525,11 +567,17 @@ export async function requestUploadUrl(
       },
     });
 
+    // Use MAX(order) + 1 within transaction to prevent order collisions
+    const maxOrder = await tx.sessionVideo.aggregate({
+      where: { sessionId },
+      _max: { order: true },
+    });
+
     await tx.sessionVideo.create({
       data: {
         sessionId,
         videoId: video.id,
-        order: session._count.sessionVideos,
+        order: (maxOrder._max.order ?? -1) + 1,
       },
     });
 
@@ -571,6 +619,18 @@ export async function confirmUpload(
     throw new NotFoundError("Video", data.videoId);
   }
 
+  // Atomically check and reserve upload quota (prevents race conditions)
+  const tier = await getUserTier(userId);
+  const limits = getTierLimits(tier);
+  const quotaResult = await checkAndReserveUploadQuota(userId, limits);
+
+  if (!quotaResult.allowed) {
+    throw new LimitExceededError(
+      `Monthly upload limit reached (${quotaResult.used}/${quotaResult.limit}). Upgrade to Premium for unlimited uploads, or wait until next month.`,
+      { used: quotaResult.used, limit: quotaResult.limit }
+    );
+  }
+
   const updated = await prisma.video.update({
     where: { id: data.videoId },
     data: {
@@ -580,9 +640,6 @@ export async function confirmUpload(
       height: data.height,
     },
   });
-
-  // Increment upload usage quota
-  await incrementUploadUsage(userId);
 
   // Auto-add to "All Videos" session
   const allVideosSession = await getOrCreateAllVideosSession(userId);
@@ -595,16 +652,19 @@ export async function confirmUpload(
   });
 
   if (!existingLink) {
-    const videoCount = await prisma.sessionVideo.count({
-      where: { sessionId: allVideosSession.id },
-    });
-
-    await prisma.sessionVideo.create({
-      data: {
-        sessionId: allVideosSession.id,
-        videoId: data.videoId,
-        order: videoCount,
-      },
+    // Use MAX(order) + 1 in a transaction to prevent order collisions
+    await prisma.$transaction(async (tx) => {
+      const maxOrder = await tx.sessionVideo.aggregate({
+        where: { sessionId: allVideosSession.id },
+        _max: { order: true },
+      });
+      await tx.sessionVideo.create({
+        data: {
+          sessionId: allVideosSession.id,
+          videoId: data.videoId,
+          order: (maxOrder._max.order ?? -1) + 1,
+        },
+      });
     });
   }
 

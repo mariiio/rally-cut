@@ -103,49 +103,77 @@ export interface ProcessingCompletePayload {
 export async function handleProcessingComplete(
   payload: ProcessingCompletePayload
 ): Promise<{ success: boolean; message?: string }> {
-  const video = await prisma.video.findUnique({
-    where: { id: payload.video_id },
-  });
-
-  if (!video) {
-    throw new NotFoundError("Video", payload.video_id);
-  }
-
-  // Idempotency check - don't reprocess if already complete/failed
-  if (
-    video.processingStatus === ProcessingStatus.COMPLETED ||
-    video.processingStatus === ProcessingStatus.FAILED ||
-    video.processingStatus === ProcessingStatus.SKIPPED
-  ) {
-    return { success: true, message: "Already processed" };
-  }
+  // Use atomic updateMany with status condition to prevent TOCTOU race conditions
+  // Only update if status is still pending/queued/processing (not already finalized)
+  const allowedStatuses = [
+    ProcessingStatus.PENDING,
+    ProcessingStatus.QUEUED,
+    ProcessingStatus.PROCESSING,
+  ];
 
   if (payload.status === "failed") {
-    await prisma.video.update({
-      where: { id: video.id },
+    const result = await prisma.video.updateMany({
+      where: {
+        id: payload.video_id,
+        processingStatus: { in: allowedStatuses },
+      },
       data: {
         processingStatus: ProcessingStatus.FAILED,
         processingError: payload.error_message ?? "Unknown error",
       },
     });
-    console.log(`[PROCESSING] Video ${video.id} failed: ${payload.error_message}`);
+
+    if (result.count === 0) {
+      // Either video not found or already processed
+      const video = await prisma.video.findUnique({
+        where: { id: payload.video_id },
+        select: { id: true },
+      });
+      if (!video) {
+        throw new NotFoundError("Video", payload.video_id);
+      }
+      return { success: true, message: "Already processed" };
+    }
+
+    console.log(`[PROCESSING] Video ${payload.video_id} failed: ${payload.error_message}`);
     return { success: false, message: payload.error_message };
   }
 
   if (payload.status === "skipped") {
-    await prisma.video.update({
-      where: { id: video.id },
+    const result = await prisma.video.updateMany({
+      where: {
+        id: payload.video_id,
+        processingStatus: { in: allowedStatuses },
+      },
       data: {
         processingStatus: ProcessingStatus.SKIPPED,
         processedAt: new Date(),
       },
     });
-    console.log(`[PROCESSING] Video ${video.id} skipped (already optimized)`);
+
+    if (result.count === 0) {
+      const video = await prisma.video.findUnique({
+        where: { id: payload.video_id },
+        select: { id: true },
+      });
+      if (!video) {
+        throw new NotFoundError("Video", payload.video_id);
+      }
+      return { success: true, message: "Already processed" };
+    }
+
+    console.log(`[PROCESSING] Video ${payload.video_id} skipped (already optimized)`);
     return { success: true, message: "Skipped" };
   }
 
-  // Update with optimized video info
-  const updateData: Parameters<typeof prisma.video.update>[0]["data"] = {
+  // Success case - update with optimized video info
+  const updateData: {
+    processingStatus: ProcessingStatus;
+    processedAt: Date;
+    processedS3Key?: string;
+    s3Key?: string;
+    fileSizeBytes?: bigint;
+  } = {
     processingStatus: ProcessingStatus.COMPLETED,
     processedAt: new Date(),
   };
@@ -160,13 +188,27 @@ export async function handleProcessingComplete(
     updateData.fileSizeBytes = BigInt(payload.processed_size_bytes);
   }
 
-  await prisma.video.update({
-    where: { id: video.id },
+  const result = await prisma.video.updateMany({
+    where: {
+      id: payload.video_id,
+      processingStatus: { in: allowedStatuses },
+    },
     data: updateData,
   });
 
+  if (result.count === 0) {
+    const video = await prisma.video.findUnique({
+      where: { id: payload.video_id },
+      select: { id: true },
+    });
+    if (!video) {
+      throw new NotFoundError("Video", payload.video_id);
+    }
+    return { success: true, message: "Already processed" };
+  }
+
   console.log(
-    `[PROCESSING] Video ${video.id} completed` +
+    `[PROCESSING] Video ${payload.video_id} completed` +
       (payload.was_optimized ? ` (optimized to ${payload.processed_s3_key})` : " (no optimization needed)")
   );
   return { success: true };
