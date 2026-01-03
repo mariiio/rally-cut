@@ -1,5 +1,12 @@
 import { prisma } from "../lib/prisma.js";
-import { generateUploadUrl, getVideoS3Key } from "../lib/s3.js";
+import {
+  generateUploadUrl,
+  getVideoS3Key,
+  initiateMultipartUpload as s3InitiateMultipart,
+  generatePartUploadUrl,
+  completeMultipartUpload as s3CompleteMultipart,
+  abortMultipartUpload as s3AbortMultipart,
+} from "../lib/s3.js";
 import {
   ConflictError,
   LimitExceededError,
@@ -279,6 +286,118 @@ export async function createVideoUploadUrl(params: CreateVideoUploadParams) {
     videoId: video.id,
     s3Key: video.s3Key,
   };
+}
+
+// ============================================================================
+// Multipart Upload (for large files, 100MB+)
+// ============================================================================
+
+// Calculate optimal part size (5MB min, scale up for large files)
+function calculatePartSize(fileSize: number): number {
+  const MIN_PART_SIZE = 5 * 1024 * 1024; // 5MB minimum (S3 requirement)
+  const MAX_PARTS = 10000; // S3 max parts limit
+  const TARGET_PARTS = 100; // Aim for ~100 parts for balance of parallelism vs overhead
+
+  let partSize = Math.ceil(fileSize / TARGET_PARTS);
+  partSize = Math.max(partSize, MIN_PART_SIZE);
+
+  // Ensure we don't exceed max parts
+  if (Math.ceil(fileSize / partSize) > MAX_PARTS) {
+    partSize = Math.ceil(fileSize / MAX_PARTS);
+  }
+
+  return partSize;
+}
+
+export interface InitiateMultipartParams {
+  userId: string;
+  filename: string;
+  contentType: string;
+  contentHash: string;
+  fileSize: number;
+  durationMs?: number;
+}
+
+export async function initiateMultipartUpload(params: InitiateMultipartParams) {
+  // Validate upload request (size, duration, quota)
+  const { expiresAt } = await validateUploadRequest({
+    userId: params.userId,
+    fileSize: params.fileSize,
+    durationMs: params.durationMs,
+    contentHash: params.contentHash,
+  });
+
+  // Find or create PENDING video (reuse logic from single upload)
+  const { video } = await prisma.$transaction(async (tx) => {
+    return findOrCreatePendingVideo(tx, {
+      userId: params.userId,
+      contentHash: params.contentHash,
+      filename: params.filename,
+      fileSize: params.fileSize,
+      durationMs: params.durationMs,
+      expiresAt,
+    });
+  });
+
+  // Initiate S3 multipart upload
+  const uploadId = await s3InitiateMultipart(video.s3Key, params.contentType);
+
+  // Calculate parts and generate presigned URLs
+  const partSize = calculatePartSize(params.fileSize);
+  const partCount = Math.ceil(params.fileSize / partSize);
+
+  const partUrls = await Promise.all(
+    Array.from({ length: partCount }, (_, i) =>
+      generatePartUploadUrl(video.s3Key, uploadId, i + 1)
+    )
+  );
+
+  return {
+    videoId: video.id,
+    s3Key: video.s3Key,
+    uploadId,
+    partSize,
+    partUrls,
+  };
+}
+
+export async function completeMultipartUpload(
+  videoId: string,
+  userId: string,
+  uploadId: string,
+  parts: { partNumber: number; etag: string }[]
+) {
+  const video = await prisma.video.findFirst({
+    where: { id: videoId, userId, status: "PENDING" },
+  });
+
+  if (!video) {
+    throw new NotFoundError("Video", videoId);
+  }
+
+  // Complete the multipart upload in S3
+  await s3CompleteMultipart(
+    video.s3Key,
+    uploadId,
+    parts.map((p) => ({ PartNumber: p.partNumber, ETag: p.etag }))
+  );
+}
+
+export async function abortMultipartUpload(
+  videoId: string,
+  userId: string,
+  uploadId: string
+) {
+  const video = await prisma.video.findFirst({
+    where: { id: videoId, userId },
+  });
+
+  if (!video) {
+    throw new NotFoundError("Video", videoId);
+  }
+
+  // Abort the multipart upload and cleanup parts in S3
+  await s3AbortMultipart(video.s3Key, uploadId);
 }
 
 export async function confirmVideoUpload(

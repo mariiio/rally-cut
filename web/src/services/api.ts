@@ -543,6 +543,74 @@ export async function confirmVideoUpload(
   return response.json();
 }
 
+// ============================================================================
+// Multipart Upload (for large files)
+// ============================================================================
+
+export interface InitiateMultipartResponse {
+  videoId: string;
+  s3Key: string;
+  uploadId: string;
+  partSize: number;
+  partUrls: string[];
+}
+
+// Initiate multipart upload - returns presigned URLs for all parts
+export async function initiateMultipartUpload(params: {
+  filename: string;
+  contentHash: string;
+  fileSize: number;
+  durationMs?: number;
+}): Promise<InitiateMultipartResponse> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/multipart/init`, {
+    method: 'POST',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify(params),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to initiate multipart upload: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Complete multipart upload by combining all parts
+export async function completeMultipartUpload(
+  videoId: string,
+  uploadId: string,
+  parts: { partNumber: number; etag: string }[]
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/multipart/complete`, {
+    method: 'POST',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify({ uploadId, parts }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to complete multipart upload: ${response.status}`);
+  }
+}
+
+// Abort multipart upload and cleanup parts
+export async function abortMultipartUpload(
+  videoId: string,
+  uploadId: string
+): Promise<void> {
+  // Best effort - don't throw on error
+  try {
+    await fetch(`${API_BASE_URL}/v1/videos/${videoId}/multipart/abort`, {
+      method: 'POST',
+      headers: getHeaders('application/json'),
+      body: JSON.stringify({ uploadId }),
+    });
+  } catch {
+    // Ignore errors on abort - cleanup will happen via S3 lifecycle
+  }
+}
+
 // Add video to session (creates junction)
 export async function addVideoToSession(
   sessionId: string,
