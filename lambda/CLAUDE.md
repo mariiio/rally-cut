@@ -44,17 +44,17 @@ docker build -t rallycut-export .
 After upload confirmation, the video-optimize function processes videos:
 
 1. Downloads original video from S3
-2. **Generates poster** (always): 1280px JPEG at 1 second
+2. **Generates poster**: 1280px JPEG at 1 second
 3. **Checks if optimization needed**: moov atom position + bitrate > 8Mbps
 4. **Optimizes video** (if needed): H.264, CRF 23, faststart
-5. **Generates proxy** (PREMIUM tier only): 720p, CRF 28 for fast editing
+5. **Generates proxy**: 720p, CRF 28 for fast editing
 6. Uploads all outputs to S3 with appropriate cache headers
 7. POSTs completion webhook with all S3 keys
 
 **Outputs:**
 - `{base}_poster.jpg` - Poster image (~50KB)
 - `{base}_optimized.mp4` - Full quality optimized video
-- `{base}_proxy.mp4` - 720p proxy (PREMIUM only)
+- `{base}_proxy.mp4` - 720p proxy for editing
 
 ## Environment Variables
 
