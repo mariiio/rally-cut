@@ -15,6 +15,7 @@ and decode overhead by ~50%, with no loss in detection accuracy.
 """
 
 import hashlib
+import re
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -115,6 +116,21 @@ class ProxyGenerator:
         except Exception:
             return 30.0  # Default fallback
 
+    def _get_duration(self, video_path: Path) -> float:
+        """Get video duration in seconds using ffprobe."""
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "csv=p=0",
+            str(video_path),
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return float(result.stdout.strip())
+        except Exception:
+            return 0.0  # Unknown duration
+
     def _get_file_signature(self, video_path: Path) -> str:
         """Get a signature for the video file (path + size + mtime)."""
         stat = video_path.stat()
@@ -200,20 +216,50 @@ class ProxyGenerator:
         ]
 
         try:
-            # Run ffmpeg with progress parsing
+            # Get video duration for progress tracking
+            duration = self._get_duration(source_video)
+
+            # Run ffmpeg with progress output to stderr
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
 
-            # Wait for completion (progress tracking could be added here)
-            _, stderr = process.communicate()
+            # Parse stderr for progress updates
+            # FFmpeg outputs lines like: time=00:00:04.10
+            time_pattern = re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)")
+            last_progress = 0.0
+            stderr_output = b""
+
+            if process.stderr:
+                while True:
+                    chunk = process.stderr.read(256)
+                    if not chunk:
+                        break
+                    stderr_output += chunk
+
+                    # Try to parse time from recent output
+                    chunk_str = chunk.decode("utf-8", errors="ignore")
+                    match = time_pattern.search(chunk_str)
+                    if match and duration > 0 and progress_callback:
+                        hours, minutes, seconds = match.groups()
+                        current_time = (
+                            int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+                        )
+                        progress = min(current_time / duration, 0.99)
+                        # Only report if progress increased meaningfully
+                        if progress - last_progress >= 0.02:
+                            last_progress = progress
+                            pct = int(progress * 100)
+                            progress_callback(progress, f"Optimizing video... {pct}%")
+
+            process.wait()
 
             if process.returncode != 0:
                 # Clean up failed proxy
                 proxy_path.unlink(missing_ok=True)
-                raise RuntimeError(f"ffmpeg failed: {stderr.decode()}")
+                raise RuntimeError(f"ffmpeg failed: {stderr_output.decode()}")
 
             if progress_callback:
                 progress_callback(1.0, "Court is ready!")

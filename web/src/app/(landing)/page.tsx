@@ -11,6 +11,8 @@ import { Pricing } from './components/Pricing';
 import { FAQ } from './components/FAQ';
 import { FinalCTA } from './components/FinalCTA';
 import { Footer } from './components/Footer';
+import { ScrollProgress } from './components/ScrollProgress';
+import { StickyMobileCTA } from './components/StickyMobileCTA';
 import { designTokens } from '@/app/designTokens';
 
 export default function LandingPage() {
@@ -22,6 +24,8 @@ export default function LandingPage() {
         color: 'text.primary',
       }}
     >
+      <ScrollProgress />
+      <StickyMobileCTA />
       <Navbar />
       <ReturningUserBanner />
       <Hero />

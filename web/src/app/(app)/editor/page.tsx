@@ -56,6 +56,7 @@ import {
 } from '@/services/api';
 import { useUploadStore } from '@/stores/uploadStore';
 import { isValidVideoFile } from '@/utils/fileHandlers';
+import { VolleyballProgress } from '@/components/VolleyballProgress';
 
 interface SessionGroup {
   session: {
@@ -110,11 +111,17 @@ export default function HomePage() {
     [sessions]
   );
 
+  // Filter out incomplete uploads (PENDING status)
+  const readyVideos = useMemo(
+    () => videos.filter((v) => v.status !== 'PENDING'),
+    [videos]
+  );
+
   // Group videos by their sessions (excluding ALL_VIDEOS)
   const groupedVideos = useMemo(() => {
     const groups: Map<string, SessionGroup> = new Map();
 
-    videos.forEach((video) => {
+    readyVideos.forEach((video) => {
       video.sessions?.forEach((session) => {
         if (session.type === 'ALL_VIDEOS') return;
 
@@ -129,10 +136,10 @@ export default function HomePage() {
     });
 
     return Array.from(groups.values());
-  }, [videos]);
+  }, [readyVideos]);
 
-  // Check if user has any content
-  const hasVideos = videos.length > 0;
+  // Check if user has any ready content
+  const hasVideos = readyVideos.length > 0;
 
   useEffect(() => {
     loadData();
@@ -308,12 +315,25 @@ export default function HomePage() {
     }
 
     // Add uploaded videos to session
+    let addedCount = 0;
+    let lastAddError: string | null = null;
     for (const videoId of uploadedVideoIds) {
       try {
         await addVideoToSession(targetSessionId, videoId);
+        addedCount++;
       } catch (err) {
         console.error(`Failed to add video ${videoId} to session:`, err);
+        lastAddError = err instanceof Error ? err.message : 'Failed to add video to session';
       }
+    }
+
+    // Check if any videos were successfully added
+    if (addedCount === 0) {
+      setUploadQueue([]);
+      setUploadError(lastAddError || 'Failed to add videos to session. Please try again.');
+      // Reload data to refresh the UI since videos are in library
+      loadData();
+      return;
     }
 
     // All done - redirect
@@ -725,7 +745,7 @@ export default function HomePage() {
                         </Typography>
                       </Box>
                       <Chip
-                        label={`${videos.length} video${videos.length !== 1 ? 's' : ''}`}
+                        label={`${readyVideos.length} video${readyVideos.length !== 1 ? 's' : ''}`}
                         sx={{
                           bgcolor: 'rgba(255, 107, 74, 0.2)',
                           color: 'primary.light',
@@ -1168,35 +1188,18 @@ export default function HomePage() {
               }}
             >
               {isUploading || creatingSession ? (
-                <Box>
-                  <CircularProgress size={56} sx={{ color: 'primary.main' }} />
-                  <Typography sx={{ mt: 2, fontWeight: 500 }} color="text.primary">
-                    {creatingSession
+                <VolleyballProgress
+                  progress={creatingSession ? 0 : progress}
+                  stepText={
+                    creatingSession
                       ? 'Creating session...'
                       : uploadQueue.length > 1
                         ? `Uploading video ${currentUploadIndex + 1} of ${uploadQueue.length}...`
-                        : currentStep}
-                  </Typography>
-                  {isUploading && (
-                    <Box sx={{ mt: 2, mx: 4 }}>
-                      <LinearProgress
-                        variant="determinate"
-                        value={progress}
-                        sx={{
-                          height: 6,
-                          borderRadius: 3,
-                          bgcolor: designTokens.colors.surface[2],
-                          '& .MuiLinearProgress-bar': {
-                            borderRadius: 3,
-                          },
-                        }}
-                      />
-                      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                        {progress}%
-                      </Typography>
-                    </Box>
-                  )}
-                </Box>
+                        : currentStep
+                  }
+                  size="lg"
+                  showPercentage={!creatingSession}
+                />
               ) : (
                 <>
                   <Box

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import {
   Box,
   Container,
@@ -14,6 +14,7 @@ import {
   FormControlLabel,
   Divider,
 } from '@mui/material';
+import { motion, useInView, useReducedMotion } from 'framer-motion';
 import CheckIcon from '@mui/icons-material/Check';
 import Link from 'next/link';
 import { designTokens } from '@/app/theme';
@@ -64,6 +65,9 @@ export function Pricing() {
   const [yearly, setYearly] = useState(false);
   const [waitlistOpen, setWaitlistOpen] = useState(false);
   const [selectedTier, setSelectedTier] = useState('pro');
+  const ref = useRef(null);
+  const isInView = useInView(ref, { once: true, margin: '-80px' });
+  const shouldReduceMotion = useReducedMotion();
 
   const handleWaitlistOpen = (tier: string) => {
     setSelectedTier(tier);
@@ -74,13 +78,19 @@ export function Pricing() {
     <Box
       component="section"
       id="pricing"
+      ref={ref}
       sx={{
         py: { xs: 8, md: 12 },
         position: 'relative',
       }}
     >
       <Container maxWidth="lg">
-        <Box sx={{ textAlign: 'center', mb: 6 }}>
+        <motion.div
+          initial={shouldReduceMotion ? {} : { opacity: 0, y: 30 }}
+          animate={isInView ? { opacity: 1, y: 0 } : {}}
+          transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+        >
+          <Box sx={{ textAlign: 'center', mb: 6 }}>
           <Typography
             variant="h2"
             sx={{
@@ -132,10 +142,21 @@ export function Pricing() {
             }
           />
         </Box>
+        </motion.div>
 
         <Grid container spacing={4} justifyContent="center">
-          {plans.map((plan) => (
+          {plans.map((plan, index) => (
             <Grid size={{ xs: 12, sm: 6, md: 5 }} key={plan.name}>
+              <motion.div
+                initial={shouldReduceMotion ? {} : { opacity: 0, y: 40 }}
+                animate={isInView ? { opacity: 1, y: 0 } : {}}
+                transition={{
+                  duration: 0.6,
+                  delay: index * 0.15,
+                  ease: [0.22, 1, 0.36, 1],
+                }}
+                style={{ height: '100%' }}
+              >
               <Paper
                 elevation={0}
                 sx={{
@@ -264,6 +285,7 @@ export function Pricing() {
                   )}
                 </Stack>
               </Paper>
+              </motion.div>
             </Grid>
           ))}
         </Grid>
