@@ -12,7 +12,7 @@ interface TierState {
 }
 
 interface TierActions {
-  fetchTier: () => Promise<void>;
+  fetchTier: (force?: boolean) => Promise<void>;
   setTier: (tier: UserTier, limits: TierLimits, usage: UsageQuota) => void;
   isPremium: () => boolean;
   canDetect: () => boolean;
@@ -21,7 +21,11 @@ interface TierActions {
   canSyncToServer: () => boolean;
   shouldShowWatermark: () => boolean;
   canUseLambdaExport: () => boolean;
+  shouldRefetch: () => boolean;
 }
+
+// Cache TTL for tier data (5 minutes)
+const CACHE_TTL_MS = 5 * 60 * 1000;
 
 // Default FREE tier limits (in case fetch fails)
 const DEFAULT_FREE_LIMITS: TierLimits = {
@@ -55,7 +59,12 @@ export const useTierStore = create<TierState & TierActions>((set, get) => ({
   error: null,
   lastFetched: null,
 
-  fetchTier: async () => {
+  fetchTier: async (force = false) => {
+    // Skip if cache is still valid (unless forced)
+    if (!force && !get().shouldRefetch()) {
+      return;
+    }
+
     set({ isLoading: true, error: null });
 
     try {
@@ -101,4 +110,10 @@ export const useTierStore = create<TierState & TierActions>((set, get) => ({
   shouldShowWatermark: () => get().limits.exportWatermark,
 
   canUseLambdaExport: () => get().limits.lambdaExportEnabled,
+
+  shouldRefetch: () => {
+    const { lastFetched } = get();
+    if (!lastFetched) return true;
+    return Date.now() - lastFetched.getTime() > CACHE_TTL_MS;
+  },
 }));

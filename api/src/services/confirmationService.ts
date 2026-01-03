@@ -320,11 +320,20 @@ export async function restoreOriginal(
   });
 
   // Delete trimmed video from S3 (outside transaction, non-blocking)
+  // Uses structured logging for failed deletions to enable cleanup via log analysis
   if (confirmation.trimmedS3Key) {
     deleteObject(confirmation.trimmedS3Key).catch((error) => {
+      // Log with structured data for potential automated cleanup
       console.error(
-        `[CONFIRMATION] Failed to delete trimmed video from S3:`,
-        error
+        JSON.stringify({
+          event: "S3_DELETE_FAILED",
+          type: "orphaned_trimmed_video",
+          s3Key: confirmation.trimmedS3Key,
+          videoId,
+          confirmationId: confirmation.id,
+          error: error instanceof Error ? error.message : String(error),
+          timestamp: new Date().toISOString(),
+        })
       );
     });
   }
@@ -361,21 +370,28 @@ export async function handleConfirmationComplete(
     throw new NotFoundError("RallyConfirmation", payload.confirmation_id);
   }
 
-  if (
-    confirmation.status === ConfirmationStatus.CONFIRMED ||
-    confirmation.status === ConfirmationStatus.FAILED
-  ) {
+  // Use atomic update to prevent race conditions - only proceed if status is still processable
+  const allowedStatuses: ConfirmationStatus[] = [ConfirmationStatus.PENDING, ConfirmationStatus.PROCESSING];
+  if (!allowedStatuses.includes(confirmation.status)) {
     return { ignored: true, reason: "Job already processed" };
   }
 
   if (payload.status === "failed") {
-    await prisma.rallyConfirmation.update({
-      where: { id: confirmation.id },
+    // Atomic update with status check to prevent race condition
+    const result = await prisma.rallyConfirmation.updateMany({
+      where: {
+        id: confirmation.id,
+        status: { in: allowedStatuses },
+      },
       data: {
         status: ConfirmationStatus.FAILED,
         error: payload.error_message ?? "Unknown error",
       },
     });
+
+    if (result.count === 0) {
+      return { ignored: true, reason: "Job already processed" };
+    }
 
     return { success: false, error: payload.error_message };
   }
@@ -383,7 +399,27 @@ export async function handleConfirmationComplete(
   // Success - update timestamps and mark as confirmed
   const mappings = confirmation.timestampMappings as unknown as TimestampMapping[];
 
-  await prisma.$transaction(async (tx) => {
+  const transactionResult = await prisma.$transaction(async (tx) => {
+    // Atomic claim - update status only if still in allowed state
+    const claimed = await tx.rallyConfirmation.updateMany({
+      where: {
+        id: confirmation.id,
+        status: { in: allowedStatuses },
+      },
+      data: {
+        status: ConfirmationStatus.CONFIRMED,
+        progress: 100,
+        trimmedS3Key: payload.output_s3_key,
+        trimmedDurationMs: payload.duration_ms,
+        confirmedAt: new Date(),
+      },
+    });
+
+    // If no rows updated, another request already processed this
+    if (claimed.count === 0) {
+      return { ignored: true };
+    }
+
     // Apply trimmed timestamps to rallies
     for (const mapping of mappings) {
       await tx.rally.updateMany({
@@ -404,18 +440,12 @@ export async function handleConfirmationComplete(
       },
     });
 
-    // Mark confirmation as complete
-    await tx.rallyConfirmation.update({
-      where: { id: confirmation.id },
-      data: {
-        status: ConfirmationStatus.CONFIRMED,
-        progress: 100,
-        trimmedS3Key: payload.output_s3_key,
-        trimmedDurationMs: payload.duration_ms,
-        confirmedAt: new Date(),
-      },
-    });
+    return { success: true };
   });
+
+  if (transactionResult.ignored) {
+    return { ignored: true, reason: "Job already processed" };
+  }
 
   console.log(
     `[CONFIRMATION] Job ${confirmation.id} completed successfully`

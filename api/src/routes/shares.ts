@@ -9,7 +9,6 @@ import {
   deleteShare,
   getShare,
   getSharePreview,
-  listSharedSessions,
   removeMember,
 } from "../services/shareService.js";
 
@@ -25,7 +24,8 @@ router.post(
   validateRequest({ params: z.object({ id: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      const share = await createShare(req.params.id, req.userId!);
+      const userId = req.userId as string; // Guaranteed by requireUser
+      const share = await createShare(req.params.id, userId);
       res.status(201).json({
         token: share.token,
         createdAt: share.createdAt,
@@ -46,7 +46,8 @@ router.get(
   validateRequest({ params: z.object({ id: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      const share = await getShare(req.params.id, req.userId!);
+      const userId = req.userId as string; // Guaranteed by requireUser
+      const share = await getShare(req.params.id, userId);
       if (!share) {
         res.json(null);
         return;
@@ -78,7 +79,8 @@ router.delete(
   validateRequest({ params: z.object({ id: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      await deleteShare(req.params.id, req.userId!);
+      const userId = req.userId as string; // Guaranteed by requireUser
+      await deleteShare(req.params.id, userId);
       res.status(204).send();
     } catch (error) {
       next(error);
@@ -98,7 +100,8 @@ router.delete(
   }),
   async (req, res, next) => {
     try {
-      await removeMember(req.params.id, req.userId!, req.params.userId);
+      const userId = req.userId as string; // Guaranteed by requireUser
+      await removeMember(req.params.id, userId, req.params.userId);
       res.status(204).send();
     } catch (error) {
       next(error);
@@ -133,7 +136,8 @@ router.post(
   validateRequest({ params: z.object({ token: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      const result = await acceptShare(req.params.token, req.userId!);
+      const userId = req.userId as string; // Guaranteed by requireUser
+      const result = await acceptShare(req.params.token, userId);
       res.json(result);
     } catch (error) {
       next(error);

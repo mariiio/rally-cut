@@ -37,7 +37,8 @@ router.post(
   validateRequest({ body: createExportJobSchema }),
   async (req, res, next) => {
     try {
-      const job = await createExportJob(req.userId!, req.body);
+      const userId = req.userId as string; // Guaranteed by requireUser
+      const job = await createExportJob(userId, req.body);
       res.status(202).json(job);
     } catch (error) {
       next(error);
@@ -55,7 +56,8 @@ router.get(
   validateRequest({ params: z.object({ id: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      const job = await getExportJob(req.params.id, req.userId!);
+      const userId = req.userId as string; // Guaranteed by requireUser
+      const job = await getExportJob(req.params.id, userId);
       if (!job) {
         return res.status(404).json({ error: "Export job not found" });
       }
@@ -76,7 +78,8 @@ router.get(
   validateRequest({ params: z.object({ id: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      const result = await getExportDownloadUrl(req.params.id, req.userId!);
+      const userId = req.userId as string; // Guaranteed by requireUser
+      const result = await getExportDownloadUrl(req.params.id, userId);
       if (!result) {
         return res.status(404).json({ error: "Export job not found" });
       }

@@ -31,6 +31,76 @@ function serializeBigInts<T>(obj: T): T {
   );
 }
 
+// Shared validation for upload requests
+interface UploadValidationParams {
+  userId: string;
+  fileSize: number;
+  durationMs?: number;
+  contentHash: string;
+}
+
+interface UploadValidationResult {
+  tier: Awaited<ReturnType<typeof getUserTier>>;
+  limits: ReturnType<typeof getTierLimits>;
+  expiresAt: Date | null;
+}
+
+async function validateUploadRequest(
+  params: UploadValidationParams
+): Promise<UploadValidationResult> {
+  const tier = await getUserTier(params.userId);
+  const limits = getTierLimits(tier);
+
+  // Validate file size against tier limit
+  if (params.fileSize > limits.maxFileSizeBytes) {
+    const fileSizeMB = Math.round(params.fileSize / (1024 * 1024));
+    const limitMB = Math.round(limits.maxFileSizeBytes / (1024 * 1024));
+    const limitGB = limitMB >= 1024 ? `${limitMB / 1024} GB` : `${limitMB} MB`;
+    throw new LimitExceededError(
+      `File size (${fileSizeMB} MB) exceeds ${limitGB} limit for ${tier} tier. ${tier === "FREE" ? "Upgrade to Premium for 2 GB uploads." : ""}`,
+      { fileSize: params.fileSize, limit: limits.maxFileSizeBytes }
+    );
+  }
+
+  // Validate duration against tier limit (if provided)
+  if (params.durationMs && params.durationMs > limits.maxVideoDurationMs) {
+    const durationMin = Math.round(params.durationMs / 60000);
+    const limitMin = Math.round(limits.maxVideoDurationMs / 60000);
+    throw new LimitExceededError(
+      `Video duration (${durationMin} min) exceeds ${limitMin} minute limit for ${tier} tier. ${tier === "FREE" ? "Upgrade to Premium for 25 minute videos." : ""}`,
+      { duration: params.durationMs, limit: limits.maxVideoDurationMs }
+    );
+  }
+
+  // Check upload quota
+  const uploadQuota = await checkUploadQuota(params.userId);
+  if (!uploadQuota.allowed) {
+    throw new LimitExceededError(
+      `Monthly upload limit reached (${uploadQuota.used}/${uploadQuota.limit}). Upgrade to Premium for unlimited uploads, or wait until next month.`,
+      { used: uploadQuota.used, limit: uploadQuota.limit }
+    );
+  }
+
+  // Check for duplicate content hash for this user
+  const existingVideo = await prisma.video.findFirst({
+    where: {
+      userId: params.userId,
+      contentHash: params.contentHash,
+      deletedAt: null,
+    },
+  });
+
+  if (existingVideo) {
+    throw new ConflictError("Video with this content already exists", {
+      existingVideoId: existingVideo.id,
+    });
+  }
+
+  const expiresAt = calculateExpirationDate(tier);
+
+  return { tier, limits, expiresAt };
+}
+
 // ============================================================================
 // Video Library (User-scoped)
 // ============================================================================
@@ -109,56 +179,13 @@ export interface CreateVideoUploadParams {
 }
 
 export async function createVideoUploadUrl(params: CreateVideoUploadParams) {
-  // Get tier and limits first for validation
-  const tier = await getUserTier(params.userId);
-  const limits = getTierLimits(tier);
-
-  // Validate file size against tier limit
-  if (params.fileSize > limits.maxFileSizeBytes) {
-    const fileSizeMB = Math.round(params.fileSize / (1024 * 1024));
-    const limitMB = Math.round(limits.maxFileSizeBytes / (1024 * 1024));
-    const limitGB = limitMB >= 1024 ? `${limitMB / 1024} GB` : `${limitMB} MB`;
-    throw new LimitExceededError(
-      `File size (${fileSizeMB} MB) exceeds ${limitGB} limit for ${tier} tier. ${tier === "FREE" ? "Upgrade to Premium for 2 GB uploads." : ""}`,
-      { fileSize: params.fileSize, limit: limits.maxFileSizeBytes }
-    );
-  }
-
-  // Validate duration against tier limit (if provided)
-  if (params.durationMs && params.durationMs > limits.maxVideoDurationMs) {
-    const durationMin = Math.round(params.durationMs / 60000);
-    const limitMin = Math.round(limits.maxVideoDurationMs / 60000);
-    throw new LimitExceededError(
-      `Video duration (${durationMin} min) exceeds ${limitMin} minute limit for ${tier} tier. ${tier === "FREE" ? "Upgrade to Premium for 25 minute videos." : ""}`,
-      { duration: params.durationMs, limit: limits.maxVideoDurationMs }
-    );
-  }
-
-  // Check upload quota
-  const uploadQuota = await checkUploadQuota(params.userId);
-  if (!uploadQuota.allowed) {
-    throw new LimitExceededError(
-      `Monthly upload limit reached (${uploadQuota.used}/${uploadQuota.limit}). Upgrade to Premium for unlimited uploads, or wait until next month.`,
-      { used: uploadQuota.used, limit: uploadQuota.limit }
-    );
-  }
-
-  // Check for duplicate content hash for this user
-  const existingVideo = await prisma.video.findFirst({
-    where: {
-      userId: params.userId,
-      contentHash: params.contentHash,
-      deletedAt: null,
-    },
+  // Validate upload request (size, duration, quota, duplicates)
+  const { expiresAt } = await validateUploadRequest({
+    userId: params.userId,
+    fileSize: params.fileSize,
+    durationMs: params.durationMs,
+    contentHash: params.contentHash,
   });
-
-  if (existingVideo) {
-    throw new ConflictError("Video with this content already exists", {
-      existingVideoId: existingVideo.id,
-    });
-  }
-
-  const expiresAt = calculateExpirationDate(tier);
 
   const videoId = crypto.randomUUID();
   const s3Key = getVideoS3Key(params.userId, videoId, params.filename);
@@ -464,56 +491,13 @@ export async function requestUploadUrl(
     );
   }
 
-  // Get tier and limits for validation
-  const tier = await getUserTier(userId);
-  const limits = getTierLimits(tier);
-
-  // Validate file size against tier limit
-  if (data.fileSize > limits.maxFileSizeBytes) {
-    const fileSizeMB = Math.round(data.fileSize / (1024 * 1024));
-    const limitMB = Math.round(limits.maxFileSizeBytes / (1024 * 1024));
-    const limitGB = limitMB >= 1024 ? `${limitMB / 1024} GB` : `${limitMB} MB`;
-    throw new LimitExceededError(
-      `File size (${fileSizeMB} MB) exceeds ${limitGB} limit for ${tier} tier. ${tier === "FREE" ? "Upgrade to Premium for 2 GB uploads." : ""}`,
-      { fileSize: data.fileSize, limit: limits.maxFileSizeBytes }
-    );
-  }
-
-  // Validate duration against tier limit (if provided)
-  if (data.durationMs && data.durationMs > limits.maxVideoDurationMs) {
-    const durationMin = Math.round(data.durationMs / 60000);
-    const limitMin = Math.round(limits.maxVideoDurationMs / 60000);
-    throw new LimitExceededError(
-      `Video duration (${durationMin} min) exceeds ${limitMin} minute limit for ${tier} tier. ${tier === "FREE" ? "Upgrade to Premium for 25 minute videos." : ""}`,
-      { duration: data.durationMs, limit: limits.maxVideoDurationMs }
-    );
-  }
-
-  // Check upload quota
-  const uploadQuota = await checkUploadQuota(userId);
-  if (!uploadQuota.allowed) {
-    throw new LimitExceededError(
-      `Monthly upload limit reached (${uploadQuota.used}/${uploadQuota.limit}). Upgrade to Premium for unlimited uploads, or wait until next month.`,
-      { used: uploadQuota.used, limit: uploadQuota.limit }
-    );
-  }
-
-  // Check for duplicate content hash for this user
-  const existingVideo = await prisma.video.findFirst({
-    where: {
-      userId,
-      contentHash: data.contentHash,
-      deletedAt: null,
-    },
+  // Validate upload request (size, duration, quota, duplicates)
+  const { expiresAt } = await validateUploadRequest({
+    userId,
+    fileSize: data.fileSize,
+    durationMs: data.durationMs,
+    contentHash: data.contentHash,
   });
-
-  if (existingVideo) {
-    throw new ConflictError("Video with this content already exists", {
-      existingVideoId: existingVideo.id,
-    });
-  }
-
-  const expiresAt = calculateExpirationDate(tier);
 
   const videoId = crypto.randomUUID();
   const s3Key = getVideoS3Key(userId, videoId, data.filename);
