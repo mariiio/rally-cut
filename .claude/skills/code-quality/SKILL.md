@@ -1,26 +1,41 @@
 ---
 name: code-quality
-description: Run RallyCut code quality checks - mypy type checking and ruff linting. Use when checking code quality, fixing type errors, or before committing changes.
+description: Run RallyCut code quality checks - type checking and linting for Python (mypy, ruff) and TypeScript (tsc, eslint). Use when checking code quality or before committing. (project)
 allowed-tools: Bash, Read, Edit, Grep
 ---
 
 # RallyCut Code Quality
 
-## Commands (run in order)
-1. Type check: `uv run mypy rallycut/`
-2. Lint: `uv run ruff check rallycut/`
-3. Auto-fix: `uv run ruff check rallycut/ --fix`
+## Python (analysis/)
 
-## Standards
-- **Ruff rules:** E, F, I, N, W, UP (line length 100, E501 ignored)
-- **MyPy:** Strict mode - all functions require type hints
+```bash
+uv run mypy rallycut/              # Type check (strict)
+uv run ruff check rallycut/        # Lint
+uv run ruff check rallycut/ --fix  # Auto-fix
+```
 
-## Common Issues
-- Missing return type → Add `-> ReturnType` to function signature
-- Untyped parameter → Add type annotation `param: Type`
-- Import order → Run `uv run ruff check --fix` to auto-sort
+### Standards
+- **Ruff:** E, F, I, N, W, UP rules (line length 100)
+- **MyPy:** Strict mode - all functions need type hints
 
-## Pre-commit Checklist
-1. `uv run mypy rallycut/` - No errors
-2. `uv run ruff check rallycut/` - No errors
-3. `uv run pytest tests` - All pass
+## TypeScript - API (api/)
+
+```bash
+cd api && npx tsc --noEmit
+```
+
+## TypeScript - Web (web/)
+
+```bash
+cd web && npx tsc --noEmit
+cd web && npm run lint
+```
+
+## Common Fixes
+
+| Issue | Fix |
+|-------|-----|
+| Missing return type | Add `-> ReturnType` |
+| Import order | `uv run ruff check --fix` |
+| Unused variable | Remove or prefix with `_` |
+| Type error | Add proper annotation |
