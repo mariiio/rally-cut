@@ -32,6 +32,7 @@ model User {
   sessionMemberships  SessionMember[]
   highlights          Highlight[]
   usageQuota          UserUsageQuota?
+  feedback            Feedback[]
 
   @@index([tier])
   @@map("users")
@@ -59,6 +60,7 @@ model AnonymousIdentity {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
   @@map("anonymous_identities")
 }
 
@@ -89,6 +91,7 @@ model SessionMember {
 
   @@unique([sessionShareId, userId])
   @@index([userId])
+  @@index([sessionShareId])
   @@map("session_members")
 }
 
@@ -117,8 +120,8 @@ model Session {
   share         SessionShare?
   exportJobs    ExportJob[]
 
-  @@unique([userId, type])
   @@index([userId])
+  @@index([userId, deletedAt])
   @@index([expiresAt])
   @@index([deletedAt])
   @@map("sessions")
@@ -155,7 +158,9 @@ model Video {
   confirmation  RallyConfirmation?
 
   @@index([userId])
+  @@index([userId, deletedAt])
   @@index([contentHash])
+  @@index([status])
   @@index([expiresAt])
   @@index([deletedAt])
   @@index([processingStatus])
@@ -217,6 +222,7 @@ model Rally {
   highlightRallies HighlightRally[]
 
   @@index([videoId])
+  @@index([videoId, startMs])
   @@map("rallies")
 }
 
@@ -253,6 +259,7 @@ model HighlightRally {
   rally     Rally     @relation(fields: [rallyId], references: [id], onDelete: Cascade)
 
   @@unique([highlightId, rallyId])
+  @@index([rallyId])
   @@map("highlight_rallies")
 }
 
@@ -275,6 +282,8 @@ model RallyDetectionJob {
 
   video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
 
+  @@index([videoId])
+  @@index([status])
   @@index([contentHash, status])
   @@map("rally_detection_jobs")
 }
@@ -308,6 +317,7 @@ model ExportJob {
 
   @@index([sessionId])
   @@index([userId])
+  @@index([status])
   @@map("export_jobs")
 }
 
@@ -354,5 +364,33 @@ model RallyConfirmation {
   video              Video              @relation(fields: [videoId], references: [id], onDelete: Cascade)
 
   @@index([videoId])
+  @@index([status])
   @@map("rally_confirmations")
+}
+
+// ============================================================================
+// User Feedback
+// ============================================================================
+
+enum FeedbackType {
+  BUG
+  FEATURE
+  FEEDBACK
+}
+
+model Feedback {
+  id        String       @id @default(uuid())
+  userId    String?      @map("user_id")
+  type      FeedbackType
+  message   String
+  email     String?
+  userAgent String?      @map("user_agent")
+  pageUrl   String?      @map("page_url")
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([type])
+  @@map("feedback")
 }
