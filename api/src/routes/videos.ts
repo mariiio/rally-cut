@@ -52,6 +52,13 @@ router.get(
       res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
       res.setHeader("Accept-Ranges", "bytes");
 
+      // Cache headers - allow browser to cache video
+      // Use longer cache for optimized videos (filename contains _optimized)
+      const isOptimized = filename.includes("_optimized");
+      const maxAge = isOptimized ? 31536000 : 86400; // 1 year vs 1 day
+      res.setHeader("Cache-Control", `public, max-age=${maxAge}`);
+      res.setHeader("ETag", `"${videoId}-${filename}"`);
+
       // Handle range request response
       if (rangeHeader && s3Response.ContentRange) {
         res.status(206); // Partial Content
