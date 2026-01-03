@@ -6,14 +6,20 @@ import { requireUser } from "../middleware/resolveUser.js";
 import { validateRequest } from "../middleware/validateRequest.js";
 import { paginationSchema, uuidSchema } from "../schemas/common.js";
 import {
+  abortMultipartSchema,
+  completeMultipartSchema,
   confirmUploadSchema,
+  initiateMultipartSchema,
   requestUploadUrlSchema,
   updateVideoSchema,
 } from "../schemas/video.js";
 import {
+  abortMultipartUpload,
+  completeMultipartUpload,
   confirmUpload,
   confirmVideoUpload,
   createVideoUploadUrl,
+  initiateMultipartUpload,
   listUserVideos,
   requestUploadUrl,
   restoreVideo,
@@ -215,6 +221,82 @@ router.post(
     try {
       const video = await confirmVideoUpload(req.params.id, req.userId!, req.body);
       res.json(video);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================================
+// Multipart Upload Endpoints (for large files)
+// ============================================================================
+
+/**
+ * POST /v1/videos/multipart/init
+ * Initiate a multipart upload and get presigned URLs for all parts
+ */
+router.post(
+  "/v1/videos/multipart/init",
+  requireUser,
+  validateRequest({ body: initiateMultipartSchema }),
+  async (req, res, next) => {
+    try {
+      const result = await initiateMultipartUpload({
+        userId: req.userId!,
+        filename: req.body.filename,
+        contentType: req.body.contentType,
+        contentHash: req.body.contentHash,
+        fileSize: req.body.fileSize,
+        durationMs: req.body.durationMs,
+      });
+      res.status(201).json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /v1/videos/:id/multipart/complete
+ * Complete a multipart upload by combining all parts
+ */
+router.post(
+  "/v1/videos/:id/multipart/complete",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: completeMultipartSchema,
+  }),
+  async (req, res, next) => {
+    try {
+      await completeMultipartUpload(
+        req.params.id,
+        req.userId!,
+        req.body.uploadId,
+        req.body.parts
+      );
+      res.json({ success: true });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /v1/videos/:id/multipart/abort
+ * Abort a multipart upload and cleanup parts
+ */
+router.post(
+  "/v1/videos/:id/multipart/abort",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: abortMultipartSchema,
+  }),
+  async (req, res, next) => {
+    try {
+      await abortMultipartUpload(req.params.id, req.userId!, req.body.uploadId);
+      res.json({ success: true });
     } catch (error) {
       next(error);
     }

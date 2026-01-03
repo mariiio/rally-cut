@@ -1,9 +1,13 @@
 import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
   S3Client,
   type S3ClientConfig,
+  UploadPartCommand,
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -44,7 +48,7 @@ export async function generateUploadUrl(
     CacheControl: "public, max-age=86400",
   });
 
-  return getSignedUrl(s3Client, command, { expiresIn: 300 });
+  return getSignedUrl(s3Client, command, { expiresIn: 3600 });
 }
 
 export async function generateDownloadUrl(key: string): Promise<string> {
@@ -135,4 +139,78 @@ export async function uploadPoster(key: string, data: Buffer): Promise<void> {
   });
 
   await upload.done();
+}
+
+// ============================================================================
+// Multipart Upload (for large files)
+// ============================================================================
+
+/**
+ * Initiate a multipart upload and return the upload ID.
+ */
+export async function initiateMultipartUpload(
+  key: string,
+  contentType: string
+): Promise<string> {
+  const command = new CreateMultipartUploadCommand({
+    Bucket: env.S3_BUCKET_NAME,
+    Key: key,
+    ContentType: contentType,
+    CacheControl: "public, max-age=86400",
+  });
+
+  const response = await s3Client.send(command);
+  return response.UploadId!;
+}
+
+/**
+ * Generate a presigned URL for uploading a single part.
+ */
+export async function generatePartUploadUrl(
+  key: string,
+  uploadId: string,
+  partNumber: number
+): Promise<string> {
+  const command = new UploadPartCommand({
+    Bucket: env.S3_BUCKET_NAME,
+    Key: key,
+    UploadId: uploadId,
+    PartNumber: partNumber,
+  });
+
+  return getSignedUrl(s3Client, command, { expiresIn: 3600 });
+}
+
+/**
+ * Complete a multipart upload by combining all parts.
+ */
+export async function completeMultipartUpload(
+  key: string,
+  uploadId: string,
+  parts: { PartNumber: number; ETag: string }[]
+): Promise<void> {
+  const command = new CompleteMultipartUploadCommand({
+    Bucket: env.S3_BUCKET_NAME,
+    Key: key,
+    UploadId: uploadId,
+    MultipartUpload: { Parts: parts },
+  });
+
+  await s3Client.send(command);
+}
+
+/**
+ * Abort a multipart upload and cleanup uploaded parts.
+ */
+export async function abortMultipartUpload(
+  key: string,
+  uploadId: string
+): Promise<void> {
+  const command = new AbortMultipartUploadCommand({
+    Bucket: env.S3_BUCKET_NAME,
+    Key: key,
+    UploadId: uploadId,
+  });
+
+  await s3Client.send(command);
 }
