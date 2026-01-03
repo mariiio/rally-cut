@@ -14,9 +14,13 @@ const envSchema = z.object({
   AWS_SECRET_ACCESS_KEY: z.string().default(""),
 
   S3_BUCKET_NAME: z.string(),
-  CLOUDFRONT_DOMAIN: z.string(),
-  CLOUDFRONT_KEY_PAIR_ID: z.string(),
-  CLOUDFRONT_PRIVATE_KEY: z.string(),
+  // Optional S3 endpoint for MinIO/local development
+  S3_ENDPOINT: z.string().url().optional(),
+
+  // CloudFront (optional for local development)
+  CLOUDFRONT_DOMAIN: z.string().default(""),
+  CLOUDFRONT_KEY_PAIR_ID: z.string().default(""),
+  CLOUDFRONT_PRIVATE_KEY: z.string().default(""),
 
   MODAL_WEBHOOK_SECRET: z.string(),
   MODAL_FUNCTION_URL: z.string().url(),
