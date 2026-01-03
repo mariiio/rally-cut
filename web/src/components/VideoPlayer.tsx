@@ -23,6 +23,7 @@ export function VideoPlayer() {
   const setCurrentTime = usePlayerStore((state) => state.setCurrentTime);
   const setDuration = usePlayerStore((state) => state.setDuration);
   const setReady = usePlayerStore((state) => state.setReady);
+  const setBufferedRanges = usePlayerStore((state) => state.setBufferedRanges);
 
   // Play/pause based on isPlaying state
   useEffect(() => {
@@ -130,7 +131,17 @@ export function VideoPlayer() {
     if (duration > 0) {
       setBufferProgress(Math.round((bufferedEnd / duration) * 100));
     }
-  }, []);
+
+    // Update buffered ranges in store for timeline visualization
+    const ranges: { start: number; end: number }[] = [];
+    for (let i = 0; i < video.buffered.length; i++) {
+      ranges.push({
+        start: video.buffered.start(i),
+        end: video.buffered.end(i),
+      });
+    }
+    setBufferedRanges(ranges);
+  }, [setBufferedRanges]);
 
   const handleEmptyStateClick = () => {
     // Trigger file upload via EditorHeader's exposed function
