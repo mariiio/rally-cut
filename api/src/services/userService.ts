@@ -11,6 +11,9 @@ import {
  * Get or create a user from a visitor ID.
  * If the visitor ID exists, returns the associated user.
  * If not, creates a new anonymous user and links it to the visitor ID.
+ *
+ * Uses retry logic to handle race conditions where multiple requests
+ * with the same visitor ID arrive simultaneously.
  */
 export async function getOrCreateUser(
   visitorId: string,
@@ -29,29 +32,54 @@ export async function getOrCreateUser(
     };
   }
 
-  // Create new user and identity in a transaction
-  const result = await prisma.$transaction(async (tx) => {
-    const user = await tx.user.create({
-      data: {
-        // Anonymous user - no email, name, etc.
-      },
+  // Try to create new user and identity
+  // Handle race condition where another request might create it first
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          // Anonymous user - no email, name, etc.
+        },
+      });
+
+      await tx.anonymousIdentity.create({
+        data: {
+          visitorId,
+          userId: user.id,
+          userAgent,
+        },
+      });
+
+      return user;
     });
 
-    await tx.anonymousIdentity.create({
-      data: {
-        visitorId,
-        userId: user.id,
-        userAgent,
-      },
-    });
+    return {
+      userId: result.id,
+      isNew: true,
+    };
+  } catch (error) {
+    // Check if this is a unique constraint violation (race condition)
+    if (
+      error instanceof Error &&
+      error.message.includes("Unique constraint failed")
+    ) {
+      // Another request created the identity first, fetch it
+      const identity = await prisma.anonymousIdentity.findUnique({
+        where: { visitorId },
+        select: { userId: true },
+      });
 
-    return user;
-  });
+      if (identity) {
+        return {
+          userId: identity.userId,
+          isNew: false,
+        };
+      }
+    }
 
-  return {
-    userId: result.id,
-    isNew: true,
-  };
+    // Re-throw other errors
+    throw error;
+  }
 }
 
 /**

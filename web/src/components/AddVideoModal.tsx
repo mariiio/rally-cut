@@ -24,6 +24,7 @@ import {
   IconButton,
   Alert,
 } from '@mui/material';
+import { VolleyballProgress } from './VolleyballProgress';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import VideoLibraryIcon from '@mui/icons-material/VideoLibrary';
 import SearchIcon from '@mui/icons-material/Search';
@@ -82,7 +83,7 @@ export function AddVideoModal({
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const { isUploading, uploadVideo } = useUploadStore();
+  const { isUploading, progress, currentStep, uploadVideo } = useUploadStore();
 
   const loadVideos = useCallback(async (searchQuery?: string) => {
     try {
@@ -252,12 +253,12 @@ export function AddVideoModal({
             }}
           >
             {isUploading ? (
-              <Box>
-                <CircularProgress size={48} />
-                <Typography sx={{ mt: 2 }} color="text.secondary">
-                  Uploading...
-                </Typography>
-              </Box>
+              <VolleyballProgress
+                progress={progress}
+                stepText={currentStep}
+                size="md"
+                showPercentage
+              />
             ) : (
               <>
                 <CloudUploadIcon sx={{ fontSize: 48, color: 'grey.500', mb: 2 }} />

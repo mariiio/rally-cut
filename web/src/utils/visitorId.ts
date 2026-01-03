@@ -15,14 +15,21 @@ export function getVisitorId(): string {
     return '';
   }
 
-  let visitorId = localStorage.getItem(VISITOR_ID_KEY);
+  try {
+    let visitorId = localStorage.getItem(VISITOR_ID_KEY);
 
-  if (!visitorId) {
-    visitorId = crypto.randomUUID();
-    localStorage.setItem(VISITOR_ID_KEY, visitorId);
+    if (!visitorId) {
+      visitorId = crypto.randomUUID();
+      localStorage.setItem(VISITOR_ID_KEY, visitorId);
+    }
+
+    return visitorId;
+  } catch (e) {
+    // localStorage might be unavailable (private browsing, quota exceeded, etc.)
+    console.warn('Failed to access localStorage for visitor ID:', e);
+    // Return a session-scoped ID as fallback
+    return crypto.randomUUID();
   }
-
-  return visitorId;
 }
 
 /**

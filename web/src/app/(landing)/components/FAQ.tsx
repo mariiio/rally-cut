@@ -1,5 +1,6 @@
 'use client';
 
+import { useRef } from 'react';
 import {
   Box,
   Container,
@@ -8,6 +9,7 @@ import {
   AccordionSummary,
   AccordionDetails,
 } from '@mui/material';
+import { motion, useInView, useReducedMotion } from 'framer-motion';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { designTokens } from '@/app/theme';
 
@@ -55,70 +57,95 @@ const faqs = [
 ];
 
 export function FAQ() {
+  const ref = useRef(null);
+  const isInView = useInView(ref, { once: true, margin: '-80px' });
+  const shouldReduceMotion = useReducedMotion();
+
   return (
     <Box
       component="section"
       id="faq"
+      ref={ref}
       sx={{
         py: { xs: 8, md: 12 },
         bgcolor: designTokens.colors.surface[1],
       }}
     >
       <Container maxWidth="md">
-        <Box sx={{ textAlign: 'center', mb: 6 }}>
-          <Typography
-            variant="h2"
-            sx={{
-              fontSize: { xs: '2rem', md: '2.5rem' },
-              fontWeight: 700,
-              mb: 2,
-            }}
-          >
-            Frequently Asked Questions
-          </Typography>
-          <Typography variant="body1" color="text.secondary">
-            Got questions? We&apos;ve got answers.
-          </Typography>
-        </Box>
+        <motion.div
+          initial={shouldReduceMotion ? {} : { opacity: 0, y: 30 }}
+          animate={isInView ? { opacity: 1, y: 0 } : {}}
+          transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+        >
+          <Box sx={{ textAlign: 'center', mb: 6 }}>
+            <Typography
+              variant="h2"
+              sx={{
+                fontSize: { xs: '2rem', md: '2.5rem' },
+                fontWeight: 700,
+                mb: 2,
+              }}
+            >
+              Frequently Asked Questions
+            </Typography>
+            <Typography variant="body1" color="text.secondary">
+              Got questions? We&apos;ve got answers.
+            </Typography>
+          </Box>
+        </motion.div>
 
         <Box>
           {faqs.map((faq, index) => (
-            <Accordion
+            <motion.div
               key={index}
-              elevation={0}
-              sx={{
-                bgcolor: 'transparent',
-                border: '1px solid',
-                borderColor: 'divider',
-                borderRadius: '12px !important',
-                mb: 2,
-                '&::before': { display: 'none' },
-                '&.Mui-expanded': {
-                  borderColor: 'primary.main',
-                  bgcolor: designTokens.colors.surface[2],
-                },
+              initial={shouldReduceMotion ? {} : { opacity: 0, y: 20 }}
+              animate={isInView ? { opacity: 1, y: 0 } : {}}
+              transition={{
+                duration: 0.5,
+                delay: 0.1 + index * 0.05,
+                ease: [0.22, 1, 0.36, 1],
               }}
             >
-              <AccordionSummary
-                expandIcon={<ExpandMoreIcon sx={{ color: 'primary.main' }} />}
+              <Accordion
+                elevation={0}
                 sx={{
-                  px: 3,
-                  py: 1,
-                  '& .MuiAccordionSummary-content': {
-                    my: 2,
+                  bgcolor: 'transparent',
+                  border: '1px solid',
+                  borderColor: 'divider',
+                  borderRadius: '12px !important',
+                  mb: 2,
+                  transition: 'all 0.3s ease',
+                  '&::before': { display: 'none' },
+                  '&:hover': {
+                    borderColor: 'rgba(255, 107, 74, 0.3)',
+                  },
+                  '&.Mui-expanded': {
+                    borderColor: 'primary.main',
+                    bgcolor: designTokens.colors.surface[2],
                   },
                 }}
               >
-                <Typography variant="h6" fontWeight={600} fontSize="1rem">
-                  {faq.question}
-                </Typography>
-              </AccordionSummary>
-              <AccordionDetails sx={{ px: 3, pb: 3, pt: 0 }}>
-                <Typography variant="body1" color="text.secondary" sx={{ lineHeight: 1.7 }}>
-                  {faq.answer}
-                </Typography>
-              </AccordionDetails>
-            </Accordion>
+                <AccordionSummary
+                  expandIcon={<ExpandMoreIcon sx={{ color: 'primary.main' }} />}
+                  sx={{
+                    px: 3,
+                    py: 1,
+                    '& .MuiAccordionSummary-content': {
+                      my: 2,
+                    },
+                  }}
+                >
+                  <Typography variant="h6" fontWeight={600} fontSize="1rem">
+                    {faq.question}
+                  </Typography>
+                </AccordionSummary>
+                <AccordionDetails sx={{ px: 3, pb: 3, pt: 0 }}>
+                  <Typography variant="body1" color="text.secondary" sx={{ lineHeight: 1.7 }}>
+                    {faq.answer}
+                  </Typography>
+                </AccordionDetails>
+              </Accordion>
+            </motion.div>
           ))}
         </Box>
       </Container>
