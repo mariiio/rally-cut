@@ -90,6 +90,7 @@ interface EditorState {
   userRole: 'owner' | 'member' | null;
   currentUserId: string | null;
   currentUserName: string | null;
+  currentUserEmail: string | null;
 
   // Video state (derived from active match when in session mode)
   videoFile: File | null;
@@ -199,6 +200,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   userRole: null,
   currentUserId: null,
   currentUserName: null,
+  currentUserEmail: null,
   videoFile: null,
   videoUrl: null,
   videoMetadata: null,
@@ -259,7 +261,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         // Fetch current user info
         try {
           const user = await getCurrentUser();
-          set({ currentUserId: user.id, currentUserName: user.name });
+          set({ currentUserId: user.id, currentUserName: user.name, currentUserEmail: user.email });
         } catch (e) {
           console.warn('Failed to load current user:', e);
         }
@@ -878,6 +880,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       userRole: null,
       currentUserId: null,
       currentUserName: null,
+      currentUserEmail: null,
       videoFile: null,
       videoUrl: null,
       videoMetadata: null,

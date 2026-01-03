@@ -10,6 +10,7 @@ import { resolveUser } from "./middleware/resolveUser.js";
 import confirmationRouter from "./routes/confirmation.js";
 import detectionRouter from "./routes/detection.js";
 import exportsRouter from "./routes/exports.js";
+import feedbackRouter from "./routes/feedback.js";
 import healthRouter from "./routes/health.js";
 import highlightsRouter from "./routes/highlights.js";
 import identityRouter from "./routes/identity.js";
@@ -54,6 +55,7 @@ app.use(confirmationRouter);
 app.use(exportsRouter);
 app.use(ralliesRouter);
 app.use(highlightsRouter);
+app.use(feedbackRouter);
 
 app.use(errorHandler);
 

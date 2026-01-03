@@ -32,6 +32,7 @@ import ShareIcon from '@mui/icons-material/Share';
 import PeopleIcon from '@mui/icons-material/People';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import DeleteIcon from '@mui/icons-material/Delete';
+import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import Chip from '@mui/material/Chip';
 import { useEditorStore } from '@/stores/editorStore';
 import { useUploadStore } from '@/stores/uploadStore';
@@ -42,6 +43,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { SyncStatus } from './SyncStatus';
 import { AddVideoModal } from './AddVideoModal';
 import { ShareModal } from './ShareModal';
+import { FeedbackModal } from './FeedbackModal';
 
 export function EditorHeader() {
   const router = useRouter();
@@ -50,6 +52,7 @@ export function EditorHeader() {
   const [showResetDialog, setShowResetDialog] = useState(false);
   const [showAddVideoModal, setShowAddVideoModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -267,19 +270,29 @@ export function EditorHeader() {
 
         {/* Share Button (only for owners) */}
         {session && userRole === 'owner' && (
-          <>
-            <Tooltip title="Share session">
-              <IconButton
-                size="small"
-                onClick={() => setShowShareModal(true)}
-                sx={{ color: 'text.secondary' }}
-              >
-                <ShareIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-            <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
-          </>
+          <Tooltip title="Share session">
+            <IconButton
+              size="small"
+              onClick={() => setShowShareModal(true)}
+              sx={{ color: 'text.secondary' }}
+            >
+              <ShareIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
         )}
+
+        {/* Feedback Button */}
+        <Tooltip title="Send feedback">
+          <IconButton
+            size="small"
+            onClick={() => setShowFeedbackModal(true)}
+            sx={{ color: 'text.secondary' }}
+          >
+            <ChatBubbleOutlineIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+
+        <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
 
         {/* History Controls */}
         <Stack direction="row" spacing={0.5} alignItems="center">
@@ -386,6 +399,12 @@ export function EditorHeader() {
           sessionName={session.name}
         />
       )}
+
+      {/* Feedback Modal */}
+      <FeedbackModal
+        open={showFeedbackModal}
+        onClose={() => setShowFeedbackModal(false)}
+      />
 
       {/* Options Menu */}
       <Menu

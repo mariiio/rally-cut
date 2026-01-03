@@ -941,3 +941,39 @@ export async function restoreOriginalVideo(videoId: string): Promise<{ success: 
 
   return response.json();
 }
+
+// ============================================================================
+// Feedback API
+// ============================================================================
+
+export type FeedbackType = 'BUG' | 'FEATURE' | 'FEEDBACK';
+
+export interface SubmitFeedbackRequest {
+  type: FeedbackType;
+  message: string;
+  email?: string;
+  pageUrl?: string;
+}
+
+export interface FeedbackResponse {
+  id: string;
+  type: FeedbackType;
+  message: string;
+  createdAt: string;
+}
+
+// Submit user feedback
+export async function submitFeedback(feedback: SubmitFeedbackRequest): Promise<FeedbackResponse> {
+  const response = await fetch(`${API_BASE_URL}/v1/feedback`, {
+    method: 'POST',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify(feedback),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to submit feedback: ${response.status}`);
+  }
+
+  return response.json();
+}
