@@ -6,7 +6,12 @@ import os from "os";
 import path from "path";
 
 import { env } from "../config/env.js";
-import { generateDownloadUrl, uploadProcessedVideo } from "../lib/s3.js";
+import {
+  generateDownloadUrl,
+  uploadProcessedVideo,
+  uploadPoster,
+  uploadProxyVideo,
+} from "../lib/s3.js";
 import { prisma } from "../lib/prisma.js";
 import { NotFoundError } from "../middleware/errorHandler.js";
 import { getUserTier } from "./tierService.js";
@@ -96,6 +101,9 @@ export interface ProcessingCompletePayload {
   status: "completed" | "failed" | "skipped";
   processed_s3_key?: string;
   processed_size_bytes?: number;
+  poster_s3_key?: string;
+  proxy_s3_key?: string;
+  proxy_size_bytes?: number;
   was_optimized?: boolean;
   error_message?: string;
 }
@@ -140,15 +148,26 @@ export async function handleProcessingComplete(
   }
 
   if (payload.status === "skipped") {
+    const skippedData: {
+      processingStatus: ProcessingStatus;
+      processedAt: Date;
+      posterS3Key?: string;
+    } = {
+      processingStatus: ProcessingStatus.SKIPPED,
+      processedAt: new Date(),
+    };
+
+    // Still save poster even when skipped
+    if (payload.poster_s3_key) {
+      skippedData.posterS3Key = payload.poster_s3_key;
+    }
+
     const result = await prisma.video.updateMany({
       where: {
         id: payload.video_id,
         processingStatus: { in: allowedStatuses },
       },
-      data: {
-        processingStatus: ProcessingStatus.SKIPPED,
-        processedAt: new Date(),
-      },
+      data: skippedData,
     });
 
     if (result.count === 0) {
@@ -173,6 +192,10 @@ export async function handleProcessingComplete(
     processedS3Key?: string;
     s3Key?: string;
     fileSizeBytes?: bigint;
+    posterS3Key?: string;
+    proxyS3Key?: string;
+    proxyFileSizeBytes?: bigint;
+    proxyGeneratedAt?: Date;
   } = {
     processingStatus: ProcessingStatus.COMPLETED,
     processedAt: new Date(),
@@ -186,6 +209,20 @@ export async function handleProcessingComplete(
 
   if (payload.processed_size_bytes) {
     updateData.fileSizeBytes = BigInt(payload.processed_size_bytes);
+  }
+
+  // Always update poster if provided
+  if (payload.poster_s3_key) {
+    updateData.posterS3Key = payload.poster_s3_key;
+  }
+
+  // Update proxy if provided (PREMIUM tier eager generation)
+  if (payload.proxy_s3_key) {
+    updateData.proxyS3Key = payload.proxy_s3_key;
+    updateData.proxyGeneratedAt = new Date();
+    if (payload.proxy_size_bytes) {
+      updateData.proxyFileSizeBytes = BigInt(payload.proxy_size_bytes);
+    }
   }
 
   const result = await prisma.video.updateMany({
@@ -252,14 +289,14 @@ async function triggerLambdaProcessing(
 
 /**
  * Run FFmpeg locally for development.
- * Downloads video from S3, optimizes it, and uploads the result.
+ * Downloads video from S3, optimizes it, generates poster and proxy.
  */
 async function triggerLocalProcessing(
   videoId: string,
   s3Key: string,
-  _tier: string
+  tier: string
 ): Promise<void> {
-  console.log(`[LOCAL PROCESSING] Starting video ${videoId}`);
+  console.log(`[LOCAL PROCESSING] Starting video ${videoId} (tier: ${tier})`);
 
   // Update status to processing
   await prisma.video.update({
@@ -274,6 +311,8 @@ async function triggerLocalProcessing(
   try {
     const inputPath = path.join(tmpDir, "input.mp4");
     const outputPath = path.join(tmpDir, "output.mp4");
+    const posterPath = path.join(tmpDir, "poster.jpg");
+    const proxyPath = path.join(tmpDir, "proxy.mp4");
 
     // Download video from S3
     console.log(`[LOCAL PROCESSING] Downloading ${s3Key}...`);
@@ -287,14 +326,37 @@ async function triggerLocalProcessing(
 
     const originalSize = (await fs.stat(inputPath)).size;
 
+    // Generate S3 key base (same folder as original)
+    const keyParts = s3Key.split("/");
+    const filename = keyParts.pop()!;
+    const folder = keyParts.join("/");
+    const [name] = filename.split(/\.(?=[^.]+$)/);
+    const baseKey = folder ? `${folder}/${name}` : name;
+
+    // Always generate poster (small cost, big UX win)
+    console.log(`[LOCAL PROCESSING] Generating poster...`);
+    await runFFmpeg([
+      "-ss", "1",
+      "-i", inputPath,
+      "-vframes", "1",
+      "-vf", "scale=1280:-1",
+      "-q:v", "2",
+      "-y", posterPath,
+    ]);
+    const posterKey = `${baseKey}_poster.jpg`;
+    const posterData = await fs.readFile(posterPath);
+    await uploadPoster(posterKey, posterData);
+    console.log(`[LOCAL PROCESSING] Uploaded poster to ${posterKey}`);
+
     // Check if optimization is needed
     const needsOptimization = await checkNeedsOptimization(inputPath);
 
     if (!needsOptimization) {
-      console.log(`[LOCAL PROCESSING] Video ${videoId} already optimized, skipping`);
+      console.log(`[LOCAL PROCESSING] Video ${videoId} already optimized, skipping video processing`);
       await handleProcessingComplete({
         video_id: videoId,
         status: "skipped",
+        poster_s3_key: posterKey,
         was_optimized: false,
       });
       return;
@@ -323,16 +385,36 @@ async function triggerLocalProcessing(
       `[LOCAL PROCESSING] Optimized ${videoId}: ${originalSize} -> ${processedSize} bytes (${reduction}% reduction)`
     );
 
-    // Generate processed S3 key
-    const keyParts = s3Key.split("/");
-    const filename = keyParts.pop()!;
-    const [name, ext] = filename.split(/\.(?=[^.]+$)/);
-    const processedKey = [...keyParts, `${name}_optimized.${ext}`].join("/");
-
     // Upload optimized video
-    console.log(`[LOCAL PROCESSING] Uploading to ${processedKey}...`);
+    const processedKey = `${baseKey}_optimized.mp4`;
+    console.log(`[LOCAL PROCESSING] Uploading optimized video to ${processedKey}...`);
     const outputData = await fs.readFile(outputPath);
     await uploadProcessedVideo(processedKey, outputData);
+
+    // Generate proxy for PREMIUM tier (eager generation)
+    let proxyKey: string | undefined;
+    let proxySizeBytes: number | undefined;
+
+    if (tier === "PREMIUM") {
+      console.log(`[LOCAL PROCESSING] Generating 720p proxy for PREMIUM tier...`);
+      await runFFmpeg([
+        "-i", outputPath,
+        "-vf", "scale=-2:720",
+        "-c:v", "libx264",
+        "-crf", "28",
+        "-preset", "fast",
+        "-movflags", "+faststart",
+        "-c:a", "aac",
+        "-b:a", "96k",
+        "-y", proxyPath,
+      ]);
+
+      proxyKey = `${baseKey}_proxy.mp4`;
+      const proxyData = await fs.readFile(proxyPath);
+      proxySizeBytes = proxyData.length;
+      await uploadProxyVideo(proxyKey, proxyData, tier);
+      console.log(`[LOCAL PROCESSING] Uploaded proxy to ${proxyKey} (${(proxySizeBytes / 1024 / 1024).toFixed(1)} MB)`);
+    }
 
     // Update via webhook handler
     await handleProcessingComplete({
@@ -340,6 +422,9 @@ async function triggerLocalProcessing(
       status: "completed",
       processed_s3_key: processedKey,
       processed_size_bytes: processedSize,
+      poster_s3_key: posterKey,
+      proxy_s3_key: proxyKey,
+      proxy_size_bytes: proxySizeBytes,
       was_optimized: true,
     });
 

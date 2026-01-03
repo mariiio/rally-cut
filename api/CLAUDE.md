@@ -60,6 +60,20 @@ src/
 - On completion, sends results to `POST /v1/webhooks/detection/complete`
 - Results stored as rallies with `order` field for sequencing
 
+### Video Processing (Optimization)
+After upload confirmation, videos are processed for faster web playback:
+
+1. **Poster generation** (always) - 1280px JPEG thumbnail for instant display
+2. **Video optimization** - H.264 + faststart if needed (high bitrate or moov atom not at start)
+3. **Proxy generation** (PREMIUM tier only, eager) - 720p version for faster editing
+
+**Outputs stored in S3:**
+- `{baseKey}_poster.jpg` - Poster image (~50KB)
+- `{baseKey}_optimized.mp4` - Optimized full-quality video
+- `{baseKey}_proxy.mp4` - 720p proxy for editing (PREMIUM only)
+
+**Local development**: Set `PROCESSING_LAMBDA_FUNCTION_NAME` to empty to use local FFmpeg.
+
 ### Video Export
 - `POST /v1/export-jobs` creates export job and triggers Lambda (or local FFmpeg)
 - `GET /v1/export-jobs/:id` returns job status/progress (polling)

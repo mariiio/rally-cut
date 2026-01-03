@@ -54,7 +54,9 @@ export interface Highlight {
 export interface Match {
   id: string;           // e.g., "match_1"
   name: string;         // Display name, e.g., "Match 1"
-  videoUrl: string;     // Runtime URL (public path or blob URL)
+  videoUrl: string;     // Runtime URL (full quality, public path or blob URL)
+  proxyUrl?: string;    // Optional 720p proxy URL for faster editing
+  posterUrl?: string;   // Optional poster image URL for instant display
   video: VideoMetadata; // Video metadata (fps, duration, dimensions)
   rallies: Rally[];     // Rallies for this match
 }

@@ -95,6 +95,8 @@ interface EditorState {
   // Video state (derived from active match when in session mode)
   videoFile: File | null;
   videoUrl: string | null;
+  posterUrl: string | null;
+  proxyUrl: string | null;
   videoMetadata: VideoMetadata | null;
 
   // Rally state (derived from active match when in session mode)
@@ -203,6 +205,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   currentUserEmail: null,
   videoFile: null,
   videoUrl: null,
+  posterUrl: null,
+  proxyUrl: null,
   videoMetadata: null,
   rallies: [],
   selectedRallyId: null,
@@ -412,6 +416,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         activeMatchId: firstMatch?.id || null,
         userRole: session.userRole || 'owner', // Default to owner if not specified
         videoUrl: firstMatch?.videoUrl || null,
+        posterUrl: firstMatch?.posterUrl || null,
+        proxyUrl: firstMatch?.proxyUrl || null,
         videoMetadata: firstMatch?.video || null,
         rallies: firstMatch?.rallies || [],
         highlights: session.highlights,
@@ -459,6 +465,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         activeMatchId,
         userRole: freshSession.userRole || 'owner',
         videoUrl: activeMatch?.videoUrl || null,
+        posterUrl: activeMatch?.posterUrl || null,
+        proxyUrl: activeMatch?.proxyUrl || null,
         videoMetadata: activeMatch?.video || null,
         rallies: activeMatch?.rallies || [],
         highlights: freshSession.highlights,
@@ -539,6 +547,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       session: { ...state.session, matches: updatedMatches },
       activeMatchId: matchId,
       videoUrl: match.videoUrl,
+      posterUrl: match.posterUrl || null,
+      proxyUrl: match.proxyUrl || null,
       videoMetadata: match.video,
       rallies: match.rallies,
       originalRallies: state.originalRalliesPerMatch[matchId] || [],
@@ -620,6 +630,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({
       videoFile: null,
       videoUrl: null,
+      posterUrl: null,
+      proxyUrl: null,
       videoMetadata: null,
     });
   },
@@ -883,6 +895,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       currentUserEmail: null,
       videoFile: null,
       videoUrl: null,
+      posterUrl: null,
+      proxyUrl: null,
       videoMetadata: null,
       rallies: [],
       highlights: [],
