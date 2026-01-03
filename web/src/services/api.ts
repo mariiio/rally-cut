@@ -35,6 +35,9 @@ export function getVideoStreamUrl(s3Key: string): string {
     : `/${s3Key}`;
 }
 
+// Video processing status (for upload optimization)
+export type ProcessingStatus = 'PENDING' | 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
+
 // API response types (from backend)
 interface ApiSession {
   id: string;
@@ -54,6 +57,7 @@ interface ApiVideo {
   s3Key: string;
   contentHash: string;
   status: 'PENDING' | 'UPLOADED' | 'DETECTING' | 'DETECTED' | 'ERROR';
+  processingStatus?: ProcessingStatus;
   durationMs: number | null;
   width: number | null;
   height: number | null;
@@ -449,6 +453,7 @@ export interface VideoListItem {
   filename: string;
   s3Key: string;
   status: 'PENDING' | 'UPLOADED' | 'DETECTING' | 'DETECTED' | 'ERROR';
+  processingStatus?: ProcessingStatus;
   durationMs: number | null;
   width: number | null;
   height: number | null;

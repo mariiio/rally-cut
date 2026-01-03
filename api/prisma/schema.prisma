@@ -141,6 +141,13 @@ model Video {
   createdAt     DateTime    @default(now()) @map("created_at")
   updatedAt     DateTime    @updatedAt @map("updated_at")
 
+  // Video optimization processing
+  processingStatus      ProcessingStatus @default(PENDING) @map("processing_status")
+  processedS3Key        String?          @map("processed_s3_key")
+  processedAt           DateTime?        @map("processed_at")
+  processingError       String?          @map("processing_error")
+  originalFileSizeBytes BigInt?          @map("original_file_size_bytes")
+
   user          User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
   sessionVideos SessionVideo[]
   rallies       Rally[]
@@ -151,6 +158,7 @@ model Video {
   @@index([contentHash])
   @@index([expiresAt])
   @@index([deletedAt])
+  @@index([processingStatus])
   @@map("videos")
 }
 
@@ -176,6 +184,15 @@ enum VideoStatus {
   DETECTING
   DETECTED
   ERROR
+}
+
+enum ProcessingStatus {
+  PENDING
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  SKIPPED
 }
 
 // ============================================================================
