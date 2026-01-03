@@ -204,7 +204,7 @@ class SyncService {
           : match.rallies;
 
         ralliesPerVideo[match.id] = rallies.map(r => ({
-          id: (r as Rally & { _backendId?: string })._backendId,
+          id: r._backendId,
           startMs: Math.round(r.start_time * 1000),
           endMs: Math.round(r.end_time * 1000),
         }));
@@ -212,7 +212,7 @@ class SyncService {
 
       // Build highlights
       const highlights = currentState.highlights.map(h => ({
-        id: (h as Highlight & { _backendId?: string })._backendId,
+        id: h._backendId,
         name: h.name,
         color: h.color,
         rallyIds: h.rallyIds,

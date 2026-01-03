@@ -16,7 +16,8 @@ router.post(
   validateRequest({ params: z.object({ id: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      const result = await triggerRallyDetection(req.params.id, req.userId!);
+      const userId = req.userId as string; // Guaranteed by requireUser
+      const result = await triggerRallyDetection(req.params.id, userId);
       res.status(202).json(result);
     } catch (error) {
       next(error);

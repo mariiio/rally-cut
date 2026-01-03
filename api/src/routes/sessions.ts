@@ -58,7 +58,8 @@ router.get(
 // Must be before /v1/sessions/:id to avoid route conflict
 router.get("/v1/sessions/shared", requireUser, async (req, res, next) => {
   try {
-    const sessions = await listSharedSessions(req.userId!);
+    const userId = req.userId as string; // Guaranteed by requireUser
+    const sessions = await listSharedSessions(userId);
     res.json({ data: sessions });
   } catch (error) {
     next(error);

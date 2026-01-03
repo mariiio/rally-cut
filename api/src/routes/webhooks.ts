@@ -1,7 +1,7 @@
+import type { RequestHandler } from "express";
 import { Router } from "express";
 import { z } from "zod";
 import { env } from "../config/env.js";
-import { ValidationError } from "../middleware/errorHandler.js";
 import { validateRequest } from "../middleware/validateRequest.js";
 import {
   handleDetectionComplete,
@@ -17,6 +17,16 @@ import {
 } from "../services/confirmationService.js";
 
 const router = Router();
+
+// Middleware to validate webhook secret before body parsing
+const requireWebhookSecret: RequestHandler = (req, res, next) => {
+  const secret = req.headers["x-webhook-secret"];
+  if (secret !== env.MODAL_WEBHOOK_SECRET) {
+    res.status(401).json({ error: "Invalid webhook secret" });
+    return;
+  }
+  next();
+};
 
 const detectionCompleteSchema = z.object({
   job_id: z.string().uuid(),
@@ -36,15 +46,10 @@ const detectionCompleteSchema = z.object({
 
 router.post(
   "/v1/webhooks/detection-complete",
+  requireWebhookSecret,
   validateRequest({ body: detectionCompleteSchema }),
   async (req, res, next) => {
     try {
-      const secret = req.headers["x-webhook-secret"];
-
-      if (secret !== env.MODAL_WEBHOOK_SECRET) {
-        throw new ValidationError("Invalid webhook secret");
-      }
-
       const result = await handleDetectionComplete(req.body);
       res.json(result);
     } catch (error) {
@@ -62,15 +67,10 @@ const progressUpdateSchema = z.object({
 
 router.post(
   "/v1/webhooks/detection-progress",
+  requireWebhookSecret,
   validateRequest({ body: progressUpdateSchema }),
   async (req, res, next) => {
     try {
-      const secret = req.headers["x-webhook-secret"];
-
-      if (secret !== env.MODAL_WEBHOOK_SECRET) {
-        throw new ValidationError("Invalid webhook secret");
-      }
-
       await updateDetectionProgress(
         req.body.job_id,
         req.body.progress,
@@ -96,15 +96,10 @@ const exportCompleteSchema = z.object({
 
 router.post(
   "/v1/webhooks/export-complete",
+  requireWebhookSecret,
   validateRequest({ body: exportCompleteSchema }),
   async (req, res, next) => {
     try {
-      const secret = req.headers["x-webhook-secret"];
-
-      if (secret !== env.MODAL_WEBHOOK_SECRET) {
-        throw new ValidationError("Invalid webhook secret");
-      }
-
       const result = await handleExportComplete(req.body);
       res.json(result);
     } catch (error) {
@@ -120,15 +115,10 @@ const exportProgressSchema = z.object({
 
 router.post(
   "/v1/webhooks/export-progress",
+  requireWebhookSecret,
   validateRequest({ body: exportProgressSchema }),
   async (req, res, next) => {
     try {
-      const secret = req.headers["x-webhook-secret"];
-
-      if (secret !== env.MODAL_WEBHOOK_SECRET) {
-        throw new ValidationError("Invalid webhook secret");
-      }
-
       await updateExportProgress(req.body.job_id, req.body.progress);
       res.json({ success: true });
     } catch (error) {
@@ -151,15 +141,10 @@ const confirmationCompleteSchema = z.object({
 
 router.post(
   "/v1/webhooks/confirmation-complete",
+  requireWebhookSecret,
   validateRequest({ body: confirmationCompleteSchema }),
   async (req, res, next) => {
     try {
-      const secret = req.headers["x-webhook-secret"];
-
-      if (secret !== env.MODAL_WEBHOOK_SECRET) {
-        throw new ValidationError("Invalid webhook secret");
-      }
-
       const result = await handleConfirmationComplete(req.body);
       res.json(result);
     } catch (error) {
@@ -175,15 +160,10 @@ const confirmationProgressSchema = z.object({
 
 router.post(
   "/v1/webhooks/confirmation-progress",
+  requireWebhookSecret,
   validateRequest({ body: confirmationProgressSchema }),
   async (req, res, next) => {
     try {
-      const secret = req.headers["x-webhook-secret"];
-
-      if (secret !== env.MODAL_WEBHOOK_SECRET) {
-        throw new ValidationError("Invalid webhook secret");
-      }
-
       await updateConfirmationProgress(
         req.body.confirmation_id,
         req.body.progress

@@ -262,7 +262,7 @@ export function VideoPlayer() {
       <video
         ref={videoRef}
         src={videoUrl}
-        preload="metadata"
+        preload="auto"
         crossOrigin={process.env.NODE_ENV === 'production' ? 'anonymous' : undefined}
         style={{
           width: '100%',

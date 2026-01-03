@@ -170,16 +170,24 @@ export async function cleanupExpiredContent(): Promise<CleanupResult> {
     select: { id: true, s3Key: true },
   });
 
-  // Delete from S3
-  for (const video of videosToHardDelete) {
-    try {
-      await deleteObject(video.s3Key);
-      console.log(`[CLEANUP] Deleted S3 object: ${video.s3Key}`);
-    } catch (error) {
-      const message = `Failed to delete S3 object ${video.s3Key}: ${error}`;
-      console.error(`[CLEANUP] ${message}`);
-      errors.push(message);
-    }
+  // Delete from S3 in batches for better performance
+  const S3_BATCH_SIZE = 10;
+  for (let i = 0; i < videosToHardDelete.length; i += S3_BATCH_SIZE) {
+    const batch = videosToHardDelete.slice(i, i + S3_BATCH_SIZE);
+    const results = await Promise.allSettled(
+      batch.map((video) => deleteObject(video.s3Key))
+    );
+
+    results.forEach((result, idx) => {
+      const video = batch[idx];
+      if (result.status === "fulfilled") {
+        console.log(`[CLEANUP] Deleted S3 object: ${video.s3Key}`);
+      } else {
+        const message = `Failed to delete S3 object ${video.s3Key}: ${result.reason}`;
+        console.error(`[CLEANUP] ${message}`);
+        errors.push(message);
+      }
+    });
   }
 
   // Delete from database

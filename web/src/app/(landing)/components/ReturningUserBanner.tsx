@@ -20,10 +20,12 @@ export function ReturningUserBanner() {
       return;
     }
 
+    let isMounted = true;
+
     // Check if user has content
     checkUserHasContent()
       .then(({ hasContent, sessionCount: count }) => {
-        if (hasContent) {
+        if (isMounted && hasContent) {
           setSessionCount(count ?? 0);
           setVisible(true);
         }
@@ -31,6 +33,10 @@ export function ReturningUserBanner() {
       .catch(() => {
         // Silently fail - don't show banner if API fails
       });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const handleDismiss = () => {

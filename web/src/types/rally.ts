@@ -23,6 +23,8 @@ export interface Rally {
   duration: number;
   type: 'rally';
   thumbnail_time: number;
+  /** Backend UUID, populated after sync with server */
+  _backendId?: string;
 }
 
 /** Aggregate statistics about all rallies */
@@ -44,6 +46,8 @@ export interface Highlight {
   createdAt: number;    // Timestamp for ordering
   createdByUserId?: string | null;  // User who created this highlight
   createdByUserName?: string | null; // Name of user who created this highlight
+  /** Backend UUID, populated after sync with server */
+  _backendId?: string;
 }
 
 /** A single match (video) within a session */

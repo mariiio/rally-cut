@@ -23,7 +23,8 @@ router.post(
   validateRequest({ params: z.object({ id: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      const result = await initiateConfirmation(req.params.id, req.userId!);
+      const userId = req.userId as string; // Guaranteed by requireUser
+      const result = await initiateConfirmation(req.params.id, userId);
       res.status(202).json(result);
     } catch (error) {
       next(error);
@@ -41,7 +42,8 @@ router.get(
   validateRequest({ params: z.object({ id: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      const status = await getConfirmationStatus(req.params.id, req.userId!);
+      const userId = req.userId as string; // Guaranteed by requireUser
+      const status = await getConfirmationStatus(req.params.id, userId);
       res.json(status);
     } catch (error) {
       next(error);
@@ -61,7 +63,8 @@ router.post(
   validateRequest({ params: z.object({ id: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      const result = await restoreOriginal(req.params.id, req.userId!);
+      const userId = req.userId as string; // Guaranteed by requireUser
+      const result = await restoreOriginal(req.params.id, userId);
       res.status(200).json(result);
     } catch (error) {
       next(error);

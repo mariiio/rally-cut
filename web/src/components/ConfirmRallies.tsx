@@ -41,13 +41,18 @@ export function ConfirmRallies({ matchId, isPremium }: ConfirmRalliesProps) {
   const isLocked = status?.status === 'CONFIRMED';
   const isProcessing = status?.status === 'PENDING' || status?.status === 'PROCESSING';
 
-  // Poll for status updates when processing
+  // Load initial status and poll when processing
   useEffect(() => {
-    if (!isProcessing) return;
+    let isMounted = true;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
 
-    const pollStatus = async () => {
+    const fetchStatus = async () => {
+      if (!isMounted) return;
+
       try {
         const result = await getConfirmationStatus(matchId);
+        if (!isMounted) return;
+
         if (result.confirmation) {
           setConfirmationStatus(matchId, {
             id: result.confirmation.id,
@@ -59,49 +64,44 @@ export function ConfirmRallies({ matchId, isPremium }: ConfirmRalliesProps) {
             trimmedDurationMs: result.confirmation.trimmedDurationMs,
           });
 
-          // If completed or failed, reload match to get updated timestamps
+          // If completed or failed, stop polling and handle result
           if (result.confirmation.status === 'CONFIRMED') {
             setIsConfirming(false);
-            // Reload the match to get updated rally timestamps
+            if (intervalId) {
+              clearInterval(intervalId);
+              intervalId = null;
+            }
             await reloadCurrentMatch();
           } else if (result.confirmation.status === 'FAILED') {
             setIsConfirming(false);
+            if (intervalId) {
+              clearInterval(intervalId);
+              intervalId = null;
+            }
             setError(result.confirmation.error || 'Confirmation failed');
           }
         }
       } catch (e) {
-        console.error('Failed to poll confirmation status:', e);
+        // Ignore errors - status may not exist yet
+        console.debug('No confirmation status for match:', matchId, e);
       }
     };
 
-    const interval = setInterval(pollStatus, 2000);
-    return () => clearInterval(interval);
+    // Initial load
+    fetchStatus();
+
+    // Start polling if processing
+    if (isProcessing) {
+      intervalId = setInterval(fetchStatus, 2000);
+    }
+
+    return () => {
+      isMounted = false;
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
   }, [isProcessing, matchId, setConfirmationStatus, setIsConfirming, reloadCurrentMatch]);
-
-  // Load initial status on mount
-  useEffect(() => {
-    const loadStatus = async () => {
-      try {
-        const result = await getConfirmationStatus(matchId);
-        if (result.confirmation) {
-          setConfirmationStatus(matchId, {
-            id: result.confirmation.id,
-            status: result.confirmation.status,
-            progress: result.confirmation.progress,
-            error: result.confirmation.error,
-            confirmedAt: result.confirmation.confirmedAt,
-            originalDurationMs: result.confirmation.originalDurationMs,
-            trimmedDurationMs: result.confirmation.trimmedDurationMs,
-          });
-        }
-      } catch (e) {
-        // Ignore errors on initial load
-        console.debug('No confirmation status for match:', matchId);
-      }
-    };
-
-    loadStatus();
-  }, [matchId, setConfirmationStatus]);
 
   const handleConfirm = useCallback(async () => {
     if (!isPremium) {
