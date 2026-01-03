@@ -23,6 +23,9 @@ import { queueVideoProcessing } from "./processingService.js";
 
 const MAX_VIDEOS_PER_SESSION = 5;
 
+// Type for Prisma transaction client
+type PrismaTransaction = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+
 // Helper to convert BigInt fields to strings for JSON serialization
 function serializeBigInts<T>(obj: T): T {
   return JSON.parse(
@@ -88,6 +91,84 @@ async function validateUploadRequest(
   const expiresAt = calculateExpirationDate(tier);
 
   return { tier, limits, expiresAt };
+}
+
+// Helper to find or create a pending video for upload
+// Reuses PENDING videos to allow retries after failed uploads
+interface FindOrCreatePendingVideoParams {
+  userId: string;
+  contentHash: string;
+  filename: string;
+  fileSize: number;
+  durationMs?: number;
+  expiresAt: Date | null;
+}
+
+interface FindOrCreatePendingVideoResult {
+  video: {
+    id: string;
+    s3Key: string;
+  };
+  reused: boolean;
+}
+
+async function findOrCreatePendingVideo(
+  tx: PrismaTransaction,
+  params: FindOrCreatePendingVideoParams
+): Promise<FindOrCreatePendingVideoResult> {
+  // Check for existing video with same content hash
+  const existingVideo = await tx.video.findFirst({
+    where: {
+      userId: params.userId,
+      contentHash: params.contentHash,
+      deletedAt: null,
+    },
+  });
+
+  if (existingVideo) {
+    // Reuse PENDING videos (allows retrying failed uploads)
+    if (existingVideo.status === "PENDING") {
+      // Update metadata in case file size or duration changed
+      // Keep original s3Key and filename to avoid orphaned S3 files
+      await tx.video.update({
+        where: { id: existingVideo.id },
+        data: {
+          fileSizeBytes: params.fileSize,
+          durationMs: params.durationMs,
+          expiresAt: params.expiresAt,
+        },
+      });
+      return {
+        video: { id: existingVideo.id, s3Key: existingVideo.s3Key },
+        reused: true,
+      };
+    }
+
+    // Completed videos are true duplicates - block with 409
+    throw new ConflictError("Video with this content already exists", {
+      existingVideoId: existingVideo.id,
+    });
+  }
+
+  // No existing video - create new one
+  const videoId = crypto.randomUUID();
+  const s3Key = getVideoS3Key(params.userId, videoId, params.filename);
+
+  const video = await tx.video.create({
+    data: {
+      id: videoId,
+      userId: params.userId,
+      name: params.filename.replace(/\.[^.]+$/, ""),
+      filename: params.filename,
+      s3Key,
+      contentHash: params.contentHash,
+      fileSizeBytes: params.fileSize,
+      durationMs: params.durationMs,
+      expiresAt: params.expiresAt,
+    },
+  });
+
+  return { video: { id: video.id, s3Key: video.s3Key }, reused: false };
 }
 
 // ============================================================================
@@ -174,46 +255,21 @@ export async function createVideoUploadUrl(params: CreateVideoUploadParams) {
     contentHash: params.contentHash,
   });
 
-  const videoId = crypto.randomUUID();
-  const s3Key = getVideoS3Key(params.userId, videoId, params.filename);
-
-  // Use transaction to atomically check for duplicates and create video
-  // This prevents TOCTOU race condition where two uploads with same content
-  // could both pass the duplicate check before either creates the record
-  const video = await prisma.$transaction(async (tx) => {
-    // Check for duplicate content hash within transaction
-    const existingVideo = await tx.video.findFirst({
-      where: {
-        userId: params.userId,
-        contentHash: params.contentHash,
-        deletedAt: null,
-      },
-    });
-
-    if (existingVideo) {
-      throw new ConflictError("Video with this content already exists", {
-        existingVideoId: existingVideo.id,
-      });
-    }
-
-    // Create video atomically after duplicate check
-    return tx.video.create({
-      data: {
-        id: videoId,
-        userId: params.userId,
-        name: params.filename.replace(/\.[^.]+$/, ""),
-        filename: params.filename,
-        s3Key,
-        contentHash: params.contentHash,
-        fileSizeBytes: params.fileSize,
-        durationMs: params.durationMs,
-        expiresAt,
-      },
+  // Use transaction to atomically find/create video
+  // Reuses PENDING videos to allow retries after failed uploads
+  const { video } = await prisma.$transaction(async (tx) => {
+    return findOrCreatePendingVideo(tx, {
+      userId: params.userId,
+      contentHash: params.contentHash,
+      filename: params.filename,
+      fileSize: params.fileSize,
+      durationMs: params.durationMs,
+      expiresAt,
     });
   });
 
   const uploadUrl = await generateUploadUrl({
-    key: s3Key,
+    key: video.s3Key,
     contentType: params.contentType,
     contentLength: params.fileSize,
   });
@@ -221,7 +277,7 @@ export async function createVideoUploadUrl(params: CreateVideoUploadParams) {
   return {
     uploadUrl,
     videoId: video.id,
-    s3Key,
+    s3Key: video.s3Key,
   };
 }
 
@@ -532,68 +588,53 @@ export async function requestUploadUrl(
     contentHash: data.contentHash,
   });
 
-  const videoId = crypto.randomUUID();
-  const s3Key = getVideoS3Key(userId, videoId, data.filename);
-
-  // Create video and link to session in transaction
-  // Also check for duplicate content hash atomically to prevent TOCTOU race
-  const result = await prisma.$transaction(async (tx) => {
-    // Check for duplicate content hash within transaction
-    const existingVideo = await tx.video.findFirst({
-      where: {
-        userId,
-        contentHash: data.contentHash,
-        deletedAt: null,
-      },
+  // Create/reuse video and link to session in transaction
+  // Reuses PENDING videos to allow retries after failed uploads
+  const { video } = await prisma.$transaction(async (tx) => {
+    const result = await findOrCreatePendingVideo(tx, {
+      userId,
+      contentHash: data.contentHash,
+      filename: data.filename,
+      fileSize: data.fileSize,
+      durationMs: data.durationMs,
+      expiresAt,
     });
 
-    if (existingVideo) {
-      throw new ConflictError("Video with this content already exists", {
-        existingVideoId: existingVideo.id,
+    // Handle SessionVideo junction
+    // If reusing a video, it might already be linked to this session
+    const existingSessionVideo = await tx.sessionVideo.findUnique({
+      where: { sessionId_videoId: { sessionId, videoId: result.video.id } },
+    });
+
+    if (!existingSessionVideo) {
+      // Link video to session with next order value
+      const maxOrder = await tx.sessionVideo.aggregate({
+        where: { sessionId },
+        _max: { order: true },
+      });
+
+      await tx.sessionVideo.create({
+        data: {
+          sessionId,
+          videoId: result.video.id,
+          order: (maxOrder._max.order ?? -1) + 1,
+        },
       });
     }
 
-    const video = await tx.video.create({
-      data: {
-        id: videoId,
-        userId,
-        name: data.filename.replace(/\.[^.]+$/, ""),
-        filename: data.filename,
-        s3Key,
-        contentHash: data.contentHash,
-        fileSizeBytes: data.fileSize,
-        durationMs: data.durationMs,
-        expiresAt,
-      },
-    });
-
-    // Use MAX(order) + 1 within transaction to prevent order collisions
-    const maxOrder = await tx.sessionVideo.aggregate({
-      where: { sessionId },
-      _max: { order: true },
-    });
-
-    await tx.sessionVideo.create({
-      data: {
-        sessionId,
-        videoId: video.id,
-        order: (maxOrder._max.order ?? -1) + 1,
-      },
-    });
-
-    return video;
+    return result;
   });
 
   const uploadUrl = await generateUploadUrl({
-    key: s3Key,
+    key: video.s3Key,
     contentType: data.contentType,
     contentLength: data.fileSize,
   });
 
   return {
     uploadUrl,
-    videoId: result.id,
-    s3Key,
+    videoId: video.id,
+    s3Key: video.s3Key,
   };
 }
 
