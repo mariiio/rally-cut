@@ -133,6 +133,7 @@ model Video {
   name          String
   filename      String
   s3Key         String      @map("s3_key")
+  /// SHA-256 hex hash for deduplication. Files >50MB: hash of first/last 10MB + metadata.
   contentHash   String      @map("content_hash")
   status        VideoStatus @default(PENDING)
   durationMs    Int?        @map("duration_ms")
@@ -277,6 +278,7 @@ model HighlightRally {
 model RallyDetectionJob {
   id              String             @id @default(uuid())
   videoId         String             @map("video_id")
+  /// SHA-256 hex hash for caching detection results across uploads with same content.
   contentHash     String             @map("content_hash")
   status          DetectionJobStatus @default(PENDING)
   progress        Float?             @default(0)

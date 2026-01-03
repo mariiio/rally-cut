@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const requestUploadUrlSchema = z.object({
   filename: z.string().min(1).max(255),
+  // SHA-256 hex hash (64 chars). For files >50MB, computed from first/last 10MB + metadata.
   contentHash: z.string().length(64),
   fileSize: z.number().int().positive(), // Tier-based limit enforced in service
   durationMs: z.number().int().positive().optional(),

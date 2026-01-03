@@ -69,11 +69,34 @@ export function isJsonFile(file: File): boolean {
 }
 
 /**
- * Generate a SHA-256 hash of a file (for deduplication)
+ * Generate a SHA-256 hash for file deduplication.
+ * For large files (>50MB), hashes first/last 10MB + metadata instead of entire file.
+ * This prevents memory issues and stale file handle errors with large videos.
  */
 export async function hashFile(file: File): Promise<string> {
-  const buffer = await file.arrayBuffer();
-  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+  const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB
+  const THRESHOLD = 50 * 1024 * 1024; // 50MB
+
+  let dataToHash: ArrayBuffer;
+
+  if (file.size <= THRESHOLD) {
+    // Small files: hash entire content
+    dataToHash = await file.arrayBuffer();
+  } else {
+    // Large files: hash first chunk + last chunk + metadata
+    const firstChunk = await file.slice(0, CHUNK_SIZE).arrayBuffer();
+    const lastChunk = await file.slice(-CHUNK_SIZE).arrayBuffer();
+    const metadata = new TextEncoder().encode(`${file.name}|${file.size}|${file.lastModified}`);
+
+    // Combine chunks
+    const combined = new Uint8Array(firstChunk.byteLength + lastChunk.byteLength + metadata.byteLength);
+    combined.set(new Uint8Array(firstChunk), 0);
+    combined.set(new Uint8Array(lastChunk), firstChunk.byteLength);
+    combined.set(metadata, firstChunk.byteLength + lastChunk.byteLength);
+    dataToHash = combined.buffer;
+  }
+
+  const hashBuffer = await crypto.subtle.digest('SHA-256', dataToHash);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
