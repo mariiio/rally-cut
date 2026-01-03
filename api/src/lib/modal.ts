@@ -9,6 +9,9 @@ export interface ModalJobParams {
 export async function triggerModalDetection(
   params: ModalJobParams
 ): Promise<void> {
+  if (!env.MODAL_FUNCTION_URL) {
+    throw new Error("MODAL_FUNCTION_URL is not configured");
+  }
   const response = await fetch(env.MODAL_FUNCTION_URL, {
     method: "POST",
     headers: {

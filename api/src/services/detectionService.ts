@@ -78,6 +78,8 @@ async function triggerLocalDetection(params: {
         AWS_ACCESS_KEY_ID: env.AWS_ACCESS_KEY_ID,
         AWS_SECRET_ACCESS_KEY: env.AWS_SECRET_ACCESS_KEY,
         AWS_REGION: env.AWS_REGION,
+        // Pass S3_ENDPOINT for MinIO/local development
+        ...(env.S3_ENDPOINT && { S3_ENDPOINT: env.S3_ENDPOINT }),
       },
     }
   );
