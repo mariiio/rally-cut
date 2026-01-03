@@ -10,12 +10,18 @@ import { designTokens } from '@/app/theme';
 export function VideoPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(false);
   const [bufferProgress, setBufferProgress] = useState(0);
 
   const videoUrl = useEditorStore((state) => state.videoUrl);
+  const posterUrl = useEditorStore((state) => state.posterUrl);
+  const proxyUrl = useEditorStore((state) => state.proxyUrl);
   const activeMatchId = useEditorStore((state) => state.activeMatchId);
   const setActiveMatch = useEditorStore((state) => state.setActiveMatch);
   const isLoadingSession = useEditorStore((state) => state.isLoadingSession);
+
+  // Use proxy URL for editing (faster loading), fall back to full quality
+  const effectiveVideoUrl = proxyUrl || videoUrl;
 
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const seekTo = usePlayerStore((state) => state.seekTo);
@@ -143,6 +149,15 @@ export function VideoPlayer() {
     setBufferedRanges(ranges);
   }, [setBufferedRanges]);
 
+  // Handle buffering stalls during playback
+  const handleWaiting = useCallback(() => {
+    setIsBuffering(true);
+  }, []);
+
+  const handleCanPlay = useCallback(() => {
+    setIsBuffering(false);
+  }, []);
+
   const handleEmptyStateClick = () => {
     // Trigger file upload via EditorHeader's exposed function
     const triggerFn = (window as unknown as { triggerVideoUpload?: () => void }).triggerVideoUpload;
@@ -172,7 +187,7 @@ export function VideoPlayer() {
     );
   }
 
-  if (!videoUrl) {
+  if (!effectiveVideoUrl) {
     return (
       <Box
         onClick={handleEmptyStateClick}
@@ -246,7 +261,7 @@ export function VideoPlayer() {
         },
       }}
     >
-      {/* Loading overlay */}
+      {/* Loading overlay - initial load */}
       {isLoading && (
         <Box
           sx={{
@@ -270,10 +285,35 @@ export function VideoPlayer() {
         </Box>
       )}
 
+      {/* Buffering indicator - during playback stalls */}
+      {isBuffering && !isLoading && (
+        <Box
+          sx={{
+            position: 'absolute',
+            top: 12,
+            right: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            bgcolor: 'rgba(0, 0, 0, 0.6)',
+            borderRadius: 1,
+            px: 1.5,
+            py: 0.75,
+            zIndex: 2,
+          }}
+        >
+          <CircularProgress color="primary" size={16} thickness={4} />
+          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+            Buffering...
+          </Typography>
+        </Box>
+      )}
+
       <video
         ref={videoRef}
-        src={videoUrl}
-        preload="auto"
+        src={effectiveVideoUrl}
+        poster={posterUrl || undefined}
+        preload="metadata"
         crossOrigin={process.env.NODE_ENV === 'production' ? 'anonymous' : undefined}
         style={{
           width: '100%',
@@ -284,6 +324,8 @@ export function VideoPlayer() {
         onLoadedMetadata={handleLoadedMetadata}
         onLoadStart={handleLoadStart}
         onProgress={handleProgress}
+        onWaiting={handleWaiting}
+        onCanPlay={handleCanPlay}
         playsInline
       />
     </Box>

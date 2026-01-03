@@ -62,6 +62,8 @@ interface ApiVideo {
   width: number | null;
   height: number | null;
   fileSizeBytes: string | null;
+  posterS3Key?: string | null;
+  proxyS3Key?: string | null;
   order: number;
   rallies: ApiRally[];
 }
@@ -138,10 +140,17 @@ function apiVideoToMatch(apiVideo: ApiVideo, cloudfrontDomain?: string): Match {
   // In production: use CloudFront for global CDN delivery
   // In development: always use relative URL (proxied to backend) to avoid CORS issues with fetch()
   const isProd = process.env.NODE_ENV === 'production';
-  let videoUrl = `/${apiVideo.s3Key}`;
-  if (isProd && cloudfrontDomain) {
-    videoUrl = `https://${cloudfrontDomain}/${apiVideo.s3Key}`;
-  }
+
+  const buildUrl = (s3Key: string): string => {
+    if (isProd && cloudfrontDomain) {
+      return `https://${cloudfrontDomain}/${s3Key}`;
+    }
+    return `/${s3Key}`;
+  };
+
+  const videoUrl = buildUrl(apiVideo.s3Key);
+  const posterUrl = apiVideo.posterS3Key ? buildUrl(apiVideo.posterS3Key) : undefined;
+  const proxyUrl = apiVideo.proxyS3Key ? buildUrl(apiVideo.proxyS3Key) : undefined;
 
   const videoMetadata: VideoMetadata = {
     path: apiVideo.filename,
@@ -158,6 +167,8 @@ function apiVideoToMatch(apiVideo: ApiVideo, cloudfrontDomain?: string): Match {
     id: apiVideo.id,
     name: apiVideo.name,
     videoUrl,
+    posterUrl,
+    proxyUrl,
     video: videoMetadata,
     rallies,
   };

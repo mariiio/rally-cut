@@ -53,6 +53,9 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "status": result["status"],
                 "processed_s3_key": result.get("processed_s3_key"),
                 "processed_size_bytes": result.get("processed_size_bytes"),
+                "poster_s3_key": result.get("poster_s3_key"),
+                "proxy_s3_key": result.get("proxy_s3_key"),
+                "proxy_size_bytes": result.get("proxy_size_bytes"),
                 "was_optimized": result.get("was_optimized", False),
             },
         )
@@ -89,23 +92,7 @@ def process_video(
 
     original_size = input_path.stat().st_size
 
-    # Check if optimization is needed
-    if not needs_optimization(input_path):
-        print("Video already optimized, skipping processing")
-        return {
-            "status": "skipped",
-            "processed_s3_key": original_s3_key,
-            "processed_size_bytes": original_size,
-            "was_optimized": False,
-        }
-
-    # Optimize video
-    output_path = tmpdir / "output.mp4"
-    optimize_video(input_path, output_path, tier)
-
-    processed_size = output_path.stat().st_size
-
-    # Generate processed S3 key (same path, with _optimized suffix)
+    # Generate S3 key components for all outputs
     path_parts = original_s3_key.rsplit("/", 1)
     if len(path_parts) == 2:
         folder, filename = path_parts
@@ -115,10 +102,44 @@ def process_video(
 
     # Split filename and extension
     if "." in filename:
-        name, ext = filename.rsplit(".", 1)
-        processed_key = f"{folder}/{name}_optimized.{ext}" if folder else f"{name}_optimized.{ext}"
+        name, _ = filename.rsplit(".", 1)
     else:
-        processed_key = f"{folder}/{filename}_optimized" if folder else f"{filename}_optimized"
+        name = filename
+
+    base_key = f"{folder}/{name}" if folder else name
+
+    # Always generate poster (small cost, big UX win)
+    poster_path = tmpdir / "poster.jpg"
+    poster_key = f"{base_key}_poster.jpg"
+    generate_poster(input_path, poster_path)
+    print(f"Uploading poster to {poster_key}...")
+    s3_client.upload_file(
+        str(poster_path),
+        s3_bucket,
+        poster_key,
+        ExtraArgs={
+            "ContentType": "image/jpeg",
+            "CacheControl": "public, max-age=31536000",  # 1 year
+        },
+    )
+
+    # Check if optimization is needed
+    if not needs_optimization(input_path):
+        print("Video already optimized, skipping processing")
+        return {
+            "status": "skipped",
+            "processed_s3_key": original_s3_key,
+            "processed_size_bytes": original_size,
+            "poster_s3_key": poster_key,
+            "was_optimized": False,
+        }
+
+    # Optimize video
+    output_path = tmpdir / "output.mp4"
+    optimize_video(input_path, output_path, tier)
+
+    processed_size = output_path.stat().st_size
+    processed_key = f"{base_key}_optimized.mp4"
 
     print(f"Uploading optimized video to {processed_key}...")
     s3_client.upload_file(
@@ -137,10 +158,33 @@ def process_video(
         f"({reduction:.1f}% reduction)"
     )
 
+    # Generate proxy for PREMIUM tier (eager generation)
+    proxy_key = None
+    proxy_size_bytes = None
+    if tier == "PREMIUM":
+        proxy_path = tmpdir / "proxy.mp4"
+        proxy_key = f"{base_key}_proxy.mp4"
+        generate_proxy(output_path, proxy_path)
+        proxy_size_bytes = proxy_path.stat().st_size
+        print(f"Uploading proxy to {proxy_key}...")
+        s3_client.upload_file(
+            str(proxy_path),
+            s3_bucket,
+            proxy_key,
+            ExtraArgs={
+                "ContentType": "video/mp4",
+                "CacheControl": "public, max-age=31536000",
+                "Tagging": "tier=premium",
+            },
+        )
+
     return {
         "status": "completed",
         "processed_s3_key": processed_key,
         "processed_size_bytes": processed_size,
+        "poster_s3_key": poster_key,
+        "proxy_s3_key": proxy_key,
+        "proxy_size_bytes": proxy_size_bytes,
         "was_optimized": True,
     }
 
@@ -222,6 +266,51 @@ def optimize_video(input_path: Path, output_path: Path, tier: str) -> None:
     if result.returncode != 0:
         print(f"FFmpeg stderr: {result.stderr}")
         raise RuntimeError(f"FFmpeg failed: {result.stderr[-500:]}")
+
+
+def generate_poster(input_path: Path, output_path: Path) -> None:
+    """Generate poster image from video (1 second in, 1280px width)."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-ss", "1",  # 1 second in
+        "-i", str(input_path),
+        "-vframes", "1",
+        "-vf", "scale=1280:-1",
+        "-q:v", "2",  # High quality JPEG
+        str(output_path),
+    ]
+
+    print(f"Generating poster: {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+    if result.returncode != 0:
+        print(f"Poster generation failed: {result.stderr}")
+        raise RuntimeError(f"Poster generation failed: {result.stderr[-500:]}")
+
+
+def generate_proxy(input_path: Path, output_path: Path) -> None:
+    """Generate 720p proxy video for editing (lower bitrate, faster loading)."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i", str(input_path),
+        "-vf", "scale=-2:720",
+        "-c:v", "libx264",
+        "-crf", "28",
+        "-preset", "fast",
+        "-movflags", "+faststart",
+        "-c:a", "aac",
+        "-b:a", "96k",
+        str(output_path),
+    ]
+
+    print(f"Generating proxy: {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+
+    if result.returncode != 0:
+        print(f"Proxy generation failed: {result.stderr}")
+        raise RuntimeError(f"Proxy generation failed: {result.stderr[-500:]}")
 
 
 def send_webhook(url: str, secret: str, payload: dict[str, Any]) -> None:

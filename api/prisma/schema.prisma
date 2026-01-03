@@ -151,6 +151,13 @@ model Video {
   processingError       String?          @map("processing_error")
   originalFileSizeBytes BigInt?          @map("original_file_size_bytes")
 
+  // Poster and proxy for fast loading
+  posterS3Key           String?          @map("poster_s3_key")
+  proxyS3Key            String?          @map("proxy_s3_key")
+  proxyFileSizeBytes    BigInt?          @map("proxy_file_size_bytes")
+  proxyGeneratedAt      DateTime?        @map("proxy_generated_at")
+  proxyLastAccessedAt   DateTime?        @map("proxy_last_accessed_at")
+
   user          User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
   sessionVideos SessionVideo[]
   rallies       Rally[]
