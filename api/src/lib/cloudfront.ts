@@ -37,5 +37,9 @@ export function generateSignedCookies(sessionId: string): SignedCookies | null {
 }
 
 export function getCloudFrontUrl(s3Key: string): string {
+  // In local development (no CloudFront), return relative URL for API proxy
+  if (!env.CLOUDFRONT_DOMAIN) {
+    return `/${s3Key}`;
+  }
   return `https://${env.CLOUDFRONT_DOMAIN}/${s3Key}`;
 }

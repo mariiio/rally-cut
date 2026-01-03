@@ -3,14 +3,28 @@ import {
   GetObjectCommand,
   PutObjectCommand,
   S3Client,
+  type S3ClientConfig,
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { env } from "../config/env.js";
 
-const s3Client = new S3Client({
+// Configure S3 client with optional endpoint for MinIO/local development
+const s3Config: S3ClientConfig = {
   region: env.AWS_REGION,
-});
+};
+
+// If S3_ENDPOINT is set, use it (for MinIO/local development)
+if (env.S3_ENDPOINT) {
+  s3Config.endpoint = env.S3_ENDPOINT;
+  s3Config.forcePathStyle = true; // Required for MinIO (path-style URLs)
+  s3Config.credentials = {
+    accessKeyId: env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
+  };
+}
+
+const s3Client = new S3Client(s3Config);
 
 export interface GenerateUploadUrlParams {
   key: string;
