@@ -5,6 +5,9 @@ import {
   confirmUpload,
   requestVideoUploadUrl,
   confirmVideoUpload,
+  initiateMultipartUpload,
+  completeMultipartUpload,
+  abortMultipartUpload,
 } from '@/services/api';
 import { useTierStore } from './tierStore';
 
@@ -23,12 +26,18 @@ interface UploadState {
   // Abort controller for cancellation
   abortController: AbortController | null;
 
+  // Local video URLs for instant playback before processing completes
+  // Maps videoId → blob URL
+  localVideoUrls: Map<string, string>;
+
   // Actions
   uploadVideo: (sessionId: string, file: File) => Promise<boolean>;
   uploadVideoToLibrary: (file: File) => Promise<UploadResult>;
   cancel: () => void;
   clearError: () => void;
   reset: () => void;
+  getLocalVideoUrl: (videoId: string) => string | undefined;
+  clearLocalVideoUrl: (videoId: string) => void;
 }
 
 // Progress constants
@@ -36,6 +45,10 @@ const PROGRESS_ANALYZE = 10;
 const PROGRESS_UPLOAD_START = 15;
 const PROGRESS_UPLOAD_RANGE = 75; // 15-90%
 const PROGRESS_FINALIZE = 95;
+
+// Multipart upload constants
+const MULTIPART_THRESHOLD = 100 * 1024 * 1024; // 100MB - use multipart above this
+const MAX_CONCURRENT_PARTS = 4; // Upload 4 parts in parallel
 
 /**
  * Validate upload against tier limits.
@@ -114,12 +127,72 @@ async function uploadToS3(
   });
 }
 
+/**
+ * Upload a file using multipart upload (for large files).
+ * Uploads parts in parallel for better performance.
+ */
+async function uploadToS3Multipart(
+  file: File,
+  partUrls: string[],
+  partSize: number,
+  abortSignal: AbortSignal,
+  onProgress: (percent: number) => void
+): Promise<{ partNumber: number; etag: string }[]> {
+  const parts: { partNumber: number; etag: string }[] = [];
+  const totalParts = partUrls.length;
+  let completedParts = 0;
+
+  // Upload a single part
+  const uploadPart = async (partNumber: number): Promise<void> => {
+    if (abortSignal.aborted) throw new Error('Upload cancelled');
+
+    const start = (partNumber - 1) * partSize;
+    const end = Math.min(start + partSize, file.size);
+    const chunk = file.slice(start, end);
+
+    const response = await fetch(partUrls[partNumber - 1], {
+      method: 'PUT',
+      body: chunk,
+      signal: abortSignal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Part ${partNumber} upload failed with status ${response.status}`);
+    }
+
+    // Get ETag from response (required for completing multipart upload)
+    const etag = response.headers.get('ETag')?.replace(/"/g, '') || '';
+    parts.push({ partNumber, etag });
+
+    completedParts++;
+    const uploadProgress = Math.round((completedParts / totalParts) * PROGRESS_UPLOAD_RANGE);
+    onProgress(PROGRESS_UPLOAD_START + uploadProgress);
+  };
+
+  // Process parts with concurrency limit
+  const queue = Array.from({ length: totalParts }, (_, i) => i + 1);
+  const workers = Array(MAX_CONCURRENT_PARTS)
+    .fill(null)
+    .map(async () => {
+      while (queue.length > 0) {
+        const partNumber = queue.shift()!;
+        await uploadPart(partNumber);
+      }
+    });
+
+  await Promise.all(workers);
+
+  // Sort by part number (required by S3)
+  return parts.sort((a, b) => a.partNumber - b.partNumber);
+}
+
 export const useUploadStore = create<UploadState>((set, get) => ({
   isUploading: false,
   progress: 0,
   currentStep: '',
   error: null,
   abortController: null,
+  localVideoUrls: new Map(),
 
   uploadVideo: async (sessionId: string, file: File) => {
     if (get().isUploading) {
@@ -174,6 +247,12 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       set({ progress: PROGRESS_FINALIZE, currentStep: 'Finalizing...' });
       await confirmUpload(sessionId, videoId, durationMs);
 
+      // Store local blob URL for instant playback
+      const blobUrl = URL.createObjectURL(file);
+      const { localVideoUrls } = get();
+      localVideoUrls.set(videoId, blobUrl);
+      set({ localVideoUrls: new Map(localVideoUrls) });
+
       set({
         isUploading: false,
         progress: 100,
@@ -227,28 +306,74 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         throw new Error(validationError);
       }
 
-      // Request presigned upload URL (user-scoped, no session)
-      set({ progress: PROGRESS_ANALYZE, currentStep: 'Preparing upload...' });
-      const { uploadUrl, videoId } = await requestVideoUploadUrl({
-        filename: file.name,
-        contentHash,
-        fileSize: file.size,
-        durationMs,
-      });
+      let videoId: string;
 
-      if (abortController.signal.aborted) throw new Error('Upload cancelled');
+      // Choose upload method based on file size
+      if (file.size > MULTIPART_THRESHOLD) {
+        // Multipart upload for large files (100MB+)
+        set({ progress: PROGRESS_ANALYZE, currentStep: 'Preparing multipart upload...' });
+        const { videoId: vid, uploadId, partSize, partUrls } = await initiateMultipartUpload({
+          filename: file.name,
+          contentHash,
+          fileSize: file.size,
+          durationMs,
+        });
+        videoId = vid;
 
-      // Upload to S3 with progress tracking
-      set({ progress: PROGRESS_UPLOAD_START, currentStep: 'Uploading video...' });
-      await uploadToS3(file, uploadUrl, abortController.signal, (progress) => {
-        set({ progress });
-      });
+        if (abortController.signal.aborted) throw new Error('Upload cancelled');
 
-      if (abortController.signal.aborted) throw new Error('Upload cancelled');
+        // Upload parts in parallel
+        set({ progress: PROGRESS_UPLOAD_START, currentStep: 'Uploading video...' });
+        try {
+          const parts = await uploadToS3Multipart(
+            file,
+            partUrls,
+            partSize,
+            abortController.signal,
+            (progress) => set({ progress })
+          );
+
+          if (abortController.signal.aborted) throw new Error('Upload cancelled');
+
+          // Complete the multipart upload
+          set({ progress: PROGRESS_FINALIZE, currentStep: 'Finalizing...' });
+          await completeMultipartUpload(videoId, uploadId, parts);
+        } catch (err) {
+          // Abort multipart upload on any error (cleanup S3 parts)
+          await abortMultipartUpload(videoId, uploadId);
+          throw err;
+        }
+      } else {
+        // Single PUT upload for smaller files
+        set({ progress: PROGRESS_ANALYZE, currentStep: 'Preparing upload...' });
+        const { uploadUrl, videoId: vid } = await requestVideoUploadUrl({
+          filename: file.name,
+          contentHash,
+          fileSize: file.size,
+          durationMs,
+        });
+        videoId = vid;
+
+        if (abortController.signal.aborted) throw new Error('Upload cancelled');
+
+        // Upload to S3 with progress tracking
+        set({ progress: PROGRESS_UPLOAD_START, currentStep: 'Uploading video...' });
+        await uploadToS3(file, uploadUrl, abortController.signal, (progress) => {
+          set({ progress });
+        });
+
+        if (abortController.signal.aborted) throw new Error('Upload cancelled');
+        set({ progress: PROGRESS_FINALIZE, currentStep: 'Finalizing...' });
+      }
 
       // Confirm upload with API (user-scoped)
-      set({ progress: PROGRESS_FINALIZE, currentStep: 'Finalizing...' });
       await confirmVideoUpload(videoId, { durationMs });
+
+      // Store local blob URL for instant playback
+      const blobUrl = URL.createObjectURL(file);
+      const { localVideoUrls } = get();
+      localVideoUrls.set(videoId, blobUrl);
+      set({ localVideoUrls: new Map(localVideoUrls) });
 
       set({
         isUploading: false,
@@ -300,5 +425,19 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       error: null,
       abortController: null,
     });
+  },
+
+  getLocalVideoUrl: (videoId: string) => {
+    return get().localVideoUrls.get(videoId);
+  },
+
+  clearLocalVideoUrl: (videoId: string) => {
+    const { localVideoUrls } = get();
+    const blobUrl = localVideoUrls.get(videoId);
+    if (blobUrl) {
+      URL.revokeObjectURL(blobUrl);
+      localVideoUrls.delete(videoId);
+      set({ localVideoUrls: new Map(localVideoUrls) });
+    }
   },
 }));

@@ -5,6 +5,7 @@ import { Box, CircularProgress, Typography } from '@mui/material';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useEditorStore } from '@/stores/editorStore';
+import { useUploadStore } from '@/stores/uploadStore';
 import { designTokens } from '@/app/theme';
 
 export function VideoPlayer() {
@@ -20,8 +21,12 @@ export function VideoPlayer() {
   const setActiveMatch = useEditorStore((state) => state.setActiveMatch);
   const isLoadingSession = useEditorStore((state) => state.isLoadingSession);
 
-  // Use proxy URL for editing (faster loading), fall back to full quality
-  const effectiveVideoUrl = proxyUrl || videoUrl;
+  // Get local blob URL if available (from recent upload)
+  const getLocalVideoUrl = useUploadStore((state) => state.getLocalVideoUrl);
+  const localVideoUrl = activeMatchId ? getLocalVideoUrl(activeMatchId) : undefined;
+
+  // Priority: local blob (instant) > proxy (fast) > full video
+  const effectiveVideoUrl = localVideoUrl || proxyUrl || videoUrl;
 
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const seekTo = usePlayerStore((state) => state.seekTo);
