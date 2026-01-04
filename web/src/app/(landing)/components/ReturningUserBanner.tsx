@@ -5,7 +5,7 @@ import { Box, Button, IconButton, Typography } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import Link from 'next/link';
-import { checkUserHasContent } from '@/services/api';
+import { listSessions } from '@/services/api';
 import { designTokens } from '@/app/designTokens';
 
 const DISMISSED_KEY = 'rallycut_returning_banner_dismissed';
@@ -22,11 +22,13 @@ export function ReturningUserBanner() {
 
     let isMounted = true;
 
-    // Check if user has content
-    checkUserHasContent()
-      .then(({ hasContent, sessionCount: count }) => {
-        if (isMounted && hasContent) {
-          setSessionCount(count ?? 0);
+    // Fetch sessions and count only REGULAR ones (exclude ALL_VIDEOS)
+    listSessions(1, 100)
+      .then((response) => {
+        if (!isMounted) return;
+        const regularSessions = response.data.filter((s) => s.type === 'REGULAR');
+        if (regularSessions.length > 0) {
+          setSessionCount(regularSessions.length);
           setVisible(true);
         }
       })
