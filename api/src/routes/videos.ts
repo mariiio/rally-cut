@@ -82,22 +82,30 @@ router.get(
       if (s3Response.Body) {
         const stream = s3Response.Body as Readable;
 
+        // Handle client disconnect (browser abort, navigation, etc.)
+        // This is critical for video seeking which triggers many aborted requests
+        const cleanup = () => {
+          if (!stream.destroyed) {
+            stream.destroy();
+          }
+        };
+
+        res.on("close", cleanup);
+        res.on("error", cleanup);
+
         // Handle stream errors
         stream.on("error", (err) => {
-          console.error("S3 stream error:", err);
+          // ECONNRESET is expected when client aborts - don't log as error
+          if ((err as NodeJS.ErrnoException).code !== "ECONNRESET") {
+            console.error("S3 stream error:", err);
+          }
           if (!res.headersSent) {
             res.status(500).send("Error streaming video");
-          } else {
-            res.end();
           }
         });
 
-        // Ensure response ends when stream ends
-        stream.on("end", () => {
-          res.end();
-        });
-
-        stream.pipe(res, { end: false });
+        // Pipe stream to response (end: true is default and correct here)
+        stream.pipe(res);
       } else {
         res.status(404).send("Video not found");
       }
