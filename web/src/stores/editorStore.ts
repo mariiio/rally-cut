@@ -23,6 +23,7 @@ import { syncService } from '@/services/syncService';
 interface HistoryEntry {
   rallies: Rally[];
   highlights: Highlight[];
+  cameraEdits: Record<string, RallyCameraEdit>;
   timestamp: number;
 }
 
@@ -1052,9 +1053,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   // History management actions
   pushHistory: () => {
     const state = get();
+    const cameraEdits = useCameraStore.getState().cameraEdits;
     const entry: HistoryEntry = {
       rallies: [...state.rallies],
       highlights: [...state.highlights],
+      cameraEdits: { ...cameraEdits },
       timestamp: Date.now(),
     };
 
@@ -1074,9 +1077,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const past = [...state.past];
     const entry = past.pop()!;
 
+    const currentCameraEdits = useCameraStore.getState().cameraEdits;
     const futureEntry: HistoryEntry = {
       rallies: [...state.rallies],
       highlights: [...state.highlights],
+      cameraEdits: { ...currentCameraEdits },
       timestamp: Date.now(),
     };
 
@@ -1087,6 +1092,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       future: [...state.future, futureEntry],
       hasUnsavedChanges: past.length > 0 || state.future.length > 0,
     });
+
+    // Restore camera edits if present in history entry
+    if (entry.cameraEdits) {
+      useCameraStore.getState().loadCameraEdits(entry.cameraEdits);
+    }
 
     // Mark dirty for backend sync
     syncService.markDirty();
@@ -1101,9 +1111,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const future = [...state.future];
     const entry = future.pop()!;
 
+    const currentCameraEdits = useCameraStore.getState().cameraEdits;
     const pastEntry: HistoryEntry = {
       rallies: [...state.rallies],
       highlights: [...state.highlights],
+      cameraEdits: { ...currentCameraEdits },
       timestamp: Date.now(),
     };
 
@@ -1114,6 +1126,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       future,
       hasUnsavedChanges: true,
     });
+
+    // Restore camera edits if present in history entry
+    if (entry.cameraEdits) {
+      useCameraStore.getState().loadCameraEdits(entry.cameraEdits);
+    }
 
     // Mark dirty for backend sync
     syncService.markDirty();

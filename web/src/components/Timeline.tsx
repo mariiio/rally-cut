@@ -136,7 +136,6 @@ export function Timeline() {
     play,
     playOnlyRallies,
     togglePlayOnlyRallies,
-    playingHighlightId,
     bufferedRanges,
   } = usePlayerStore();
   const timelineRef = useRef<TimelineState>(null);
@@ -152,6 +151,7 @@ export function Timeline() {
 
   // Clear delete confirmation when selection changes
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset on selection change
     setDeleteConfirmId(null);
   }, [selectedRallyId]);
 
@@ -468,6 +468,7 @@ export function Timeline() {
   useEffect(() => {
     if (duration > 0 && containerWidth > 0) {
       const newScale = getAutoScale();
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional auto-fit on resize
       setScale(newScale);
     }
   }, [duration, containerWidth, getAutoScale]);
@@ -678,7 +679,7 @@ export function Timeline() {
   // Handle rally changes - only used for visual updates during drag
   // Actual persistence happens in handleActionResizeEnd/handleActionMoveEnd
   const handleChange = useCallback(
-    (_data: TimelineRow[]) => {
+    () => {
       // No-op: we persist changes in onActionResizeEnd/onActionMoveEnd
       // to avoid double history entries
     },
@@ -863,6 +864,18 @@ export function Timeline() {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // Stop polling - defined before startPolling since it's used there
+  const stopPolling = useCallback(() => {
+    if (elapsedIntervalRef.current) {
+      clearInterval(elapsedIntervalRef.current);
+      elapsedIntervalRef.current = null;
+    }
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  }, []);
+
   // Start polling for detection status
   const startPolling = useCallback((startTime?: number) => {
     if (!activeMatchId) return;
@@ -924,19 +937,7 @@ export function Timeline() {
         // Ignore polling errors, keep trying
       }
     }, 5000);
-  }, [activeMatchId]);
-
-  // Stop polling
-  const stopPolling = useCallback(() => {
-    if (elapsedIntervalRef.current) {
-      clearInterval(elapsedIntervalRef.current);
-      elapsedIntervalRef.current = null;
-    }
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
-    }
-  }, []);
+  }, [activeMatchId, stopPolling, reloadCurrentMatch]);
 
   // Check detection status on mount
   useEffect(() => {
@@ -987,8 +988,6 @@ export function Timeline() {
       setDetectionStatus(null);
     }
   };
-
-  const hasRallies = rallies && rallies.length > 0;
 
   return (
     <Box sx={{ bgcolor: 'background.paper', borderRadius: 1, overflow: 'hidden' }}>
