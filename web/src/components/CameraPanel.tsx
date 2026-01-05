@@ -315,229 +315,222 @@ export function CameraPanel() {
   // Min zoom is always 1.0 - zoom out causes objectFit issues
   const zoomMin = 1.0;
 
-  // Empty state - no rally selected
-  if (!selectedRally) {
-    return (
-      <Box
-        sx={{
-          height: '100%',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          p: 3,
-          color: 'text.secondary',
-        }}
-      >
-        <VideocamIcon sx={{ fontSize: 48, mb: 2, opacity: 0.3 }} />
-        <Typography variant="body2" sx={{ textAlign: 'center' }}>
-          Select a rally to edit camera
-        </Typography>
-        <Typography variant="caption" sx={{ textAlign: 'center', mt: 1, color: 'text.disabled' }}>
-          Click on a rally from the list to start editing
-        </Typography>
-      </Box>
-    );
-  }
-
-  const rallyIndex = rallies.indexOf(selectedRally) + 1;
+  const rallyIndex = selectedRally ? rallies.indexOf(selectedRally) + 1 : 0;
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* Global preview toggle - separate from rally-specific settings */}
-      <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={applyCameraEdits}
-              onChange={toggleApplyCameraEdits}
-              color="primary"
-              size="small"
-              disabled={!hasAnyCameraEdits}
-            />
-          }
-          label={
-            <Typography
-              variant="body2"
-              sx={{ color: hasAnyCameraEdits ? 'text.primary' : 'text.disabled' }}
-            >
-              Preview camera edits
-            </Typography>
-          }
-          sx={{ m: 0 }}
-        />
-        {!hasAnyCameraEdits && (
-          <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block', mt: 0.5 }}>
-            Add keyframes to enable preview
-          </Typography>
-        )}
-      </Box>
-
-      {/* Rally-specific header */}
-      <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
-          Camera Edit
-        </Typography>
-        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-          Rally {rallyIndex}: {formatTime(selectedRally.start_time)} -{' '}
-          {formatTime(selectedRally.end_time)}
-        </Typography>
-      </Box>
-
-      {/* Controls */}
-      <Box sx={{ flex: 1, overflowY: 'auto', p: 2 }}>
-        {/* Aspect ratio selector */}
-        <Box sx={{ mb: 3 }}>
-          <Typography variant="caption" sx={{ color: 'text.secondary', mb: 1, display: 'block' }}>
-            Aspect Ratio
-          </Typography>
-          <ToggleButtonGroup
-            value={cameraEdit?.aspectRatio ?? 'ORIGINAL'}
-            exclusive
-            onChange={handleAspectRatioChange}
-            size="small"
-            sx={{ width: '100%' }}
-          >
-            <ToggleButton value="ORIGINAL" sx={{ flex: 1 }}>
-              <Crop169Icon sx={{ mr: 0.5, fontSize: 18 }} />
-              16:9
-            </ToggleButton>
-            <ToggleButton value="VERTICAL" sx={{ flex: 1 }}>
-              <CropPortraitIcon sx={{ mr: 0.5, fontSize: 18 }} />
-              9:16
-            </ToggleButton>
-          </ToggleButtonGroup>
+      {/* Global preview toggle - always visible when camera edits exist */}
+      {hasAnyCameraEdits && (
+        <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
+          <FormControlLabel
+            control={
+              <Switch
+                checked={applyCameraEdits}
+                onChange={toggleApplyCameraEdits}
+                color="primary"
+                size="small"
+              />
+            }
+            label={
+              <Typography variant="body2">
+                Preview camera edits
+              </Typography>
+            }
+            sx={{ m: 0 }}
+          />
         </Box>
+      )}
 
-        <Divider sx={{ my: 2 }} />
-
-        {/* Keyframes section */}
-        <Box sx={{ mb: 2 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-            <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-              Keyframes ({activeKeyframes.length})
+      {/* Empty state - no rally selected */}
+      {!selectedRally ? (
+        <Box
+          sx={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            p: 3,
+            color: 'text.secondary',
+          }}
+        >
+          <VideocamIcon sx={{ fontSize: 48, mb: 2, opacity: 0.3 }} />
+          <Typography variant="body2" sx={{ textAlign: 'center' }}>
+            Select a rally to edit camera
+          </Typography>
+          <Typography variant="caption" sx={{ textAlign: 'center', mt: 1, color: 'text.disabled' }}>
+            Click on a rally from the list to start editing
+          </Typography>
+        </Box>
+      ) : (
+        <>
+          {/* Rally-specific header */}
+          <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
+              Camera Edit
             </Typography>
-            {hasCameraKeyframes && (
-              <Tooltip title="Reset all camera settings">
-                <IconButton
-                  size="small"
-                  onClick={() => setShowResetConfirm(true)}
-                  sx={{ color: 'error.main', opacity: 0.7, '&:hover': { opacity: 1 } }}
-                >
-                  <RestartAltIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-            )}
+            <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+              Rally {rallyIndex}: {formatTime(selectedRally.start_time)} -{' '}
+              {formatTime(selectedRally.end_time)}
+            </Typography>
           </Box>
 
-          {/* Keyframe list */}
-          <Stack spacing={0.5}>
-            {activeKeyframes.map((kf) => (
-              <KeyframeItem
-                key={kf.id}
-                keyframe={kf}
-                isSelected={selectedKeyframeId === kf.id}
-                isDeleting={deleteConfirmId === kf.id}
-                onSelect={() => {
-                  selectKeyframe(kf.id);
-                  // Seek to keyframe position
-                  const keyframeTime = selectedRally.start_time + kf.timeOffset * rallyDuration;
-                  seek(keyframeTime);
-                  // Enter camera edit mode when clicking a keyframe
-                  setIsCameraTabActive(true);
-                }}
-                onDelete={() => handleKeyframeDeleteClick(kf.id)}
-                onCancelDelete={handleCancelKeyframeDelete}
-                rallyStartTime={selectedRally.start_time}
-                rallyDuration={rallyDuration}
-              />
-            ))}
-          </Stack>
+          {/* Controls */}
+          <Box sx={{ flex: 1, overflowY: 'auto', p: 2 }}>
+            {/* Aspect ratio selector */}
+            <Box sx={{ mb: 3 }}>
+              <Typography variant="caption" sx={{ color: 'text.secondary', mb: 1, display: 'block' }}>
+                Aspect Ratio
+              </Typography>
+              <ToggleButtonGroup
+                value={cameraEdit?.aspectRatio ?? 'ORIGINAL'}
+                exclusive
+                onChange={handleAspectRatioChange}
+                size="small"
+                sx={{ width: '100%' }}
+              >
+                <ToggleButton value="ORIGINAL" sx={{ flex: 1 }}>
+                  <Crop169Icon sx={{ mr: 0.5, fontSize: 18 }} />
+                  16:9
+                </ToggleButton>
+                <ToggleButton value="VERTICAL" sx={{ flex: 1 }}>
+                  <CropPortraitIcon sx={{ mr: 0.5, fontSize: 18 }} />
+                  9:16
+                </ToggleButton>
+              </ToggleButtonGroup>
+            </Box>
 
-          {activeKeyframes.length === 0 && (
-            <Box sx={{ textAlign: 'center', py: 2 }}>
-              <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block' }}>
-                Drag on video or adjust zoom to add keyframes
+            <Divider sx={{ my: 2 }} />
+
+            {/* Keyframes section */}
+            <Box sx={{ mb: 2 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                  Keyframes ({activeKeyframes.length})
+                </Typography>
+                {hasCameraKeyframes && (
+                  <Tooltip title="Reset all camera settings">
+                    <IconButton
+                      size="small"
+                      onClick={() => setShowResetConfirm(true)}
+                      sx={{ color: 'error.main', opacity: 0.7, '&:hover': { opacity: 1 } }}
+                    >
+                      <RestartAltIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                )}
+              </Box>
+
+              {/* Keyframe list */}
+              <Stack spacing={0.5}>
+                {activeKeyframes.map((kf) => (
+                  <KeyframeItem
+                    key={kf.id}
+                    keyframe={kf}
+                    isSelected={selectedKeyframeId === kf.id}
+                    isDeleting={deleteConfirmId === kf.id}
+                    onSelect={() => {
+                      selectKeyframe(kf.id);
+                      // Seek to keyframe position
+                      const keyframeTime = selectedRally.start_time + kf.timeOffset * rallyDuration;
+                      seek(keyframeTime);
+                      // Enter camera edit mode when clicking a keyframe
+                      setIsCameraTabActive(true);
+                    }}
+                    onDelete={() => handleKeyframeDeleteClick(kf.id)}
+                    onCancelDelete={handleCancelKeyframeDelete}
+                    rallyStartTime={selectedRally.start_time}
+                    rallyDuration={rallyDuration}
+                  />
+                ))}
+              </Stack>
+
+              {activeKeyframes.length === 0 && (
+                <Box sx={{ textAlign: 'center', py: 2 }}>
+                  <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block' }}>
+                    Drag on video or adjust zoom to add keyframes
+                  </Typography>
+                </Box>
+              )}
+            </Box>
+
+            <Divider sx={{ my: 2 }} />
+
+            {/* Camera controls - always visible */}
+            <Box>
+              {/* Selected keyframe info */}
+              {selectedKeyframe && (
+                <>
+                  <Typography variant="caption" sx={{ color: 'text.secondary', mb: 1, display: 'block' }}>
+                    Selected Keyframe
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 2 }}>
+                    Time: {formatTime(selectedRally.start_time + selectedKeyframe.timeOffset * rallyDuration)}
+                    {' '}({formatOffset(selectedKeyframe.timeOffset)} of rally)
+                  </Typography>
+                </>
+              )}
+
+              {/* Zoom slider - always available */}
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                  Zoom: {(selectedKeyframe?.zoom ?? getCameraStateAtTime(selectedRallyId!, currentTimeOffset).zoom).toFixed(1)}x
+                </Typography>
+                <Slider
+                  value={selectedKeyframe?.zoom ?? getCameraStateAtTime(selectedRallyId!, currentTimeOffset).zoom}
+                  onChange={handleZoomChange}
+                  min={zoomMin}
+                  max={ZOOM_MAX}
+                  step={ZOOM_STEP}
+                  size="small"
+                />
+              </Box>
+
+              {/* Position hint */}
+              <Typography variant="caption" sx={{ color: 'text.disabled', fontStyle: 'italic' }}>
+                {selectedKeyframe
+                  ? 'Drag on video to reposition keyframe'
+                  : 'Drag on video or adjust zoom to create keyframe'}
               </Typography>
             </Box>
-          )}
-        </Box>
-
-        <Divider sx={{ my: 2 }} />
-
-        {/* Camera controls - always visible */}
-        <Box>
-          {/* Selected keyframe info */}
-          {selectedKeyframe && (
-            <>
-              <Typography variant="caption" sx={{ color: 'text.secondary', mb: 1, display: 'block' }}>
-                Selected Keyframe
-              </Typography>
-              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 2 }}>
-                Time: {formatTime(selectedRally.start_time + selectedKeyframe.timeOffset * rallyDuration)}
-                {' '}({formatOffset(selectedKeyframe.timeOffset)} of rally)
-              </Typography>
-            </>
-          )}
-
-          {/* Zoom slider - always available */}
-          <Box sx={{ mb: 2 }}>
-            <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-              Zoom: {(selectedKeyframe?.zoom ?? getCameraStateAtTime(selectedRallyId!, currentTimeOffset).zoom).toFixed(1)}x
-            </Typography>
-            <Slider
-              value={selectedKeyframe?.zoom ?? getCameraStateAtTime(selectedRallyId!, currentTimeOffset).zoom}
-              onChange={handleZoomChange}
-              min={zoomMin}
-              max={ZOOM_MAX}
-              step={ZOOM_STEP}
-              size="small"
-            />
           </Box>
 
-          {/* Position hint */}
-          <Typography variant="caption" sx={{ color: 'text.disabled', fontStyle: 'italic' }}>
-            {selectedKeyframe
-              ? 'Drag on video to reposition keyframe'
-              : 'Drag on video or adjust zoom to create keyframe'}
-          </Typography>
-        </Box>
-      </Box>
+          {/* Current position indicator */}
+          <Box
+            sx={{
+              px: 2,
+              py: 1,
+              borderTop: 1,
+              borderColor: 'divider',
+              bgcolor: designTokens.colors.surface[2],
+            }}
+          >
+            <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+              Playhead: {formatTime(currentTime)} ({formatOffset(currentTimeOffset)} of rally)
+            </Typography>
+          </Box>
 
-      {/* Current position indicator */}
-      <Box
-        sx={{
-          px: 2,
-          py: 1,
-          borderTop: 1,
-          borderColor: 'divider',
-          bgcolor: designTokens.colors.surface[2],
-        }}
-      >
-        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-          Playhead: {formatTime(currentTime)} ({formatOffset(currentTimeOffset)} of rally)
-        </Typography>
-      </Box>
-
-      {/* Reset confirmation dialog */}
-      <Dialog
-        open={showResetConfirm}
-        onClose={() => setShowResetConfirm(false)}
-        maxWidth="xs"
-      >
-        <DialogTitle>Reset Camera Settings?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            This will remove all keyframes and camera settings for this rally. This action cannot be undone.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setShowResetConfirm(false)}>Cancel</Button>
-          <Button onClick={handleResetCamera} color="error" variant="contained">
-            Reset
-          </Button>
-        </DialogActions>
-      </Dialog>
+          {/* Reset confirmation dialog */}
+          <Dialog
+            open={showResetConfirm}
+            onClose={() => setShowResetConfirm(false)}
+            maxWidth="xs"
+          >
+            <DialogTitle>Reset Camera Settings?</DialogTitle>
+            <DialogContent>
+              <DialogContentText>
+                This will remove all keyframes and camera settings for this rally. This action cannot be undone.
+              </DialogContentText>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setShowResetConfirm(false)}>Cancel</Button>
+              <Button onClick={handleResetCamera} color="error" variant="contained">
+                Reset
+              </Button>
+            </DialogActions>
+          </Dialog>
+        </>
+      )}
     </Box>
   );
 }
