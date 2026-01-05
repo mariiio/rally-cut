@@ -68,6 +68,22 @@ interface ApiVideo {
   rallies: ApiRally[];
 }
 
+interface ApiCameraKeyframe {
+  id: string;
+  timeOffset: number;
+  positionX: number;
+  positionY: number;
+  zoom: number;
+  easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT';
+}
+
+interface ApiCameraEdit {
+  id: string;
+  enabled: boolean;
+  aspectRatio: 'ORIGINAL' | 'VERTICAL';
+  keyframes: ApiCameraKeyframe[];
+}
+
 interface ApiRally {
   id: string;
   videoId: string;
@@ -79,6 +95,7 @@ interface ApiRally {
   servingTeam: 'A' | 'B' | null;
   notes: string | null;
   order: number;
+  cameraEdit?: ApiCameraEdit | null;
 }
 
 interface ApiHighlight {
@@ -218,8 +235,61 @@ function apiSessionToFrontend(apiSession: ApiSession, cloudfrontDomain?: string)
   };
 }
 
+// Export camera edit types for external use
+export type { ApiCameraKeyframe, ApiCameraEdit };
+
+// Camera edit extraction result
+export interface CameraEditMap {
+  // frontendRallyId -> camera edit data
+  [rallyId: string]: {
+    enabled: boolean;
+    aspectRatio: 'ORIGINAL' | 'VERTICAL';
+    keyframes: Array<{
+      id: string;
+      timeOffset: number;
+      positionX: number;
+      positionY: number;
+      zoom: number;
+      easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT';
+    }>;
+  };
+}
+
+// Extract camera edits from API session response
+function extractCameraEdits(apiSession: ApiSession): CameraEditMap {
+  const result: CameraEditMap = {};
+
+  for (const video of apiSession.videos) {
+    for (const rally of video.rallies) {
+      if (rally.cameraEdit && rally.cameraEdit.enabled) {
+        const frontendRallyId = `${video.id}_rally_${rally.order + 1}`;
+        result[frontendRallyId] = {
+          enabled: rally.cameraEdit.enabled,
+          aspectRatio: rally.cameraEdit.aspectRatio,
+          keyframes: rally.cameraEdit.keyframes.map(kf => ({
+            id: kf.id,
+            timeOffset: kf.timeOffset,
+            positionX: kf.positionX,
+            positionY: kf.positionY,
+            zoom: kf.zoom,
+            easing: kf.easing,
+          })),
+        };
+      }
+    }
+  }
+
+  return result;
+}
+
+// Session fetch result including camera edits
+export interface FetchSessionResult {
+  session: Session;
+  cameraEdits: CameraEditMap;
+}
+
 // API client functions
-export async function fetchSession(sessionId: string): Promise<Session> {
+export async function fetchSession(sessionId: string): Promise<FetchSessionResult> {
   const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}`, {
     headers: getHeaders(),
     credentials: 'include', // Include cookies for CloudFront signed cookies
@@ -234,7 +304,13 @@ export async function fetchSession(sessionId: string): Promise<Session> {
   // Get CloudFront domain from env if available
   const cloudfrontDomain = process.env.NEXT_PUBLIC_CLOUDFRONT_DOMAIN;
 
-  return apiSessionToFrontend(apiSession, cloudfrontDomain);
+  // Extract camera edits before transforming
+  const cameraEdits = extractCameraEdits(apiSession);
+
+  return {
+    session: apiSessionToFrontend(apiSession, cloudfrontDomain),
+    cameraEdits,
+  };
 }
 
 export async function createSession(name: string): Promise<{ id: string; name: string }> {
@@ -278,19 +354,6 @@ export async function listSessions(page = 1, limit = 20): Promise<ListSessionsRe
 
   if (!response.ok) {
     throw new Error(`Failed to list sessions: ${response.status}`);
-  }
-
-  return response.json();
-}
-
-// Check if user has any content (for returning user banner)
-export async function checkUserHasContent(): Promise<{ hasContent: boolean; sessionCount?: number }> {
-  const response = await fetch(`${API_BASE_URL}/v1/sessions/has-content`, {
-    headers: getHeaders(),
-  });
-
-  if (!response.ok) {
-    return { hasContent: false };
   }
 
   return response.json();

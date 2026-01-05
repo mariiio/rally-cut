@@ -28,6 +28,21 @@ function shouldUseLocalExport(): boolean {
   return false;
 }
 
+// Camera keyframe for FFmpeg filter generation
+interface CameraKeyframe {
+  timeOffset: number;  // 0.0-1.0 within rally
+  positionX: number;   // 0.0-1.0
+  positionY: number;   // 0.0-1.0
+  zoom: number;        // 1.0-3.0
+  easing: "LINEAR" | "EASE_IN" | "EASE_OUT" | "EASE_IN_OUT";
+}
+
+interface CameraEdit {
+  enabled: boolean;
+  aspectRatio: "ORIGINAL" | "VERTICAL";
+  keyframes: CameraKeyframe[];
+}
+
 interface CreateExportJobInput {
   sessionId: string;
   // tier is NOT in input - determined by backend from user
@@ -39,12 +54,196 @@ interface CreateExportJobInput {
     videoS3Key: string;
     startMs: number;
     endMs: number;
+    camera?: CameraEdit;
   }>;
 }
 
 // Internal interface with tier for trigger functions
 interface ExportTriggerInput extends CreateExportJobInput {
   tier: "FREE" | "PREMIUM";
+}
+
+/**
+ * Generate FFmpeg video filter for camera panning/zooming.
+ * Uses crop filter with expressions to animate position based on keyframes.
+ *
+ * @param camera - Camera edit configuration
+ * @param durationSec - Rally duration in seconds
+ * @param inputWidth - Source video width (default 1920)
+ * @param inputHeight - Source video height (default 1080)
+ * @returns FFmpeg -vf filter string
+ */
+function generateCameraFilter(
+  camera: CameraEdit,
+  durationSec: number,
+  inputWidth = 1920,
+  inputHeight = 1080
+): string {
+  const fps = 30;
+  const totalFrames = Math.ceil(durationSec * fps);
+
+  // Calculate output dimensions based on aspect ratio
+  let outputWidth: number;
+  let outputHeight: number;
+
+  if (camera.aspectRatio === "VERTICAL") {
+    // 9:16 vertical from 16:9 source
+    outputHeight = inputHeight;
+    outputWidth = Math.round(outputHeight * 9 / 16);
+  } else {
+    // Keep original aspect ratio
+    outputWidth = inputWidth;
+    outputHeight = inputHeight;
+  }
+
+  const keyframes = camera.keyframes;
+
+  // If no keyframes, use static center crop
+  if (!keyframes || keyframes.length === 0) {
+    const x = Math.round((inputWidth - outputWidth) / 2);
+    const y = Math.round((inputHeight - outputHeight) / 2);
+    return `crop=${outputWidth}:${outputHeight}:${x}:${y}`;
+  }
+
+  // Sort keyframes by time
+  const sortedKeyframes = [...keyframes].sort((a, b) => a.timeOffset - b.timeOffset);
+
+  // For single keyframe, use static position with zoom
+  if (sortedKeyframes.length === 1) {
+    const kf = sortedKeyframes[0];
+    const zoom = Math.max(1, Math.min(3, kf.zoom));
+    const croppedW = Math.round(outputWidth / zoom);
+    const croppedH = Math.round(outputHeight / zoom);
+    const maxX = inputWidth - croppedW;
+    const maxY = inputHeight - croppedH;
+    const x = Math.round(kf.positionX * maxX);
+    const y = Math.round(kf.positionY * maxY);
+    return `crop=${croppedW}:${croppedH}:${x}:${y},scale=${outputWidth}:${outputHeight}`;
+  }
+
+  // Build FFmpeg expression for animated crop
+  // We'll generate a piecewise expression using if() functions
+
+  // Helper to generate easing expression
+  const easingExpr = (t: string, easing: string): string => {
+    switch (easing) {
+      case "EASE_IN":
+        return `(${t}*${t})`;
+      case "EASE_OUT":
+        return `(1-(1-${t})*(1-${t}))`;
+      case "EASE_IN_OUT":
+        return `(${t}<0.5?2*${t}*${t}:1-(-2*${t}+2)*(-2*${t}+2)/2)`;
+      default: // LINEAR
+        return t;
+    }
+  };
+
+  // Generate expressions for x, y positions and zoom
+  // FFmpeg uses 'n' for frame number in expressions
+  const segments: string[] = [];
+
+  for (let i = 0; i < sortedKeyframes.length - 1; i++) {
+    const kf1 = sortedKeyframes[i];
+    const kf2 = sortedKeyframes[i + 1];
+
+    const frame1 = Math.round(kf1.timeOffset * totalFrames);
+    const frame2 = Math.round(kf2.timeOffset * totalFrames);
+
+    // Linear interpolation with easing
+    const tExpr = `((n-${frame1})/${Math.max(1, frame2 - frame1)})`;
+    const easedT = easingExpr(tExpr, kf2.easing);
+
+    // Interpolate zoom
+    const z1 = Math.max(1, Math.min(3, kf1.zoom));
+    const z2 = Math.max(1, Math.min(3, kf2.zoom));
+    const zoomExpr = `(${z1}+${easedT}*(${z2}-${z1}))`;
+
+    // Interpolate position (0-1 normalized)
+    const px1 = kf1.positionX;
+    const px2 = kf2.positionX;
+    const py1 = kf1.positionY;
+    const py2 = kf2.positionY;
+    const pxExpr = `(${px1}+${easedT}*(${px2}-${px1}))`;
+    const pyExpr = `(${py1}+${easedT}*(${py2}-${py1}))`;
+
+    // Width/height expressions accounting for zoom
+    const wExpr = `floor(${outputWidth}/${zoomExpr})`;
+    const hExpr = `floor(${outputHeight}/${zoomExpr})`;
+
+    // X/Y position expressions (position is relative to valid crop area)
+    const xExpr = `floor(${pxExpr}*(${inputWidth}-${wExpr}))`;
+    const yExpr = `floor(${pyExpr}*(${inputHeight}-${hExpr}))`;
+
+    segments.push({
+      frame1,
+      frame2,
+      wExpr,
+      hExpr,
+      xExpr,
+      yExpr,
+    } as unknown as string); // We'll process this differently
+  }
+
+  // For simplicity with complex expressions, we'll use a simpler approach:
+  // Generate a static filter based on first keyframe if expressions get too complex
+  // FFmpeg expressions have limits on complexity
+
+  // Simplified approach: Use zoompan filter which handles this better
+  // Format: zoompan=z='zoom_expr':x='x_expr':y='y_expr':d=frames:s=WxH:fps=fps
+
+  // Build zoom, x, y expressions as piecewise
+  const buildPiecewiseExpr = (
+    keyframes: CameraKeyframe[],
+    getValue: (kf: CameraKeyframe) => number,
+    totalFrames: number
+  ): string => {
+    if (keyframes.length === 1) {
+      return String(getValue(keyframes[0]));
+    }
+
+    let expr = "";
+    for (let i = keyframes.length - 2; i >= 0; i--) {
+      const kf1 = keyframes[i];
+      const kf2 = keyframes[i + 1];
+      const frame1 = Math.round(kf1.timeOffset * totalFrames);
+      const frame2 = Math.round(kf2.timeOffset * totalFrames);
+      const v1 = getValue(kf1);
+      const v2 = getValue(kf2);
+
+      const tExpr = `(on-${frame1})/${Math.max(1, frame2 - frame1)}`;
+      const easedT = easingExpr(tExpr, kf2.easing);
+      const interpExpr = `${v1}+${easedT}*(${v2}-${v1})`;
+
+      if (i === keyframes.length - 2) {
+        // Last segment (innermost)
+        expr = `if(lt(on,${frame1}),${v1},${interpExpr})`;
+      } else {
+        // Wrap with condition for this segment
+        expr = `if(lt(on,${frame1}),${v1},if(lt(on,${frame2}),${interpExpr},${expr}))`;
+      }
+    }
+    return expr || String(getValue(keyframes[0]));
+  };
+
+  const zoomExpr = buildPiecewiseExpr(sortedKeyframes, kf => Math.max(1, Math.min(3, kf.zoom)), totalFrames);
+  const pxExpr = buildPiecewiseExpr(sortedKeyframes, kf => kf.positionX, totalFrames);
+  const pyExpr = buildPiecewiseExpr(sortedKeyframes, kf => kf.positionY, totalFrames);
+
+  // Calculate base crop dimensions (at zoom=1) for output aspect ratio
+  const baseW = outputWidth;
+  const baseH = outputHeight;
+
+  // X position: normalize positionX to available pan range
+  // At zoom Z, crop size is baseW/Z x baseH/Z
+  // Available X range: 0 to (inputW - baseW/Z)
+  // X = positionX * (inputW - baseW/zoom)
+  const xExprFinal = `floor((${pxExpr})*(${inputWidth}-${baseW}/(${zoomExpr})))`;
+  const yExprFinal = `floor((${pyExpr})*(${inputHeight}-${baseH}/(${zoomExpr})))`;
+  const wExprFinal = `floor(${baseW}/(${zoomExpr}))`;
+  const hExprFinal = `floor(${baseH}/(${zoomExpr}))`;
+
+  // Use crop with expressions, then scale to output size
+  return `crop=w='${wExprFinal}':h='${hExprFinal}':x='${xExprFinal}':y='${yExprFinal}',scale=${outputWidth}:${outputHeight}`;
 }
 
 export async function createExportJob(
@@ -91,7 +290,7 @@ export async function createExportJob(
       tier: effectiveTier as UserTier,
       status: ExportStatus.PENDING,
       config: input.config,
-      rallies: input.rallies,
+      rallies: input.rallies as unknown as Parameters<typeof prisma.exportJob.create>[0]['data']['rallies'],
     },
   });
 
@@ -193,10 +392,31 @@ async function triggerLocalExport(
       const startSec = rally.startMs / 1000;
       const durationSec = (rally.endMs - rally.startMs) / 1000;
 
-      console.log(`[LOCAL EXPORT] Extracting clip ${i + 1}/${input.rallies.length}...`);
+      // Check if this rally has camera edits
+      const hasCamera = rally.camera?.enabled && rally.camera?.keyframes?.length > 0;
 
-      if (input.tier === "PREMIUM") {
-        // Fast copy for premium
+      console.log(`[LOCAL EXPORT] Extracting clip ${i + 1}/${input.rallies.length}${hasCamera ? ' with camera effects' : ''}...`);
+
+      if (hasCamera) {
+        // Camera edits require re-encoding
+        const cameraFilter = generateCameraFilter(rally.camera!, durationSec);
+        console.log(`[LOCAL EXPORT] Camera filter: ${cameraFilter}`);
+
+        await runFFmpeg([
+          "-ss", String(startSec),
+          "-i", videoPath,
+          "-t", String(durationSec),
+          "-vf", cameraFilter,
+          "-c:v", "libx264",
+          "-preset", "fast",
+          "-crf", "23",
+          "-c:a", "aac",
+          "-b:a", "128k",
+          "-avoid_negative_ts", "make_zero",
+          "-y", clipPath,
+        ]);
+      } else if (input.tier === "PREMIUM") {
+        // Fast copy for premium (no camera edits)
         await runFFmpeg([
           "-ss", String(startSec),
           "-i", videoPath,
@@ -344,6 +564,13 @@ async function triggerExportLambda(jobId: string, input: ExportTriggerInput) {
       videoS3Key: r.videoS3Key,
       startMs: r.startMs,
       endMs: r.endMs,
+      // Include camera edit if present and enabled
+      ...(r.camera?.enabled && {
+        camera: {
+          aspectRatio: r.camera.aspectRatio,
+          keyframes: r.camera.keyframes,
+        },
+      }),
     })),
     callbackUrl: `${env.API_BASE_URL}/v1/webhooks/export-complete`,
     webhookSecret: env.MODAL_WEBHOOK_SECRET,

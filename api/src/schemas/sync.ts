@@ -1,9 +1,11 @@
 import { z } from "zod";
+import { rallyCameraEditSchema } from "./camera.js";
 
 const rallyInputSchema = z.object({
   id: z.string().uuid().optional(),
   startMs: z.number().int().min(0),
   endMs: z.number().int().min(0),
+  cameraEdit: rallyCameraEditSchema.optional(),
 });
 
 const highlightInputSchema = z.object({

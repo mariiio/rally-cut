@@ -27,6 +27,101 @@ s3_client = boto3.client("s3")
 WATERMARK_S3_KEY = "assets/watermark.png"
 
 
+def generate_camera_filter(
+    camera: dict,
+    duration_sec: float,
+    input_width: int = 1920,
+    input_height: int = 1080,
+) -> str:
+    """
+    Generate FFmpeg video filter for camera panning/zooming.
+    Uses crop filter with expressions to animate position based on keyframes.
+    """
+    fps = 30
+    total_frames = int(duration_sec * fps)
+
+    aspect_ratio = camera.get("aspectRatio", "ORIGINAL")
+    keyframes = camera.get("keyframes", [])
+
+    # Calculate output dimensions
+    if aspect_ratio == "VERTICAL":
+        output_height = input_height
+        output_width = round(output_height * 9 / 16)
+    else:
+        output_width = input_width
+        output_height = input_height
+
+    # No keyframes - static center crop
+    if not keyframes:
+        x = round((input_width - output_width) / 2)
+        y = round((input_height - output_height) / 2)
+        return f"crop={output_width}:{output_height}:{x}:{y}"
+
+    # Sort keyframes by time
+    sorted_kfs = sorted(keyframes, key=lambda k: k.get("timeOffset", 0))
+
+    # Single keyframe - static position with zoom
+    if len(sorted_kfs) == 1:
+        kf = sorted_kfs[0]
+        zoom = max(1, min(3, kf.get("zoom", 1)))
+        cropped_w = round(output_width / zoom)
+        cropped_h = round(output_height / zoom)
+        max_x = input_width - cropped_w
+        max_y = input_height - cropped_h
+        x = round(kf.get("positionX", 0.5) * max_x)
+        y = round(kf.get("positionY", 0.5) * max_y)
+        return f"crop={cropped_w}:{cropped_h}:{x}:{y},scale={output_width}:{output_height}"
+
+    # Helper for easing expressions
+    def easing_expr(t: str, easing: str) -> str:
+        if easing == "EASE_IN":
+            return f"({t}*{t})"
+        elif easing == "EASE_OUT":
+            return f"(1-(1-{t})*(1-{t}))"
+        elif easing == "EASE_IN_OUT":
+            return f"({t}<0.5?2*{t}*{t}:1-(-2*{t}+2)*(-2*{t}+2)/2)"
+        return t  # LINEAR
+
+    # Build piecewise expression for a value
+    def build_piecewise_expr(kfs: list, get_value, total_frames: int) -> str:
+        if len(kfs) == 1:
+            return str(get_value(kfs[0]))
+
+        expr = ""
+        for i in range(len(kfs) - 2, -1, -1):
+            kf1, kf2 = kfs[i], kfs[i + 1]
+            frame1 = round(kf1.get("timeOffset", 0) * total_frames)
+            frame2 = round(kf2.get("timeOffset", 0) * total_frames)
+            v1 = get_value(kf1)
+            v2 = get_value(kf2)
+
+            t_expr = f"(on-{frame1})/{max(1, frame2 - frame1)}"
+            eased_t = easing_expr(t_expr, kf2.get("easing", "LINEAR"))
+            interp_expr = f"{v1}+{eased_t}*({v2}-{v1})"
+
+            if i == len(kfs) - 2:
+                expr = f"if(lt(on,{frame1}),{v1},{interp_expr})"
+            else:
+                expr = f"if(lt(on,{frame1}),{v1},if(lt(on,{frame2}),{interp_expr},{expr}))"
+
+        return expr or str(get_value(kfs[0]))
+
+    zoom_expr = build_piecewise_expr(sorted_kfs, lambda k: max(1, min(3, k.get("zoom", 1))), total_frames)
+    px_expr = build_piecewise_expr(sorted_kfs, lambda k: k.get("positionX", 0.5), total_frames)
+    py_expr = build_piecewise_expr(sorted_kfs, lambda k: k.get("positionY", 0.5), total_frames)
+
+    # Calculate filter expressions
+    base_w = output_width
+    base_h = output_height
+
+    x_expr_final = f"floor(({px_expr})*({input_width}-{base_w}/({zoom_expr})))"
+    y_expr_final = f"floor(({py_expr})*({input_height}-{base_h}/({zoom_expr})))"
+    w_expr_final = f"floor({base_w}/({zoom_expr}))"
+    h_expr_final = f"floor({base_h}/({zoom_expr}))"
+
+    return f"crop=w='{w_expr_final}':h='{h_expr_final}':x='{x_expr_final}':y='{y_expr_final}',scale={output_width}:{output_height}"
+
+
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Main Lambda entry point."""
     print(f"Received event: {json.dumps(event)}")
@@ -113,6 +208,7 @@ def process_export(
 
         # Extract clip
         clip_path = clips_dir / f"clip_{i:04d}.mp4"
+        camera = rally.get("camera")  # Optional camera edit data
         extract_clip(
             input_path=video_path,
             output_path=clip_path,
@@ -121,6 +217,7 @@ def process_export(
             tier=tier,
             s3_bucket=s3_bucket,
             tmpdir=tmpdir,
+            camera=camera,
         )
         clip_files.append(clip_path)
 
@@ -154,13 +251,48 @@ def extract_clip(
     tier: str,
     s3_bucket: str,
     tmpdir: Path,
+    camera: dict | None = None,
 ) -> None:
-    """Extract a clip from video, applying tier-specific processing."""
+    """Extract a clip from video, applying tier-specific processing and optional camera effects."""
     start_sec = start_ms / 1000
     duration_sec = (end_ms - start_ms) / 1000
 
-    if tier == "PREMIUM":
-        # Premium: fast copy, no re-encoding
+    # Check if camera effects are enabled
+    has_camera = camera is not None and camera.get("keyframes")
+    if has_camera:
+        print(f"Applying camera effects: {camera.get('aspectRatio', 'ORIGINAL')}, {len(camera.get('keyframes', []))} keyframes")
+
+    if has_camera:
+        # Camera edits require re-encoding
+        camera_filter = generate_camera_filter(camera, duration_sec)
+        print(f"Camera filter: {camera_filter}")
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            str(start_sec),
+            "-i",
+            str(input_path),
+            "-t",
+            str(duration_sec),
+            "-vf",
+            camera_filter,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "23",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-avoid_negative_ts",
+            "make_zero",
+            str(output_path),
+        ]
+    elif tier == "PREMIUM":
+        # Premium: fast copy, no re-encoding (when no camera effects)
         cmd = [
             "ffmpeg",
             "-y",

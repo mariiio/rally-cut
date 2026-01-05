@@ -1,18 +1,25 @@
 'use client';
 
-import { useRef, useEffect, useCallback, useState } from 'react';
+import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { Box, CircularProgress, Typography } from '@mui/material';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useUploadStore } from '@/stores/uploadStore';
+import { useCameraStore } from '@/stores/cameraStore';
+import { calculateVideoTransform } from '@/utils/cameraInterpolation';
+import { DEFAULT_CAMERA_STATE } from '@/types/camera';
 import { designTokens } from '@/app/theme';
+import { CameraOverlay } from './CameraOverlay';
 
 export function VideoPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const videoContainerRef = useRef<HTMLDivElement>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
   const [bufferProgress, setBufferProgress] = useState(0);
+  // Camera time updated via RAF for smooth camera panning during playback
+  const [cameraTime, setCameraTime] = useState(0);
 
   const videoUrl = useEditorStore((state) => state.videoUrl);
   const posterUrl = useEditorStore((state) => state.posterUrl);
@@ -36,6 +43,87 @@ export function VideoPlayer() {
   const setDuration = usePlayerStore((state) => state.setDuration);
   const setReady = usePlayerStore((state) => state.setReady);
   const setBufferedRanges = usePlayerStore((state) => state.setBufferedRanges);
+  const applyCameraEdits = usePlayerStore((state) => state.applyCameraEdits);
+  const currentTime = usePlayerStore((state) => state.currentTime);
+
+  // Camera state
+  const getCameraStateAtTime = useCameraStore((state) => state.getCameraStateAtTime);
+  const cameraEdits = useCameraStore((state) => state.cameraEdits);
+  const dragPosition = useCameraStore((state) => state.dragPosition);
+  const selectedKeyframeId = useCameraStore((state) => state.selectedKeyframeId);
+
+  // Get rallies from editor store
+  const rallies = useEditorStore((state) => state.rallies);
+  const selectedRallyId = useEditorStore((state) => state.selectedRallyId);
+
+  // Find current rally based on playhead position
+  const currentRally = useMemo(() => {
+    // If a rally is selected, use it for camera preview
+    if (selectedRallyId) {
+      return rallies.find((r) => r.id === selectedRallyId) ?? null;
+    }
+    // Otherwise find rally at current time
+    return rallies.find((r) => currentTime >= r.start_time && currentTime <= r.end_time) ?? null;
+  }, [rallies, currentTime, selectedRallyId]);
+
+  // Get camera edit for current rally
+  const currentCameraEdit = useMemo(() => {
+    if (!currentRally) return null;
+    return cameraEdits[currentRally.id] ?? null;
+  }, [currentRally, cameraEdits]);
+
+  // Check if camera edit has keyframes for the active aspect ratio
+  const hasCameraKeyframes = currentCameraEdit &&
+    (currentCameraEdit.keyframes[currentCameraEdit.aspectRatio]?.length ?? 0) > 0;
+
+  // Determine if camera should be applied (toggle on OR actively editing a keyframe)
+  const shouldApplyCamera = applyCameraEdits || selectedKeyframeId !== null;
+
+  // Calculate video transform style based on camera state
+  const videoTransformStyle = useMemo(() => {
+    // Only apply when camera preview is on and we have a rally
+    if (!shouldApplyCamera || !currentRally) {
+      return {};
+    }
+
+    const aspectRatio = currentCameraEdit?.aspectRatio ?? 'ORIGINAL';
+
+    // If no keyframes, show default centered position for the aspect ratio
+    if (!hasCameraKeyframes) {
+      return calculateVideoTransform(DEFAULT_CAMERA_STATE, aspectRatio);
+    }
+
+    // Use cameraTime for camera position - updated via RAF during playback
+    // and via seeked event when scrubbing
+    const effectiveTime = cameraTime;
+
+    // Calculate time offset within the rally (0-1)
+    const rallyDuration = currentRally.end_time - currentRally.start_time;
+    const timeWithinRally = rallyDuration > 0
+      ? (effectiveTime - currentRally.start_time) / rallyDuration
+      : 0;
+    const clampedOffset = Math.max(0, Math.min(1, timeWithinRally));
+
+    // Get interpolated camera state
+    const cameraState = getCameraStateAtTime(currentRally.id, clampedOffset);
+
+    // If dragging, override position with drag position for live preview
+    const effectiveState = dragPosition
+      ? { ...cameraState, positionX: dragPosition.x, positionY: dragPosition.y }
+      : cameraState;
+
+    // Calculate CSS transform
+    return calculateVideoTransform(effectiveState, aspectRatio);
+  }, [shouldApplyCamera, currentRally, hasCameraKeyframes, currentCameraEdit, cameraTime, getCameraStateAtTime, dragPosition]);
+
+  // Get container aspect ratio - show aspect ratio even without keyframes when preview is on
+  const containerAspectRatio = useMemo(() => {
+    if (!shouldApplyCamera || !currentRally) {
+      return '16/9';
+    }
+    const aspectRatio = currentCameraEdit?.aspectRatio ?? 'ORIGINAL';
+    return aspectRatio === 'VERTICAL' ? '9/16' : '16/9';
+  }, [shouldApplyCamera, currentRally, currentCameraEdit]);
 
   // Play/pause based on isPlaying state
   useEffect(() => {
@@ -49,10 +137,35 @@ export function VideoPlayer() {
     }
   }, [isPlaying]);
 
+  // RAF loop for smooth camera updates during playback
+  // This runs at 60fps to sample video.currentTime for smooth panning
+  useEffect(() => {
+    if (!isPlaying || !shouldApplyCamera || !hasCameraKeyframes) {
+      return;
+    }
+
+    let rafId: number;
+    const updateCameraTime = () => {
+      const video = videoRef.current;
+      if (video) {
+        setCameraTime(video.currentTime);
+      }
+      rafId = requestAnimationFrame(updateCameraTime);
+    };
+
+    rafId = requestAnimationFrame(updateCameraTime);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+    };
+  }, [isPlaying, shouldApplyCamera, hasCameraKeyframes]);
+
   // Handle manual seek requests
   useEffect(() => {
     if (seekTo !== null && videoRef.current) {
       videoRef.current.currentTime = seekTo;
+      // Update cameraTime immediately for smooth preview when paused
+      setCameraTime(seekTo);
       clearSeek();
       // Resume playback if we're supposed to be playing
       if (isPlaying) {
@@ -60,6 +173,14 @@ export function VideoPlayer() {
       }
     }
   }, [seekTo, clearSeek, isPlaying]);
+
+  // Handle seeked event - update camera time when scrubbing
+  const handleSeeked = useCallback(() => {
+    const video = videoRef.current;
+    if (video && !isPlaying) {
+      setCameraTime(video.currentTime);
+    }
+  }, [isPlaying]);
 
   // Track if we're in the middle of a match switch
   const switchingMatchRef = useRef(false);
@@ -242,16 +363,22 @@ export function VideoPlayer() {
     );
   }
 
+  // Check if camera preview is active (toggle on OR editing, and rally is selected)
+  const isCameraPreviewActive = shouldApplyCamera && currentRally !== null;
+
   return (
     <Box
       sx={{
         width: '100%',
-        aspectRatio: '16/9',
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
         bgcolor: '#000',
         borderRadius: 2,
-        overflow: 'hidden',
         position: 'relative',
         boxShadow: designTokens.colors.video.shadow,
+        // When in vertical mode, contain the vertical video within a 16:9 outer frame
+        aspectRatio: '16/9',
         // Premium border effect
         '&::before': {
           content: '""',
@@ -265,6 +392,19 @@ export function VideoPlayer() {
           maskComposite: 'exclude',
           pointerEvents: 'none',
         },
+        // Camera preview active indicator
+        ...(isCameraPreviewActive && {
+          '&::after': {
+            content: '""',
+            position: 'absolute',
+            inset: -2,
+            borderRadius: 2.5,
+            border: '2px solid',
+            borderColor: 'primary.main',
+            opacity: 0.6,
+            pointerEvents: 'none',
+          },
+        }),
       }}
     >
       {/* Loading overlay - initial load */}
@@ -315,25 +455,151 @@ export function VideoPlayer() {
         </Box>
       )}
 
-      <video
-        ref={videoRef}
-        src={effectiveVideoUrl}
-        poster={posterUrl || undefined}
-        preload="metadata"
-        crossOrigin={process.env.NODE_ENV === 'production' ? 'anonymous' : undefined}
-        style={{
-          width: '100%',
-          height: '100%',
-          objectFit: 'contain',
-        }}
-        onTimeUpdate={handleTimeUpdate}
-        onLoadedMetadata={handleLoadedMetadata}
-        onLoadStart={handleLoadStart}
-        onProgress={handleProgress}
-        onWaiting={handleWaiting}
-        onCanPlay={handleCanPlay}
-        playsInline
-      />
+      {/* Camera preview mode indicator */}
+      {isCameraPreviewActive && (
+        <Box
+          sx={{
+            position: 'absolute',
+            top: 12,
+            left: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 0.75,
+            bgcolor: 'rgba(0, 0, 0, 0.6)',
+            borderRadius: 1,
+            px: 1.5,
+            py: 0.5,
+            zIndex: 2,
+          }}
+        >
+          <Box
+            sx={{
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              bgcolor: 'primary.main',
+              animation: 'pulse 2s infinite',
+              '@keyframes pulse': {
+                '0%, 100%': { opacity: 1 },
+                '50%': { opacity: 0.5 },
+              },
+            }}
+          />
+          <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 500 }}>
+            {currentCameraEdit?.aspectRatio === 'VERTICAL' ? '9:16' : '16:9'} Preview
+          </Typography>
+        </Box>
+      )}
+
+      {/* 9:16 wrapper - centers the vertical preview */}
+      {containerAspectRatio === '9/16' && (
+        <Box
+          sx={{
+            position: 'absolute',
+            top: 0,
+            bottom: 0,
+            // Calculate width explicitly: for 9:16 in a 16:9 parent
+            // width = height * (9/16), but height = parentHeight
+            // parentWidth = parentHeight * (16/9)
+            // so width as % of parent = (9/16) / (16/9) = 31.64%
+            width: `${(9/16) / (16/9) * 100}%`,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            overflow: 'hidden',
+          }}
+        >
+          <Box
+            ref={videoContainerRef}
+            sx={{
+              position: 'absolute',
+              inset: 0,
+              overflow: 'hidden',
+            }}
+          >
+            <CameraOverlay containerRef={videoContainerRef} />
+            <video
+              ref={videoRef}
+              src={effectiveVideoUrl}
+              poster={posterUrl || undefined}
+              preload="metadata"
+              crossOrigin={process.env.NODE_ENV === 'production' ? 'anonymous' : undefined}
+              style={{
+                position: 'absolute',
+                top: 0,
+                // Position video at center, transform will handle panning
+                left: '50%',
+                // Auto width maintains aspect ratio, height fills container
+                // This makes a 16:9 video 3.16x wider than the 9:16 container
+                width: 'auto',
+                height: '100%',
+                // NO objectFit - we handle positioning via transform only
+                // This makes 9:16 work exactly like 16:9 (transform only)
+                willChange: 'transform',
+                // Same transition as 16:9 - transform only
+                // Use 200ms ease-out to smooth out large/fast camera movements
+                transition: dragPosition
+                  ? 'none'
+                  : isPlaying
+                    ? 'transform 0.2s ease-out'
+                    : 'transform 0.2s ease-out',
+                ...videoTransformStyle,
+              }}
+              onTimeUpdate={handleTimeUpdate}
+              onSeeked={handleSeeked}
+              onLoadedMetadata={handleLoadedMetadata}
+              onLoadStart={handleLoadStart}
+              onProgress={handleProgress}
+              onWaiting={handleWaiting}
+              onCanPlay={handleCanPlay}
+              playsInline
+            />
+          </Box>
+        </Box>
+      )}
+
+      {/* 16:9 layout - normal video display */}
+      {containerAspectRatio !== '9/16' && (
+        <Box
+          ref={videoContainerRef}
+          sx={{
+            position: 'relative',
+            width: '100%',
+            height: '100%',
+            overflow: 'hidden',
+          }}
+        >
+          <CameraOverlay containerRef={videoContainerRef} />
+          <video
+            ref={videoRef}
+            src={effectiveVideoUrl}
+            poster={posterUrl || undefined}
+            preload="metadata"
+            crossOrigin={process.env.NODE_ENV === 'production' ? 'anonymous' : undefined}
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'contain',
+              willChange: isCameraPreviewActive ? 'transform' : 'auto',
+              // No transition during drag (instant feedback)
+              // Use 200ms ease-out to smooth out large/fast camera movements
+              transition: dragPosition
+                ? 'none'
+                : isPlaying
+                  ? 'transform 0.2s ease-out'
+                  : 'transform 0.2s ease-out',
+              ...videoTransformStyle,
+            }}
+            onTimeUpdate={handleTimeUpdate}
+            onSeeked={handleSeeked}
+            onLoadedMetadata={handleLoadedMetadata}
+            onLoadStart={handleLoadStart}
+            onProgress={handleProgress}
+            onWaiting={handleWaiting}
+            onCanPlay={handleCanPlay}
+            playsInline
+          />
+        </Box>
+      )}
     </Box>
   );
 }

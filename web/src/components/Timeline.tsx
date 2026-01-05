@@ -11,8 +11,6 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
-import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import KeyboardIcon from '@mui/icons-material/Keyboard';
 import StarIcon from '@mui/icons-material/Star';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
@@ -25,6 +23,7 @@ import {
 } from '@xzdarcy/react-timeline-editor';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
+import { useCameraStore } from '@/stores/cameraStore';
 import { formatTimeShort, formatTime } from '@/utils/timeFormat';
 import { triggerRallyDetection, getDetectionStatus } from '@/services/api';
 
@@ -100,10 +99,21 @@ export function Timeline() {
     activeMatchId,
     reloadCurrentMatch,
     isRallyEditingLocked,
+    isCameraTabActive,
+    setIsCameraTabActive,
   } = useEditorStore();
 
   // Check if rally editing is locked (after confirmation)
   const isLocked = isRallyEditingLocked();
+
+  // Camera edit mode: rally selected AND camera tab is active
+  const isInCameraEditMode = selectedRallyId !== null && isCameraTabActive;
+
+  // Camera edits for keyframe markers
+  const cameraEdits = useCameraStore((state) => state.cameraEdits);
+  const selectKeyframe = useCameraStore((state) => state.selectKeyframe);
+  const selectedKeyframeId = useCameraStore((state) => state.selectedKeyframeId);
+  const removeKeyframe = useCameraStore((state) => state.removeKeyframe);
 
   // Detection state
   const [isDetecting, setIsDetecting] = useState(false);
@@ -131,6 +141,7 @@ export function Timeline() {
   const timelineContainerRef = useRef<HTMLDivElement>(null);
   const [isDraggingCursor, setIsDraggingCursor] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [keyframeDeleteConfirmId, setKeyframeDeleteConfirmId] = useState<string | null>(null);
   const [hotkeysAnchorEl, setHotkeysAnchorEl] = useState<HTMLButtonElement | null>(null);
   const [scrollLeft, setScrollLeft] = useState(0);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -266,8 +277,15 @@ export function Timeline() {
           if (isMod) {
             // Cmd/Ctrl + Left: go to previous rally
             goToPrevRally();
+          } else if (isInCameraEditMode) {
+            // Camera edit mode: move playhead left 0.3s within rally bounds (finer control)
+            const rally = getSelectedRally();
+            if (rally) {
+              const newTime = Math.max(rally.start_time, currentTime - 0.3);
+              seek(newTime);
+            }
           } else if (selectedRallyId && !isLocked) {
-            // Left with rally selected: adjust rally (disabled when locked)
+            // Left with rally selected (not in camera mode): adjust rally
             const rallyLeft = getSelectedRally();
             if (e.shiftKey) {
               // Shift + Left: shrink end (-0.5s)
@@ -293,8 +311,15 @@ export function Timeline() {
           if (isMod) {
             // Cmd/Ctrl + Right: go to next rally
             goToNextRally();
+          } else if (isInCameraEditMode) {
+            // Camera edit mode: move playhead right 0.3s within rally bounds (finer control)
+            const rally = getSelectedRally();
+            if (rally) {
+              const newTime = Math.min(rally.end_time, currentTime + 0.3);
+              seek(newTime);
+            }
           } else if (selectedRallyId && !isLocked) {
-            // Right with rally selected: adjust rally (disabled when locked)
+            // Right with rally selected (not in camera mode): adjust rally
             const rallyRight = getSelectedRally();
             if (e.shiftKey) {
               // Shift + Right: expand end (+0.5s)
@@ -317,8 +342,23 @@ export function Timeline() {
 
         case 'Delete':
         case 'Backspace':
-          // Disable delete when locked
-          if (selectedRallyId && !isLocked) {
+          // Priority 1: Delete keyframe in camera edit mode
+          if (isInCameraEditMode && selectedKeyframeId && selectedRallyId) {
+            e.preventDefault();
+            if (keyframeDeleteConfirmId === selectedKeyframeId) {
+              // Confirm delete on second press
+              removeKeyframe(selectedRallyId, selectedKeyframeId);
+              setKeyframeDeleteConfirmId(null);
+              selectKeyframe(null);
+            } else {
+              // Show confirmation on first press
+              setKeyframeDeleteConfirmId(selectedKeyframeId);
+            }
+            break;
+          }
+
+          // Priority 2: Delete rally (when not in camera edit mode)
+          if (selectedRallyId && !isLocked && !isInCameraEditMode) {
             e.preventDefault();
             if (deleteConfirmId === selectedRallyId) {
               // Confirm delete on second press
@@ -333,7 +373,9 @@ export function Timeline() {
           break;
 
         case 'Escape':
-          if (deleteConfirmId) {
+          if (keyframeDeleteConfirmId) {
+            setKeyframeDeleteConfirmId(null);
+          } else if (deleteConfirmId) {
             setDeleteConfirmId(null);
           } else if (selectedRallyId) {
             selectRally(null);
@@ -362,7 +404,7 @@ export function Timeline() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, play, pause, seek, currentTime, duration, selectedRallyId, deleteConfirmId, removeRally, selectRally, isInsideSelectedRally, getSelectedRally, goToPrevRally, goToNextRally, adjustRallyStart, adjustRallyEnd, videoMetadata, rallies, createRallyAtTime, handleToggleHighlight, isLocked]);
+  }, [isPlaying, play, pause, seek, currentTime, duration, selectedRallyId, deleteConfirmId, removeRally, selectRally, isInsideSelectedRally, getSelectedRally, goToPrevRally, goToNextRally, adjustRallyStart, adjustRallyEnd, videoMetadata, rallies, createRallyAtTime, handleToggleHighlight, isLocked, isInCameraEditMode, selectedKeyframeId, keyframeDeleteConfirmId, removeKeyframe, selectKeyframe]);
 
   // Jump to previous/next rally
   const jumpToPrevRally = useCallback(() => {
@@ -437,6 +479,58 @@ export function Timeline() {
       setScale(newScale);
     }
   }, [duration, containerWidth, getAutoScale]);
+
+  // Track previous camera edit mode state and store original scale
+  const prevCameraEditModeRef = useRef<boolean>(false);
+  const originalScaleRef = useRef<number | null>(null);
+
+  // Zoom and center timeline on selected rally when entering camera edit mode
+  // Restore original scale when exiting camera edit mode
+  useEffect(() => {
+    const wasInCameraEditMode = prevCameraEditModeRef.current;
+    prevCameraEditModeRef.current = isInCameraEditMode;
+
+    // Exiting camera edit mode - restore original scale
+    if (wasInCameraEditMode && !isInCameraEditMode && originalScaleRef.current !== null) {
+      setScale(originalScaleRef.current);
+      originalScaleRef.current = null;
+      return;
+    }
+
+    // Entering camera edit mode - save scale and zoom to rally
+    if (!wasInCameraEditMode && isInCameraEditMode) {
+      if (!containerWidth || !rallies) return;
+      const rally = rallies.find((r) => r.id === selectedRallyId);
+      if (!rally) return;
+
+      const rallyDuration = rally.end_time - rally.start_time;
+      if (rallyDuration <= 0) return;
+
+      // Save current scale before zooming
+      originalScaleRef.current = scale;
+
+      // Target: rally takes ~60% of viewport width
+      const targetWidth = containerWidth * 0.6;
+      const optimalScale = (rallyDuration * SCALE_WIDTH) / targetWidth;
+      const newScale = Math.max(MIN_SCALE, Math.min(optimalScale, 30));
+
+      setScale(newScale);
+
+      // Scroll to center the rally after a brief delay for scale to apply
+      setTimeout(() => {
+        const container = timelineContainerRef.current;
+        if (!container) return;
+
+        const editGrid = container.querySelector('.timeline-editor-edit-area .ReactVirtualized__Grid');
+        if (editGrid) {
+          const pixelsPerSecond = SCALE_WIDTH / newScale;
+          const rallyCenter = (rally.start_time + rally.end_time) / 2;
+          const centerScrollLeft = Math.max(0, (rallyCenter * pixelsPerSecond) - (containerWidth / 2));
+          editGrid.scrollLeft = centerScrollLeft;
+        }
+      }, 50);
+    }
+  }, [isInCameraEditMode, selectedRallyId, rallies, containerWidth, scale]);
 
   // Sync timeline cursor with video playback position
   useEffect(() => {
@@ -545,12 +639,12 @@ export function Timeline() {
           end: rally.end_time,
           effectId: 'rally',
           selected: rally.id === selectedRallyId,
-          flexible: false,
+          flexible: !isLocked && !isInCameraEditMode,
           movable: false,
         })),
       },
     ];
-  }, [rallies, selectedRallyId]);
+  }, [rallies, selectedRallyId, isLocked, isInCameraEditMode]);
 
   // Check if a move/resize would cause overlap
   const checkOverlap = useCallback(
@@ -565,27 +659,14 @@ export function Timeline() {
     [rallies]
   );
 
-  // Handle rally changes (resize/move)
+  // Handle rally changes - only used for visual updates during drag
+  // Actual persistence happens in handleActionResizeEnd/handleActionMoveEnd
   const handleChange = useCallback(
-    (data: TimelineRow[]) => {
-      if (!rallies) return;
-      const actions = data[0]?.actions || [];
-      actions.forEach((action: TimelineAction) => {
-        const rally = rallies.find((s) => s.id === action.id);
-        if (rally) {
-          if (
-            rally.start_time !== action.start ||
-            rally.end_time !== action.end
-          ) {
-            updateRally(action.id, {
-              start_time: action.start,
-              end_time: action.end,
-            });
-          }
-        }
-      });
+    (_data: TimelineRow[]) => {
+      // No-op: we persist changes in onActionResizeEnd/onActionMoveEnd
+      // to avoid double history entries
     },
-    [rallies, updateRally]
+    []
   );
 
   // Prevent overlapping during move (also disable when locked)
@@ -630,14 +711,23 @@ export function Timeline() {
     [updateRally]
   );
 
-  // Handle clicking on timeline to seek and deselect
+  // Handle clicking on timeline to seek (don't deselect - user can press Escape)
   const handleClickTimeArea = useCallback(
     (time: number) => {
+      // In camera edit mode, constrain to rally bounds
+      if (isInCameraEditMode) {
+        const rally = getSelectedRally();
+        if (rally) {
+          const constrainedTime = Math.max(rally.start_time, Math.min(rally.end_time, time));
+          seek(constrainedTime);
+          return true;
+        }
+      }
       seek(time);
-      selectRally(null);
+      // Don't deselect rally - allow moving playhead while keeping rally selected
       return true;
     },
-    [seek, selectRally]
+    [seek, isInCameraEditMode, getSelectedRally]
   );
 
   // Handle clicking on an action to select it
@@ -1014,13 +1104,6 @@ export function Timeline() {
       {/* Timeline editor */}
       <Box
         ref={timelineContainerRef}
-        onClick={(e) => {
-          // Deselect if clicking on empty area (not on a rally)
-          const target = e.target as HTMLElement;
-          if (!target.closest('.timeline-editor-action')) {
-            selectRally(null);
-          }
-        }}
         sx={{
           height: 180,
           width: '100%',
@@ -1058,10 +1141,19 @@ export function Timeline() {
               boxShadow: '0 4px 8px rgba(59, 130, 246, 0.3) !important',
             },
           },
-          // Allow resize cursor on edges (disabled when locked)
-          '& .timeline-editor-action-left-stretch, & .timeline-editor-action-right-stretch': {
-            cursor: isLocked ? 'default !important' : 'ew-resize !important',
-            pointerEvents: isLocked ? 'none !important' : 'auto !important',
+          // Resize handles on edges (disabled when locked or in camera edit mode)
+          '& .timeline-editor-action .timeline-editor-action-left-stretch, & .timeline-editor-action .timeline-editor-action-right-stretch': {
+            cursor: (isLocked || isInCameraEditMode) ? 'default !important' : 'ew-resize !important',
+            pointerEvents: (isLocked || isInCameraEditMode) ? 'none !important' : 'auto !important',
+            width: '10px !important',
+            overflow: 'visible !important',
+            background: 'transparent !important',
+            zIndex: '50 !important',
+            ...(!isLocked && !isInCameraEditMode && {
+              '&:hover': {
+                background: 'rgba(255,255,255,0.1) !important',
+              },
+            }),
           },
           '& .timeline-editor-action-selected': {
             background: 'linear-gradient(180deg, #FF6B4A 0%, #E55235 100%) !important',
@@ -1163,36 +1255,12 @@ export function Timeline() {
           getScaleRender={getScaleRender}
           getActionRender={(action) => {
             const rally = rallies?.find((s) => s.id === action.id);
-            const isSelected = selectedRallyId === action.id;
 
-            const edgeButtonStyle = {
-              p: 0,
-              minWidth: 20,
-              minHeight: 20,
-              width: 20,
-              height: 20,
-              color: 'white',
-              bgcolor: 'primary.dark',
-              border: '1px solid rgba(255,255,255,0.3)',
-              borderRadius: '4px',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
-              '&:hover': {
-                bgcolor: 'primary.main',
-                border: '1px solid rgba(255,255,255,0.5)',
-              },
-            };
-
-            const handleAdjustStart = (delta: number) => {
-              if (adjustRallyStart(action.id, delta) && rally) {
-                seek(rally.start_time + delta);
-              }
-            };
-
-            const handleAdjustEnd = (delta: number) => {
-              if (adjustRallyEnd(action.id, delta) && rally) {
-                seek(rally.end_time + delta);
-              }
-            };
+            // Get keyframes for this rally (active aspect ratio)
+            const cameraEdit = cameraEdits[action.id];
+            const keyframes = cameraEdit
+              ? cameraEdit.keyframes[cameraEdit.aspectRatio] ?? []
+              : [];
 
             return (
               <Box
@@ -1203,6 +1271,76 @@ export function Timeline() {
                   overflow: 'visible',
                 }}
               >
+                {/* Keyframe tick marks */}
+                {keyframes.map((kf) => (
+                  <Box
+                    key={kf.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      // Select the rally and keyframe
+                      selectRally(action.id);
+                      selectKeyframe(kf.id);
+                      // Switch to camera edit mode
+                      setIsCameraTabActive(true);
+                      // Seek to keyframe position
+                      if (rally) {
+                        const keyframeTime = rally.start_time + kf.timeOffset * (rally.end_time - rally.start_time);
+                        seek(keyframeTime);
+                      }
+                    }}
+                    sx={{
+                      position: 'absolute',
+                      left: `${kf.timeOffset * 100}%`,
+                      top: 0,
+                      bottom: 0,
+                      width: 14,
+                      transform: 'translateX(-50%)',
+                      cursor: 'pointer',
+                      zIndex: 10,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      '&:hover .kf-dot': {
+                        transform: 'scale(1.4)',
+                        bgcolor: '#FFD700',
+                      },
+                      '&:hover .kf-line': {
+                        bgcolor: 'rgba(255,255,255,0.6)',
+                      },
+                    }}
+                  >
+                    {/* Vertical line */}
+                    <Box
+                      className="kf-line"
+                      sx={{
+                        position: 'absolute',
+                        top: 0,
+                        bottom: 0,
+                        left: '50%',
+                        width: 1,
+                        transform: 'translateX(-50%)',
+                        bgcolor: 'rgba(255,255,255,0.35)',
+                        transition: 'background-color 0.15s',
+                      }}
+                    />
+                    {/* Centered clickable dot */}
+                    <Box
+                      className="kf-dot"
+                      sx={{
+                        position: 'relative',
+                        width: 10,
+                        height: 10,
+                        borderRadius: '50%',
+                        bgcolor: selectedKeyframeId === kf.id ? '#FFD700' : '#FFA500',
+                        border: '2px solid',
+                        borderColor: selectedKeyframeId === kf.id ? '#FFF' : 'rgba(0,0,0,0.4)',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
+                        transition: 'transform 0.15s, background-color 0.15s',
+                      }}
+                    />
+                  </Box>
+                ))}
+
                 {/* Center content */}
                 <Box
                   sx={{
@@ -1235,77 +1373,6 @@ export function Timeline() {
                   </Typography>
                 </Box>
 
-                {/* Left edge controls - only show when selected and not locked */}
-                {isSelected && !isLocked && (
-                  <Stack
-                    direction="column"
-                    spacing={0.5}
-                    sx={{
-                      position: 'absolute',
-                      left: -24,
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      zIndex: 100,
-                    }}
-                  >
-                    <IconButton
-                      size="small"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleAdjustStart(-0.5);
-                      }}
-                      sx={edgeButtonStyle}
-                    >
-                      <ChevronLeftIcon sx={{ fontSize: 14 }} />
-                    </IconButton>
-                    <IconButton
-                      size="small"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleAdjustStart(0.5);
-                      }}
-                      sx={edgeButtonStyle}
-                    >
-                      <ChevronRightIcon sx={{ fontSize: 14 }} />
-                    </IconButton>
-                  </Stack>
-                )}
-
-                {/* Right edge controls - only show when selected and not locked */}
-                {isSelected && !isLocked && (
-                  <Stack
-                    direction="column"
-                    spacing={0.5}
-                    sx={{
-                      position: 'absolute',
-                      right: -24,
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      zIndex: 100,
-                    }}
-                  >
-                    <IconButton
-                      size="small"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleAdjustEnd(0.5);
-                      }}
-                      sx={edgeButtonStyle}
-                    >
-                      <ChevronRightIcon sx={{ fontSize: 14 }} />
-                    </IconButton>
-                    <IconButton
-                      size="small"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleAdjustEnd(-0.5);
-                      }}
-                      sx={edgeButtonStyle}
-                    >
-                      <ChevronLeftIcon sx={{ fontSize: 14 }} />
-                    </IconButton>
-                  </Stack>
-                )}
 
                 {/* Highlight color bar on left edge */}
                 {(() => {
@@ -1404,11 +1471,16 @@ export function Timeline() {
                 const startX = e.clientX;
                 const startTime = currentTime;
                 const pixelsPerSecond = SCALE_WIDTH / scale;
+                // Get rally bounds for camera edit mode constraint
+                const rally = isInCameraEditMode ? getSelectedRally() : null;
 
                 const handleMouseMove = (moveEvent: MouseEvent) => {
                   const deltaX = moveEvent.clientX - startX;
                   const deltaTime = deltaX / pixelsPerSecond;
-                  const newTime = Math.max(0, Math.min(duration, startTime + deltaTime));
+                  // In camera edit mode, constrain to rally bounds
+                  const minTime = rally ? rally.start_time : 0;
+                  const maxTime = rally ? rally.end_time : duration;
+                  const newTime = Math.max(minTime, Math.min(maxTime, startTime + deltaTime));
                   seek(newTime);
                 };
 
@@ -1455,8 +1527,8 @@ export function Timeline() {
           </Box>
         )}
 
-        {/* Delete button overlay for selected rally (hidden when locked) */}
-        {selectedRallyId && selectedRallyPosition && selectedRallyPosition.center > 0 && !isLocked && (
+        {/* Delete button overlay for selected rally (hidden when locked or in camera edit mode) */}
+        {selectedRallyId && selectedRallyPosition && selectedRallyPosition.center > 0 && !isLocked && !isInCameraEditMode && (
           <Box
             sx={{
               position: 'absolute',

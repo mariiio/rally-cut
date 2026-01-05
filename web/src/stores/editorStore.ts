@@ -14,7 +14,9 @@ import {
   SessionManifest,
 } from '@/types/rally';
 import { usePlayerStore } from './playerStore';
-import { fetchSession as fetchSessionFromApi, getCurrentUser } from '@/services/api';
+import { fetchSession as fetchSessionFromApi, getCurrentUser, type CameraEditMap } from '@/services/api';
+import { useCameraStore } from './cameraStore';
+import type { RallyCameraEdit } from '@/types/camera';
 import { syncService } from '@/services/syncService';
 
 // History management types
@@ -40,6 +42,7 @@ interface PersistedSession {
   sessionId: string;
   matchRallies: Record<string, Rally[]>; // matchId -> rallies
   highlights: Highlight[];
+  cameraEdits?: Record<string, RallyCameraEdit>; // rallyId -> camera edit
   savedAt: number;
 }
 
@@ -124,6 +127,10 @@ interface EditorState {
   // Confirmation state (per match/video)
   confirmationStatus: Record<string, ConfirmationStatus | null>;
   isConfirming: boolean;
+
+  // Camera edit mode state
+  isCameraTabActive: boolean;
+  setIsCameraTabActive: (active: boolean) => void;
 
   // Session actions
   loadSession: (sessionId: string) => Promise<void>;
@@ -236,6 +243,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   confirmationStatus: {},
   isConfirming: false,
 
+  // Camera edit mode state
+  isCameraTabActive: false,
+  setIsCameraTabActive: (active: boolean) => set({ isCameraTabActive: active }),
+
   // Session actions
   loadSession: async (sessionId: string) => {
     // Start loading
@@ -254,7 +265,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       if (useApi) {
         // Fetch from backend API
-        session = await fetchSessionFromApi(sessionId);
+        const result = await fetchSessionFromApi(sessionId);
+        session = result.session;
+
+        // Load camera edits into camera store (migration handled by loadCameraEdits)
+        if (Object.keys(result.cameraEdits).length > 0) {
+          // Pass raw data - loadCameraEdits will migrate old format if needed
+          useCameraStore.getState().loadCameraEdits(result.cameraEdits);
+        }
 
         // Update progress
         set({
@@ -305,6 +323,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }),
             highlights: savedData.highlights || session.highlights,
           };
+
+          // Load camera edits from localStorage (overrides API data)
+          if (savedData.cameraEdits && Object.keys(savedData.cameraEdits).length > 0) {
+            useCameraStore.getState().loadCameraEdits(savedData.cameraEdits);
+          }
         }
 
         // Set up state getter for sync service
@@ -394,6 +417,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           matches,
           highlights: savedData?.highlights || [],
         };
+
+        // Load camera edits from localStorage
+        if (savedData?.cameraEdits && Object.keys(savedData.cameraEdits).length > 0) {
+          useCameraStore.getState().loadCameraEdits(savedData.cameraEdits);
+        }
       }
 
       // Get all original rallies flattened for the active match comparison
@@ -447,12 +475,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     try {
       // Fetch fresh session data from API
-      const freshSession = await fetchSessionFromApi(state.session.id);
+      const result = await fetchSessionFromApi(state.session.id);
+      const freshSession = result.session;
+
+      // Load camera edits into camera store (migration handled by loadCameraEdits)
+      if (Object.keys(result.cameraEdits).length > 0) {
+        useCameraStore.getState().loadCameraEdits(result.cameraEdits);
+      }
 
       // Preserve activeMatchId if the match still exists, otherwise use first match
-      const matchStillExists = freshSession.matches.some((m) => m.id === state.activeMatchId);
+      const matchStillExists = freshSession.matches.some((m: { id: string }) => m.id === state.activeMatchId);
       const activeMatchId = matchStillExists ? state.activeMatchId : freshSession.matches[0]?.id || null;
-      const activeMatch = freshSession.matches.find((m) => m.id === activeMatchId);
+      const activeMatch = freshSession.matches.find((m: { id: string }) => m.id === activeMatchId);
 
       // Update original rallies for all matches
       const originalRalliesPerMatch: Record<string, Rally[]> = {};
@@ -487,8 +521,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     try {
       // Fetch fresh session data from API
-      const freshSession = await fetchSessionFromApi(state.session.id);
-      const freshMatch = freshSession.matches.find((m) => m.id === state.activeMatchId);
+      const result = await fetchSessionFromApi(state.session.id);
+      const freshSession = result.session;
+      const freshMatch = freshSession.matches.find((m: { id: string }) => m.id === state.activeMatchId);
+
+      // Load camera edits into camera store (migration handled by loadCameraEdits)
+      if (Object.keys(result.cameraEdits).length > 0) {
+        useCameraStore.getState().loadCameraEdits(result.cameraEdits);
+      }
 
       if (!freshMatch) return null;
 
@@ -917,6 +957,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       },
       confirmationStatus: {},
       isConfirming: false,
+      isCameraTabActive: false,
     });
   },
 
@@ -1048,10 +1089,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           }
         }
 
+        // Get camera edits from camera store
+        const cameraEdits = useCameraStore.getState().cameraEdits;
+
         const data: PersistedSession = {
           sessionId: state.session.id,
           matchRallies,
           highlights: state.highlights,
+          cameraEdits,
           savedAt: Date.now(),
         };
         localStorage.setItem(getStorageKey(state.session.id), JSON.stringify(data));
@@ -1359,3 +1404,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     return confirmation?.status === 'CONFIRMED';
   },
 }));
+
+// Subscribe to cameraStore changes to trigger localStorage persistence
+// This ensures camera edits are saved alongside rally/highlight edits
+useCameraStore.subscribe(
+  (state) => state.cameraEdits,
+  () => {
+    // Only save if editorStore has a session loaded
+    if (useEditorStore.getState().session) {
+      debouncedSave(() => useEditorStore.getState().saveToStorage());
+    }
+  }
+);

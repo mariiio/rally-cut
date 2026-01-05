@@ -13,7 +13,9 @@
 
 import { API_BASE_URL } from './api';
 import type { Rally, Highlight } from '@/types/rally';
+import type { RallyCameraEdit } from '@/types/camera';
 import { useTierStore } from '@/stores/tierStore';
+import { useCameraStore } from '@/stores/cameraStore';
 
 // Sync configuration
 const SYNC_DEBOUNCE_MS = 5000; // Sync 5 seconds after last change
@@ -192,10 +194,47 @@ class SyncService {
 
       // Build the state to sync
       // Collect rallies from all matches, using current active match's edited rallies
+      const cameraEdits = useCameraStore.getState().cameraEdits;
+
+      // Helper to map keyframes to sync format
+      const mapKeyframes = (keyframes: Array<{
+        timeOffset: number;
+        positionX: number;
+        positionY: number;
+        zoom: number;
+        easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT';
+      }>) => keyframes.map(kf => ({
+        timeOffset: kf.timeOffset,
+        positionX: kf.positionX,
+        positionY: kf.positionY,
+        zoom: kf.zoom,
+        easing: kf.easing,
+      }));
+
       const ralliesPerVideo: Record<string, Array<{
         id?: string;
         startMs: number;
         endMs: number;
+        cameraEdit?: {
+          enabled: boolean;
+          aspectRatio: 'ORIGINAL' | 'VERTICAL';
+          keyframes: {
+            ORIGINAL: Array<{
+              timeOffset: number;
+              positionX: number;
+              positionY: number;
+              zoom: number;
+              easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT';
+            }>;
+            VERTICAL: Array<{
+              timeOffset: number;
+              positionX: number;
+              positionY: number;
+              zoom: number;
+              easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT';
+            }>;
+          };
+        };
       }>> = {};
 
       for (const match of currentState.session.matches) {
@@ -203,11 +242,29 @@ class SyncService {
           ? currentState.rallies
           : match.rallies;
 
-        ralliesPerVideo[match.id] = rallies.map(r => ({
-          id: r._backendId,
-          startMs: Math.round(r.start_time * 1000),
-          endMs: Math.round(r.end_time * 1000),
-        }));
+        ralliesPerVideo[match.id] = rallies.map(r => {
+          const cameraEdit = cameraEdits[r.id];
+          // Only include camera edit if it has keyframes in any aspect ratio
+          const hasKeyframes = cameraEdit && (
+            (cameraEdit.keyframes.ORIGINAL?.length ?? 0) > 0 ||
+            (cameraEdit.keyframes.VERTICAL?.length ?? 0) > 0
+          );
+          return {
+            id: r._backendId,
+            startMs: Math.round(r.start_time * 1000),
+            endMs: Math.round(r.end_time * 1000),
+            ...(hasKeyframes && {
+              cameraEdit: {
+                enabled: true, // Always enabled if we have keyframes
+                aspectRatio: cameraEdit.aspectRatio,
+                keyframes: {
+                  ORIGINAL: mapKeyframes(cameraEdit.keyframes.ORIGINAL ?? []),
+                  VERTICAL: mapKeyframes(cameraEdit.keyframes.VERTICAL ?? []),
+                },
+              },
+            }),
+          };
+        });
       }
 
       // Build highlights

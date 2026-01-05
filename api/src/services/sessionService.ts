@@ -105,6 +105,15 @@ export async function getSessionById(id: string, userId?: string) {
             include: {
               rallies: {
                 orderBy: { order: "asc" },
+                include: {
+                  cameraEdit: {
+                    include: {
+                      keyframes: {
+                        orderBy: { timeOffset: "asc" },
+                      },
+                    },
+                  },
+                },
               },
             },
           },

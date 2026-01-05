@@ -21,6 +21,7 @@ interface PlayerState {
   isReady: boolean;
   seekTo: number | null; // When set, player should seek to this time
   playOnlyRallies: boolean; // Skip dead time between rallies
+  applyCameraEdits: boolean; // Apply camera edits during playback
   bufferedRanges: BufferedRange[]; // Which parts of the video are buffered
 
   // Highlight playback state
@@ -40,6 +41,8 @@ interface PlayerState {
   setReady: (ready: boolean) => void;
   setBufferedRanges: (ranges: BufferedRange[]) => void;
   togglePlayOnlyRallies: () => void;
+  toggleApplyCameraEdits: () => void;
+  setApplyCameraEdits: (apply: boolean) => void;
 
   // Highlight playback actions
   startHighlightPlayback: (highlightId: string, playlist: PlaylistRally[], startIndex?: number) => void;
@@ -57,6 +60,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   isReady: false,
   seekTo: null,
   playOnlyRallies: false,
+  applyCameraEdits: true,
   bufferedRanges: [],
 
   // Highlight playback state
@@ -83,6 +87,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   setReady: (ready: boolean) => set({ isReady: ready }),
   setBufferedRanges: (ranges) => set({ bufferedRanges: ranges }),
   togglePlayOnlyRallies: () => set((state) => ({ playOnlyRallies: !state.playOnlyRallies })),
+  toggleApplyCameraEdits: () => set((state) => ({ applyCameraEdits: !state.applyCameraEdits })),
+  setApplyCameraEdits: (apply) => set({ applyCameraEdits: apply }),
 
   // Highlight playback actions
   startHighlightPlayback: (highlightId: string, playlist: PlaylistRally[], startIndex = 0) => {
