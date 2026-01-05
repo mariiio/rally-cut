@@ -96,6 +96,8 @@ export async function syncState(
           const rally = rallies[order];
           if (!rally) continue;
 
+          let rallyId: string;
+
           if (rally.id && existingIds.has(rally.id)) {
             // Update existing rally
             await tx.rally.update({
@@ -106,6 +108,7 @@ export async function syncState(
                 order,
               },
             });
+            rallyId = rally.id;
             seenIds.add(rally.id);
           } else {
             // Create new rally
@@ -117,7 +120,63 @@ export async function syncState(
                 order,
               },
             });
+            rallyId = created.id;
             seenIds.add(created.id);
+          }
+
+          // Sync camera edit if provided
+          if (rally.cameraEdit) {
+            // Upsert camera edit
+            const existingCameraEdit = await tx.rallyCameraEdit.findUnique({
+              where: { rallyId },
+              include: { keyframes: true },
+            });
+
+            if (existingCameraEdit) {
+              // Delete old keyframes and create new ones
+              await tx.cameraKeyframe.deleteMany({
+                where: { rallyCameraId: existingCameraEdit.id },
+              });
+
+              await tx.rallyCameraEdit.update({
+                where: { id: existingCameraEdit.id },
+                data: {
+                  enabled: rally.cameraEdit.enabled,
+                  aspectRatio: rally.cameraEdit.aspectRatio,
+                  keyframes: {
+                    createMany: {
+                      data: rally.cameraEdit.keyframes.map((kf) => ({
+                        timeOffset: kf.timeOffset,
+                        positionX: kf.positionX,
+                        positionY: kf.positionY,
+                        zoom: kf.zoom,
+                        easing: kf.easing,
+                      })),
+                    },
+                  },
+                },
+              });
+            } else {
+              // Create new camera edit with keyframes
+              await tx.rallyCameraEdit.create({
+                data: {
+                  rallyId,
+                  enabled: rally.cameraEdit.enabled,
+                  aspectRatio: rally.cameraEdit.aspectRatio,
+                  keyframes: {
+                    createMany: {
+                      data: rally.cameraEdit.keyframes.map((kf) => ({
+                        timeOffset: kf.timeOffset,
+                        positionX: kf.positionX,
+                        positionY: kf.positionY,
+                        zoom: kf.zoom,
+                        easing: kf.easing,
+                      })),
+                    },
+                  },
+                },
+              });
+            }
           }
         }
 

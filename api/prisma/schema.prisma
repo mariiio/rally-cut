@@ -228,10 +228,57 @@ model Rally {
 
   video            Video            @relation(fields: [videoId], references: [id], onDelete: Cascade)
   highlightRallies HighlightRally[]
+  cameraEdit       RallyCameraEdit?
 
   @@index([videoId])
   @@index([videoId, startMs])
   @@map("rallies")
+}
+
+// ============================================================================
+// Camera Tracking (Instagram-style edits)
+// ============================================================================
+
+enum AspectRatio {
+  ORIGINAL // 16:9
+  VERTICAL // 9:16
+}
+
+enum CameraEasing {
+  LINEAR
+  EASE_IN
+  EASE_OUT
+  EASE_IN_OUT
+}
+
+model RallyCameraEdit {
+  id          String      @id @default(uuid())
+  rallyId     String      @unique @map("rally_id")
+  aspectRatio AspectRatio @default(ORIGINAL) @map("aspect_ratio")
+  enabled     Boolean     @default(false)
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  rally     Rally            @relation(fields: [rallyId], references: [id], onDelete: Cascade)
+  keyframes CameraKeyframe[]
+
+  @@map("rally_camera_edits")
+}
+
+model CameraKeyframe {
+  id            String       @id @default(uuid())
+  rallyCameraId String       @map("rally_camera_id")
+  timeOffset    Float        @map("time_offset") // 0.0-1.0 within rally
+  positionX     Float        @default(0.5) @map("position_x") // 0-1, center=0.5
+  positionY     Float        @default(0.5) @map("position_y")
+  zoom          Float        @default(1.0) // 1.0-3.0
+  easing        CameraEasing @default(EASE_IN_OUT)
+  createdAt     DateTime     @default(now()) @map("created_at")
+
+  rallyCameraEdit RallyCameraEdit @relation(fields: [rallyCameraId], references: [id], onDelete: Cascade)
+
+  @@index([rallyCameraId])
+  @@map("camera_keyframes")
 }
 
 enum ServingTeam {
