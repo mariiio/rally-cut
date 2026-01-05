@@ -15,6 +15,7 @@ import {
   CircularProgress,
   Collapse,
   TextField,
+  Divider,
 } from '@mui/material';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -23,6 +24,8 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
+import LockIcon from '@mui/icons-material/Lock';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import ListItemIcon from '@mui/material/ListItemIcon';
@@ -35,8 +38,8 @@ import { formatTime, formatDuration } from '@/utils/timeFormat';
 import { Rally, Match } from '@/types/rally';
 import { designTokens } from '@/app/theme';
 import { ConfirmDialog } from './ConfirmDialog';
-import { ConfirmRallies, LockedRalliesBanner } from './ConfirmRallies';
-import { deleteVideo, renameVideo } from '@/services/api';
+import { LockedRalliesBanner } from './ConfirmRallies';
+import { deleteVideo, renameVideo, confirmRallies } from '@/services/api';
 
 export function RallyList() {
   const {
@@ -54,6 +57,10 @@ export function RallyList() {
     isRallyEditingLocked,
     removeRally,
     setIsCameraTabActive,
+    confirmationStatus,
+    setConfirmationStatus,
+    isConfirming,
+    setIsConfirming,
   } = useEditorStore();
   const isPremium = useTierStore((state) => state.isPremium());
   const { currentTime, seek } = usePlayerStore();
@@ -90,6 +97,12 @@ export function RallyList() {
 
   // Rally delete confirmation state
   const [rallyToDelete, setRallyToDelete] = useState<Rally | null>(null);
+
+  // Video (match) action menu state
+  const [videoMenuAnchor, setVideoMenuAnchor] = useState<{
+    el: HTMLElement;
+    match: Match;
+  } | null>(null);
 
   const toggleMatchExpanded = (matchId: string) => {
     setExpandedMatches((prev) => {
@@ -325,7 +338,7 @@ export function RallyList() {
                       ? 'action.selected'
                       : 'action.hover',
                   },
-                  '&:hover .delete-btn, &:hover .edit-btn': { opacity: 1 },
+                  '&:hover .video-menu-btn': { opacity: 1 },
                 }}
               >
                 {/* Expand/collapse icon */}
@@ -379,7 +392,7 @@ export function RallyList() {
                       fontSize: '0.875rem',
                       fontWeight: isActiveMatch ? 600 : 400,
                       color: isActiveMatch ? 'text.primary' : 'text.secondary',
-                      cursor: 'text',
+                      cursor: 'pointer',
                     }}
                   >
                     {match.name}
@@ -410,79 +423,40 @@ export function RallyList() {
                   {formatDuration(matchDuration)}
                 </Typography>
 
-                {/* Edit button */}
-                <Tooltip title="Rename video">
-                  <IconButton
-                    className="edit-btn"
-                    size="small"
-                    onClick={(e) => handleStartRename(e, match)}
-                    disabled={isRenaming || editingMatchId === match.id}
-                    sx={{
-                      ml: 0.5,
-                      p: 0.25,
-                      opacity: 0,
-                      transition: 'opacity 0.15s',
-                      color: 'text.secondary',
-                      '&:hover': {
-                        color: 'primary.main',
-                      },
-                    }}
-                  >
-                    <EditIcon sx={{ fontSize: 16 }} />
-                  </IconButton>
-                </Tooltip>
-
-                {/* Delete button */}
-                {session.matches.length > 1 ? (
-                  <Tooltip title="Delete video">
-                    <IconButton
-                      className="delete-btn"
-                      size="small"
-                      onClick={(e) => handleDeleteClick(e, match)}
-                      disabled={isDeleting}
-                      sx={{
-                        ml: 0.5,
-                        p: 0.25,
-                        opacity: 0,
-                        transition: 'opacity 0.15s',
-                        color: 'text.secondary',
-                        '&:hover': {
-                          color: 'error.main',
-                        },
-                      }}
-                    >
-                      <DeleteIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                ) : (
-                  <Tooltip title="Cannot delete the only video">
-                    <span>
-                      <IconButton
-                        className="delete-btn"
-                        size="small"
-                        disabled
-                        sx={{
-                          ml: 0.5,
-                          p: 0.25,
-                          opacity: 0,
-                          transition: 'opacity 0.15s',
-                        }}
-                      >
-                        <DeleteIcon sx={{ fontSize: 16 }} />
-                      </IconButton>
-                    </span>
+                {/* Locked indicator */}
+                {confirmationStatus[match.id]?.status === 'CONFIRMED' && (
+                  <Tooltip title="Rallies confirmed">
+                    <LockIcon sx={{ fontSize: 14, color: 'success.main', ml: 0.5 }} />
                   </Tooltip>
                 )}
+
+                {/* Processing indicator */}
+                {(confirmationStatus[match.id]?.status === 'PENDING' || confirmationStatus[match.id]?.status === 'PROCESSING') && (
+                  <CircularProgress size={14} sx={{ ml: 0.5 }} />
+                )}
+
+                {/* Video menu button */}
+                <IconButton
+                  className="video-menu-btn"
+                  size="small"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setVideoMenuAnchor({ el: e.currentTarget, match });
+                  }}
+                  sx={{
+                    ml: 0.5,
+                    p: 0.25,
+                    opacity: 0,
+                    transition: 'opacity 0.15s',
+                    color: 'text.secondary',
+                  }}
+                >
+                  <MoreVertIcon sx={{ fontSize: 16 }} />
+                </IconButton>
               </Box>
 
               {/* Collapsible rally list */}
               <Collapse in={isExpanded}>
-                {/* Confirm rallies action for active match */}
-                {isActiveMatch && (
-                  <Box sx={{ px: 1.5, py: 1, borderBottom: '1px solid', borderColor: 'divider' }}>
-                    <ConfirmRallies matchId={match.id} isPremium={isPremium} />
-                  </Box>
-                )}
                 <Box sx={{ pl: 1.5 }}>
                   {matchRallies.map((rally, index) => {
                     const isSelected = selectedRallyId === rally.id;
@@ -671,6 +645,95 @@ export function RallyList() {
             <DeleteIcon fontSize="small" sx={{ color: 'error.main' }} />
           </ListItemIcon>
           <ListItemText>Delete</ListItemText>
+        </MenuItem>
+      </Menu>
+
+      {/* Video (match) action menu */}
+      <Menu
+        anchorEl={videoMenuAnchor?.el}
+        open={Boolean(videoMenuAnchor)}
+        onClose={() => setVideoMenuAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <MenuItem
+          onClick={(e) => {
+            if (videoMenuAnchor) {
+              handleStartRename(e, videoMenuAnchor.match);
+            }
+            setVideoMenuAnchor(null);
+          }}
+        >
+          <ListItemIcon>
+            <EditIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>Rename</ListItemText>
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            if (videoMenuAnchor) {
+              setMatchToDelete(videoMenuAnchor.match);
+              setShowDeleteDialog(true);
+            }
+            setVideoMenuAnchor(null);
+          }}
+          disabled={session?.matches.length === 1}
+        >
+          <ListItemIcon>
+            <DeleteIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>Delete</ListItemText>
+        </MenuItem>
+        <Divider />
+        <MenuItem
+          onClick={async () => {
+            if (!videoMenuAnchor || !isPremium) return;
+            const matchId = videoMenuAnchor.match.id;
+            setVideoMenuAnchor(null);
+            setIsConfirming(true);
+            try {
+              const result = await confirmRallies(matchId);
+              setConfirmationStatus(matchId, {
+                id: result.confirmationId,
+                status: result.status,
+                progress: result.progress,
+                error: null,
+                confirmedAt: null,
+                originalDurationMs: 0, // Will be updated on next poll
+                trimmedDurationMs: null,
+              });
+            } catch (error) {
+              console.error('Failed to confirm rallies:', error);
+              setIsConfirming(false);
+            }
+          }}
+          disabled={
+            !isPremium ||
+            isConfirming ||
+            confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'CONFIRMED' ||
+            confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'PENDING' ||
+            confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'PROCESSING'
+          }
+        >
+          <ListItemIcon>
+            {confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'CONFIRMED' ? (
+              <CheckCircleIcon fontSize="small" sx={{ color: 'success.main' }} />
+            ) : !isPremium ? (
+              <LockIcon fontSize="small" />
+            ) : (
+              <CheckCircleIcon fontSize="small" />
+            )}
+          </ListItemIcon>
+          <ListItemText
+            primary="Confirm Rallies"
+            secondary={
+              confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'CONFIRMED'
+                ? 'Already confirmed'
+                : !isPremium
+                  ? 'Premium feature'
+                  : 'Trim video to keep only rallies'
+            }
+          />
         </MenuItem>
       </Menu>
 
