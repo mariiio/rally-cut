@@ -151,9 +151,10 @@ export function CameraPanel() {
   // Local state for keyframe delete confirmation
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
-  // Editor store - get selected rally
+  // Editor store - get selected rally and camera tab state
   const selectedRallyId = useEditorStore((state) => state.selectedRallyId);
   const rallies = useEditorStore((state) => state.rallies);
+  const setIsCameraTabActive = useEditorStore((state) => state.setIsCameraTabActive);
 
   const selectedRally = useMemo(
     () => rallies.find((r) => r.id === selectedRallyId) ?? null,
@@ -228,9 +229,11 @@ export function CameraPanel() {
     (_: React.MouseEvent<HTMLElement>, newRatio: AspectRatio | null) => {
       if (newRatio && selectedRallyId) {
         setAspectRatio(selectedRallyId, newRatio);
+        // Enter camera edit mode when changing aspect ratio
+        setIsCameraTabActive(true);
       }
     },
-    [selectedRallyId, setAspectRatio]
+    [selectedRallyId, setAspectRatio, setIsCameraTabActive]
   );
 
   // Keyframe delete with confirmation
@@ -255,6 +258,9 @@ export function CameraPanel() {
     (_: Event, value: number | number[]) => {
       if (!selectedRallyId) return;
       const newZoom = value as number;
+
+      // Enter camera edit mode when changing zoom
+      setIsCameraTabActive(true);
 
       if (selectedKeyframeId) {
         // Keyframe is selected: update it
@@ -281,7 +287,7 @@ export function CameraPanel() {
         }
       }
     },
-    [selectedRallyId, selectedKeyframeId, currentTimeOffset, activeKeyframes, updateKeyframe, addKeyframe, selectKeyframe, getCameraStateAtTime]
+    [selectedRallyId, selectedKeyframeId, currentTimeOffset, activeKeyframes, updateKeyframe, addKeyframe, selectKeyframe, getCameraStateAtTime, setIsCameraTabActive]
   );
 
   const handleResetCamera = useCallback(() => {
@@ -293,6 +299,18 @@ export function CameraPanel() {
 
   // Check if rally has camera keyframes for the active aspect ratio
   const hasCameraKeyframes = activeKeyframes.length > 0;
+
+  // Check if any rally in the session has camera edits (for disabling preview toggle)
+  const cameraEdits = useCameraStore((state) => state.cameraEdits);
+  const hasAnyCameraEdits = useMemo(() => {
+    return rallies.some((rally) => {
+      const edit = cameraEdits[rally.id];
+      return (
+        edit &&
+        ((edit.keyframes.ORIGINAL?.length ?? 0) > 0 || (edit.keyframes.VERTICAL?.length ?? 0) > 0)
+      );
+    });
+  }, [rallies, cameraEdits]);
 
   // Min zoom is always 1.0 - zoom out causes objectFit issues
   const zoomMin = 1.0;
@@ -313,7 +331,10 @@ export function CameraPanel() {
       >
         <VideocamIcon sx={{ fontSize: 48, mb: 2, opacity: 0.3 }} />
         <Typography variant="body2" sx={{ textAlign: 'center' }}>
-          Select a rally to edit camera tracking
+          Select a rally to edit camera
+        </Typography>
+        <Typography variant="caption" sx={{ textAlign: 'center', mt: 1, color: 'text.disabled' }}>
+          Click on a rally from the list to start editing
         </Typography>
       </Box>
     );
@@ -332,11 +353,24 @@ export function CameraPanel() {
               onChange={toggleApplyCameraEdits}
               color="primary"
               size="small"
+              disabled={!hasAnyCameraEdits}
             />
           }
-          label={<Typography variant="body2">Preview camera edits</Typography>}
+          label={
+            <Typography
+              variant="body2"
+              sx={{ color: hasAnyCameraEdits ? 'text.primary' : 'text.disabled' }}
+            >
+              Preview camera edits
+            </Typography>
+          }
           sx={{ m: 0 }}
         />
+        {!hasAnyCameraEdits && (
+          <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block', mt: 0.5 }}>
+            Add keyframes to enable preview
+          </Typography>
+        )}
       </Box>
 
       {/* Rally-specific header */}
@@ -409,6 +443,8 @@ export function CameraPanel() {
                   // Seek to keyframe position
                   const keyframeTime = selectedRally.start_time + kf.timeOffset * rallyDuration;
                   seek(keyframeTime);
+                  // Enter camera edit mode when clicking a keyframe
+                  setIsCameraTabActive(true);
                 }}
                 onDelete={() => handleKeyframeDeleteClick(kf.id)}
                 onCancelDelete={handleCancelKeyframeDelete}

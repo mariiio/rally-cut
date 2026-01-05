@@ -792,8 +792,10 @@ export function Timeline() {
     (_e: React.MouseEvent, action: { action: TimelineAction }) => {
       selectRally(action.action.id);
       seek(action.action.start);
+      // Exit camera edit mode when clicking on a rally normally
+      setIsCameraTabActive(false);
     },
-    [selectRally, seek]
+    [selectRally, seek, setIsCameraTabActive]
   );
 
   // Custom scale rendering

@@ -22,6 +22,11 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
+import Menu from '@mui/material/Menu';
+import MenuItem from '@mui/material/MenuItem';
+import ListItemIcon from '@mui/material/ListItemIcon';
+import ListItemText from '@mui/material/ListItemText';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useExportStore } from '@/stores/exportStore';
@@ -47,6 +52,8 @@ export function RallyList() {
     videoUrl,
     reloadSession,
     isRallyEditingLocked,
+    removeRally,
+    setIsCameraTabActive,
   } = useEditorStore();
   const isPremium = useTierStore((state) => state.isPremium());
   const { currentTime, seek } = usePlayerStore();
@@ -74,6 +81,16 @@ export function RallyList() {
   const [editName, setEditName] = useState('');
   const [isRenaming, setIsRenaming] = useState(false);
 
+  // Rally action menu state
+  const [rallyMenuAnchor, setRallyMenuAnchor] = useState<{
+    el: HTMLElement;
+    rally: Rally;
+    matchId: string;
+  } | null>(null);
+
+  // Rally delete confirmation state
+  const [rallyToDelete, setRallyToDelete] = useState<Rally | null>(null);
+
   const toggleMatchExpanded = (matchId: string) => {
     setExpandedMatches((prev) => {
       const next = new Set(prev);
@@ -95,7 +112,9 @@ export function RallyList() {
     }
     selectRally(rally.id);
     seek(rally.start_time);
-  }, [activeMatchId, setActiveMatch, selectRally, seek]);
+    // Exit camera edit mode when clicking on a rally normally
+    setIsCameraTabActive(false);
+  }, [activeMatchId, setActiveMatch, selectRally, seek, setIsCameraTabActive]);
 
   const handleDownloadRally = useCallback((e: React.MouseEvent, rally: Rally) => {
     e.stopPropagation();
@@ -491,7 +510,7 @@ export function RallyList() {
                               ? 'action.selected'
                               : 'action.hover',
                           },
-                          '&:hover .download-btn': { opacity: 1 },
+                          '&:hover .more-btn': { opacity: 1 },
                         }}
                       >
                         {/* Playing indicator */}
@@ -582,13 +601,15 @@ export function RallyList() {
                           </Stack>
                         )}
 
-                        {/* Download button */}
+                        {/* More menu button */}
                         {videoSource && isActiveMatch && (
                           <IconButton
-                            className="download-btn"
+                            className="more-btn"
                             size="small"
-                            onClick={(e) => handleDownloadRally(e, rally)}
-                            disabled={isExporting}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRallyMenuAnchor({ el: e.currentTarget, rally, matchId: match.id });
+                            }}
                             sx={{
                               ml: 0.5,
                               p: 0.25,
@@ -600,7 +621,7 @@ export function RallyList() {
                             {exportingRallyId === rally.id ? (
                               <CircularProgress size={12} />
                             ) : (
-                              <FileDownloadIcon sx={{ fontSize: 14 }} />
+                              <MoreVertIcon sx={{ fontSize: 14 }} />
                             )}
                           </IconButton>
                         )}
@@ -614,6 +635,45 @@ export function RallyList() {
         })}
       </Box>
 
+      {/* Rally action menu */}
+      <Menu
+        anchorEl={rallyMenuAnchor?.el}
+        open={Boolean(rallyMenuAnchor)}
+        onClose={() => setRallyMenuAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <MenuItem
+          onClick={(e) => {
+            handleDownloadRally(e, rallyMenuAnchor!.rally);
+            setRallyMenuAnchor(null);
+          }}
+          disabled={isExporting}
+        >
+          <ListItemIcon>
+            {exportingRallyId === rallyMenuAnchor?.rally.id ? (
+              <CircularProgress size={16} />
+            ) : (
+              <FileDownloadIcon fontSize="small" />
+            )}
+          </ListItemIcon>
+          <ListItemText>Download</ListItemText>
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            setRallyToDelete(rallyMenuAnchor!.rally);
+            setRallyMenuAnchor(null);
+          }}
+          disabled={isRallyEditingLocked()}
+          sx={{ color: 'error.main' }}
+        >
+          <ListItemIcon>
+            <DeleteIcon fontSize="small" sx={{ color: 'error.main' }} />
+          </ListItemIcon>
+          <ListItemText>Delete</ListItemText>
+        </MenuItem>
+      </Menu>
+
       {/* Delete video confirmation dialog */}
       <ConfirmDialog
         open={showDeleteDialog}
@@ -626,6 +686,22 @@ export function RallyList() {
           setShowDeleteDialog(false);
           setMatchToDelete(null);
         }}
+      />
+
+      {/* Delete rally confirmation dialog */}
+      <ConfirmDialog
+        open={Boolean(rallyToDelete)}
+        title="Delete rally?"
+        message="This will permanently delete this rally. This action cannot be undone."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        onConfirm={() => {
+          if (rallyToDelete) {
+            removeRally(rallyToDelete.id);
+            setRallyToDelete(null);
+          }
+        }}
+        onCancel={() => setRallyToDelete(null)}
       />
     </Box>
   );
