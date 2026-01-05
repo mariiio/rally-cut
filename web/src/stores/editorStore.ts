@@ -756,6 +756,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (!rally) return false;
 
     const newStart = rally.start_time + delta;
+    const rallyDuration = rally.end_time - rally.start_time;
 
     // Boundary checks
     if (newStart < 0) return false;
@@ -769,7 +770,50 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (prevRally && newStart < prevRally.end_time) return false;
     }
 
+    // Keyframe boundary check - don't allow dragging past the first keyframe
+    // When collapsing start (delta > 0), ensure we don't exclude keyframes
+    const cameraEdit = useCameraStore.getState().cameraEdits[id];
+    if (cameraEdit && delta > 0) {
+      const allKeyframes = [
+        ...(cameraEdit.keyframes.ORIGINAL ?? []),
+        ...(cameraEdit.keyframes.VERTICAL ?? []),
+      ];
+      if (allKeyframes.length > 0) {
+        // Find the earliest keyframe (smallest timeOffset)
+        const firstKeyframeOffset = Math.min(...allKeyframes.map((kf) => kf.timeOffset));
+        // Convert to absolute time
+        const firstKeyframeAbsTime = rally.start_time + firstKeyframeOffset * rallyDuration;
+        // Don't allow start to go past the first keyframe
+        if (newStart > firstKeyframeAbsTime) return false;
+      }
+    }
+
+    // Update the rally start time
     state.updateRally(id, { start_time: newStart });
+
+    // Recalculate keyframe timeOffsets to keep them at the same absolute video time
+    if (cameraEdit) {
+      const newDuration = rally.end_time - newStart;
+      const updateKeyframesForRatio = (keyframes: typeof cameraEdit.keyframes.ORIGINAL) => {
+        return keyframes.map((kf) => {
+          // Convert old timeOffset to absolute time
+          const absTime = rally.start_time + kf.timeOffset * rallyDuration;
+          // Convert back to new timeOffset
+          const newTimeOffset = (absTime - newStart) / newDuration;
+          return { ...kf, timeOffset: Math.max(0, Math.min(1, newTimeOffset)) };
+        });
+      };
+
+      const updatedEdit = {
+        ...cameraEdit,
+        keyframes: {
+          ORIGINAL: updateKeyframesForRatio(cameraEdit.keyframes.ORIGINAL ?? []),
+          VERTICAL: updateKeyframesForRatio(cameraEdit.keyframes.VERTICAL ?? []),
+        },
+      };
+      useCameraStore.getState().setCameraEdit(id, updatedEdit);
+    }
+
     return true;
   },
 
@@ -779,6 +823,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (!rally) return false;
 
     const newEnd = rally.end_time + delta;
+    const rallyDuration = rally.end_time - rally.start_time;
     const videoDuration = state.videoMetadata?.duration ?? Infinity;
 
     // Boundary checks
@@ -793,7 +838,50 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (nextRally && newEnd > nextRally.start_time) return false;
     }
 
+    // Keyframe boundary check - don't allow dragging past the last keyframe
+    // When collapsing end (delta < 0), ensure we don't exclude keyframes
+    const cameraEdit = useCameraStore.getState().cameraEdits[id];
+    if (cameraEdit && delta < 0) {
+      const allKeyframes = [
+        ...(cameraEdit.keyframes.ORIGINAL ?? []),
+        ...(cameraEdit.keyframes.VERTICAL ?? []),
+      ];
+      if (allKeyframes.length > 0) {
+        // Find the latest keyframe (largest timeOffset)
+        const lastKeyframeOffset = Math.max(...allKeyframes.map((kf) => kf.timeOffset));
+        // Convert to absolute time
+        const lastKeyframeAbsTime = rally.start_time + lastKeyframeOffset * rallyDuration;
+        // Don't allow end to go before the last keyframe
+        if (newEnd < lastKeyframeAbsTime) return false;
+      }
+    }
+
+    // Update the rally end time
     state.updateRally(id, { end_time: newEnd });
+
+    // Recalculate keyframe timeOffsets to keep them at the same absolute video time
+    if (cameraEdit) {
+      const newDuration = newEnd - rally.start_time;
+      const updateKeyframesForRatio = (keyframes: typeof cameraEdit.keyframes.ORIGINAL) => {
+        return keyframes.map((kf) => {
+          // Convert old timeOffset to absolute time
+          const absTime = rally.start_time + kf.timeOffset * rallyDuration;
+          // Convert back to new timeOffset
+          const newTimeOffset = (absTime - rally.start_time) / newDuration;
+          return { ...kf, timeOffset: Math.max(0, Math.min(1, newTimeOffset)) };
+        });
+      };
+
+      const updatedEdit = {
+        ...cameraEdit,
+        keyframes: {
+          ORIGINAL: updateKeyframesForRatio(cameraEdit.keyframes.ORIGINAL ?? []),
+          VERTICAL: updateKeyframesForRatio(cameraEdit.keyframes.VERTICAL ?? []),
+        },
+      };
+      useCameraStore.getState().setCameraEdit(id, updatedEdit);
+    }
+
     return true;
   },
 
