@@ -300,8 +300,8 @@ export function Timeline() {
               }
             }
           } else {
-            // Arrow Left: seek back 5 seconds
-            seek(Math.max(0, currentTime - 5));
+            // Arrow Left: seek back 1 second
+            seek(Math.max(0, currentTime - 1));
             // Clear auto-pause flag when manually seeking
             autoPausedAtEndRef.current = null;
           }
@@ -334,8 +334,8 @@ export function Timeline() {
               }
             }
           } else {
-            // Arrow Right: seek forward 5 seconds
-            seek(Math.min(duration, currentTime + 5));
+            // Arrow Right: seek forward 1 second
+            seek(Math.min(duration, currentTime + 1));
             // Clear auto-pause flag when manually seeking
             autoPausedAtEndRef.current = null;
           }
@@ -472,20 +472,43 @@ export function Timeline() {
     }
   }, [duration, containerWidth, getAutoScale]);
 
-  // Track previous camera edit mode state and store original scale
+  // Track previous camera edit mode state and store original scale/scroll
   const prevCameraEditModeRef = useRef<boolean>(false);
   const originalScaleRef = useRef<number | null>(null);
+  const editedRallyIdRef = useRef<string | null>(null);
 
   // Zoom and center timeline on selected rally when entering camera edit mode
-  // Restore original scale when exiting camera edit mode
+  // Restore original scale and center on edited rally when exiting camera edit mode
   useEffect(() => {
     const wasInCameraEditMode = prevCameraEditModeRef.current;
     prevCameraEditModeRef.current = isInCameraEditMode;
 
-    // Exiting camera edit mode - restore original scale
+    // Exiting camera edit mode - restore original scale and center on edited rally
     if (wasInCameraEditMode && !isInCameraEditMode && originalScaleRef.current !== null) {
-      setScale(originalScaleRef.current);
+      const restoredScale = originalScaleRef.current;
+      const editedRallyId = editedRallyIdRef.current;
+      setScale(restoredScale);
       originalScaleRef.current = null;
+
+      // Center on the rally that was being edited
+      if (editedRallyId && containerWidth) {
+        const rally = rallies?.find((r) => r.id === editedRallyId);
+        if (rally) {
+          setTimeout(() => {
+            const container = timelineContainerRef.current;
+            if (!container) return;
+
+            const editGrid = container.querySelector('.timeline-editor-edit-area .ReactVirtualized__Grid');
+            if (editGrid) {
+              const pixelsPerSecond = SCALE_WIDTH / restoredScale;
+              const rallyCenter = (rally.start_time + rally.end_time) / 2;
+              const centerScrollLeft = Math.max(0, (rallyCenter * pixelsPerSecond) - (containerWidth / 2));
+              editGrid.scrollLeft = centerScrollLeft;
+            }
+          }, 50);
+        }
+      }
+      editedRallyIdRef.current = null;
       return;
     }
 
@@ -498,8 +521,9 @@ export function Timeline() {
       const rallyDuration = rally.end_time - rally.start_time;
       if (rallyDuration <= 0) return;
 
-      // Save current scale before zooming
+      // Save current scale and rally ID before zooming
       originalScaleRef.current = scale;
+      editedRallyIdRef.current = selectedRallyId;
 
       // Target: rally takes ~60% of viewport width
       const targetWidth = containerWidth * 0.6;
@@ -790,12 +814,15 @@ export function Timeline() {
   // Handle clicking on an action to select it
   const handleClickAction = useCallback(
     (_e: React.MouseEvent, action: { action: TimelineAction }) => {
+      const clickedSameRally = action.action.id === selectedRallyId;
       selectRally(action.action.id);
       seek(action.action.start);
-      // Exit camera edit mode when clicking on a rally normally
-      setIsCameraTabActive(false);
+      // Only exit camera edit mode when clicking on a different rally
+      if (!clickedSameRally) {
+        setIsCameraTabActive(false);
+      }
     },
-    [selectRally, seek, setIsCameraTabActive]
+    [selectRally, seek, setIsCameraTabActive, selectedRallyId]
   );
 
   // Custom scale rendering
@@ -1070,7 +1097,7 @@ export function Timeline() {
                   fontSize: 10,
                   lineHeight: 1.2,
                 }}>
-                  {detectionProgress > 0 ? `${Math.round(detectionProgress)}%` : ''} • {formatElapsed(elapsedTime)}
+                  {formatElapsed(elapsedTime)}
                 </Typography>
               </Stack>
             </Stack>
