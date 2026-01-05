@@ -29,6 +29,7 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
   // Get selected rally
   const selectedRallyId = useEditorStore((state) => state.selectedRallyId);
   const rallies = useEditorStore((state) => state.rallies);
+  const isCameraTabActive = useEditorStore((state) => state.isCameraTabActive);
   const selectedRally = rallies.find((r) => r.id === selectedRallyId) ?? null;
 
   // Player state
@@ -53,8 +54,8 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
     ? Math.max(0, Math.min(1, (currentTime - selectedRally.start_time) / (selectedRally.end_time - selectedRally.start_time)))
     : 0;
 
-  // Show overlay when camera preview is on AND there's a selected rally
-  const isActive = applyCameraEdits && selectedRallyId && selectedRally;
+  // Show overlay only when in camera edit mode (camera tab active)
+  const isActive = isCameraTabActive && applyCameraEdits && selectedRallyId && selectedRally;
 
   // Get aspect ratio
   const aspectRatio: AspectRatio = cameraEdit?.aspectRatio ?? 'ORIGINAL';

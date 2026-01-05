@@ -58,7 +58,7 @@ export const designTokens = {
   spacing: {
     panel: {
       expanded: {
-        left: 280,
+        left: 340,
         right: 340,
       },
       collapsed: 48,

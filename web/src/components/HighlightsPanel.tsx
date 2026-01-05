@@ -30,6 +30,9 @@ import EditIcon from '@mui/icons-material/Edit';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
+import Menu from '@mui/material/Menu';
+import MenuItem from '@mui/material/MenuItem';
 import {
   DndContext,
   closestCenter,
@@ -169,6 +172,7 @@ interface SortableRallyItemProps {
 }
 
 const SortableRallyItem = memo(function SortableRallyItem({ rally, highlightId, matchName, isActive, isPreselected, onClick, onRemove }: SortableRallyItemProps) {
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const dragId = createDragId(highlightId, rally.id);
   const {
     attributes,
@@ -189,6 +193,22 @@ const SortableRallyItem = memo(function SortableRallyItem({ rally, highlightId, 
   const duration = (rally.end_time - rally.start_time).toFixed(1);
 
   const showHighlight = isActive || isPreselected;
+
+  const handleRemoveClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConfirmingRemove(true);
+  }, []);
+
+  const handleConfirmRemove = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onRemove();
+    setConfirmingRemove(false);
+  }, [onRemove]);
+
+  const handleCancelRemove = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConfirmingRemove(false);
+  }, []);
 
   return (
     <ListItem
@@ -233,19 +253,48 @@ const SortableRallyItem = memo(function SortableRallyItem({ rally, highlightId, 
         sx={{ my: 0 }}
       />
 
-      <IconButton
-        className="remove-btn"
-        size="small"
-        onClick={(e) => { e.stopPropagation(); onRemove(); }}
-        sx={{
-          opacity: 0,
-          p: 0.25,
-          transition: 'opacity 0.15s',
-          '&:hover': { color: 'error.main' },
-        }}
-      >
-        <CloseIcon sx={{ fontSize: 14 }} />
-      </IconButton>
+      {confirmingRemove ? (
+        <Stack direction="row" spacing={0.25}>
+          <Tooltip title="Confirm remove">
+            <IconButton
+              size="small"
+              onClick={handleConfirmRemove}
+              sx={{
+                color: 'white',
+                bgcolor: 'error.main',
+                width: 24,
+                height: 24,
+                '&:hover': { bgcolor: 'error.light' },
+              }}
+            >
+              <CheckIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Cancel">
+            <IconButton
+              size="small"
+              onClick={handleCancelRemove}
+              sx={{ width: 24, height: 24 }}
+            >
+              <CloseIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+        </Stack>
+      ) : (
+        <IconButton
+          className="remove-btn"
+          size="small"
+          onClick={handleRemoveClick}
+          sx={{
+            opacity: 0,
+            p: 0.25,
+            transition: 'opacity 0.15s',
+            '&:hover': { color: 'error.main' },
+          }}
+        >
+          <CloseIcon sx={{ fontSize: 14 }} />
+        </IconButton>
+      )}
     </ListItem>
   );
 });
@@ -303,6 +352,11 @@ export function HighlightsPanel() {
   // Track preselected rally per highlight (highlightId -> rallyId)
   const [preselectedRallies, setPreselectedRallies] = useState<Record<string, string>>({});
   const [showNamePromptModal, setShowNamePromptModal] = useState(false);
+  // Highlight action menu state
+  const [highlightMenuAnchor, setHighlightMenuAnchor] = useState<{
+    el: HTMLElement;
+    highlight: { id: string; name: string; color: string; rallyIds: string[] };
+  } | null>(null);
 
   // DnD sensors
   const sensors = useSensors(
@@ -735,19 +789,6 @@ export function HighlightsPanel() {
                     </Tooltip>
                   )}
 
-                  {/* Edit button - only show if user can edit */}
-                  {editingId !== highlight.id && canEdit && (
-                    <Tooltip title="Rename">
-                      <IconButton
-                        size="small"
-                        onClick={(e) => handleStartEdit(highlight, e)}
-                        sx={{ opacity: isSelected ? 1 : 0.5, '&:hover': { opacity: 1 } }}
-                      >
-                        <EditIcon sx={{ fontSize: 16 }} />
-                      </IconButton>
-                    </Tooltip>
-                  )}
-
                   {/* Rally count */}
                   <Chip
                     label={rallyCount}
@@ -761,29 +802,6 @@ export function HighlightsPanel() {
                       color: highlight.color,
                     }}
                   />
-
-                  {/* Download button */}
-                  {videoSource && (
-                    <Tooltip title={rallyCount === 0 ? 'No rallies' : 'Download highlight'}>
-                      <span>
-                        <IconButton
-                          size="small"
-                          onClick={(e) => handleDownloadClick(highlight.id, e)}
-                          disabled={rallyCount === 0 || isExporting}
-                          sx={{
-                            opacity: isSelected || exportingHighlightId === highlight.id ? 1 : 0.5,
-                            '&:hover': { opacity: 1 },
-                          }}
-                        >
-                          {exportingHighlightId === highlight.id ? (
-                            <CircularProgress size={16} />
-                          ) : (
-                            <FileDownloadIcon sx={{ fontSize: 18 }} />
-                          )}
-                        </IconButton>
-                      </span>
-                    </Tooltip>
-                  )}
 
                   {/* Play/Stop button */}
                   {isPlaying ? (
@@ -809,48 +827,24 @@ export function HighlightsPanel() {
                     </Tooltip>
                   )}
 
-                  {/* Delete button with confirmation - only show if user can edit */}
-                  {canEdit && (
-                    deleteConfirmId === highlight.id ? (
-                      <Stack direction="row" spacing={0.25}>
-                        <Tooltip title="Confirm delete">
-                          <IconButton
-                            size="small"
-                            onClick={(e) => handleConfirmDelete(highlight.id, e)}
-                            sx={{
-                              color: 'white',
-                              bgcolor: 'error.main',
-                              width: 24,
-                              height: 24,
-                              '&:hover': { bgcolor: 'error.light' },
-                            }}
-                          >
-                            <CheckIcon sx={{ fontSize: 14 }} />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Cancel">
-                          <IconButton
-                            size="small"
-                            onClick={handleCancelDelete}
-                            sx={{ width: 24, height: 24 }}
-                          >
-                            <CloseIcon sx={{ fontSize: 14 }} />
-                          </IconButton>
-                        </Tooltip>
-                      </Stack>
+                  {/* More menu button */}
+                  <IconButton
+                    size="small"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setHighlightMenuAnchor({ el: e.currentTarget, highlight });
+                    }}
+                    sx={{
+                      opacity: isSelected || exportingHighlightId === highlight.id ? 1 : 0.5,
+                      '&:hover': { opacity: 1 },
+                    }}
+                  >
+                    {exportingHighlightId === highlight.id ? (
+                      <CircularProgress size={16} />
                     ) : (
-                      <IconButton
-                        size="small"
-                        onClick={(e) => handleDeleteClick(highlight.id, e)}
-                        sx={{
-                          opacity: isSelected ? 1 : 0.5,
-                          '&:hover': { opacity: 1, color: 'error.main' },
-                        }}
-                      >
-                        <DeleteIcon sx={{ fontSize: 18 }} />
-                      </IconButton>
-                    )
-                  )}
+                      <MoreVertIcon sx={{ fontSize: 18 }} />
+                    )}
+                  </IconButton>
                 </Box>
 
                 {/* Collapsible rally list */}
@@ -921,6 +915,66 @@ export function HighlightsPanel() {
           })() : null}
         </DragOverlay>
       </DndContext>
+
+      {/* Highlight action menu */}
+      <Menu
+        anchorEl={highlightMenuAnchor?.el}
+        open={Boolean(highlightMenuAnchor)}
+        onClose={() => setHighlightMenuAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        {/* Rename - only if user can edit */}
+        {highlightMenuAnchor && canEditHighlight(highlightMenuAnchor.highlight.id) && (
+          <MenuItem
+            onClick={(e) => {
+              handleStartEdit(highlightMenuAnchor.highlight, e);
+              setHighlightMenuAnchor(null);
+            }}
+          >
+            <ListItemIcon>
+              <EditIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>Rename</ListItemText>
+          </MenuItem>
+        )}
+
+        {/* Download */}
+        <MenuItem
+          onClick={(e) => {
+            if (highlightMenuAnchor) {
+              setDownloadAnchor({ el: highlightMenuAnchor.el as HTMLButtonElement, id: highlightMenuAnchor.highlight.id });
+            }
+            setHighlightMenuAnchor(null);
+          }}
+          disabled={
+            (highlightMenuAnchor?.highlight.rallyIds?.length ?? 0) === 0 ||
+            isExporting ||
+            !videoSource
+          }
+        >
+          <ListItemIcon>
+            <FileDownloadIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>Download</ListItemText>
+        </MenuItem>
+
+        {/* Delete - only if user can edit */}
+        {highlightMenuAnchor && canEditHighlight(highlightMenuAnchor.highlight.id) && (
+          <MenuItem
+            onClick={(e) => {
+              handleDeleteClick(highlightMenuAnchor.highlight.id, e);
+              setHighlightMenuAnchor(null);
+            }}
+            sx={{ color: 'error.main' }}
+          >
+            <ListItemIcon>
+              <DeleteIcon fontSize="small" sx={{ color: 'error.main' }} />
+            </ListItemIcon>
+            <ListItemText>Delete</ListItemText>
+          </MenuItem>
+        )}
+      </Menu>
 
       {/* Download Popover */}
       <Popover

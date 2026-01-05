@@ -52,7 +52,7 @@ export function EditorLayout({ sessionId }: EditorLayoutProps) {
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
   const [showNamePromptModal, setShowNamePromptModal] = useState(false);
   const [pendingCreateHighlight, setPendingCreateHighlight] = useState(false);
-  const [rightPanelTab, setRightPanelTab] = useState<'highlights' | 'camera'>('highlights');
+  const [leftPanelTab, setLeftPanelTab] = useState<'rallies' | 'highlights'>('rallies');
 
   // Camera store - count rallies with camera edits (has keyframes in any aspect ratio)
   const cameraEdits = useCameraStore((state) => state.cameraEdits);
@@ -101,7 +101,6 @@ export function EditorLayout({ sessionId }: EditorLayoutProps) {
       if (e.key === 'c' && e.shiftKey) {
         e.preventDefault();
         setRightPanelCollapsed(false);
-        setRightPanelTab('camera');
         return;
       }
     };
@@ -110,22 +109,21 @@ export function EditorLayout({ sessionId }: EditorLayoutProps) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [undo, redo, canUndo, canRedo]);
 
-  // Sync camera tab state to store (for Timeline to access)
-  useEffect(() => {
-    setIsCameraTabActive(rightPanelTab === 'camera');
-  }, [rightPanelTab, setIsCameraTabActive]);
-
-  // Track previous isCameraTabActive value to detect changes from store
+  // When store requests camera tab active (e.g., from Timeline keyframe click or camera button), expand right panel
   const prevIsCameraTabActive = useRef(isCameraTabActive);
-
-  // Sync store camera tab state back to local tab (for Timeline keyframe clicks)
-  // Only respond when isCameraTabActive changes TO true, not when rightPanelTab changes
   useEffect(() => {
     if (isCameraTabActive && !prevIsCameraTabActive.current) {
-      setRightPanelTab('camera');
+      setRightPanelCollapsed(false);
     }
     prevIsCameraTabActive.current = isCameraTabActive;
   }, [isCameraTabActive]);
+
+  // Exit camera edit mode when right panel is collapsed
+  useEffect(() => {
+    if (rightPanelCollapsed && isCameraTabActive) {
+      setIsCameraTabActive(false);
+    }
+  }, [rightPanelCollapsed, isCameraTabActive, setIsCameraTabActive]);
 
   // Load session data
   useEffect(() => {
@@ -196,39 +194,129 @@ export function EditorLayout({ sessionId }: EditorLayoutProps) {
           overflow: 'hidden',
         }}
       >
-        {/* Left Panel - Rally Navigator */}
+        {/* Left Panel - Rallies & Highlights */}
         <CollapsiblePanel
-          title="Rallies"
-          count={rallies?.length}
+          title=""
           collapsed={leftPanelCollapsed}
           onToggle={() => setLeftPanelCollapsed((prev) => !prev)}
           position="left"
-          collapsedIcon={
-            <Tooltip title="Rallies" placement="right">
-              <Badge
-                badgeContent={rallies?.length || 0}
-                color="primary"
-                max={99}
-                sx={{
-                  '& .MuiBadge-badge': {
-                    fontSize: '0.625rem',
-                    height: 16,
-                    minWidth: 16,
-                  },
-                }}
+          headerAction={
+            leftPanelTab === 'highlights' ? (
+              <Tooltip
+                title={
+                  canCreateHighlight()
+                    ? 'Create highlight'
+                    : 'All highlights must have segments first'
+                }
               >
-                <IconButton
-                  size="small"
-                  onClick={() => setLeftPanelCollapsed(false)}
-                  sx={{ color: 'text.secondary' }}
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={handleCreateHighlight}
+                    disabled={!canCreateHighlight()}
+                    color="primary"
+                  >
+                    <AddIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            ) : null
+          }
+          collapsedIcon={
+            <Stack spacing={1}>
+              <Tooltip title="Rallies" placement="right">
+                <Badge
+                  badgeContent={rallies?.length || 0}
+                  color="primary"
+                  max={99}
+                  sx={{
+                    '& .MuiBadge-badge': {
+                      fontSize: '0.625rem',
+                      height: 16,
+                      minWidth: 16,
+                    },
+                  }}
                 >
-                  <ListAltIcon fontSize="small" />
-                </IconButton>
-              </Badge>
-            </Tooltip>
+                  <IconButton
+                    size="small"
+                    onClick={() => {
+                      setLeftPanelCollapsed(false);
+                      setLeftPanelTab('rallies');
+                    }}
+                    sx={{ color: 'text.secondary' }}
+                  >
+                    <ListAltIcon fontSize="small" />
+                  </IconButton>
+                </Badge>
+              </Tooltip>
+              <Tooltip title="Highlights" placement="right">
+                <Badge
+                  badgeContent={highlights?.length || 0}
+                  color="secondary"
+                  max={99}
+                  sx={{
+                    '& .MuiBadge-badge': {
+                      fontSize: '0.625rem',
+                      height: 16,
+                      minWidth: 16,
+                      bgcolor: 'secondary.main',
+                    },
+                  }}
+                >
+                  <IconButton
+                    size="small"
+                    onClick={() => {
+                      setLeftPanelCollapsed(false);
+                      setLeftPanelTab('highlights');
+                    }}
+                    sx={{ color: 'text.secondary' }}
+                  >
+                    <StarIcon fontSize="small" />
+                  </IconButton>
+                </Badge>
+              </Tooltip>
+            </Stack>
           }
         >
-          <RallyList />
+          {/* Tab switcher */}
+          <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+            <Tabs
+              value={leftPanelTab}
+              onChange={(_, v) => setLeftPanelTab(v)}
+              variant="fullWidth"
+              sx={{
+                minHeight: 36,
+                '& .MuiTab-root': {
+                  minHeight: 36,
+                  py: 0.5,
+                  fontSize: '0.75rem',
+                },
+              }}
+            >
+              <Tab
+                value="rallies"
+                label={`Rallies (${rallies?.length ?? 0})`}
+                icon={<ListAltIcon sx={{ fontSize: 16 }} />}
+                iconPosition="start"
+                sx={{ minHeight: 36 }}
+              />
+              <Tab
+                value="highlights"
+                label={`Highlights (${highlights?.length ?? 0})`}
+                icon={<StarIcon sx={{ fontSize: 16 }} />}
+                iconPosition="start"
+                sx={{ minHeight: 36 }}
+              />
+            </Tabs>
+          </Box>
+          {/* Tab content */}
+          <Box sx={{ flex: 1, overflow: 'hidden' }}>
+            {leftPanelTab === 'rallies' ? (
+              <RallyList />
+            ) : (
+              <HighlightsPanel />
+            )}
+          </Box>
         </CollapsiblePanel>
 
         {/* Center - Video Area */}
@@ -261,126 +349,39 @@ export function EditorLayout({ sessionId }: EditorLayoutProps) {
           </Box>
         </Box>
 
-        {/* Right Panel - Highlights & Camera */}
+        {/* Right Panel - Camera */}
         <CollapsiblePanel
-          title={rightPanelTab === 'highlights' ? 'Highlights' : 'Camera'}
-          count={rightPanelTab === 'highlights' ? highlights?.length : cameraEditCount}
+          title="Camera"
+          count={cameraEditCount}
           collapsed={rightPanelCollapsed}
           onToggle={() => setRightPanelCollapsed((prev) => !prev)}
           position="right"
-          headerAction={
-            rightPanelTab === 'highlights' ? (
-              <Tooltip
-                title={
-                  canCreateHighlight()
-                    ? 'Create highlight'
-                    : 'All highlights must have segments first'
-                }
-              >
-                <span>
-                  <IconButton
-                    size="small"
-                    onClick={handleCreateHighlight}
-                    disabled={!canCreateHighlight()}
-                    color="primary"
-                  >
-                    <AddIcon fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
-            ) : null
-          }
           collapsedIcon={
-            <Stack spacing={1}>
-              <Tooltip title="Highlights" placement="left">
-                <Badge
-                  badgeContent={highlights?.length || 0}
-                  color="secondary"
-                  max={99}
-                  sx={{
-                    '& .MuiBadge-badge': {
-                      fontSize: '0.625rem',
-                      height: 16,
-                      minWidth: 16,
-                      bgcolor: 'secondary.main',
-                    },
-                  }}
+            <Tooltip title="Camera" placement="left">
+              <Badge
+                badgeContent={cameraEditCount || 0}
+                color="primary"
+                max={99}
+                sx={{
+                  '& .MuiBadge-badge': {
+                    fontSize: '0.625rem',
+                    height: 16,
+                    minWidth: 16,
+                  },
+                }}
+              >
+                <IconButton
+                  size="small"
+                  onClick={() => setRightPanelCollapsed(false)}
+                  sx={{ color: 'text.secondary' }}
                 >
-                  <IconButton
-                    size="small"
-                    onClick={() => {
-                      setRightPanelCollapsed(false);
-                      setRightPanelTab('highlights');
-                    }}
-                    sx={{ color: 'text.secondary' }}
-                  >
-                    <StarIcon fontSize="small" />
-                  </IconButton>
-                </Badge>
-              </Tooltip>
-              <Tooltip title="Camera" placement="left">
-                <Badge
-                  badgeContent={cameraEditCount || 0}
-                  color="primary"
-                  max={99}
-                  sx={{
-                    '& .MuiBadge-badge': {
-                      fontSize: '0.625rem',
-                      height: 16,
-                      minWidth: 16,
-                    },
-                  }}
-                >
-                  <IconButton
-                    size="small"
-                    onClick={() => {
-                      setRightPanelCollapsed(false);
-                      setRightPanelTab('camera');
-                    }}
-                    sx={{ color: 'text.secondary' }}
-                  >
-                    <VideocamIcon fontSize="small" />
-                  </IconButton>
-                </Badge>
-              </Tooltip>
-            </Stack>
+                  <VideocamIcon fontSize="small" />
+                </IconButton>
+              </Badge>
+            </Tooltip>
           }
         >
-          {/* Tab switcher */}
-          <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-            <Tabs
-              value={rightPanelTab}
-              onChange={(_, v) => setRightPanelTab(v)}
-              variant="fullWidth"
-              sx={{
-                minHeight: 36,
-                '& .MuiTab-root': {
-                  minHeight: 36,
-                  py: 0.5,
-                  fontSize: '0.75rem',
-                },
-              }}
-            >
-              <Tab
-                value="highlights"
-                label="Highlights"
-                icon={<StarIcon sx={{ fontSize: 16 }} />}
-                iconPosition="start"
-                sx={{ minHeight: 36 }}
-              />
-              <Tab
-                value="camera"
-                label="Camera"
-                icon={<VideocamIcon sx={{ fontSize: 16 }} />}
-                iconPosition="start"
-                sx={{ minHeight: 36 }}
-              />
-            </Tabs>
-          </Box>
-          {/* Tab content */}
-          <Box sx={{ flex: 1, overflow: 'hidden' }}>
-            {rightPanelTab === 'highlights' ? <HighlightsPanel /> : <CameraPanel />}
-          </Box>
+          <CameraPanel />
         </CollapsiblePanel>
       </Box>
 

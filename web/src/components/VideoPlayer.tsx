@@ -55,6 +55,7 @@ export function VideoPlayer() {
   // Get rallies from editor store
   const rallies = useEditorStore((state) => state.rallies);
   const selectedRallyId = useEditorStore((state) => state.selectedRallyId);
+  const isCameraTabActive = useEditorStore((state) => state.isCameraTabActive);
 
   // Find current rally based on playhead position
   const currentRally = useMemo(() => {
@@ -363,8 +364,8 @@ export function VideoPlayer() {
     );
   }
 
-  // Check if camera preview is active (toggle on OR editing, and rally is selected)
-  const isCameraPreviewActive = shouldApplyCamera && currentRally !== null;
+  // Check if camera preview UI should be shown (must be in camera edit mode)
+  const isCameraPreviewActive = isCameraTabActive && shouldApplyCamera && currentRally !== null;
 
   return (
     <Box
