@@ -14,6 +14,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import KeyboardIcon from '@mui/icons-material/Keyboard';
 import StarIcon from '@mui/icons-material/Star';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
+import CameraAltIcon from '@mui/icons-material/CameraAlt';
 import {
   Timeline as TimelineEditor,
   TimelineRow,
@@ -114,6 +115,7 @@ export function Timeline() {
   const selectKeyframe = useCameraStore((state) => state.selectKeyframe);
   const selectedKeyframeId = useCameraStore((state) => state.selectedKeyframeId);
   const removeKeyframe = useCameraStore((state) => state.removeKeyframe);
+  const setCameraEdit = useCameraStore((state) => state.setCameraEdit);
 
   // Detection state
   const [isDetecting, setIsDetecting] = useState(false);
@@ -141,7 +143,6 @@ export function Timeline() {
   const timelineContainerRef = useRef<HTMLDivElement>(null);
   const [isDraggingCursor, setIsDraggingCursor] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-  const [keyframeDeleteConfirmId, setKeyframeDeleteConfirmId] = useState<string | null>(null);
   const [hotkeysAnchorEl, setHotkeysAnchorEl] = useState<HTMLButtonElement | null>(null);
   const [scrollLeft, setScrollLeft] = useState(0);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -342,18 +343,11 @@ export function Timeline() {
 
         case 'Delete':
         case 'Backspace':
-          // Priority 1: Delete keyframe in camera edit mode
+          // Priority 1: Delete keyframe in camera edit mode (single press)
           if (isInCameraEditMode && selectedKeyframeId && selectedRallyId) {
             e.preventDefault();
-            if (keyframeDeleteConfirmId === selectedKeyframeId) {
-              // Confirm delete on second press
-              removeKeyframe(selectedRallyId, selectedKeyframeId);
-              setKeyframeDeleteConfirmId(null);
-              selectKeyframe(null);
-            } else {
-              // Show confirmation on first press
-              setKeyframeDeleteConfirmId(selectedKeyframeId);
-            }
+            removeKeyframe(selectedRallyId, selectedKeyframeId);
+            selectKeyframe(null);
             break;
           }
 
@@ -373,9 +367,7 @@ export function Timeline() {
           break;
 
         case 'Escape':
-          if (keyframeDeleteConfirmId) {
-            setKeyframeDeleteConfirmId(null);
-          } else if (deleteConfirmId) {
+          if (deleteConfirmId) {
             setDeleteConfirmId(null);
           } else if (selectedRallyId) {
             selectRally(null);
@@ -404,7 +396,7 @@ export function Timeline() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, play, pause, seek, currentTime, duration, selectedRallyId, deleteConfirmId, removeRally, selectRally, isInsideSelectedRally, getSelectedRally, goToPrevRally, goToNextRally, adjustRallyStart, adjustRallyEnd, videoMetadata, rallies, createRallyAtTime, handleToggleHighlight, isLocked, isInCameraEditMode, selectedKeyframeId, keyframeDeleteConfirmId, removeKeyframe, selectKeyframe]);
+  }, [isPlaying, play, pause, seek, currentTime, duration, selectedRallyId, deleteConfirmId, removeRally, selectRally, isInsideSelectedRally, getSelectedRally, goToPrevRally, goToNextRally, adjustRallyStart, adjustRallyEnd, videoMetadata, rallies, createRallyAtTime, handleToggleHighlight, isLocked, isInCameraEditMode, selectedKeyframeId, removeKeyframe, selectKeyframe]);
 
   // Jump to previous/next rally
   const jumpToPrevRally = useCallback(() => {
@@ -679,24 +671,89 @@ export function Timeline() {
   );
 
   // Prevent overlapping during resize (also disable when locked)
+  // Also prevent resizing past keyframes
+  // Also update video preview to show where the edge is being dragged
   const handleActionResizing = useCallback(
     (params: { action: TimelineAction; start: number; end: number }) => {
       if (isLocked) return false;
-      return !checkOverlap(params.action.id, params.start, params.end);
+      if (checkOverlap(params.action.id, params.start, params.end)) return false;
+
+      // Check keyframe boundaries - don't allow resize to exclude keyframes
+      const cameraEdit = cameraEdits[params.action.id];
+      const rally = rallies?.find((r) => r.id === params.action.id);
+
+      if (cameraEdit && rally) {
+        const oldDuration = rally.end_time - rally.start_time;
+        const allKeyframes = [
+          ...(cameraEdit.keyframes.ORIGINAL ?? []),
+          ...(cameraEdit.keyframes.VERTICAL ?? []),
+        ];
+
+        for (const kf of allKeyframes) {
+          // Convert keyframe timeOffset to absolute time
+          const kfAbsTime = rally.start_time + kf.timeOffset * oldDuration;
+          // Check if keyframe would be outside new bounds
+          if (kfAbsTime < params.start || kfAbsTime > params.end) {
+            return false;
+          }
+        }
+      }
+
+      // Update video preview to show the edge being dragged
+      if (rally) {
+        const startChanged = Math.abs(params.start - rally.start_time) > 0.01;
+        const endChanged = Math.abs(params.end - rally.end_time) > 0.01;
+        if (startChanged) {
+          seek(params.start);
+        } else if (endChanged) {
+          seek(params.end);
+        }
+      }
+
+      return true;
     },
-    [checkOverlap, isLocked]
+    [checkOverlap, isLocked, cameraEdits, rallies, seek]
   );
 
   // Persist changes after resize ends
+  // Also recalculate keyframe offsets to keep them at the same absolute video time
   const handleActionResizeEnd = useCallback(
     (params: { action: TimelineAction; start: number; end: number }) => {
+      const rally = rallies?.find((r) => r.id === params.action.id);
+      const cameraEdit = cameraEdits[params.action.id];
+
+      // Recalculate keyframe timeOffsets if rally has camera edits
+      if (rally && cameraEdit) {
+        const oldDuration = rally.end_time - rally.start_time;
+        const newDuration = params.end - params.start;
+
+        const updateKeyframesForRatio = (keyframes: typeof cameraEdit.keyframes.ORIGINAL) => {
+          return keyframes.map((kf) => {
+            // Convert old timeOffset to absolute time
+            const absTime = rally.start_time + kf.timeOffset * oldDuration;
+            // Convert back to new timeOffset
+            const newTimeOffset = (absTime - params.start) / newDuration;
+            return { ...kf, timeOffset: Math.max(0, Math.min(1, newTimeOffset)) };
+          });
+        };
+
+        const updatedEdit = {
+          ...cameraEdit,
+          keyframes: {
+            ORIGINAL: updateKeyframesForRatio(cameraEdit.keyframes.ORIGINAL ?? []),
+            VERTICAL: updateKeyframesForRatio(cameraEdit.keyframes.VERTICAL ?? []),
+          },
+        };
+        setCameraEdit(params.action.id, updatedEdit);
+      }
+
       updateRally(params.action.id, {
         start_time: params.start,
         end_time: params.end,
       });
       return true;
     },
-    [updateRally]
+    [updateRally, rallies, cameraEdits, setCameraEdit]
   );
 
   // Persist changes after move ends
@@ -1262,6 +1319,25 @@ export function Timeline() {
               ? cameraEdit.keyframes[cameraEdit.aspectRatio] ?? []
               : [];
 
+            // Check if this rally has any camera edits
+            const hasCameraEdits = cameraEdit && (
+              cameraEdit.aspectRatio === 'VERTICAL' ||
+              keyframes.length > 0
+            );
+
+            // Is THIS specific rally being camera-edited?
+            const isThisRallyInCameraEditMode = selectedRallyId === action.id && isCameraTabActive;
+
+            // Determine what to render
+            const showKeyframeDots = isThisRallyInCameraEditMode && keyframes.length > 0;
+            const showCameraIndicator = hasCameraEdits && !isThisRallyInCameraEditMode;
+
+            // Calculate original rally duration for keyframe positioning
+            // During resize, action.start/end change but rally.start_time/end_time stay the same
+            // We need to position keyframes based on their absolute time, not their stored offset
+            const originalDuration = rally ? rally.end_time - rally.start_time : 1;
+            const currentDuration = action.end - action.start;
+
             return (
               <Box
                 sx={{
@@ -1272,7 +1348,16 @@ export function Timeline() {
                 }}
               >
                 {/* Keyframe tick marks */}
-                {keyframes.map((kf) => (
+                {showKeyframeDots && keyframes.map((kf) => {
+                  // Calculate absolute time of keyframe based on original rally bounds
+                  const kfAbsTime = rally
+                    ? rally.start_time + kf.timeOffset * originalDuration
+                    : action.start + kf.timeOffset * currentDuration;
+                  // Calculate position as percentage of current action bounds
+                  // This keeps keyframes visually fixed during resize
+                  const compensatedLeft = ((kfAbsTime - action.start) / currentDuration) * 100;
+
+                  return (
                   <Box
                     key={kf.id}
                     onClick={(e) => {
@@ -1290,7 +1375,7 @@ export function Timeline() {
                     }}
                     sx={{
                       position: 'absolute',
-                      left: `${kf.timeOffset * 100}%`,
+                      left: `${compensatedLeft}%`,
                       top: 0,
                       bottom: 0,
                       width: 14,
@@ -1339,7 +1424,22 @@ export function Timeline() {
                       }}
                     />
                   </Box>
-                ))}
+                  );
+                })}
+
+                {/* Camera indicator badge */}
+                {showCameraIndicator && (
+                  <Box
+                    sx={{
+                      position: 'absolute',
+                      top: 3,
+                      right: 3,
+                      zIndex: 15,
+                    }}
+                  >
+                    <CameraAltIcon sx={{ fontSize: 14, color: 'rgba(255,255,255,0.5)' }} />
+                  </Box>
+                )}
 
                 {/* Center content */}
                 <Box

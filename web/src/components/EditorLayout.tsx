@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Box, IconButton, Tooltip, Badge, Skeleton, Typography, Stack, LinearProgress, Tabs, Tab } from '@mui/material';
 import ListAltIcon from '@mui/icons-material/ListAlt';
 import StarIcon from '@mui/icons-material/Star';
@@ -115,12 +115,17 @@ export function EditorLayout({ sessionId }: EditorLayoutProps) {
     setIsCameraTabActive(rightPanelTab === 'camera');
   }, [rightPanelTab, setIsCameraTabActive]);
 
+  // Track previous isCameraTabActive value to detect changes from store
+  const prevIsCameraTabActive = useRef(isCameraTabActive);
+
   // Sync store camera tab state back to local tab (for Timeline keyframe clicks)
+  // Only respond when isCameraTabActive changes TO true, not when rightPanelTab changes
   useEffect(() => {
-    if (isCameraTabActive && rightPanelTab !== 'camera') {
+    if (isCameraTabActive && !prevIsCameraTabActive.current) {
       setRightPanelTab('camera');
     }
-  }, [isCameraTabActive, rightPanelTab]);
+    prevIsCameraTabActive.current = isCameraTabActive;
+  }, [isCameraTabActive]);
 
   // Load session data
   useEffect(() => {
