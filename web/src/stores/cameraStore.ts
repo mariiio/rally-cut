@@ -9,9 +9,26 @@ import {
   DEFAULT_KEYFRAME,
   DEFAULT_CAMERA_STATE,
   migrateCameraEdit,
+  HandheldPreset,
 } from '@/types/camera';
 import { interpolateCameraState } from '@/utils/cameraInterpolation';
 import { syncService } from '@/services/syncService';
+
+// Lazy reference to editor store to avoid circular dependency
+// The store will be accessed at runtime when pushHistory is called
+let editorStoreRef: { pushHistory: () => void } | null = null;
+
+const pushEditorHistory = () => {
+  // Lazy load editor store reference on first use
+  if (!editorStoreRef) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { useEditorStore } = require('./editorStore');
+    editorStoreRef = {
+      pushHistory: () => useEditorStore.getState().pushHistory(),
+    };
+  }
+  editorStoreRef.pushHistory();
+};
 
 // Use object instead of Map for better shallow comparison
 type CameraEditsRecord = Record<string, RallyCameraEdit>;
@@ -27,6 +44,9 @@ type LegacyCameraEditsRecord = Record<string, LegacyCameraEdit | RallyCameraEdit
 interface CameraStoreState {
   // Per-rally camera edits (rallyId -> edit)
   cameraEdits: CameraEditsRecord;
+
+  // Handheld motion preset (global, applies to all rallies)
+  handheldPreset: HandheldPreset;
 
   // UI state
   selectedKeyframeId: string | null;
@@ -44,6 +64,9 @@ interface CameraStoreState {
   // UI actions
   selectKeyframe: (id: string | null) => void;
   setDragPosition: (pos: { x: number; y: number } | null) => void;
+
+  // Handheld motion actions
+  setHandheldPreset: (preset: HandheldPreset) => void;
 
   // Rally-level actions
   resetCamera: (rallyId: string) => void;
@@ -73,6 +96,7 @@ export const useCameraStore = create<CameraStoreState>()(
   subscribeWithSelector((set, get) => ({
     // Initial state
     cameraEdits: {},
+    handheldPreset: 'OFF' as HandheldPreset,
     selectedKeyframeId: null,
     dragPosition: null,
     isDirty: false,
@@ -103,12 +127,17 @@ export const useCameraStore = create<CameraStoreState>()(
 
     // Set aspect ratio for a rally (also deselects keyframe since it belongs to other ratio)
     setAspectRatio: (rallyId: string, ratio: AspectRatio) => {
+      const existing = get().cameraEdits[rallyId];
+      // Only push history if aspect ratio is actually changing
+      if (!existing || existing.aspectRatio !== ratio) {
+        pushEditorHistory();
+      }
       set((state) => {
-        const existing = state.cameraEdits[rallyId] ?? { ...DEFAULT_CAMERA_EDIT };
+        const edit = state.cameraEdits[rallyId] ?? { ...DEFAULT_CAMERA_EDIT };
         return {
           cameraEdits: {
             ...state.cameraEdits,
-            [rallyId]: { ...existing, aspectRatio: ratio },
+            [rallyId]: { ...edit, aspectRatio: ratio },
           },
           // Deselect keyframe when switching aspect ratio (it belongs to the other set)
           selectedKeyframeId: null,
@@ -120,6 +149,7 @@ export const useCameraStore = create<CameraStoreState>()(
 
     // Add a keyframe at specified time offset (to the active aspect ratio)
     addKeyframe: (rallyId: string, keyframe: Omit<CameraKeyframe, 'id'>) => {
+      pushEditorHistory();
       const id = generateKeyframeId();
       set((state) => {
         const existing = state.cameraEdits[rallyId] ?? { ...DEFAULT_CAMERA_EDIT };
@@ -154,6 +184,7 @@ export const useCameraStore = create<CameraStoreState>()(
 
     // Update an existing keyframe (in the active aspect ratio)
     updateKeyframe: (rallyId: string, keyframeId: string, updates: Partial<CameraKeyframe>) => {
+      pushEditorHistory();
       set((state) => {
         const existing = state.cameraEdits[rallyId];
         if (!existing) return state;
@@ -189,6 +220,7 @@ export const useCameraStore = create<CameraStoreState>()(
 
     // Remove a keyframe (from the active aspect ratio)
     removeKeyframe: (rallyId: string, keyframeId: string) => {
+      pushEditorHistory();
       set((state) => {
         const existing = state.cameraEdits[rallyId];
         if (!existing) return state;
@@ -220,8 +252,18 @@ export const useCameraStore = create<CameraStoreState>()(
     selectKeyframe: (id: string | null) => set({ selectedKeyframeId: id }),
     setDragPosition: (pos: { x: number; y: number } | null) => set({ dragPosition: pos }),
 
+    // Handheld motion
+    setHandheldPreset: (preset: HandheldPreset) => {
+      set({ handheldPreset: preset });
+      // Persist to localStorage
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('rallycut-handheld-preset', preset);
+      }
+    },
+
     // Reset camera for a rally (remove all keyframes and settings)
     resetCamera: (rallyId: string) => {
+      pushEditorHistory();
       set((state) => {
         const newEdits = { ...state.cameraEdits };
         delete newEdits[rallyId];
@@ -314,3 +356,13 @@ export const selectCameraEdit = (rallyId: string | null) => (state: CameraStoreS
 export const selectSelectedKeyframeId = (state: CameraStoreState) => state.selectedKeyframeId;
 
 export const selectDragPosition = (state: CameraStoreState) => state.dragPosition;
+
+export const selectHandheldPreset = (state: CameraStoreState) => state.handheldPreset;
+
+// Initialize handheld preset from localStorage on client side
+if (typeof window !== 'undefined') {
+  const saved = localStorage.getItem('rallycut-handheld-preset');
+  if (saved && ['OFF', 'SUBTLE', 'NATURAL', 'DOCUMENTARY', 'AGGRESSIVE'].includes(saved)) {
+    useCameraStore.setState({ handheldPreset: saved as HandheldPreset });
+  }
+}
