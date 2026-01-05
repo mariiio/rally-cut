@@ -72,12 +72,6 @@ export const DEFAULT_CAMERA_STATE: CameraState = {
   zoom: 1.0,
 };
 
-/** Aspect ratio display info */
-export const ASPECT_RATIO_INFO: Record<AspectRatio, { label: string; ratio: string; value: number }> = {
-  ORIGINAL: { label: 'Widescreen', ratio: '16:9', value: 16 / 9 },
-  VERTICAL: { label: 'Vertical', ratio: '9:16', value: 9 / 16 },
-};
-
 /** Zoom constraints */
 export const ZOOM_MIN = 0.5;  // Allow zoom out (shows letterboxing in vertical mode)
 export const ZOOM_MAX = 3.0;

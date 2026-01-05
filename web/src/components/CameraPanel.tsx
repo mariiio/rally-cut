@@ -200,7 +200,10 @@ export function CameraPanel() {
     return Math.max(0, Math.min(1, offset));
   }, [selectedRally, currentTime]);
 
-  const rallyDuration = selectedRally ? selectedRally.end_time - selectedRally.start_time : 0;
+  const rallyDuration = useMemo(
+    () => selectedRally ? selectedRally.end_time - selectedRally.start_time : 0,
+    [selectedRally]
+  );
 
   // Get drag position to detect active dragging
   const dragPosition = useCameraStore((state) => state.dragPosition);

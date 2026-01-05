@@ -101,12 +101,12 @@ export function interpolateCameraState(
     };
   }
 
-  // Ensure keyframes are sorted
-  const sorted = [...keyframes].sort((a, b) => a.timeOffset - b.timeOffset);
+  // Keyframes are maintained in sorted order by cameraStore.addKeyframe()
+  // No need to re-sort here (this function is called 60x/second during playback)
 
   // Before first keyframe - use first keyframe values
-  if (t <= sorted[0].timeOffset) {
-    const first = sorted[0];
+  if (t <= keyframes[0].timeOffset) {
+    const first = keyframes[0];
     return {
       positionX: first.positionX,
       positionY: first.positionY,
@@ -115,8 +115,8 @@ export function interpolateCameraState(
   }
 
   // After last keyframe - use last keyframe values
-  if (t >= sorted[sorted.length - 1].timeOffset) {
-    const last = sorted[sorted.length - 1];
+  if (t >= keyframes[keyframes.length - 1].timeOffset) {
+    const last = keyframes[keyframes.length - 1];
     return {
       positionX: last.positionX,
       positionY: last.positionY,
@@ -126,15 +126,15 @@ export function interpolateCameraState(
 
   // Find surrounding keyframes
   let beforeIdx = 0;
-  for (let i = 0; i < sorted.length - 1; i++) {
-    if (sorted[i].timeOffset <= t && sorted[i + 1].timeOffset >= t) {
+  for (let i = 0; i < keyframes.length - 1; i++) {
+    if (keyframes[i].timeOffset <= t && keyframes[i + 1].timeOffset >= t) {
       beforeIdx = i;
       break;
     }
   }
 
-  const before = sorted[beforeIdx];
-  const after = sorted[beforeIdx + 1];
+  const before = keyframes[beforeIdx];
+  const after = keyframes[beforeIdx + 1];
 
   // Calculate local t between these two keyframes
   const range = after.timeOffset - before.timeOffset;

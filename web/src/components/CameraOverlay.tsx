@@ -102,10 +102,8 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
     if (!dragState?.isDragging || !containerRef.current) return;
 
     const handleMouseMove = (e: MouseEvent) => {
-      const container = containerRef.current;
-      if (!container) return;
-
-      const rect = container.getBoundingClientRect();
+      // containerRef.current is guaranteed by the early return at line 102
+      const rect = containerRef.current!.getBoundingClientRect();
       // Calculate drag delta as percentage of container
       const deltaX = (e.clientX - dragState.startX) / rect.width;
       const deltaY = (e.clientY - dragState.startY) / rect.height;
