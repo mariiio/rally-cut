@@ -25,16 +25,35 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [localPosition, setLocalPosition] = useState<{ x: number; y: number } | null>(null);
+  // Track if user has explicitly exited camera edit mode for current rally
+  const [exitedForRally, setExitedForRally] = useState<string | null>(null);
 
   // Get selected rally
   const selectedRallyId = useEditorStore((state) => state.selectedRallyId);
   const rallies = useEditorStore((state) => state.rallies);
   const isCameraTabActive = useEditorStore((state) => state.isCameraTabActive);
+  const setIsCameraTabActive = useEditorStore((state) => state.setIsCameraTabActive);
   const selectedRally = rallies.find((r) => r.id === selectedRallyId) ?? null;
+
+  // Track when user exits camera edit mode - hide overlay until they select a different rally
+  const prevIsCameraTabActive = useRef(isCameraTabActive);
+  useEffect(() => {
+    if (prevIsCameraTabActive.current && !isCameraTabActive && selectedRallyId) {
+      // User exited camera edit mode - remember this rally
+      setExitedForRally(selectedRallyId);
+    }
+    prevIsCameraTabActive.current = isCameraTabActive;
+  }, [isCameraTabActive, selectedRallyId]);
+
+  // Reset exitedForRally when selecting a different rally
+  useEffect(() => {
+    if (selectedRallyId !== exitedForRally) {
+      setExitedForRally(null);
+    }
+  }, [selectedRallyId, exitedForRally]);
 
   // Player state
   const currentTime = usePlayerStore((state) => state.currentTime);
-  const applyCameraEdits = usePlayerStore((state) => state.applyCameraEdits);
 
   // Camera state
   const cameraEdit = useCameraStore(selectCameraEdit(selectedRallyId));
@@ -54,8 +73,18 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
     ? Math.max(0, Math.min(1, (currentTime - selectedRally.start_time) / (selectedRally.end_time - selectedRally.start_time)))
     : 0;
 
-  // Show overlay only when in camera edit mode (camera tab active)
-  const isActive = isCameraTabActive && applyCameraEdits && selectedRallyId && selectedRally;
+  // Check if rally has camera edits (keyframes in any aspect ratio)
+  const hasCameraEdits = cameraEdit && (
+    (cameraEdit.keyframes.ORIGINAL?.length ?? 0) > 0 ||
+    (cameraEdit.keyframes.VERTICAL?.length ?? 0) > 0
+  );
+
+  // Show overlay when:
+  // - In camera edit mode (isCameraTabActive), OR
+  // - Rally with camera edits is selected (for quick editing), unless user exited edit mode for this rally
+  const isActive = selectedRallyId && selectedRally && (
+    isCameraTabActive || (hasCameraEdits && exitedForRally !== selectedRallyId)
+  );
 
   // Get aspect ratio
   const aspectRatio: AspectRatio = cameraEdit?.aspectRatio ?? 'ORIGINAL';
@@ -67,6 +96,11 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
 
     e.preventDefault();
     e.stopPropagation();
+
+    // Enter camera edit mode when user starts dragging
+    if (!isCameraTabActive) {
+      setIsCameraTabActive(true);
+    }
 
     // Get starting position - from selected keyframe or current camera state
     let startPosX: number;
@@ -93,7 +127,7 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
       x: startPosX,
       y: startPosY,
     });
-  }, [selectedKeyframe, selectedRallyId, getCameraStateAtTime, currentTimeOffset]);
+  }, [selectedKeyframe, selectedRallyId, getCameraStateAtTime, currentTimeOffset, isCameraTabActive, setIsCameraTabActive]);
 
   // Get current zoom level from selected keyframe or current camera state
   const currentZoom = selectedKeyframe?.zoom ?? (selectedRallyId ? getCameraStateAtTime(selectedRallyId, currentTimeOffset).zoom : 1);

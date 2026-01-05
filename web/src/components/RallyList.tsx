@@ -125,7 +125,7 @@ export function RallyList() {
     }
     selectRally(rally.id);
     seek(rally.start_time);
-    // Exit camera edit mode when clicking on a rally normally
+    // Exit camera edit mode when clicking on a rally
     setIsCameraTabActive(false);
   }, [activeMatchId, setActiveMatch, selectRally, seek, setIsCameraTabActive]);
 
