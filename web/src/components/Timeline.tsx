@@ -739,8 +739,8 @@ export function Timeline() {
     [checkOverlap, isLocked]
   );
 
-  // Handle resize: block when keyframe would be excluded to stop visual
-  // pendingResize tracks last valid position for correct final commit
+  // Handle resize: always return true to avoid shift, clamp position via pendingResize
+  // The visual offset is corrected via CSS transform in getActionRender
   const handleActionResizing = useCallback(
     (params: { action: TimelineAction; start: number; end: number }) => {
       if (isLocked) return false;
@@ -748,12 +748,17 @@ export function Timeline() {
       const rally = rallies?.find((r) => r.id === params.action.id);
       if (!rally) return true;
 
-      // Check overlap
+      // Check overlap - keep current position if would overlap
       if (checkOverlap(params.action.id, params.start, params.end)) {
-        return false;
+        // Don't update pendingResize, keep last valid
+        return true;
       }
 
-      // Check keyframe boundaries
+      // Calculate clamped position based on keyframe boundaries
+      let clampedStart = params.start;
+      let clampedEnd = params.end;
+      let isBlocked = false;
+
       const cameraEdit = cameraEdits[params.action.id];
       if (cameraEdit) {
         const duration = rally.end_time - rally.start_time;
@@ -764,31 +769,41 @@ export function Timeline() {
 
         for (const kf of allKeyframes) {
           const kfAbsTime = rally.start_time + kf.timeOffset * duration;
-          if (kfAbsTime < params.start || kfAbsTime > params.end) {
-            // Blocked - show indicators but DON'T update pendingResize
-            if (keyframeBlockedRallyId !== params.action.id) {
-              setKeyframeBlockedRallyId(params.action.id);
-            }
-            if (keyframeBlockedTimeoutRef.current) {
-              clearTimeout(keyframeBlockedTimeoutRef.current);
-              keyframeBlockedTimeoutRef.current = null;
-            }
-            return false;
+          // Clamp start - can't exclude keyframe
+          if (kfAbsTime < clampedStart) {
+            clampedStart = kfAbsTime;
+            isBlocked = true;
+          }
+          // Clamp end - can't exclude keyframe
+          if (kfAbsTime > clampedEnd) {
+            clampedEnd = kfAbsTime;
+            isBlocked = true;
+          }
+        }
+
+        // Show keyframe indicators when blocked
+        if (isBlocked) {
+          if (keyframeBlockedRallyId !== params.action.id) {
+            setKeyframeBlockedRallyId(params.action.id);
+          }
+          if (keyframeBlockedTimeoutRef.current) {
+            clearTimeout(keyframeBlockedTimeoutRef.current);
+            keyframeBlockedTimeoutRef.current = null;
           }
         }
       }
 
-      // Allowed - update pendingResize with this valid position
+      // Update pendingResize with CLAMPED position (CSS will correct visual)
       setPendingResize({
         rallyId: params.action.id,
-        start: params.start,
-        end: params.end,
+        start: clampedStart,
+        end: clampedEnd,
       });
 
-      // Update video preview
+      // Update video preview to clamped position
       const startDelta = params.start - rally.start_time;
       const isResizingStart = Math.abs(startDelta) > 0.01;
-      seek(isResizingStart ? params.start : params.end);
+      seek(isResizingStart ? clampedStart : clampedEnd);
 
       return true;
     },
@@ -1290,25 +1305,15 @@ export function Timeline() {
           '& .timeline-editor-time-area': {
             background: '#0F1116 !important',
           },
+          // Action container is INVISIBLE - we render our own styled Box in getActionRender
+          // This allows us to control visual position during drag (clamping to keyframes)
           '& .timeline-editor-action': {
-            background: 'linear-gradient(180deg, #3B82F6 0%, #2563EB 100%) !important',
-            borderRadius: '4px !important',
+            background: 'transparent !important',
+            border: 'none !important',
+            boxShadow: 'none !important',
             cursor: 'pointer',
             overflow: 'visible !important',
             zIndex: '10 !important',
-            transition: 'all 0.2s ease !important',
-            border: '1px solid rgba(255,255,255,0.1) !important',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.2) !important',
-            // Dim non-selected when there's a selection
-            ...(selectedRallyId && {
-              opacity: '0.4 !important',
-              filter: 'saturate(0.5) !important',
-            }),
-            '&:hover': {
-              background: 'linear-gradient(180deg, #60A5FA 0%, #3B82F6 100%) !important',
-              opacity: '0.7 !important',
-              boxShadow: '0 4px 8px rgba(59, 130, 246, 0.3) !important',
-            },
           },
           // Resize handles on edges (disabled when locked or in camera edit mode)
           '& .timeline-editor-action .timeline-editor-action-left-stretch, & .timeline-editor-action .timeline-editor-action-right-stretch': {
@@ -1318,25 +1323,12 @@ export function Timeline() {
             overflow: 'visible !important',
             background: 'transparent !important',
             zIndex: '50 !important',
-            ...(!isLocked && !isInCameraEditMode && {
-              '&:hover': {
-                background: 'rgba(255,255,255,0.1) !important',
-              },
-            }),
           },
           '& .timeline-editor-action-selected': {
-            background: 'linear-gradient(180deg, #FF6B4A 0%, #E55235 100%) !important',
-            boxShadow: '0 0 0 2px rgba(255,107,74,0.5), 0 4px 12px rgba(255,107,74,0.4) !important',
+            background: 'transparent !important',
+            border: 'none !important',
+            boxShadow: 'none !important',
             zIndex: '20 !important',
-            opacity: '1 !important',
-            filter: 'saturate(1) !important',
-            transform: 'scale(1.02)',
-            border: '1px solid rgba(255,255,255,0.3) !important',
-            '&:hover': {
-              background: 'linear-gradient(180deg, #FF8A6F 0%, #FF6B4A 100%) !important',
-              opacity: '1 !important',
-              boxShadow: '0 0 0 2px rgba(255,107,74,0.6), 0 6px 16px rgba(255,107,74,0.5) !important',
-            },
           },
           // Hide the default cursor completely
           '& .timeline-editor-cursor': {
@@ -1455,10 +1447,20 @@ export function Timeline() {
             const showCameraIndicator = hasCameraEdits && !isThisRallyInCameraEditMode && !isResizeBlockedByKeyframes;
 
             // Calculate original rally duration for keyframe positioning
-            // During resize, action.start/end change but rally.start_time/end_time stay the same
-            // We need to position keyframes based on their absolute time, not their stored offset
             const originalDuration = rally ? rally.end_time - rally.start_time : 1;
             const currentDuration = action.end - action.start;
+
+            // Calculate position offset: library renders at action.start, we want pendingResize.start
+            const pending = pendingResize?.rallyId === action.id ? pendingResize : null;
+            const pixelsPerSecond = SCALE_WIDTH / scale;
+            const offsetX = pending ? (pending.start - action.start) * pixelsPerSecond : 0;
+            const visualWidth = pending
+              ? (pending.end - pending.start) * pixelsPerSecond
+              : currentDuration * pixelsPerSecond;
+
+            // Determine if this action is selected
+            const isSelected = action.id === selectedRallyId;
+            const hasSelection = selectedRallyId !== null;
 
             return (
               <Box
@@ -1469,15 +1471,57 @@ export function Timeline() {
                   overflow: 'visible',
                 }}
               >
+                {/* Visual segment - positioned at clamped position */}
+                <Box
+                  sx={{
+                    position: 'absolute',
+                    left: offsetX,
+                    top: 0,
+                    width: visualWidth,
+                    height: '100%',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    transition: pending ? 'none' : 'all 0.2s ease', // No transition during drag
+                    // Styling based on selected state
+                    background: isSelected
+                      ? 'linear-gradient(180deg, #FF6B4A 0%, #E55235 100%)'
+                      : 'linear-gradient(180deg, #3B82F6 0%, #2563EB 100%)',
+                    border: isSelected
+                      ? '1px solid rgba(255,255,255,0.3)'
+                      : '1px solid rgba(255,255,255,0.1)',
+                    boxShadow: isSelected
+                      ? '0 0 0 2px rgba(255,107,74,0.5), 0 4px 12px rgba(255,107,74,0.4)'
+                      : '0 2px 4px rgba(0,0,0,0.2)',
+                    // Dim non-selected when there's a selection
+                    ...(!isSelected && hasSelection && {
+                      opacity: 0.4,
+                      filter: 'saturate(0.5)',
+                    }),
+                    ...(isSelected && {
+                      transform: 'scale(1.02)',
+                      zIndex: 10,
+                    }),
+                    '&:hover': isSelected ? {
+                      background: 'linear-gradient(180deg, #FF8A6F 0%, #FF6B4A 100%)',
+                      boxShadow: '0 0 0 2px rgba(255,107,74,0.6), 0 6px 16px rgba(255,107,74,0.5)',
+                    } : {
+                      background: 'linear-gradient(180deg, #60A5FA 0%, #3B82F6 100%)',
+                      opacity: 0.7,
+                      boxShadow: '0 4px 8px rgba(59, 130, 246, 0.3)',
+                    },
+                  }}
+                >
                 {/* Keyframe tick marks */}
                 {showKeyframeDots && keyframesToShow.map((kf) => {
                   // Calculate absolute time of keyframe based on original rally bounds
                   const kfAbsTime = rally
                     ? rally.start_time + kf.timeOffset * originalDuration
                     : action.start + kf.timeOffset * currentDuration;
-                  // Calculate position as percentage of current action bounds
-                  // This keeps keyframes visually fixed during resize
-                  const compensatedLeft = ((kfAbsTime - action.start) / currentDuration) * 100;
+                  // Calculate position relative to the VISUAL segment bounds (pending or rally)
+                  const visualStart = pending?.start ?? rally?.start_time ?? action.start;
+                  const visualEnd = pending?.end ?? rally?.end_time ?? action.end;
+                  const visualDuration = visualEnd - visualStart;
+                  const compensatedLeft = ((kfAbsTime - visualStart) / visualDuration) * 100;
 
                   return (
                   <Box
@@ -1633,7 +1677,7 @@ export function Timeline() {
                     />
                   );
                 })()}
-
+                </Box>
               </Box>
             );
           }}
