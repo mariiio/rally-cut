@@ -34,8 +34,6 @@ export function EditorLayout({ sessionId, videoId }: EditorLayoutProps) {
   const {
     loadSession,
     loadVideo,
-    session,
-    singleVideoMode,
     undo,
     redo,
     canUndo,
@@ -128,14 +126,16 @@ export function EditorLayout({ sessionId, videoId }: EditorLayoutProps) {
     }
   }, [rightPanelCollapsed, isCameraTabActive, setIsCameraTabActive]);
 
-  // Load session or video data
+  // Load session or video data on mount
+  // Always fetch fresh data - localStorage edits are applied inside loadSession/loadVideo
+  // This ensures deleted videos don't appear as ghosts while preserving user's local edits
   useEffect(() => {
-    if (videoId && !session) {
+    if (videoId) {
       loadVideo(videoId);
-    } else if (sessionId && !session) {
+    } else if (sessionId) {
       loadSession(sessionId);
     }
-  }, [sessionId, videoId, session, loadSession, loadVideo]);
+  }, [sessionId, videoId, loadSession, loadVideo]);
 
   // Responsive: collapse panels on smaller screens
   useEffect(() => {
