@@ -27,6 +27,9 @@ import CropPortraitIcon from '@mui/icons-material/CropPortrait';
 import Crop169Icon from '@mui/icons-material/Crop169';
 import VideocamIcon from '@mui/icons-material/Videocam';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+import WavesIcon from '@mui/icons-material/Waves';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useCameraStore, createDefaultKeyframe, selectCameraEdit, selectSelectedKeyframeId, selectHandheldPreset } from '@/stores/cameraStore';
@@ -328,40 +331,73 @@ export function CameraPanel() {
       {/* Global preview toggle and handheld preset - always visible when camera edits exist */}
       {hasAnyCameraEdits && (
         <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
-          <FormControlLabel
-            control={
+          <Stack spacing={1}>
+            {/* Preview toggle */}
+            <Box
+              onClick={toggleApplyCameraEdits}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1.25,
+                py: 0.75,
+                cursor: 'pointer',
+                borderRadius: 1,
+                '&:hover': { bgcolor: 'action.hover' },
+              }}
+            >
+              {applyCameraEdits ? (
+                <VisibilityIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
+              ) : (
+                <VisibilityOffIcon sx={{ fontSize: 18, color: 'text.disabled' }} />
+              )}
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography variant="body2" sx={{ lineHeight: 1.3 }}>
+                  Preview Effects
+                </Typography>
+                <Typography variant="caption" sx={{ color: 'text.disabled', lineHeight: 1.2 }}>
+                  Show zoom, pan & motion
+                </Typography>
+              </Box>
               <Switch
                 checked={applyCameraEdits}
-                onChange={toggleApplyCameraEdits}
                 color="primary"
                 size="small"
+                onClick={(e) => e.stopPropagation()}
+                onChange={toggleApplyCameraEdits}
               />
-            }
-            label={
-              <Typography variant="body2">
-                Preview camera edits
-              </Typography>
-            }
-            sx={{ m: 0 }}
-          />
+            </Box>
 
-          {/* Handheld motion toggle */}
-          <FormControlLabel
-            control={
+            {/* Natural motion toggle */}
+            <Box
+              onClick={handleHandheldToggle}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1.25,
+                py: 0.75,
+                cursor: 'pointer',
+                borderRadius: 1,
+                '&:hover': { bgcolor: 'action.hover' },
+              }}
+            >
+              <WavesIcon sx={{ fontSize: 18, color: handheldPreset === 'NATURAL' ? 'text.secondary' : 'text.disabled' }} />
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography variant="body2" sx={{ lineHeight: 1.3 }}>
+                  Natural Motion
+                </Typography>
+                <Typography variant="caption" sx={{ color: 'text.disabled', lineHeight: 1.2 }}>
+                  Subtle handheld sway
+                </Typography>
+              </Box>
               <Switch
                 checked={handheldPreset === 'NATURAL'}
-                onChange={handleHandheldToggle}
                 color="primary"
                 size="small"
+                onClick={(e) => e.stopPropagation()}
+                onChange={handleHandheldToggle}
               />
-            }
-            label={
-              <Typography variant="body2">
-                Natural camera motion
-              </Typography>
-            }
-            sx={{ m: 0, mt: 1 }}
-          />
+            </Box>
+          </Stack>
         </Box>
       )}
 
