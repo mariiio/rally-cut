@@ -19,13 +19,15 @@ import {
   confirmUpload,
   confirmVideoUpload,
   createVideoUploadUrl,
+  getVideoForEditor,
+  hardDeleteVideo,
   initiateMultipartUpload,
   listUserVideos,
   requestUploadUrl,
   restoreVideo,
-  softDeleteVideo,
   updateVideo,
 } from "../services/videoService.js";
+import { queueVideoProcessing } from "../services/processingService.js";
 
 const router = Router();
 
@@ -186,6 +188,25 @@ router.get(
 );
 
 /**
+ * GET /v1/videos/:id/editor
+ * Get video data for single-video editor mode
+ * Returns video with rallies, camera edits, and filtered highlights
+ */
+router.get(
+  "/v1/videos/:id/editor",
+  requireUser,
+  validateRequest({ params: z.object({ id: uuidSchema }) }),
+  async (req, res, next) => {
+    try {
+      const result = await getVideoForEditor(req.params.id, req.userId!);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
  * POST /v1/videos/upload-url
  * Get presigned URL to upload a new video (not linked to a session)
  */
@@ -313,7 +334,7 @@ router.post(
 
 /**
  * DELETE /v1/videos/:id
- * Soft delete a video
+ * Permanently delete a video and all associated data
  */
 router.delete(
   "/v1/videos/:id",
@@ -321,7 +342,7 @@ router.delete(
   validateRequest({ params: z.object({ id: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      await softDeleteVideo(req.params.id, req.userId!);
+      await hardDeleteVideo(req.params.id, req.userId!);
       res.status(204).send();
     } catch (error) {
       next(error);
@@ -416,6 +437,26 @@ router.post(
         req.body
       );
       res.json(video);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /v1/videos/:id/reprocess
+ * Re-trigger video processing (for development/retry failed processing)
+ */
+router.post(
+  "/v1/videos/:id/reprocess",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      await queueVideoProcessing(req.params.id, req.userId!);
+      res.json({ success: true, message: "Processing queued" });
     } catch (error) {
       next(error);
     }

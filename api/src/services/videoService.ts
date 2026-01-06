@@ -6,6 +6,7 @@ import {
   generatePartUploadUrl,
   completeMultipartUpload as s3CompleteMultipart,
   abortMultipartUpload as s3AbortMultipart,
+  deleteObject,
 } from "../lib/s3.js";
 import {
   ConflictError,
@@ -26,7 +27,7 @@ import {
   checkUploadQuota,
   checkAndReserveUploadQuota,
 } from "./tierService.js";
-import { queueVideoProcessing } from "./processingService.js";
+import { queueVideoProcessing, generatePosterImmediate } from "./processingService.js";
 
 const MAX_VIDEOS_PER_SESSION = 5;
 
@@ -117,6 +118,7 @@ interface FindOrCreatePendingVideoResult {
     s3Key: string;
   };
   reused: boolean;
+  alreadyExists: boolean; // True if video was already uploaded (not pending)
 }
 
 async function findOrCreatePendingVideo(
@@ -148,13 +150,16 @@ async function findOrCreatePendingVideo(
       return {
         video: { id: existingVideo.id, s3Key: existingVideo.s3Key },
         reused: true,
+        alreadyExists: false,
       };
     }
 
-    // Completed videos are true duplicates - block with 409
-    throw new ConflictError("Video with this content already exists", {
-      existingVideoId: existingVideo.id,
-    });
+    // Completed videos - return existing video so frontend can skip upload
+    return {
+      video: { id: existingVideo.id, s3Key: existingVideo.s3Key },
+      reused: true,
+      alreadyExists: true,
+    };
   }
 
   // No existing video - create new one
@@ -175,7 +180,7 @@ async function findOrCreatePendingVideo(
     },
   });
 
-  return { video: { id: video.id, s3Key: video.s3Key }, reused: false };
+  return { video: { id: video.id, s3Key: video.s3Key }, reused: false, alreadyExists: false };
 }
 
 // ============================================================================
@@ -264,7 +269,7 @@ export async function createVideoUploadUrl(params: CreateVideoUploadParams) {
 
   // Use transaction to atomically find/create video
   // Reuses PENDING videos to allow retries after failed uploads
-  const { video } = await prisma.$transaction(async (tx) => {
+  const { video, alreadyExists } = await prisma.$transaction(async (tx) => {
     return findOrCreatePendingVideo(tx, {
       userId: params.userId,
       contentHash: params.contentHash,
@@ -274,6 +279,16 @@ export async function createVideoUploadUrl(params: CreateVideoUploadParams) {
       expiresAt,
     });
   });
+
+  // If video already exists, skip upload URL generation
+  if (alreadyExists) {
+    return {
+      uploadUrl: null,
+      videoId: video.id,
+      s3Key: video.s3Key,
+      alreadyExists: true,
+    };
+  }
 
   const uploadUrl = await generateUploadUrl({
     key: video.s3Key,
@@ -285,6 +300,7 @@ export async function createVideoUploadUrl(params: CreateVideoUploadParams) {
     uploadUrl,
     videoId: video.id,
     s3Key: video.s3Key,
+    alreadyExists: false,
   };
 }
 
@@ -328,7 +344,7 @@ export async function initiateMultipartUpload(params: InitiateMultipartParams) {
   });
 
   // Find or create PENDING video (reuse logic from single upload)
-  const { video } = await prisma.$transaction(async (tx) => {
+  const { video, alreadyExists } = await prisma.$transaction(async (tx) => {
     return findOrCreatePendingVideo(tx, {
       userId: params.userId,
       contentHash: params.contentHash,
@@ -338,6 +354,18 @@ export async function initiateMultipartUpload(params: InitiateMultipartParams) {
       expiresAt,
     });
   });
+
+  // If video already exists, skip multipart upload entirely
+  if (alreadyExists) {
+    return {
+      videoId: video.id,
+      s3Key: video.s3Key,
+      uploadId: null,
+      partSize: 0,
+      partUrls: [],
+      alreadyExists: true,
+    };
+  }
 
   // Initiate S3 multipart upload
   const uploadId = await s3InitiateMultipart(video.s3Key, params.contentType);
@@ -358,6 +386,7 @@ export async function initiateMultipartUpload(params: InitiateMultipartParams) {
     uploadId,
     partSize,
     partUrls,
+    alreadyExists: false,
   };
 }
 
@@ -462,6 +491,12 @@ export async function confirmVideoUpload(
     });
   }
 
+  // Generate poster immediately for fast UX (async, ~2-3 seconds)
+  generatePosterImmediate(videoId, updated.s3Key).catch((error) => {
+    console.error(`[UPLOAD] Failed to generate poster for ${videoId}:`, error);
+    // Non-fatal: processing pipeline will regenerate if missing
+  });
+
   // Queue video for optimization processing (async, non-blocking)
   // Video is immediately playable; processing happens in background
   queueVideoProcessing(videoId, userId).catch((error) => {
@@ -509,6 +544,56 @@ export async function softDeleteVideo(videoId: string, userId: string) {
     where: { id: videoId },
     data: { deletedAt: new Date() },
   });
+
+  return { success: true };
+}
+
+/**
+ * Permanently delete a video and all associated data.
+ * - Deletes database record (cascades: rallies, camera edits, keyframes, highlight rallies, session videos)
+ * - Deletes S3 files (original, poster, proxy, processed, trimmed)
+ */
+export async function hardDeleteVideo(videoId: string, userId: string) {
+  // Fetch video with confirmation (for trimmedS3Key)
+  const video = await prisma.video.findFirst({
+    where: { id: videoId, userId, deletedAt: null },
+    include: {
+      confirmation: { select: { trimmedS3Key: true } },
+    },
+  });
+
+  if (!video) {
+    throw new NotFoundError("Video", videoId);
+  }
+
+  // Collect S3 keys to delete
+  const s3KeysToDelete = [
+    video.s3Key,
+    video.posterS3Key,
+    video.proxyS3Key,
+    video.processedS3Key,
+    video.confirmation?.trimmedS3Key,
+  ].filter((key): key is string => !!key);
+
+  // Delete from database (cascades handle related records)
+  await prisma.video.delete({
+    where: { id: videoId },
+  });
+
+  // Delete S3 files (non-blocking, log failures)
+  for (const key of s3KeysToDelete) {
+    deleteObject(key).catch((error) => {
+      console.error(
+        JSON.stringify({
+          event: "S3_DELETE_FAILED",
+          type: "video_hard_delete",
+          videoId,
+          s3Key: key,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      );
+    });
+  }
 
   return { success: true };
 }
@@ -828,6 +913,12 @@ export async function confirmUpload(
     });
   }
 
+  // Generate poster immediately for fast UX (async, ~2-3 seconds)
+  generatePosterImmediate(data.videoId, updated.s3Key).catch((error) => {
+    console.error(`[UPLOAD] Failed to generate poster for ${data.videoId}:`, error);
+    // Non-fatal: processing pipeline will regenerate if missing
+  });
+
   // Queue video for optimization processing (async, non-blocking)
   queueVideoProcessing(data.videoId, userId).catch((error) => {
     console.error(`[UPLOAD] Failed to queue processing for video ${data.videoId}:`, error);
@@ -873,4 +964,88 @@ export async function getVideoById(id: string) {
   }
 
   return serializeBigInts(video);
+}
+
+// ============================================================================
+// Single Video Editor
+// ============================================================================
+
+/**
+ * Get a video with all data needed for the single-video editor.
+ * Returns the video with rallies, camera edits, and filtered highlights.
+ */
+export async function getVideoForEditor(videoId: string, userId: string) {
+  // Fetch video with rallies and camera edits
+  const video = await prisma.video.findFirst({
+    where: { id: videoId, userId, deletedAt: null },
+    include: {
+      rallies: {
+        orderBy: { order: "asc" },
+        include: {
+          cameraEdit: {
+            include: {
+              keyframes: {
+                orderBy: { timeOffset: "asc" },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!video) {
+    throw new NotFoundError("Video", videoId);
+  }
+
+  // Get the ALL_VIDEOS session for this user (for syncing edits)
+  const allVideosSession = await getOrCreateAllVideosSession(userId);
+
+  // Get rally IDs for this video
+  const videoRallyIds = video.rallies.map((r) => r.id);
+
+  // Fetch highlights from ALL_VIDEOS session that contain rallies from this video
+  const highlights = await prisma.highlight.findMany({
+    where: {
+      sessionId: allVideosSession.id,
+      highlightRallies: {
+        some: {
+          rallyId: { in: videoRallyIds },
+        },
+      },
+    },
+    orderBy: { createdAt: "asc" },
+    include: {
+      highlightRallies: {
+        orderBy: { order: "asc" },
+        include: {
+          rally: true,
+        },
+      },
+      createdByUser: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+    },
+  });
+
+  return serializeBigInts({
+    video: {
+      id: video.id,
+      name: video.name,
+      filename: video.filename,
+      s3Key: video.s3Key,
+      posterS3Key: video.posterS3Key,
+      proxyS3Key: video.proxyS3Key,
+      processedS3Key: video.processedS3Key,
+      durationMs: video.durationMs,
+      width: video.width,
+      height: video.height,
+      rallies: video.rallies,
+    },
+    allVideosSessionId: allVideosSession.id,
+    highlights,
+  });
 }

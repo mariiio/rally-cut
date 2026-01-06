@@ -75,7 +75,7 @@ export function ReturningUserBanner() {
       </Typography>
       <Button
         component={Link}
-        href="/editor"
+        href="/sessions"
         size="small"
         variant="outlined"
         endIcon={<ArrowForwardIcon />}

@@ -101,7 +101,7 @@ export function Navbar() {
             ))}
             <Button
               component={Link}
-              href="/editor"
+              href="/sessions"
               variant="contained"
               sx={{
                 ml: 2,
@@ -163,7 +163,7 @@ export function Navbar() {
           <ListItem disablePadding sx={{ mt: 2 }}>
             <Button
               component={Link}
-              href="/editor"
+              href="/sessions"
               variant="contained"
               fullWidth
               sx={{ py: 1.5, fontWeight: 600 }}

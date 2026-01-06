@@ -80,6 +80,49 @@ export const ZOOM_STEP = 0.1;
 /** Time threshold for keyframe proximity (5% of rally duration) */
 export const KEYFRAME_TIME_THRESHOLD = 0.05;
 
+/** Handheld camera motion preset (simple on/off) */
+export type HandheldPreset = 'OFF' | 'NATURAL';
+
+/** Internal configuration for each handheld preset */
+export interface HandheldPresetConfig {
+  /** Overall intensity multiplier (0-1) */
+  intensity: number;
+  /** Pan wobble intensity (0-1) */
+  panIntensity: number;
+  /** Zoom wobble intensity (0-1) */
+  zoomIntensity: number;
+  /** Breathing effect intensity (0-1) */
+  breathingIntensity: number;
+  /** Enable spring physics for overshoot */
+  springEnabled: boolean;
+  /** Spring stiffness (higher = snappier) */
+  springStiffness: number;
+  /** Spring damping (higher = less bounce) */
+  springDamping: number;
+}
+
+/** Preset configurations (internal, not exposed to user) */
+export const HANDHELD_PRESET_CONFIG: Record<HandheldPreset, HandheldPresetConfig> = {
+  OFF: {
+    intensity: 0,
+    panIntensity: 0,
+    zoomIntensity: 0,
+    breathingIntensity: 0,
+    springEnabled: false,
+    springStiffness: 200,
+    springDamping: 20,
+  },
+  NATURAL: {
+    intensity: 0.5,
+    panIntensity: 0.5,
+    zoomIntensity: 0.25,
+    breathingIntensity: 0.4,
+    springEnabled: true,
+    springStiffness: 200,
+    springDamping: 20,
+  },
+};
+
 /**
  * Migrate old camera edit format (single keyframes array) to new format (per-aspect-ratio).
  * Used when loading from localStorage or API that may have old format.

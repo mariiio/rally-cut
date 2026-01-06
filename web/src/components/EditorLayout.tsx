@@ -26,13 +26,16 @@ import { designTokens } from '@/app/theme';
 
 interface EditorLayoutProps {
   sessionId?: string;
+  videoId?: string;
 }
 
-export function EditorLayout({ sessionId }: EditorLayoutProps) {
+export function EditorLayout({ sessionId, videoId }: EditorLayoutProps) {
   const isMobile = useIsMobile();
   const {
     loadSession,
+    loadVideo,
     session,
+    singleVideoMode,
     undo,
     redo,
     canUndo,
@@ -125,12 +128,14 @@ export function EditorLayout({ sessionId }: EditorLayoutProps) {
     }
   }, [rightPanelCollapsed, isCameraTabActive, setIsCameraTabActive]);
 
-  // Load session data
+  // Load session or video data
   useEffect(() => {
-    if (sessionId && !session) {
+    if (videoId && !session) {
+      loadVideo(videoId);
+    } else if (sessionId && !session) {
       loadSession(sessionId);
     }
-  }, [sessionId, session, loadSession]);
+  }, [sessionId, videoId, session, loadSession, loadVideo]);
 
   // Responsive: collapse panels on smaller screens
   useEffect(() => {

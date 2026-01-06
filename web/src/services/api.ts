@@ -532,6 +532,7 @@ export interface VideoListItem {
   width: number | null;
   height: number | null;
   fileSizeBytes: string | null;
+  posterS3Key?: string | null;
   createdAt: string;
   sessionCount: number;
   sessions?: VideoSession[];
@@ -567,13 +568,192 @@ export async function listVideos(
   return response.json();
 }
 
+// ============================================================================
+// Single Video Editor
+// ============================================================================
+
+// API response for single video editor
+interface ApiVideoEditorResponse {
+  video: {
+    id: string;
+    name: string;
+    filename: string;
+    s3Key: string;
+    posterS3Key?: string | null;
+    proxyS3Key?: string | null;
+    processedS3Key?: string | null;
+    durationMs: number | null;
+    width: number | null;
+    height: number | null;
+    rallies: ApiRally[];
+  };
+  allVideosSessionId: string;
+  highlights: ApiHighlight[];
+}
+
+// Result type for fetchVideoForEditor
+export interface FetchVideoEditorResult {
+  video: {
+    id: string;
+    name: string;
+    filename: string;
+    s3Key: string;
+    posterS3Key?: string | null;
+    proxyS3Key?: string | null;
+    processedS3Key?: string | null;
+    durationMs: number | null;
+    width: number | null;
+    height: number | null;
+  };
+  match: Match;
+  highlights: Highlight[];
+  allVideosSessionId: string;
+  cameraEdits: CameraEditMap;
+}
+
+/**
+ * Fetch video data for single-video editor mode.
+ * Transforms API response to frontend format with a single Match.
+ */
+export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEditorResult> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/editor`, {
+    headers: getHeaders(),
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch video for editor: ${response.status}`);
+  }
+
+  const data: ApiVideoEditorResponse = await response.json();
+  const cloudfrontDomain = process.env.NEXT_PUBLIC_CLOUDFRONT_DOMAIN;
+
+  // Build video URLs
+  const getUrl = (s3Key: string | null | undefined): string | undefined => {
+    if (!s3Key) return undefined;
+    return cloudfrontDomain ? `https://${cloudfrontDomain}/${s3Key}` : `/${s3Key}`;
+  };
+
+  // Default FPS to 30 (not available from API)
+  const fps = 30;
+
+  // Transform rallies to frontend format
+  const rallies: Rally[] = data.video.rallies.map((apiRally) => {
+    const startTime = apiRally.startMs / 1000;
+    const endTime = apiRally.endMs / 1000;
+    const duration = endTime - startTime;
+
+    return {
+      id: `${videoId}_rally_${apiRally.order + 1}`,
+      _backendId: apiRally.id,
+      start_time: startTime,
+      end_time: endTime,
+      start_frame: Math.round(startTime * fps),
+      end_frame: Math.round(endTime * fps),
+      duration,
+      type: 'rally' as const,
+      thumbnail_time: startTime + duration / 2,
+    };
+  });
+
+  // Extract camera edits
+  const cameraEdits: CameraEditMap = {};
+  for (const rally of data.video.rallies) {
+    if (rally.cameraEdit && rally.cameraEdit.enabled) {
+      const frontendRallyId = `${videoId}_rally_${rally.order + 1}`;
+      cameraEdits[frontendRallyId] = {
+        enabled: rally.cameraEdit.enabled,
+        aspectRatio: rally.cameraEdit.aspectRatio,
+        keyframes: rally.cameraEdit.keyframes.map(kf => ({
+          id: kf.id,
+          timeOffset: kf.timeOffset,
+          positionX: kf.positionX,
+          positionY: kf.positionY,
+          zoom: kf.zoom,
+          easing: kf.easing,
+        })),
+      };
+    }
+  }
+
+  // Build Match object
+  const duration = (data.video.durationMs ?? 0) / 1000;
+  const match: Match = {
+    id: videoId,
+    name: data.video.name,
+    videoUrl: getUrl(data.video.processedS3Key) || getUrl(data.video.s3Key) || '',
+    proxyUrl: getUrl(data.video.proxyS3Key),
+    posterUrl: getUrl(data.video.posterS3Key),
+    video: {
+      path: data.video.s3Key,
+      fps,
+      duration,
+      width: data.video.width ?? 1920,
+      height: data.video.height ?? 1080,
+      frame_count: Math.round(duration * fps),
+    },
+    rallies,
+  };
+
+  // Transform highlights to frontend format
+  // Build a map of backend rally IDs to frontend rally IDs for this video
+  const backendToFrontendRallyId: Record<string, string> = {};
+  for (const rally of data.video.rallies) {
+    backendToFrontendRallyId[rally.id] = `${videoId}_rally_${rally.order + 1}`;
+  }
+
+  const highlights: Highlight[] = data.highlights.map((apiHighlight) => {
+    const rallyBackendIds: Record<string, string> = {};
+    const rallyIds: string[] = [];
+
+    for (const hr of apiHighlight.highlightRallies) {
+      const frontendRallyId = backendToFrontendRallyId[hr.rallyId];
+      if (frontendRallyId) {
+        rallyIds.push(frontendRallyId);
+        rallyBackendIds[frontendRallyId] = hr.id;
+      }
+    }
+
+    return {
+      id: `highlight_${apiHighlight.id}`,
+      _backendId: apiHighlight.id,
+      _rallyBackendIds: rallyBackendIds,
+      name: apiHighlight.name,
+      color: apiHighlight.color,
+      rallyIds,
+      createdAt: Date.now(),
+      createdByUserId: apiHighlight.createdByUserId ?? null,
+      createdByUserName: apiHighlight.createdByUser?.name ?? null,
+    };
+  });
+
+  return {
+    video: {
+      id: data.video.id,
+      name: data.video.name,
+      filename: data.video.filename,
+      s3Key: data.video.s3Key,
+      posterS3Key: data.video.posterS3Key,
+      proxyS3Key: data.video.proxyS3Key,
+      processedS3Key: data.video.processedS3Key,
+      durationMs: data.video.durationMs,
+      width: data.video.width,
+      height: data.video.height,
+    },
+    match,
+    highlights,
+    allVideosSessionId: data.allVideosSessionId,
+    cameraEdits,
+  };
+}
+
 // Request upload URL for a new video (not linked to a session)
 export async function requestVideoUploadUrl(params: {
   filename: string;
   contentHash: string;
   fileSize: number;
   durationMs?: number;
-}): Promise<{ uploadUrl: string; videoId: string; s3Key: string }> {
+}): Promise<{ uploadUrl: string | null; videoId: string; s3Key: string; alreadyExists?: boolean }> {
   const response = await fetch(`${API_BASE_URL}/v1/videos/upload-url`, {
     method: 'POST',
     headers: getHeaders('application/json'),
@@ -613,9 +793,10 @@ export async function confirmVideoUpload(
 export interface InitiateMultipartResponse {
   videoId: string;
   s3Key: string;
-  uploadId: string;
+  uploadId: string | null;
   partSize: number;
   partUrls: string[];
+  alreadyExists?: boolean;
 }
 
 // Initiate multipart upload - returns presigned URLs for all parts

@@ -23,7 +23,7 @@ import { designTokens } from '@/app/theme';
 
 export function MobileEditorHeader() {
   const router = useRouter();
-  const { session, undo, redo, canUndo, canRedo } = useEditorStore();
+  const { session, singleVideoMode, undo, redo, canUndo, canRedo } = useEditorStore();
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
 
   const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
@@ -36,7 +36,7 @@ export function MobileEditorHeader() {
 
   const handleHome = () => {
     handleMenuClose();
-    router.push('/editor');
+    router.push(singleVideoMode ? '/videos' : '/sessions');
   };
 
   return (
@@ -52,7 +52,7 @@ export function MobileEditorHeader() {
         flexShrink: 0,
       }}
     >
-      {/* Session Name */}
+      {/* Session/Video Name */}
       <Typography
         variant="subtitle1"
         sx={{
@@ -64,7 +64,9 @@ export function MobileEditorHeader() {
           px: 1,
         }}
       >
-        {session?.name || 'RallyCut'}
+        {singleVideoMode
+          ? session?.matches[0]?.name || 'Video'
+          : session?.name || 'RallyCut'}
       </Typography>
 
       {/* Undo/Redo */}

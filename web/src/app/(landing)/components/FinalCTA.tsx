@@ -68,7 +68,7 @@ export function FinalCTA() {
             >
               <Button
                 component={Link}
-                href="/editor"
+                href="/sessions"
                 variant="contained"
                 size="large"
                 sx={{

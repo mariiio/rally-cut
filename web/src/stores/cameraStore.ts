@@ -362,7 +362,7 @@ export const selectHandheldPreset = (state: CameraStoreState) => state.handheldP
 // Initialize handheld preset from localStorage on client side
 if (typeof window !== 'undefined') {
   const saved = localStorage.getItem('rallycut-handheld-preset');
-  if (saved && ['OFF', 'SUBTLE', 'NATURAL', 'DOCUMENTARY', 'AGGRESSIVE'].includes(saved)) {
+  if (saved && ['OFF', 'NATURAL'].includes(saved)) {
     useCameraStore.setState({ handheldPreset: saved as HandheldPreset });
   }
 }

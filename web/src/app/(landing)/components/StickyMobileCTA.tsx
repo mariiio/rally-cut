@@ -36,7 +36,7 @@ export function StickyMobileCTA() {
       >
         <Button
           component={Link}
-          href="/editor"
+          href="/sessions"
           variant="contained"
           fullWidth
           size="large"
@@ -78,7 +78,7 @@ export function StickyMobileCTA() {
       >
         <Button
           component={Link}
-          href="/editor"
+          href="/sessions"
           variant="contained"
           fullWidth
           size="large"

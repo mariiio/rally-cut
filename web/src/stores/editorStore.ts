@@ -14,7 +14,7 @@ import {
   SessionManifest,
 } from '@/types/rally';
 import { usePlayerStore } from './playerStore';
-import { fetchSession as fetchSessionFromApi, getCurrentUser, type CameraEditMap } from '@/services/api';
+import { fetchSession as fetchSessionFromApi, fetchVideoForEditor, getCurrentUser, type CameraEditMap } from '@/services/api';
 import { useCameraStore } from './cameraStore';
 import type { RallyCameraEdit } from '@/types/camera';
 import { syncService } from '@/services/syncService';
@@ -133,8 +133,13 @@ interface EditorState {
   isCameraTabActive: boolean;
   setIsCameraTabActive: (active: boolean) => void;
 
+  // Single video mode state
+  singleVideoMode: boolean;
+  singleVideoId: string | null;
+
   // Session actions
   loadSession: (sessionId: string) => Promise<void>;
+  loadVideo: (videoId: string) => Promise<void>;
   reloadSession: () => Promise<void>;
   reloadCurrentMatch: () => Promise<{ ralliesCount: number } | null>;
   setActiveMatch: (matchId: string) => void;
@@ -247,6 +252,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   // Camera edit mode state
   isCameraTabActive: false,
   setIsCameraTabActive: (active: boolean) => set({ isCameraTabActive: active }),
+
+  // Single video mode state
+  singleVideoMode: false,
+  singleVideoId: null,
 
   // Session actions
   loadSession: async (sessionId: string) => {
@@ -467,6 +476,115 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         sessionLoadProgress: 0,
       });
       console.error('Error loading session:', error);
+    }
+  },
+
+  // Load a single video for editing (uses ALL_VIDEOS session for sync)
+  loadVideo: async (videoId: string) => {
+    // Start loading
+    set({
+      isLoadingSession: true,
+      sessionLoadStep: 'Loading video...',
+      sessionLoadProgress: 10,
+      singleVideoMode: true,
+      singleVideoId: videoId,
+    });
+
+    try {
+      // Fetch video data from API
+      const result = await fetchVideoForEditor(videoId);
+
+      // Update progress
+      set({
+        sessionLoadStep: 'Preparing video...',
+        sessionLoadProgress: 50,
+      });
+
+      // Load camera edits into camera store
+      if (Object.keys(result.cameraEdits).length > 0) {
+        useCameraStore.getState().loadCameraEdits(result.cameraEdits);
+      }
+
+      // Fetch current user info
+      try {
+        const user = await getCurrentUser();
+        set({ currentUserId: user.id, currentUserName: user.name, currentUserEmail: user.email });
+      } catch (e) {
+        console.warn('Failed to load current user:', e);
+      }
+
+      // Initialize sync service with the ALL_VIDEOS session ID
+      syncService.init(result.allVideosSessionId);
+
+      // Build a virtual session with single match for the editor
+      const session: Session = {
+        id: result.allVideosSessionId,
+        name: result.video.name,
+        matches: [result.match],
+        highlights: result.highlights,
+        userRole: 'owner',
+      };
+
+      // Store original rallies
+      const originalRalliesPerMatch: Record<string, Rally[]> = {
+        [videoId]: [...result.match.rallies],
+      };
+
+      // Set up state getter for sync service
+      syncService.setStateGetter(() => ({
+        session: get().session,
+        rallies: get().rallies,
+        highlights: get().highlights,
+        activeMatchId: get().activeMatchId,
+      }));
+
+      // Subscribe to sync status updates
+      if (syncUnsubscribe) {
+        syncUnsubscribe();
+      }
+      syncUnsubscribe = syncService.subscribe((status) => {
+        get().updateSyncStatus(status);
+      });
+
+      // Final progress update
+      set({
+        sessionLoadStep: 'Ready',
+        sessionLoadProgress: 100,
+      });
+
+      set({
+        isLoadingSession: false,
+        sessionLoadStep: '',
+        sessionLoadProgress: 0,
+        session,
+        activeMatchId: videoId,
+        userRole: 'owner',
+        videoUrl: result.match.videoUrl,
+        posterUrl: result.match.posterUrl || null,
+        proxyUrl: result.match.proxyUrl || null,
+        videoMetadata: result.match.video,
+        rallies: result.match.rallies,
+        highlights: result.highlights,
+        selectedRallyId: null,
+        selectedHighlightId: null,
+        past: [],
+        future: [],
+        originalRallies: result.match.rallies,
+        originalHighlights: [],
+        originalRalliesPerMatch,
+        hasUnsavedChanges: false,
+      });
+    } catch (error) {
+      // Clear loading state on error
+      set({
+        isLoadingSession: false,
+        sessionLoadStep: '',
+        sessionLoadProgress: 0,
+        singleVideoMode: false,
+        singleVideoId: null,
+      });
+      console.error('Error loading video:', error);
+      throw error;
     }
   },
 

@@ -719,7 +719,7 @@ export default function HomePage() {
                   },
                 }}
               >
-                <CardActionArea onClick={() => router.push(`/sessions/${allVideosSession.id}`)}>
+                <CardActionArea onClick={() => router.push('/videos')}>
                   <CardContent sx={{ py: 3, px: 3 }}>
                     <Stack direction="row" alignItems="center" spacing={2}>
                       <Box
@@ -864,6 +864,7 @@ export default function HomePage() {
                               <Box sx={{ position: 'relative', aspectRatio: '16/9' }}>
                                 <video
                                   src={getVideoStreamUrl(video.s3Key)}
+                                  poster={video.posterS3Key ? getVideoStreamUrl(video.posterS3Key) : undefined}
                                   preload="metadata"
                                   muted
                                   style={{

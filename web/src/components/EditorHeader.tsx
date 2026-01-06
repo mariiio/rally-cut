@@ -61,6 +61,7 @@ export function EditorHeader() {
     session,
     activeMatchId,
     userRole,
+    singleVideoMode,
     setActiveMatch,
     undo,
     redo,
@@ -121,7 +122,7 @@ export function EditorHeader() {
       setDeleting(true);
       await deleteSession(session.id);
       setShowDeleteDialog(false);
-      router.push('/editor');
+      router.push('/sessions');
     } catch (err) {
       console.error('Failed to delete session:', err);
       setError('Failed to delete session');
@@ -151,12 +152,12 @@ export function EditorHeader() {
         }}
       >
         {/* Brand - Clickable to go home */}
-        <Tooltip title="Back to home">
+        <Tooltip title={singleVideoMode ? 'Back to videos' : 'Back to home'}>
           <Stack
             direction="row"
             alignItems="center"
             spacing={1}
-            onClick={() => router.push('/editor')}
+            onClick={() => router.push(singleVideoMode ? '/videos' : '/sessions')}
             sx={{
               minWidth: 'fit-content',
               cursor: 'pointer',
@@ -199,29 +200,8 @@ export function EditorHeader() {
         <Stack direction="row" alignItems="center" spacing={2} sx={{ flex: 1, minWidth: 0 }}>
           {session ? (
             <>
-              {session.matches.length > 1 && (
-                <Select
-                  value={activeMatchId || ''}
-                  onChange={handleMatchChange}
-                  size="small"
-                  displayEmpty
-                  sx={{
-                    minWidth: 180,
-                    '& .MuiSelect-select': {
-                      py: 0.75,
-                      fontSize: '0.875rem',
-                    },
-                  }}
-                >
-                  {session.matches.map((match) => (
-                    <MenuItem key={match.id} value={match.id}>
-                      {match.name}
-                    </MenuItem>
-                  ))}
-                </Select>
-              )}
-
-              {session.matches.length === 1 && (
+              {/* Single video mode: just show video name */}
+              {singleVideoMode ? (
                 <Typography
                   variant="body2"
                   sx={{
@@ -229,23 +209,59 @@ export function EditorHeader() {
                     fontWeight: 500,
                   }}
                 >
-                  {session.matches[0].name}
+                  {session.matches[0]?.name || 'Video'}
                 </Typography>
-              )}
+              ) : (
+                <>
+                  {session.matches.length > 1 && (
+                    <Select
+                      value={activeMatchId || ''}
+                      onChange={handleMatchChange}
+                      size="small"
+                      displayEmpty
+                      sx={{
+                        minWidth: 180,
+                        '& .MuiSelect-select': {
+                          py: 0.75,
+                          fontSize: '0.875rem',
+                        },
+                      }}
+                    >
+                      {session.matches.map((match) => (
+                        <MenuItem key={match.id} value={match.id}>
+                          {match.name}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  )}
 
-              {/* Add Video Button */}
-              <Tooltip title="Add video">
-                <span>
-                  <IconButton
-                    size="small"
-                    onClick={() => setShowAddVideoModal(true)}
-                    disabled={isUploading}
-                    sx={{ color: 'text.secondary' }}
-                  >
-                    <AddIcon fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
+                  {session.matches.length === 1 && (
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.primary',
+                        fontWeight: 500,
+                      }}
+                    >
+                      {session.matches[0].name}
+                    </Typography>
+                  )}
+
+                  {/* Add Video Button - hide in single video mode */}
+                  <Tooltip title="Add video">
+                    <span>
+                      <IconButton
+                        size="small"
+                        onClick={() => setShowAddVideoModal(true)}
+                        disabled={isUploading}
+                        sx={{ color: 'text.secondary' }}
+                      >
+                        <AddIcon fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                </>
+              )}
 
               {/* Sync Status Indicator */}
               <SyncStatus />
