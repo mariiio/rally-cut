@@ -291,7 +291,7 @@ class VideoCutter:
         return play_count, service_count, avg_confidence
 
     def _get_segments_from_results(
-        self, results: list[GameStateResult], fps: float
+        self, results: list[GameStateResult], fps: float, total_frames: int | None = None
     ) -> list[TimeSegment]:
         """Convert analysis results to merged play segments with hysteresis."""
         from rallycut.core.models import GameState
@@ -465,6 +465,12 @@ class VideoCutter:
 
             padded_start = max(0, segment.start_frame - padding_start_frames)
             padded_end = segment.end_frame + padding_end_frames
+            if total_frames is not None:
+                padded_start = min(padded_start, total_frames - 1)
+                padded_end = min(padded_end, total_frames - 1)
+                # Skip segments that are entirely outside video bounds
+                if padded_start >= padded_end:
+                    continue
 
             play_segments.append(
                 TimeSegment(
@@ -518,9 +524,10 @@ class VideoCutter:
 
         analyzer = self._get_analyzer()
 
-        # Get source video info for FPS and frame mapping
+        # Get source video info for FPS, frame count, and frame mapping
         with Video(input_path) as video:
             source_fps = video.info.fps
+            source_frame_count = video.info.frame_count
 
         # Use proxy for faster analysis if enabled
         if self.use_proxy:
@@ -585,8 +592,8 @@ class VideoCutter:
                 # When return_raw=False (default), returns list[GameStateResult]
                 results = direct_results  # type: ignore[assignment]
 
-        # Convert to merged segments
-        merged_segments = self._get_segments_from_results(results, fps)
+        # Convert to merged segments (clamp to source video duration)
+        merged_segments = self._get_segments_from_results(results, fps, source_frame_count)
 
         return merged_segments
 
@@ -613,6 +620,7 @@ class VideoCutter:
         # Get source video info
         with Video(input_path) as video:
             source_fps = video.info.fps
+            source_frame_count = video.info.frame_count
 
         # Run analysis (with or without proxy)
         if self.use_proxy:
@@ -695,11 +703,11 @@ class VideoCutter:
         # Get segments before min_duration filter (by temporarily setting it to 0)
         original_min_play = self.min_play_duration
         self.min_play_duration = 0.0
-        raw_segments = self._get_segments_from_results(smoothed_results, fps)
+        raw_segments = self._get_segments_from_results(smoothed_results, fps, source_frame_count)
         self.min_play_duration = original_min_play
 
         # Get final segments with actual filter
-        final_segments = self._get_segments_from_results(smoothed_results, fps)
+        final_segments = self._get_segments_from_results(smoothed_results, fps, source_frame_count)
 
         return {
             "raw_results": raw_results,

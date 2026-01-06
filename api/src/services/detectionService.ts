@@ -477,6 +477,14 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
     return !userRallies.some((userRally) => ralliesOverlap(mlRange, userRally));
   });
 
+  // Clamp rally timestamps to video duration (safety net for ML results)
+  const durationMs = job.video.durationMs ?? Infinity;
+  const clampedMlRallies = newMlRallies.map((r) => ({
+    ...r,
+    start_ms: Math.max(0, Math.min(r.start_ms, durationMs)),
+    end_ms: Math.max(0, Math.min(r.end_ms, durationMs)),
+  }));
+
   await prisma.$transaction(async (tx) => {
     // Delete old ML-only rallies (they'll be replaced with new ML results)
     if (mlOnlyRallies.length > 0) {
@@ -488,9 +496,9 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
     }
 
     // Create new ML rallies (non-overlapping with user rallies)
-    if (newMlRallies.length > 0) {
+    if (clampedMlRallies.length > 0) {
       await tx.rally.createMany({
-        data: newMlRallies.map((r, index) => ({
+        data: clampedMlRallies.map((r, index) => ({
           videoId: job.videoId,
           startMs: r.start_ms,
           endMs: r.end_ms,
