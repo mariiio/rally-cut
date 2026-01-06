@@ -25,6 +25,7 @@ model User {
   tierExpiresAt DateTime? @map("tier_expires_at")
   createdAt     DateTime  @default(now()) @map("created_at")
   convertedAt   DateTime? @map("converted_at")
+  lastActiveAt  DateTime? @map("last_active_at") /// Last time user accessed content (for inactivity cleanup)
 
   videos              Video[]
   sessions            Session[]
@@ -159,6 +160,9 @@ model Video {
   proxyFileSizeBytes    BigInt?          @map("proxy_file_size_bytes")
   proxyGeneratedAt      DateTime?        @map("proxy_generated_at")
   proxyLastAccessedAt   DateTime?        @map("proxy_last_accessed_at")
+
+  // Quality downgrade tracking (FREE tier loses original quality after 7 days)
+  qualityDowngradedAt   DateTime?        @map("quality_downgraded_at")
 
   user          User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
   sessionVideos SessionVideo[]

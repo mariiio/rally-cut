@@ -9,6 +9,36 @@ import { getUserTier, calculateExpirationDate } from "./tierService.js";
 
 const ALL_VIDEOS_SESSION_NAME = "All Videos";
 
+// Activity tracking debounce: only update if >1 hour since last update
+const ACTIVITY_DEBOUNCE_MS = 60 * 60 * 1000; // 1 hour
+
+/**
+ * Update user's lastActiveAt timestamp for inactivity-based cleanup.
+ * Uses debouncing to avoid excessive database writes.
+ * Fire-and-forget: doesn't block the calling function.
+ */
+async function trackUserActivity(userId: string): Promise<void> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { lastActiveAt: true },
+  });
+
+  if (!user) return;
+
+  const now = Date.now();
+  const lastActive = user.lastActiveAt?.getTime() ?? 0;
+
+  // Only update if more than 1 hour since last activity
+  if (now - lastActive > ACTIVITY_DEBOUNCE_MS) {
+    prisma.user
+      .update({
+        where: { id: userId },
+        data: { lastActiveAt: new Date() },
+      })
+      .catch(() => {}); // Fire and forget, don't block on errors
+  }
+}
+
 // Helper to convert BigInt fields to strings for JSON serialization
 function serializeBigInts<T>(obj: T): T {
   return JSON.parse(
@@ -171,6 +201,9 @@ export async function getSessionById(id: string, userId?: string) {
       // User has no access
       throw new NotFoundError("Session", id);
     }
+
+    // Track activity for inactivity-based cleanup (fire-and-forget)
+    trackUserActivity(userId);
   }
 
   // Transform to expected format with videos array

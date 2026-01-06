@@ -59,6 +59,8 @@ export interface Match {
   posterUrl?: string;   // Optional poster image URL for instant display
   video: VideoMetadata; // Video metadata (fps, duration, dimensions)
   rallies: Rally[];     // Rallies for this match
+  createdAt?: string;   // ISO timestamp when video was uploaded
+  qualityDowngradedAt?: string | null; // ISO timestamp when original quality was removed (FREE tier)
 }
 
 /** A session containing multiple matches */

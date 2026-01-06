@@ -17,6 +17,7 @@ import { CollapsiblePanel } from './CollapsiblePanel';
 import { ExportProgress } from './ExportProgress';
 import { UploadProgress } from './UploadProgress';
 import { SessionLoadingProgress } from './SessionLoadingProgress';
+import { OriginalQualityBanner } from './OriginalQualityBanner';
 import { NamePromptModal } from './NamePromptModal';
 import { MobileEditorLayout } from './mobile';
 import { useEditorStore } from '@/stores/editorStore';
@@ -46,7 +47,11 @@ export function EditorLayout({ sessionId, videoId }: EditorLayoutProps) {
     currentUserName,
     setIsCameraTabActive,
     isCameraTabActive,
+    getActiveMatch,
   } = useEditorStore();
+
+  // Get current match for quality banner
+  const currentMatch = getActiveMatch();
 
   // Panel collapse state
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
@@ -350,6 +355,7 @@ export function EditorLayout({ sessionId, videoId }: EditorLayoutProps) {
             <SessionLoadingProgress />
             <UploadProgress />
             <ExportProgress />
+            <OriginalQualityBanner currentMatch={currentMatch} />
             <VideoPlayer />
           </Box>
         </Box>
