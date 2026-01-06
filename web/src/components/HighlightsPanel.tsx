@@ -318,6 +318,9 @@ export function HighlightsPanel() {
     canEditHighlight,
     currentUserName,
     currentUserId,
+    expandedHighlightIds,
+    expandHighlight,
+    collapseHighlight,
   } = useEditorStore();
 
   // Get all rallies across all matches for cross-match highlights
@@ -346,7 +349,6 @@ export function HighlightsPanel() {
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [downloadAnchor, setDownloadAnchor] = useState<{ el: HTMLButtonElement; id: string } | null>(null);
   const [withFade, setWithFade] = useState(false);
-  const [expandedHighlights, setExpandedHighlights] = useState<Set<string>>(new Set());
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [overHighlightId, setOverHighlightId] = useState<string | null>(null);
   // Track preselected rally per highlight (highlightId -> rallyId)
@@ -433,7 +435,7 @@ export function HighlightsPanel() {
         const targetIndex = targetHighlight?.rallyIds.length ?? 0;
         moveRallyBetweenHighlights(rallyId, sourceHighlightId, targetHighlightId, targetIndex);
         // Auto-expand the target highlight
-        setExpandedHighlights((prev) => new Set(prev).add(targetHighlightId));
+        expandHighlight(targetHighlightId);
       }
       return;
     }
@@ -464,7 +466,7 @@ export function HighlightsPanel() {
       if (targetIndex !== -1) {
         moveRallyBetweenHighlights(rallyId, sourceHighlightId, targetHighlightId, targetIndex);
         // Auto-expand the target highlight
-        setExpandedHighlights((prev) => new Set(prev).add(targetHighlightId));
+        expandHighlight(targetHighlightId);
       }
     }
   };
@@ -648,7 +650,7 @@ export function HighlightsPanel() {
             const isSelected = selectedHighlightId === highlight.id;
             const isPlaying = playingHighlightId === highlight.id;
             const rallyCount = highlight.rallyIds?.length ?? 0;
-            const isExpanded = expandedHighlights.has(highlight.id);
+            const isExpanded = expandedHighlightIds.has(highlight.id);
             const canEdit = canEditHighlight(highlight.id);
             const creatorName = highlight.createdByUserName;
             const isOwnHighlight = highlight.createdByUserId === currentUserId;
@@ -677,15 +679,11 @@ export function HighlightsPanel() {
                     if (isSelected) {
                       // Deselect and collapse
                       selectHighlight(null);
-                      setExpandedHighlights((prev) => {
-                        const next = new Set(prev);
-                        next.delete(highlight.id);
-                        return next;
-                      });
+                      collapseHighlight(highlight.id);
                     } else {
                       // Select and expand
                       selectHighlight(highlight.id);
-                      setExpandedHighlights((prev) => new Set(prev).add(highlight.id));
+                      expandHighlight(highlight.id);
                     }
                   }}
                   sx={{

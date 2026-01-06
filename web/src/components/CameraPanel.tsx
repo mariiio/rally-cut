@@ -466,7 +466,7 @@ export function CameraPanel() {
             <Box sx={{ mb: 2 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
                 <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                  Keyframes ({activeKeyframes.length})
+                  Keyframes
                 </Typography>
                 {hasCameraKeyframes && (
                   <Tooltip title="Reset all camera settings">

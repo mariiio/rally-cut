@@ -21,7 +21,6 @@ import { OriginalQualityBanner } from './OriginalQualityBanner';
 import { NamePromptModal } from './NamePromptModal';
 import { MobileEditorLayout } from './mobile';
 import { useEditorStore } from '@/stores/editorStore';
-import { useCameraStore } from '@/stores/cameraStore';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { designTokens } from '@/app/theme';
 
@@ -47,6 +46,8 @@ export function EditorLayout({ sessionId, videoId }: EditorLayoutProps) {
     currentUserName,
     setIsCameraTabActive,
     isCameraTabActive,
+    leftPanelTab,
+    setLeftPanelTab,
     getActiveMatch,
   } = useEditorStore();
 
@@ -58,13 +59,6 @@ export function EditorLayout({ sessionId, videoId }: EditorLayoutProps) {
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
   const [showNamePromptModal, setShowNamePromptModal] = useState(false);
   const [pendingCreateHighlight, setPendingCreateHighlight] = useState(false);
-  const [leftPanelTab, setLeftPanelTab] = useState<'rallies' | 'highlights'>('rallies');
-
-  // Camera store - count rallies with camera edits (has keyframes in any aspect ratio)
-  const cameraEdits = useCameraStore((state) => state.cameraEdits);
-  const cameraEditCount = Object.values(cameraEdits).filter((e) =>
-    (e.keyframes.ORIGINAL?.length ?? 0) > 0 || (e.keyframes.VERTICAL?.length ?? 0) > 0
-  ).length;
 
   // Keyboard shortcuts for undo/redo
   useEffect(() => {
@@ -363,32 +357,18 @@ export function EditorLayout({ sessionId, videoId }: EditorLayoutProps) {
         {/* Right Panel - Camera */}
         <CollapsiblePanel
           title="Camera"
-          count={cameraEditCount}
           collapsed={rightPanelCollapsed}
           onToggle={() => setRightPanelCollapsed((prev) => !prev)}
           position="right"
           collapsedIcon={
             <Tooltip title="Camera" placement="left">
-              <Badge
-                badgeContent={cameraEditCount || 0}
-                color="primary"
-                max={99}
-                sx={{
-                  '& .MuiBadge-badge': {
-                    fontSize: '0.625rem',
-                    height: 16,
-                    minWidth: 16,
-                  },
-                }}
+              <IconButton
+                size="small"
+                onClick={() => setRightPanelCollapsed(false)}
+                sx={{ color: 'text.secondary' }}
               >
-                <IconButton
-                  size="small"
-                  onClick={() => setRightPanelCollapsed(false)}
-                  sx={{ color: 'text.secondary' }}
-                >
-                  <VideocamIcon fontSize="small" />
-                </IconButton>
-              </Badge>
+                <VideocamIcon fontSize="small" />
+              </IconButton>
             </Tooltip>
           }
         >

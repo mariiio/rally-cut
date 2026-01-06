@@ -133,6 +133,16 @@ interface EditorState {
   isCameraTabActive: boolean;
   setIsCameraTabActive: (active: boolean) => void;
 
+  // Left panel tab state
+  leftPanelTab: 'rallies' | 'highlights';
+  setLeftPanelTab: (tab: 'rallies' | 'highlights') => void;
+
+  // Expanded highlights in panel
+  expandedHighlightIds: Set<string>;
+  expandHighlight: (id: string) => void;
+  collapseHighlight: (id: string) => void;
+  toggleHighlightExpanded: (id: string) => void;
+
   // Single video mode state
   singleVideoMode: boolean;
   singleVideoId: string | null;
@@ -253,6 +263,30 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   // Camera edit mode state
   isCameraTabActive: false,
   setIsCameraTabActive: (active: boolean) => set({ isCameraTabActive: active }),
+
+  // Left panel tab state
+  leftPanelTab: 'rallies',
+  setLeftPanelTab: (tab: 'rallies' | 'highlights') => set({ leftPanelTab: tab }),
+
+  // Expanded highlights in panel
+  expandedHighlightIds: new Set<string>(),
+  expandHighlight: (id: string) => set((state) => ({
+    expandedHighlightIds: new Set(state.expandedHighlightIds).add(id),
+  })),
+  collapseHighlight: (id: string) => set((state) => {
+    const next = new Set(state.expandedHighlightIds);
+    next.delete(id);
+    return { expandedHighlightIds: next };
+  }),
+  toggleHighlightExpanded: (id: string) => set((state) => {
+    const next = new Set(state.expandedHighlightIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    return { expandedHighlightIds: next };
+  }),
 
   // Single video mode state
   singleVideoMode: false,
@@ -1071,6 +1105,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         state.selectedRallyId === id ? null : state.selectedRallyId,
       hasUnsavedChanges: true,
     });
+
+    // Remove camera edits for the deleted rally
+    useCameraStore.getState().removeCameraEdit(id);
 
     // Mark dirty for backend sync
     syncService.markDirty();
