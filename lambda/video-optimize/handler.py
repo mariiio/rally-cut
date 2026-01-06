@@ -23,8 +23,13 @@ import requests
 s3_client = boto3.client("s3")
 
 
-def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    """Main Lambda entry point."""
+def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
+    """Main Lambda entry point.
+
+    Args:
+        event: Lambda event payload with video processing details
+        _context: Lambda context (unused, required by AWS Lambda signature)
+    """
     print(f"Received event: {json.dumps(event)}")
 
     video_id = event["videoId"]
