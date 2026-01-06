@@ -70,6 +70,7 @@ interface CameraStoreState {
 
   // Rally-level actions
   resetCamera: (rallyId: string) => void;
+  removeCameraEdit: (rallyId: string) => void;
 
   // Getters (computed at call time, not stored)
   getCameraEdit: (rallyId: string) => RallyCameraEdit;
@@ -274,6 +275,18 @@ export const useCameraStore = create<CameraStoreState>()(
         };
       });
       syncService.markDirty();
+    },
+
+    // Remove camera edit for a rally (used during merge, doesn't push history)
+    removeCameraEdit: (rallyId: string) => {
+      set((state) => {
+        const newEdits = { ...state.cameraEdits };
+        delete newEdits[rallyId];
+        return {
+          cameraEdits: newEdits,
+          isDirty: true,
+        };
+      });
     },
 
     // Get interpolated camera state at a time offset within a rally (uses active aspect ratio)

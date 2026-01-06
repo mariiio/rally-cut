@@ -503,78 +503,28 @@ export function VideoPlayer() {
         </Box>
       )}
 
-      {/* 9:16 wrapper - centers the vertical preview */}
-      {containerAspectRatio === '9/16' && (
-        <Box
-          sx={{
-            position: 'absolute',
-            top: 0,
-            bottom: 0,
-            // Calculate width explicitly: for 9:16 in a 16:9 parent
-            // width = height * (9/16), but height = parentHeight
-            // parentWidth = parentHeight * (16/9)
-            // so width as % of parent = (9/16) / (16/9) = 31.64%
-            width: `${(9/16) / (16/9) * 100}%`,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            overflow: 'hidden',
-          }}
-        >
-          <Box
-            ref={videoContainerRef}
-            sx={{
-              position: 'absolute',
-              inset: 0,
-              overflow: 'hidden',
-            }}
-          >
-            <CameraOverlay containerRef={videoContainerRef} />
-            <video
-              ref={videoRef}
-              src={effectiveVideoUrl}
-              poster={posterUrl || undefined}
-              preload="metadata"
-              crossOrigin={process.env.NODE_ENV === 'production' ? 'anonymous' : undefined}
-              style={{
-                position: 'absolute',
-                top: 0,
-                // Position video at center, transform will handle panning
-                left: '50%',
-                // Auto width maintains aspect ratio, height fills container
-                // This makes a 16:9 video 3.16x wider than the 9:16 container
-                width: 'auto',
-                height: '100%',
-                // NO objectFit - we handle positioning via transform only
-                // This makes 9:16 work exactly like 16:9 (transform only)
-                willChange: 'transform',
-                // Same transition as 16:9 - transform only
-                // Use 200ms ease-out to smooth out large/fast camera movements
-                transition: dragPosition
-                  ? 'none'
-                  : isPlaying
-                    ? 'transform 0.2s ease-out'
-                    : 'transform 0.2s ease-out',
-                ...videoTransformStyle,
-              }}
-              onTimeUpdate={handleTimeUpdate}
-              onSeeked={handleSeeked}
-              onLoadedMetadata={handleLoadedMetadata}
-              onLoadStart={handleLoadStart}
-              onProgress={handleProgress}
-              onWaiting={handleWaiting}
-              onCanPlay={handleCanPlay}
-              playsInline
-            />
-          </Box>
-        </Box>
-      )}
-
-      {/* 16:9 layout - normal video display */}
-      {containerAspectRatio !== '9/16' && (
+      {/* Unified video container - single video element to prevent remounting on aspect ratio change */}
+      <Box
+        sx={{
+          position: containerAspectRatio === '9/16' ? 'absolute' : 'relative',
+          top: containerAspectRatio === '9/16' ? 0 : undefined,
+          bottom: containerAspectRatio === '9/16' ? 0 : undefined,
+          // For 9:16: Calculate width explicitly for 9:16 in a 16:9 parent
+          // width = height * (9/16), but height = parentHeight
+          // parentWidth = parentHeight * (16/9)
+          // so width as % of parent = (9/16) / (16/9) = 31.64%
+          width: containerAspectRatio === '9/16' ? `${(9/16) / (16/9) * 100}%` : '100%',
+          height: '100%',
+          left: containerAspectRatio === '9/16' ? '50%' : undefined,
+          transform: containerAspectRatio === '9/16' ? 'translateX(-50%)' : undefined,
+          overflow: 'hidden',
+        }}
+      >
         <Box
           ref={videoContainerRef}
           sx={{
-            position: 'relative',
+            position: containerAspectRatio === '9/16' ? 'absolute' : 'relative',
+            inset: containerAspectRatio === '9/16' ? 0 : undefined,
             width: '100%',
             height: '100%',
             overflow: 'hidden',
@@ -587,18 +537,23 @@ export function VideoPlayer() {
             poster={posterUrl || undefined}
             preload="metadata"
             crossOrigin={process.env.NODE_ENV === 'production' ? 'anonymous' : undefined}
-            style={{
+            style={containerAspectRatio === '9/16' ? {
+              // 9:16 mode: position video at center, transform handles panning
+              position: 'absolute',
+              top: 0,
+              left: '50%',
+              width: 'auto',
+              height: '100%',
+              willChange: 'transform',
+              transition: dragPosition ? 'none' : 'transform 0.2s ease-out',
+              ...videoTransformStyle,
+            } : {
+              // 16:9 mode: normal video display
               width: '100%',
               height: '100%',
               objectFit: 'contain',
               willChange: isCameraPreviewActive ? 'transform' : 'auto',
-              // No transition during drag (instant feedback)
-              // Use 200ms ease-out to smooth out large/fast camera movements
-              transition: dragPosition
-                ? 'none'
-                : isPlaying
-                  ? 'transform 0.2s ease-out'
-                  : 'transform 0.2s ease-out',
+              transition: dragPosition ? 'none' : 'transform 0.2s ease-out',
               ...videoTransformStyle,
             }}
             onTimeUpdate={handleTimeUpdate}
@@ -611,7 +566,7 @@ export function VideoPlayer() {
             playsInline
           />
         </Box>
-      )}
+      </Box>
     </Box>
   );
 }
