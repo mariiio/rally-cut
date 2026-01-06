@@ -8,17 +8,32 @@ import {
   IconButton,
   Snackbar,
   Alert,
+  Button,
 } from '@mui/material';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
+import UpgradeIcon from '@mui/icons-material/Upgrade';
+import Link from 'next/link';
 import { useUploadStore } from '@/stores/uploadStore';
+import { useTierStore } from '@/stores/tierStore';
 import { ConfirmDialog } from './ConfirmDialog';
 
 export function UploadProgress() {
   const { isUploading, progress, currentStep, error, cancel, clearError, reset } = useUploadStore();
   const [showCancelDialog, setShowCancelDialog] = useState(false);
+  const [showSuccessInfo, setShowSuccessInfo] = useState(false);
+  const isPremium = useTierStore((state) => state.isPremium());
 
   const isComplete = !isUploading && progress === 100;
+
+  // Show success info snackbar for FREE users after upload completes
+  useEffect(() => {
+    if (isComplete && !isPremium) {
+      // Small delay to let the progress bar finish animation
+      const timer = setTimeout(() => setShowSuccessInfo(true), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [isComplete, isPremium]);
 
   // Warn user before leaving page during upload
   useEffect(() => {
@@ -183,6 +198,34 @@ export function UploadProgress() {
         }}
         onCancel={() => setShowCancelDialog(false)}
       />
+
+      {/* Success info snackbar for FREE users */}
+      <Snackbar
+        open={showSuccessInfo}
+        autoHideDuration={10000}
+        onClose={() => setShowSuccessInfo(false)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          severity="info"
+          onClose={() => setShowSuccessInfo(false)}
+          sx={{ width: '100%', maxWidth: 500 }}
+          action={
+            <Button
+              component={Link}
+              href="/pricing"
+              color="inherit"
+              size="small"
+              startIcon={<UpgradeIcon />}
+            >
+              Upgrade
+            </Button>
+          }
+        >
+          Video saved! Free accounts keep videos forever.
+          Original quality exports available for 7 days.
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

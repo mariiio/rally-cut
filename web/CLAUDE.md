@@ -34,7 +34,8 @@ src/
 │   ├── RallyList     # Rally list sidebar
 │   ├── HighlightsPanel
 │   ├── CameraPanel   # Camera edit controls
-│   └── CameraOverlay # Visual preview overlay
+│   ├── CameraOverlay # Visual preview overlay
+│   └── OriginalQualityBanner # FREE tier upgrade prompt (7-day quality warning)
 ├── stores/           # Zustand stores (see below)
 ├── services/
 │   ├── api.ts        # REST client

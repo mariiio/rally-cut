@@ -36,7 +36,9 @@ const DEFAULT_FREE_LIMITS: TierLimits = {
   exportQuality: '720p',
   exportWatermark: true,
   lambdaExportEnabled: false,
-  retentionDays: 7,
+  retentionDays: null, // Deprecated
+  originalQualityDays: 7,
+  inactivityDeleteDays: 60,
   serverSyncEnabled: false,
   highlightsEnabled: true,
 };

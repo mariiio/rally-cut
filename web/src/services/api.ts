@@ -66,6 +66,8 @@ interface ApiVideo {
   proxyS3Key?: string | null;
   order: number;
   rallies: ApiRally[];
+  createdAt: string;
+  qualityDowngradedAt?: string | null;
 }
 
 interface ApiCameraKeyframe {
@@ -188,6 +190,8 @@ function apiVideoToMatch(apiVideo: ApiVideo, cloudfrontDomain?: string): Match {
     proxyUrl,
     video: videoMetadata,
     rallies,
+    createdAt: apiVideo.createdAt,
+    qualityDowngradedAt: apiVideo.qualityDowngradedAt,
   };
 }
 
@@ -922,7 +926,9 @@ export interface TierLimits {
   exportQuality: '720p' | 'original';
   exportWatermark: boolean;
   lambdaExportEnabled: boolean;
-  retentionDays: number | null;
+  retentionDays: number | null; // Deprecated - use originalQualityDays/inactivityDeleteDays
+  originalQualityDays: number | null;
+  inactivityDeleteDays: number | null;
   serverSyncEnabled: boolean;
   highlightsEnabled: boolean;
 }

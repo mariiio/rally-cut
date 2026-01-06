@@ -12,7 +12,9 @@ export const TIER_LIMITS = {
     exportQuality: "720p" as const,
     exportWatermark: true,
     lambdaExportEnabled: false,
-    retentionDays: 7,
+    retentionDays: null, // Videos kept until 2 months inactive
+    originalQualityDays: 7, // Original quality kept for 7 days, then downgraded to 720p proxy
+    inactivityDeleteDays: 60, // Hard delete after 2 months of inactivity
     serverSyncEnabled: false,
     highlightsEnabled: true,
   },
@@ -25,6 +27,8 @@ export const TIER_LIMITS = {
     exportWatermark: false,
     lambdaExportEnabled: true,
     retentionDays: null, // indefinite
+    originalQualityDays: null, // Original quality kept forever
+    inactivityDeleteDays: null, // Never auto-deleted
     serverSyncEnabled: true,
     highlightsEnabled: true,
   },
@@ -219,12 +223,11 @@ export async function checkAndReserveDetectionQuota(
   });
 }
 
-export function calculateExpirationDate(tier: UserTier): Date | null {
-  const limits = getTierLimits(tier);
-  if (limits.retentionDays === null) {
-    return null;
-  }
-  return new Date(Date.now() + limits.retentionDays * 24 * 60 * 60 * 1000);
+export function calculateExpirationDate(_tier: UserTier): Date | null {
+  // No time-based expiration - videos are kept until user is inactive for 2 months
+  // Quality downgrade (original → proxy) happens after 7 days for FREE tier
+  // Hard delete happens after 2 months of inactivity for FREE tier
+  return null;
 }
 
 // ============================================================================
