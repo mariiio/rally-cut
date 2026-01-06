@@ -10,6 +10,7 @@ import {
   generateDownloadUrl,
   uploadProcessedVideo,
   uploadPoster,
+  deleteObject,
 } from "../lib/s3.js";
 import { prisma } from "../lib/prisma.js";
 import { NotFoundError } from "../middleware/errorHandler.js";
@@ -268,6 +269,7 @@ export async function handleProcessingComplete(
     processingStatus: ProcessingStatus;
     processedAt: Date;
     processedS3Key?: string;
+    originalS3Key?: string;
     s3Key?: string;
     fileSizeBytes?: bigint;
     posterS3Key?: string;
@@ -279,8 +281,21 @@ export async function handleProcessingComplete(
     processedAt: new Date(),
   };
 
+  // Track the original s3Key before overwriting (for cleanup)
+  let originalKeyToDelete: string | null = null;
+
   // Only update s3Key and processedS3Key if optimization actually occurred
   if (payload.was_optimized && payload.processed_s3_key) {
+    // Fetch current s3Key to preserve as originalS3Key before overwriting
+    const currentVideo = await prisma.video.findUnique({
+      where: { id: payload.video_id },
+      select: { s3Key: true },
+    });
+    if (currentVideo) {
+      updateData.originalS3Key = currentVideo.s3Key;
+      originalKeyToDelete = currentVideo.s3Key;
+    }
+
     updateData.processedS3Key = payload.processed_s3_key;
     updateData.s3Key = payload.processed_s3_key; // Point to optimized version
   }
@@ -320,6 +335,17 @@ export async function handleProcessingComplete(
       throw new NotFoundError("Video", payload.video_id);
     }
     return { success: true, message: "Already processed" };
+  }
+
+  // Delete the original upload file from S3 to save storage
+  // (exports use the optimized file, not the original)
+  if (originalKeyToDelete) {
+    deleteObject(originalKeyToDelete).catch((error) => {
+      console.error(
+        `[PROCESSING] Failed to delete original S3 object ${originalKeyToDelete}: ${error}`
+      );
+    });
+    console.log(`[PROCESSING] Queued deletion of original: ${originalKeyToDelete}`);
   }
 
   console.log(
