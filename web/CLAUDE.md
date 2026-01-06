@@ -22,69 +22,100 @@ npx tsc --noEmit     # Type check
 
 ```
 src/
-├── app/              # Next.js pages (page.tsx, editor/[id]/)
-├── components/       # React components
+├── app/              # Next.js pages
+│   ├── (landing)/    # Public landing page
+│   ├── (app)/        # Protected editor
+│   │   ├── sessions/[id]/  # Multi-video session editor
+│   │   └── videos/[id]/    # Single video editor
+├── components/
 │   ├── EditorLayout  # Main 3-panel layout
-│   ├── VideoPlayer   # HTML5 video with controls
+│   ├── VideoPlayer   # HTML5 video with camera transforms
 │   ├── Timeline      # Rally timeline with drag handles
-│   ├── RalliesPanel  # Rally list sidebar
-│   └── HighlightsPanel # Highlight management
-├── stores/           # Zustand stores
-│   ├── editorStore   # Rallies, highlights, undo/redo
-│   └── playerStore   # Video playback state
+│   ├── RallyList     # Rally list sidebar
+│   ├── HighlightsPanel
+│   ├── CameraPanel   # Camera edit controls
+│   └── CameraOverlay # Visual preview overlay
+├── stores/           # Zustand stores (see below)
 ├── services/
 │   ├── api.ts        # REST client
-│   └── syncService   # Backend sync (debounced)
-├── utils/
-│   └── videoExport.ts # Server-side export via API
-└── types/rally.ts    # TypeScript types
+│   └── syncService   # Backend sync (5s debounce)
+└── utils/
+    ├── videoExport.ts
+    └── cameraInterpolation.ts
 ```
 
-## Key Patterns
+## Zustand Stores
 
-### State with History
-- `editorStore` maintains `past[]` and `future[]` arrays for undo/redo
-- Every mutation calls `pushHistory()` first, then `syncService.markDirty()`
-- State persisted to localStorage immediately, synced to backend after 5s debounce
+| Store | Purpose |
+|-------|---------|
+| `editorStore` | Rallies, highlights, undo/redo (50 entries), localStorage + backend sync |
+| `playerStore` | Playback state, highlight playlist, buffered ranges |
+| `cameraStore` | Per-rally camera edits, keyframes, aspect ratio, handheld motion |
+| `uploadStore` | Upload progress, multipart handling, local blob URLs |
+| `exportStore` | Export job tracking, download progress |
+| `tierStore` | Subscription tier, usage limits |
 
-### Timeline Drag
-- Uses @dnd-kit for drag handles on rally boundaries
-- `adjustRallyStart/End` methods validate against overlap and video duration
-- Timeline zoom controlled by wheel events
+## Camera System
 
-### Video Playback
-- `playerStore` separate from editor for performance
-- Keyboard shortcuts: Space (play/pause), J/K/L (speed), arrows (seek)
-- Highlight playback switches videos automatically
+Instagram-style zoom/pan effects per rally:
 
-### Video Loading Optimization
-For fast editing of large videos (15-20 min iPhone recordings):
+- **Aspect ratios**: ORIGINAL (16:9) or VERTICAL (9:16)
+- **Keyframes**: timeOffset (0-1), positionX/Y (0-1), zoom (1-3x), easing
+- **Handheld motion**: OFF/LIGHT/MEDIUM/HEAVY presets (simulates camera shake)
+- **Interpolation**: Keyframes blended with easing (LINEAR, EASE_IN, EASE_OUT, EASE_IN_OUT)
 
-- **Local blob URL**: After upload, video plays instantly from browser memory
-- **720p proxy**: After processing (~30-60s), uses lightweight proxy for editing
-- **Poster**: 1280px thumbnail shown while video loads
-- **preload="metadata"**: Only fetches video metadata, not full file
+Camera edits stored per aspect ratio (switching preserves both).
 
-Priority in `VideoPlayer.tsx`: `localBlobUrl` → `proxyUrl` → `videoUrl`
+## Video Loading Priority
 
-The `uploadStore` maintains `localVideoUrls` map (videoId → blob URL) for instant playback after upload. Cleared on page refresh, then proxy is used.
+For fast editing of large videos:
 
-## Code Style
+1. **localBlobUrl** - Instant playback after upload (from uploadStore)
+2. **proxyUrl** - 720p proxy after processing (~30-60s)
+3. **videoUrl** - Full quality (fallback)
 
-- TypeScript strict mode
-- ESLint with Next.js config
-- Functional components with hooks
-- Memoization for expensive computations (useMemo, useCallback)
+Also uses: `preload="metadata"`, 1280px poster thumbnail.
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| Space | Play/pause (restart if at end) |
+| Arrow Left/Right | Seek ±1s (±0.3s in camera edit mode) |
+| Shift + Arrow | Shrink/expand rally end ±0.5s |
+| Cmd/Ctrl + Arrow | Jump to prev/next rally |
+| Cmd/Ctrl + Enter | Create new rally at cursor |
+| Delete/Backspace | Delete keyframe (priority) or rally (double-press) |
+| Enter | Toggle rally in highlight |
+| Escape | Cancel deletion / deselect |
+| Cmd/Ctrl + Z | Undo |
+| Cmd/Ctrl + Shift + Z | Redo |
+| [ / ] | Collapse left/right panel |
+| Cmd/Ctrl + Shift + C | Open camera panel |
+
+## State Persistence
+
+- **localStorage**: Immediate save on every mutation
+- **Backend sync**: 5s debounce after `markDirty()`, PREMIUM only
+- **Undo/redo**: 50 entries, stored in `past[]`/`future[]` arrays
 
 ## API Integration
 
-- `NEXT_PUBLIC_API_URL` environment variable for backend
-- `fetchSession()` loads session with videos, rallies, highlights
-- `syncService.markDirty()` schedules state sync to backend
-- Rally IDs: frontend uses `{videoId}_rally_{n}`, backend uses UUIDs
+- `NEXT_PUBLIC_API_URL` for backend
+- Rally IDs: frontend uses `{matchId}_rally_{n}`, backend uses UUIDs
+- `syncService.markDirty()` schedules state sync
 
-### Video Export
-- `exportServerSide()` in `utils/videoExport.ts` triggers server-side export
-- Creates export job via API, polls for progress, downloads when complete
-- **FREE tier**: 720p + watermark, **PREMIUM tier**: original quality
-- Falls back to local FFmpeg.wasm if server export unavailable
+## Export
+
+- `exportServerSide()` triggers Lambda export via API
+- Polls for progress, downloads when complete
+- FREE = 720p + watermark, PREMIUM = original + camera effects
+
+## Caveats
+
+- **Rally ID format**: Frontend `{matchId}_rally_{n}` ↔ Backend UUIDs (mapped during sync)
+- **Confirmation lock**: After rally confirmation, all rally edits locked for that video
+- **FREE tier**: No server sync, localStorage only
+- **Camera edits on boundary**: Start/end adjustments cannot exclude first/last keyframe
+- **Highlight playback**: Auto-switches videos via `pendingMatchSwitch` in playerStore
+- **Upload blob cleanup**: `localVideoUrls` cleared on page refresh, then uses proxy
