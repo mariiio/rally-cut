@@ -551,7 +551,7 @@ export async function softDeleteVideo(videoId: string, userId: string) {
 /**
  * Permanently delete a video and all associated data.
  * - Deletes database record (cascades: rallies, camera edits, keyframes, highlight rallies, session videos)
- * - Deletes S3 files (original, poster, proxy, processed, trimmed)
+ * - Deletes S3 files (original, optimized, poster, proxy, trimmed)
  */
 export async function hardDeleteVideo(videoId: string, userId: string) {
   // Fetch video with confirmation (for trimmedS3Key)
@@ -569,6 +569,7 @@ export async function hardDeleteVideo(videoId: string, userId: string) {
   // Collect S3 keys to delete
   const s3KeysToDelete = [
     video.s3Key,
+    video.originalS3Key,
     video.posterS3Key,
     video.proxyS3Key,
     video.processedS3Key,

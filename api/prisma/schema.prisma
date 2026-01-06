@@ -148,6 +148,7 @@ model Video {
   // Video optimization processing
   processingStatus      ProcessingStatus @default(PENDING) @map("processing_status")
   processedS3Key        String?          @map("processed_s3_key")
+  originalS3Key         String?          @map("original_s3_key") /// Original upload path before optimization overwrites s3Key
   processedAt           DateTime?        @map("processed_at")
   processingError       String?          @map("processing_error")
   originalFileSizeBytes BigInt?          @map("original_file_size_bytes")

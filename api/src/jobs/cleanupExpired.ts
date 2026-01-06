@@ -146,7 +146,7 @@ export async function cleanupExpiredContent(): Promise<CleanupResult> {
     console.log(`[CLEANUP] Hard deleted ${hardDeletedSessions} sessions`);
   }
 
-  // Find videos to hard delete with S3 keys
+  // Find videos to hard delete with all S3 keys
   const videosToHardDelete = await prisma.video.findMany({
     where: {
       deletedAt: { lte: hardDeleteCutoff },
@@ -167,23 +167,40 @@ export async function cleanupExpiredContent(): Promise<CleanupResult> {
         },
       },
     },
-    select: { id: true, s3Key: true },
+    select: {
+      id: true,
+      s3Key: true,
+      originalS3Key: true,
+      posterS3Key: true,
+      proxyS3Key: true,
+      confirmation: { select: { trimmedS3Key: true } },
+    },
   });
+
+  // Collect all S3 keys to delete for each video
+  const s3KeysToDelete: string[] = [];
+  for (const video of videosToHardDelete) {
+    if (video.s3Key) s3KeysToDelete.push(video.s3Key);
+    if (video.originalS3Key) s3KeysToDelete.push(video.originalS3Key);
+    if (video.posterS3Key) s3KeysToDelete.push(video.posterS3Key);
+    if (video.proxyS3Key) s3KeysToDelete.push(video.proxyS3Key);
+    if (video.confirmation?.trimmedS3Key) s3KeysToDelete.push(video.confirmation.trimmedS3Key);
+  }
 
   // Delete from S3 in batches for better performance
   const S3_BATCH_SIZE = 10;
-  for (let i = 0; i < videosToHardDelete.length; i += S3_BATCH_SIZE) {
-    const batch = videosToHardDelete.slice(i, i + S3_BATCH_SIZE);
+  for (let i = 0; i < s3KeysToDelete.length; i += S3_BATCH_SIZE) {
+    const batch = s3KeysToDelete.slice(i, i + S3_BATCH_SIZE);
     const results = await Promise.allSettled(
-      batch.map((video) => deleteObject(video.s3Key))
+      batch.map((key) => deleteObject(key))
     );
 
     results.forEach((result, idx) => {
-      const video = batch[idx];
+      const key = batch[idx];
       if (result.status === "fulfilled") {
-        console.log(`[CLEANUP] Deleted S3 object: ${video.s3Key}`);
+        console.log(`[CLEANUP] Deleted S3 object: ${key}`);
       } else {
-        const message = `Failed to delete S3 object ${video.s3Key}: ${result.reason}`;
+        const message = `Failed to delete S3 object ${key}: ${result.reason}`;
         console.error(`[CLEANUP] ${message}`);
         errors.push(message);
       }
