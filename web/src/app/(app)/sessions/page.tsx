@@ -214,11 +214,27 @@ export default function HomePage() {
   };
 
   const generateSessionName = () => {
-    return `Session - ${new Date().toLocaleDateString('en-US', {
+    const baseName = `Session - ${new Date().toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
     })}`;
+
+    // Check if base name already exists
+    const existingNames = new Set(
+      regularSessions.map((s) => s.name.toLowerCase())
+    );
+
+    if (!existingNames.has(baseName.toLowerCase())) {
+      return baseName;
+    }
+
+    // Find the next available number suffix
+    let counter = 2;
+    while (existingNames.has(`${baseName} (${counter})`.toLowerCase())) {
+      counter++;
+    }
+    return `${baseName} (${counter})`;
   };
 
   const handleUploadDialogOpen = () => {
