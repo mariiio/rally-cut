@@ -35,7 +35,9 @@ async function trackUserActivity(userId: string): Promise<void> {
         where: { id: userId },
         data: { lastActiveAt: new Date() },
       })
-      .catch(() => {}); // Fire and forget, don't block on errors
+      .catch((err) => {
+        console.error("[trackUserActivity] Failed to update lastActiveAt:", err);
+      });
   }
 }
 

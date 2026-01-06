@@ -262,7 +262,11 @@ def optimize_video(input_path: Path, output_path: Path, tier: str) -> None:
 
     if result.returncode != 0:
         print(f"FFmpeg stderr: {result.stderr}")
-        raise RuntimeError(f"FFmpeg failed: {result.stderr[-500:]}")
+        # Include first and last 500 chars for better debugging context
+        stderr = result.stderr
+        if len(stderr) > 1000:
+            stderr = f"{stderr[:500]}\n...[truncated]...\n{stderr[-500:]}"
+        raise RuntimeError(f"FFmpeg failed: {stderr}")
 
 
 def generate_poster(input_path: Path, output_path: Path) -> None:
@@ -283,7 +287,10 @@ def generate_poster(input_path: Path, output_path: Path) -> None:
 
     if result.returncode != 0:
         print(f"Poster generation failed: {result.stderr}")
-        raise RuntimeError(f"Poster generation failed: {result.stderr[-500:]}")
+        stderr = result.stderr
+        if len(stderr) > 1000:
+            stderr = f"{stderr[:500]}\n...[truncated]...\n{stderr[-500:]}"
+        raise RuntimeError(f"Poster generation failed: {stderr}")
 
 
 def generate_proxy(input_path: Path, output_path: Path) -> None:
@@ -307,7 +314,10 @@ def generate_proxy(input_path: Path, output_path: Path) -> None:
 
     if result.returncode != 0:
         print(f"Proxy generation failed: {result.stderr}")
-        raise RuntimeError(f"Proxy generation failed: {result.stderr[-500:]}")
+        stderr = result.stderr
+        if len(stderr) > 1000:
+            stderr = f"{stderr[:500]}\n...[truncated]...\n{stderr[-500:]}"
+        raise RuntimeError(f"Proxy generation failed: {stderr}")
 
 
 def send_webhook(
