@@ -126,6 +126,12 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Main Lambda entry point."""
     print(f"Received event: {json.dumps(event)}")
 
+    # Validate required parameters
+    required = ["jobId", "rallies", "callbackUrl", "webhookSecret", "s3Bucket"]
+    missing = [key for key in required if key not in event]
+    if missing:
+        raise ValueError(f"Missing required parameters: {', '.join(missing)}")
+
     job_id = event["jobId"]
     tier = event.get("tier", "FREE")
     output_format = event.get("format", "mp4")
@@ -415,10 +421,14 @@ def concatenate_clips(clip_files: list[Path], output_path: Path) -> None:
     ]
 
     print(f"Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"FFmpeg stderr: {result.stderr}")
-        raise RuntimeError(f"FFmpeg concat failed: {result.stderr}")
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"FFmpeg stderr: {result.stderr}")
+            raise RuntimeError(f"FFmpeg concat failed: {result.stderr}")
+    finally:
+        # Clean up concat file
+        concat_file.unlink(missing_ok=True)
 
 
 def send_webhook(url: str, secret: str, payload: dict, raise_on_error: bool = False) -> None:

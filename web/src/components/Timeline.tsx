@@ -46,9 +46,9 @@ function HotkeyRow({ keys, description, secondary }: { keys: string[]; descripti
   return (
     <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2}>
       <Stack direction="row" spacing={0.5}>
-        {keys.map((key, i) => (
+        {keys.map((key) => (
           <Box
-            key={i}
+            key={key}
             sx={{
               px: 0.75,
               py: 0.25,

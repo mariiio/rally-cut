@@ -1572,8 +1572,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const state = get();
     const highlight = state.highlights?.find((h) => h.id === highlightId);
     if (!highlight) return false;
-    // If no creator ID set, anyone can edit (legacy highlights)
-    if (!highlight.createdByUserId) return true;
+    // If no creator ID set, anyone can edit (legacy highlights - log for tracking)
+    if (!highlight.createdByUserId) {
+      console.warn(`[canEditHighlight] Legacy highlight ${highlightId} has no createdByUserId`);
+      return true;
+    }
     // Only creator can edit
     return highlight.createdByUserId === state.currentUserId;
   },

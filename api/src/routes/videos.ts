@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { Readable } from "stream";
 import { z } from "zod";
-import { getObject } from "../lib/s3.js";
+import { prisma } from "../lib/prisma.js";
+import { getObject, generateDownloadUrl } from "../lib/s3.js";
 import { requireUser } from "../middleware/resolveUser.js";
 import { validateRequest } from "../middleware/validateRequest.js";
 import { paginationSchema, uuidSchema } from "../schemas/common.js";
@@ -136,17 +137,14 @@ router.get(
       const { s3Key } = req.query as { s3Key: string };
 
       // Verify the user owns a video with this s3Key
-      const video = await import("../lib/prisma.js").then((m) =>
-        m.prisma.video.findFirst({
-          where: { s3Key, userId: req.userId!, deletedAt: null },
-        })
-      );
+      const video = await prisma.video.findFirst({
+        where: { s3Key, userId: req.userId!, deletedAt: null },
+      });
 
       if (!video) {
         return res.status(404).json({ error: "Video not found" });
       }
 
-      const { generateDownloadUrl } = await import("../lib/s3.js");
       const downloadUrl = await generateDownloadUrl(s3Key);
 
       return res.json({ downloadUrl });
