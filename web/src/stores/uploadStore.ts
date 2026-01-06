@@ -350,11 +350,13 @@ export const useUploadStore = create<UploadState>((set, get) => ({
 
       let videoId: string;
 
+      let skipUpload = false;
+
       // Choose upload method based on file size
       if (file.size > MULTIPART_THRESHOLD) {
         // Multipart upload for large files (100MB+)
         set({ progress: PROGRESS_ANALYZE, currentStep: `Preparing "${shortName}" for upload` });
-        const { videoId: vid, uploadId, partSize, partUrls } = await initiateMultipartUpload({
+        const { videoId: vid, uploadId, partSize, partUrls, alreadyExists } = await initiateMultipartUpload({
           filename: file.name,
           contentHash,
           fileSize: file.size,
@@ -362,40 +364,46 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         });
         videoId = vid;
 
-        if (abortController.signal.aborted) throw new Error('Upload cancelled');
-
-        // Upload parts in parallel
-        const totalParts = partUrls.length;
-        set({
-          progress: PROGRESS_UPLOAD_START,
-          currentStep: getUploadMessage(PROGRESS_UPLOAD_START, file.name, true, 0, totalParts),
-        });
-        try {
-          const parts = await uploadToS3Multipart(
-            file,
-            partUrls,
-            partSize,
-            abortController.signal,
-            (progress, partsComplete, total) => set({
-              progress,
-              currentStep: getUploadMessage(progress, file.name, true, partsComplete, total),
-            })
-          );
-
+        // If video already exists, skip upload entirely
+        if (alreadyExists) {
+          skipUpload = true;
+          set({ progress: PROGRESS_FINALIZE, currentStep: `"${shortName}" already in library` });
+        } else {
           if (abortController.signal.aborted) throw new Error('Upload cancelled');
 
-          // Complete the multipart upload
-          set({ progress: PROGRESS_FINALIZE, currentStep: `Assembling "${shortName}"` });
-          await completeMultipartUpload(videoId, uploadId, parts);
-        } catch (err) {
-          // Abort multipart upload on any error (cleanup S3 parts)
-          await abortMultipartUpload(videoId, uploadId);
-          throw err;
+          // Upload parts in parallel
+          const totalParts = partUrls.length;
+          set({
+            progress: PROGRESS_UPLOAD_START,
+            currentStep: getUploadMessage(PROGRESS_UPLOAD_START, file.name, true, 0, totalParts),
+          });
+          try {
+            const parts = await uploadToS3Multipart(
+              file,
+              partUrls,
+              partSize,
+              abortController.signal,
+              (progress, partsComplete, total) => set({
+                progress,
+                currentStep: getUploadMessage(progress, file.name, true, partsComplete, total),
+              })
+            );
+
+            if (abortController.signal.aborted) throw new Error('Upload cancelled');
+
+            // Complete the multipart upload
+            set({ progress: PROGRESS_FINALIZE, currentStep: `Assembling "${shortName}"` });
+            await completeMultipartUpload(videoId, uploadId!, parts);
+          } catch (err) {
+            // Abort multipart upload on any error (cleanup S3 parts)
+            await abortMultipartUpload(videoId, uploadId!);
+            throw err;
+          }
         }
       } else {
         // Single PUT upload for smaller files
         set({ progress: PROGRESS_ANALYZE, currentStep: `Preparing "${shortName}" for upload` });
-        const { uploadUrl, videoId: vid } = await requestVideoUploadUrl({
+        const { uploadUrl, videoId: vid, alreadyExists } = await requestVideoUploadUrl({
           filename: file.name,
           contentHash,
           fileSize: file.size,
@@ -403,26 +411,34 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         });
         videoId = vid;
 
-        if (abortController.signal.aborted) throw new Error('Upload cancelled');
+        // If video already exists, skip upload entirely
+        if (alreadyExists) {
+          skipUpload = true;
+          set({ progress: PROGRESS_FINALIZE, currentStep: `"${shortName}" already in library` });
+        } else {
+          if (abortController.signal.aborted) throw new Error('Upload cancelled');
 
-        // Upload to S3 with progress tracking
-        set({
-          progress: PROGRESS_UPLOAD_START,
-          currentStep: getUploadMessage(PROGRESS_UPLOAD_START, file.name, false),
-        });
-        await uploadToS3(file, uploadUrl, abortController.signal, (progress) => {
+          // Upload to S3 with progress tracking
           set({
-            progress,
-            currentStep: getUploadMessage(progress, file.name, false),
+            progress: PROGRESS_UPLOAD_START,
+            currentStep: getUploadMessage(PROGRESS_UPLOAD_START, file.name, false),
           });
-        });
+          await uploadToS3(file, uploadUrl!, abortController.signal, (progress) => {
+            set({
+              progress,
+              currentStep: getUploadMessage(progress, file.name, false),
+            });
+          });
 
-        if (abortController.signal.aborted) throw new Error('Upload cancelled');
-        set({ progress: PROGRESS_FINALIZE, currentStep: `Saving "${shortName}"` });
+          if (abortController.signal.aborted) throw new Error('Upload cancelled');
+          set({ progress: PROGRESS_FINALIZE, currentStep: `Saving "${shortName}"` });
+        }
       }
 
-      // Confirm upload with API (user-scoped)
-      await confirmVideoUpload(videoId, { durationMs });
+      // Confirm upload with API (user-scoped) - skip if video already existed
+      if (!skipUpload) {
+        await confirmVideoUpload(videoId, { durationMs });
+      }
 
       // Store local blob URL for instant playback
       const blobUrl = URL.createObjectURL(file);

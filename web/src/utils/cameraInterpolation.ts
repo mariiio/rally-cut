@@ -8,7 +8,15 @@ import {
   CameraState,
   CameraEasing,
   DEFAULT_CAMERA_STATE,
+  HandheldPreset,
+  HANDHELD_PRESET_CONFIG,
 } from '@/types/camera';
+import { applyHandheldMotion, calculateCameraVelocity } from './handheldMotion';
+import {
+  CameraSpringState,
+  createCameraSpringState,
+  stepCameraSpring,
+} from './springPhysics';
 
 /**
  * Easing functions for smooth keyframe transitions.
@@ -232,5 +240,124 @@ export function calculateVideoTransform(
       transformOrigin: `${originX}% 50%`,
     };
   }
+}
+
+/**
+ * Spring state manager for handheld motion.
+ * Persists across frames for smooth physics simulation.
+ */
+interface HandheldState {
+  springState: CameraSpringState | null;
+  lastRallyId: string | null;
+  lastTime: number;
+  lastBaseState: CameraState | null;
+}
+
+let handheldState: HandheldState = {
+  springState: null,
+  lastRallyId: null,
+  lastTime: 0,
+  lastBaseState: null,
+};
+
+/**
+ * Reset handheld state (call when seeking or switching rallies).
+ */
+export function resetHandheldState(): void {
+  handheldState = {
+    springState: null,
+    lastRallyId: null,
+    lastTime: 0,
+    lastBaseState: null,
+  };
+}
+
+/**
+ * Get interpolated camera state with optional handheld motion.
+ * This is the main entry point during playback when handheld is enabled.
+ *
+ * @param keyframes Array of camera keyframes
+ * @param timeOffset Time within rally as fraction (0.0 to 1.0)
+ * @param absoluteTime Absolute video time in seconds (for noise sampling)
+ * @param rallyId Current rally ID (for state reset detection)
+ * @param preset Handheld simulation preset
+ * @returns Camera state with handheld motion applied
+ */
+export function getCameraStateWithHandheld(
+  keyframes: CameraKeyframe[],
+  timeOffset: number,
+  absoluteTime: number,
+  rallyId: string,
+  preset: HandheldPreset
+): CameraState {
+  // Get base interpolated state
+  const baseState = interpolateCameraState(keyframes, timeOffset);
+
+  // Early exit if handheld is off
+  if (preset === 'OFF') {
+    return baseState;
+  }
+
+  const config = HANDHELD_PRESET_CONFIG[preset];
+
+  // Calculate time delta
+  const timeDelta = absoluteTime - handheldState.lastTime;
+
+  // Reset state if rally changed or we seeked significantly (>0.5s jump)
+  if (
+    rallyId !== handheldState.lastRallyId ||
+    Math.abs(timeDelta) > 0.5 ||
+    timeDelta < 0
+  ) {
+    handheldState = {
+      springState: null,
+      lastRallyId: rallyId,
+      lastTime: absoluteTime,
+      lastBaseState: { ...baseState },
+    };
+  }
+
+  // Track previous state for velocity calculation
+  const prevState = handheldState.lastBaseState || baseState;
+  handheldState.lastBaseState = { ...baseState };
+  handheldState.lastTime = absoluteTime;
+  handheldState.lastRallyId = rallyId;
+
+  // Apply spring physics if enabled
+  let processedState = baseState;
+  if (config.springEnabled && timeDelta > 0 && timeDelta < 0.1) {
+    if (!handheldState.springState) {
+      handheldState.springState = createCameraSpringState({
+        x: baseState.positionX,
+        y: baseState.positionY,
+        zoom: baseState.zoom,
+      });
+    }
+
+    const springConfig = {
+      stiffness: config.springStiffness,
+      damping: config.springDamping,
+      mass: 1,
+    };
+
+    handheldState.springState = stepCameraSpring(
+      handheldState.springState,
+      { x: baseState.positionX, y: baseState.positionY, zoom: baseState.zoom },
+      springConfig,
+      timeDelta
+    );
+
+    processedState = {
+      positionX: handheldState.springState.x.position,
+      positionY: handheldState.springState.y.position,
+      zoom: handheldState.springState.zoom.position,
+    };
+  }
+
+  // Calculate velocity for movement-dependent shake
+  const velocity = calculateCameraVelocity(prevState, baseState, timeDelta || 0.016);
+
+  // Apply handheld motion (wobble, breathing, movement shake)
+  return applyHandheldMotion(processedState, absoluteTime, velocity, preset);
 }
 

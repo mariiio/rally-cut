@@ -154,7 +154,7 @@ export function Hero() {
                 <Stack spacing={2} sx={{ mb: 4 }}>
                   <Button
                     component={Link}
-                    href="/editor"
+                    href="/sessions"
                     variant="contained"
                     size="large"
                     sx={{

@@ -29,7 +29,7 @@ import VideocamIcon from '@mui/icons-material/Videocam';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
-import { useCameraStore, createDefaultKeyframe, selectCameraEdit, selectSelectedKeyframeId } from '@/stores/cameraStore';
+import { useCameraStore, createDefaultKeyframe, selectCameraEdit, selectSelectedKeyframeId, selectHandheldPreset } from '@/stores/cameraStore';
 import { designTokens } from '@/app/theme';
 import type { AspectRatio, CameraKeyframe } from '@/types/camera';
 import { ZOOM_MAX, ZOOM_STEP, KEYFRAME_TIME_THRESHOLD } from '@/types/camera';
@@ -170,6 +170,8 @@ export function CameraPanel() {
   // Camera store - use optimized selectors
   const cameraEdit = useCameraStore(selectCameraEdit(selectedRallyId));
   const selectedKeyframeId = useCameraStore(selectSelectedKeyframeId);
+  const handheldPreset = useCameraStore(selectHandheldPreset);
+  const setHandheldPreset = useCameraStore((state) => state.setHandheldPreset);
 
   // Get stable action references
   const setAspectRatio = useCameraStore((state) => state.setAspectRatio);
@@ -297,6 +299,10 @@ export function CameraPanel() {
     }
   }, [selectedRallyId, resetCamera]);
 
+  const handleHandheldToggle = useCallback(() => {
+    setHandheldPreset(handheldPreset === 'OFF' ? 'NATURAL' : 'OFF');
+  }, [handheldPreset, setHandheldPreset]);
+
   // Check if rally has camera keyframes for the active aspect ratio
   const hasCameraKeyframes = activeKeyframes.length > 0;
 
@@ -319,7 +325,7 @@ export function CameraPanel() {
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* Global preview toggle - always visible when camera edits exist */}
+      {/* Global preview toggle and handheld preset - always visible when camera edits exist */}
       {hasAnyCameraEdits && (
         <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
           <FormControlLabel
@@ -337,6 +343,24 @@ export function CameraPanel() {
               </Typography>
             }
             sx={{ m: 0 }}
+          />
+
+          {/* Handheld motion toggle */}
+          <FormControlLabel
+            control={
+              <Switch
+                checked={handheldPreset === 'NATURAL'}
+                onChange={handleHandheldToggle}
+                color="primary"
+                size="small"
+              />
+            }
+            label={
+              <Typography variant="body2">
+                Natural camera motion
+              </Typography>
+            }
+            sx={{ m: 0, mt: 1 }}
           />
         </Box>
       )}

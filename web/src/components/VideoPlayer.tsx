@@ -6,8 +6,8 @@ import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useUploadStore } from '@/stores/uploadStore';
-import { useCameraStore } from '@/stores/cameraStore';
-import { calculateVideoTransform } from '@/utils/cameraInterpolation';
+import { useCameraStore, selectHandheldPreset } from '@/stores/cameraStore';
+import { calculateVideoTransform, getCameraStateWithHandheld, resetHandheldState } from '@/utils/cameraInterpolation';
 import { DEFAULT_CAMERA_STATE } from '@/types/camera';
 import { designTokens } from '@/app/theme';
 import { CameraOverlay } from './CameraOverlay';
@@ -47,10 +47,10 @@ export function VideoPlayer() {
   const currentTime = usePlayerStore((state) => state.currentTime);
 
   // Camera state
-  const getCameraStateAtTime = useCameraStore((state) => state.getCameraStateAtTime);
   const cameraEdits = useCameraStore((state) => state.cameraEdits);
   const dragPosition = useCameraStore((state) => state.dragPosition);
   const selectedKeyframeId = useCameraStore((state) => state.selectedKeyframeId);
+  const handheldPreset = useCameraStore(selectHandheldPreset);
 
   // Get rallies from editor store
   const rallies = useEditorStore((state) => state.rallies);
@@ -105,8 +105,17 @@ export function VideoPlayer() {
       : 0;
     const clampedOffset = Math.max(0, Math.min(1, timeWithinRally));
 
-    // Get interpolated camera state
-    const cameraState = getCameraStateAtTime(currentRally.id, clampedOffset);
+    // Get keyframes for the active aspect ratio
+    const keyframes = currentCameraEdit?.keyframes[aspectRatio] ?? [];
+
+    // Get interpolated camera state with handheld motion applied
+    const cameraState = getCameraStateWithHandheld(
+      keyframes,
+      clampedOffset,
+      effectiveTime,
+      currentRally.id,
+      handheldPreset
+    );
 
     // If dragging, override position with drag position for live preview
     const effectiveState = dragPosition
@@ -115,7 +124,7 @@ export function VideoPlayer() {
 
     // Calculate CSS transform
     return calculateVideoTransform(effectiveState, aspectRatio);
-  }, [shouldApplyCamera, currentRally, hasCameraKeyframes, currentCameraEdit, cameraTime, getCameraStateAtTime, dragPosition]);
+  }, [shouldApplyCamera, currentRally, hasCameraKeyframes, currentCameraEdit, cameraTime, handheldPreset, dragPosition]);
 
   // Get container aspect ratio - show aspect ratio even without keyframes when preview is on
   const containerAspectRatio = useMemo(() => {
@@ -158,6 +167,8 @@ export function VideoPlayer() {
 
     return () => {
       cancelAnimationFrame(rafId);
+      // Reset handheld state when playback stops to avoid stale spring physics
+      resetHandheldState();
     };
   }, [isPlaying, shouldApplyCamera, hasCameraKeyframes]);
 

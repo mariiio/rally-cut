@@ -36,7 +36,7 @@ const plans = [
       'Local storage only',
     ],
     cta: 'Start Free',
-    href: '/editor',
+    href: '/sessions',
     highlighted: false,
   },
   {
