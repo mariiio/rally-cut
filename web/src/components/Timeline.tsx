@@ -104,6 +104,8 @@ export function Timeline() {
     isRallyEditingLocked,
     isCameraTabActive,
     setIsCameraTabActive,
+    setLeftPanelTab,
+    expandHighlight,
   } = useEditorStore();
 
   // Check if rally editing is locked (after confirmation)
@@ -147,6 +149,15 @@ export function Timeline() {
   const [hotkeysAnchorEl, setHotkeysAnchorEl] = useState<HTMLButtonElement | null>(null);
   const [scrollLeft, setScrollLeft] = useState(0);
   const [containerWidth, setContainerWidth] = useState(0);
+  const [keyframeBlockedRallyId, setKeyframeBlockedRallyId] = useState<string | null>(null);
+  const keyframeBlockedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Pending resize position - used to keep library in sync during drag
+  // This overrides rally position in editorData during active resize
+  const [pendingResize, setPendingResize] = useState<{
+    rallyId: string;
+    start: number;
+    end: number;
+  } | null>(null);
 
   // Track if we auto-paused at segment end (for restart behavior)
   const autoPausedAtEndRef = useRef<string | null>(null); // stores segment ID if auto-paused
@@ -220,19 +231,25 @@ export function Timeline() {
       } else {
         // Add to highlight
         addRallyToHighlight(selectedRallyId, selectedHighlightId);
+        setLeftPanelTab('highlights');
+        expandHighlight(selectedHighlightId);
       }
     } else if (highlights.length > 0) {
       // No highlight selected but highlights exist - add to the latest one
       const latestHighlight = highlights[highlights.length - 1];
       addRallyToHighlight(selectedRallyId, latestHighlight.id);
       selectHighlight(latestHighlight.id);
+      setLeftPanelTab('highlights');
+      expandHighlight(latestHighlight.id);
     } else {
       // No highlights exist - create new one
       const newId = createHighlight();
       addRallyToHighlight(selectedRallyId, newId);
       selectHighlight(newId);
+      setLeftPanelTab('highlights');
+      expandHighlight(newId);
     }
-  }, [selectedRallyId, selectedHighlightId, highlights, addRallyToHighlight, removeRallyFromHighlight, createHighlight, selectHighlight]);
+  }, [selectedRallyId, selectedHighlightId, highlights, addRallyToHighlight, removeRallyFromHighlight, createHighlight, selectHighlight, setLeftPanelTab, expandHighlight]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -668,22 +685,27 @@ export function Timeline() {
   }, [rallies, scale, scrollLeft, isLocked]);
 
   // Convert Rally[] to TimelineRow[] format
+  // Use pendingResize position during active drag to keep library in sync
   const editorData: TimelineRow[] = useMemo(() => {
     return [
       {
         id: 'rallies',
-        actions: (rallies ?? []).map((rally) => ({
-          id: rally.id,
-          start: rally.start_time,
-          end: rally.end_time,
-          effectId: 'rally',
-          selected: rally.id === selectedRallyId,
-          flexible: !isLocked && !isInCameraEditMode,
-          movable: false,
-        })),
+        actions: (rallies ?? []).map((rally) => {
+          // During resize, use pending position to prevent library desync
+          const usePending = pendingResize && pendingResize.rallyId === rally.id;
+          return {
+            id: rally.id,
+            start: usePending ? pendingResize.start : rally.start_time,
+            end: usePending ? pendingResize.end : rally.end_time,
+            effectId: 'rally',
+            selected: rally.id === selectedRallyId,
+            flexible: !isLocked && !isInCameraEditMode,
+            movable: false,
+          };
+        }),
       },
     ];
-  }, [rallies, selectedRallyId, isLocked, isInCameraEditMode]);
+  }, [rallies, selectedRallyId, isLocked, isInCameraEditMode, pendingResize]);
 
   // Check if a move/resize would cause overlap
   const checkOverlap = useCallback(
@@ -717,69 +739,106 @@ export function Timeline() {
     [checkOverlap, isLocked]
   );
 
-  // Prevent overlapping during resize (also disable when locked)
-  // Also prevent resizing past keyframes
-  // Also update video preview to show where the edge is being dragged
+  // Handle resize: block when keyframe would be excluded to stop visual
+  // pendingResize tracks last valid position for correct final commit
   const handleActionResizing = useCallback(
     (params: { action: TimelineAction; start: number; end: number }) => {
       if (isLocked) return false;
-      if (checkOverlap(params.action.id, params.start, params.end)) return false;
 
-      // Check keyframe boundaries - don't allow resize to exclude keyframes
-      const cameraEdit = cameraEdits[params.action.id];
       const rally = rallies?.find((r) => r.id === params.action.id);
+      if (!rally) return true;
 
-      if (cameraEdit && rally) {
-        const oldDuration = rally.end_time - rally.start_time;
+      // Check overlap
+      if (checkOverlap(params.action.id, params.start, params.end)) {
+        return false;
+      }
+
+      // Check keyframe boundaries
+      const cameraEdit = cameraEdits[params.action.id];
+      if (cameraEdit) {
+        const duration = rally.end_time - rally.start_time;
         const allKeyframes = [
           ...(cameraEdit.keyframes.ORIGINAL ?? []),
           ...(cameraEdit.keyframes.VERTICAL ?? []),
         ];
 
         for (const kf of allKeyframes) {
-          // Convert keyframe timeOffset to absolute time
-          const kfAbsTime = rally.start_time + kf.timeOffset * oldDuration;
-          // Check if keyframe would be outside new bounds
+          const kfAbsTime = rally.start_time + kf.timeOffset * duration;
           if (kfAbsTime < params.start || kfAbsTime > params.end) {
+            // Blocked - show indicators but DON'T update pendingResize
+            if (keyframeBlockedRallyId !== params.action.id) {
+              setKeyframeBlockedRallyId(params.action.id);
+            }
+            if (keyframeBlockedTimeoutRef.current) {
+              clearTimeout(keyframeBlockedTimeoutRef.current);
+              keyframeBlockedTimeoutRef.current = null;
+            }
             return false;
           }
         }
       }
 
-      // Update video preview to show the edge being dragged
-      if (rally) {
-        const startChanged = Math.abs(params.start - rally.start_time) > 0.01;
-        const endChanged = Math.abs(params.end - rally.end_time) > 0.01;
-        if (startChanged) {
-          seek(params.start);
-        } else if (endChanged) {
-          seek(params.end);
-        }
-      }
+      // Allowed - update pendingResize with this valid position
+      setPendingResize({
+        rallyId: params.action.id,
+        start: params.start,
+        end: params.end,
+      });
+
+      // Update video preview
+      const startDelta = params.start - rally.start_time;
+      const isResizingStart = Math.abs(startDelta) > 0.01;
+      seek(isResizingStart ? params.start : params.end);
 
       return true;
     },
-    [checkOverlap, isLocked, cameraEdits, rallies, seek]
+    [checkOverlap, isLocked, cameraEdits, rallies, seek, keyframeBlockedRallyId]
   );
 
+  // Hide keyframe indicators and clear pending resize when mouse is released
+  useEffect(() => {
+    const handleMouseUp = () => {
+      // Clear pending resize (drag ended)
+      setPendingResize(null);
+
+      if (keyframeBlockedRallyId) {
+        // Clear any existing timeout
+        if (keyframeBlockedTimeoutRef.current) {
+          clearTimeout(keyframeBlockedTimeoutRef.current);
+        }
+        // Hide after a delay so user can see why resize was blocked
+        keyframeBlockedTimeoutRef.current = setTimeout(() => {
+          setKeyframeBlockedRallyId(null);
+        }, 800);
+      }
+    };
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => window.removeEventListener('mouseup', handleMouseUp);
+  }, [keyframeBlockedRallyId]);
+
   // Persist changes after resize ends
+  // Use pendingResize values (clamped) instead of raw params (may have library offset)
   // Also recalculate keyframe offsets to keep them at the same absolute video time
   const handleActionResizeEnd = useCallback(
     (params: { action: TimelineAction; start: number; end: number }) => {
       const rally = rallies?.find((r) => r.id === params.action.id);
       const cameraEdit = cameraEdits[params.action.id];
 
+      // Use pending position if available (it's clamped), otherwise use params
+      const finalStart = pendingResize?.rallyId === params.action.id ? pendingResize.start : params.start;
+      const finalEnd = pendingResize?.rallyId === params.action.id ? pendingResize.end : params.end;
+
       // Recalculate keyframe timeOffsets if rally has camera edits
       if (rally && cameraEdit) {
         const oldDuration = rally.end_time - rally.start_time;
-        const newDuration = params.end - params.start;
+        const newDuration = finalEnd - finalStart;
 
         const updateKeyframesForRatio = (keyframes: typeof cameraEdit.keyframes.ORIGINAL) => {
           return keyframes.map((kf) => {
             // Convert old timeOffset to absolute time
             const absTime = rally.start_time + kf.timeOffset * oldDuration;
             // Convert back to new timeOffset
-            const newTimeOffset = (absTime - params.start) / newDuration;
+            const newTimeOffset = (absTime - finalStart) / newDuration;
             return { ...kf, timeOffset: Math.max(0, Math.min(1, newTimeOffset)) };
           });
         };
@@ -795,12 +854,15 @@ export function Timeline() {
       }
 
       updateRally(params.action.id, {
-        start_time: params.start,
-        end_time: params.end,
+        start_time: finalStart,
+        end_time: finalEnd,
       });
+
+      // Clear pending resize
+      setPendingResize(null);
       return true;
     },
-    [updateRally, rallies, cameraEdits, setCameraEdit]
+    [updateRally, rallies, cameraEdits, setCameraEdit, pendingResize]
   );
 
   // Persist changes after move ends
@@ -1363,24 +1425,34 @@ export function Timeline() {
           getActionRender={(action) => {
             const rally = rallies?.find((s) => s.id === action.id);
 
-            // Get keyframes for this rally (active aspect ratio)
+            // Get keyframes for this rally
             const cameraEdit = cameraEdits[action.id];
-            const keyframes = cameraEdit
+            const activeKeyframes = cameraEdit
               ? cameraEdit.keyframes[cameraEdit.aspectRatio] ?? []
+              : [];
+            // Get ALL keyframes (both aspect ratios) for resize blocking display
+            const allKeyframes = cameraEdit
+              ? [...(cameraEdit.keyframes.ORIGINAL ?? []), ...(cameraEdit.keyframes.VERTICAL ?? [])]
               : [];
 
             // Check if this rally has any camera edits
             const hasCameraEdits = cameraEdit && (
               cameraEdit.aspectRatio === 'VERTICAL' ||
-              keyframes.length > 0
+              allKeyframes.length > 0
             );
 
             // Is THIS specific rally being camera-edited?
             const isThisRallyInCameraEditMode = selectedRallyId === action.id && isCameraTabActive;
 
+            // Show keyframes when resize is blocked by them (to explain why)
+            const isResizeBlockedByKeyframes = keyframeBlockedRallyId === action.id;
+
             // Determine what to render
-            const showKeyframeDots = isThisRallyInCameraEditMode && keyframes.length > 0;
-            const showCameraIndicator = hasCameraEdits && !isThisRallyInCameraEditMode;
+            // In camera edit mode: show only active aspect ratio keyframes
+            // When resize is blocked: show ALL keyframes (any could be blocking)
+            const keyframesToShow = isResizeBlockedByKeyframes ? allKeyframes : activeKeyframes;
+            const showKeyframeDots = (isThisRallyInCameraEditMode || isResizeBlockedByKeyframes) && keyframesToShow.length > 0;
+            const showCameraIndicator = hasCameraEdits && !isThisRallyInCameraEditMode && !isResizeBlockedByKeyframes;
 
             // Calculate original rally duration for keyframe positioning
             // During resize, action.start/end change but rally.start_time/end_time stay the same
@@ -1398,7 +1470,7 @@ export function Timeline() {
                 }}
               >
                 {/* Keyframe tick marks */}
-                {showKeyframeDots && keyframes.map((kf) => {
+                {showKeyframeDots && keyframesToShow.map((kf) => {
                   // Calculate absolute time of keyframe based on original rally bounds
                   const kfAbsTime = rally
                     ? rally.start_time + kf.timeOffset * originalDuration

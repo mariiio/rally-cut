@@ -86,9 +86,26 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   setDuration: (duration: number) => set({ duration }),
   setReady: (ready: boolean) => set({ isReady: ready }),
   setBufferedRanges: (ranges) => set({ bufferedRanges: ranges }),
-  togglePlayOnlyRallies: () => set((state) => ({ playOnlyRallies: !state.playOnlyRallies })),
-  toggleApplyCameraEdits: () => set((state) => ({ applyCameraEdits: !state.applyCameraEdits })),
-  setApplyCameraEdits: (apply) => set({ applyCameraEdits: apply }),
+  togglePlayOnlyRallies: () => {
+    const newValue = !get().playOnlyRallies;
+    set({ playOnlyRallies: newValue });
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('rallycut-play-only-rallies', String(newValue));
+    }
+  },
+  toggleApplyCameraEdits: () => {
+    const newValue = !get().applyCameraEdits;
+    set({ applyCameraEdits: newValue });
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('rallycut-apply-camera-edits', String(newValue));
+    }
+  },
+  setApplyCameraEdits: (apply) => {
+    set({ applyCameraEdits: apply });
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('rallycut-apply-camera-edits', String(apply));
+    }
+  },
 
   // Highlight playback actions
   startHighlightPlayback: (highlightId: string, playlist: PlaylistRally[], startIndex = 0) => {
@@ -156,3 +173,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     return state.highlightPlaylist[state.highlightRallyIndex] || null;
   },
 }));
+
+// Initialize settings from localStorage on client side
+if (typeof window !== 'undefined') {
+  const savedApplyCameraEdits = localStorage.getItem('rallycut-apply-camera-edits');
+  if (savedApplyCameraEdits !== null) {
+    usePlayerStore.setState({ applyCameraEdits: savedApplyCameraEdits === 'true' });
+  }
+  const savedPlayOnlyRallies = localStorage.getItem('rallycut-play-only-rallies');
+  if (savedPlayOnlyRallies !== null) {
+    usePlayerStore.setState({ playOnlyRallies: savedPlayOnlyRallies === 'true' });
+  }
+}
