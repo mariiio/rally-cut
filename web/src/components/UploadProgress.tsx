@@ -73,9 +73,41 @@ export function UploadProgress() {
     );
   }
 
-  // Show nothing when not uploading
-  if (!isUploading && progress === 0) {
+  // Show nothing when not uploading (but keep snackbar if open)
+  if (!isUploading && progress === 0 && !showSuccessInfo) {
     return null;
+  }
+
+  // Only show snackbar when progress bar is hidden
+  if (!isUploading && progress === 0 && showSuccessInfo) {
+    return (
+      <Snackbar
+        open={showSuccessInfo}
+        autoHideDuration={10000}
+        onClose={() => setShowSuccessInfo(false)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          severity="info"
+          onClose={() => setShowSuccessInfo(false)}
+          sx={{ width: '100%', maxWidth: 500 }}
+          action={
+            <Button
+              component={Link}
+              href="/pricing"
+              color="inherit"
+              size="small"
+              startIcon={<UpgradeIcon />}
+            >
+              Upgrade
+            </Button>
+          }
+        >
+          Video saved! Free accounts keep videos forever.
+          Original quality exports available for 7 days.
+        </Alert>
+      </Snackbar>
+    );
   }
 
   return (
@@ -198,34 +230,6 @@ export function UploadProgress() {
         }}
         onCancel={() => setShowCancelDialog(false)}
       />
-
-      {/* Success info snackbar for FREE users */}
-      <Snackbar
-        open={showSuccessInfo}
-        autoHideDuration={10000}
-        onClose={() => setShowSuccessInfo(false)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert
-          severity="info"
-          onClose={() => setShowSuccessInfo(false)}
-          sx={{ width: '100%', maxWidth: 500 }}
-          action={
-            <Button
-              component={Link}
-              href="/pricing"
-              color="inherit"
-              size="small"
-              startIcon={<UpgradeIcon />}
-            >
-              Upgrade
-            </Button>
-          }
-        >
-          Video saved! Free accounts keep videos forever.
-          Original quality exports available for 7 days.
-        </Alert>
-      </Snackbar>
     </Box>
   );
 }

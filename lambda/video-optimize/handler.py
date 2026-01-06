@@ -44,7 +44,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 tier=tier,
             )
 
-        # Notify success
+        # Notify success (raise on error so Lambda fails if webhook fails)
         send_webhook(
             callback_url,
             webhook_secret,
@@ -58,6 +58,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "proxy_size_bytes": result.get("proxy_size_bytes"),
                 "was_optimized": result.get("was_optimized", False),
             },
+            raise_on_error=True,
         )
 
         return {"statusCode": 200, "body": json.dumps({"success": True})}
@@ -309,8 +310,17 @@ def generate_proxy(input_path: Path, output_path: Path) -> None:
         raise RuntimeError(f"Proxy generation failed: {result.stderr[-500:]}")
 
 
-def send_webhook(url: str, secret: str, payload: dict[str, Any]) -> None:
-    """Send webhook notification."""
+def send_webhook(
+    url: str, secret: str, payload: dict[str, Any], raise_on_error: bool = False
+) -> None:
+    """Send webhook notification.
+
+    Args:
+        url: Webhook URL
+        secret: Webhook secret for authentication
+        payload: JSON payload to send
+        raise_on_error: If True, re-raise exceptions after logging (for critical webhooks)
+    """
     print(f"Sending webhook to {url}: {payload}")
     try:
         response = requests.post(
@@ -325,3 +335,5 @@ def send_webhook(url: str, secret: str, payload: dict[str, Any]) -> None:
         print(f"Webhook response: {response.status_code}")
     except Exception as e:
         print(f"Webhook failed: {e}")
+        if raise_on_error:
+            raise

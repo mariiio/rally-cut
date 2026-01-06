@@ -201,9 +201,6 @@ class RallyCutConfig(BaseSettings):
     )
     yolo_confidence: float = 0.25
 
-    # Processing settings
-    chunk_duration: float = 300.0  # 5 minutes in seconds
-
     # Device settings
     device: str = Field(default_factory=_detect_device)
 

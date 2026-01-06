@@ -56,8 +56,7 @@ export async function syncState(
   const isOwner = userRole === "owner" || !userId;
   const hasRallyChanges = Object.keys(input.ralliesPerVideo).length > 0;
   if (!isOwner && hasRallyChanges) {
-    // Check if there are actual changes to rallies
-    // For now, we'll just skip rally sync for members
+    throw new ForbiddenError("Members cannot modify rallies");
   }
 
   const videoIds = new Set(session.sessionVideos.map((sv) => sv.videoId));

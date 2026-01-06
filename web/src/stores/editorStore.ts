@@ -1393,6 +1393,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       color,
       rallyIds: [],
       createdAt: Date.now(),
+      createdByUserId: state.currentUserId,
     };
 
     set({

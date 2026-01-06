@@ -147,7 +147,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 webhook_secret=webhook_secret,
             )
 
-        # Notify success
+        # Notify success (raise on error so Lambda fails if webhook fails)
         send_webhook(
             callback_url,
             webhook_secret,
@@ -156,6 +156,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "status": "completed",
                 "output_s3_key": output_key,
             },
+            raise_on_error=True,
         )
 
         return {"statusCode": 200, "body": json.dumps({"success": True})}
@@ -420,8 +421,15 @@ def concatenate_clips(clip_files: list[Path], output_path: Path) -> None:
         raise RuntimeError(f"FFmpeg concat failed: {result.stderr}")
 
 
-def send_webhook(url: str, secret: str, payload: dict) -> None:
-    """Send webhook notification."""
+def send_webhook(url: str, secret: str, payload: dict, raise_on_error: bool = False) -> None:
+    """Send webhook notification.
+
+    Args:
+        url: Webhook URL
+        secret: Webhook secret for authentication
+        payload: JSON payload to send
+        raise_on_error: If True, re-raise exceptions after logging (for critical webhooks)
+    """
     print(f"Sending webhook to {url}: {payload}")
     try:
         response = requests.post(
@@ -433,6 +441,8 @@ def send_webhook(url: str, secret: str, payload: dict) -> None:
         print(f"Webhook response: {response.status_code} {response.text}")
     except Exception as e:
         print(f"Webhook failed: {e}")
+        if raise_on_error:
+            raise
 
 
 def send_progress(url: str, secret: str, job_id: str, progress: int) -> None:
