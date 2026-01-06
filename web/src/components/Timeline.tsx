@@ -15,6 +15,7 @@ import KeyboardIcon from '@mui/icons-material/Keyboard';
 import StarIcon from '@mui/icons-material/Star';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import CameraAltIcon from '@mui/icons-material/CameraAlt';
+import MergeTypeIcon from '@mui/icons-material/MergeType';
 import {
   Timeline as TimelineEditor,
   TimelineRow,
@@ -89,6 +90,7 @@ export function Timeline() {
     adjustRallyEnd,
     createRallyAtTime,
     removeRally,
+    mergeRallies,
     videoMetadata,
     highlights,
     selectedHighlightId,
@@ -644,6 +646,26 @@ export function Timeline() {
 
     return { left, width, center };
   }, [selectedRallyId, rallies, scale, scrollLeft]);
+
+  // Calculate close rally pairs for merge buttons (gap <= 3 seconds)
+  const closeRallyPairs = useMemo(() => {
+    if (!rallies || rallies.length < 2 || isLocked) return [];
+    const sorted = [...rallies].sort((a, b) => a.start_time - b.start_time);
+    const pairs: { first: typeof sorted[0]; second: typeof sorted[0]; gap: number; position: number }[] = [];
+
+    const pixelsPerSecond = SCALE_WIDTH / scale;
+    const startLeft = 10;
+
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const gap = sorted[i + 1].start_time - sorted[i].end_time;
+      if (gap <= 3.0 && gap > 0) {
+        const midpoint = sorted[i].end_time + gap / 2;
+        const position = startLeft + (midpoint * pixelsPerSecond) - scrollLeft;
+        pairs.push({ first: sorted[i], second: sorted[i + 1], gap, position });
+      }
+    }
+    return pairs;
+  }, [rallies, scale, scrollLeft, isLocked]);
 
   // Convert Rally[] to TimelineRow[] format
   const editorData: TimelineRow[] = useMemo(() => {
@@ -1807,6 +1829,41 @@ export function Timeline() {
             )}
           </Box>
         )}
+
+        {/* Merge buttons between close rallies (gap <= 3s) */}
+        {closeRallyPairs.map(({ first, second, position }) => (
+          position > 0 && position < (containerWidth || 9999) && (
+            <Tooltip key={`merge-${first.id}-${second.id}`} title="Merge rallies" arrow>
+              <IconButton
+                size="small"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  mergeRallies(first.id, second.id);
+                }}
+                sx={{
+                  position: 'absolute',
+                  left: position,
+                  top: 'calc(50% + 20px)',
+                  transform: 'translate(-50%, -50%)',
+                  zIndex: 40,
+                  width: 24,
+                  height: 24,
+                  bgcolor: 'warning.main',
+                  color: 'warning.contrastText',
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+                  '&:hover': {
+                    bgcolor: 'warning.dark',
+                    transform: 'translate(-50%, -50%) scale(1.1)',
+                  },
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <MergeTypeIcon sx={{ fontSize: 14 }} />
+              </IconButton>
+            </Tooltip>
+          )
+        ))}
       </Box>
     </Box>
   );

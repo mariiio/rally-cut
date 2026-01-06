@@ -159,6 +159,7 @@ interface EditorState {
   adjustRallyEnd: (id: string, delta: number) => boolean;
   createRallyAtTime: (time: number, duration?: number) => void;
   removeRally: (id: string) => void;
+  mergeRallies: (firstId: string, secondId: string) => void;
   selectRally: (id: string | null) => void;
   exportToJson: () => RallyFile | null;
   clearAll: () => void;
@@ -1068,6 +1069,103 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       highlights: updatedHighlights,
       selectedRallyId:
         state.selectedRallyId === id ? null : state.selectedRallyId,
+      hasUnsavedChanges: true,
+    });
+
+    // Mark dirty for backend sync
+    syncService.markDirty();
+
+    debouncedSave(() => get().saveToStorage());
+  },
+
+  mergeRallies: (firstId: string, secondId: string) => {
+    const state = get();
+    const first = state.rallies.find((r) => r.id === firstId);
+    const second = state.rallies.find((r) => r.id === secondId);
+    if (!first || !second) return;
+
+    // Ensure first rally comes before second
+    const [earlier, later] = first.start_time < second.start_time
+      ? [first, second]
+      : [second, first];
+    const earlierId = earlier.id;
+    const laterId = later.id;
+
+    state.pushHistory();
+
+    const fps = state.videoMetadata?.fps ?? 30;
+    const merged = recalculateRally({
+      ...earlier,
+      end_time: later.end_time,
+    }, fps);
+
+    // Merge camera edits from both rallies
+    const cameraStore = useCameraStore.getState();
+    const earlierEdit = cameraStore.cameraEdits[earlierId];
+    const laterEdit = cameraStore.cameraEdits[laterId];
+
+    if (earlierEdit || laterEdit) {
+      const earlierDuration = earlier.end_time - earlier.start_time;
+      const laterDuration = later.end_time - later.start_time;
+      const mergedDuration = later.end_time - earlier.start_time;
+
+      // Determine aspect ratio: prefer VERTICAL if either has it
+      const useVertical =
+        earlierEdit?.aspectRatio === 'VERTICAL' ||
+        laterEdit?.aspectRatio === 'VERTICAL';
+      const mergedAspectRatio = useVertical ? 'VERTICAL' : 'ORIGINAL';
+
+      // Helper to convert keyframe timeOffset to new merged rally coordinates
+      const convertEarlierKeyframe = (kf: { id: string; timeOffset: number; positionX: number; positionY: number; zoom: number; easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT' }) => ({
+        ...kf,
+        // Earlier rally starts at 0, so just scale down the offset
+        timeOffset: (kf.timeOffset * earlierDuration) / mergedDuration,
+      });
+
+      const convertLaterKeyframe = (kf: { id: string; timeOffset: number; positionX: number; positionY: number; zoom: number; easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT' }) => ({
+        ...kf,
+        // Later rally starts after the gap, calculate absolute time then convert to offset
+        timeOffset: ((later.start_time - earlier.start_time) + kf.timeOffset * laterDuration) / mergedDuration,
+      });
+
+      // Merge keyframes for each aspect ratio
+      const mergeKeyframesForRatio = (ratio: 'ORIGINAL' | 'VERTICAL') => {
+        const earlierKfs = earlierEdit?.keyframes[ratio] ?? [];
+        const laterKfs = laterEdit?.keyframes[ratio] ?? [];
+        return [
+          ...earlierKfs.map(convertEarlierKeyframe),
+          ...laterKfs.map(convertLaterKeyframe),
+        ].sort((a, b) => a.timeOffset - b.timeOffset);
+      };
+
+      const mergedCameraEdit: RallyCameraEdit = {
+        enabled: earlierEdit?.enabled || laterEdit?.enabled || false,
+        aspectRatio: mergedAspectRatio,
+        keyframes: {
+          ORIGINAL: mergeKeyframesForRatio('ORIGINAL'),
+          VERTICAL: mergeKeyframesForRatio('VERTICAL'),
+        },
+      };
+
+      // Set merged camera edit and remove later rally's edit
+      cameraStore.setCameraEdit(earlierId, mergedCameraEdit);
+      cameraStore.removeCameraEdit(laterId);
+    }
+
+    // Transfer highlights from later rally to earlier (deduplicate)
+    const updatedHighlights = state.highlights.map((h) => ({
+      ...h,
+      rallyIds: h.rallyIds.includes(laterId)
+        ? [...new Set([...h.rallyIds.filter((id) => id !== laterId), earlierId])]
+        : h.rallyIds,
+    }));
+
+    set({
+      rallies: state.rallies
+        .filter((r) => r.id !== laterId)
+        .map((r) => (r.id === earlierId ? merged : r)),
+      highlights: updatedHighlights,
+      selectedRallyId: earlierId,
       hasUnsavedChanges: true,
     });
 
