@@ -239,8 +239,8 @@ class GameStateAnalyzer:
             results = self._smooth_results(results, self.temporal_smoothing_window)
 
         if return_raw:
-            assert raw_results is not None
-            return results, raw_results
+            # raw_results is guaranteed non-None when return_raw=True (set on line 235)
+            return results, raw_results  # type: ignore[return-value]
         return results
 
     def smooth_results(

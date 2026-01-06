@@ -11,7 +11,6 @@ Processes video export jobs by:
 """
 
 import json
-import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -122,8 +121,13 @@ def generate_camera_filter(
     return f"crop=w='{w_expr_final}':h='{h_expr_final}':x='{x_expr_final}':y='{y_expr_final}',scale={output_width}:{output_height}"
 
 
-def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    """Main Lambda entry point."""
+def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
+    """Main Lambda entry point.
+
+    Args:
+        event: Lambda event payload with export job details
+        _context: Lambda context (unused, required by AWS Lambda signature)
+    """
     print(f"Received event: {json.dumps(event)}")
 
     # Validate required parameters

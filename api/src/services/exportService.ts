@@ -447,7 +447,9 @@ async function triggerLocalExport(
 
     // Clean up downloaded videos
     for (const videoPath of videoPathMap.values()) {
-      await fs.unlink(videoPath).catch(() => {});
+      await fs.unlink(videoPath).catch((err) => {
+        console.error(`[export] Failed to clean up ${videoPath}:`, err);
+      });
     }
 
     await updateExportProgress(jobId, 85);
