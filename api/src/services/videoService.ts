@@ -22,7 +22,6 @@ import type {
 import { getOrCreateAllVideosSession } from "./sessionService.js";
 import {
   getUserTier,
-  calculateExpirationDate,
   getTierLimits,
   checkUploadQuota,
   checkAndReserveUploadQuota,
@@ -96,9 +95,8 @@ async function validateUploadRequest(
   // Note: Duplicate content hash check is done atomically in createVideoUploadUrl/requestUploadUrl
   // to prevent TOCTOU race conditions
 
-  const expiresAt = calculateExpirationDate(tier);
-
-  return { tier, limits, expiresAt };
+  // No time-based expiration - videos kept until 2 months of user inactivity
+  return { tier, limits, expiresAt: null };
 }
 
 // Helper to find or create a pending video for upload

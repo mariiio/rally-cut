@@ -67,9 +67,6 @@ class BallTracker:
         self.use_predictions = use_predictions
         self._detector: Any = None
         self._kalman: KalmanFilter | None = None
-        # Static object filter: tracks positions that appear repeatedly without movement
-        self._static_positions: dict[tuple[int, int], int] = {}  # (x//20, y//20) -> count
-        self._static_threshold: int = 10  # Frames before considering position as static
 
     def _get_detector(self) -> Any:
         """Lazy load the YOLO detector."""
@@ -170,31 +167,6 @@ class BallTracker:
 
         kalman.update(np.array([detection.x, detection.y]))
 
-    def _get_position_key(self, x: float, y: float) -> tuple[int, int]:
-        """Get grid key for position (20px cells for grouping nearby detections)."""
-        return (int(x) // 20, int(y) // 20)
-
-    def _is_static_position(self, x: float, y: float) -> bool:
-        """Check if position has been detected statically too many times."""
-        key = self._get_position_key(x, y)
-        return self._static_positions.get(key, 0) >= self._static_threshold
-
-    def _update_static_tracking(self, candidates: list[BallPosition]) -> None:
-        """Update static position tracking based on current frame detections."""
-        # Decay all counts slightly (positions that aren't seen will fade)
-        keys_to_remove = []
-        for key in self._static_positions:
-            self._static_positions[key] = max(0, self._static_positions[key] - 1)
-            if self._static_positions[key] == 0:
-                keys_to_remove.append(key)
-        for key in keys_to_remove:
-            del self._static_positions[key]
-
-        # Increment count for all detected positions
-        for cand in candidates:
-            key = self._get_position_key(cand.x, cand.y)
-            self._static_positions[key] = self._static_positions.get(key, 0) + 2  # +2 to outpace decay
-
     def _validate_detection(
         self,
         candidates: list[BallPosition],
@@ -221,17 +193,9 @@ class BallTracker:
         if not candidates:
             return None, False
 
-        # Filter out static positions (logos, text, etc. that don't move)
-        # Note: This is disabled for now - needs tuning for different video types
-        # moving_candidates = [
-        #     c for c in candidates
-        #     if not self._is_static_position(c.x, c.y)
-        # ]
-        moving_candidates = candidates  # Disabled static filter
-
         if kalman is None:
-            # No prior tracking - return highest confidence non-static candidate
-            return moving_candidates[0] if moving_candidates else None, False
+            # No prior tracking - return highest confidence candidate
+            return candidates[0], False
 
         # Get predicted position from Kalman
         predicted_x, predicted_y = kalman.x[0], kalman.x[1]
@@ -240,7 +204,7 @@ class BallTracker:
         scored = []
         best_distant_candidate = None  # Track high-confidence but distant candidates
 
-        for cand in moving_candidates:
+        for cand in candidates:
             distance = np.sqrt((cand.x - predicted_x) ** 2 + (cand.y - predicted_y) ** 2)
 
             if distance <= max_velocity:
@@ -304,9 +268,6 @@ class BallTracker:
         if end_frame is None:
             end_frame = video.info.frame_count
 
-        # Reset static position tracking for new video segment
-        self._static_positions.clear()
-
         positions: list[BallPosition] = []
         frames_processed = 0
         frames_detected = 0
@@ -325,9 +286,6 @@ class BallTracker:
 
             # Get all detection candidates
             candidates = detector.detect_frame_candidates(frame, frame_idx)
-
-            # Update static object tracking (to filter logos, text, etc.)
-            self._update_static_tracking(candidates)
 
             # Apply temporal validation to select best candidate
             detection, should_reset = self._validate_detection(candidates, kalman, max_velocity)

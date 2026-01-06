@@ -119,44 +119,6 @@ class Video:
         ret, frame = cap.read()
         return frame if ret else None
 
-    def read_frames(
-        self,
-        start_frame: int,
-        count: int,
-        step: int = 1,
-        resize: tuple[int, int] | None = None,
-    ) -> list[np.ndarray]:
-        """
-        Read multiple frames starting from a position.
-
-        Args:
-            start_frame: Starting frame index
-            count: Number of frames to read
-            step: Step between frames
-            resize: Optional (width, height) to resize frames for faster processing
-
-        Returns:
-            List of frames as numpy arrays
-        """
-        frames = []
-        cap = self._get_capture()
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-
-        for i in range(count):
-            if step > 1 and i > 0:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame + i * step)
-
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            if resize:
-                frame = cv2.resize(frame, resize, interpolation=cv2.INTER_AREA)
-
-            frames.append(frame)
-
-        return frames
-
     def iter_frames(
         self,
         start_frame: int = 0,
@@ -214,43 +176,6 @@ class Video:
                 next_yield_frame += step
 
             frame_idx += 1
-
-    def iter_chunks(
-        self,
-        chunk_frames: int,
-        overlap: int = 0,
-    ) -> Iterator[tuple[int, list[np.ndarray]]]:
-        """
-        Iterate over video in chunks.
-
-        Args:
-            chunk_frames: Number of frames per chunk
-            overlap: Number of overlapping frames between chunks
-
-        Yields:
-            Tuple of (start_frame_idx, list of frames)
-        """
-        cap = self._get_capture()
-        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-
-        total_frames = self.info.frame_count
-        stride = chunk_frames - overlap
-        start_frame = 0
-
-        while start_frame < total_frames:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-            frames = []
-
-            for _ in range(chunk_frames):
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                frames.append(frame)
-
-            if frames:
-                yield start_frame, frames
-
-            start_frame += stride
 
     def close(self) -> None:
         """Release video capture resources."""

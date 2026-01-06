@@ -223,13 +223,6 @@ export async function checkAndReserveDetectionQuota(
   });
 }
 
-export function calculateExpirationDate(_tier: UserTier): Date | null {
-  // No time-based expiration - videos are kept until user is inactive for 2 months
-  // Quality downgrade (original → proxy) happens after 7 days for FREE tier
-  // Hard delete happens after 2 months of inactivity for FREE tier
-  return null;
-}
-
 // ============================================================================
 // Upload Quota
 // ============================================================================

@@ -5,7 +5,7 @@ import type {
   CreateSessionInput,
   UpdateSessionInput,
 } from "../schemas/session.js";
-import { getUserTier, calculateExpirationDate } from "./tierService.js";
+import { getUserTier } from "./tierService.js";
 
 const ALL_VIDEOS_SESSION_NAME = "All Videos";
 
@@ -49,15 +49,13 @@ function serializeBigInts<T>(obj: T): T {
 }
 
 export async function createSession(data: CreateSessionInput, userId?: string) {
-  const tier = await getUserTier(userId);
-  const expiresAt = calculateExpirationDate(tier);
-
   return prisma.session.create({
     data: {
       name: data.name,
       userId,
       type: "REGULAR",
-      expiresAt,
+      // No time-based expiration - videos kept until 2 months of user inactivity
+      expiresAt: null,
     },
   });
 }
@@ -73,15 +71,13 @@ export async function getOrCreateAllVideosSession(userId: string) {
   });
 
   if (!session) {
-    const tier = await getUserTier(userId);
-    const expiresAt = calculateExpirationDate(tier);
-
     session = await prisma.session.create({
       data: {
         userId,
         name: ALL_VIDEOS_SESSION_NAME,
         type: "ALL_VIDEOS",
-        expiresAt,
+        // No time-based expiration - videos kept until 2 months of user inactivity
+        expiresAt: null,
       },
     });
   }
