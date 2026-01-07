@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useState, useMemo } from 'react';
-import { Box, Button, IconButton, Typography, Chip } from '@mui/material';
+import { Box, Button, IconButton, Typography, Chip, Tooltip } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import DiamondIcon from '@mui/icons-material/Diamond';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import Link from 'next/link';
 import { useTierStore } from '@/stores/tierStore';
 import { designTokens } from '@/app/theme';
@@ -123,15 +124,33 @@ export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerPro
             },
           }}
         />
-        <Typography
-          variant="body2"
-          sx={{
-            color: 'text.secondary',
-            fontSize: '0.8rem',
-          }}
-        >
-          Original quality available for export
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+              fontSize: '0.8rem',
+            }}
+          >
+            Original quality available for export
+          </Typography>
+          <Tooltip
+            title="After this period, exports will be 720p. Re-upload to restore full quality."
+            arrow
+            placement="top"
+          >
+            <InfoOutlinedIcon
+              sx={{
+                fontSize: 14,
+                color: 'text.disabled',
+                cursor: 'help',
+                '&:hover': {
+                  color: 'text.secondary',
+                },
+              }}
+            />
+          </Tooltip>
+        </Box>
       </Box>
 
       <Button
