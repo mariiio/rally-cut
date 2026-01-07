@@ -17,7 +17,7 @@ import { TIER_LIMITS } from "../services/tierService.js";
  * PREMIUM users and sessions shared with PREMIUM users are never auto-deleted.
  */
 
-const ORIGINAL_QUALITY_DAYS = TIER_LIMITS.FREE.originalQualityDays!; // 7 days
+const ORIGINAL_QUALITY_DAYS = TIER_LIMITS.FREE.originalQualityDays!; // 3 days
 const INACTIVITY_DELETE_DAYS = TIER_LIMITS.FREE.inactivityDeleteDays!; // 60 days
 
 export interface CleanupResult {
@@ -47,16 +47,16 @@ export async function cleanupExpiredContent(): Promise<CleanupResult> {
 
   console.log("[CLEANUP] Starting cleanup...");
   console.log(`[CLEANUP] Current time: ${now.toISOString()}`);
-  console.log(`[CLEANUP] Quality downgrade cutoff (7 days): ${qualityDowngradeCutoff.toISOString()}`);
+  console.log(`[CLEANUP] Quality downgrade cutoff (${ORIGINAL_QUALITY_DAYS} days): ${qualityDowngradeCutoff.toISOString()}`);
   console.log(`[CLEANUP] Inactivity cutoff (60 days): ${inactivityCutoff.toISOString()}`);
 
   // ============================================================================
-  // Phase A: Quality Downgrade for FREE tier videos older than 7 days
+  // Phase A: Quality Downgrade for FREE tier videos older than ORIGINAL_QUALITY_DAYS
   // ============================================================================
 
   // Find videos to downgrade:
   // - Owner is FREE tier
-  // - createdAt <= 7 days ago
+  // - createdAt <= ORIGINAL_QUALITY_DAYS ago
   // - qualityDowngradedAt is null (not already downgraded)
   // - Has a proxy to fallback to
   // - Not in any session with a PREMIUM member

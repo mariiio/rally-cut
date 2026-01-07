@@ -33,7 +33,7 @@ const plans = [
       '720p exports + watermark',
       'Browser-based export',
       'Unlimited video storage',
-      '720p quality after 7 days',
+      '720p quality after 3 days',
       'Local storage only',
     ],
     cta: 'Start Free',

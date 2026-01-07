@@ -13,7 +13,7 @@ export const TIER_LIMITS = {
     exportWatermark: true,
     lambdaExportEnabled: false,
     retentionDays: null, // Videos kept until 2 months inactive
-    originalQualityDays: 7, // Original quality kept for 7 days, then downgraded to 720p proxy
+    originalQualityDays: 3, // Original quality kept for 3 days, then downgraded to 720p proxy
     inactivityDeleteDays: 60, // Hard delete after 2 months of inactivity
     serverSyncEnabled: false,
     highlightsEnabled: true,
