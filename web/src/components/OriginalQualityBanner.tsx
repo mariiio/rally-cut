@@ -84,8 +84,8 @@ export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerPro
       return isDowngradedDismissed ? 'none' : 'downgraded';
     }
 
-    // Within grace period - show countdown
-    if (daysUntilDowngrade <= 3) {
+    // Within 2 days of grace period ending - show countdown
+    if (daysUntilDowngrade <= 2) {
       // On last day (or past), always show regardless of dismissal
       if (daysUntilDowngrade <= 1) return 'countdown';
       // Otherwise, respect dismissal
