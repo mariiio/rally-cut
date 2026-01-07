@@ -135,7 +135,7 @@ export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerPro
             Upgrade to unlock full quality exports
           </Typography>
           <Tooltip
-            title="Pro unlocks original quality exports. After this period, the source file is removed and you'd need to re-upload."
+            title="Pro unlocks original quality exports. After this period, only 720p will be available—re-upload to restore full quality."
             arrow
             placement="top"
           >

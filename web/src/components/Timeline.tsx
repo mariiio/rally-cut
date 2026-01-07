@@ -1645,13 +1645,13 @@ export function Timeline() {
                 </Box>
 
 
-                {/* Highlight color bar on left edge */}
+                {/* Highlight color bar on bottom edge */}
                 {(() => {
                   const rallyHighlights = getHighlightsForRally(action.id);
                   if (rallyHighlights.length === 0) return null;
 
                   const colors = rallyHighlights.map(h => h.color);
-                  // Create vertical gradient with equal stops for each color
+                  // Create horizontal gradient with equal stops for each color
                   const gradientStops = colors.map((color, i) => {
                     const start = (i / colors.length) * 100;
                     const end = ((i + 1) / colors.length) * 100;
@@ -1662,16 +1662,16 @@ export function Timeline() {
                     <Box
                       sx={{
                         position: 'absolute',
-                        top: -1,
                         left: -1,
+                        right: -1,
                         bottom: -1,
-                        width: 5,
+                        height: 5,
                         background: colors.length === 1
                           ? colors[0]
-                          : `linear-gradient(180deg, ${gradientStops})`,
-                        borderRadius: '4px 0 0 4px',
+                          : `linear-gradient(90deg, ${gradientStops})`,
+                        borderRadius: '0 0 4px 4px',
                         border: '1px solid rgba(255,255,255,0.1)',
-                        borderRight: 'none',
+                        borderTop: 'none',
                       }}
                     />
                   );
