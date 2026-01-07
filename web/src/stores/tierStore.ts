@@ -37,7 +37,7 @@ const DEFAULT_FREE_LIMITS: TierLimits = {
   exportWatermark: true,
   lambdaExportEnabled: false,
   retentionDays: null, // Deprecated
-  originalQualityDays: 7,
+  originalQualityDays: 3,
   inactivityDeleteDays: 60,
   serverSyncEnabled: false,
   highlightsEnabled: true,

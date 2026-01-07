@@ -52,7 +52,7 @@ All endpoints require `X-Visitor-Id` header (UUID):
 | Monthly uploads | 5 | Unlimited |
 | Export quality | 720p + watermark | Original |
 | Server sync | No (localStorage only) | Yes |
-| Original quality | 7 days (then 720p proxy) | Forever |
+| Original quality | 3 days (then 720p proxy) | Forever |
 | Video retention | Until 2 months inactive | Forever |
 
 Tier checked via `tierService.ts`. Premium expires → auto-downgrade to FREE.
@@ -60,7 +60,7 @@ Tier checked via `tierService.ts`. Premium expires → auto-downgrade to FREE.
 ### Retention Policy
 
 FREE tier videos follow a two-phase cleanup:
-1. **Day 7**: Original/optimized quality deleted, video remains accessible at 720p proxy
+1. **Day 3**: Original/optimized quality deleted, video remains accessible at 720p proxy
 2. **2 months inactive**: All content hard deleted (videos, sessions, S3 files)
 
 Activity tracking: User's `lastActiveAt` updated (1hr debounce) when accessing sessions.

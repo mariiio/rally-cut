@@ -1498,7 +1498,6 @@ export function Timeline() {
                       filter: 'saturate(0.5)',
                     }),
                     ...(isSelected && {
-                      transform: 'scale(1.02)',
                       zIndex: 10,
                     }),
                     '&:hover': isSelected ? {
