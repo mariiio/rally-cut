@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useState, useMemo } from 'react';
-import { Box, Button, IconButton, Typography } from '@mui/material';
+import { Box, Button, IconButton, Typography, Chip } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
-import UpgradeIcon from '@mui/icons-material/Upgrade';
+import DiamondIcon from '@mui/icons-material/Diamond';
+import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import Link from 'next/link';
 import { useTierStore } from '@/stores/tierStore';
+import { designTokens } from '@/app/theme';
 import type { Match } from '@/types/rally';
 
 const DISMISSED_KEY_PREFIX = 'rallycut_quality_banner_dismissed_';
@@ -17,7 +19,7 @@ interface OriginalQualityBannerProps {
 
 /**
  * Banner that warns FREE tier users when their video's original quality
- * is about to be downgraded (7 days after upload).
+ * is about to be downgraded (3 days after upload).
  *
  * Shows when:
  * - User is FREE tier
@@ -81,69 +83,96 @@ export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerPro
     return null;
   }
 
-  const urgencyMessage = daysUntilDowngrade === 0
-    ? 'Today is the last day'
+  const isUrgent = daysUntilDowngrade !== null && daysUntilDowngrade <= 1;
+  const timeLabel = daysUntilDowngrade === 0
+    ? 'Last day'
     : daysUntilDowngrade === 1
-    ? '1 day left'
-    : `${daysUntilDowngrade} days left`;
+    ? '1 day'
+    : `${daysUntilDowngrade} days`;
 
   return (
     <Box
       sx={{
-        bgcolor: '#FFF3E0',
-        borderBottom: '1px solid #FFB74D',
-        py: 1,
+        background: isUrgent
+          ? 'linear-gradient(90deg, rgba(255, 107, 74, 0.15) 0%, rgba(255, 209, 102, 0.1) 100%)'
+          : 'linear-gradient(90deg, rgba(255, 209, 102, 0.1) 0%, rgba(0, 212, 170, 0.05) 100%)',
+        borderBottom: '1px solid',
+        borderColor: isUrgent ? 'rgba(255, 107, 74, 0.3)' : 'rgba(255, 209, 102, 0.2)',
+        py: 0.75,
         px: 2,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 2,
+        gap: 1.5,
         flexWrap: 'wrap',
       }}
     >
-      <Typography
-        variant="body2"
-        sx={{
-          color: '#E65100',
-          fontWeight: 500,
-          textAlign: 'center',
-        }}
-      >
-        <strong>{urgencyMessage}</strong> to keep original quality for exports.
-        Your video will remain accessible at 720p.
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <Chip
+          icon={<AccessTimeIcon sx={{ fontSize: 14 }} />}
+          label={timeLabel}
+          size="small"
+          sx={{
+            bgcolor: isUrgent ? 'rgba(255, 107, 74, 0.2)' : 'rgba(255, 209, 102, 0.2)',
+            color: isUrgent ? designTokens.colors.tertiary.dark : designTokens.colors.tertiary.main,
+            fontWeight: 600,
+            fontSize: '0.7rem',
+            height: 22,
+            '& .MuiChip-icon': {
+              color: 'inherit',
+            },
+          }}
+        />
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+            fontSize: '0.8rem',
+          }}
+        >
+          Original quality available for export
+        </Typography>
+      </Box>
+
       <Button
         component={Link}
         href="/pricing"
         size="small"
-        variant="contained"
-        startIcon={<UpgradeIcon />}
+        startIcon={<DiamondIcon sx={{ fontSize: 14 }} />}
         sx={{
-          bgcolor: '#E65100',
-          color: 'white',
+          background: designTokens.gradients.tertiary,
+          color: '#1a1a1a',
           fontWeight: 600,
+          fontSize: '0.75rem',
+          px: 1.5,
+          py: 0.5,
+          minHeight: 28,
+          borderRadius: 1,
+          textTransform: 'none',
           '&:hover': {
-            bgcolor: '#BF360C',
+            background: designTokens.gradients.primary,
+            color: 'white',
           },
         }}
       >
-        Upgrade
+        Upgrade to Pro
       </Button>
-      {daysUntilDowngrade !== null && daysUntilDowngrade > 1 && (
+
+      {!isUrgent && (
         <IconButton
           size="small"
           onClick={handleDismiss}
           sx={{
-            color: '#E65100',
-            opacity: 0.6,
+            color: 'text.disabled',
+            p: 0.5,
             '&:hover': {
-              opacity: 1,
-              bgcolor: 'rgba(230, 81, 0, 0.1)',
+              color: 'text.secondary',
+              bgcolor: 'rgba(255, 255, 255, 0.05)',
             },
           }}
-          aria-label="Dismiss banner"
+          aria-label="Dismiss"
         >
-          <CloseIcon fontSize="small" />
+          <CloseIcon sx={{ fontSize: 16 }} />
         </IconButton>
       )}
     </Box>
