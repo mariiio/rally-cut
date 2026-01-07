@@ -132,10 +132,10 @@ export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerPro
               fontSize: '0.8rem',
             }}
           >
-            Original quality available for export
+            Upgrade to unlock full quality exports
           </Typography>
           <Tooltip
-            title="After this period, exports will be 720p. Re-upload to restore full quality."
+            title="Pro unlocks original quality exports. After this period, the source file is removed and you'd need to re-upload."
             arrow
             placement="top"
           >
