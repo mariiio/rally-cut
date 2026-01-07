@@ -171,15 +171,25 @@ export function ConfirmRallies({ matchId, isPremium }: ConfirmRalliesProps) {
     );
   }
 
-  // Show error alert
+  // Show error alert with helpful messages
   if (error) {
+    const isNoRalliesError = error.toLowerCase().includes('at least one rally') ||
+                             error.toLowerCase().includes('no rallies');
     return (
       <Alert
-        severity="error"
+        severity={isNoRalliesError ? 'info' : 'error'}
         onClose={() => setError(null)}
-        sx={{ py: 0, fontSize: 11 }}
+        sx={{ py: 0.5, fontSize: 11 }}
       >
-        {error}
+        {isNoRalliesError ? (
+          <>
+            <strong>No rallies to confirm.</strong> Add rallies by clicking the{' '}
+            <strong>+ Add Rally</strong> button or pressing <kbd>Cmd+Enter</kbd> while
+            playing the video.
+          </>
+        ) : (
+          error
+        )}
       </Alert>
     );
   }
@@ -270,27 +280,34 @@ export function ConfirmRallies({ matchId, isPremium }: ConfirmRalliesProps) {
   }
 
   // Default - show confirm button
+  const hasRallies = rallies.length > 0;
+  const tooltipTitle = hasRallies
+    ? 'Generate a trimmed video with only rally segments'
+    : 'Add rallies first using + Add Rally or Cmd+Enter';
+
   return (
     <>
-      <Tooltip title="Generate a trimmed video with only rally segments">
-        <Button
-          variant="outlined"
-          size="small"
-          onClick={() => setShowConfirmDialog(true)}
-          disabled={isConfirming || rallies.length === 0}
-          startIcon={isConfirming ? <CircularProgress size={12} /> : <CheckCircleIcon />}
-          sx={{
-            fontSize: 11,
-            py: 0.5,
-            borderColor: 'divider',
-            '&:hover': {
-              borderColor: 'primary.main',
-              bgcolor: 'rgba(144, 202, 249, 0.08)',
-            },
-          }}
-        >
-          Confirm Rallies
-        </Button>
+      <Tooltip title={tooltipTitle}>
+        <span>
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => setShowConfirmDialog(true)}
+            disabled={isConfirming || !hasRallies}
+            startIcon={isConfirming ? <CircularProgress size={12} /> : <CheckCircleIcon />}
+            sx={{
+              fontSize: 11,
+              py: 0.5,
+              borderColor: 'divider',
+              '&:hover': {
+                borderColor: 'primary.main',
+                bgcolor: 'rgba(144, 202, 249, 0.08)',
+              },
+            }}
+          >
+            Confirm Rallies
+          </Button>
+        </span>
       </Tooltip>
 
       <ConfirmDialog
@@ -303,36 +320,5 @@ export function ConfirmRallies({ matchId, isPremium }: ConfirmRalliesProps) {
         onCancel={() => setShowConfirmDialog(false)}
       />
     </>
-  );
-}
-
-/**
- * Locked Banner - shows when rallies are locked
- * Display at the top of the rally list to indicate editing is disabled
- */
-export function LockedRalliesBanner() {
-  const { isRallyEditingLocked } = useEditorStore();
-  const isLocked = isRallyEditingLocked();
-
-  if (!isLocked) return null;
-
-  return (
-    <Box
-      sx={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 1,
-        px: 1.5,
-        py: 0.75,
-        bgcolor: 'rgba(76, 175, 80, 0.1)',
-        borderBottom: '1px solid',
-        borderColor: 'success.dark',
-      }}
-    >
-      <LockIcon sx={{ fontSize: 14, color: 'success.main' }} />
-      <Typography variant="caption" sx={{ fontSize: 11, color: 'success.main' }}>
-        Rallies confirmed - editing disabled. Restore to make changes.
-      </Typography>
-    </Box>
   );
 }

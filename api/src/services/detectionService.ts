@@ -519,16 +519,12 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
       .map((rally, i) => ({ id: rally.id, order: i }))
       .filter((u, i) => allRallies[i].order !== u.order);
 
-    // Batch update all order changes in a single query
-    if (updates.length > 0) {
-      const ids = updates.map((u) => u.id);
-      const orderCase = updates
-        .map((u) => `WHEN '${u.id}'::uuid THEN ${u.order}`)
-        .join(" ");
-      await tx.$executeRawUnsafe(
-        `UPDATE "rallies" SET "order" = CASE id ${orderCase} END WHERE id = ANY($1::uuid[])`,
-        ids
-      );
+    // Batch update all order changes
+    for (const u of updates) {
+      await tx.rally.update({
+        where: { id: u.id },
+        data: { order: u.order },
+      });
     }
 
     await tx.rallyDetectionJob.update({

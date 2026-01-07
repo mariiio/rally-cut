@@ -127,6 +127,10 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     Args:
         event: Lambda event payload with export job details
         _context: Lambda context (unused, required by AWS Lambda signature)
+
+    Supports two modes:
+    - Export mode (default): Regular video export
+    - Confirmation mode (isConfirmation=True): Rally confirmation / trimmed video generation
     """
     print(f"Received event: {json.dumps(event)}")
 
@@ -143,10 +147,11 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     callback_url = event["callbackUrl"]
     webhook_secret = event["webhookSecret"]
     s3_bucket = event["s3Bucket"]
+    is_confirmation = event.get("isConfirmation", False)
 
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
-            output_key = process_export(
+            output_key, duration_ms, proxy_key = process_export(
                 job_id=job_id,
                 tier=tier,
                 output_format=output_format,
@@ -155,34 +160,48 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 tmpdir=Path(tmpdir),
                 callback_url=callback_url,
                 webhook_secret=webhook_secret,
+                is_confirmation=is_confirmation,
             )
 
-        # Notify success (raise on error so Lambda fails if webhook fails)
-        send_webhook(
-            callback_url,
-            webhook_secret,
-            {
+        # Build webhook payload based on mode
+        if is_confirmation:
+            # Confirmation mode uses confirmation_id and includes duration + proxy
+            payload = {
+                "confirmation_id": job_id,
+                "status": "completed",
+                "output_s3_key": output_key,
+                "duration_ms": duration_ms,
+                "proxy_s3_key": proxy_key,
+            }
+        else:
+            # Export mode uses job_id
+            payload = {
                 "job_id": job_id,
                 "status": "completed",
                 "output_s3_key": output_key,
-            },
-            raise_on_error=True,
-        )
+            }
+
+        # Notify success (raise on error so Lambda fails if webhook fails)
+        send_webhook(callback_url, webhook_secret, payload, raise_on_error=True)
 
         return {"statusCode": 200, "body": json.dumps({"success": True})}
 
     except Exception as e:
         print(f"Export failed: {e}")
-        # Notify failure
-        send_webhook(
-            callback_url,
-            webhook_secret,
-            {
+        # Build failure payload based on mode
+        if is_confirmation:
+            payload = {
+                "confirmation_id": job_id,
+                "status": "failed",
+                "error_message": str(e),
+            }
+        else:
+            payload = {
                 "job_id": job_id,
                 "status": "failed",
                 "error_message": str(e),
-            },
-        )
+            }
+        send_webhook(callback_url, webhook_secret, payload)
         raise
 
 
@@ -195,8 +214,24 @@ def process_export(
     tmpdir: Path,
     callback_url: str,
     webhook_secret: str,
-) -> str:
-    """Process the export and return the output S3 key."""
+    is_confirmation: bool = False,
+) -> tuple[str, int | None, str | None]:
+    """Process the export and return the output S3 key, duration, and proxy key.
+
+    Args:
+        job_id: Export job ID or confirmation ID
+        tier: User tier (FREE or PREMIUM)
+        output_format: Output format (mp4 or webm)
+        rallies: List of rally clips to extract
+        s3_bucket: S3 bucket name
+        tmpdir: Temporary directory for processing
+        callback_url: Webhook callback URL
+        webhook_secret: Webhook authentication secret
+        is_confirmation: If True, use confirmation mode (different output path, return duration)
+
+    Returns:
+        Tuple of (output S3 key, duration in ms or None, proxy S3 key or None)
+    """
     clips_dir = tmpdir / "clips"
     clips_dir.mkdir()
 
@@ -206,7 +241,7 @@ def process_export(
     # Download and process each clip
     for i, rally in enumerate(rallies):
         progress = int((i / total_rallies) * 80)  # 0-80% for clip extraction
-        send_progress(callback_url, webhook_secret, job_id, progress)
+        send_progress(callback_url, webhook_secret, job_id, progress, is_confirmation)
 
         video_s3_key = rally["videoS3Key"]
         start_ms = rally["startMs"]
@@ -239,22 +274,46 @@ def process_export(
         video_path.unlink()
 
     # Concatenate clips
-    send_progress(callback_url, webhook_secret, job_id, 85)
+    send_progress(callback_url, webhook_secret, job_id, 85, is_confirmation)
     output_path = tmpdir / f"output.{output_format}"
     concatenate_clips(clip_files, output_path)
 
-    # Upload to S3
-    send_progress(callback_url, webhook_secret, job_id, 95)
-    output_key = f"exports/{job_id}/output.{output_format}"
-    print(f"Uploading to {output_key}")
-    s3_client.upload_file(
-        str(output_path),
-        s3_bucket,
-        output_key,
-        ExtraArgs={"ContentType": f"video/{output_format}"},
-    )
+    # Get duration for confirmation mode
+    duration_ms = None
+    proxy_key = None
+    output_key = None
 
-    return output_key
+    if is_confirmation:
+        # Proxy-only mode: The concatenated output IS the proxy (already 720p from extract_clip)
+        # No full-quality output is generated - exports use original video with reverse-mapped timestamps
+        duration_ms = get_video_duration_ms(output_path)
+        proxy_key = f"confirmations/{job_id}/proxy.{output_format}"
+
+        print(f"Uploading confirmation proxy to {proxy_key}")
+        send_progress(callback_url, webhook_secret, job_id, 95, is_confirmation)
+
+        s3_client.upload_file(
+            str(output_path),
+            s3_bucket,
+            proxy_key,
+            ExtraArgs={"ContentType": f"video/{output_format}"},
+        )
+        # output_key stays None - no full-quality trimmed video
+    else:
+        # Normal export mode
+        output_key = f"exports/{job_id}/output.{output_format}"
+
+        print(f"Uploading to {output_key}")
+        send_progress(callback_url, webhook_secret, job_id, 95, is_confirmation)
+
+        s3_client.upload_file(
+            str(output_path),
+            s3_bucket,
+            output_key,
+            ExtraArgs={"ContentType": f"video/{output_format}"},
+        )
+
+    return output_key, duration_ms, proxy_key
 
 
 def extract_clip(
@@ -440,6 +499,8 @@ def concatenate_clips(clip_files: list[Path], output_path: Path) -> None:
         str(concat_file),
         "-c",
         "copy",
+        "-movflags",
+        "+faststart",  # Enable progressive download for streaming
         str(output_path),
     ]
 
@@ -478,9 +539,44 @@ def send_webhook(url: str, secret: str, payload: dict, raise_on_error: bool = Fa
             raise
 
 
-def send_progress(url: str, secret: str, job_id: str, progress: int) -> None:
-    """Send progress update."""
+def send_progress(
+    url: str, secret: str, job_id: str, progress: int, is_confirmation: bool = False
+) -> None:
+    """Send progress update.
+
+    Args:
+        url: Callback URL (used to extract base URL)
+        secret: Webhook secret
+        job_id: Job ID or confirmation ID
+        progress: Progress percentage (0-100)
+        is_confirmation: If True, use confirmation progress endpoint
+    """
     # Extract base URL and construct progress endpoint
     parsed = urlparse(url)
-    progress_url = f"{parsed.scheme}://{parsed.netloc}/v1/webhooks/export-progress"
-    send_webhook(progress_url, secret, {"job_id": job_id, "progress": progress})
+    if is_confirmation:
+        progress_url = f"{parsed.scheme}://{parsed.netloc}/v1/webhooks/confirmation-progress"
+        payload = {"confirmation_id": job_id, "progress": progress}
+    else:
+        progress_url = f"{parsed.scheme}://{parsed.netloc}/v1/webhooks/export-progress"
+        payload = {"job_id": job_id, "progress": progress}
+    send_webhook(progress_url, secret, payload)
+
+
+def get_video_duration_ms(video_path: Path) -> int:
+    """Get video duration in milliseconds using ffprobe."""
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(video_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"ffprobe failed: {result.stderr}")
+        raise RuntimeError(f"Failed to get video duration: {result.stderr}")
+    duration_sec = float(result.stdout.strip())
+    return int(duration_sec * 1000)

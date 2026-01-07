@@ -14,7 +14,7 @@ import {
   SessionManifest,
 } from '@/types/rally';
 import { usePlayerStore } from './playerStore';
-import { fetchSession as fetchSessionFromApi, fetchVideoForEditor, getCurrentUser, AccessDeniedError, type CameraEditMap } from '@/services/api';
+import { fetchSession as fetchSessionFromApi, fetchVideoForEditor, getCurrentUser, getConfirmationStatus, AccessDeniedError, type CameraEditMap } from '@/services/api';
 import { useCameraStore } from './cameraStore';
 import type { RallyCameraEdit } from '@/types/camera';
 import { syncService } from '@/services/syncService';
@@ -580,6 +580,26 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         originalRalliesPerMatch,
         hasUnsavedChanges: false,
       });
+
+      // Load confirmation status for all matches
+      for (const match of session.matches) {
+        try {
+          const confirmResult = await getConfirmationStatus(match.id);
+          if (confirmResult.confirmation) {
+            get().setConfirmationStatus(match.id, {
+              id: confirmResult.confirmation.id,
+              status: confirmResult.confirmation.status,
+              progress: confirmResult.confirmation.progress,
+              error: confirmResult.confirmation.error,
+              confirmedAt: confirmResult.confirmation.confirmedAt,
+              originalDurationMs: confirmResult.confirmation.originalDurationMs,
+              trimmedDurationMs: confirmResult.confirmation.trimmedDurationMs,
+            });
+          }
+        } catch {
+          // Ignore - no confirmation exists for this video
+        }
+      }
     } catch (error) {
       // Handle AccessDeniedError specially
       if (error instanceof AccessDeniedError) {
@@ -708,6 +728,24 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         originalRalliesPerMatch,
         hasUnsavedChanges: false,
       });
+
+      // Load confirmation status for this video
+      try {
+        const confirmResult = await getConfirmationStatus(videoId);
+        if (confirmResult.confirmation) {
+          get().setConfirmationStatus(videoId, {
+            id: confirmResult.confirmation.id,
+            status: confirmResult.confirmation.status,
+            progress: confirmResult.confirmation.progress,
+            error: confirmResult.confirmation.error,
+            confirmedAt: confirmResult.confirmation.confirmedAt,
+            originalDurationMs: confirmResult.confirmation.originalDurationMs,
+            trimmedDurationMs: confirmResult.confirmation.trimmedDurationMs,
+          });
+        }
+      } catch {
+        // Ignore - no confirmation exists for this video
+      }
     } catch (error) {
       // Clear loading state on error
       set({
@@ -798,6 +836,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       set({
         session: { ...state.session, matches: updatedMatches },
+        // Update video URLs and metadata (important after confirmation changes proxy/duration)
+        videoUrl: freshMatch.videoUrl,
+        proxyUrl: freshMatch.proxyUrl || null,
+        posterUrl: freshMatch.posterUrl || null,
+        videoMetadata: freshMatch.video,
         rallies: freshMatch.rallies,
         originalRallies: freshMatch.rallies,
         originalRalliesPerMatch: newOriginalRalliesPerMatch,

@@ -37,6 +37,84 @@ const router = Router();
 // ============================================================================
 
 /**
+ * GET /confirmations/:confirmationId/:filename
+ * Stream confirmed/trimmed video content from S3 (for local development without CloudFront)
+ * Supports range requests for video seeking
+ */
+router.get(
+  "/confirmations/:confirmationId/:filename",
+  async (req, res, next) => {
+    try {
+      const { confirmationId, filename } = req.params;
+      const s3Key = `confirmations/${confirmationId}/${filename}`;
+      const rangeHeader = req.headers.range;
+
+      const s3Response = await getObject(s3Key, rangeHeader);
+
+      // Set appropriate headers
+      if (s3Response.ContentType) {
+        res.setHeader("Content-Type", s3Response.ContentType);
+      }
+
+      // CORS headers for fetch
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+      res.setHeader("Accept-Ranges", "bytes");
+
+      // Cache headers - trimmed videos can be cached for a long time
+      res.setHeader("Cache-Control", "public, max-age=31536000");
+      res.setHeader("ETag", `"${confirmationId}-${filename}"`);
+
+      // Handle range request response
+      if (rangeHeader && s3Response.ContentRange) {
+        res.status(206); // Partial Content
+        res.setHeader("Content-Range", s3Response.ContentRange);
+        if (s3Response.ContentLength) {
+          res.setHeader("Content-Length", s3Response.ContentLength);
+        }
+      } else {
+        if (s3Response.ContentLength) {
+          res.setHeader("Content-Length", s3Response.ContentLength);
+        }
+      }
+
+      // Stream the body to the response
+      if (s3Response.Body) {
+        const stream = s3Response.Body as Readable;
+
+        const cleanup = () => {
+          if (!stream.destroyed) {
+            stream.destroy();
+          }
+        };
+
+        res.on("close", cleanup);
+        res.on("error", cleanup);
+
+        stream.on("error", (err) => {
+          if ((err as NodeJS.ErrnoException).code !== "ECONNRESET") {
+            console.error("S3 stream error:", err);
+          }
+          if (!res.headersSent) {
+            res.status(500).send("Error streaming video");
+          }
+        });
+
+        stream.pipe(res);
+      } else {
+        res.status(404).send("Video not found");
+      }
+    } catch (error: unknown) {
+      if (error && typeof error === "object" && "name" in error && error.name === "NoSuchKey") {
+        res.status(404).send("Video not found");
+      } else {
+        next(error);
+      }
+    }
+  }
+);
+
+/**
  * GET /videos/:userId/:videoId/:filename
  * Stream video content from S3 (for local development without CloudFront)
  * Supports range requests for video seeking

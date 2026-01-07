@@ -169,10 +169,11 @@ export async function initiateConfirmation(
   );
 
   // Trigger processing (async, don't wait)
+  // Also pass proxyS3Key so we can trim both videos in parallel
   const useLocal = shouldUseLocalProcessing();
   const triggerFn = useLocal ? triggerLocalProcessing : triggerLambdaProcessing;
 
-  triggerFn(confirmation.id, video.s3Key, mappings).catch((error) => {
+  triggerFn(confirmation.id, video.s3Key, mappings, video.proxyS3Key ?? undefined).catch((error) => {
     console.error(
       `[CONFIRMATION] Failed to trigger processing for job ${confirmation.id}:`,
       error
@@ -293,29 +294,28 @@ export async function restoreOriginal(
 
   // Use a transaction to revert timestamps and clean up
   await prisma.$transaction(async (tx) => {
-    // Batch update rally timestamps to original values in a single query
-    if (mappings.length > 0) {
-      const ids = mappings.map((m) => m.rallyId);
-      const startCase = mappings
-        .map((m) => `WHEN '${m.rallyId}'::uuid THEN ${m.originalStartMs}`)
-        .join(" ");
-      const endCase = mappings
-        .map((m) => `WHEN '${m.rallyId}'::uuid THEN ${m.originalEndMs}`)
-        .join(" ");
-      await tx.$executeRawUnsafe(
-        `UPDATE "rallies" SET "start_ms" = CASE id ${startCase} END, "end_ms" = CASE id ${endCase} END WHERE id = ANY($1::uuid[])`,
-        ids
-      );
+    // Batch update rally timestamps to original values
+    // Match by trimmed timestamps (current state) since rally IDs can change
+    for (const m of mappings) {
+      const rally = await tx.rally.findFirst({
+        where: {
+          videoId,
+          startMs: m.trimmedStartMs,
+          endMs: m.trimmedEndMs,
+        },
+      });
+
+      if (rally) {
+        await tx.rally.update({
+          where: { id: rally.id },
+          data: { startMs: m.originalStartMs, endMs: m.originalEndMs },
+        });
+      }
+      // Rally not found - may have been deleted, skip
     }
 
-    // Update video to use original s3Key and duration
-    await tx.video.update({
-      where: { id: videoId },
-      data: {
-        s3Key: confirmation.originalS3Key,
-        durationMs: confirmation.originalDurationMs,
-      },
-    });
+    // NOTE: With proxy-only confirmation, video record was never modified.
+    // We only need to delete the confirmation record.
 
     // Delete the confirmation record
     await tx.rallyConfirmation.delete({
@@ -323,11 +323,28 @@ export async function restoreOriginal(
     });
   });
 
-  // Delete trimmed video from S3 (outside transaction, non-blocking)
+  // Delete confirmation proxy from S3 (outside transaction, non-blocking)
   // Uses structured logging for failed deletions to enable cleanup via log analysis
+  if (confirmation.proxyS3Key) {
+    deleteObject(confirmation.proxyS3Key).catch((error) => {
+      // Log with structured data for potential automated cleanup
+      console.error(
+        JSON.stringify({
+          event: "S3_DELETE_FAILED",
+          type: "orphaned_confirmation_proxy",
+          s3Key: confirmation.proxyS3Key,
+          videoId,
+          confirmationId: confirmation.id,
+          error: error instanceof Error ? error.message : String(error),
+          timestamp: new Date().toISOString(),
+        })
+      );
+    });
+  }
+
+  // Also delete trimmed video if it exists (from legacy confirmations)
   if (confirmation.trimmedS3Key) {
     deleteObject(confirmation.trimmedS3Key).catch((error) => {
-      // Log with structured data for potential automated cleanup
       console.error(
         JSON.stringify({
           event: "S3_DELETE_FAILED",
@@ -353,6 +370,7 @@ interface ConfirmationCompletePayload {
   error_message?: string;
   output_s3_key?: string;
   duration_ms?: number;
+  proxy_s3_key?: string;  // Trimmed proxy video (if available)
 }
 
 /**
@@ -415,6 +433,7 @@ export async function handleConfirmationComplete(
         progress: 100,
         trimmedS3Key: payload.output_s3_key,
         trimmedDurationMs: payload.duration_ms,
+        proxyS3Key: payload.proxy_s3_key ?? null,  // Store trimmed proxy if available
         confirmedAt: new Date(),
       },
     });
@@ -424,29 +443,33 @@ export async function handleConfirmationComplete(
       return { ignored: true };
     }
 
-    // Batch update rally timestamps to trimmed values in a single query
-    if (mappings.length > 0) {
-      const ids = mappings.map((m) => m.rallyId);
-      const startCase = mappings
-        .map((m) => `WHEN '${m.rallyId}'::uuid THEN ${m.trimmedStartMs}`)
-        .join(" ");
-      const endCase = mappings
-        .map((m) => `WHEN '${m.rallyId}'::uuid THEN ${m.trimmedEndMs}`)
-        .join(" ");
-      await tx.$executeRawUnsafe(
-        `UPDATE "rallies" SET "start_ms" = CASE id ${startCase} END, "end_ms" = CASE id ${endCase} END WHERE id = ANY($1::uuid[])`,
-        ids
-      );
+    // Batch update rally timestamps to trimmed values
+    // Match by original timestamps instead of ID, since rally IDs can change
+    // if a sync happens between initiation and completion
+    for (const m of mappings) {
+      const rally = await tx.rally.findFirst({
+        where: {
+          videoId: confirmation.videoId,
+          startMs: m.originalStartMs,
+          endMs: m.originalEndMs,
+        },
+      });
+
+      if (rally) {
+        await tx.rally.update({
+          where: { id: rally.id },
+          data: { startMs: m.trimmedStartMs, endMs: m.trimmedEndMs },
+        });
+      }
+      // Rally not found - may have been deleted during processing, skip
     }
 
-    // Update video to use trimmed s3Key and duration
-    await tx.video.update({
-      where: { id: confirmation.videoId },
-      data: {
-        s3Key: payload.output_s3_key ?? confirmation.video.s3Key,
-        durationMs: payload.duration_ms ?? confirmation.trimmedDurationMs,
-      },
-    });
+    // NOTE: With proxy-only confirmation, we do NOT modify the Video record.
+    // - video.s3Key stays pointing to original (for exports)
+    // - video.durationMs stays as original duration
+    // - video.proxyS3Key stays as original proxy
+    // The confirmation proxy is stored in RallyConfirmation.proxyS3Key
+    // and the videoService returns it for editing when confirmed.
 
     return { success: true };
   });
@@ -483,14 +506,16 @@ export async function updateConfirmationProgress(
 
 /**
  * Run FFmpeg locally for development.
- * Downloads video from S3, extracts rally clips, concatenates, and uploads result.
+ * Generates ONLY a 720p proxy for editing (no full-quality trimmed video).
+ * The original video stays unchanged - exports use it directly with reverse-mapped timestamps.
  */
 async function triggerLocalProcessing(
   confirmationId: string,
   videoS3Key: string,
-  mappings: TimestampMapping[]
+  mappings: TimestampMapping[],
+  _proxyS3Key?: string  // Ignored - we generate fresh proxy from original
 ): Promise<void> {
-  console.log(`[LOCAL CONFIRMATION] Starting job ${confirmationId}`);
+  console.log(`[LOCAL CONFIRMATION] Starting job ${confirmationId} (proxy-only mode)`);
 
   // Update status to processing
   await prisma.rallyConfirmation.update({
@@ -503,13 +528,13 @@ async function triggerLocalProcessing(
   await fs.mkdir(tmpDir, { recursive: true });
 
   try {
-    // Download video from S3
-    const downloadUrl = await generateDownloadUrl(videoS3Key);
+    // Download original video from S3
     const videoPath = path.join(tmpDir, "input.mp4");
 
     console.log(`[LOCAL CONFIRMATION] Downloading video...`);
     await updateConfirmationProgress(confirmationId, 5);
 
+    const downloadUrl = await generateDownloadUrl(videoS3Key);
     const response = await fetch(downloadUrl);
     if (!response.ok) {
       throw new Error(`Failed to download video: ${response.status}`);
@@ -519,7 +544,7 @@ async function triggerLocalProcessing(
 
     await updateConfirmationProgress(confirmationId, 15);
 
-    // Extract clips for each rally
+    // Extract clips at 720p for each rally
     const clipPaths: string[] = [];
 
     for (let i = 0; i < mappings.length; i++) {
@@ -533,23 +558,23 @@ async function triggerLocalProcessing(
         (mapping.originalEndMs - mapping.originalStartMs) / 1000;
 
       console.log(
-        `[LOCAL CONFIRMATION] Extracting clip ${i + 1}/${mappings.length}...`
+        `[LOCAL CONFIRMATION] Extracting 720p clip ${i + 1}/${mappings.length}...`
       );
 
-      // Fast copy (no re-encoding)
+      // Extract at 720p (re-encode for proxy)
       await runFFmpeg([
-        "-ss",
-        String(startSec),
-        "-i",
-        videoPath,
-        "-t",
-        String(durationSec),
-        "-c",
-        "copy",
-        "-avoid_negative_ts",
-        "make_zero",
-        "-y",
-        clipPath,
+        "-ss", String(startSec),
+        "-i", videoPath,
+        "-t", String(durationSec),
+        "-vf", "scale=-2:720",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-crf", "28",
+        "-preset", "fast",
+        "-c:a", "aac",
+        "-b:a", "96k",
+        "-avoid_negative_ts", "make_zero",
+        "-y", clipPath,
       ]);
 
       clipPaths.push(clipPath);
@@ -557,8 +582,8 @@ async function triggerLocalProcessing(
 
     await updateConfirmationProgress(confirmationId, 80);
 
-    // Concatenate clips
-    const outputPath = path.join(tmpDir, "output.mp4");
+    // Concatenate clips into single proxy
+    const outputPath = path.join(tmpDir, "proxy.mp4");
 
     if (clipPaths.length === 1) {
       // Just rename single clip
@@ -572,17 +597,15 @@ async function triggerLocalProcessing(
       console.log(
         `[LOCAL CONFIRMATION] Concatenating ${clipPaths.length} clips...`
       );
+
+      // Use stream copy for concatenation (clips are already 720p)
       await runFFmpeg([
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        concatPath,
-        "-c",
-        "copy",
-        "-y",
-        outputPath,
+        "-f", "concat",
+        "-safe", "0",
+        "-i", concatPath,
+        "-c", "copy",
+        "-movflags", "+faststart",
+        "-y", outputPath,
       ]);
     }
 
@@ -591,13 +614,14 @@ async function triggerLocalProcessing(
     // Get output duration
     const durationMs = await getVideoDuration(outputPath);
 
-    // Upload to S3
-    const outputKey = `confirmations/${confirmationId}/trimmed.mp4`;
-    console.log(`[LOCAL CONFIRMATION] Uploading to ${outputKey}...`);
+    // Upload proxy to S3
+    const proxyOutputKey = `confirmations/${confirmationId}/proxy.mp4`;
+
+    console.log(`[LOCAL CONFIRMATION] Uploading proxy to ${proxyOutputKey}...`);
 
     const outputData = await fs.readFile(outputPath);
     const uploadUrl = await generateUploadUrl({
-      key: outputKey,
+      key: proxyOutputKey,
       contentType: "video/mp4",
       contentLength: outputData.length,
     });
@@ -609,18 +633,21 @@ async function triggerLocalProcessing(
     });
 
     if (!uploadResponse.ok) {
-      throw new Error(`Failed to upload: ${uploadResponse.status}`);
+      throw new Error(`Failed to upload proxy: ${uploadResponse.status}`);
     }
 
     // Mark as complete via webhook handler
+    // NOTE: output_s3_key is null (no full-quality trimmed video)
+    // Only proxy_s3_key is set
     await handleConfirmationComplete({
       confirmation_id: confirmationId,
       status: "completed",
-      output_s3_key: outputKey,
+      output_s3_key: undefined,  // No full-quality trimmed video
       duration_ms: durationMs,
+      proxy_s3_key: proxyOutputKey,
     });
 
-    console.log(`[LOCAL CONFIRMATION] Job ${confirmationId} completed`);
+    console.log(`[LOCAL CONFIRMATION] Job ${confirmationId} completed (proxy only)`);
   } catch (error) {
     console.error(`[LOCAL CONFIRMATION] Job ${confirmationId} failed:`, error);
     await prisma.rallyConfirmation.update({
@@ -709,20 +736,29 @@ function getVideoDuration(videoPath: string): Promise<number> {
 
 /**
  * Trigger Lambda for video processing.
+ * Uses the same export Lambda with isConfirmation flag for proxy-only output.
  */
 async function triggerLambdaProcessing(
   confirmationId: string,
   videoS3Key: string,
-  mappings: TimestampMapping[]
+  mappings: TimestampMapping[],
+  _proxyS3Key?: string  // Ignored - Lambda generates fresh proxy
 ): Promise<void> {
   const functionName = env.EXPORT_LAMBDA_FUNCTION_NAME!;
 
+  // Send export-compatible payload with isConfirmation flag
+  // Lambda will generate ONLY a 720p proxy (no full-quality trimmed video)
   const payload = {
-    confirmationId,
-    videoS3Key,
+    jobId: confirmationId,  // Lambda expects jobId
+    tier: "PREMIUM",        // Confirmation is PREMIUM-only
+    format: "mp4",
+    isConfirmation: true,   // Enables proxy-only confirmation mode in Lambda
+    proxyOnly: true,        // Explicitly request proxy-only output
     rallies: mappings.map((m) => ({
+      videoS3Key,           // Same video for all rallies in confirmation
       startMs: m.originalStartMs,
       endMs: m.originalEndMs,
+      exportQuality: "720p",  // Generate 720p proxy for editing
     })),
     callbackUrl: `${env.API_BASE_URL}/v1/webhooks/confirmation-complete`,
     webhookSecret: env.MODAL_WEBHOOK_SECRET,
@@ -743,5 +779,5 @@ async function triggerLambdaProcessing(
     data: { status: ConfirmationStatus.PROCESSING },
   });
 
-  console.log(`[CONFIRMATION] Triggered Lambda for job ${confirmationId}`);
+  console.log(`[CONFIRMATION] Triggered Lambda for job ${confirmationId} (proxy-only mode)`);
 }

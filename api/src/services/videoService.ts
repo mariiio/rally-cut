@@ -1003,7 +1003,7 @@ export async function getVideoById(id: string) {
  * Returns the video with rallies, camera edits, and filtered highlights.
  */
 export async function getVideoForEditor(videoId: string, userId: string) {
-  // Fetch video with rallies and camera edits
+  // Fetch video with rallies, camera edits, and confirmation status
   const video = await prisma.video.findFirst({
     where: { id: videoId, userId, deletedAt: null },
     include: {
@@ -1019,12 +1019,22 @@ export async function getVideoForEditor(videoId: string, userId: string) {
           },
         },
       },
+      confirmation: true,
     },
   });
 
   if (!video) {
     throw new NotFoundError("Video", videoId);
   }
+
+  // Check if video is confirmed
+  const isConfirmed = video.confirmation?.status === "CONFIRMED";
+  // For confirmed videos, use the confirmation proxy for editing
+  // and the trimmed duration for the player timeline
+  const confirmationProxy = isConfirmed ? video.confirmation?.proxyS3Key : null;
+  const effectiveDuration = isConfirmed
+    ? video.confirmation?.trimmedDurationMs ?? video.durationMs
+    : video.durationMs;
 
   // Get the ALL_VIDEOS session for this user (for syncing edits)
   const allVideosSession = await getOrCreateAllVideosSession(userId);
@@ -1064,11 +1074,14 @@ export async function getVideoForEditor(videoId: string, userId: string) {
       id: video.id,
       name: video.name,
       filename: video.filename,
-      s3Key: video.s3Key,
+      s3Key: video.s3Key,  // Original video (unchanged, used for exports)
       posterS3Key: video.posterS3Key,
-      proxyS3Key: video.proxyS3Key,
-      processedS3Key: video.processedS3Key,
-      durationMs: video.durationMs,
+      // For confirmed videos, use confirmation proxy for editing
+      // For non-confirmed, use regular proxy/processed
+      proxyS3Key: confirmationProxy ?? video.proxyS3Key,
+      processedS3Key: isConfirmed ? null : video.processedS3Key,
+      // For confirmed videos, return trimmed duration for player timeline
+      durationMs: effectiveDuration,
       width: video.width,
       height: video.height,
       rallies: video.rallies,
