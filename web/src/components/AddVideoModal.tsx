@@ -11,14 +11,9 @@ import {
   Typography,
   Tabs,
   Tab,
-  List,
-  ListItemButton,
-  ListItemText,
-  ListItemIcon,
   Checkbox,
   CircularProgress,
   Chip,
-  Stack,
   TextField,
   InputAdornment,
   IconButton,
@@ -32,6 +27,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import {
   listVideos,
   addVideoToSession,
+  getVideoStreamUrl,
   type VideoListItem,
 } from '@/services/api';
 import { useUploadStore } from '@/stores/uploadStore';
@@ -315,49 +311,105 @@ export function AddVideoModal({
               </Typography>
             </Box>
           ) : (
-            <List sx={{ maxHeight: 300, overflow: 'auto' }}>
-              {videos.map((video) => (
-                <ListItemButton
-                  key={video.id}
-                  onClick={() => handleVideoSelect(video.id)}
-                  selected={selectedVideoIds.includes(video.id)}
-                  sx={{
-                    borderRadius: 1,
-                    mb: 0.5,
-                    '&.Mui-selected': {
-                      bgcolor: 'action.selected',
-                    },
-                  }}
-                >
-                  <ListItemIcon>
-                    <Checkbox
-                      checked={selectedVideoIds.includes(video.id)}
-                      edge="start"
-                      tabIndex={-1}
-                      disableRipple
-                    />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary={video.name}
-                    secondary={
-                      <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
+            <Box sx={{ maxHeight: 350, overflow: 'auto' }}>
+              <Box
+                sx={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(2, 1fr)',
+                  gap: 1.5,
+                }}
+              >
+                {videos.map((video) => {
+                  const isSelected = selectedVideoIds.includes(video.id);
+                  return (
+                    <Box
+                      key={video.id}
+                      onClick={() => handleVideoSelect(video.id)}
+                      sx={{
+                        cursor: 'pointer',
+                        borderRadius: 1.5,
+                        overflow: 'hidden',
+                        border: '2px solid',
+                        borderColor: isSelected ? 'primary.main' : 'transparent',
+                        bgcolor: isSelected ? 'action.selected' : 'grey.900',
+                        transition: 'all 0.15s',
+                        '&:hover': {
+                          borderColor: isSelected ? 'primary.main' : 'grey.700',
+                          bgcolor: isSelected ? 'action.selected' : 'grey.800',
+                        },
+                      }}
+                    >
+                      {/* Poster */}
+                      <Box sx={{ position: 'relative', aspectRatio: '16/9', bgcolor: 'grey.800' }}>
+                        {video.posterS3Key ? (
+                          <img
+                            src={getVideoStreamUrl(video.posterS3Key)}
+                            alt={video.name}
+                            style={{
+                              width: '100%',
+                              height: '100%',
+                              objectFit: 'cover',
+                              display: 'block',
+                            }}
+                          />
+                        ) : (
+                          <Box
+                            sx={{
+                              width: '100%',
+                              height: '100%',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                            }}
+                          >
+                            <VideoLibraryIcon sx={{ fontSize: 32, color: 'grey.600' }} />
+                          </Box>
+                        )}
+                        {/* Duration badge */}
                         <Chip
                           label={formatDuration(video.durationMs)}
                           size="small"
-                          sx={{ height: 20, fontSize: '0.7rem' }}
+                          sx={{
+                            position: 'absolute',
+                            bottom: 4,
+                            right: 4,
+                            height: 20,
+                            fontSize: '0.7rem',
+                            bgcolor: 'rgba(0,0,0,0.7)',
+                            color: 'white',
+                          }}
                         />
-                        <Chip
-                          label={video.status}
+                        {/* Selection checkbox */}
+                        <Checkbox
+                          checked={isSelected}
+                          sx={{
+                            position: 'absolute',
+                            top: 2,
+                            left: 2,
+                            p: 0.5,
+                            bgcolor: 'rgba(0,0,0,0.5)',
+                            borderRadius: 1,
+                            '&:hover': { bgcolor: 'rgba(0,0,0,0.7)' },
+                          }}
                           size="small"
-                          color={video.status === 'DETECTED' ? 'success' : 'default'}
-                          sx={{ height: 20, fontSize: '0.7rem' }}
                         />
-                      </Stack>
-                    }
-                  />
-                </ListItemButton>
-              ))}
-            </List>
+                      </Box>
+                      {/* Video name */}
+                      <Box sx={{ p: 1 }}>
+                        <Typography
+                          variant="body2"
+                          noWrap
+                          title={video.name}
+                          sx={{ fontWeight: 500 }}
+                        >
+                          {video.name}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  );
+                })}
+              </Box>
+            </Box>
           )}
         </TabPanel>
       </DialogContent>

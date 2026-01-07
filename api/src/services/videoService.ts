@@ -719,8 +719,37 @@ export async function removeVideoFromSession(
     throw new NotFoundError("SessionVideo", `${sessionId}/${videoId}`);
   }
 
-  await prisma.sessionVideo.delete({
-    where: { id: sessionVideo.id },
+  // Use transaction to clean up highlights properly
+  await prisma.$transaction(async (tx) => {
+    // 1. Delete the session-video junction
+    await tx.sessionVideo.delete({
+      where: { id: sessionVideo.id },
+    });
+
+    // 2. Remove highlight-rally associations for rallies from this video
+    await tx.highlightRally.deleteMany({
+      where: {
+        highlight: { sessionId },
+        rally: { videoId },
+      },
+    });
+
+    // 3. Delete highlights that are now empty (have no rallies)
+    const emptyHighlights = await tx.highlight.findMany({
+      where: {
+        sessionId,
+        highlightRallies: { none: {} },
+      },
+      select: { id: true },
+    });
+
+    if (emptyHighlights.length > 0) {
+      await tx.highlight.deleteMany({
+        where: {
+          id: { in: emptyHighlights.map((h) => h.id) },
+        },
+      });
+    }
   });
 
   return { success: true };

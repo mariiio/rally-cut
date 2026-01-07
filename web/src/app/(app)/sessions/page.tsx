@@ -20,7 +20,6 @@ import {
   Stack,
   IconButton,
   Alert,
-  LinearProgress,
   Radio,
   RadioGroup,
   FormControlLabel,
@@ -57,6 +56,7 @@ import {
 import { useUploadStore } from '@/stores/uploadStore';
 import { isValidVideoFile } from '@/utils/fileHandlers';
 import { VolleyballProgress } from '@/components/VolleyballProgress';
+import { AddVideoModal } from '@/components/AddVideoModal';
 
 interface SessionGroup {
   session: {
@@ -96,6 +96,7 @@ export default function HomePage() {
   const [uploadQueue, setUploadQueue] = useState<File[]>([]);
   const [currentUploadIndex, setCurrentUploadIndex] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [addToEmptySession, setAddToEmptySession] = useState<{ id: string; name: string } | null>(null);
 
   const { isUploading, progress, currentStep, uploadVideoToLibrary } = useUploadStore();
 
@@ -137,6 +138,12 @@ export default function HomePage() {
 
     return Array.from(groups.values());
   }, [readyVideos]);
+
+  // Find empty sessions (sessions with no videos)
+  const emptySessions = useMemo(() => {
+    const sessionIdsWithVideos = new Set(groupedVideos.map((g) => g.session.id));
+    return regularSessions.filter((s) => !sessionIdsWithVideos.has(s.id));
+  }, [regularSessions, groupedVideos]);
 
   // Check if user has any ready content
   const hasVideos = readyVideos.length > 0;
@@ -822,31 +829,17 @@ export default function HomePage() {
                           fontWeight: 500,
                         }}
                       />
-                      <Box sx={{ ml: 2, display: 'flex', gap: 1, alignItems: 'center' }}>
-                        <Button
-                          size="small"
-                          onClick={() => router.push(`/sessions/${session.id}`)}
-                          sx={{
-                            color: 'primary.main',
-                            fontWeight: 600,
-                            '&:hover': {
-                              backgroundColor: 'rgba(255, 107, 74, 0.1)',
-                            },
-                          }}
-                        >
-                          Open
-                        </Button>
-                        <IconButton
-                          size="small"
-                          onClick={(e) => handleMenuOpen(e, session.id, session.name)}
-                          sx={{
-                            color: 'text.secondary',
-                            '&:hover': { color: 'text.primary', bgcolor: 'action.hover' },
-                          }}
-                        >
-                          <MoreVertIcon fontSize="small" />
-                        </IconButton>
-                      </Box>
+                      <IconButton
+                        size="small"
+                        onClick={(e) => handleMenuOpen(e, session.id, session.name)}
+                        sx={{
+                          ml: 2,
+                          color: 'text.secondary',
+                          '&:hover': { color: 'text.primary', bgcolor: 'action.hover' },
+                        }}
+                      >
+                        <MoreVertIcon fontSize="small" />
+                      </IconButton>
                     </Box>
                     {/* Video Grid */}
                     <Box sx={{ p: 2, bgcolor: designTokens.colors.surface[0] }}>
@@ -966,6 +959,75 @@ export default function HomePage() {
                           </Grid>
                         ))}
                       </Grid>
+                    </Box>
+                  </Card>
+                ))}
+              </Box>
+            )}
+
+            {/* Empty Sessions */}
+            {emptySessions.length > 0 && (
+              <Box sx={{ mb: 4 }}>
+                <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 2, fontWeight: 500 }}>
+                  Empty Sessions
+                </Typography>
+                {emptySessions.map((session) => (
+                  <Card
+                    key={session.id}
+                    sx={{
+                      mb: 2,
+                      bgcolor: designTokens.colors.surface[1],
+                      borderRadius: 2,
+                      overflow: 'hidden',
+                      border: '1px solid',
+                      borderColor: 'divider',
+                    }}
+                  >
+                    <Box
+                      sx={{
+                        p: 2,
+                        display: 'flex',
+                        alignItems: 'center',
+                        background: designTokens.gradients.toolbar,
+                      }}
+                    >
+                      <Typography variant="subtitle1" fontWeight={600} sx={{ flex: 1 }}>
+                        {session.name}
+                      </Typography>
+                      <Chip
+                        label="No videos"
+                        size="small"
+                        sx={{
+                          bgcolor: 'rgba(255, 255, 255, 0.1)',
+                          color: 'text.secondary',
+                          fontWeight: 500,
+                        }}
+                      />
+                      <Box sx={{ ml: 2, display: 'flex', gap: 1, alignItems: 'center' }}>
+                        <Button
+                          size="small"
+                          onClick={() => setAddToEmptySession({ id: session.id, name: session.name })}
+                          sx={{
+                            color: 'secondary.main',
+                            fontWeight: 600,
+                            '&:hover': {
+                              backgroundColor: 'rgba(0, 212, 170, 0.1)',
+                            },
+                          }}
+                        >
+                          Add Videos
+                        </Button>
+                        <IconButton
+                          size="small"
+                          onClick={(e) => handleMenuOpen(e, session.id, session.name)}
+                          sx={{
+                            color: 'text.secondary',
+                            '&:hover': { color: 'text.primary', bgcolor: 'action.hover' },
+                          }}
+                        >
+                          <MoreVertIcon fontSize="small" />
+                        </IconButton>
+                      </Box>
                     </Box>
                   </Card>
                 ))}
@@ -1317,6 +1379,20 @@ export default function HomePage() {
             </Button>
           </DialogActions>
         </Dialog>
+
+        {/* Add Video Modal for empty sessions */}
+        {addToEmptySession && (
+          <AddVideoModal
+            open={true}
+            onClose={() => setAddToEmptySession(null)}
+            sessionId={addToEmptySession.id}
+            existingVideoIds={[]}
+            onVideoAdded={() => {
+              setAddToEmptySession(null);
+              loadData();
+            }}
+          />
+        )}
       </Container>
     </Box>
   );

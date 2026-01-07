@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Box,
   Typography,
@@ -30,6 +31,7 @@ import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
+import AddIcon from '@mui/icons-material/Add';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useExportStore } from '@/stores/exportStore';
@@ -39,7 +41,7 @@ import { Rally, Match } from '@/types/rally';
 import { designTokens } from '@/app/theme';
 import { ConfirmDialog } from './ConfirmDialog';
 import { LockedRalliesBanner } from './ConfirmRallies';
-import { deleteVideo, renameVideo, confirmRallies } from '@/services/api';
+import { removeVideoFromSession, renameVideo, confirmRallies } from '@/services/api';
 
 export function RallyList() {
   const {
@@ -61,10 +63,12 @@ export function RallyList() {
     setConfirmationStatus,
     isConfirming,
     setIsConfirming,
+    setShowAddVideoModal,
   } = useEditorStore();
   const isPremium = useTierStore((state) => state.isPremium());
   const { currentTime, seek } = usePlayerStore();
   const { isExporting, exportingRallyId, exportingAll, downloadRally, downloadAllRallies } = useExportStore();
+  const router = useRouter();
 
   // Use File if available, otherwise use URL
   const videoSource = videoFile || videoUrl;
@@ -81,7 +85,7 @@ export function RallyList() {
   // Delete video dialog state
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [matchToDelete, setMatchToDelete] = useState<Match | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const [, setIsDeleting] = useState(false);
 
   // Rename video state
   const [editingMatchId, setEditingMatchId] = useState<string | null>(null);
@@ -165,21 +169,29 @@ export function RallyList() {
     setShowDeleteDialog(true);
   }, []);
 
-  const handleConfirmDelete = useCallback(async () => {
-    if (!matchToDelete) return;
+  const handleConfirmRemove = useCallback(async () => {
+    if (!matchToDelete || !session) return;
+
+    const isLastVideo = session.matches.length === 1;
 
     setIsDeleting(true);
     try {
-      await deleteVideo(matchToDelete.id);
-      await reloadSession();
+      await removeVideoFromSession(session.id, matchToDelete.id);
       setShowDeleteDialog(false);
       setMatchToDelete(null);
+
+      if (isLastVideo) {
+        // Redirect to sessions page since the session will be empty
+        router.push('/sessions');
+      } else {
+        await reloadSession();
+      }
     } catch (error) {
-      console.error('Failed to delete video:', error);
+      console.error('Failed to remove video from session:', error);
     } finally {
       setIsDeleting(false);
     }
-  }, [matchToDelete, reloadSession]);
+  }, [matchToDelete, reloadSession, session, router]);
 
   const handleStartRename = useCallback((e: React.MouseEvent, match: Match) => {
     e.stopPropagation();
@@ -225,6 +237,35 @@ export function RallyList() {
         <Typography variant="body2" sx={{ color: 'text.disabled', textAlign: 'center' }}>
           Load a JSON file to see rallies
         </Typography>
+      </Box>
+    );
+  }
+
+  // If session has no videos, show add video prompt
+  if (!session.matches || session.matches.length === 0) {
+    return (
+      <Box
+        sx={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          p: 3,
+          gap: 2,
+        }}
+      >
+        <Typography variant="body2" sx={{ color: 'text.secondary', textAlign: 'center' }}>
+          No videos in this session.
+        </Typography>
+        <Button
+          variant="contained"
+          startIcon={<AddIcon />}
+          onClick={() => setShowAddVideoModal(true)}
+          sx={{ textTransform: 'none' }}
+        >
+          Add Video
+        </Button>
       </Box>
     );
   }
@@ -677,12 +718,11 @@ export function RallyList() {
             }
             setVideoMenuAnchor(null);
           }}
-          disabled={session?.matches.length === 1}
         >
           <ListItemIcon>
             <DeleteIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText>Delete</ListItemText>
+          <ListItemText>Remove from session</ListItemText>
         </MenuItem>
         <Divider />
         <MenuItem
@@ -737,14 +777,18 @@ export function RallyList() {
         </MenuItem>
       </Menu>
 
-      {/* Delete video confirmation dialog */}
+      {/* Remove video from session confirmation dialog */}
       <ConfirmDialog
         open={showDeleteDialog}
-        title="Delete video?"
-        message={`This will permanently delete "${matchToDelete?.name}" and all its rallies. This action cannot be undone.`}
-        confirmLabel="Delete"
-        cancelLabel="Keep video"
-        onConfirm={handleConfirmDelete}
+        title={session?.matches.length === 1 ? "Remove last video?" : "Remove video from session?"}
+        message={
+          session?.matches.length === 1
+            ? `This is the last video in this session. Removing "${matchToDelete?.name}" will leave the session empty. The video itself will remain in your library.`
+            : `Remove "${matchToDelete?.name}" from this session? The video will remain in your library. Rallies and highlights associated with this video will be removed from the session.`
+        }
+        confirmLabel="Remove"
+        cancelLabel="Cancel"
+        onConfirm={handleConfirmRemove}
         onCancel={() => {
           setShowDeleteDialog(false);
           setMatchToDelete(null);

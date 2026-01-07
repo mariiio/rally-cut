@@ -50,7 +50,6 @@ export function EditorHeader() {
   const videoInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [showResetDialog, setShowResetDialog] = useState(false);
-  const [showAddVideoModal, setShowAddVideoModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
@@ -70,6 +69,8 @@ export function EditorHeader() {
     canRedo,
     hasChangesFromOriginal,
     reloadSession,
+    showAddVideoModal,
+    setShowAddVideoModal,
   } = useEditorStore();
 
   const { isUploading, uploadVideo } = useUploadStore();

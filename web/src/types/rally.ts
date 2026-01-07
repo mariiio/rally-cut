@@ -87,15 +87,17 @@ export interface SessionManifest {
   };
 }
 
-/** Color palette for highlights - beach volleyball theme */
+/** Color palette for highlights - beach volleyball theme
+ * Note: Avoid #FF6B4A, #FF8A6F (selected rally colors) and #60A5FA, #3B82F6 (unselected rally colors)
+ */
 export const HIGHLIGHT_COLORS = [
   '#FFE66D', // Sand Gold
-  '#FF6B4A', // Coral (Primary)
+  '#F06292', // Pink
   '#00D4AA', // Teal (Secondary)
-  '#FF8A6F', // Sunset Peach
+  '#FFCC80', // Light Orange
   '#4DDFBF', // Aqua Mint
   '#F5BC3C', // Warm Gold
-  '#60A5FA', // Sky Blue
+  '#4DD0E1', // Cyan
   '#FB7185', // Rose
   '#A78BFA', // Lavender
   '#34D399', // Emerald
