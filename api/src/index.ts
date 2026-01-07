@@ -17,6 +17,7 @@ import identityRouter from "./routes/identity.js";
 import ralliesRouter from "./routes/rallies.js";
 import sessionsRouter from "./routes/sessions.js";
 import sharesRouter from "./routes/shares.js";
+import accessRequestsRouter from "./routes/accessRequests.js";
 import videosRouter from "./routes/videos.js";
 import webhooksRouter from "./routes/webhooks.js";
 
@@ -49,6 +50,7 @@ app.use(identityRouter);
 // Main API routes
 app.use(sessionsRouter);
 app.use(sharesRouter);
+app.use(accessRequestsRouter);
 app.use(videosRouter);
 app.use(detectionRouter);
 app.use(confirmationRouter);

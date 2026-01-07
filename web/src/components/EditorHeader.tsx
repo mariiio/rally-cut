@@ -46,6 +46,7 @@ import { SyncStatus } from './SyncStatus';
 import { AddVideoModal } from './AddVideoModal';
 import { ShareModal } from './ShareModal';
 import { FeedbackModal } from './FeedbackModal';
+import { PendingAccessRequests } from './PendingAccessRequests';
 
 export function EditorHeader() {
   const router = useRouter();
@@ -326,6 +327,11 @@ export function EditorHeader() {
               <ShareIcon fontSize="small" />
             </IconButton>
           </Tooltip>
+        )}
+
+        {/* Pending Access Requests (only for owners) */}
+        {session && userRole === 'owner' && (
+          <PendingAccessRequests sessionId={session.id} />
         )}
 
         {/* Feedback Button */}

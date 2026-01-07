@@ -25,6 +25,23 @@ export function getHeaders(contentType?: string): HeadersInit {
 }
 
 /**
+ * Custom error for ACCESS_DENIED responses (403 with accessRequestable flag)
+ */
+export class AccessDeniedError extends Error {
+  public readonly sessionName: string;
+  public readonly ownerName: string | null;
+  public readonly hasPendingRequest: boolean;
+
+  constructor(sessionName: string, ownerName: string | null, hasPendingRequest: boolean) {
+    super("You don't have access to this session");
+    this.name = 'AccessDeniedError';
+    this.sessionName = sessionName;
+    this.ownerName = ownerName;
+    this.hasPendingRequest = hasPendingRequest;
+  }
+}
+
+/**
  * Get video stream URL from S3 key.
  * Uses CloudFront if configured, otherwise falls back to local proxy.
  */
@@ -301,6 +318,17 @@ export async function fetchSession(sessionId: string): Promise<FetchSessionResul
   });
 
   if (!response.ok) {
+    // Handle 403 ACCESS_DENIED specially
+    if (response.status === 403) {
+      const errorData = await response.json().catch(() => null);
+      if (errorData?.error?.code === 'ACCESS_DENIED' && errorData?.error?.details?.accessRequestable) {
+        throw new AccessDeniedError(
+          errorData.error.details.sessionName,
+          errorData.error.details.ownerName,
+          errorData.error.details.hasPendingRequest
+        );
+      }
+    }
     throw new Error(`Failed to fetch session: ${response.status}`);
   }
 
@@ -1113,11 +1141,15 @@ export async function getSharePreview(token: string): Promise<SharePreview> {
   return response.json();
 }
 
-// Accept a share invite
-export async function acceptShare(token: string): Promise<{ sessionId: string; alreadyOwner?: boolean; alreadyMember?: boolean }> {
+// Accept a share invite (optionally with a display name)
+export async function acceptShare(token: string, name?: string): Promise<{ sessionId: string; alreadyOwner?: boolean; alreadyMember?: boolean }> {
   const response = await fetch(`${API_BASE_URL}/v1/share/${token}/accept`, {
     method: 'POST',
-    headers: getHeaders(),
+    headers: {
+      ...getHeaders(),
+      'Content-Type': 'application/json',
+    },
+    body: name ? JSON.stringify({ name }) : undefined,
   });
 
   if (!response.ok) {
@@ -1136,6 +1168,103 @@ export async function listSharedSessions(): Promise<{ data: SharedSession[] }> {
 
   if (!response.ok) {
     throw new Error(`Failed to list shared sessions: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// ============================================================================
+// Access Requests API
+// ============================================================================
+
+export interface AccessRequest {
+  id: string;
+  userId: string;
+  userName: string | null;
+  userEmail: string | null;
+  userAvatarUrl: string | null;
+  message: string | null;
+  requestedAt: string;
+}
+
+// Create an access request for a session
+export async function requestAccess(
+  sessionId: string,
+  message?: string
+): Promise<{ id: string; status: string; requestedAt: string }> {
+  const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/access-requests`, {
+    method: 'POST',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify({ message }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to request access: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Get pending access requests for a session (owner only)
+export async function getAccessRequests(sessionId: string): Promise<{ requests: AccessRequest[] }> {
+  const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/access-requests`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get access requests: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Get count of pending access requests (owner only)
+export async function getAccessRequestsCount(sessionId: string): Promise<{ pending: number }> {
+  const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/access-requests/count`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get access request count: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Accept an access request (owner only)
+export async function acceptAccessRequest(
+  sessionId: string,
+  requestId: string
+): Promise<{ success: boolean }> {
+  const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/access-requests/${requestId}/accept`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to accept access request: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Reject an access request (owner only)
+export async function rejectAccessRequest(
+  sessionId: string,
+  requestId: string
+): Promise<{ success: boolean }> {
+  const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/access-requests/${requestId}/reject`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to reject access request: ${response.status}`);
   }
 
   return response.json();

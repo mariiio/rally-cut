@@ -5,6 +5,7 @@ export type ErrorCode =
   | "VALIDATION_ERROR"
   | "NOT_FOUND"
   | "FORBIDDEN"
+  | "ACCESS_DENIED"
   | "LIMIT_EXCEEDED"
   | "CONFLICT"
   | "INTERNAL_ERROR";
@@ -72,6 +73,21 @@ export class ConflictError extends AppError {
 export class ForbiddenError extends AppError {
   constructor(message: string, details?: Record<string, unknown>) {
     super("FORBIDDEN", message, 403, details);
+  }
+}
+
+export class AccessDeniedError extends AppError {
+  constructor(
+    sessionName: string,
+    ownerName: string | null,
+    hasPendingRequest: boolean
+  ) {
+    super("ACCESS_DENIED", "You don't have access to this session", 403, {
+      accessRequestable: true,
+      sessionName,
+      ownerName,
+      hasPendingRequest,
+    });
   }
 }
 

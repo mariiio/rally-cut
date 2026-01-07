@@ -34,6 +34,7 @@ export function ConfirmRallies({ matchId, isPremium }: ConfirmRalliesProps) {
   } = useEditorStore();
 
   const [error, setError] = useState<string | null>(null);
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [showRestoreDialog, setShowRestoreDialog] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
 
@@ -270,26 +271,38 @@ export function ConfirmRallies({ matchId, isPremium }: ConfirmRalliesProps) {
 
   // Default - show confirm button
   return (
-    <Tooltip title="Generate a trimmed video with only rally segments">
-      <Button
-        variant="outlined"
-        size="small"
-        onClick={handleConfirm}
-        disabled={isConfirming || rallies.length === 0}
-        startIcon={isConfirming ? <CircularProgress size={12} /> : <CheckCircleIcon />}
-        sx={{
-          fontSize: 11,
-          py: 0.5,
-          borderColor: 'divider',
-          '&:hover': {
-            borderColor: 'primary.main',
-            bgcolor: 'rgba(144, 202, 249, 0.08)',
-          },
-        }}
-      >
-        Confirm Rallies
-      </Button>
-    </Tooltip>
+    <>
+      <Tooltip title="Generate a trimmed video with only rally segments">
+        <Button
+          variant="outlined"
+          size="small"
+          onClick={() => setShowConfirmDialog(true)}
+          disabled={isConfirming || rallies.length === 0}
+          startIcon={isConfirming ? <CircularProgress size={12} /> : <CheckCircleIcon />}
+          sx={{
+            fontSize: 11,
+            py: 0.5,
+            borderColor: 'divider',
+            '&:hover': {
+              borderColor: 'primary.main',
+              bgcolor: 'rgba(144, 202, 249, 0.08)',
+            },
+          }}
+        >
+          Confirm Rallies
+        </Button>
+      </Tooltip>
+
+      <ConfirmDialog
+        open={showConfirmDialog}
+        title="Confirm rallies?"
+        message="This will create a new trimmed video containing only the rally segments. Dead time between rallies will be removed, and rally editing will be locked."
+        confirmLabel="Confirm"
+        cancelLabel="Cancel"
+        onConfirm={handleConfirm}
+        onCancel={() => setShowConfirmDialog(false)}
+      />
+    </>
   );
 }
 

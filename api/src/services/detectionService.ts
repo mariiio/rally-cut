@@ -523,10 +523,10 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
     if (updates.length > 0) {
       const ids = updates.map((u) => u.id);
       const orderCase = updates
-        .map((u) => `WHEN '${u.id}' THEN ${u.order}`)
+        .map((u) => `WHEN '${u.id}'::uuid THEN ${u.order}`)
         .join(" ");
       await tx.$executeRawUnsafe(
-        `UPDATE "Rally" SET "order" = CASE id ${orderCase} END WHERE id = ANY($1::uuid[])`,
+        `UPDATE "rallies" SET "order" = CASE id ${orderCase} END WHERE id = ANY($1::uuid[])`,
         ids
       );
     }

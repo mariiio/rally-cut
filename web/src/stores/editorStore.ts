@@ -14,7 +14,7 @@ import {
   SessionManifest,
 } from '@/types/rally';
 import { usePlayerStore } from './playerStore';
-import { fetchSession as fetchSessionFromApi, fetchVideoForEditor, getCurrentUser, type CameraEditMap } from '@/services/api';
+import { fetchSession as fetchSessionFromApi, fetchVideoForEditor, getCurrentUser, AccessDeniedError, type CameraEditMap } from '@/services/api';
 import { useCameraStore } from './cameraStore';
 import type { RallyCameraEdit } from '@/types/camera';
 import { syncService } from '@/services/syncService';
@@ -83,11 +83,21 @@ export interface ConfirmationStatus {
   trimmedDurationMs?: number | null;
 }
 
+// Session error state for access denied scenarios
+interface SessionError {
+  type: 'not_found' | 'access_denied' | 'unknown';
+  sessionName?: string;
+  ownerName?: string | null;
+  hasPendingRequest?: boolean;
+}
+
 interface EditorState {
   // Session loading state
   isLoadingSession: boolean;
   sessionLoadStep: string;
   sessionLoadProgress: number;
+  sessionError: SessionError | null;
+  clearSessionError: () => void;
 
   // Session state
   session: Session | null;
@@ -229,6 +239,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   isLoadingSession: false,
   sessionLoadStep: '',
   sessionLoadProgress: 0,
+  sessionError: null,
+  clearSessionError: () => set({ sessionError: null }),
 
   session: null,
   activeMatchId: null,
@@ -321,11 +333,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   // Session actions
   loadSession: async (sessionId: string) => {
-    // Start loading
+    // Start loading and clear any previous error
     set({
       isLoadingSession: true,
       sessionLoadStep: 'Loading session...',
       sessionLoadProgress: 10,
+      sessionError: null,
     });
 
     try {
@@ -568,11 +581,33 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         hasUnsavedChanges: false,
       });
     } catch (error) {
-      // Clear loading state on error
+      // Handle AccessDeniedError specially
+      if (error instanceof AccessDeniedError) {
+        set({
+          isLoadingSession: false,
+          sessionLoadStep: '',
+          sessionLoadProgress: 0,
+          sessionError: {
+            type: 'access_denied',
+            sessionName: error.sessionName,
+            ownerName: error.ownerName,
+            hasPendingRequest: error.hasPendingRequest,
+          },
+        });
+        return;
+      }
+
+      // Handle other errors
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const isNotFound = errorMessage.includes('404') || errorMessage.toLowerCase().includes('not found');
+
       set({
         isLoadingSession: false,
         sessionLoadStep: '',
         sessionLoadProgress: 0,
+        sessionError: {
+          type: isNotFound ? 'not_found' : 'unknown',
+        },
       });
       console.error('Error loading session:', error);
     }

@@ -133,11 +133,15 @@ router.get(
 router.post(
   "/v1/share/:token/accept",
   requireUser,
-  validateRequest({ params: z.object({ token: uuidSchema }) }),
+  validateRequest({
+    params: z.object({ token: uuidSchema }),
+    body: z.object({ name: z.string().min(1).max(100).optional() }).optional(),
+  }),
   async (req, res, next) => {
     try {
       const userId = req.userId as string; // Guaranteed by requireUser
-      const result = await acceptShare(req.params.token, userId);
+      const name = req.body?.name;
+      const result = await acceptShare(req.params.token, userId, name);
       res.json(result);
     } catch (error) {
       next(error);
