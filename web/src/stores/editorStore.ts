@@ -133,6 +133,10 @@ interface EditorState {
   isCameraTabActive: boolean;
   setIsCameraTabActive: (active: boolean) => void;
 
+  // Add video modal state
+  showAddVideoModal: boolean;
+  setShowAddVideoModal: (show: boolean) => void;
+
   // Left panel tab state
   leftPanelTab: 'rallies' | 'highlights';
   setLeftPanelTab: (tab: 'rallies' | 'highlights') => void;
@@ -263,6 +267,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   // Camera edit mode state
   isCameraTabActive: false,
   setIsCameraTabActive: (active: boolean) => set({ isCameraTabActive: active }),
+
+  // Add video modal state
+  showAddVideoModal: false,
+  setShowAddVideoModal: (show: boolean) => set({ showAddVideoModal: show }),
 
   // Left panel tab state
   leftPanelTab: 'rallies',

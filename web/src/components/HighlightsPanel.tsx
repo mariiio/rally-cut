@@ -60,13 +60,7 @@ import { Rally } from '@/types/rally';
 import { RallyWithSource, FADE_DURATION } from '@/utils/videoExport';
 import { designTokens } from '@/app/theme';
 import { NamePromptModal } from './NamePromptModal';
-
-// Helper to format time as MM:SS
-function formatTime(seconds: number): string {
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
-}
+import { ConfirmDialog } from './ConfirmDialog';
 
 // Helper to create composite ID for drag and drop
 function createDragId(highlightId: string, rallyId: string): string {
@@ -960,8 +954,8 @@ export function HighlightsPanel() {
         {/* Delete - only if user can edit */}
         {highlightMenuAnchor && canEditHighlight(highlightMenuAnchor.highlight.id) && (
           <MenuItem
-            onClick={(e) => {
-              handleDeleteClick(highlightMenuAnchor.highlight.id, e);
+            onClick={() => {
+              setDeleteConfirmId(highlightMenuAnchor.highlight.id);
               setHighlightMenuAnchor(null);
             }}
             sx={{ color: 'error.main' }}
@@ -1019,6 +1013,20 @@ export function HighlightsPanel() {
         onNameSet={() => {
           // Name was set, modal will close automatically
         }}
+      />
+
+      {/* Delete Confirmation Dialog */}
+      <ConfirmDialog
+        open={deleteConfirmId !== null}
+        title="Delete Highlight"
+        message="Are you sure you want to delete this highlight? This action cannot be undone."
+        confirmLabel="Delete"
+        onConfirm={() => {
+          if (deleteConfirmId) {
+            deleteHighlight(deleteConfirmId);
+          }
+        }}
+        onCancel={() => setDeleteConfirmId(null)}
       />
     </Box>
   );
