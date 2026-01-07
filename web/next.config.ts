@@ -40,6 +40,10 @@ const nextConfig: NextConfig = {
         source: '/videos/:path*',
         destination: `${apiUrl}/videos/:path*`,
       },
+      {
+        source: '/confirmations/:path*',
+        destination: `${apiUrl}/confirmations/:path*`,
+      },
     ];
   },
 

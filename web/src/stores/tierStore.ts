@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { UserTier, TierLimits, UsageQuota } from '@/services/api';
 import { getCurrentUser } from '@/services/api';
+import { syncService } from '@/services/syncService';
 
 interface TierState {
   tier: UserTier;
@@ -67,6 +68,7 @@ export const useTierStore = create<TierState & TierActions>((set, get) => ({
       return;
     }
 
+    const previousTier = get().tier;
     set({ isLoading: true, error: null });
 
     try {
@@ -78,6 +80,19 @@ export const useTierStore = create<TierState & TierActions>((set, get) => ({
         isLoading: false,
         lastFetched: new Date(),
       });
+
+      // If upgraded from FREE to PREMIUM, trigger sync to push localStorage data to server
+      // Use a short delay to ensure editor/syncService has initialized
+      if (previousTier === 'FREE' && user.tier === 'PREMIUM') {
+        console.log('[TierStore] Upgraded to PREMIUM - triggering sync for localStorage data');
+        // Immediate attempt
+        syncService.markDirty();
+        // Retry after editor likely initialized (in case page is still loading)
+        setTimeout(() => {
+          console.log('[TierStore] Retry sync after delay');
+          syncService.markDirty();
+        }, 2000);
+      }
     } catch (error) {
       console.error('Failed to fetch tier:', error);
       set({

@@ -441,6 +441,7 @@ model RallyConfirmation {
   // Trimmed video (generated)
   trimmedS3Key       String?            @map("trimmed_s3_key")
   trimmedDurationMs  Int?               @map("trimmed_duration_ms")
+  proxyS3Key         String?            @map("proxy_s3_key")  // 720p proxy for trimmed video
 
   // Timestamp mapping: [{rallyId, originalStartMs, originalEndMs, trimmedStartMs, trimmedEndMs}]
   timestampMappings  Json               @map("timestamp_mappings")

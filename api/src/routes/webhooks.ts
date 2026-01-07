@@ -138,6 +138,7 @@ const confirmationCompleteSchema = z.object({
   error_message: z.string().optional(),
   output_s3_key: z.string().optional(),
   duration_ms: z.number().int().positive().optional(),
+  proxy_s3_key: z.string().optional(),  // Trimmed proxy video (if available)
 });
 
 router.post(

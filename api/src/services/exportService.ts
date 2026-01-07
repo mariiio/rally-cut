@@ -1,4 +1,4 @@
-import { ExportStatus } from "@prisma/client";
+import { ConfirmationStatus, ExportStatus } from "@prisma/client";
 import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 import { spawn } from "child_process";
 import fs from "fs/promises";
@@ -10,6 +10,7 @@ import { generateDownloadUrl, generateUploadUrl } from "../lib/s3.js";
 import { prisma } from "../lib/prisma.js";
 import { ForbiddenError, NotFoundError } from "../middleware/errorHandler.js";
 import { getUserTier, getTierLimits, TIER_LIMITS, type UserTier } from "./tierService.js";
+import type { TimestampMapping } from "./confirmationService.js";
 
 const lambdaClient = new LambdaClient({
   region: env.AWS_REGION,
@@ -311,7 +312,7 @@ export async function createExportJob(
     throw new NotFoundError("Session", input.sessionId);
   }
 
-  // Look up video createdAt for each rally to determine export quality
+  // Look up video createdAt and confirmations for each rally
   const videoIds = [...new Set(input.rallies.map((r) => r.videoId))];
   const videos = await prisma.video.findMany({
     where: { id: { in: videoIds } },
@@ -319,12 +320,56 @@ export async function createExportJob(
   });
   const videoCreatedAtMap = new Map(videos.map((v) => [v.id, v.createdAt]));
 
-  // Add exportQuality to each rally based on its video's age
+  // Look up confirmations for confirmed videos (for timestamp reverse-mapping)
+  const confirmations = await prisma.rallyConfirmation.findMany({
+    where: {
+      videoId: { in: videoIds },
+      status: ConfirmationStatus.CONFIRMED,
+    },
+    select: {
+      videoId: true,
+      originalS3Key: true,
+      timestampMappings: true,
+    },
+  });
+  const confirmationMap = new Map(confirmations.map((c) => [c.videoId, c]));
+
+  // Add exportQuality and reverse-map timestamps for confirmed videos
   const ralliesWithQuality = input.rallies.map((rally) => {
     const videoCreatedAt = videoCreatedAtMap.get(rally.videoId);
     const exportQuality = videoCreatedAt
       ? getExportQuality(effectiveTier, videoCreatedAt)
       : "720p"; // Default to 720p if video not found
+
+    // Check if this video is confirmed
+    const confirmation = confirmationMap.get(rally.videoId);
+    if (confirmation) {
+      // Reverse-map timestamps: find the mapping that matches this rally's trimmed timestamps
+      const mappings = confirmation.timestampMappings as unknown as TimestampMapping[];
+      const mapping = mappings.find(
+        (m) => m.trimmedStartMs === rally.startMs && m.trimmedEndMs === rally.endMs
+      );
+
+      if (mapping) {
+        // Use original video and original timestamps for export
+        console.log(
+          `[EXPORT] Reverse-mapping confirmed video ${rally.videoId}: ` +
+          `${rally.startMs}-${rally.endMs} -> ${mapping.originalStartMs}-${mapping.originalEndMs}`
+        );
+        return {
+          ...rally,
+          videoS3Key: confirmation.originalS3Key,  // Use original video
+          startMs: mapping.originalStartMs,         // Use original timestamps
+          endMs: mapping.originalEndMs,
+          exportQuality,
+        };
+      }
+      // Mapping not found - rally might have been modified, use as-is
+      console.warn(
+        `[EXPORT] No mapping found for confirmed rally ${rally.startMs}-${rally.endMs} on video ${rally.videoId}`
+      );
+    }
+
     return { ...rally, exportQuality };
   });
 
