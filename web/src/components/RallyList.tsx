@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Box,
@@ -27,6 +27,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import LockIcon from '@mui/icons-material/Lock';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import RestoreIcon from '@mui/icons-material/Restore';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import ListItemIcon from '@mui/material/ListItemIcon';
@@ -40,8 +41,7 @@ import { formatTime, formatDuration } from '@/utils/timeFormat';
 import { Rally, Match } from '@/types/rally';
 import { designTokens } from '@/app/theme';
 import { ConfirmDialog } from './ConfirmDialog';
-import { LockedRalliesBanner } from './ConfirmRallies';
-import { removeVideoFromSession, renameVideo, confirmRallies } from '@/services/api';
+import { removeVideoFromSession, renameVideo, confirmRallies, getConfirmationStatus, restoreOriginalVideo } from '@/services/api';
 
 export function RallyList() {
   const {
@@ -111,6 +111,48 @@ export function RallyList() {
   // Confirm rallies dialog state
   const [showConfirmRalliesDialog, setShowConfirmRalliesDialog] = useState(false);
   const [matchToConfirm, setMatchToConfirm] = useState<Match | null>(null);
+
+  // Restore original video dialog state
+  const [showRestoreDialog, setShowRestoreDialog] = useState(false);
+  const [matchToRestore, setMatchToRestore] = useState<Match | null>(null);
+  const [isRestoring, setIsRestoring] = useState(false);
+
+  // Poll for confirmation status when confirming
+  useEffect(() => {
+    if (!isConfirming || !activeMatchId) return;
+
+    const status = confirmationStatus[activeMatchId];
+    const isProcessing = status?.status === 'PENDING' || status?.status === 'PROCESSING';
+    if (!isProcessing) return;
+
+    const intervalId = setInterval(async () => {
+      try {
+        const result = await getConfirmationStatus(activeMatchId);
+        if (result.confirmation) {
+          setConfirmationStatus(activeMatchId, {
+            id: result.confirmation.id,
+            status: result.confirmation.status,
+            progress: result.confirmation.progress,
+            error: result.confirmation.error,
+            confirmedAt: result.confirmation.confirmedAt,
+            originalDurationMs: result.confirmation.originalDurationMs,
+            trimmedDurationMs: result.confirmation.trimmedDurationMs,
+          });
+
+          if (result.confirmation.status === 'CONFIRMED' || result.confirmation.status === 'FAILED') {
+            setIsConfirming(false);
+            if (result.confirmation.status === 'CONFIRMED') {
+              await reloadSession();
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Failed to poll confirmation status:', e);
+      }
+    }, 2000);
+
+    return () => clearInterval(intervalId);
+  }, [isConfirming, activeMatchId, confirmationStatus, setConfirmationStatus, setIsConfirming, reloadSession]);
 
   const toggleMatchExpanded = (matchId: string) => {
     setExpandedMatches((prev) => {
@@ -314,8 +356,6 @@ export function RallyList() {
         </Box>
       )}
 
-      {/* Locked rallies banner */}
-      <LockedRalliesBanner />
 
       {/* Download All Popover */}
       <Popover
@@ -360,7 +400,8 @@ export function RallyList() {
         {session.matches.map((match) => {
           const isExpanded = expandedMatches.has(match.id);
           const isActiveMatch = activeMatchId === match.id;
-          const matchRallies = [...match.rallies].sort((a, b) => a.start_time - b.start_time);
+          // Use rallies from store for active match (live updates), session for others
+          const matchRallies = [...(isActiveMatch ? rallies : match.rallies)].sort((a, b) => a.start_time - b.start_time);
           const matchDuration = matchRallies.reduce((sum, r) => sum + r.duration, 0);
 
           return (
@@ -729,41 +770,56 @@ export function RallyList() {
           <ListItemText>Remove from session</ListItemText>
         </MenuItem>
         <Divider />
-        <MenuItem
-          onClick={() => {
-            if (!videoMenuAnchor || !isPremium) return;
-            setMatchToConfirm(videoMenuAnchor.match);
-            setVideoMenuAnchor(null);
-            setShowConfirmRalliesDialog(true);
-          }}
-          disabled={
-            !isPremium ||
-            isConfirming ||
-            confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'CONFIRMED' ||
-            confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'PENDING' ||
-            confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'PROCESSING'
-          }
-        >
-          <ListItemIcon>
-            {confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'CONFIRMED' ? (
-              <CheckCircleIcon fontSize="small" sx={{ color: 'success.main' }} />
-            ) : !isPremium ? (
-              <LockIcon fontSize="small" />
-            ) : (
-              <CheckCircleIcon fontSize="small" />
-            )}
-          </ListItemIcon>
-          <ListItemText
-            primary="Confirm Rallies"
-            secondary={
-              confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'CONFIRMED'
-                ? 'Already confirmed'
-                : !isPremium
+        {confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'CONFIRMED' ? (
+          <MenuItem
+            onClick={() => {
+              if (!videoMenuAnchor) return;
+              setMatchToRestore(videoMenuAnchor.match);
+              setVideoMenuAnchor(null);
+              setShowRestoreDialog(true);
+            }}
+            disabled={isRestoring}
+          >
+            <ListItemIcon>
+              <RestoreIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText
+              primary="Restore Original"
+              secondary="Revert to full video"
+            />
+          </MenuItem>
+        ) : (
+          <MenuItem
+            onClick={() => {
+              if (!videoMenuAnchor || !isPremium) return;
+              setMatchToConfirm(videoMenuAnchor.match);
+              setVideoMenuAnchor(null);
+              setShowConfirmRalliesDialog(true);
+            }}
+            disabled={
+              !isPremium ||
+              isConfirming ||
+              confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'PENDING' ||
+              confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'PROCESSING'
+            }
+          >
+            <ListItemIcon>
+              {!isPremium ? (
+                <LockIcon fontSize="small" />
+              ) : (
+                <CheckCircleIcon fontSize="small" />
+              )}
+            </ListItemIcon>
+            <ListItemText
+              primary="Confirm Rallies"
+              secondary={
+                !isPremium
                   ? 'Premium feature'
                   : 'Trim video to keep only rallies'
-            }
-          />
-        </MenuItem>
+              }
+            />
+          </MenuItem>
+        )}
       </Menu>
 
       {/* Remove video from session confirmation dialog */}
@@ -831,6 +887,34 @@ export function RallyList() {
         onCancel={() => {
           setShowConfirmRalliesDialog(false);
           setMatchToConfirm(null);
+        }}
+      />
+
+      {/* Restore original video confirmation dialog */}
+      <ConfirmDialog
+        open={showRestoreDialog}
+        title="Restore original video?"
+        message="This will delete the trimmed video and restore rally timestamps to their original values. You'll need to confirm again to create a new trimmed video."
+        confirmLabel="Restore"
+        cancelLabel="Cancel"
+        onConfirm={async () => {
+          if (!matchToRestore) return;
+          setShowRestoreDialog(false);
+          setIsRestoring(true);
+          try {
+            await restoreOriginalVideo(matchToRestore.id);
+            setConfirmationStatus(matchToRestore.id, null);
+            await reloadSession();
+          } catch (error) {
+            console.error('Failed to restore original video:', error);
+          } finally {
+            setIsRestoring(false);
+            setMatchToRestore(null);
+          }
+        }}
+        onCancel={() => {
+          setShowRestoreDialog(false);
+          setMatchToRestore(null);
         }}
       />
     </Box>
