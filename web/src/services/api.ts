@@ -9,7 +9,7 @@ export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost
 /**
  * Get default headers including X-Visitor-Id for user identification.
  */
-function getHeaders(contentType?: string): HeadersInit {
+export function getHeaders(contentType?: string): HeadersInit {
   const headers: HeadersInit = {};
 
   const visitorId = getVisitorId();
@@ -236,6 +236,7 @@ function apiSessionToFrontend(apiSession: ApiSession, cloudfrontDomain?: string)
     matches,
     highlights,
     userRole: apiSession.userRole,
+    updatedAt: apiSession.updatedAt,
   };
 }
 
@@ -957,8 +958,24 @@ export interface UserResponse {
   sessionCount: number;
 }
 
-// Get current user
+// User cache for getCurrentUser (5 minute TTL)
+let cachedUser: UserResponse | null = null;
+let userCacheTimestamp = 0;
+const USER_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+// Invalidate user cache (call after user updates)
+export function invalidateUserCache(): void {
+  cachedUser = null;
+  userCacheTimestamp = 0;
+}
+
+// Get current user (cached)
 export async function getCurrentUser(): Promise<UserResponse> {
+  // Return cached user if still valid
+  if (cachedUser && Date.now() - userCacheTimestamp < USER_CACHE_TTL) {
+    return cachedUser;
+  }
+
   const response = await fetch(`${API_BASE_URL}/v1/me`, {
     headers: getHeaders(),
   });
@@ -967,7 +984,10 @@ export async function getCurrentUser(): Promise<UserResponse> {
     throw new Error(`Failed to get user: ${response.status}`);
   }
 
-  return response.json();
+  const user = await response.json();
+  cachedUser = user;
+  userCacheTimestamp = Date.now();
+  return user;
 }
 
 // Update current user (e.g., name)
@@ -983,7 +1003,11 @@ export async function updateCurrentUser(data: { name?: string }): Promise<UserRe
     throw new Error(error.error?.message || `Failed to update user: ${response.status}`);
   }
 
-  return response.json();
+  const user = await response.json();
+  // Update cache with new user data
+  cachedUser = user;
+  userCacheTimestamp = Date.now();
+  return user;
 }
 
 // ============================================================================

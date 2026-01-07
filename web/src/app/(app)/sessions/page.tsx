@@ -158,7 +158,7 @@ export default function HomePage() {
       setError(null);
       const [sessionsResponse, videosResponse, sharedResponse] = await Promise.all([
         listSessions(),
-        listVideos(1, 100),
+        listVideos(1, 30),
         listSharedSessions().catch(() => ({ data: [] })),
       ]);
       setSessions(sessionsResponse.data);
@@ -871,19 +871,28 @@ export default function HomePage() {
                               onClick={() => router.push(`/sessions/${session.id}`)}
                             >
                               <Box sx={{ position: 'relative', aspectRatio: '16/9' }}>
-                                <video
-                                  src={getVideoStreamUrl(video.s3Key)}
-                                  poster={video.posterS3Key ? getVideoStreamUrl(video.posterS3Key) : undefined}
-                                  preload="metadata"
-                                  muted
-                                  style={{
-                                    width: '100%',
-                                    height: '100%',
-                                    objectFit: 'cover',
-                                    backgroundColor: designTokens.colors.surface[0],
-                                    display: 'block',
-                                  }}
-                                />
+                                {video.posterS3Key ? (
+                                  <img
+                                    src={getVideoStreamUrl(video.posterS3Key)}
+                                    alt={video.name}
+                                    loading="lazy"
+                                    style={{
+                                      width: '100%',
+                                      height: '100%',
+                                      objectFit: 'cover',
+                                      backgroundColor: designTokens.colors.surface[0],
+                                      display: 'block',
+                                    }}
+                                  />
+                                ) : (
+                                  <Box
+                                    sx={{
+                                      width: '100%',
+                                      height: '100%',
+                                      bgcolor: designTokens.colors.surface[0],
+                                    }}
+                                  />
+                                )}
                                 {/* Gradient overlay */}
                                 <Box
                                   sx={{
