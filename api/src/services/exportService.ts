@@ -1,4 +1,4 @@
-import { ExportStatus, UserTier } from "@prisma/client";
+import { ExportStatus } from "@prisma/client";
 import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 import { spawn } from "child_process";
 import fs from "fs/promises";
@@ -9,11 +9,28 @@ import { env } from "../config/env.js";
 import { generateDownloadUrl, generateUploadUrl } from "../lib/s3.js";
 import { prisma } from "../lib/prisma.js";
 import { ForbiddenError, NotFoundError } from "../middleware/errorHandler.js";
-import { getUserTier, getTierLimits } from "./tierService.js";
+import { getUserTier, getTierLimits, TIER_LIMITS, type UserTier } from "./tierService.js";
 
 const lambdaClient = new LambdaClient({
   region: env.AWS_REGION,
 });
+
+type ExportQuality = "original" | "720p";
+
+/**
+ * Determine export quality for a video based on tier and upload age.
+ * FREE users get original quality exports for the first 3 days, then 720p.
+ * PREMIUM users always get original quality.
+ */
+function getExportQuality(tier: UserTier, videoCreatedAt: Date): ExportQuality {
+  if (tier === "PREMIUM") return "original";
+
+  const originalQualityDays = TIER_LIMITS.FREE.originalQualityDays;
+  if (!originalQualityDays) return "720p"; // No grace period configured
+
+  const daysSinceUpload = (Date.now() - videoCreatedAt.getTime()) / (24 * 60 * 60 * 1000);
+  return daysSinceUpload <= originalQualityDays ? "original" : "720p";
+}
 
 // Check if we should use local FFmpeg (development mode)
 function shouldUseLocalExport(): boolean {
@@ -58,9 +75,21 @@ interface CreateExportJobInput {
   }>;
 }
 
-// Internal interface with tier for trigger functions
-interface ExportTriggerInput extends CreateExportJobInput {
+// Internal interface with tier and exportQuality for trigger functions
+interface ExportTriggerInput {
+  sessionId: string;
   tier: "FREE" | "PREMIUM";
+  config: {
+    format: "mp4" | "webm";
+  };
+  rallies: Array<{
+    videoId: string;
+    videoS3Key: string;
+    startMs: number;
+    endMs: number;
+    camera?: CameraEdit;
+    exportQuality: ExportQuality; // Per-rally quality based on video age
+  }>;
 }
 
 /**
@@ -282,6 +311,23 @@ export async function createExportJob(
     throw new NotFoundError("Session", input.sessionId);
   }
 
+  // Look up video createdAt for each rally to determine export quality
+  const videoIds = [...new Set(input.rallies.map((r) => r.videoId))];
+  const videos = await prisma.video.findMany({
+    where: { id: { in: videoIds } },
+    select: { id: true, createdAt: true },
+  });
+  const videoCreatedAtMap = new Map(videos.map((v) => [v.id, v.createdAt]));
+
+  // Add exportQuality to each rally based on its video's age
+  const ralliesWithQuality = input.rallies.map((rally) => {
+    const videoCreatedAt = videoCreatedAtMap.get(rally.videoId);
+    const exportQuality = videoCreatedAt
+      ? getExportQuality(effectiveTier, videoCreatedAt)
+      : "720p"; // Default to 720p if video not found
+    return { ...rally, exportQuality };
+  });
+
   // Create the export job with user's actual tier
   const job = await prisma.exportJob.create({
     data: {
@@ -298,8 +344,13 @@ export async function createExportJob(
 
   const triggerFn = useLocal ? triggerLocalExport : triggerExportLambda;
 
-  // Use effectiveTier (user's actual tier) instead of input.tier
-  const exportInput = { ...input, tier: effectiveTier };
+  // Build export input with tier and per-rally exportQuality
+  const exportInput: ExportTriggerInput = {
+    sessionId: input.sessionId,
+    tier: effectiveTier,
+    config: input.config,
+    rallies: ralliesWithQuality,
+  };
 
   // Trigger export (async, don't wait)
   triggerFn(job.id, exportInput).catch((error) => {
@@ -397,16 +448,23 @@ async function triggerLocalExport(
 
       console.log(`[LOCAL EXPORT] Extracting clip ${i + 1}/${input.rallies.length}${hasCamera ? ' with camera effects' : ''}...`);
 
+      // Use per-rally exportQuality (original or 720p based on video age)
+      const quality = rally.exportQuality;
+
       if (hasCamera) {
         // Camera edits require re-encoding
         const cameraFilter = generateCameraFilter(rally.camera!, durationSec);
-        console.log(`[LOCAL EXPORT] Camera filter: ${cameraFilter}`);
+        // If 720p quality, add scale filter after camera filter
+        const vf = quality === "720p"
+          ? `${cameraFilter},scale=-2:720`
+          : cameraFilter;
+        console.log(`[LOCAL EXPORT] Camera filter (${quality}): ${vf}`);
 
         await runFFmpeg([
           "-ss", String(startSec),
           "-i", videoPath,
           "-t", String(durationSec),
-          "-vf", cameraFilter,
+          "-vf", vf,
           "-c:v", "libx264",
           "-preset", "fast",
           "-crf", "23",
@@ -415,8 +473,8 @@ async function triggerLocalExport(
           "-avoid_negative_ts", "make_zero",
           "-y", clipPath,
         ]);
-      } else if (input.tier === "PREMIUM") {
-        // Fast copy for premium (no camera edits)
+      } else if (quality === "original") {
+        // Fast copy for original quality (PREMIUM or FREE within grace period)
         await runFFmpeg([
           "-ss", String(startSec),
           "-i", videoPath,
@@ -426,7 +484,7 @@ async function triggerLocalExport(
           "-y", clipPath,
         ]);
       } else {
-        // Re-encode to 720p for free tier (no watermark in local dev)
+        // Re-encode to 720p (FREE after grace period, no watermark in local dev)
         await runFFmpeg([
           "-ss", String(startSec),
           "-i", videoPath,
@@ -566,6 +624,7 @@ async function triggerExportLambda(jobId: string, input: ExportTriggerInput) {
       videoS3Key: r.videoS3Key,
       startMs: r.startMs,
       endMs: r.endMs,
+      exportQuality: r.exportQuality, // Per-rally quality based on video age
       // Include camera edit if present and enabled
       ...(r.camera?.enabled && {
         camera: {

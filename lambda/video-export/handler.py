@@ -220,12 +220,15 @@ def process_export(
         # Extract clip
         clip_path = clips_dir / f"clip_{i:04d}.mp4"
         camera = rally.get("camera")  # Optional camera edit data
+        # Per-rally export quality based on video age (original for first 3 days, then 720p)
+        export_quality = rally.get("exportQuality", "720p")
         extract_clip(
             input_path=video_path,
             output_path=clip_path,
             start_ms=start_ms,
             end_ms=end_ms,
             tier=tier,
+            export_quality=export_quality,
             s3_bucket=s3_bucket,
             tmpdir=tmpdir,
             camera=camera,
@@ -260,67 +263,33 @@ def extract_clip(
     start_ms: int,
     end_ms: int,
     tier: str,
+    export_quality: str,
     s3_bucket: str,
     tmpdir: Path,
     camera: dict | None = None,
 ) -> None:
-    """Extract a clip from video, applying tier-specific processing and optional camera effects."""
+    """Extract a clip from video, applying tier-specific processing and optional camera effects.
+
+    Args:
+        tier: User tier ("FREE" or "PREMIUM") - determines watermark
+        export_quality: Quality level ("original" or "720p") - determines resolution
+            FREE users get "original" for first 3 days, then "720p"
+            PREMIUM users always get "original"
+    """
     start_sec = start_ms / 1000
     duration_sec = (end_ms - start_ms) / 1000
+
+    # Watermark is tier-based: FREE always gets watermark regardless of quality
+    add_watermark = (tier == "FREE")
 
     # Check if camera effects are enabled
     has_camera = camera is not None and camera.get("keyframes")
     if has_camera:
         print(f"Applying camera effects: {camera.get('aspectRatio', 'ORIGINAL')}, {len(camera.get('keyframes', []))} keyframes")
 
-    if has_camera:
-        # Camera edits require re-encoding
-        camera_filter = generate_camera_filter(camera, duration_sec)
-        print(f"Camera filter: {camera_filter}")
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-ss",
-            str(start_sec),
-            "-i",
-            str(input_path),
-            "-t",
-            str(duration_sec),
-            "-vf",
-            camera_filter,
-            "-c:v",
-            "libx264",
-            "-preset",
-            "fast",
-            "-crf",
-            "23",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-            "-avoid_negative_ts",
-            "make_zero",
-            str(output_path),
-        ]
-    elif tier == "PREMIUM":
-        # Premium: fast copy, no re-encoding (when no camera effects)
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-ss",
-            str(start_sec),
-            "-i",
-            str(input_path),
-            "-t",
-            str(duration_sec),
-            "-c",
-            "copy",
-            "-avoid_negative_ts",
-            "make_zero",
-            str(output_path),
-        ]
-    else:
-        # Free: scale to 720p and add watermark
+    # Download watermark if needed
+    watermark_path = None
+    if add_watermark:
         watermark_path = tmpdir / "watermark.png"
         if not watermark_path.exists():
             try:
@@ -329,64 +298,114 @@ def extract_clip(
                 print(f"Could not download watermark: {e}, proceeding without")
                 watermark_path = None
 
-        if watermark_path and watermark_path.exists():
-            # Scale to 720p height and overlay watermark in bottom-right corner
-            filter_complex = (
-                "[0:v]scale=-2:720[scaled];"
-                "[scaled][1:v]overlay=W-w-20:H-h-20[out]"
-            )
+    print(f"Export quality: {export_quality}, tier: {tier}, watermark: {add_watermark}")
+
+    if has_camera:
+        # Camera edits require re-encoding
+        camera_filter = generate_camera_filter(camera, duration_sec)
+        # Add 720p scale if needed
+        if export_quality == "720p":
+            camera_filter = f"{camera_filter},scale=-2:720"
+        print(f"Camera filter: {camera_filter}")
+
+        if add_watermark and watermark_path and watermark_path.exists():
+            # Camera + watermark
+            filter_complex = f"[0:v]{camera_filter}[cam];[cam][1:v]overlay=W-w-20:H-h-20[out]"
             cmd = [
-                "ffmpeg",
-                "-y",
-                "-ss",
-                str(start_sec),
-                "-i",
-                str(input_path),
-                "-i",
-                str(watermark_path),
-                "-t",
-                str(duration_sec),
-                "-filter_complex",
-                filter_complex,
-                "-map",
-                "[out]",
-                "-map",
-                "0:a?",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "fast",
-                "-crf",
-                "23",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "128k",
+                "ffmpeg", "-y",
+                "-ss", str(start_sec),
+                "-i", str(input_path),
+                "-i", str(watermark_path),
+                "-t", str(duration_sec),
+                "-filter_complex", filter_complex,
+                "-map", "[out]",
+                "-map", "0:a?",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-c:a", "aac", "-b:a", "128k",
+                "-avoid_negative_ts", "make_zero",
                 str(output_path),
             ]
         else:
-            # No watermark, just scale
+            # Camera only (no watermark or watermark unavailable)
             cmd = [
-                "ffmpeg",
-                "-y",
-                "-ss",
-                str(start_sec),
-                "-i",
-                str(input_path),
-                "-t",
-                str(duration_sec),
-                "-vf",
-                "scale=-2:720",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "fast",
-                "-crf",
-                "23",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "128k",
+                "ffmpeg", "-y",
+                "-ss", str(start_sec),
+                "-i", str(input_path),
+                "-t", str(duration_sec),
+                "-vf", camera_filter,
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-c:a", "aac", "-b:a", "128k",
+                "-avoid_negative_ts", "make_zero",
+                str(output_path),
+            ]
+    elif export_quality == "original" and not add_watermark:
+        # PREMIUM with original quality: fast copy, no re-encoding
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", str(start_sec),
+            "-i", str(input_path),
+            "-t", str(duration_sec),
+            "-c", "copy",
+            "-avoid_negative_ts", "make_zero",
+            str(output_path),
+        ]
+    elif export_quality == "original" and add_watermark:
+        # FREE within grace period: original quality but with watermark (requires re-encode)
+        if watermark_path and watermark_path.exists():
+            filter_complex = "[0:v][1:v]overlay=W-w-20:H-h-20[out]"
+            cmd = [
+                "ffmpeg", "-y",
+                "-ss", str(start_sec),
+                "-i", str(input_path),
+                "-i", str(watermark_path),
+                "-t", str(duration_sec),
+                "-filter_complex", filter_complex,
+                "-map", "[out]",
+                "-map", "0:a?",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-c:a", "aac", "-b:a", "128k",
+                "-avoid_negative_ts", "make_zero",
+                str(output_path),
+            ]
+        else:
+            # No watermark available, just copy
+            cmd = [
+                "ffmpeg", "-y",
+                "-ss", str(start_sec),
+                "-i", str(input_path),
+                "-t", str(duration_sec),
+                "-c", "copy",
+                "-avoid_negative_ts", "make_zero",
+                str(output_path),
+            ]
+    else:
+        # 720p quality (FREE after grace period)
+        if watermark_path and watermark_path.exists():
+            # Scale to 720p and add watermark
+            filter_complex = "[0:v]scale=-2:720[scaled];[scaled][1:v]overlay=W-w-20:H-h-20[out]"
+            cmd = [
+                "ffmpeg", "-y",
+                "-ss", str(start_sec),
+                "-i", str(input_path),
+                "-i", str(watermark_path),
+                "-t", str(duration_sec),
+                "-filter_complex", filter_complex,
+                "-map", "[out]",
+                "-map", "0:a?",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-c:a", "aac", "-b:a", "128k",
+                str(output_path),
+            ]
+        else:
+            # No watermark, just scale to 720p
+            cmd = [
+                "ffmpeg", "-y",
+                "-ss", str(start_sec),
+                "-i", str(input_path),
+                "-t", str(duration_sec),
+                "-vf", "scale=-2:720",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-c:a", "aac", "-b:a", "128k",
                 str(output_path),
             ]
 
