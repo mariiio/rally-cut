@@ -12,35 +12,45 @@ import { designTokens } from '@/app/theme';
 import type { Match } from '@/types/rally';
 
 const DISMISSED_KEY_PREFIX = 'rallycut_quality_banner_dismissed_';
+const DOWNGRADED_DISMISSED_KEY_PREFIX = 'rallycut_downgraded_banner_dismissed_';
 
 interface OriginalQualityBannerProps {
   /** Current video/match being viewed */
   currentMatch: Match | null;
 }
 
+type BannerState = 'none' | 'countdown' | 'downgraded';
+
 /**
- * Banner that warns FREE tier users when their video's original quality
- * is about to be downgraded (3 days after upload).
+ * Banner for FREE tier users about video quality:
  *
- * Shows when:
- * - User is FREE tier
- * - Video is not yet quality-downgraded
- * - Within 3 days of downgrade
- * - Re-appears on last day regardless of dismissal
+ * 1. Countdown state (within 3 days of upload, not yet downgraded):
+ *    - Shows time remaining for full quality exports
+ *    - "Full quality exports available for X days"
+ *
+ * 2. Downgraded state (after 3 days OR qualityDowngradedAt set):
+ *    - Subtle info message
+ *    - "Full quality exports no longer available. Upgrade and re-upload to restore."
+ *    - Permanently dismissible per video
  */
 export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerProps) {
-  const [isDismissed, setIsDismissed] = useState(false);
+  const [isCountdownDismissed, setIsCountdownDismissed] = useState(false);
+  const [isDowngradedDismissed, setIsDowngradedDismissed] = useState(false);
   const isPremium = useTierStore((state) => state.isPremium());
   const originalQualityDays = useTierStore((state) => state.limits.originalQualityDays);
 
-  const dismissedKey = currentMatch ? `${DISMISSED_KEY_PREFIX}${currentMatch.id}` : null;
+  const countdownDismissedKey = currentMatch ? `${DISMISSED_KEY_PREFIX}${currentMatch.id}` : null;
+  const downgradedDismissedKey = currentMatch ? `${DOWNGRADED_DISMISSED_KEY_PREFIX}${currentMatch.id}` : null;
 
   // Check dismissed state on mount and when match changes
   useEffect(() => {
-    if (dismissedKey) {
-      setIsDismissed(localStorage.getItem(dismissedKey) === 'true');
+    if (countdownDismissedKey) {
+      setIsCountdownDismissed(localStorage.getItem(countdownDismissedKey) === 'true');
     }
-  }, [dismissedKey]);
+    if (downgradedDismissedKey) {
+      setIsDowngradedDismissed(localStorage.getItem(downgradedDismissedKey) === 'true');
+    }
+  }, [countdownDismissedKey, downgradedDismissedKey]);
 
   // Calculate days until quality downgrade
   const daysUntilDowngrade = useMemo(() => {
@@ -49,41 +59,119 @@ export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerPro
     const createdAt = new Date(currentMatch.createdAt);
     const now = new Date();
     const daysSinceUpload = Math.floor((now.getTime() - createdAt.getTime()) / (24 * 60 * 60 * 1000));
-    return Math.max(0, originalQualityDays - daysSinceUpload);
+    return originalQualityDays - daysSinceUpload;
   }, [currentMatch?.createdAt, originalQualityDays]);
 
-  // Determine if banner should show
-  const shouldShow = useMemo(() => {
+  // Determine banner state
+  const bannerState: BannerState = useMemo(() => {
     // Don't show for premium users
-    if (isPremium) return false;
+    if (isPremium) return 'none';
 
-    // Don't show if no match or already downgraded
-    if (!currentMatch || currentMatch.qualityDowngradedAt) return false;
+    // Don't show if no match
+    if (!currentMatch) return 'none';
 
-    // Don't show if no createdAt or we can't calculate days
-    if (daysUntilDowngrade === null) return false;
+    // Already downgraded - show downgraded banner (if not dismissed)
+    if (currentMatch.qualityDowngradedAt) {
+      return isDowngradedDismissed ? 'none' : 'downgraded';
+    }
 
-    // Only show when within 3 days
-    if (daysUntilDowngrade > 3) return false;
+    // No createdAt - can't calculate, don't show
+    if (daysUntilDowngrade === null) return 'none';
 
-    // On last day (or past), always show regardless of dismissal
-    if (daysUntilDowngrade <= 1) return true;
+    // Past grace period but not yet marked as downgraded in DB
+    // (cleanup job hasn't run yet)
+    if (daysUntilDowngrade < 0) {
+      return isDowngradedDismissed ? 'none' : 'downgraded';
+    }
 
-    // Otherwise, respect dismissal
-    return !isDismissed;
-  }, [isPremium, currentMatch, daysUntilDowngrade, isDismissed]);
+    // Within grace period - show countdown
+    if (daysUntilDowngrade <= 3) {
+      // On last day (or past), always show regardless of dismissal
+      if (daysUntilDowngrade <= 1) return 'countdown';
+      // Otherwise, respect dismissal
+      return isCountdownDismissed ? 'none' : 'countdown';
+    }
 
-  const handleDismiss = () => {
-    if (dismissedKey) {
-      localStorage.setItem(dismissedKey, 'true');
-      setIsDismissed(true);
+    return 'none';
+  }, [isPremium, currentMatch, daysUntilDowngrade, isCountdownDismissed, isDowngradedDismissed]);
+
+  const handleDismissCountdown = () => {
+    if (countdownDismissedKey) {
+      localStorage.setItem(countdownDismissedKey, 'true');
+      setIsCountdownDismissed(true);
     }
   };
 
-  if (!shouldShow) {
+  const handleDismissDowngraded = () => {
+    if (downgradedDismissedKey) {
+      localStorage.setItem(downgradedDismissedKey, 'true');
+      setIsDowngradedDismissed(true);
+    }
+  };
+
+  if (bannerState === 'none') {
     return null;
   }
 
+  // Downgraded state - subtle info banner
+  if (bannerState === 'downgraded') {
+    return (
+      <Box
+        sx={{
+          background: 'rgba(255, 255, 255, 0.03)',
+          borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+          py: 0.5,
+          px: 2,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 1.5,
+        }}
+      >
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.disabled',
+            fontSize: '0.75rem',
+          }}
+        >
+          Full quality exports no longer available.{' '}
+          <Typography
+            component={Link}
+            href="/pricing"
+            sx={{
+              color: designTokens.colors.tertiary.main,
+              fontSize: 'inherit',
+              textDecoration: 'none',
+              '&:hover': {
+                textDecoration: 'underline',
+              },
+            }}
+          >
+            Upgrade
+          </Typography>
+          {' '}and re-upload to restore.
+        </Typography>
+        <IconButton
+          size="small"
+          onClick={handleDismissDowngraded}
+          sx={{
+            color: 'text.disabled',
+            p: 0.25,
+            '&:hover': {
+              color: 'text.secondary',
+              bgcolor: 'rgba(255, 255, 255, 0.05)',
+            },
+          }}
+          aria-label="Dismiss"
+        >
+          <CloseIcon sx={{ fontSize: 14 }} />
+        </IconButton>
+      </Box>
+    );
+  }
+
+  // Countdown state
   const isUrgent = daysUntilDowngrade !== null && daysUntilDowngrade <= 1;
   const timeLabel = daysUntilDowngrade === 0
     ? 'Last day'
@@ -132,10 +220,10 @@ export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerPro
               fontSize: '0.8rem',
             }}
           >
-            Upgrade to unlock full quality exports
+            Full quality exports available
           </Typography>
           <Tooltip
-            title="After this period, re-upload required for full quality exports."
+            title="FREE tier includes full quality exports with watermark for the first 3 days. Upgrade to Pro for permanent full quality without watermark."
             arrow
             placement="top"
           >
@@ -180,7 +268,7 @@ export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerPro
       {!isUrgent && (
         <IconButton
           size="small"
-          onClick={handleDismiss}
+          onClick={handleDismissCountdown}
           sx={{
             color: 'text.disabled',
             p: 0.5,
