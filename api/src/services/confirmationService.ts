@@ -297,13 +297,13 @@ export async function restoreOriginal(
     if (mappings.length > 0) {
       const ids = mappings.map((m) => m.rallyId);
       const startCase = mappings
-        .map((m) => `WHEN '${m.rallyId}' THEN ${m.originalStartMs}`)
+        .map((m) => `WHEN '${m.rallyId}'::uuid THEN ${m.originalStartMs}`)
         .join(" ");
       const endCase = mappings
-        .map((m) => `WHEN '${m.rallyId}' THEN ${m.originalEndMs}`)
+        .map((m) => `WHEN '${m.rallyId}'::uuid THEN ${m.originalEndMs}`)
         .join(" ");
       await tx.$executeRawUnsafe(
-        `UPDATE "Rally" SET "start_ms" = CASE id ${startCase} END, "end_ms" = CASE id ${endCase} END WHERE id = ANY($1::uuid[])`,
+        `UPDATE "rallies" SET "start_ms" = CASE id ${startCase} END, "end_ms" = CASE id ${endCase} END WHERE id = ANY($1::uuid[])`,
         ids
       );
     }
@@ -428,13 +428,13 @@ export async function handleConfirmationComplete(
     if (mappings.length > 0) {
       const ids = mappings.map((m) => m.rallyId);
       const startCase = mappings
-        .map((m) => `WHEN '${m.rallyId}' THEN ${m.trimmedStartMs}`)
+        .map((m) => `WHEN '${m.rallyId}'::uuid THEN ${m.trimmedStartMs}`)
         .join(" ");
       const endCase = mappings
-        .map((m) => `WHEN '${m.rallyId}' THEN ${m.trimmedEndMs}`)
+        .map((m) => `WHEN '${m.rallyId}'::uuid THEN ${m.trimmedEndMs}`)
         .join(" ");
       await tx.$executeRawUnsafe(
-        `UPDATE "Rally" SET "start_ms" = CASE id ${startCase} END, "end_ms" = CASE id ${endCase} END WHERE id = ANY($1::uuid[])`,
+        `UPDATE "rallies" SET "start_ms" = CASE id ${startCase} END, "end_ms" = CASE id ${endCase} END WHERE id = ANY($1::uuid[])`,
         ids
       );
     }

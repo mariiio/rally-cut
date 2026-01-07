@@ -9,11 +9,12 @@ import {
   CardContent,
   CircularProgress,
   Container,
+  TextField,
   Typography,
 } from '@mui/material';
 import PersonIcon from '@mui/icons-material/Person';
 import FolderSharedIcon from '@mui/icons-material/FolderShared';
-import { getSharePreview, acceptShare, type SharePreview } from '@/services/api';
+import { getSharePreview, acceptShare, getCurrentUser, type SharePreview } from '@/services/api';
 
 export default function AcceptSharePage() {
   const params = useParams();
@@ -24,12 +25,27 @@ export default function AcceptSharePage() {
   const [accepting, setAccepting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<SharePreview | null>(null);
+  const [userName, setUserName] = useState<string | null>(null);
+  const [nameInput, setNameInput] = useState('');
+  const [needsName, setNeedsName] = useState(false);
 
   useEffect(() => {
-    async function loadPreview() {
+    async function loadData() {
       try {
-        const data = await getSharePreview(token);
-        setPreview(data);
+        // Load share preview and current user in parallel
+        const [shareData, userData] = await Promise.all([
+          getSharePreview(token),
+          getCurrentUser().catch(() => null),
+        ]);
+        setPreview(shareData);
+
+        // Check if user already has a name
+        if (userData?.name) {
+          setUserName(userData.name);
+          setNeedsName(false);
+        } else {
+          setNeedsName(true);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load share');
       } finally {
@@ -38,16 +54,24 @@ export default function AcceptSharePage() {
     }
 
     if (token) {
-      loadPreview();
+      loadData();
     }
   }, [token]);
 
   const handleAccept = async () => {
+    // Validate name if needed
+    if (needsName && !nameInput.trim()) {
+      setError('Please enter your name');
+      return;
+    }
+
     setAccepting(true);
     setError(null);
 
     try {
-      const result = await acceptShare(token);
+      // Pass name only if user needs to set one
+      const nameToSend = needsName ? nameInput.trim() : undefined;
+      const result = await acceptShare(token, nameToSend);
 
       if (result.alreadyOwner) {
         // User is the owner, just redirect
@@ -156,9 +180,30 @@ export default function AcceptSharePage() {
               &ldquo;{preview?.sessionName}&rdquo;
             </Typography>
 
-            <Typography color="text.secondary" sx={{ mb: 4 }}>
+            <Typography color="text.secondary" sx={{ mb: 3 }}>
               Accept the invitation to view and add highlights to this session.
             </Typography>
+
+            {/* Name input for users without a name */}
+            {needsName && (
+              <TextField
+                fullWidth
+                label="Your name"
+                value={nameInput}
+                onChange={(e) => setNameInput(e.target.value)}
+                placeholder="Enter your name to join"
+                sx={{ mb: 3 }}
+                inputProps={{ maxLength: 100 }}
+                helperText="This name will be visible to other session members"
+              />
+            )}
+
+            {/* Show existing name */}
+            {userName && (
+              <Typography color="text.secondary" sx={{ mb: 3 }}>
+                Joining as <strong>{userName}</strong>
+              </Typography>
+            )}
 
             {error && (
               <Typography color="error.main" sx={{ mb: 2 }}>

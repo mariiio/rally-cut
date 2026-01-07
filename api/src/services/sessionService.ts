@@ -1,5 +1,9 @@
 import { prisma } from "../lib/prisma.js";
-import { NotFoundError, ValidationError } from "../middleware/errorHandler.js";
+import {
+  NotFoundError,
+  ValidationError,
+  AccessDeniedError,
+} from "../middleware/errorHandler.js";
 import type { Pagination } from "../schemas/common.js";
 import type {
   CreateSessionInput,
@@ -181,6 +185,13 @@ export async function getSessionById(id: string, userId?: string) {
             : false,
         },
       },
+      // Include pending access request check for access denied response
+      accessRequests: userId
+        ? {
+            where: { userId, status: "PENDING" },
+            select: { id: true },
+          }
+        : undefined,
     },
   });
 
@@ -196,8 +207,14 @@ export async function getSessionById(id: string, userId?: string) {
     } else if (session.share?.members && session.share.members.length > 0) {
       userRole = "member";
     } else {
-      // User has no access
-      throw new NotFoundError("Session", id);
+      // User has no access - throw AccessDeniedError with session info
+      const hasPendingRequest =
+        session.accessRequests && session.accessRequests.length > 0;
+      throw new AccessDeniedError(
+        session.name,
+        session.user?.name ?? null,
+        hasPendingRequest
+      );
     }
 
     // Track activity for inactivity-based cleanup (fire-and-forget)
@@ -214,8 +231,8 @@ export async function getSessionById(id: string, userId?: string) {
     })),
   };
 
-  // Remove sessionVideos and share from response (sessionVideos replaced by videos, share was for access check)
-  const { sessionVideos: _, share: __, ...result } = transformed;
+  // Remove internal fields from response (sessionVideos replaced by videos, share/accessRequests for access check)
+  const { sessionVideos: _, share: __, accessRequests: ___, ...result } = transformed;
 
   // Convert BigInt fields to strings for JSON serialization
   return serializeBigInts(result);

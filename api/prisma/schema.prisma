@@ -34,6 +34,8 @@ model User {
   highlights          Highlight[]
   usageQuota          UserUsageQuota?
   feedback            Feedback[]
+  accessRequests      AccessRequest[]  @relation("accessRequests")
+  resolvedRequests    AccessRequest[]  @relation("resolvedRequests")
 
   @@index([tier])
   @@map("users")
@@ -96,6 +98,32 @@ model SessionMember {
   @@map("session_members")
 }
 
+enum AccessRequestStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+model AccessRequest {
+  id          String              @id @default(uuid())
+  sessionId   String              @map("session_id")
+  userId      String              @map("user_id")
+  status      AccessRequestStatus @default(PENDING)
+  message     String?
+  requestedAt DateTime            @default(now()) @map("requested_at")
+  resolvedAt  DateTime?           @map("resolved_at")
+  resolvedBy  String?             @map("resolved_by")
+
+  session  Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user     User    @relation("accessRequests", fields: [userId], references: [id], onDelete: Cascade)
+  resolver User?   @relation("resolvedRequests", fields: [resolvedBy], references: [id], onDelete: SetNull)
+
+  @@unique([sessionId, userId])
+  @@index([sessionId, status])
+  @@index([userId])
+  @@map("access_requests")
+}
+
 // ============================================================================
 // Session & Video (Many-to-Many via SessionVideo)
 // ============================================================================
@@ -115,11 +143,12 @@ model Session {
   createdAt DateTime    @default(now()) @map("created_at")
   updatedAt DateTime    @updatedAt @map("updated_at")
 
-  user          User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
-  sessionVideos SessionVideo[]
-  highlights    Highlight[]
-  share         SessionShare?
-  exportJobs    ExportJob[]
+  user           User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  sessionVideos  SessionVideo[]
+  highlights     Highlight[]
+  share          SessionShare?
+  exportJobs     ExportJob[]
+  accessRequests AccessRequest[]
 
   @@index([userId])
   @@index([userId, deletedAt])

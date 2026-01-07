@@ -231,8 +231,13 @@ export async function getSharePreview(token: string) {
 
 /**
  * Accept a share invite (any user with valid token)
+ * Optionally updates user's name if provided
  */
-export async function acceptShare(token: string, userId: string) {
+export async function acceptShare(
+  token: string,
+  userId: string,
+  name?: string
+) {
   const share = await prisma.sessionShare.findUnique({
     where: { token },
     include: {
@@ -244,6 +249,14 @@ export async function acceptShare(token: string, userId: string) {
 
   if (!share) {
     throw new NotFoundError("Share link not found or expired");
+  }
+
+  // Update user's name if provided
+  if (name) {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { name },
+    });
   }
 
   // Don't allow owner to join as member

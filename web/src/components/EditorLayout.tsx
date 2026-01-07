@@ -20,6 +20,7 @@ import { SessionLoadingProgress } from './SessionLoadingProgress';
 import { OriginalQualityBanner } from './OriginalQualityBanner';
 import { NamePromptModal } from './NamePromptModal';
 import { MobileEditorLayout } from './mobile';
+import { AccessRequestForm } from './AccessRequestForm';
 import { useEditorStore } from '@/stores/editorStore';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { designTokens } from '@/app/theme';
@@ -49,6 +50,7 @@ export function EditorLayout({ sessionId, videoId }: EditorLayoutProps) {
     leftPanelTab,
     setLeftPanelTab,
     getActiveMatch,
+    sessionError,
   } = useEditorStore();
 
   // Get current match for quality banner
@@ -169,6 +171,38 @@ export function EditorLayout({ sessionId, videoId }: EditorLayoutProps) {
       selectHighlight(newId);
     }
   };
+
+  // Handle session errors (access denied, not found)
+  if (sessionError) {
+    if (sessionError.type === 'access_denied' && sessionId) {
+      return (
+        <AccessRequestForm
+          sessionId={sessionId}
+          sessionName={sessionError.sessionName}
+          ownerName={sessionError.ownerName}
+          hasPendingRequest={sessionError.hasPendingRequest}
+        />
+      );
+    }
+    // For not_found or unknown errors, show a simple error page
+    return (
+      <Box
+        sx={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          bgcolor: 'grey.900',
+        }}
+      >
+        <Typography color="text.secondary">
+          {sessionError.type === 'not_found'
+            ? 'Session not found'
+            : 'Failed to load session'}
+        </Typography>
+      </Box>
+    );
+  }
 
   // Render mobile layout for phones
   if (isMobile) {

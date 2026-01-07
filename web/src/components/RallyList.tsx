@@ -108,6 +108,10 @@ export function RallyList() {
     match: Match;
   } | null>(null);
 
+  // Confirm rallies dialog state
+  const [showConfirmRalliesDialog, setShowConfirmRalliesDialog] = useState(false);
+  const [matchToConfirm, setMatchToConfirm] = useState<Match | null>(null);
+
   const toggleMatchExpanded = (matchId: string) => {
     setExpandedMatches((prev) => {
       const next = new Set(prev);
@@ -726,26 +730,11 @@ export function RallyList() {
         </MenuItem>
         <Divider />
         <MenuItem
-          onClick={async () => {
+          onClick={() => {
             if (!videoMenuAnchor || !isPremium) return;
-            const matchId = videoMenuAnchor.match.id;
+            setMatchToConfirm(videoMenuAnchor.match);
             setVideoMenuAnchor(null);
-            setIsConfirming(true);
-            try {
-              const result = await confirmRallies(matchId);
-              setConfirmationStatus(matchId, {
-                id: result.confirmationId,
-                status: result.status,
-                progress: result.progress,
-                error: null,
-                confirmedAt: null,
-                originalDurationMs: 0, // Will be updated on next poll
-                trimmedDurationMs: null,
-              });
-            } catch (error) {
-              console.error('Failed to confirm rallies:', error);
-              setIsConfirming(false);
-            }
+            setShowConfirmRalliesDialog(true);
           }}
           disabled={
             !isPremium ||
@@ -809,6 +798,40 @@ export function RallyList() {
           }
         }}
         onCancel={() => setRallyToDelete(null)}
+      />
+
+      {/* Confirm rallies confirmation dialog */}
+      <ConfirmDialog
+        open={showConfirmRalliesDialog}
+        title="Confirm rallies?"
+        message="This will create a new trimmed video containing only the rally segments. Dead time between rallies will be removed, and rally editing will be locked."
+        confirmLabel="Confirm"
+        cancelLabel="Cancel"
+        onConfirm={async () => {
+          if (!matchToConfirm) return;
+          setShowConfirmRalliesDialog(false);
+          setIsConfirming(true);
+          try {
+            const result = await confirmRallies(matchToConfirm.id);
+            setConfirmationStatus(matchToConfirm.id, {
+              id: result.confirmationId,
+              status: result.status,
+              progress: result.progress,
+              error: null,
+              confirmedAt: null,
+              originalDurationMs: 0,
+              trimmedDurationMs: null,
+            });
+          } catch (error) {
+            console.error('Failed to confirm rallies:', error);
+            setIsConfirming(false);
+          }
+          setMatchToConfirm(null);
+        }}
+        onCancel={() => {
+          setShowConfirmRalliesDialog(false);
+          setMatchToConfirm(null);
+        }}
       />
     </Box>
   );
