@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Box,
@@ -33,9 +33,11 @@ import PeopleIcon from '@mui/icons-material/People';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
+import DiamondIcon from '@mui/icons-material/Diamond';
 import Chip from '@mui/material/Chip';
 import { useEditorStore } from '@/stores/editorStore';
 import { useUploadStore } from '@/stores/uploadStore';
+import { useTierStore } from '@/stores/tierStore';
 import { isValidVideoFile } from '@/utils/fileHandlers';
 import { deleteSession } from '@/services/api';
 import { designTokens } from '@/app/theme';
@@ -74,6 +76,13 @@ export function EditorHeader() {
   } = useEditorStore();
 
   const { isUploading, uploadVideo } = useUploadStore();
+  const isPremium = useTierStore((state) => state.isPremium());
+  const fetchTier = useTierStore((state) => state.fetchTier);
+
+  // Fetch tier on mount
+  useEffect(() => {
+    fetchTier();
+  }, [fetchTier]);
 
   const handleVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -266,6 +275,27 @@ export function EditorHeader() {
 
               {/* Sync Status Indicator */}
               <SyncStatus />
+
+              {/* Premium badge */}
+              {isPremium && (
+                <Chip
+                  icon={<DiamondIcon sx={{ fontSize: 14 }} />}
+                  label="Premium"
+                  size="small"
+                  variant="outlined"
+                  sx={{
+                    ml: 1,
+                    height: 24,
+                    borderColor: 'rgba(255, 209, 102, 0.5)',
+                    color: designTokens.colors.tertiary.main,
+                    fontWeight: 600,
+                    fontSize: '0.75rem',
+                    '& .MuiChip-icon': {
+                      color: designTokens.colors.tertiary.main,
+                    },
+                  }}
+                />
+              )}
 
               {/* Shared badge for members */}
               {userRole === 'member' && (

@@ -11,9 +11,8 @@
  * - PREMIUM tier: Full server sync enabled
  */
 
-import { API_BASE_URL } from './api';
+import { API_BASE_URL, getHeaders } from './api';
 import type { Rally, Highlight } from '@/types/rally';
-import type { RallyCameraEdit } from '@/types/camera';
 import { useTierStore } from '@/stores/tierStore';
 import { useCameraStore } from '@/stores/cameraStore';
 
@@ -61,8 +60,12 @@ class SyncService {
   init(sessionId: string) {
     const meta = this.loadMeta(sessionId);
 
+    // Check tier - FREE users cannot sync to server
+    const canSync = useTierStore.getState().canSyncToServer();
+
     // Restore dirty state from localStorage - if there were unsaved changes before reload
-    const wasDirty = meta?.isDirty ?? false;
+    // For FREE tier, always mark as not dirty since we can't sync anyway
+    const wasDirty = canSync ? (meta?.isDirty ?? false) : false;
 
     this.state = {
       sessionId,
@@ -74,8 +77,8 @@ class SyncService {
 
     this.notifyListeners();
 
-    // If we had unsaved changes, schedule a sync
-    if (wasDirty) {
+    // If we had unsaved changes and can sync, schedule a sync
+    if (wasDirty && canSync) {
       this.scheduleSyncDebounced();
     }
   }
@@ -89,9 +92,20 @@ class SyncService {
 
   /**
    * Mark state as dirty and schedule sync.
+   * For FREE tier, only saves locally without attempting cloud sync.
    */
   markDirty() {
     if (!this.state) return;
+
+    // Check tier early - don't even schedule sync for FREE tier
+    const canSync = useTierStore.getState().canSyncToServer();
+    if (!canSync) {
+      // FREE tier: just mark as saved locally, don't schedule sync
+      this.state.isDirty = false;
+      this.state.error = null;
+      this.notifyListeners();
+      return;
+    }
 
     this.state.isDirty = true;
     this.state.error = null;
@@ -155,6 +169,11 @@ class SyncService {
   // Private methods
 
   private scheduleSyncDebounced() {
+    // Don't schedule sync for FREE tier
+    if (!useTierStore.getState().canSyncToServer()) {
+      return;
+    }
+
     if (this.syncTimeout) {
       clearTimeout(this.syncTimeout);
     }
@@ -218,22 +237,14 @@ class SyncService {
         cameraEdit?: {
           enabled: boolean;
           aspectRatio: 'ORIGINAL' | 'VERTICAL';
-          keyframes: {
-            ORIGINAL: Array<{
-              timeOffset: number;
-              positionX: number;
-              positionY: number;
-              zoom: number;
-              easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT';
-            }>;
-            VERTICAL: Array<{
-              timeOffset: number;
-              positionX: number;
-              positionY: number;
-              zoom: number;
-              easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT';
-            }>;
-          };
+          // Backend expects a flat array of keyframes for the current aspect ratio
+          keyframes: Array<{
+            timeOffset: number;
+            positionX: number;
+            positionY: number;
+            zoom: number;
+            easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT';
+          }>;
         };
       }>> = {};
 
@@ -244,11 +255,10 @@ class SyncService {
 
         ralliesPerVideo[match.id] = rallies.map(r => {
           const cameraEdit = cameraEdits[r.id];
-          // Only include camera edit if it has keyframes in any aspect ratio
-          const hasKeyframes = cameraEdit && (
-            (cameraEdit.keyframes.ORIGINAL?.length ?? 0) > 0 ||
-            (cameraEdit.keyframes.VERTICAL?.length ?? 0) > 0
-          );
+          // Only include camera edit if it has keyframes for the current aspect ratio
+          const currentAspectRatio = cameraEdit?.aspectRatio ?? 'ORIGINAL';
+          const keyframesForAspect = cameraEdit?.keyframes[currentAspectRatio] ?? [];
+          const hasKeyframes = keyframesForAspect.length > 0;
           return {
             id: r._backendId,
             startMs: Math.round(r.start_time * 1000),
@@ -256,11 +266,9 @@ class SyncService {
             ...(hasKeyframes && {
               cameraEdit: {
                 enabled: true, // Always enabled if we have keyframes
-                aspectRatio: cameraEdit.aspectRatio,
-                keyframes: {
-                  ORIGINAL: mapKeyframes(cameraEdit.keyframes.ORIGINAL ?? []),
-                  VERTICAL: mapKeyframes(cameraEdit.keyframes.VERTICAL ?? []),
-                },
+                aspectRatio: currentAspectRatio,
+                // Backend expects a flat array of keyframes for the current aspect ratio
+                keyframes: mapKeyframes(keyframesForAspect),
               },
             }),
           };
@@ -278,7 +286,7 @@ class SyncService {
       // Send to backend
       const response = await fetch(`${API_BASE_URL}/v1/sessions/${this.state.sessionId}/sync-state`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getHeaders('application/json'),
         body: JSON.stringify({
           ralliesPerVideo,
           highlights,
@@ -321,8 +329,8 @@ class SyncService {
   private saveMeta(sessionId: string, meta: SyncMeta) {
     try {
       localStorage.setItem(this.getStorageKey(sessionId), JSON.stringify(meta));
-    } catch (e) {
-      // Ignore
+    } catch {
+      // Ignore localStorage errors
     }
   }
 
@@ -330,7 +338,7 @@ class SyncService {
     try {
       const stored = localStorage.getItem(this.getStorageKey(sessionId));
       return stored ? JSON.parse(stored) : null;
-    } catch (e) {
+    } catch {
       return null;
     }
   }

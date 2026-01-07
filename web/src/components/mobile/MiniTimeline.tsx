@@ -50,7 +50,7 @@ export function MiniTimeline({
     const halfWindow = windowDuration / 2;
 
     let windowStart = Math.max(0, rallyCenter - halfWindow);
-    let windowEnd = Math.min(videoDuration, windowStart + windowDuration);
+    const windowEnd = Math.min(videoDuration, windowStart + windowDuration);
 
     // Adjust if we hit the end
     if (windowEnd === videoDuration) {

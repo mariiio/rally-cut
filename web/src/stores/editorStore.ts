@@ -50,6 +50,7 @@ interface PersistedSession {
 const STORAGE_KEY_PREFIX = 'rallycut_session_';
 const MAX_HISTORY_SIZE = 50;
 const DEFAULT_RALLY_DURATION = 7;
+const SESSION_CACHE_TTL = 60 * 1000; // 1 minute
 
 const getStorageKey = (sessionId: string) => `${STORAGE_KEY_PREFIX}${sessionId}_v1`;
 
@@ -150,6 +151,10 @@ interface EditorState {
   // Single video mode state
   singleVideoMode: boolean;
   singleVideoId: string | null;
+
+  // Session cache (for back navigation)
+  sessionCache: Record<string, { session: Session; cameraEdits: CameraEditMap; timestamp: number }>;
+  invalidateSessionCache: (sessionId?: string) => void;
 
   // Session actions
   loadSession: (sessionId: string) => Promise<void>;
@@ -300,6 +305,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   singleVideoMode: false,
   singleVideoId: null,
 
+  // Session cache (for back navigation - 1 minute TTL)
+  sessionCache: {},
+  invalidateSessionCache: (sessionId?: string) => {
+    if (sessionId) {
+      set((state) => {
+        const newCache = { ...state.sessionCache };
+        delete newCache[sessionId];
+        return { sessionCache: newCache };
+      });
+    } else {
+      set({ sessionCache: {} });
+    }
+  },
+
   // Session actions
   loadSession: async (sessionId: string) => {
     // Start loading
@@ -311,14 +330,36 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     try {
       let session: Session;
-      let originalRalliesPerMatch: Record<string, Rally[]> = {};
+      const originalRalliesPerMatch: Record<string, Rally[]> = {};
 
       // Try to load from API first
       const useApi = process.env.NEXT_PUBLIC_API_URL && !sessionId.startsWith('local_');
 
       if (useApi) {
-        // Fetch from backend API
-        const result = await fetchSessionFromApi(sessionId);
+        // Check session cache first (for back navigation)
+        const cached = get().sessionCache[sessionId];
+        let result: { session: Session; cameraEdits: CameraEditMap };
+
+        if (cached && Date.now() - cached.timestamp < SESSION_CACHE_TTL) {
+          // Use cached data
+          result = { session: cached.session, cameraEdits: cached.cameraEdits };
+        } else {
+          // Fetch from backend API
+          result = await fetchSessionFromApi(sessionId);
+
+          // Store in cache for future back-navigation
+          set((state) => ({
+            sessionCache: {
+              ...state.sessionCache,
+              [sessionId]: {
+                session: result.session,
+                cameraEdits: result.cameraEdits,
+                timestamp: Date.now(),
+              },
+            },
+          }));
+        }
+
         session = result.session;
 
         // Load camera edits into camera store (migration handled by loadCameraEdits)
@@ -350,7 +391,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         }
 
         // Check localStorage for unsaved local edits
-        // Local edits take priority over backend data
         let savedData: PersistedSession | null = null;
         if (typeof window !== 'undefined') {
           try {
@@ -363,12 +403,24 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           }
         }
 
-        // Apply local edits if available
-        if (savedData?.matchRallies) {
+        // Compare timestamps to decide whether to apply local edits
+        const apiUpdatedAt = session.updatedAt ? new Date(session.updatedAt).getTime() : 0;
+        const localSavedAt = savedData?.savedAt;
+
+        // Apply local edits if:
+        // 1. We have local rallies AND
+        // 2. Either local data has no timestamp (legacy format - be conservative) OR local is newer than backend
+        const shouldApplyLocalEdits = savedData?.matchRallies && (
+          localSavedAt === undefined || // Legacy localStorage without timestamp - apply to be safe
+          localSavedAt > apiUpdatedAt   // Local edits are newer
+        );
+
+        if (shouldApplyLocalEdits && savedData) {
+          // Local edits should be applied
           session = {
             ...session,
             matches: session.matches.map((match) => {
-              const localRallies = savedData?.matchRallies?.[match.id];
+              const localRallies = savedData.matchRallies?.[match.id];
               if (localRallies && localRallies.length > 0) {
                 return { ...match, rallies: localRallies };
               }
@@ -381,6 +433,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (savedData.cameraEdits && Object.keys(savedData.cameraEdits).length > 0) {
             useCameraStore.getState().loadCameraEdits(savedData.cameraEdits);
           }
+        } else if (savedData && localSavedAt !== undefined && localSavedAt <= apiUpdatedAt) {
+          // Backend is newer and we have a timestamp to compare - discard stale local cache
+          localStorage.removeItem(getStorageKey(sessionId));
+          console.info('Discarded stale localStorage edits - backend has newer data');
         }
 
         // Set up state getter for sync service
@@ -1068,7 +1124,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (insideRally) return; // Can't create inside existing rally
 
     // Calculate start and end with constraints
-    let startTime = time;
+    const startTime = time;
     let endTime = time + duration;
 
     // Adjust if overlapping with next rally
