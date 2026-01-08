@@ -6,16 +6,29 @@ import {
   exportConcatenated,
   exportMultiSourceConcatenated,
   downloadBlob,
+  downloadFromUrl,
   getVideoName,
   cancelExport,
   VideoSource,
   RallyWithSource,
 } from '@/utils/videoExport';
+import {
+  createExportJob,
+  getExportJobStatus,
+  getExportDownloadUrl,
+} from '@/services/api';
 
 const BROWSER_NOT_SUPPORTED_ERROR =
   'Your browser does not support video export. Please use a modern browser like Chrome, Firefox, or Edge.';
 
 const AUTO_RESET_DELAY_MS = 2000;
+
+// Video info needed for server-side export (distinct from rally.ts VideoMetadata)
+interface ExportVideoInfo {
+  id: string;
+  s3Key: string;
+  name: string;
+}
 
 interface ExportState {
   // Export status
@@ -29,7 +42,7 @@ interface ExportState {
   exportingHighlightId: string | null;
   exportingAll: boolean;
 
-  // Actions
+  // Browser-based export (legacy, for non-confirmed videos)
   downloadRally: (videoSource: VideoSource, rally: Rally, withWatermark?: boolean) => Promise<void>;
   downloadAllRallies: (videoSource: VideoSource, rallies: Rally[], withFade: boolean, withWatermark?: boolean) => Promise<void>;
   downloadHighlight: (
@@ -39,10 +52,26 @@ interface ExportState {
     withFade: boolean,
     withWatermark?: boolean
   ) => Promise<void>;
+
+  // Server-side export (handles confirmed videos with reverse timestamp mapping)
+  downloadRallyServerSide: (
+    sessionId: string,
+    video: ExportVideoInfo,
+    rally: Rally
+  ) => Promise<void>;
+  downloadAllRalliesServerSide: (
+    sessionId: string,
+    video: ExportVideoInfo,
+    rallies: Rally[]
+  ) => Promise<void>;
+
   cancel: () => void;
   clearError: () => void;
   reset: () => void;
 }
+
+// Cancellation flag for server-side export polling
+let serverExportCancelled = false;
 
 export const useExportStore = create<ExportState>((set, get) => ({
   isExporting: false,
@@ -227,8 +256,171 @@ export const useExportStore = create<ExportState>((set, get) => ({
     }
   },
 
+  // Server-side export for single rally (handles confirmed videos)
+  downloadRallyServerSide: async (sessionId: string, video: ExportVideoInfo, rally: Rally) => {
+    if (get().isExporting) {
+      return;
+    }
+
+    serverExportCancelled = false;
+
+    set({
+      isExporting: true,
+      progress: 0,
+      currentStep: 'Submitting export job...',
+      error: null,
+      exportingRallyId: rally.id,
+      exportingHighlightId: null,
+      exportingAll: false,
+    });
+
+    try {
+      // Convert rally timestamps (seconds) to milliseconds
+      const startMs = Math.round(rally.start_time * 1000);
+      const endMs = Math.round(rally.end_time * 1000);
+
+      // Create export job - backend handles reverse timestamp mapping for confirmed videos
+      const job = await createExportJob({
+        sessionId,
+        config: { format: 'mp4' },
+        rallies: [{
+          videoId: video.id,
+          videoS3Key: video.s3Key,
+          startMs,
+          endMs,
+        }],
+      });
+
+      set({ progress: 5, currentStep: 'Processing...' });
+
+      // Poll for completion
+      const result = await pollExportJob(job.id, (progress, step) => {
+        if (!serverExportCancelled) {
+          set({ progress, currentStep: step });
+        }
+      });
+
+      if (serverExportCancelled) {
+        return;
+      }
+
+      if (result.status === 'COMPLETED' && result.downloadUrl) {
+        set({ progress: 95, currentStep: 'Downloading...' });
+
+        // Download the file
+        const filename = `${video.name}_rally_${rally.id}.mp4`;
+        await downloadFromUrl(result.downloadUrl, filename);
+
+        set({
+          isExporting: false,
+          progress: 100,
+          currentStep: 'Download complete',
+          exportingRallyId: null,
+        });
+
+        setTimeout(() => {
+          set({ progress: 0, currentStep: '' });
+        }, AUTO_RESET_DELAY_MS);
+      } else {
+        throw new Error(result.error || 'Export failed');
+      }
+    } catch (err) {
+      if (!serverExportCancelled) {
+        set({
+          isExporting: false,
+          error: err instanceof Error ? err.message : 'Export failed',
+          exportingRallyId: null,
+        });
+      }
+    }
+  },
+
+  // Server-side export for all rallies (handles confirmed videos)
+  downloadAllRalliesServerSide: async (sessionId: string, video: ExportVideoInfo, rallies: Rally[]) => {
+    if (get().isExporting) {
+      return;
+    }
+
+    if (rallies.length === 0) {
+      set({ error: 'No rallies to export' });
+      return;
+    }
+
+    serverExportCancelled = false;
+
+    set({
+      isExporting: true,
+      progress: 0,
+      currentStep: 'Submitting export job...',
+      error: null,
+      exportingRallyId: null,
+      exportingHighlightId: null,
+      exportingAll: true,
+    });
+
+    try {
+      // Convert rally timestamps (seconds) to milliseconds
+      const exportRallies = rallies.map(rally => ({
+        videoId: video.id,
+        videoS3Key: video.s3Key,
+        startMs: Math.round(rally.start_time * 1000),
+        endMs: Math.round(rally.end_time * 1000),
+      }));
+
+      // Create export job - backend handles reverse timestamp mapping for confirmed videos
+      const job = await createExportJob({
+        sessionId,
+        config: { format: 'mp4' },
+        rallies: exportRallies,
+      });
+
+      set({ progress: 5, currentStep: 'Processing...' });
+
+      // Poll for completion
+      const result = await pollExportJob(job.id, (progress, step) => {
+        if (!serverExportCancelled) {
+          set({ progress, currentStep: step });
+        }
+      });
+
+      if (serverExportCancelled) {
+        return;
+      }
+
+      if (result.status === 'COMPLETED' && result.downloadUrl) {
+        set({ progress: 95, currentStep: 'Downloading...' });
+
+        // Download the file
+        const filename = `${video.name}_all_${rallies.length}rallies.mp4`;
+        await downloadFromUrl(result.downloadUrl, filename);
+
+        set({
+          isExporting: false,
+          progress: 100,
+          currentStep: 'Download complete',
+          exportingAll: false,
+        });
+
+        setTimeout(() => {
+          set({ progress: 0, currentStep: '' });
+        }, AUTO_RESET_DELAY_MS);
+      } else {
+        throw new Error(result.error || 'Export failed');
+      }
+    } catch (err) {
+      if (!serverExportCancelled) {
+        set({
+          isExporting: false,
+          error: err instanceof Error ? err.message : 'Export failed',
+          exportingAll: false,
+        });
+      }
+    }
+  },
+
   cancel: () => {
     cancelExport();
+    serverExportCancelled = true;
     set({
       isExporting: false,
       progress: 0,
@@ -256,3 +448,55 @@ export const useExportStore = create<ExportState>((set, get) => ({
     });
   },
 }));
+
+/**
+ * Poll an export job until completion or failure
+ */
+async function pollExportJob(
+  jobId: string,
+  onProgress: (progress: number, step: string) => void,
+  maxAttempts = 300, // 10 minutes at 2s intervals
+  interval = 2000
+): Promise<{ status: string; downloadUrl?: string; error?: string }> {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (serverExportCancelled) {
+      throw new Error('Export cancelled');
+    }
+
+    const job = await getExportJobStatus(jobId);
+
+    // Map server progress (0-100) to our range (5-90)
+    const mappedProgress = 5 + Math.round((job.progress / 100) * 85);
+    onProgress(mappedProgress, getServerProgressMessage(job.progress));
+
+    if (job.status === 'COMPLETED') {
+      // Get download URL
+      const downloadResult = await getExportDownloadUrl(jobId);
+      return {
+        status: 'COMPLETED',
+        downloadUrl: downloadResult.downloadUrl || undefined,
+      };
+    }
+
+    if (job.status === 'FAILED') {
+      return { status: 'FAILED', error: job.error };
+    }
+
+    // Wait before next poll
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+
+  return { status: 'FAILED', error: 'Export timed out' };
+}
+
+/**
+ * Get progress message for server export
+ */
+function getServerProgressMessage(progress: number): string {
+  if (progress < 10) return 'Warming up on the server...';
+  if (progress < 30) return 'Downloading video clips...';
+  if (progress < 60) return 'Extracting rallies...';
+  if (progress < 80) return 'Processing video...';
+  if (progress < 95) return 'Uploading final video...';
+  return 'Finishing up...';
+}
