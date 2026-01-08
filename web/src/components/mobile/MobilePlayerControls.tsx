@@ -39,34 +39,7 @@ export function MobilePlayerControls() {
   const [videoDetectionStatus, setVideoDetectionStatus] = useState<string | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Check video detection status on mount
-  useEffect(() => {
-    if (!activeMatchId) return;
-
-    const checkStatus = async () => {
-      try {
-        const status = await getDetectionStatus(activeMatchId);
-        setVideoDetectionStatus(status.status);
-        if (status.status === 'DETECTING') {
-          setIsDetecting(true);
-          setDetectionStatus(status.job?.progressMessage || 'Processing...');
-          setDetectionProgress(status.job?.progress || 0);
-          startPolling();
-        }
-      } catch {
-        // Video not yet uploaded for detection
-      }
-    };
-
-    checkStatus();
-
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-      }
-    };
-  }, [activeMatchId]);
-
+  // Define startPolling before the effect that uses it
   const startPolling = useCallback(() => {
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
@@ -100,6 +73,34 @@ export function MobilePlayerControls() {
       }
     }, 3000);
   }, [activeMatchId, reloadCurrentMatch]);
+
+  // Check video detection status on mount
+  useEffect(() => {
+    if (!activeMatchId) return;
+
+    const checkStatus = async () => {
+      try {
+        const status = await getDetectionStatus(activeMatchId);
+        setVideoDetectionStatus(status.status);
+        if (status.status === 'DETECTING') {
+          setIsDetecting(true);
+          setDetectionStatus(status.job?.progressMessage || 'Processing...');
+          setDetectionProgress(status.job?.progress || 0);
+          startPolling();
+        }
+      } catch {
+        // Video not yet uploaded for detection
+      }
+    };
+
+    checkStatus();
+
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, [activeMatchId, startPolling]);
 
   const handleStartDetection = async () => {
     if (!activeMatchId) return;

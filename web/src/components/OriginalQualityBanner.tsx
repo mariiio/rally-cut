@@ -45,6 +45,7 @@ export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerPro
   // Check dismissed state on mount and when match changes
   useEffect(() => {
     if (countdownDismissedKey) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: syncing with localStorage
       setIsCountdownDismissed(localStorage.getItem(countdownDismissedKey) === 'true');
     }
     if (downgradedDismissedKey) {
@@ -53,14 +54,15 @@ export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerPro
   }, [countdownDismissedKey, downgradedDismissedKey]);
 
   // Calculate days until quality downgrade
+  const createdAt = currentMatch?.createdAt;
   const daysUntilDowngrade = useMemo(() => {
-    if (!currentMatch?.createdAt || !originalQualityDays) return null;
+    if (!createdAt || !originalQualityDays) return null;
 
-    const createdAt = new Date(currentMatch.createdAt);
+    const createdDate = new Date(createdAt);
     const now = new Date();
-    const daysSinceUpload = Math.floor((now.getTime() - createdAt.getTime()) / (24 * 60 * 60 * 1000));
+    const daysSinceUpload = Math.floor((now.getTime() - createdDate.getTime()) / (24 * 60 * 60 * 1000));
     return originalQualityDays - daysSinceUpload;
-  }, [currentMatch?.createdAt, originalQualityDays]);
+  }, [createdAt, originalQualityDays]);
 
   // Determine banner state
   const bannerState: BannerState = useMemo(() => {

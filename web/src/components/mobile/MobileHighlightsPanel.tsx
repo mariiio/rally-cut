@@ -74,10 +74,11 @@ export function MobileHighlightsPanel({ onRallyTap }: MobileHighlightsPanelProps
   };
 
   // Get all rallies with their match info
+  const sessionMatches = session?.matches;
   const allRallies = useMemo(() => {
-    if (!session?.matches) return {};
-    const map: Record<string, { rally: typeof session.matches[0]['rallies'][0]; matchName: string }> = {};
-    session.matches.forEach((match) => {
+    if (!sessionMatches) return {};
+    const map: Record<string, { rally: typeof sessionMatches[0]['rallies'][0]; matchName: string }> = {};
+    sessionMatches.forEach((match) => {
       // Use current rallies from store for active match
       const matchRallies = match.id === activeMatchId ? (rallies || []) : match.rallies;
       matchRallies.forEach((rally) => {
@@ -85,7 +86,7 @@ export function MobileHighlightsPanel({ onRallyTap }: MobileHighlightsPanelProps
       });
     });
     return map;
-  }, [session?.matches, activeMatchId, rallies]);
+  }, [sessionMatches, activeMatchId, rallies]);
 
   const handleCreateHighlight = () => {
     if (!currentUserName) {
@@ -128,7 +129,7 @@ export function MobileHighlightsPanel({ onRallyTap }: MobileHighlightsPanelProps
         })
         .filter(Boolean);
       if (playlist.length > 0) {
-        startHighlightPlayback(highlightId, playlist as any);
+        startHighlightPlayback(highlightId, playlist as { id: string; matchId: string; start_time: number; end_time: number }[]);
       }
     }
   };
@@ -300,7 +301,7 @@ export function MobileHighlightsPanel({ onRallyTap }: MobileHighlightsPanelProps
                         fontWeight={600}
                         onDoubleClick={
                           canEdit
-                            ? (e) => startEditing(highlight.id, highlight.name, e as any)
+                            ? (e: React.MouseEvent) => startEditing(highlight.id, highlight.name, e)
                             : undefined
                         }
                         sx={{

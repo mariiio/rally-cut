@@ -115,6 +115,7 @@ export function EditorLayout({ sessionId, videoId }: EditorLayoutProps) {
   const prevIsCameraTabActive = useRef(isCameraTabActive);
   useEffect(() => {
     if (isCameraTabActive && !prevIsCameraTabActive.current) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: auto-expand panel when camera tab activated
       setRightPanelCollapsed(false);
     }
     prevIsCameraTabActive.current = isCameraTabActive;

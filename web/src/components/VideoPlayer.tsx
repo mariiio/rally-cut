@@ -177,6 +177,7 @@ export function VideoPlayer() {
     if (seekTo !== null && videoRef.current) {
       videoRef.current.currentTime = seekTo;
       // Update cameraTime immediately for smooth preview when paused
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: syncing camera time with seek
       setCameraTime(seekTo);
       clearSeek();
       // Resume playback if we're supposed to be playing

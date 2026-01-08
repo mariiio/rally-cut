@@ -40,6 +40,7 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
   useEffect(() => {
     if (prevIsCameraTabActive.current && !isCameraTabActive && selectedRallyId) {
       // User exited camera edit mode - remember this rally
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: tracking previous state
       setExitedForRally(selectedRallyId);
     }
     prevIsCameraTabActive.current = isCameraTabActive;
@@ -48,6 +49,7 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
   // Reset exitedForRally when selecting a different rally
   useEffect(() => {
     if (selectedRallyId !== exitedForRally) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: syncing derived state
       setExitedForRally(null);
     }
   }, [selectedRallyId, exitedForRally]);

@@ -54,12 +54,13 @@ export function MobileRallyEditorModal({
     return rallies.find((r) => r.id === rallyId) || null;
   }, [rallyId, rallies]);
 
+  const sessionMatches = session?.matches;
   const match = useMemo(() => {
-    if (!rallyId || !session?.matches) return null;
+    if (!rallyId || !sessionMatches) return null;
     // Extract match ID from rally ID (format: {matchId}_rally_{n})
     const matchId = rallyId.split('_rally_')[0];
-    return session.matches.find((m) => m.id === matchId) || null;
-  }, [rallyId, session?.matches]);
+    return sessionMatches.find((m) => m.id === matchId) || null;
+  }, [rallyId, sessionMatches]);
 
   const activeMatch = getActiveMatch();
   const videoDuration = activeMatch?.video?.duration || 0;

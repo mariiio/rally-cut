@@ -47,7 +47,7 @@ export function NamePromptModal({ open, onClose, onNameSet }: NamePromptModalPro
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>What's your name?</DialogTitle>
+      <DialogTitle>What&apos;s your name?</DialogTitle>
       <DialogContent>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           Your name will be shown on highlights you create.
