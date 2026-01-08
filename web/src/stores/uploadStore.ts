@@ -92,10 +92,16 @@ function getUploadMessage(progress: number, fileName: string, isMultipart: boole
 /**
  * Validate upload against tier limits.
  * Returns error message if validation fails, null if valid.
+ * Ensures tier data is fetched before validation.
  */
-function validateUploadLimits(fileSize: number, durationMs: number): string | null {
-  const tierStore = useTierStore.getState();
-  const { limits, usage, tier } = tierStore;
+async function validateUploadLimits(fileSize: number, durationMs: number): Promise<string | null> {
+  // Ensure we have fresh tier data before validating (uses 5-min cache)
+  const { shouldRefetch, fetchTier } = useTierStore.getState();
+  if (shouldRefetch()) {
+    await fetchTier();
+  }
+
+  const { limits, usage, tier } = useTierStore.getState();
 
   // Check upload quota
   if (usage.uploadsRemaining !== null && usage.uploadsRemaining <= 0) {
@@ -256,8 +262,8 @@ export const useUploadStore = create<UploadState>((set, get) => ({
 
       if (abortController.signal.aborted) throw new Error('Upload cancelled');
 
-      // Pre-validate against tier limits
-      const validationError = validateUploadLimits(file.size, durationMs);
+      // Pre-validate against tier limits (ensures fresh tier data)
+      const validationError = await validateUploadLimits(file.size, durationMs);
       if (validationError) {
         throw new Error(validationError);
       }
@@ -342,8 +348,8 @@ export const useUploadStore = create<UploadState>((set, get) => ({
 
       if (abortController.signal.aborted) throw new Error('Upload cancelled');
 
-      // Pre-validate against tier limits
-      const validationError = validateUploadLimits(file.size, durationMs);
+      // Pre-validate against tier limits (ensures fresh tier data)
+      const validationError = await validateUploadLimits(file.size, durationMs);
       if (validationError) {
         throw new Error(validationError);
       }
