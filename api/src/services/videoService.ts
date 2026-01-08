@@ -25,6 +25,7 @@ import {
   getTierLimits,
   checkUploadQuota,
   checkAndReserveUploadQuota,
+  TIER_LIMITS,
 } from "./tierService.js";
 import { queueVideoProcessing, generatePosterImmediate } from "./processingService.js";
 
@@ -70,8 +71,9 @@ async function validateUploadRequest(
     const fileSizeMB = Math.round(params.fileSize / (1024 * 1024));
     const limitMB = Math.round(limits.maxFileSizeBytes / (1024 * 1024));
     const limitGB = limitMB >= 1024 ? `${limitMB / 1024} GB` : `${limitMB} MB`;
+    const premiumLimitGB = TIER_LIMITS.PREMIUM.maxFileSizeBytes / (1024 * 1024 * 1024);
     const upgradeHint = tier === "FREE"
-      ? " Upgrade to Premium for 2 GB uploads."
+      ? ` Upgrade to Premium for ${premiumLimitGB} GB uploads.`
       : " Consider compressing the video or splitting it into parts.";
     throw new LimitExceededError(
       `File size (${fileSizeMB} MB) exceeds ${limitGB} limit for ${tier} tier.${upgradeHint}`,
@@ -83,8 +85,9 @@ async function validateUploadRequest(
   if (params.durationMs && params.durationMs > limits.maxVideoDurationMs) {
     const durationMin = Math.round(params.durationMs / 60000);
     const limitMin = Math.round(limits.maxVideoDurationMs / 60000);
+    const premiumLimitMin = Math.round(TIER_LIMITS.PREMIUM.maxVideoDurationMs / 60000);
     throw new LimitExceededError(
-      `Video duration (${durationMin} min) exceeds ${limitMin} minute limit for ${tier} tier. ${tier === "FREE" ? "Upgrade to Premium for 25 minute videos." : ""}`,
+      `Video duration (${durationMin} min) exceeds ${limitMin} minute limit for ${tier} tier.${tier === "FREE" ? ` Upgrade to Premium for ${premiumLimitMin} minute videos.` : ""}`,
       { duration: params.durationMs, limit: limits.maxVideoDurationMs }
     );
   }

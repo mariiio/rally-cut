@@ -9,7 +9,7 @@ import {
   completeMultipartUpload,
   abortMultipartUpload,
 } from '@/services/api';
-import { useTierStore } from './tierStore';
+import { useTierStore, PREMIUM_LIMITS } from './tierStore';
 
 interface UploadResult {
   success: boolean;
@@ -113,14 +113,14 @@ async function validateUploadLimits(fileSize: number, durationMs: number): Promi
     const fileSizeMB = Math.round(fileSize / (1024 * 1024));
     const limitMB = Math.round(limits.maxFileSizeBytes / (1024 * 1024));
     const limitStr = limitMB >= 1024 ? `${limitMB / 1024} GB` : `${limitMB} MB`;
-    return `File size (${fileSizeMB} MB) exceeds ${limitStr} limit for ${tier} tier.${tier === 'FREE' ? ' Upgrade to Premium for 2 GB uploads.' : ''}`;
+    return `File size (${fileSizeMB} MB) exceeds ${limitStr} limit for ${tier} tier.${tier === 'FREE' ? ` Upgrade to Premium for ${PREMIUM_LIMITS.maxFileSizeGB} GB uploads.` : ''}`;
   }
 
   // Check duration
   if (durationMs > limits.maxVideoDurationMs) {
     const durationMin = Math.round(durationMs / 60000);
     const limitMin = Math.round(limits.maxVideoDurationMs / 60000);
-    return `Video duration (${durationMin} min) exceeds ${limitMin} minute limit for ${tier} tier.${tier === 'FREE' ? ' Upgrade to Premium for 25 minute videos.' : ''}`;
+    return `Video duration (${durationMin} min) exceeds ${limitMin} minute limit for ${tier} tier.${tier === 'FREE' ? ` Upgrade to Premium for ${PREMIUM_LIMITS.maxVideoDurationMin} minute videos.` : ''}`;
   }
 
   return null;
