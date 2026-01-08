@@ -808,9 +808,44 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   reloadCurrentMatch: async () => {
     const state = get();
-    if (!state.session || !state.activeMatchId) return null;
+    if (!state.activeMatchId) return null;
 
     try {
+      // Handle single video mode differently - fetch video directly
+      if (state.singleVideoMode && state.singleVideoId) {
+        const result = await fetchVideoForEditor(state.singleVideoId);
+
+        // Load camera edits into camera store
+        if (Object.keys(result.cameraEdits).length > 0) {
+          useCameraStore.getState().loadCameraEdits(result.cameraEdits);
+        }
+
+        // Build updated session with fresh match data
+        const updatedSession = state.session ? {
+          ...state.session,
+          matches: [result.match],
+        } : null;
+
+        // Update state with fresh video data
+        set({
+          session: updatedSession,
+          videoUrl: result.match.videoUrl,
+          proxyUrl: result.match.proxyUrl || null,
+          posterUrl: result.match.posterUrl || null,
+          videoMetadata: result.match.video,
+          rallies: result.match.rallies,
+          originalRallies: result.match.rallies,
+          past: [],
+          future: [],
+          hasUnsavedChanges: false,
+        });
+
+        return { ralliesCount: result.match.rallies.length };
+      }
+
+      // Session mode - fetch full session
+      if (!state.session) return null;
+
       // Fetch fresh session data from API
       const result = await fetchSessionFromApi(state.session.id);
       const freshSession = result.session;
