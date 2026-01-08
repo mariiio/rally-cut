@@ -202,6 +202,7 @@ function apiVideoToMatch(apiVideo: ApiVideo, cloudfrontDomain?: string): Match {
   return {
     id: apiVideo.id,
     name: apiVideo.name,
+    s3Key: apiVideo.s3Key,
     videoUrl,
     posterUrl,
     proxyUrl,
@@ -714,6 +715,7 @@ export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEd
   const match: Match = {
     id: videoId,
     name: data.video.name,
+    s3Key: data.video.s3Key,
     videoUrl: getUrl(data.video.processedS3Key) || getUrl(data.video.s3Key) || '',
     proxyUrl: getUrl(data.video.proxyS3Key),
     posterUrl: getUrl(data.video.posterS3Key),

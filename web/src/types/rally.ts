@@ -52,8 +52,9 @@ export interface Highlight {
 
 /** A single match (video) within a session */
 export interface Match {
-  id: string;           // e.g., "match_1"
+  id: string;           // API video UUID
   name: string;         // Display name, e.g., "Match 1"
+  s3Key?: string;       // S3 key for server-side operations (export, etc.) - only for API-loaded videos
   videoUrl: string;     // Runtime URL (full quality, public path or blob URL)
   proxyUrl?: string;    // Optional 720p proxy URL for faster editing
   posterUrl?: string;   // Optional poster image URL for instant display

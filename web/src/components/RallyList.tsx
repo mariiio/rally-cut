@@ -54,8 +54,6 @@ export function RallyList() {
     selectedRallyId,
     selectRally,
     getHighlightsForRally,
-    videoFile,
-    videoUrl,
     reloadSession,
     isRallyEditingLocked,
     removeRally,
@@ -68,11 +66,14 @@ export function RallyList() {
   } = useEditorStore();
   const isPremium = useTierStore((state) => state.isPremium());
   const { currentTime, seek } = usePlayerStore();
-  const { isExporting, exportingRallyId, exportingAll, downloadRally, downloadAllRallies } = useExportStore();
+  const {
+    isExporting,
+    exportingRallyId,
+    exportingAll,
+    downloadRallyServerSide,
+    downloadAllRalliesServerSide,
+  } = useExportStore();
   const router = useRouter();
-
-  // Use File if available, otherwise use URL
-  const videoSource = videoFile || videoUrl;
 
   // Track which matches are expanded
   const [expandedMatches, setExpandedMatches] = useState<Set<string>>(
@@ -180,11 +181,24 @@ export function RallyList() {
     setIsCameraTabActive(false);
   }, [activeMatchId, setActiveMatch, selectRally, seek, setIsCameraTabActive]);
 
-  const handleDownloadRally = useCallback((e: React.MouseEvent, rally: Rally) => {
+  // Get the active match from session
+  const activeMatch = useMemo(
+    () => session?.matches?.find(m => m.id === activeMatchId),
+    [session, activeMatchId]
+  );
+
+  // Server-side export for single rally (handles confirmed videos correctly)
+  const handleDownloadRally = useCallback((e: React.MouseEvent, rally: Rally, matchId: string) => {
     e.stopPropagation();
-    if (!videoSource) return;
-    downloadRally(videoSource, rally);
-  }, [videoSource, downloadRally]);
+    const match = session?.matches?.find(m => m.id === matchId);
+    if (!session || !match || !match.s3Key) return;
+
+    downloadRallyServerSide(session.id, {
+      id: match.id,
+      s3Key: match.s3Key,
+      name: match.name,
+    }, rally);
+  }, [session, downloadRallyServerSide]);
 
   // Sort active match rallies by start time - memoized
   const sortedRallies = useMemo(
@@ -204,11 +218,17 @@ export function RallyList() {
     [sortedRallies]
   );
 
+  // Server-side export for all rallies (handles confirmed videos correctly)
   const handleDownloadAll = useCallback(() => {
-    if (!videoSource || !sortedRallies.length) return;
-    downloadAllRallies(videoSource, sortedRallies, withFade);
+    if (!session || !activeMatch || !activeMatch.s3Key || !sortedRallies.length) return;
+
+    downloadAllRalliesServerSide(session.id, {
+      id: activeMatch.id,
+      s3Key: activeMatch.s3Key,
+      name: activeMatch.name,
+    }, sortedRallies);
     setDownloadAllAnchor(null);
-  }, [videoSource, sortedRallies, withFade, downloadAllRallies]);
+  }, [session, activeMatch, sortedRallies, downloadAllRalliesServerSide]);
 
   const handleDeleteClick = useCallback((e: React.MouseEvent, match: Match) => {
     e.stopPropagation(); // Don't toggle expand/collapse
@@ -336,11 +356,11 @@ export function RallyList() {
           <Typography variant="caption" sx={{ color: 'text.secondary' }}>
             Total: <strong>{formatDuration(totalDuration)}</strong>
           </Typography>
-          <Tooltip title={!videoSource ? 'Load a video first' : 'Download all rallies'}>
+          <Tooltip title={!activeMatch ? 'Load a video first' : 'Download all rallies'}>
             <span>
               <IconButton
                 size="small"
-                disabled={!videoSource || isExporting}
+                disabled={!activeMatch || isExporting}
                 onClick={(e) => setDownloadAllAnchor(e.currentTarget)}
                 sx={{
                   color: exportingAll ? 'primary.main' : 'text.secondary',
@@ -663,7 +683,7 @@ export function RallyList() {
                         )}
 
                         {/* More menu button */}
-                        {videoSource && isActiveMatch && (
+                        {match.s3Key && isActiveMatch && (
                           <IconButton
                             className="more-btn"
                             size="small"
@@ -706,7 +726,7 @@ export function RallyList() {
       >
         <MenuItem
           onClick={(e) => {
-            handleDownloadRally(e, rallyMenuAnchor!.rally);
+            handleDownloadRally(e, rallyMenuAnchor!.rally, rallyMenuAnchor!.matchId);
             setRallyMenuAnchor(null);
           }}
           disabled={isExporting}
