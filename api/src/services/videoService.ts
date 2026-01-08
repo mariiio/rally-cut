@@ -62,14 +62,20 @@ async function validateUploadRequest(
   const tier = await getUserTier(params.userId);
   const limits = getTierLimits(tier);
 
+  // Log tier info for debugging upload issues
+  console.log(`[UPLOAD] User ${params.userId} has tier ${tier}, file size: ${Math.round(params.fileSize / (1024 * 1024))} MB, limit: ${Math.round(limits.maxFileSizeBytes / (1024 * 1024))} MB`);
+
   // Validate file size against tier limit
   if (params.fileSize > limits.maxFileSizeBytes) {
     const fileSizeMB = Math.round(params.fileSize / (1024 * 1024));
     const limitMB = Math.round(limits.maxFileSizeBytes / (1024 * 1024));
     const limitGB = limitMB >= 1024 ? `${limitMB / 1024} GB` : `${limitMB} MB`;
+    const upgradeHint = tier === "FREE"
+      ? " Upgrade to Premium for 2 GB uploads."
+      : " Consider compressing the video or splitting it into parts.";
     throw new LimitExceededError(
-      `File size (${fileSizeMB} MB) exceeds ${limitGB} limit for ${tier} tier. ${tier === "FREE" ? "Upgrade to Premium for 2 GB uploads." : ""}`,
-      { fileSize: params.fileSize, limit: limits.maxFileSizeBytes }
+      `File size (${fileSizeMB} MB) exceeds ${limitGB} limit for ${tier} tier.${upgradeHint}`,
+      { fileSize: params.fileSize, limit: limits.maxFileSizeBytes, tier }
     );
   }
 
