@@ -38,6 +38,7 @@ export function RallyForm({ open, rallyId, onClose }: RallyFormProps) {
   useEffect(() => {
     if (open) {
       if (isEditing && rally) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: initializing form state
         setStartTimeStr(formatTime(rally.start_time));
         setEndTimeStr(formatTime(rally.end_time));
       } else {

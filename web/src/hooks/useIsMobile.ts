@@ -18,6 +18,7 @@ export function useIsMobile(): boolean {
   const isMobile = useMediaQuery(`(max-width: ${designTokens.mobile.breakpoint - 1}px)`);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: tracking mount state for SSR hydration
     setMounted(true);
   }, []);
 

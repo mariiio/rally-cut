@@ -62,6 +62,7 @@ export function MobileRallyList({ onRallyTap }: MobileRallyListProps) {
 
       if (hasRally) {
         // Expand the match
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: auto-expand to show selected rally
         setExpandedMatches(prev => {
           if (prev.has(match.id)) return prev;
           return new Set(prev).add(match.id);
@@ -120,16 +121,17 @@ export function MobileRallyList({ onRallyTap }: MobileRallyListProps) {
   );
 
   // Calculate total duration across all matches
+  const sessionMatches = session?.matches;
   const totalDuration = useMemo(() => {
-    if (!session?.matches) return 0;
-    return session.matches.reduce((sum, match) => {
+    if (!sessionMatches) return 0;
+    return sessionMatches.reduce((sum, match) => {
       // Use current rallies from store for active match
       const matchRallies = match.id === activeMatchId ? (rallies || []) : match.rallies;
       return (
         sum + matchRallies.reduce((rallySum, rally) => rallySum + rally.duration, 0)
       );
     }, 0);
-  }, [session?.matches, activeMatchId, rallies]);
+  }, [sessionMatches, activeMatchId, rallies]);
 
   if (!session?.matches || session.matches.length === 0) {
     return (
