@@ -178,6 +178,20 @@ export async function triggerRallyDetection(videoId: string, userId: string) {
     throw new NotFoundError("Video", videoId);
   }
 
+  // Check if video has confirmed rallies - detection is not allowed on confirmed videos
+  const confirmation = await prisma.rallyConfirmation.findFirst({
+    where: {
+      videoId,
+      status: "CONFIRMED",
+    },
+  });
+
+  if (confirmation !== null) {
+    throw new ForbiddenError(
+      "Cannot run detection on a video with confirmed rallies. Restore the original video first."
+    );
+  }
+
   if (video.status !== "UPLOADED") {
     throw new ConflictError(
       `Video must be in UPLOADED status to trigger detection (current: ${video.status})`

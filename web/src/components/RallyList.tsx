@@ -740,19 +740,21 @@ export function RallyList() {
           </ListItemIcon>
           <ListItemText>Download</ListItemText>
         </MenuItem>
-        <MenuItem
-          onClick={() => {
-            setRallyToDelete(rallyMenuAnchor!.rally);
-            setRallyMenuAnchor(null);
-          }}
-          disabled={isRallyEditingLocked()}
-          sx={{ color: 'error.main' }}
-        >
-          <ListItemIcon>
-            <DeleteIcon fontSize="small" sx={{ color: 'error.main' }} />
-          </ListItemIcon>
-          <ListItemText>Delete</ListItemText>
-        </MenuItem>
+        {/* Hide delete option when rallies are confirmed */}
+        {!isRallyEditingLocked() && (
+          <MenuItem
+            onClick={() => {
+              setRallyToDelete(rallyMenuAnchor!.rally);
+              setRallyMenuAnchor(null);
+            }}
+            sx={{ color: 'error.main' }}
+          >
+            <ListItemIcon>
+              <DeleteIcon fontSize="small" sx={{ color: 'error.main' }} />
+            </ListItemIcon>
+            <ListItemText>Delete</ListItemText>
+          </MenuItem>
+        )}
       </Menu>
 
       {/* Video (match) action menu */}
