@@ -147,6 +147,7 @@ export async function getSessionById(id: string, userId?: string) {
                   },
                 },
               },
+              confirmation: true,
             },
           },
         },
@@ -222,13 +223,28 @@ export async function getSessionById(id: string, userId?: string) {
   }
 
   // Transform to expected format with videos array
+  // For confirmed videos, use confirmation proxy and duration
   const transformed = {
     ...session,
     userRole,
-    videos: session.sessionVideos.map((sv) => ({
-      ...sv.video,
-      order: sv.order,
-    })),
+    videos: session.sessionVideos.map((sv) => {
+      const video = sv.video;
+      const isConfirmed = video.confirmation?.status === "CONFIRMED";
+      return {
+        ...video,
+        order: sv.order,
+        // For confirmed videos, use confirmation proxy for editing
+        proxyS3Key: isConfirmed
+          ? video.confirmation?.proxyS3Key ?? video.proxyS3Key
+          : video.proxyS3Key,
+        // For confirmed videos, use trimmed duration
+        durationMs: isConfirmed
+          ? video.confirmation?.trimmedDurationMs ?? video.durationMs
+          : video.durationMs,
+        // Clear processedS3Key for confirmed (use proxy instead)
+        processedS3Key: isConfirmed ? null : video.processedS3Key,
+      };
+    }),
   };
 
   // Remove internal fields from response (sessionVideos replaced by videos, share/accessRequests for access check)

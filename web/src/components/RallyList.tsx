@@ -42,6 +42,7 @@ import { Rally, Match } from '@/types/rally';
 import { designTokens } from '@/app/theme';
 import { ConfirmDialog } from './ConfirmDialog';
 import { removeVideoFromSession, renameVideo, confirmRallies, getConfirmationStatus, restoreOriginalVideo } from '@/services/api';
+import { syncService } from '@/services/syncService';
 
 export function RallyList() {
   const {
@@ -799,6 +800,7 @@ export function RallyList() {
             disabled={
               !isPremium ||
               isConfirming ||
+              (videoMenuAnchor?.match.rallies.length ?? 0) === 0 ||
               confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'PENDING' ||
               confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'PROCESSING'
             }
@@ -815,6 +817,8 @@ export function RallyList() {
               secondary={
                 !isPremium
                   ? 'Premium feature'
+                  : (videoMenuAnchor?.match.rallies.length ?? 0) === 0
+                  ? 'Add rallies first'
                   : 'Trim video to keep only rallies'
               }
             />
@@ -868,6 +872,8 @@ export function RallyList() {
           setShowConfirmRalliesDialog(false);
           setIsConfirming(true);
           try {
+            // Sync pending changes to ensure rallies are in the database
+            await syncService.syncNow();
             const result = await confirmRallies(matchToConfirm.id);
             setConfirmationStatus(matchToConfirm.id, {
               id: result.confirmationId,
