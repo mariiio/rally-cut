@@ -1135,39 +1135,41 @@ export function Timeline() {
           </Tooltip>
         </Stack>
 
-        {/* Rallies only toggle - Center */}
-        <Tooltip title="Skip dead time between rallies" arrow>
-          <Box
-            onClick={togglePlayOnlyRallies}
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 0.75,
-              px: 1.5,
-              py: 0.5,
-              borderRadius: 2,
-              cursor: 'pointer',
-              bgcolor: playOnlyRallies ? 'primary.main' : 'action.hover',
-              color: playOnlyRallies ? 'primary.contrastText' : 'text.secondary',
-              transition: 'all 0.2s ease',
-              '&:hover': {
-                bgcolor: playOnlyRallies ? 'primary.dark' : 'action.selected',
-              },
-            }}
-          >
-            <FastForwardIcon sx={{ fontSize: 16 }} />
-            <Typography
-              variant="caption"
+        {/* Rallies only toggle - Center (hidden when confirmed since video already contains only rallies) */}
+        {!isLocked && (
+          <Tooltip title="Skip dead time between rallies" arrow>
+            <Box
+              onClick={togglePlayOnlyRallies}
               sx={{
-                fontWeight: 500,
-                fontSize: 12,
-                userSelect: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.75,
+                px: 1.5,
+                py: 0.5,
+                borderRadius: 2,
+                cursor: 'pointer',
+                bgcolor: playOnlyRallies ? 'primary.main' : 'action.hover',
+                color: playOnlyRallies ? 'primary.contrastText' : 'text.secondary',
+                transition: 'all 0.2s ease',
+                '&:hover': {
+                  bgcolor: playOnlyRallies ? 'primary.dark' : 'action.selected',
+                },
               }}
             >
-              Rallies only
-            </Typography>
-          </Box>
-        </Tooltip>
+              <FastForwardIcon sx={{ fontSize: 16 }} />
+              <Typography
+                variant="caption"
+                sx={{
+                  fontWeight: 500,
+                  fontSize: 12,
+                  userSelect: 'none',
+                }}
+              >
+                Rallies only
+              </Typography>
+            </Box>
+          </Tooltip>
+        )}
 
         {/* Info and controls - Right */}
         <Stack direction="row" alignItems="center" spacing={1} sx={{ flex: 1, justifyContent: 'flex-end' }}>
@@ -1221,8 +1223,8 @@ export function Timeline() {
                 OK
               </Button>
             </Stack>
-          ) : videoDetectionStatus === 'DETECTED' ? (
-            // Video already detected - show nothing or a small indicator
+          ) : videoDetectionStatus === 'DETECTED' || isLocked ? (
+            // Video already detected or confirmed - don't show detect button
             null
           ) : (
             <Tooltip title="Use ML to automatically detect rallies in this video">
