@@ -211,67 +211,57 @@ export function EditorHeader() {
         <Stack direction="row" alignItems="center" spacing={2} sx={{ flex: 1, minWidth: 0 }}>
           {session ? (
             <>
-              {/* Single video mode: just show video name */}
-              {singleVideoMode ? (
-                <Typography
-                  variant="body2"
+              {/* Session name */}
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.primary',
+                  fontWeight: 600,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {session.name}
+              </Typography>
+
+              {/* Video selector (only in session mode with multiple videos) */}
+              {!singleVideoMode && session.matches.length > 1 && (
+                <Select
+                  value={activeMatchId || ''}
+                  onChange={handleMatchChange}
+                  size="small"
+                  displayEmpty
                   sx={{
-                    color: 'text.primary',
-                    fontWeight: 500,
+                    minWidth: 160,
+                    '& .MuiSelect-select': {
+                      py: 0.5,
+                      fontSize: '0.8125rem',
+                    },
                   }}
                 >
-                  {session.matches[0]?.name || 'Video'}
-                </Typography>
-              ) : (
-                <>
-                  {session.matches.length > 1 && (
-                    <Select
-                      value={activeMatchId || ''}
-                      onChange={handleMatchChange}
+                  {session.matches.map((match) => (
+                    <MenuItem key={match.id} value={match.id}>
+                      {match.name}
+                    </MenuItem>
+                  ))}
+                </Select>
+              )}
+
+              {/* Add Video Button - hide in single video mode */}
+              {!singleVideoMode && (
+                <Tooltip title="Add video">
+                  <span>
+                    <IconButton
                       size="small"
-                      displayEmpty
-                      sx={{
-                        minWidth: 180,
-                        '& .MuiSelect-select': {
-                          py: 0.75,
-                          fontSize: '0.875rem',
-                        },
-                      }}
+                      onClick={() => setShowAddVideoModal(true)}
+                      disabled={isUploading}
+                      sx={{ color: 'text.secondary' }}
                     >
-                      {session.matches.map((match) => (
-                        <MenuItem key={match.id} value={match.id}>
-                          {match.name}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  )}
-
-                  {session.matches.length === 1 && (
-                    <Typography
-                      variant="body2"
-                      sx={{
-                        color: 'text.primary',
-                        fontWeight: 500,
-                      }}
-                    >
-                      {session.matches[0].name}
-                    </Typography>
-                  )}
-
-                  {/* Add Video Button - hide in single video mode */}
-                  <Tooltip title="Add video">
-                    <span>
-                      <IconButton
-                        size="small"
-                        onClick={() => setShowAddVideoModal(true)}
-                        disabled={isUploading}
-                        sx={{ color: 'text.secondary' }}
-                      >
-                        <AddIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                </>
+                      <AddIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
               )}
 
               {/* Sync Status Indicator */}

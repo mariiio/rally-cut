@@ -766,11 +766,16 @@ export function RallyList() {
         transformOrigin={{ vertical: 'top', horizontal: 'right' }}
       >
         <MenuItem
-          onClick={(e) => {
-            if (videoMenuAnchor) {
-              handleStartRename(e, videoMenuAnchor.match);
-            }
+          onClick={() => {
+            const matchToRename = videoMenuAnchor?.match;
             setVideoMenuAnchor(null);
+            if (matchToRename) {
+              // Delay to ensure menu is fully closed before starting rename
+              requestAnimationFrame(() => {
+                setEditingMatchId(matchToRename.id);
+                setEditName(matchToRename.name);
+              });
+            }
           }}
         >
           <ListItemIcon>
