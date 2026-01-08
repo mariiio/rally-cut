@@ -473,10 +473,13 @@ export function Timeline() {
   // We want totalWidth = containerWidth, so scale = duration * SCALE_WIDTH / containerWidth
   const getAutoScale = useCallback(() => {
     if (duration > 0 && containerWidth > 0) {
-      // Calculate exact scale to fit entire duration in container width
-      const exactScale = (duration * SCALE_WIDTH) / containerWidth;
-      // Return as-is (no rounding) to maintain exact fit, but respect min
-      return Math.max(MIN_SCALE, exactScale);
+      // Calculate initial scale to fit entire duration in container width
+      const initialScale = (duration * SCALE_WIDTH) / containerWidth;
+      const clampedScale = Math.max(MIN_SCALE, initialScale);
+      // Adjust scale so duration divides evenly (prevents timeline extending past video)
+      const scaleCount = Math.ceil(duration / clampedScale);
+      const adjustedScale = duration / scaleCount;
+      return Math.max(MIN_SCALE, adjustedScale);
     }
     return 30;
   }, [duration, containerWidth]);
@@ -1412,8 +1415,8 @@ export function Timeline() {
           dragLine={true}
           autoScroll={false}
           autoReRender={true}
-          minScaleCount={Math.max(1, duration > 0 ? Math.ceil(duration / scale) + 2 : 1)}
-          maxScaleCount={Math.max(100, duration > 0 ? Math.ceil(duration / scale) + 10 : 100)}
+          minScaleCount={Math.max(1, duration > 0 ? Math.round(duration / scale) : 1)}
+          maxScaleCount={Math.max(1, duration > 0 ? Math.round(duration / scale) : 1)}
           onScroll={handleScroll}
           getScaleRender={getScaleRender}
           getActionRender={(action) => {
