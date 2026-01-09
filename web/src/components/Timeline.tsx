@@ -473,13 +473,8 @@ export function Timeline() {
   // We want totalWidth = containerWidth, so scale = duration * SCALE_WIDTH / containerWidth
   const getAutoScale = useCallback(() => {
     if (duration > 0 && containerWidth > 0) {
-      // Calculate initial scale to fit entire duration in container width
-      const initialScale = (duration * SCALE_WIDTH) / containerWidth;
-      const clampedScale = Math.max(MIN_SCALE, initialScale);
-      // Adjust scale so duration divides evenly (prevents timeline extending past video)
-      const scaleCount = Math.ceil(duration / clampedScale);
-      const adjustedScale = duration / scaleCount;
-      return Math.max(MIN_SCALE, adjustedScale);
+      const exactScale = (duration * SCALE_WIDTH) / containerWidth;
+      return Math.max(MIN_SCALE, exactScale);
     }
     return 30;
   }, [duration, containerWidth]);
@@ -1348,6 +1343,44 @@ export function Timeline() {
           },
         }}
       >
+        {/* Video end marker - visual indicator where video content ends */}
+        {duration > 0 && scale > 0 && (() => {
+          const endPosition = 10 + (duration * SCALE_WIDTH / scale) - scrollLeft;
+          if (endPosition < -10 || endPosition > containerWidth + 100) return null;
+          return (
+            <>
+              {/* Striped area after video end */}
+              <Box
+                sx={{
+                  position: 'absolute',
+                  left: Math.max(0, endPosition),
+                  top: 32,
+                  bottom: 0,
+                  right: 0,
+                  bgcolor: 'rgba(0,0,0,0.5)',
+                  pointerEvents: 'none',
+                  zIndex: 4,
+                  backgroundImage: 'repeating-linear-gradient(-45deg, transparent, transparent 6px, rgba(255,255,255,0.04) 6px, rgba(255,255,255,0.04) 12px)',
+                }}
+              />
+              {/* Vertical line at video end */}
+              <Box
+                sx={{
+                  position: 'absolute',
+                  left: endPosition,
+                  top: 28,
+                  bottom: 0,
+                  width: 2,
+                  bgcolor: 'warning.main',
+                  opacity: 0.8,
+                  pointerEvents: 'none',
+                  zIndex: 6,
+                }}
+              />
+            </>
+          );
+        })()}
+
         {/* Buffer progress bar - shows which parts of video are loaded */}
         {duration > 0 && (
           <Box
@@ -1415,8 +1448,8 @@ export function Timeline() {
           dragLine={true}
           autoScroll={false}
           autoReRender={true}
-          minScaleCount={Math.max(1, duration > 0 ? Math.round(duration / scale) : 1)}
-          maxScaleCount={Math.max(1, duration > 0 ? Math.round(duration / scale) : 1)}
+          minScaleCount={Math.max(1, duration > 0 ? Math.ceil(duration / scale) + 2 : 1)}
+          maxScaleCount={Math.max(1, duration > 0 ? Math.ceil(duration / scale) + 2 : 1)}
           onScroll={handleScroll}
           getScaleRender={getScaleRender}
           getActionRender={(action) => {
