@@ -162,61 +162,35 @@ async function triggerLocalDetection(params: {
   return Promise.resolve();
 }
 
-// Wait for video proxy to be ready (processing must complete)
-// Returns the video with proxyS3Key populated, or throws if processing failed
-const PROXY_WAIT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-const PROXY_POLL_INTERVAL_MS = 2000; // 2 seconds
-
-async function waitForProxy(videoId: string): Promise<Video> {
-  const startTime = Date.now();
-  let pollCount = 0;
-
-  while (Date.now() - startTime < PROXY_WAIT_TIMEOUT_MS) {
-    const video = await prisma.video.findUnique({
-      where: { id: videoId },
-    });
-
-    if (!video) {
-      throw new NotFoundError("Video", videoId);
-    }
-
-    // Proxy is ready
-    if (video.proxyS3Key) {
-      console.log(`[DETECTION] Proxy ready for video ${videoId}`);
-      return video;
-    }
-
-    // Processing completed but no proxy (SKIPPED or edge case) - use original
-    if (
-      video.processingStatus === ProcessingStatus.COMPLETED ||
-      video.processingStatus === ProcessingStatus.SKIPPED
-    ) {
-      console.log(
-        `[DETECTION] Processing ${video.processingStatus} but no proxy, using original`
-      );
-      return video;
-    }
-
-    // Processing failed - cannot proceed
-    if (video.processingStatus === ProcessingStatus.FAILED) {
-      throw new ConflictError(
-        "Video processing failed. Please re-upload the video."
-      );
-    }
-
-    // Still processing - wait and retry (log every 10 polls = 20 seconds)
-    pollCount++;
-    if (pollCount === 1 || pollCount % 10 === 0) {
-      console.log(
-        `[DETECTION] Waiting for proxy... (status: ${video.processingStatus}, ${Math.round((Date.now() - startTime) / 1000)}s elapsed)`
-      );
-    }
-    await new Promise((resolve) => setTimeout(resolve, PROXY_POLL_INTERVAL_MS));
+// Check if video proxy is ready for detection
+// Returns the video if ready, null if still processing, throws if failed
+function checkProxyReady(video: Video): Video | null {
+  // Proxy is ready
+  if (video.proxyS3Key) {
+    console.log(`[DETECTION] Proxy ready for video ${video.id}`);
+    return video;
   }
 
-  throw new ConflictError(
-    "Timed out waiting for video processing to complete. Please try again later."
-  );
+  // Processing completed but no proxy (SKIPPED or edge case) - use original
+  if (
+    video.processingStatus === ProcessingStatus.COMPLETED ||
+    video.processingStatus === ProcessingStatus.SKIPPED
+  ) {
+    console.log(
+      `[DETECTION] Processing ${video.processingStatus} but no proxy, using original`
+    );
+    return video;
+  }
+
+  // Processing failed - cannot proceed
+  if (video.processingStatus === ProcessingStatus.FAILED) {
+    throw new ConflictError(
+      "Video processing failed. Please re-upload the video."
+    );
+  }
+
+  // Still processing - return null to signal "preparing" state
+  return null;
 }
 
 export async function triggerRallyDetection(videoId: string, userId: string) {
@@ -271,9 +245,14 @@ export async function triggerRallyDetection(videoId: string, userId: string) {
     );
   }
 
-  // Wait for proxy to be ready BEFORE reserving quota
+  // Check proxy is ready BEFORE reserving quota
   // This ensures we don't consume quota if video processing is stuck/failed
-  const readyVideo = await waitForProxy(videoId);
+  const readyVideo = checkProxyReady(video);
+
+  // Video still processing - return "preparing" status for frontend to retry
+  if (!readyVideo) {
+    return { jobId: null, status: "preparing", message: "Preparing video..." };
+  }
 
   // Atomically check and reserve a detection quota slot
   // This prevents race conditions where concurrent requests bypass quota limits

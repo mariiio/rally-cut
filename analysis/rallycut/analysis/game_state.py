@@ -110,6 +110,10 @@ class GameStateAnalyzer:
         if total_windows == 0:
             return results
 
+        # Report initial progress
+        if progress_callback:
+            progress_callback(0.0, "Reading the game...")
+
         # Check if resize is needed (skip for optimized proxy already at 224x224)
         needs_resize = None  # Will be determined from first frame
 

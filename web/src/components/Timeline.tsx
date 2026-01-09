@@ -106,6 +106,7 @@ export function Timeline() {
     setIsCameraTabActive,
     setLeftPanelTab,
     expandHighlight,
+    getActiveMatch,
   } = useEditorStore();
 
   // Check if rally editing is locked (after confirmation)
@@ -121,13 +122,20 @@ export function Timeline() {
   const removeKeyframe = useCameraStore((state) => state.removeKeyframe);
   const setCameraEdit = useCameraStore((state) => state.setCameraEdit);
 
-  // Detection state
-  const [isDetecting, setIsDetecting] = useState(false);
-  const [detectionStatus, setDetectionStatus] = useState<string | null>(null);
+  // Get active match to access video status
+  const activeMatch = getActiveMatch();
+
+  // Detection state - initialize from store to avoid flicker
+  const [isDetecting, setIsDetecting] = useState(activeMatch?.status === 'DETECTING');
+  const [detectionStatus, setDetectionStatus] = useState<string | null>(
+    activeMatch?.status === 'DETECTING' ? 'Analyzing rallies...' : null
+  );
   const [detectionError, setDetectionError] = useState<string | null>(null);
   const [detectionProgress, setDetectionProgress] = useState(0);
   const [elapsedTime, setElapsedTime] = useState(0);
-  const [videoDetectionStatus, setVideoDetectionStatus] = useState<string | null>(null); // UPLOADED, DETECTING, DETECTED
+  const [videoDetectionStatus, setVideoDetectionStatus] = useState<string | null>(
+    activeMatch?.status ?? null
+  );
   const [detectionResult, setDetectionResult] = useState<{ ralliesCount: number } | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -647,21 +655,6 @@ export function Timeline() {
     return startLeft + (currentTime * pixelsPerSecond) - scrollLeft;
   }, [currentTime, scale, scrollLeft]);
 
-  // Calculate selected rally position for delete button overlay (accounting for scroll offset)
-  const selectedRallyPosition = useMemo(() => {
-    if (!selectedRallyId || !rallies) return null;
-    const rally = rallies.find(s => s.id === selectedRallyId);
-    if (!rally) return null;
-
-    const pixelsPerSecond = SCALE_WIDTH / scale;
-    const startLeft = 10;
-    const left = startLeft + (rally.start_time * pixelsPerSecond) - scrollLeft;
-    const width = (rally.end_time - rally.start_time) * pixelsPerSecond;
-    const center = left + (width / 2);
-
-    return { left, width, center };
-  }, [selectedRallyId, rallies, scale, scrollLeft]);
-
   // Calculate close rally pairs for merge buttons (gap <= 3 seconds)
   const closeRallyPairs = useMemo(() => {
     if (!rallies || rallies.length < 2 || isLocked) return [];
@@ -698,7 +691,7 @@ export function Timeline() {
             effectId: 'rally',
             selected: rally.id === selectedRallyId,
             flexible: !isLocked && !isInCameraEditMode,
-            movable: false,
+            movable: !isLocked && !isInCameraEditMode,
           };
         }),
       },
@@ -728,13 +721,22 @@ export function Timeline() {
     []
   );
 
-  // Prevent overlapping during move (also disable when locked)
+  // Handle move during drag - check overlap and update pending state for smooth visual feedback
   const handleActionMoving = useCallback(
     (params: { action: TimelineAction; start: number; end: number }) => {
-      if (isLocked) return false;
-      return !checkOverlap(params.action.id, params.start, params.end);
+      if (isLocked || isInCameraEditMode) return false;
+      if (checkOverlap(params.action.id, params.start, params.end)) return false;
+
+      // Update pending state for smooth visual feedback
+      setPendingResize({
+        rallyId: params.action.id,
+        start: params.start,
+        end: params.end,
+      });
+
+      return true;
     },
-    [checkOverlap, isLocked]
+    [checkOverlap, isLocked, isInCameraEditMode]
   );
 
   // Handle resize: always return true to avoid shift, clamp position via pendingResize
@@ -879,15 +881,22 @@ export function Timeline() {
   );
 
   // Persist changes after move ends
+  // Note: Moving doesn't change duration, so keyframe timeOffsets remain valid
   const handleActionMoveEnd = useCallback(
     (params: { action: TimelineAction; start: number; end: number }) => {
+      // Use pending position if available (for consistency with visual state)
+      const finalStart = pendingResize?.rallyId === params.action.id ? pendingResize.start : params.start;
+      const finalEnd = pendingResize?.rallyId === params.action.id ? pendingResize.end : params.end;
+
       updateRally(params.action.id, {
-        start_time: params.start,
-        end_time: params.end,
+        start_time: finalStart,
+        end_time: finalEnd,
       });
+
+      setPendingResize(null);
       return true;
     },
-    [updateRally]
+    [updateRally, pendingResize]
   );
 
   // Handle clicking on timeline to seek (don't deselect - user can press Escape)
@@ -1036,34 +1045,49 @@ export function Timeline() {
     }, 5000);
   }, [activeMatchId, stopPolling, reloadCurrentMatch]);
 
-  // Check detection status on mount
+  // Sync detection status when match changes
   useEffect(() => {
-    if (!activeMatchId) return;
+    if (activeMatch?.status) {
+      setVideoDetectionStatus(activeMatch.status);
+      // If match is DETECTING, set up the detecting UI state
+      if (activeMatch.status === 'DETECTING') {
+        setIsDetecting(true);
+        setDetectionStatus('Analyzing rallies...');
+        setDetectionError(null);
+      }
+    }
+  }, [activeMatch?.status]);
 
-    const checkInitialStatus = async () => {
+  // Fetch job progress if video is DETECTING (to get progress/elapsed time)
+  useEffect(() => {
+    if (!activeMatchId || activeMatch?.status !== 'DETECTING') return;
+
+    const fetchJobProgress = async () => {
       try {
         const status = await getDetectionStatus(activeMatchId);
-        setVideoDetectionStatus(status.status);
-        if (status.status === 'DETECTING' && status.job?.status === 'RUNNING') {
-          // Detection is already in progress - resume polling
-          setIsDetecting(true);
+        if (status.job?.status === 'RUNNING') {
           setDetectionProgress(status.job.progress ?? 0);
-          setDetectionStatus(status.job.progressMessage || 'Processing video');
-          setDetectionError(null);
+          setDetectionStatus(status.job.progressMessage || 'Analyzing rallies...');
           // Use job start time if available
           const startTime = status.job.startedAt ? new Date(status.job.startedAt).getTime() : Date.now();
           startPolling(startTime);
+        } else if (status.job?.status === 'COMPLETED') {
+          // Job completed while we were loading - reload match data
+          await reloadCurrentMatch();
+          setIsDetecting(false);
+          setVideoDetectionStatus('DETECTED');
         }
       } catch {
-        // Ignore errors on initial check
+        // Ignore errors, polling will handle updates
+        startPolling(Date.now());
       }
     };
 
-    checkInitialStatus();
+    fetchJobProgress();
 
     // Cleanup on unmount
     return () => stopPolling();
-  }, [activeMatchId, startPolling, stopPolling]);
+  }, [activeMatchId, activeMatch?.status, startPolling, stopPolling, reloadCurrentMatch]);
 
   // Handle starting rally detection
   const handleStartDetection = async () => {
@@ -1075,15 +1099,35 @@ export function Timeline() {
     setDetectionError(null);
     setElapsedTime(0);
 
-    try {
-      await triggerRallyDetection(activeMatchId);
-      setDetectionStatus('Processing video');
-      startPolling(Date.now());
-    } catch (err) {
-      setIsDetecting(false);
-      setDetectionError(err instanceof Error ? err.message : 'Failed to start detection');
-      setDetectionStatus(null);
+    // Retry loop for "preparing" status (video still being optimized)
+    const maxRetries = 36; // 36 * 5s = 3 minutes max wait
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const result = await triggerRallyDetection(activeMatchId);
+
+        // Video still being optimized - show friendly message and retry
+        if (result.status === 'preparing') {
+          setDetectionStatus('Preparing video...');
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          continue;
+        }
+
+        // Detection started successfully
+        setDetectionStatus('Analyzing rallies...');
+        startPolling(Date.now());
+        return;
+      } catch (err) {
+        setIsDetecting(false);
+        setDetectionError(err instanceof Error ? err.message : 'Failed to start detection');
+        setDetectionStatus(null);
+        return;
+      }
     }
+
+    // Timed out waiting for video to be ready
+    setIsDetecting(false);
+    setDetectionError('Video is taking too long to prepare. Please try again later.');
+    setDetectionStatus(null);
   };
 
   return (
@@ -1444,7 +1488,7 @@ export function Timeline() {
           scaleWidth={SCALE_WIDTH}
           startLeft={10}
           rowHeight={100}
-          gridSnap={true}
+          gridSnap={false}
           dragLine={true}
           autoScroll={false}
           autoReRender={true}
@@ -1630,8 +1674,8 @@ export function Timeline() {
                   );
                 })}
 
-                {/* Camera indicator badge */}
-                {showCameraIndicator && (
+                {/* Camera indicator badge (only when not selected, since action buttons take this spot) */}
+                {showCameraIndicator && !isSelected && (
                   <Box
                     sx={{
                       position: 'absolute',
@@ -1648,6 +1692,114 @@ export function Timeline() {
                   >
                     <CameraAltIcon sx={{ fontSize: 12, color: 'rgba(255,255,255,0.85)' }} />
                   </Box>
+                )}
+
+                {/* Action buttons (inside segment, top-right) */}
+                {isSelected && !isLocked && !isThisRallyInCameraEditMode && (
+                  <Stack
+                    direction="row"
+                    spacing={0.5}
+                    sx={{
+                      position: 'absolute',
+                      top: 4,
+                      right: 4,
+                      zIndex: 20,
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {deleteConfirmId === action.id ? (
+                      <>
+                        <Tooltip title="Confirm delete">
+                          <IconButton
+                            size="small"
+                            onClick={() => {
+                              removeRally(action.id);
+                              setDeleteConfirmId(null);
+                              selectRally(null);
+                            }}
+                            sx={{
+                              width: 22,
+                              height: 22,
+                              bgcolor: '#d32f2f',
+                              color: 'white',
+                              '&:hover': { bgcolor: '#f44336' },
+                            }}
+                          >
+                            <CheckIcon sx={{ fontSize: 14 }} />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Cancel">
+                          <IconButton
+                            size="small"
+                            onClick={() => setDeleteConfirmId(null)}
+                            sx={{
+                              width: 22,
+                              height: 22,
+                              bgcolor: 'rgba(0,0,0,0.4)',
+                              color: 'white',
+                              '&:hover': { bgcolor: 'rgba(0,0,0,0.6)' },
+                            }}
+                          >
+                            <CloseIcon sx={{ fontSize: 14 }} />
+                          </IconButton>
+                        </Tooltip>
+                      </>
+                    ) : (
+                      <>
+                        <Tooltip title={
+                          isRallyInTargetHighlight
+                            ? `Remove from ${targetHighlight?.name}`
+                            : targetHighlight
+                              ? `Add to ${targetHighlight.name}`
+                              : 'Add to new highlight'
+                        }>
+                          <IconButton
+                            size="small"
+                            onClick={handleToggleHighlight}
+                            sx={{
+                              width: 22,
+                              height: 22,
+                              bgcolor: isRallyInTargetHighlight
+                                ? targetHighlight?.color || '#FFE66D'
+                                : 'rgba(0,0,0,0.4)',
+                              color: isRallyInTargetHighlight
+                                ? 'rgba(0,0,0,0.8)'
+                                : targetHighlight
+                                  ? targetHighlight.color
+                                  : 'rgba(255,255,255,0.8)',
+                              '&:hover': {
+                                bgcolor: isRallyInTargetHighlight
+                                  ? 'rgba(0,0,0,0.4)'
+                                  : targetHighlight?.color || '#FFE66D',
+                                color: isRallyInTargetHighlight
+                                  ? targetHighlight?.color || 'rgba(255,255,255,0.8)'
+                                  : 'rgba(0,0,0,0.8)',
+                              },
+                              transition: 'all 0.15s ease',
+                            }}
+                          >
+                            <StarIcon sx={{ fontSize: 14 }} />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Delete rally">
+                          <IconButton
+                            size="small"
+                            onClick={() => setDeleteConfirmId(action.id)}
+                            sx={{
+                              width: 22,
+                              height: 22,
+                              bgcolor: 'rgba(0,0,0,0.4)',
+                              color: 'rgba(255,255,255,0.8)',
+                              '&:hover': { bgcolor: '#d32f2f', color: 'white' },
+                              transition: 'all 0.15s ease',
+                            }}
+                          >
+                            <DeleteIcon sx={{ fontSize: 14 }} />
+                          </IconButton>
+                        </Tooltip>
+                      </>
+                    )}
+                  </Stack>
                 )}
 
                 {/* Center content */}
@@ -1832,153 +1984,6 @@ export function Timeline() {
               >
                 <AddIcon sx={{ fontSize: 16 }} />
               </IconButton>
-            )}
-          </Box>
-        )}
-
-        {/* Delete button overlay for selected rally (hidden when locked or in camera edit mode) */}
-        {selectedRallyId && selectedRallyPosition && selectedRallyPosition.center > 0 && !isLocked && !isInCameraEditMode && (
-          <Box
-            sx={{
-              position: 'absolute',
-              left: selectedRallyPosition.center,
-              top: 36,
-              transform: 'translateX(-50%)',
-              zIndex: 100,
-              pointerEvents: 'auto',
-            }}
-          >
-            {deleteConfirmId === selectedRallyId ? (
-              // Confirmation UI
-              <Stack
-                direction="row"
-                spacing={0.5}
-                alignItems="center"
-                sx={{
-                  bgcolor: 'rgba(20,20,20,0.95)',
-                  borderRadius: '8px',
-                  py: 0.5,
-                  px: 1,
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-                  border: '1px solid rgba(255,255,255,0.15)',
-                }}
-              >
-                <Typography
-                  variant="caption"
-                  sx={{
-                    color: 'white',
-                    fontSize: 12,
-                    fontWeight: 500,
-                    mr: 0.5,
-                  }}
-                >
-                  Delete?
-                </Typography>
-                <IconButton
-                  size="small"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeRally(selectedRallyId);
-                    setDeleteConfirmId(null);
-                    selectRally(null);
-                  }}
-                  sx={{
-                    width: 26,
-                    height: 26,
-                    bgcolor: '#d32f2f',
-                    color: 'white',
-                    '&:hover': { bgcolor: '#f44336' },
-                  }}
-                >
-                  <CheckIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-                <IconButton
-                  size="small"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setDeleteConfirmId(null);
-                  }}
-                  sx={{
-                    width: 26,
-                    height: 26,
-                    bgcolor: 'rgba(255,255,255,0.1)',
-                    color: 'white',
-                    '&:hover': { bgcolor: 'rgba(255,255,255,0.2)' },
-                  }}
-                >
-                  <CloseIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Stack>
-            ) : (
-              // Toggle highlight and Delete buttons
-              <Stack direction="row" spacing={0.5}>
-                <Tooltip title={
-                  isRallyInTargetHighlight
-                    ? `Remove from ${targetHighlight?.name}`
-                    : targetHighlight
-                      ? `Add to ${targetHighlight.name}`
-                      : 'Add to new highlight'
-                }>
-                  <IconButton
-                    size="small"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleToggleHighlight();
-                    }}
-                    sx={{
-                      width: 28,
-                      height: 28,
-                      bgcolor: isRallyInTargetHighlight
-                        ? targetHighlight?.color || '#FFE66D'
-                        : 'rgba(20,20,20,0.9)',
-                      color: isRallyInTargetHighlight
-                        ? 'rgba(0,0,0,0.8)'
-                        : targetHighlight
-                          ? targetHighlight.color
-                          : 'rgba(255,255,255,0.8)',
-                      border: '1px solid rgba(255,255,255,0.15)',
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
-                      '&:hover': {
-                        bgcolor: isRallyInTargetHighlight
-                          ? 'rgba(20,20,20,0.9)'
-                          : targetHighlight
-                            ? targetHighlight.color
-                            : '#FFE66D',
-                        color: isRallyInTargetHighlight
-                          ? targetHighlight?.color || 'rgba(255,255,255,0.8)'
-                          : 'rgba(0,0,0,0.8)',
-                        border: '1px solid transparent',
-                      },
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    <StarIcon sx={{ fontSize: 16 }} />
-                  </IconButton>
-                </Tooltip>
-                <IconButton
-                  size="small"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setDeleteConfirmId(selectedRallyId);
-                  }}
-                  sx={{
-                    width: 28,
-                    height: 28,
-                    bgcolor: 'rgba(20,20,20,0.9)',
-                    color: 'rgba(255,255,255,0.8)',
-                    border: '1px solid rgba(255,255,255,0.15)',
-                    boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
-                    '&:hover': {
-                      bgcolor: '#d32f2f',
-                      color: 'white',
-                      border: '1px solid transparent',
-                    },
-                    transition: 'all 0.15s ease',
-                  }}
-                >
-                  <DeleteIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Stack>
             )}
           </Box>
         )}

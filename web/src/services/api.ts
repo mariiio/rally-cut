@@ -210,6 +210,7 @@ function apiVideoToMatch(apiVideo: ApiVideo, cloudfrontDomain?: string): Match {
     rallies,
     createdAt: apiVideo.createdAt,
     qualityDowngradedAt: apiVideo.qualityDowngradedAt,
+    status: apiVideo.status,
   };
 }
 
@@ -620,6 +621,7 @@ interface ApiVideoEditorResponse {
     width: number | null;
     height: number | null;
     rallies: ApiRally[];
+    status: 'PENDING' | 'UPLOADED' | 'DETECTING' | 'DETECTED' | 'ERROR';
   };
   allVideosSessionId: string;
   highlights: ApiHighlight[];
@@ -728,6 +730,7 @@ export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEd
       frame_count: Math.round(duration * fps),
     },
     rallies,
+    status: data.video.status,
   };
 
   // Transform highlights to frontend format
