@@ -167,7 +167,7 @@ interface EditorState {
   invalidateSessionCache: (sessionId?: string) => void;
 
   // Session actions
-  loadSession: (sessionId: string) => Promise<void>;
+  loadSession: (sessionId: string, initialVideoId?: string) => Promise<void>;
   loadVideo: (videoId: string) => Promise<void>;
   reloadSession: () => Promise<void>;
   reloadCurrentMatch: () => Promise<{ ralliesCount: number } | null>;
@@ -332,7 +332,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   // Session actions
-  loadSession: async (sessionId: string) => {
+  loadSession: async (sessionId: string, initialVideoId?: string) => {
     // Start loading and clear any previous error
     set({
       isLoadingSession: true,
@@ -546,11 +546,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         }
       }
 
-      // Get all original rallies flattened for the active match comparison
-      const firstMatchOriginalRallies = originalRalliesPerMatch[session.matches[0]?.id] || [];
+      // Determine which match to set as active - use initialVideoId if provided and valid
+      const initialMatch = initialVideoId
+        ? session.matches.find(m => m.id === initialVideoId)
+        : null;
+      const activeMatch = initialMatch || session.matches[0];
 
-      // Set first match as active
-      const firstMatch = session.matches[0];
+      // Get all original rallies flattened for the active match comparison
+      const activeMatchOriginalRallies = originalRalliesPerMatch[activeMatch?.id] || [];
 
       // Final progress update before setting session
       set({
@@ -563,19 +566,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         sessionLoadStep: '',
         sessionLoadProgress: 0,
         session,
-        activeMatchId: firstMatch?.id || null,
+        activeMatchId: activeMatch?.id || null,
         userRole: session.userRole || 'owner', // Default to owner if not specified
-        videoUrl: firstMatch?.videoUrl || null,
-        posterUrl: firstMatch?.posterUrl || null,
-        proxyUrl: firstMatch?.proxyUrl || null,
-        videoMetadata: firstMatch?.video || null,
-        rallies: firstMatch?.rallies || [],
+        videoUrl: activeMatch?.videoUrl || null,
+        posterUrl: activeMatch?.posterUrl || null,
+        proxyUrl: activeMatch?.proxyUrl || null,
+        videoMetadata: activeMatch?.video || null,
+        rallies: activeMatch?.rallies || [],
         highlights: session.highlights,
         selectedRallyId: null,
         selectedHighlightId: null,
         past: [],
         future: [],
-        originalRallies: firstMatchOriginalRallies,
+        originalRallies: activeMatchOriginalRallies,
         originalHighlights: [],
         originalRalliesPerMatch,
         hasUnsavedChanges: false,

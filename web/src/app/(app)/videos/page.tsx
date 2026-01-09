@@ -38,6 +38,7 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { designTokens } from '@/app/theme';
 import {
   listVideos,
+  listSessions,
   getVideoStreamUrl,
   deleteVideo,
   renameVideo,
@@ -67,6 +68,7 @@ export default function VideosPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const [allVideosSessionId, setAllVideosSessionId] = useState<string | null>(null);
   const limit = 20;
 
   // Video menu state
@@ -98,6 +100,22 @@ export default function VideosPage() {
   useEffect(() => {
     loadVideos();
   }, [page, search]);
+
+  // Fetch ALL_VIDEOS session ID on mount
+  useEffect(() => {
+    const fetchAllVideosSession = async () => {
+      try {
+        const result = await listSessions();
+        const allVideosSession = result.data.find(s => s.type === 'ALL_VIDEOS');
+        if (allVideosSession) {
+          setAllVideosSessionId(allVideosSession.id);
+        }
+      } catch (error) {
+        console.error('Failed to fetch sessions:', error);
+      }
+    };
+    fetchAllVideosSession();
+  }, []);
 
   // Debounce search input
   useEffect(() => {
@@ -319,7 +337,11 @@ export default function VideosPage() {
                           },
                         },
                       }}
-                      onClick={() => router.push(`/videos/${video.id}`)}
+                      onClick={() => {
+                        if (allVideosSessionId) {
+                          router.push(`/sessions/${allVideosSessionId}?video=${video.id}`);
+                        }
+                      }}
                     >
                       <Box sx={{ position: 'relative', aspectRatio: '16/9' }}>
                         <video

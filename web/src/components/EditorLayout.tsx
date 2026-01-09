@@ -28,9 +28,10 @@ import { designTokens } from '@/app/theme';
 interface EditorLayoutProps {
   sessionId?: string;
   videoId?: string;
+  initialVideoId?: string;
 }
 
-export function EditorLayout({ sessionId, videoId }: EditorLayoutProps) {
+export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayoutProps) {
   const isMobile = useIsMobile();
   const {
     loadSession,
@@ -135,9 +136,9 @@ export function EditorLayout({ sessionId, videoId }: EditorLayoutProps) {
     if (videoId) {
       loadVideo(videoId);
     } else if (sessionId) {
-      loadSession(sessionId);
+      loadSession(sessionId, initialVideoId);
     }
-  }, [sessionId, videoId, loadSession, loadVideo]);
+  }, [sessionId, videoId, initialVideoId, loadSession, loadVideo]);
 
   // Responsive: collapse panels on smaller screens
   useEffect(() => {
