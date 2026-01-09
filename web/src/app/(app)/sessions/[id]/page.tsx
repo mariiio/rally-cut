@@ -1,6 +1,7 @@
 'use client';
 
 import { use } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { EditorLayout } from '@/components/EditorLayout';
 
 interface SessionPageProps {
@@ -9,5 +10,7 @@ interface SessionPageProps {
 
 export default function SessionPage({ params }: SessionPageProps) {
   const { id } = use(params);
-  return <EditorLayout sessionId={id} />;
+  const searchParams = useSearchParams();
+  const initialVideoId = searchParams.get('video') || undefined;
+  return <EditorLayout sessionId={id} initialVideoId={initialVideoId} />;
 }
