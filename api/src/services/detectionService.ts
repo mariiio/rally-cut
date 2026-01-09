@@ -2,6 +2,8 @@ import { spawn } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
 
+import { ProcessingStatus, Video } from "@prisma/client";
+
 import { env } from "../config/env.js";
 import { triggerModalDetection } from "../lib/modal.js";
 import { prisma } from "../lib/prisma.js";
@@ -160,6 +162,63 @@ async function triggerLocalDetection(params: {
   return Promise.resolve();
 }
 
+// Wait for video proxy to be ready (processing must complete)
+// Returns the video with proxyS3Key populated, or throws if processing failed
+const PROXY_WAIT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const PROXY_POLL_INTERVAL_MS = 2000; // 2 seconds
+
+async function waitForProxy(videoId: string): Promise<Video> {
+  const startTime = Date.now();
+  let pollCount = 0;
+
+  while (Date.now() - startTime < PROXY_WAIT_TIMEOUT_MS) {
+    const video = await prisma.video.findUnique({
+      where: { id: videoId },
+    });
+
+    if (!video) {
+      throw new NotFoundError("Video", videoId);
+    }
+
+    // Proxy is ready
+    if (video.proxyS3Key) {
+      console.log(`[DETECTION] Proxy ready for video ${videoId}`);
+      return video;
+    }
+
+    // Processing completed but no proxy (SKIPPED or edge case) - use original
+    if (
+      video.processingStatus === ProcessingStatus.COMPLETED ||
+      video.processingStatus === ProcessingStatus.SKIPPED
+    ) {
+      console.log(
+        `[DETECTION] Processing ${video.processingStatus} but no proxy, using original`
+      );
+      return video;
+    }
+
+    // Processing failed - cannot proceed
+    if (video.processingStatus === ProcessingStatus.FAILED) {
+      throw new ConflictError(
+        "Video processing failed. Please re-upload the video."
+      );
+    }
+
+    // Still processing - wait and retry (log every 10 polls = 20 seconds)
+    pollCount++;
+    if (pollCount === 1 || pollCount % 10 === 0) {
+      console.log(
+        `[DETECTION] Waiting for proxy... (status: ${video.processingStatus}, ${Math.round((Date.now() - startTime) / 1000)}s elapsed)`
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, PROXY_POLL_INTERVAL_MS));
+  }
+
+  throw new ConflictError(
+    "Timed out waiting for video processing to complete. Please try again later."
+  );
+}
+
 export async function triggerRallyDetection(videoId: string, userId: string) {
   // userId is now required - enforced by requireUser middleware
 
@@ -211,6 +270,10 @@ export async function triggerRallyDetection(videoId: string, userId: string) {
       }
     );
   }
+
+  // Wait for proxy to be ready BEFORE reserving quota
+  // This ensures we don't consume quota if video processing is stuck/failed
+  const readyVideo = await waitForProxy(videoId);
 
   // Atomically check and reserve a detection quota slot
   // This prevents race conditions where concurrent requests bypass quota limits
@@ -308,13 +371,15 @@ export async function triggerRallyDetection(videoId: string, userId: string) {
     : triggerModalDetection;
 
   const useLocal = shouldUseLocalDetection();
+  const videoKey = readyVideo.proxyS3Key ?? readyVideo.s3Key;
   console.log(
     `[DETECTION] Using ${useLocal ? "LOCAL" : "MODAL"} detection for job ${job.id}`
   );
+  console.log(`[DETECTION] Video key: ${videoKey}`);
 
   await triggerFn({
     jobId: job.id,
-    videoS3Key: video.s3Key,
+    videoS3Key: videoKey,
     callbackUrl,
   }).catch(async (error) => {
     await prisma.$transaction([

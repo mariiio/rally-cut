@@ -96,25 +96,42 @@ class ProxyGenerator:
         self.cache_dir = cache_dir or Path(user_cache_dir("rallycut")) / "proxies"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def _get_source_fps(self, video_path: Path) -> float:
-        """Get source video FPS using ffprobe."""
+    def _get_video_info(self, video_path: Path) -> tuple[float, int]:
+        """Get source video FPS and height in a single ffprobe call.
+
+        Returns:
+            Tuple of (fps, height). Defaults to (30.0, 1080) on error.
+        """
         cmd = [
             "ffprobe",
             "-v", "error",
             "-select_streams", "v:0",
-            "-show_entries", "stream=r_frame_rate",
+            "-show_entries", "stream=r_frame_rate,height",
             "-of", "csv=p=0",
             str(video_path),
         ]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            fps_str = result.stdout.strip()
-            if "/" in fps_str:
-                num, den = fps_str.split("/")
-                return float(num) / float(den)
-            return float(fps_str)
+            # Output format: "fps_num/fps_den,height" e.g. "30/1,1080"
+            parts = result.stdout.strip().split(",")
+            if len(parts) >= 2:
+                fps_str, height_str = parts[0], parts[1]
+                # Parse FPS
+                if "/" in fps_str:
+                    num, den = fps_str.split("/")
+                    fps = float(num) / float(den)
+                else:
+                    fps = float(fps_str)
+                height = int(height_str)
+                return fps, height
         except Exception:
-            return 30.0  # Default fallback
+            pass
+        return 30.0, 1080  # Defaults
+
+    def _get_source_fps(self, video_path: Path) -> float:
+        """Get source video FPS using ffprobe."""
+        fps, _ = self._get_video_info(video_path)
+        return fps
 
     def _get_duration(self, video_path: Path) -> float:
         """Get video duration in seconds using ffprobe."""
@@ -130,6 +147,11 @@ class ProxyGenerator:
             return float(result.stdout.strip())
         except Exception:
             return 0.0  # Unknown duration
+
+    def _get_source_height(self, video_path: Path) -> int:
+        """Get source video height in pixels using ffprobe."""
+        _, height = self._get_video_info(video_path)
+        return height
 
     def _get_file_signature(self, video_path: Path) -> str:
         """Get a signature for the video file (path + size + mtime)."""
@@ -177,9 +199,17 @@ class ProxyGenerator:
         Raises:
             RuntimeError: If ffmpeg fails
         """
-        # Detect source FPS to determine if normalization is needed
-        source_fps = self._get_source_fps(source_video)
+        # Get source video info in single ffprobe call
+        source_fps, source_height = self._get_video_info(source_video)
         should_normalize_fps = source_fps > self.FPS_NORMALIZE_THRESHOLD
+        is_already_small = source_height <= 720
+
+        # Skip proxy generation if input is already small enough (e.g., API-generated 720p proxy)
+        # and doesn't need FPS normalization
+        if is_already_small and not should_normalize_fps:
+            if progress_callback:
+                progress_callback(1.0, "Video already optimized!")
+            return source_video
 
         proxy_path = self._get_proxy_path_for_fps(source_video, should_normalize_fps)
 
@@ -190,7 +220,12 @@ class ProxyGenerator:
             return proxy_path
 
         # Build filter chain
-        if should_normalize_fps:
+        # If source is already small (<=720p), only normalize FPS without downscaling
+        # Otherwise, downscale to config.height (480p) and optionally normalize FPS
+        if is_already_small and should_normalize_fps:
+            # Keep resolution, just normalize FPS (e.g., 720p@60fps -> 720p@30fps)
+            vf_filter = f"fps={self.config.fps}"
+        elif should_normalize_fps:
             vf_filter = f"scale=-2:{self.config.height},fps={self.config.fps}"
         else:
             vf_filter = f"scale=-2:{self.config.height}"
