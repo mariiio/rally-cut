@@ -286,8 +286,7 @@ class ProxyGenerator:
                         # Only report if progress increased meaningfully
                         if progress - last_progress >= 0.02:
                             last_progress = progress
-                            pct = int(progress * 100)
-                            progress_callback(progress, f"Optimizing video... {pct}%")
+                            progress_callback(progress, "Optimizing video...")
 
             process.wait()
 

@@ -189,8 +189,7 @@ class GameStateAnalyzer:
                     # Report progress
                     if progress_callback and windows_processed % batch_size == 0:
                         progress = windows_processed / total_windows
-                        pct = int(progress * 100)
-                        progress_callback(progress, f"Reading the game... {pct}%")
+                        progress_callback(progress, "Reading the game...")
                 else:
                     break
 
