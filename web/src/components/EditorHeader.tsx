@@ -9,8 +9,6 @@ import {
   Stack,
   Tooltip,
   Divider,
-  Select,
-  SelectChangeEvent,
   Snackbar,
   Alert,
   Menu,
@@ -61,10 +59,8 @@ export function EditorHeader() {
 
   const {
     session,
-    activeMatchId,
     userRole,
     singleVideoMode,
-    setActiveMatch,
     undo,
     redo,
     resetToOriginal,
@@ -105,10 +101,6 @@ export function EditorHeader() {
     if (success) {
       await reloadSession();
     }
-  };
-
-  const handleMatchChange = (event: SelectChangeEvent<string>) => {
-    setActiveMatch(event.target.value);
   };
 
   const isMac = typeof navigator !== 'undefined' && navigator.platform.includes('Mac');
@@ -224,29 +216,6 @@ export function EditorHeader() {
               >
                 {session.name}
               </Typography>
-
-              {/* Video selector (only in session mode with multiple videos) */}
-              {!singleVideoMode && session.matches.length > 1 && (
-                <Select
-                  value={activeMatchId || ''}
-                  onChange={handleMatchChange}
-                  size="small"
-                  displayEmpty
-                  sx={{
-                    minWidth: 160,
-                    '& .MuiSelect-select': {
-                      py: 0.5,
-                      fontSize: '0.8125rem',
-                    },
-                  }}
-                >
-                  {session.matches.map((match) => (
-                    <MenuItem key={match.id} value={match.id}>
-                      {match.name}
-                    </MenuItem>
-                  ))}
-                </Select>
-              )}
 
               {/* Add Video Button - hide in single video mode */}
               {!singleVideoMode && (

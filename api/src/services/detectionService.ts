@@ -163,34 +163,28 @@ async function triggerLocalDetection(params: {
 }
 
 // Check if video proxy is ready for detection
-// Returns the video if ready, null if still processing, throws if failed
-function checkProxyReady(video: Video): Video | null {
-  // Proxy is ready
+// Returns the video - uses proxy if available, otherwise falls back to original
+function getVideoForDetection(video: Video): Video {
+  // Proxy is ready - use it for faster detection
   if (video.proxyS3Key) {
-    console.log(`[DETECTION] Proxy ready for video ${video.id}`);
+    console.log(`[DETECTION] Using proxy for video ${video.id}`);
     return video;
   }
 
-  // Processing completed but no proxy (SKIPPED or edge case) - use original
-  if (
-    video.processingStatus === ProcessingStatus.COMPLETED ||
-    video.processingStatus === ProcessingStatus.SKIPPED
-  ) {
-    console.log(
-      `[DETECTION] Processing ${video.processingStatus} but no proxy, using original`
-    );
-    return video;
-  }
-
-  // Processing failed - cannot proceed
+  // Processing failed - warn but allow detection with original
   if (video.processingStatus === ProcessingStatus.FAILED) {
-    throw new ConflictError(
-      "Video processing failed. Please re-upload the video."
+    console.log(
+      `[DETECTION] Processing failed for ${video.id}, using original video`
     );
+    return video;
   }
 
-  // Still processing - return null to signal "preparing" state
-  return null;
+  // Proxy not ready yet - fall back to original video
+  // This allows detection to start immediately without waiting for proxy
+  console.log(
+    `[DETECTION] Proxy not ready (status: ${video.processingStatus}), using original for ${video.id}`
+  );
+  return video;
 }
 
 export async function triggerRallyDetection(videoId: string, userId: string) {
@@ -245,14 +239,8 @@ export async function triggerRallyDetection(videoId: string, userId: string) {
     );
   }
 
-  // Check proxy is ready BEFORE reserving quota
-  // This ensures we don't consume quota if video processing is stuck/failed
-  const readyVideo = checkProxyReady(video);
-
-  // Video still processing - return "preparing" status for frontend to retry
-  if (!readyVideo) {
-    return { jobId: null, status: "preparing", message: "Preparing video..." };
-  }
+  // Get the video source for detection (proxy if available, otherwise original)
+  const detectionVideo = getVideoForDetection(video);
 
   // Atomically check and reserve a detection quota slot
   // This prevents race conditions where concurrent requests bypass quota limits
@@ -350,7 +338,7 @@ export async function triggerRallyDetection(videoId: string, userId: string) {
     : triggerModalDetection;
 
   const useLocal = shouldUseLocalDetection();
-  const videoKey = readyVideo.proxyS3Key ?? readyVideo.s3Key;
+  const videoKey = detectionVideo.proxyS3Key ?? detectionVideo.s3Key;
   console.log(
     `[DETECTION] Using ${useLocal ? "LOCAL" : "MODAL"} detection for job ${job.id}`
   );

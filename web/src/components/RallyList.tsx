@@ -156,16 +156,29 @@ export function RallyList() {
     return () => clearInterval(intervalId);
   }, [isConfirming, activeMatchId, confirmationStatus, setConfirmationStatus, setIsConfirming, reloadSession]);
 
-  const toggleMatchExpanded = (matchId: string) => {
-    setExpandedMatches((prev) => {
-      const next = new Set(prev);
-      if (next.has(matchId)) {
-        next.delete(matchId);
-      } else {
-        next.add(matchId);
+  const handleMatchClick = (match: Match) => {
+    const isActiveMatch = activeMatchId === match.id;
+    // Use rallies from store for active match (live updates), session for others
+    const matchRallies = isActiveMatch ? rallies : match.rallies;
+    const hasRallies = matchRallies.length > 0;
+
+    if (hasRallies) {
+      // Toggle expand/collapse for videos with rallies
+      setExpandedMatches((prev) => {
+        const next = new Set(prev);
+        if (next.has(match.id)) {
+          next.delete(match.id);
+        } else {
+          next.add(match.id);
+        }
+        return next;
+      });
+    } else {
+      // Switch to video in player for videos with no rallies
+      if (!isActiveMatch) {
+        setActiveMatch(match.id);
       }
-      return next;
-    });
+    }
   };
 
   const handleRallyClick = useCallback((matchId: string, rally: Rally) => {
@@ -429,7 +442,7 @@ export function RallyList() {
             <Box key={match.id}>
               {/* Match header */}
               <Box
-                onClick={() => toggleMatchExpanded(match.id)}
+                onClick={() => handleMatchClick(match)}
                 sx={{
                   display: 'flex',
                   alignItems: 'center',
