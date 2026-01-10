@@ -1099,35 +1099,16 @@ export function Timeline() {
     setDetectionError(null);
     setElapsedTime(0);
 
-    // Retry loop for "preparing" status (video still being optimized)
-    const maxRetries = 36; // 36 * 5s = 3 minutes max wait
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        const result = await triggerRallyDetection(activeMatchId);
-
-        // Video still being optimized - show friendly message and retry
-        if (result.status === 'preparing') {
-          setDetectionStatus('Preparing video...');
-          await new Promise(resolve => setTimeout(resolve, 5000));
-          continue;
-        }
-
-        // Detection started successfully
-        setDetectionStatus('Analyzing rallies...');
-        startPolling(Date.now());
-        return;
-      } catch (err) {
-        setIsDetecting(false);
-        setDetectionError(err instanceof Error ? err.message : 'Failed to start detection');
-        setDetectionStatus(null);
-        return;
-      }
+    try {
+      await triggerRallyDetection(activeMatchId);
+      // Detection started successfully
+      setDetectionStatus('Analyzing rallies...');
+      startPolling(Date.now());
+    } catch (err) {
+      setIsDetecting(false);
+      setDetectionError(err instanceof Error ? err.message : 'Failed to start detection');
+      setDetectionStatus(null);
     }
-
-    // Timed out waiting for video to be ready
-    setIsDetecting(false);
-    setDetectionError('Video is taking too long to prepare. Please try again later.');
-    setDetectionStatus(null);
   };
 
   return (
