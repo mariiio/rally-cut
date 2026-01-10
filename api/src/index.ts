@@ -48,10 +48,12 @@ app.use(resolveUser);
 app.use(identityRouter);
 
 // Main API routes
+// videosRouter must come before sessionsRouter to ensure /videos/upload-url
+// matches before /videos/:videoId (which would interpret "upload-url" as a videoId)
+app.use(videosRouter);
 app.use(sessionsRouter);
 app.use(sharesRouter);
 app.use(accessRequestsRouter);
-app.use(videosRouter);
 app.use(detectionRouter);
 app.use(confirmationRouter);
 app.use(exportsRouter);

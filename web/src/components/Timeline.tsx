@@ -132,13 +132,11 @@ export function Timeline() {
   );
   const [detectionError, setDetectionError] = useState<string | null>(null);
   const [detectionProgress, setDetectionProgress] = useState(0);
-  const [elapsedTime, setElapsedTime] = useState(0);
   const [videoDetectionStatus, setVideoDetectionStatus] = useState<string | null>(
     activeMatch?.status ?? null
   );
   const [detectionResult, setDetectionResult] = useState<{ ralliesCount: number } | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const {
     currentTime,
     duration,
@@ -963,19 +961,8 @@ export function Timeline() {
     return !insideRally;
   }, [rallies, currentTime, videoMetadata, isDraggingCursor, selectedRallyId, isLocked]);
 
-  // Format elapsed time as MM:SS
-  const formatElapsed = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  // Stop polling - defined before startPolling since it's used there
+  // Stop polling for detection status
   const stopPolling = useCallback(() => {
-    if (elapsedIntervalRef.current) {
-      clearInterval(elapsedIntervalRef.current);
-      elapsedIntervalRef.current = null;
-    }
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
@@ -983,21 +970,11 @@ export function Timeline() {
   }, []);
 
   // Start polling for detection status
-  const startPolling = useCallback((startTime?: number) => {
+  const startPolling = useCallback(() => {
     if (!activeMatchId) return;
 
-    // Set up elapsed time tracking
-    const start = startTime || Date.now();
-    setElapsedTime(Math.floor((Date.now() - start) / 1000));
-
-    // Clear any existing intervals
-    if (elapsedIntervalRef.current) clearInterval(elapsedIntervalRef.current);
+    // Clear any existing interval
     if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-
-    // Update elapsed time every second
-    elapsedIntervalRef.current = setInterval(() => {
-      setElapsedTime(Math.floor((Date.now() - start) / 1000));
-    }, 1000);
 
     // Poll for status every 5 seconds
     pollIntervalRef.current = setInterval(async () => {
@@ -1048,6 +1025,7 @@ export function Timeline() {
   // Sync detection status when match changes
   useEffect(() => {
     if (activeMatch?.status) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional sync on match change
       setVideoDetectionStatus(activeMatch.status);
       // If match is DETECTING, set up the detecting UI state
       if (activeMatch.status === 'DETECTING') {
@@ -1068,9 +1046,7 @@ export function Timeline() {
         if (status.job?.status === 'RUNNING') {
           setDetectionProgress(status.job.progress ?? 0);
           setDetectionStatus(status.job.progressMessage || 'Analyzing rallies...');
-          // Use job start time if available
-          const startTime = status.job.startedAt ? new Date(status.job.startedAt).getTime() : Date.now();
-          startPolling(startTime);
+          startPolling();
         } else if (status.job?.status === 'COMPLETED') {
           // Job completed while we were loading - reload match data
           await reloadCurrentMatch();
@@ -1079,7 +1055,7 @@ export function Timeline() {
         }
       } catch {
         // Ignore errors, polling will handle updates
-        startPolling(Date.now());
+        startPolling();
       }
     };
 
@@ -1097,13 +1073,12 @@ export function Timeline() {
     setDetectionStatus('Starting analysis...');
     setDetectionProgress(0);
     setDetectionError(null);
-    setElapsedTime(0);
 
     try {
       await triggerRallyDetection(activeMatchId);
       // Detection started successfully
       setDetectionStatus('Analyzing rallies...');
-      startPolling(Date.now());
+      startPolling();
     } catch (err) {
       setIsDetecting(false);
       setDetectionError(err instanceof Error ? err.message : 'Failed to start detection');
@@ -1198,31 +1173,50 @@ export function Timeline() {
         <Stack direction="row" alignItems="center" spacing={1} sx={{ flex: 1, justifyContent: 'flex-end' }}>
           {/* Detection status or button */}
           {isDetecting ? (
-            <Stack direction="row" alignItems="center" spacing={1} sx={{
+            <Stack direction="row" alignItems="center" spacing={1.5} sx={{
               bgcolor: 'action.hover',
               px: 1.5,
               py: 0.5,
               borderRadius: 2,
             }}>
-              <CircularProgress
-                size={18}
-                variant={detectionProgress > 0 ? "determinate" : "indeterminate"}
-                value={detectionProgress}
-                color="primary"
-              />
-              <Stack spacing={0}>
-                <Typography variant="caption" sx={{ color: 'text.primary', fontWeight: 500, lineHeight: 1.2 }}>
-                  {detectionStatus || 'Analyzing...'}
-                </Typography>
-                <Typography variant="caption" sx={{
-                  color: 'text.secondary',
-                  fontFamily: 'monospace',
-                  fontSize: 10,
-                  lineHeight: 1.2,
-                }}>
-                  {formatElapsed(elapsedTime)}
-                </Typography>
-              </Stack>
+              {/* Progress indicator with percentage inside */}
+              <Box sx={{ position: 'relative', display: 'inline-flex' }}>
+                <CircularProgress
+                  size={32}
+                  variant={detectionProgress > 0 ? "determinate" : "indeterminate"}
+                  value={detectionProgress}
+                  color="primary"
+                  thickness={4}
+                />
+                {detectionProgress > 0 && (
+                  <Box
+                    sx={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      bottom: 0,
+                      right: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        fontSize: 9,
+                        fontWeight: 600,
+                        color: 'text.secondary',
+                      }}
+                    >
+                      {Math.round(detectionProgress)}%
+                    </Typography>
+                  </Box>
+                )}
+              </Box>
+              <Typography variant="caption" sx={{ color: 'text.primary', fontWeight: 500 }}>
+                {detectionStatus || 'Analyzing...'}
+              </Typography>
             </Stack>
           ) : detectionResult ? (
             // Show success/result message
