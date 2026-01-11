@@ -19,7 +19,7 @@ export const TIER_LIMITS = {
     highlightsEnabled: true,
   },
   PREMIUM: {
-    detectionsPerMonth: 6,
+    detectionsPerMonth: 9,
     maxVideoDurationMs: 25 * 60 * 1000, // 25 minutes
     maxFileSizeBytes: 2.5 * 1024 * 1024 * 1024, // 2.5 GB
     monthlyUploadCount: null as number | null, // unlimited

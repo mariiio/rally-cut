@@ -1993,9 +1993,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       [startTime, finalEndTime] = [finalEndTime, startTime];
     }
 
-    // Enforce minimum duration (3s for recording mode)
-    if (finalEndTime - startTime < 3) {
-      finalEndTime = startTime + 3;
+    // Enforce minimum duration (4s for recording mode)
+    if (finalEndTime - startTime < 4) {
+      finalEndTime = startTime + 4;
     }
 
     // Clamp to video duration

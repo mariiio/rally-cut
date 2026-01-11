@@ -246,8 +246,9 @@ export async function triggerRallyDetection(videoId: string, userId: string) {
   // This prevents race conditions where concurrent requests bypass quota limits
   const quota = await checkAndReserveDetectionQuota(userId, limits);
   if (!quota.allowed) {
+    const upgradeHint = tier === "FREE" ? " Upgrade to Premium for more detections." : "";
     throw new LimitExceededError(
-      `Monthly detection limit reached (${quota.used}/${quota.limit}). Upgrade to Premium for more detections.`,
+      `Monthly detection limit reached (${quota.used}/${quota.limit}).${upgradeHint}`,
       {
         field: "detectionsUsed",
         value: quota.used,

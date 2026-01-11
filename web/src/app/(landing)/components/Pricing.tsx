@@ -46,7 +46,7 @@ const plans = [
     subtitle: 'For regular players',
     price: { monthly: 7.99, yearly: 76 },
     features: [
-      '6 AI detections/month',
+      '9 AI detections/month',
       'Unlimited uploads',
       'Up to 2 GB per video',
       'Up to 25 min per video',
