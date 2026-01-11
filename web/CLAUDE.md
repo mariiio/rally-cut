@@ -88,7 +88,8 @@ Also uses: `preload="metadata"`, 1280px poster thumbnail.
 | Cmd/Ctrl + Enter | Create new rally at cursor |
 | Delete/Backspace | Delete keyframe (priority) or rally (double-press) |
 | Enter | Toggle rally in highlight |
-| Escape | Cancel deletion / deselect |
+| M | Mark rally start/end (recording mode) |
+| Escape | Cancel deletion / deselect / cancel recording |
 | Cmd/Ctrl + Z | Undo |
 | Cmd/Ctrl + Shift + Z | Redo |
 | [ / ] | Collapse left/right panel |

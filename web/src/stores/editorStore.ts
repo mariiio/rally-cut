@@ -232,6 +232,13 @@ interface EditorState {
   getNextHighlightColor: () => string;
   getHighlightsForRally: (rallyId: string) => Highlight[];
   isRallyEditingLocked: () => boolean;
+
+  // Rally recording state (M key hotkey)
+  isRecordingRally: boolean;
+  rallyRecordingStartTime: number | null;
+  startRallyRecording: () => void;
+  stopRallyRecording: (endTime: number) => void;
+  cancelRallyRecording: () => void;
 }
 
 export const useEditorStore = create<EditorState>((set, get) => ({
@@ -284,6 +291,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   // Camera edit mode state
   isCameraTabActive: false,
   setIsCameraTabActive: (active: boolean) => set({ isCameraTabActive: active }),
+
+  // Rally recording state (M key hotkey)
+  isRecordingRally: false,
+  rallyRecordingStartTime: null,
 
   // Add video modal state
   showAddVideoModal: false,
@@ -927,6 +938,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       rallies: match.rallies,
       originalRallies: state.originalRalliesPerMatch[matchId] || [],
       selectedRallyId: null,
+      // Cancel any in-progress rally recording when switching videos
+      isRecordingRally: false,
+      rallyRecordingStartTime: null,
     });
   },
 
@@ -1944,6 +1958,75 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (!state.activeMatchId) return false;
     const confirmation = state.confirmationStatus[state.activeMatchId];
     return confirmation?.status === 'CONFIRMED';
+  },
+
+  // Rally recording actions (M key hotkey)
+  startRallyRecording: () => {
+    const state = get();
+    const playerState = usePlayerStore.getState();
+    const currentTime = playerState.currentTime;
+
+    // Don't allow recording if editing is locked
+    if (state.isRallyEditingLocked()) return;
+
+    // Check if inside existing rally - don't allow recording inside a rally
+    const insideRally = state.rallies.some(
+      (r) => currentTime >= r.start_time && currentTime <= r.end_time
+    );
+    if (insideRally) return;
+
+    set({
+      isRecordingRally: true,
+      rallyRecordingStartTime: currentTime,
+    });
+  },
+
+  stopRallyRecording: (endTime: number) => {
+    const state = get();
+    if (!state.isRecordingRally || state.rallyRecordingStartTime === null) return;
+
+    let startTime = state.rallyRecordingStartTime;
+    let finalEndTime = endTime;
+
+    // Handle case where user rewound (swap times)
+    if (startTime > finalEndTime) {
+      [startTime, finalEndTime] = [finalEndTime, startTime];
+    }
+
+    // Enforce minimum duration (3s for recording mode)
+    if (finalEndTime - startTime < 3) {
+      finalEndTime = startTime + 3;
+    }
+
+    // Clamp to video duration
+    const videoDuration = state.videoMetadata?.duration ?? Infinity;
+    if (finalEndTime > videoDuration) {
+      finalEndTime = videoDuration;
+    }
+
+    // Check for overlap with existing rallies
+    const overlapping = state.rallies.filter(
+      (r) => startTime < r.end_time && finalEndTime > r.start_time
+    );
+
+    if (overlapping.length > 0) {
+      // Cancel recording if would overlap
+      set({ isRecordingRally: false, rallyRecordingStartTime: null });
+      return;
+    }
+
+    // Clear recording state first
+    set({ isRecordingRally: false, rallyRecordingStartTime: null });
+
+    // Create the rally using existing addRally action
+    state.addRally(startTime, finalEndTime);
+  },
+
+  cancelRallyRecording: () => {
+    set({
+      isRecordingRally: false,
+      rallyRecordingStartTime: null,
+    });
   },
 }));
 
