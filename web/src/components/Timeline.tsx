@@ -672,6 +672,19 @@ export function Timeline() {
     return startLeft + (currentTime * pixelsPerSecond) - scrollLeft;
   }, [currentTime, scale, scrollLeft]);
 
+  // Calculate selected rally position for floating action buttons
+  const selectedRallyPosition = useMemo(() => {
+    if (!selectedRallyId || !rallies) return null;
+    const rally = rallies.find(r => r.id === selectedRallyId);
+    if (!rally) return null;
+    const pixelsPerSecond = SCALE_WIDTH / scale;
+    const startLeft = 10;
+    const left = startLeft + (rally.start_time * pixelsPerSecond) - scrollLeft;
+    const width = (rally.end_time - rally.start_time) * pixelsPerSecond;
+    const center = left + width / 2;
+    return { left, width, center };
+  }, [selectedRallyId, rallies, scale, scrollLeft]);
+
   // Calculate close rally pairs for merge buttons (gap <= 3 seconds)
   const closeRallyPairs = useMemo(() => {
     if (!rallies || rallies.length < 2 || isLocked) return [];
@@ -1741,114 +1754,6 @@ export function Timeline() {
                   </Box>
                 )}
 
-                {/* Action buttons (inside segment, top-right) */}
-                {isSelected && !isLocked && !isThisRallyInCameraEditMode && (
-                  <Stack
-                    direction="row"
-                    spacing={0.5}
-                    sx={{
-                      position: 'absolute',
-                      top: 4,
-                      right: 4,
-                      zIndex: 20,
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {deleteConfirmId === action.id ? (
-                      <>
-                        <Tooltip title="Confirm delete">
-                          <IconButton
-                            size="small"
-                            onClick={() => {
-                              removeRally(action.id);
-                              setDeleteConfirmId(null);
-                              selectRally(null);
-                            }}
-                            sx={{
-                              width: 22,
-                              height: 22,
-                              bgcolor: '#d32f2f',
-                              color: 'white',
-                              '&:hover': { bgcolor: '#f44336' },
-                            }}
-                          >
-                            <CheckIcon sx={{ fontSize: 14 }} />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Cancel">
-                          <IconButton
-                            size="small"
-                            onClick={() => setDeleteConfirmId(null)}
-                            sx={{
-                              width: 22,
-                              height: 22,
-                              bgcolor: 'rgba(0,0,0,0.4)',
-                              color: 'white',
-                              '&:hover': { bgcolor: 'rgba(0,0,0,0.6)' },
-                            }}
-                          >
-                            <CloseIcon sx={{ fontSize: 14 }} />
-                          </IconButton>
-                        </Tooltip>
-                      </>
-                    ) : (
-                      <>
-                        <Tooltip title={
-                          isRallyInTargetHighlight
-                            ? `Remove from ${targetHighlight?.name}`
-                            : targetHighlight
-                              ? `Add to ${targetHighlight.name}`
-                              : 'Add to new highlight'
-                        }>
-                          <IconButton
-                            size="small"
-                            onClick={handleToggleHighlight}
-                            sx={{
-                              width: 22,
-                              height: 22,
-                              bgcolor: isRallyInTargetHighlight
-                                ? targetHighlight?.color || '#FFE66D'
-                                : 'rgba(0,0,0,0.4)',
-                              color: isRallyInTargetHighlight
-                                ? 'rgba(0,0,0,0.8)'
-                                : targetHighlight
-                                  ? targetHighlight.color
-                                  : 'rgba(255,255,255,0.8)',
-                              '&:hover': {
-                                bgcolor: isRallyInTargetHighlight
-                                  ? 'rgba(0,0,0,0.4)'
-                                  : targetHighlight?.color || '#FFE66D',
-                                color: isRallyInTargetHighlight
-                                  ? targetHighlight?.color || 'rgba(255,255,255,0.8)'
-                                  : 'rgba(0,0,0,0.8)',
-                              },
-                              transition: 'all 0.15s ease',
-                            }}
-                          >
-                            <StarIcon sx={{ fontSize: 14 }} />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Delete rally">
-                          <IconButton
-                            size="small"
-                            onClick={() => setDeleteConfirmId(action.id)}
-                            sx={{
-                              width: 22,
-                              height: 22,
-                              bgcolor: 'rgba(0,0,0,0.4)',
-                              color: 'rgba(255,255,255,0.8)',
-                              '&:hover': { bgcolor: '#d32f2f', color: 'white' },
-                              transition: 'all 0.15s ease',
-                            }}
-                          >
-                            <DeleteIcon sx={{ fontSize: 14 }} />
-                          </IconButton>
-                        </Tooltip>
-                      </>
-                    )}
-                  </Stack>
-                )}
-
                 {/* Center content */}
                 <Box
                   sx={{
@@ -2069,6 +1974,119 @@ export function Timeline() {
             </Tooltip>
           )
         ))}
+
+        {/* Floating action buttons for selected rally (rendered at container level to avoid clipping) */}
+        {selectedRallyId && selectedRallyPosition && !isLocked && !isInCameraEditMode &&
+         selectedRallyPosition.center > 0 && selectedRallyPosition.center < (containerWidth || 9999) && (
+          <Stack
+            direction="row"
+            spacing={0.5}
+            sx={{
+              position: 'absolute',
+              left: selectedRallyPosition.center,
+              top: 40,
+              transform: 'translateX(-50%)',
+              zIndex: 50,
+              bgcolor: 'rgba(0,0,0,0.85)',
+              borderRadius: 1.5,
+              p: 0.5,
+              boxShadow: '0 2px 12px rgba(0,0,0,0.4)',
+            }}
+          >
+            {deleteConfirmId === selectedRallyId ? (
+              <>
+                <Tooltip title="Confirm delete">
+                  <IconButton
+                    size="small"
+                    onClick={() => {
+                      removeRally(selectedRallyId);
+                      setDeleteConfirmId(null);
+                      selectRally(null);
+                    }}
+                    sx={{
+                      width: 24,
+                      height: 24,
+                      bgcolor: '#d32f2f',
+                      color: 'white',
+                      '&:hover': { bgcolor: '#f44336' },
+                    }}
+                  >
+                    <CheckIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="Cancel">
+                  <IconButton
+                    size="small"
+                    onClick={() => setDeleteConfirmId(null)}
+                    sx={{
+                      width: 24,
+                      height: 24,
+                      bgcolor: 'rgba(255,255,255,0.1)',
+                      color: 'white',
+                      '&:hover': { bgcolor: 'rgba(255,255,255,0.2)' },
+                    }}
+                  >
+                    <CloseIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
+              </>
+            ) : (
+              <>
+                <Tooltip title={
+                  isRallyInTargetHighlight
+                    ? `Remove from ${targetHighlight?.name}`
+                    : targetHighlight
+                      ? `Add to ${targetHighlight.name}`
+                      : 'Add to new highlight'
+                }>
+                  <IconButton
+                    size="small"
+                    onClick={handleToggleHighlight}
+                    sx={{
+                      width: 24,
+                      height: 24,
+                      bgcolor: isRallyInTargetHighlight
+                        ? targetHighlight?.color || '#FFE66D'
+                        : 'rgba(255,255,255,0.1)',
+                      color: isRallyInTargetHighlight
+                        ? 'rgba(0,0,0,0.8)'
+                        : targetHighlight
+                          ? targetHighlight.color
+                          : 'rgba(255,255,255,0.8)',
+                      '&:hover': {
+                        bgcolor: isRallyInTargetHighlight
+                          ? 'rgba(255,255,255,0.2)'
+                          : targetHighlight?.color || '#FFE66D',
+                        color: isRallyInTargetHighlight
+                          ? targetHighlight?.color || 'rgba(255,255,255,0.8)'
+                          : 'rgba(0,0,0,0.8)',
+                      },
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <StarIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="Delete rally">
+                  <IconButton
+                    size="small"
+                    onClick={() => setDeleteConfirmId(selectedRallyId)}
+                    sx={{
+                      width: 24,
+                      height: 24,
+                      bgcolor: 'rgba(255,255,255,0.1)',
+                      color: 'rgba(255,255,255,0.8)',
+                      '&:hover': { bgcolor: '#d32f2f', color: 'white' },
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <DeleteIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
+              </>
+            )}
+          </Stack>
+        )}
       </Box>
     </Box>
   );
