@@ -14,7 +14,7 @@ This analysis examines optimal video parameters for ML-based rally detection in 
 | Parameter | Optimal Value | Rationale |
 |-----------|--------------|-----------|
 | **FPS** | 30fps | VideoMAE's 16-frame window needs 0.5s temporal coverage. At 60fps, 16 frames = 0.27s (too short). At 30fps, 16 frames = 0.53s (matches training data). |
-| **Resolution** | 360-480p | VideoMAE input is 224x224. 360p is sufficient and fastest. 480p is good compromise for YOLO ball tracking. |
+| **Resolution** | 360-480p | VideoMAE input is 224x224. 360p is sufficient and fastest. 480p is good quality compromise. |
 | **Codec** | H.264 | Best decode speed. Use `ultrafast` preset + `fastdecode` tune. |
 | **CRF** | 24-26 | Good quality/size balance. Lower than original 28. |
 | **Keyframe Interval** | 30 (1 sec) | Enables faster seeking for sparse analysis. |
@@ -86,18 +86,10 @@ FPS normalization happens in two places:
 
 **Recommendation**: Normalize in proxy, remove runtime subsampling.
 
-### 3. YOLO Profile FPS Threshold (`video_normalizer.py`)
-The YOLO profile has `fps_threshold=60.0`, but 59.94fps videos won't trigger normalization.
-
-**Recommendation**: Use `fps_threshold=55.0` to catch 60fps videos.
-
 ## Over-Optimizations (Unnecessary Complexity)
 
 ### 1. Analysis-Specific Profiles May Be Overkill
-The difference between "videomae" and "combined" profiles is minimal. A single "balanced" profile (480p@30fps) works well for both rally detection and ball tracking.
-
-### 2. YOLO High-Resolution Profile
-The 720p YOLO profile provides marginal ball detection improvement but 4x larger files and slower decode. Not worth it for most use cases.
+The difference between "videomae" and "combined" profiles is minimal. A single "balanced" profile (480p@30fps) works well for rally detection.
 
 ## Changes Applied
 

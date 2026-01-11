@@ -1,7 +1,7 @@
 [project]
 name = "rallycut"
 version = "0.1.0"
-description = "Beach volleyball video analysis CLI - auto-cut, statistics, highlights, and ball tracking"
+description = "Beach volleyball video analysis CLI - auto-cut dead time from recordings"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
@@ -34,14 +34,11 @@ dependencies = [
     "torch>=2.0.0",
     "torchvision>=0.15.0",
     "transformers>=4.30.0",
-    "ultralytics>=8.0.0",
     # Video Processing
     "opencv-python>=4.8.0",
     "numpy>=1.24.0",
     "ffmpeg-python>=0.2.0",
-    # Ball Tracking
     "scipy>=1.11.0",
-    "filterpy>=1.4.5",
     # Utilities
     "httpx>=0.25.0",
     "tqdm>=4.65.0",
@@ -50,7 +47,6 @@ dependencies = [
     "onnx>=1.20.0",
     "onnxruntime>=1.23.2",
     "onnxscript>=0.5.7",
-    "pytorchvideo>=0.1.5",
     "boto3>=1.42.19",
 ]
 
