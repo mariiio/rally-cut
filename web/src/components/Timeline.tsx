@@ -107,6 +107,10 @@ export function Timeline() {
     setLeftPanelTab,
     expandHighlight,
     getActiveMatch,
+    isRecordingRally,
+    startRallyRecording,
+    stopRallyRecording,
+    cancelRallyRecording,
   } = useEditorStore();
 
   // Check if rally editing is locked (after confirmation)
@@ -392,7 +396,9 @@ export function Timeline() {
           break;
 
         case 'Escape':
-          if (deleteConfirmId) {
+          if (isRecordingRally) {
+            cancelRallyRecording();
+          } else if (deleteConfirmId) {
             setDeleteConfirmId(null);
           } else if (selectedRallyId) {
             selectRally(null);
@@ -417,11 +423,24 @@ export function Timeline() {
             handleToggleHighlight();
           }
           break;
+
+        case 'KeyM':
+          e.preventDefault();
+          if (isLocked) break;
+
+          if (isRecordingRally) {
+            // Second press: end recording and create rally
+            stopRallyRecording(currentTime);
+          } else {
+            // First press: start recording
+            startRallyRecording();
+          }
+          break;
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, play, pause, seek, currentTime, duration, selectedRallyId, deleteConfirmId, removeRally, selectRally, isInsideSelectedRally, getSelectedRally, goToPrevRally, goToNextRally, adjustRallyStart, adjustRallyEnd, videoMetadata, rallies, createRallyAtTime, handleToggleHighlight, isLocked, isInCameraEditMode, selectedKeyframeId, removeKeyframe, selectKeyframe]);
+  }, [isPlaying, play, pause, seek, currentTime, duration, selectedRallyId, deleteConfirmId, removeRally, selectRally, isInsideSelectedRally, getSelectedRally, goToPrevRally, goToNextRally, adjustRallyStart, adjustRallyEnd, videoMetadata, rallies, createRallyAtTime, handleToggleHighlight, isLocked, isInCameraEditMode, selectedKeyframeId, removeKeyframe, selectKeyframe, isRecordingRally, startRallyRecording, stopRallyRecording, cancelRallyRecording]);
 
   // Jump to previous/next rally
   const jumpToPrevRally = useCallback(() => {
@@ -1171,6 +1190,32 @@ export function Timeline() {
 
         {/* Info and controls - Right */}
         <Stack direction="row" alignItems="center" spacing={1} sx={{ flex: 1, justifyContent: 'flex-end' }}>
+          {/* Recording indicator */}
+          {isRecordingRally && (
+            <Stack direction="row" alignItems="center" spacing={0.75} sx={{
+              bgcolor: '#d32f2f',
+              color: 'white',
+              px: 1.5,
+              py: 0.5,
+              borderRadius: 2,
+              animation: 'pulse 1s infinite',
+              '@keyframes pulse': {
+                '0%, 100%': { opacity: 1 },
+                '50%': { opacity: 0.7 },
+              },
+            }}>
+              <Box sx={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                bgcolor: 'white',
+              }} />
+              <Typography variant="caption" sx={{ fontWeight: 600, fontSize: 12 }}>
+                Recording... (M to end)
+              </Typography>
+            </Stack>
+          )}
+
           {/* Detection status or button */}
           {isDetecting ? (
             <Stack direction="row" alignItems="center" spacing={1.5} sx={{
@@ -1284,22 +1329,49 @@ export function Timeline() {
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
         transformOrigin={{ vertical: 'top', horizontal: 'right' }}
       >
-        <Box sx={{ p: 2, minWidth: 280 }}>
-          <Typography variant="subtitle2" sx={{ mb: 1.5, fontWeight: 600 }}>
+        <Box sx={{ p: 2, minWidth: 300 }}>
+          <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
             Keyboard Shortcuts
           </Typography>
-          <Stack spacing={1}>
+
+          {/* Playback */}
+          <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, textTransform: 'uppercase', fontSize: 10, letterSpacing: 0.5 }}>
+            Playback
+          </Typography>
+          <Stack spacing={0.75} sx={{ mt: 0.75, mb: 2 }}>
             <HotkeyRow keys={['Space']} description="Play / Pause" />
-            <HotkeyRow keys={['←', '→']} description="Seek ±5s / Adjust start (selected)" />
-            <HotkeyRow keys={['⇧', '←', '→']} description="Adjust end ±0.5s (selected)" />
-            <HotkeyRow keys={['⌘/Ctrl', '←']} description="Previous segment" />
-            <HotkeyRow keys={['⌘/Ctrl', '→']} description="Next segment" />
-            <HotkeyRow keys={['↵']} description="Toggle highlight (selected)" />
-            <HotkeyRow keys={['⌘/Ctrl', '↵']} description="New segment at cursor" />
-            <HotkeyRow keys={['Delete']} description="Delete segment (press twice)" />
-            <HotkeyRow keys={['⌘/Ctrl', 'Z']} description="Undo" />
-            <HotkeyRow keys={['⌘/Ctrl', '⇧', 'Z']} description="Redo" />
-            <HotkeyRow keys={['Esc']} description="Deselect segment" />
+            <HotkeyRow keys={['←', '→']} description="Seek ±1s" />
+            <HotkeyRow keys={['⌘', '←', '→']} description="Jump to prev/next rally" />
+          </Stack>
+
+          {/* Rally Creation */}
+          <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, textTransform: 'uppercase', fontSize: 10, letterSpacing: 0.5 }}>
+            Create Rallies
+          </Typography>
+          <Stack spacing={0.75} sx={{ mt: 0.75, mb: 2 }}>
+            <HotkeyRow keys={['M']} description="Mark start, then end" />
+            <HotkeyRow keys={['⌘', '↵']} description="Create at cursor (7s)" />
+          </Stack>
+
+          {/* Rally Editing */}
+          <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, textTransform: 'uppercase', fontSize: 10, letterSpacing: 0.5 }}>
+            Edit Selected Rally
+          </Typography>
+          <Stack spacing={0.75} sx={{ mt: 0.75, mb: 2 }}>
+            <HotkeyRow keys={['←', '→']} description="Adjust start ±0.5s" />
+            <HotkeyRow keys={['⇧', '←', '→']} description="Adjust end ±0.5s" />
+            <HotkeyRow keys={['↵']} description="Add to highlight" />
+            <HotkeyRow keys={['Del']} description="Delete (press twice)" />
+          </Stack>
+
+          {/* General */}
+          <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, textTransform: 'uppercase', fontSize: 10, letterSpacing: 0.5 }}>
+            General
+          </Typography>
+          <Stack spacing={0.75} sx={{ mt: 0.75 }}>
+            <HotkeyRow keys={['⌘', 'Z']} description="Undo" />
+            <HotkeyRow keys={['⌘', '⇧', 'Z']} description="Redo" />
+            <HotkeyRow keys={['Esc']} description="Deselect / Cancel" />
           </Stack>
         </Box>
       </Popover>

@@ -56,6 +56,7 @@ export function VideoPlayer() {
   const rallies = useEditorStore((state) => state.rallies);
   const selectedRallyId = useEditorStore((state) => state.selectedRallyId);
   const isCameraTabActive = useEditorStore((state) => state.isCameraTabActive);
+  const isRecordingRally = useEditorStore((state) => state.isRecordingRally);
 
   // Find current rally based on playhead position
   const currentRally = useMemo(() => {
@@ -500,6 +501,42 @@ export function VideoPlayer() {
           />
           <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 500 }}>
             {currentCameraEdit?.aspectRatio === 'VERTICAL' ? '9:16' : '16:9'} Preview
+          </Typography>
+        </Box>
+      )}
+
+      {/* Rally recording indicator */}
+      {isRecordingRally && (
+        <Box
+          sx={{
+            position: 'absolute',
+            top: 12,
+            right: isBuffering && !isLoading ? 100 : 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 0.75,
+            bgcolor: '#d32f2f',
+            borderRadius: 1,
+            px: 1.5,
+            py: 0.5,
+            zIndex: 2,
+            animation: 'recPulse 1s infinite',
+            '@keyframes recPulse': {
+              '0%, 100%': { opacity: 1 },
+              '50%': { opacity: 0.7 },
+            },
+          }}
+        >
+          <Box
+            sx={{
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              bgcolor: 'white',
+            }}
+          />
+          <Typography variant="caption" sx={{ color: 'white', fontWeight: 600 }}>
+            REC
           </Typography>
         </Box>
       )}
