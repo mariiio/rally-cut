@@ -207,16 +207,12 @@ class ProxyGenerator:
         # Skip proxy generation if input is already small enough (e.g., API-generated 720p proxy)
         # and doesn't need FPS normalization
         if is_already_small and not should_normalize_fps:
-            if progress_callback:
-                progress_callback(1.0, "Video already optimized!")
             return source_video
 
         proxy_path = self._get_proxy_path_for_fps(source_video, should_normalize_fps)
 
         # Skip if already exists
         if proxy_path.exists():
-            if progress_callback:
-                progress_callback(1.0, "Court already set up!")
             return proxy_path
 
         # Build filter chain
@@ -229,9 +225,6 @@ class ProxyGenerator:
             vf_filter = f"scale=-2:{self.config.height},fps={self.config.fps}"
         else:
             vf_filter = f"scale=-2:{self.config.height}"
-
-        if progress_callback:
-            progress_callback(0.0, "Setting up the court...")
 
         # Build ffmpeg command with optimized settings
         cmd = [
@@ -286,7 +279,7 @@ class ProxyGenerator:
                         # Only report if progress increased meaningfully
                         if progress - last_progress >= 0.02:
                             last_progress = progress
-                            progress_callback(progress, "Optimizing video...")
+                            progress_callback(progress, "Preparing for analysis...")
 
             process.wait()
 
@@ -294,9 +287,6 @@ class ProxyGenerator:
                 # Clean up failed proxy
                 proxy_path.unlink(missing_ok=True)
                 raise RuntimeError(f"ffmpeg failed: {stderr_output.decode()}")
-
-            if progress_callback:
-                progress_callback(1.0, "Court is ready!")
 
             return proxy_path
 
