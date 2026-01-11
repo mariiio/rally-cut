@@ -868,7 +868,7 @@ export default function HomePage() {
                                   },
                                 },
                               }}
-                              onClick={() => router.push(`/sessions/${session.id}`)}
+                              onClick={() => router.push(`/sessions/${session.id}?video=${video.id}`)}
                             >
                               <Box sx={{ position: 'relative', aspectRatio: '16/9' }}>
                                 {video.posterS3Key ? (
