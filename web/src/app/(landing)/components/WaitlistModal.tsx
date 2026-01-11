@@ -77,8 +77,8 @@ export function WaitlistModal({ open, onClose, tier }: WaitlistModalProps) {
         },
       }}
     >
-      <DialogTitle sx={{ pr: 6 }}>
-        <Typography variant="h5" fontWeight={600}>
+      <DialogTitle component="div" sx={{ pr: 6 }}>
+        <Typography variant="h5" component="h2" fontWeight={600}>
           Join the Waitlist
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
