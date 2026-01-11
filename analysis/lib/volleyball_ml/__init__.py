@@ -6,6 +6,4 @@ License: MIT
 
 This module contains adapted code for:
 - VideoMAE game state classification
-- YOLOv8 action detection
-- Ball tracking utilities
 """

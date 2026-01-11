@@ -1,11 +1,11 @@
 # RallyCut Analysis
 
-Beach volleyball video analysis CLI. Uses ML (VideoMAE, YOLOv8) to detect game states, remove dead time, and track ball trajectories.
+Beach volleyball video analysis CLI. Uses ML (VideoMAE) to detect game states and remove dead time.
 
 ## Stack
 
 - Python 3.11+, uv package manager
-- PyTorch + Transformers (VideoMAE), Ultralytics (YOLO)
+- PyTorch + Transformers (VideoMAE)
 - Typer CLI, Pydantic config, FFmpeg, OpenCV
 
 ## Commands
@@ -13,7 +13,6 @@ Beach volleyball video analysis CLI. Uses ML (VideoMAE, YOLOv8) to detect game s
 ```bash
 # Core commands
 uv run rallycut cut <video.mp4>        # Remove dead time
-uv run rallycut overlay <video.mp4>    # Ball tracking overlay
 uv run rallycut profile <video.mp4>    # Performance profiling
 
 # Useful options for cut
@@ -34,14 +33,13 @@ uv run ruff check rallycut/            # Lint
 
 ```
 rallycut/
-├── cli/commands/    # Typer commands (cut, overlay, profile)
+├── cli/commands/    # Typer commands (cut, profile)
 ├── core/            # Config, models, Video wrapper, caching, profiler
 ├── analysis/        # GameStateAnalyzer (VideoMAE ML classifier)
 ├── processing/      # VideoCutter, FFmpegExporter
-├── tracking/        # BallTracker (YOLO + Kalman filter)
 ├── service/         # Cloud detection (Modal deployment)
 │   └── platforms/modal_app.py  # Modal GPU function
-lib/volleyball_ml/   # ML model wrappers (VideoMAE, YOLO)
+lib/volleyball_ml/   # ML model wrappers (VideoMAE)
 tests/
 ├── unit/            # Fast tests with mocked ML
 └── integration/     # Full pipeline tests
@@ -55,7 +53,6 @@ Nested Pydantic config with YAML/env var support. Key sections:
 |---------|-------------|
 | `game_state` | `stride=48` (frames between samples), `window_size=16`, `batch_size=8` |
 | `segment` | `min_play_duration=1.0`, `min_gap=5.0`, `rally_continuation=2.0` |
-| `ball_tracking` | `confidence=0.35`, `max_missing_frames=30` |
 | `proxy` | 480p@30fps normalized for faster ML |
 
 **Loading priority:**

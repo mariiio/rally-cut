@@ -7,7 +7,6 @@ from rallycut.core.models import (
     Action,
     ActionCount,
     ActionType,
-    BallPosition,
     GameState,
     GameStateResult,
     MatchStatistics,
@@ -185,37 +184,6 @@ class TestAction:
         )
 
         assert action.position is None
-
-
-class TestBallPosition:
-    """Tests for BallPosition dataclass."""
-
-    def test_ball_position_creation(self):
-        """Test creating BallPosition."""
-        pos = BallPosition(
-            frame_idx=100,
-            x=500.0,
-            y=300.0,
-            confidence=0.95,
-        )
-
-        assert pos.x == 500.0
-        assert pos.y == 300.0
-        assert pos.confidence == 0.95
-        assert pos.frame_idx == 100
-        assert pos.is_predicted is False
-
-    def test_ball_position_predicted(self):
-        """Test predicted BallPosition."""
-        pos = BallPosition(
-            frame_idx=101,
-            x=510.0,
-            y=305.0,
-            confidence=0.8,
-            is_predicted=True,
-        )
-
-        assert pos.is_predicted is True
 
 
 class TestRally:

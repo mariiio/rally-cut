@@ -9,7 +9,6 @@ import tempfile
 from rallycut.core.models import (
     Action,
     ActionType,
-    BallPosition,
     GameState,
     GameStateResult,
     TimeSegment,
@@ -65,14 +64,6 @@ class TestPipelineIntegration:
             TimeSegment(750, 1200, 25.0, 40.0, GameState.PLAY),
         ]
 
-    @pytest.fixture
-    def mock_ball_positions(self):
-        """Create mock ball tracking data."""
-        return [
-            BallPosition(x=500, y=300, confidence=0.9, frame_idx=i)
-            for i in range(30)
-        ]
-
     def test_statistics_flow(
         self,
         mock_video_info,
@@ -118,27 +109,6 @@ class TestPipelineIntegration:
         assert "rallies" in result
         assert result["actions"]["serves"] == 2
 
-    def test_trajectory_processing_flow(self, mock_ball_positions):
-        """Test trajectory processing flow."""
-        from rallycut.tracking.trajectory import TrajectoryProcessor
-
-        processor = TrajectoryProcessor(
-            smooth_sigma=1.5,
-            max_gap_frames=10,
-        )
-
-        # Process trajectory
-        segments = processor.process(
-            mock_ball_positions,
-            interpolate=True,
-            smooth=True,
-        )
-
-        # Should return list of trajectory segments
-        assert len(segments) >= 1
-        # Each segment has positions
-        assert len(segments[0].positions) > 0
-
 
 class TestCLICommands:
     """Tests for CLI command structure."""
@@ -157,7 +127,7 @@ class TestCLICommands:
         command_names = [cmd.name for cmd in app.registered_commands]
 
         # Check that key commands exist
-        expected_commands = ["cut", "overlay", "profile"]
+        expected_commands = ["cut", "profile"]
         for cmd in expected_commands:
             assert cmd in command_names, f"Command '{cmd}' not found in CLI"
 

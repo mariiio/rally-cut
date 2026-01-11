@@ -4,12 +4,11 @@ import typer
 from rich.console import Console
 
 from rallycut.cli.commands.cut import cut as cut_command
-from rallycut.cli.commands.overlay import overlay as overlay_command
 from rallycut.cli.commands.profile import profile as profile_command
 
 app = typer.Typer(
     name="rallycut",
-    help="Beach volleyball video analysis CLI - rally detection and ball tracking",
+    help="Beach volleyball video analysis CLI - rally detection",
     no_args_is_help=True,
 )
 
@@ -17,7 +16,6 @@ console = Console()
 
 # Register commands
 app.command(name="cut")(cut_command)
-app.command(name="overlay")(overlay_command)
 app.command(name="profile")(profile_command)
 
 
