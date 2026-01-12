@@ -261,7 +261,7 @@ def run(
 @app.command()
 def modal(
     epochs: int = typer.Option(25, "--epochs", "-e", help="Number of training epochs"),
-    batch_size: int = typer.Option(8, "--batch-size", "-b", help="Batch size (8-16 for A10G)"),
+    batch_size: int = typer.Option(4, "--batch-size", "-b", help="Batch size (4-8 for T4 GPU)"),
     upload: bool = typer.Option(False, "--upload", help="Upload training data to Modal volume"),
     upload_videos: bool = typer.Option(
         False, "--upload-videos", help="Upload videos to Modal volume"

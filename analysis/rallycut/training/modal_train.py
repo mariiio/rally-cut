@@ -53,10 +53,10 @@ training_volume = modal.Volume.from_name("rallycut-training", create_if_missing=
 
 @app.function(
     image=image,
-    gpu="A10G",  # A10G: 24GB VRAM, good balance of cost/performance
+    gpu="T4",  # T4: 16GB VRAM, cheapest option (~$0.59/hr)
     timeout=14400,  # 4 hours max
     volumes={"/data": training_volume},
-    memory=32768,  # 32GB RAM
+    memory=16384,  # 16GB RAM
 )
 def train_model(
     epochs: int = 25,
