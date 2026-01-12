@@ -65,18 +65,26 @@ export async function syncState(
     // Sync rallies for each video (only if user is owner)
     if (isOwner) {
       // Pre-fetch all rallies for all session videos in one query to avoid N+1
+      // Include data needed for comparison to skip unchanged rallies
       const allExistingRallies = await tx.rally.findMany({
         where: { videoId: { in: [...videoIds] } },
-        select: { id: true, videoId: true },
+        select: { id: true, videoId: true, startMs: true, endMs: true, order: true },
       });
 
-      // Group by videoId for O(1) lookups
-      const existingRalliesByVideo = new Map<string, Set<string>>();
+      // Group by videoId for O(1) lookups, storing full rally data for comparison
+      const existingRalliesByVideo = new Map<
+        string,
+        Map<string, { startMs: number; endMs: number; order: number }>
+      >();
       for (const rally of allExistingRallies) {
         if (!existingRalliesByVideo.has(rally.videoId)) {
-          existingRalliesByVideo.set(rally.videoId, new Set());
+          existingRalliesByVideo.set(rally.videoId, new Map());
         }
-        existingRalliesByVideo.get(rally.videoId)!.add(rally.id);
+        existingRalliesByVideo.get(rally.videoId)!.set(rally.id, {
+          startMs: rally.startMs,
+          endMs: rally.endMs,
+          order: rally.order,
+        });
       }
 
       for (const [videoId, rallies] of Object.entries(input.ralliesPerVideo)) {
@@ -84,8 +92,8 @@ export async function syncState(
           continue; // Skip unknown videos
         }
 
-        // Get existing rally IDs from pre-fetched data
-        const existingIds = existingRalliesByVideo.get(videoId) ?? new Set<string>();
+        // Get existing rallies from pre-fetched data
+        const existingRallies = existingRalliesByVideo.get(videoId) ?? new Map();
 
         // Track which IDs we've seen
         const seenIds = new Set<string>();
@@ -97,16 +105,24 @@ export async function syncState(
 
           let rallyId: string;
 
-          if (rally.id && existingIds.has(rally.id)) {
-            // Update existing rally
-            await tx.rally.update({
-              where: { id: rally.id },
-              data: {
-                startMs: rally.startMs,
-                endMs: rally.endMs,
-                order,
-              },
-            });
+          const existing = rally.id ? existingRallies.get(rally.id) : undefined;
+          if (rally.id && existing) {
+            // Only update if something changed
+            const hasChanges =
+              existing.startMs !== rally.startMs ||
+              existing.endMs !== rally.endMs ||
+              existing.order !== order;
+
+            if (hasChanges) {
+              await tx.rally.update({
+                where: { id: rally.id },
+                data: {
+                  startMs: rally.startMs,
+                  endMs: rally.endMs,
+                  order,
+                },
+              });
+            }
             rallyId = rally.id;
             seenIds.add(rally.id);
           } else {
@@ -176,11 +192,16 @@ export async function syncState(
                 },
               });
             }
+          } else if (rally.cameraEdit === null) {
+            // Explicitly delete camera edit when cameraEdit is null
+            await tx.rallyCameraEdit.deleteMany({
+              where: { rallyId },
+            });
           }
         }
 
         // Delete rallies that are no longer in the list
-        const toDelete = [...existingIds].filter((id) => !seenIds.has(id));
+        const toDelete = [...existingRallies.keys()].filter((id) => !seenIds.has(id));
         if (toDelete.length > 0) {
           await tx.rally.deleteMany({
             where: { id: { in: toDelete } },
