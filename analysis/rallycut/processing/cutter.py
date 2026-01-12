@@ -6,25 +6,29 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from rallycut.core.config import get_config, get_recommended_batch_size
+from rallycut.core.config import (
+    MODEL_PRESETS,
+    get_config,
+    get_model_path,
+    get_recommended_batch_size,
+)
 from rallycut.core.models import GameStateResult, TimeSegment
 from rallycut.core.video import Video
 from rallycut.processing.exporter import FFmpegExporter
 
 if TYPE_CHECKING:
+    from pathlib import Path as PathType
+
     from rallycut.analysis.game_state import GameStateAnalyzer
     from rallycut.core.proxy import ProxyGenerator
 
-# Confidence threshold for treating NO_PLAY as PLAY in boundary regions
-# If play_confidence + service_confidence > threshold, extend the segment
-BOUNDARY_CONFIDENCE_THRESHOLD = 0.35
+# Default heuristic values (indoor model defaults)
+# These can be overridden by MODEL_PRESETS when a model_variant is specified
+DEFAULT_BOUNDARY_CONFIDENCE_THRESHOLD = 0.35
+DEFAULT_MIN_ACTIVE_DENSITY = 0.25
 
 # Minimum number of PLAY/SERVICE windows required to form a valid segment
 MIN_ACTIVE_WINDOWS = 1
-
-# Minimum density of active windows (active_windows / segment_duration_in_stride_units)
-# This filters segments that span large time ranges but have sparse detections
-MIN_ACTIVE_DENSITY = 0.25
 
 
 class VideoCutter:
@@ -45,18 +49,32 @@ class VideoCutter:
         min_gap_seconds: float | None = None,
         auto_stride: bool = True,
         rally_continuation_seconds: float | None = None,
+        model_variant: str = "indoor",
     ):
         config = get_config()
         self.device = device or config.device
+        self.model_variant = model_variant
+
+        # Get model-specific preset if available
+        preset = MODEL_PRESETS.get(model_variant, MODEL_PRESETS["indoor"])
+
+        # Apply preset values, with explicit parameters taking precedence
         self.padding_seconds = padding_seconds if padding_seconds is not None else config.segment.padding_seconds
         self.padding_end_seconds = padding_end_seconds if padding_end_seconds is not None else config.segment.padding_end_seconds
-        self.min_play_duration = min_play_duration if min_play_duration is not None else config.segment.min_play_duration
+        self.min_play_duration = min_play_duration if min_play_duration is not None else preset.get("min_play_duration", config.segment.min_play_duration)
         self.base_stride = stride if stride is not None else config.game_state.stride
         self.limit_seconds = limit_seconds
         self.use_proxy = use_proxy if use_proxy is not None else config.proxy.enabled
         self.min_gap_seconds = min_gap_seconds if min_gap_seconds is not None else config.segment.min_gap_seconds
         self.auto_stride = auto_stride
-        self.rally_continuation_seconds = rally_continuation_seconds if rally_continuation_seconds is not None else config.segment.rally_continuation_seconds
+        self.rally_continuation_seconds = rally_continuation_seconds if rally_continuation_seconds is not None else preset.get("rally_continuation_seconds", config.segment.rally_continuation_seconds)
+
+        # Model-specific heuristic thresholds from preset
+        self.boundary_confidence_threshold = preset.get("boundary_confidence_threshold", DEFAULT_BOUNDARY_CONFIDENCE_THRESHOLD)
+        self.min_active_density = preset.get("min_active_density", DEFAULT_MIN_ACTIVE_DENSITY)
+
+        # Model path based on variant
+        self._model_path: PathType | None = get_model_path(model_variant)
 
         self._analyzer: GameStateAnalyzer | None = None
         self._proxy_generator: ProxyGenerator | None = None
@@ -82,7 +100,9 @@ class VideoCutter:
         if self._analyzer is None:
             from rallycut.analysis.game_state import GameStateAnalyzer
 
-            self._analyzer = GameStateAnalyzer(device=self.device)
+            self._analyzer = GameStateAnalyzer(
+                device=self.device, model_path=self._model_path
+            )
         return self._analyzer
 
     def _get_proxy_generator(self) -> ProxyGenerator:
@@ -141,8 +161,8 @@ class VideoCutter:
                     # Gap between plays - extend if any active confidence
                     should_extend = active_confidence > 0.25
                 elif prev_is_play or next_is_play:
-                    # Boundary - use stricter threshold
-                    should_extend = active_confidence > BOUNDARY_CONFIDENCE_THRESHOLD
+                    # Boundary - use model-specific threshold
+                    should_extend = active_confidence > self.boundary_confidence_threshold
 
                 if should_extend:
                     # Convert NO_PLAY to PLAY with reduced confidence
@@ -460,7 +480,7 @@ class VideoCutter:
                 stride_frames = self.base_stride
                 segment_stride_intervals = max(1, segment.frame_count / stride_frames)
                 active_density = active_window_count / segment_stride_intervals
-                if active_density < MIN_ACTIVE_DENSITY:
+                if active_density < self.min_active_density:
                     continue
 
             padded_start = max(0, segment.start_frame - padding_start_frames)

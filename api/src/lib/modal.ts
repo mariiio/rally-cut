@@ -4,6 +4,7 @@ export interface ModalJobParams {
   jobId: string;
   videoS3Key: string;
   callbackUrl: string;
+  modelVariant?: "indoor" | "beach";
 }
 
 export async function triggerModalDetection(
@@ -22,6 +23,9 @@ export async function triggerModalDetection(
       video_key: params.videoS3Key,
       callback_url: params.callbackUrl,
       webhook_secret: env.MODAL_WEBHOOK_SECRET,
+      config: params.modelVariant
+        ? { model_variant: params.modelVariant }
+        : undefined,
     }),
   });
 

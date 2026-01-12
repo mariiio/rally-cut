@@ -43,6 +43,7 @@ async function triggerLocalDetection(params: {
   jobId: string;
   videoS3Key: string;
   callbackUrl: string;
+  modelVariant?: "indoor" | "beach";
 }): Promise<void> {
   // Path to the analysis project (relative to api/)
   const analysisDir = path.resolve(__dirname, "../../../analysis");
@@ -50,28 +51,34 @@ async function triggerLocalDetection(params: {
 
   console.log(`[LOCAL] Starting detection for job ${params.jobId}`);
   console.log(`[LOCAL] Video: ${params.videoS3Key}`);
+  console.log(`[LOCAL] Model: ${params.modelVariant || "indoor"}`);
   console.log(`[LOCAL] Callback: ${params.callbackUrl}`);
 
+  // Build arguments
+  const args = [
+    "run",
+    "python",
+    "-m",
+    pythonScript,
+    "--job-id",
+    params.jobId,
+    "--video-path",
+    params.videoS3Key,
+    "--callback-url",
+    params.callbackUrl,
+    "--webhook-secret",
+    env.MODAL_WEBHOOK_SECRET,
+    "--s3-bucket",
+    env.S3_BUCKET_NAME,
+  ];
+
+  // Add model variant if specified
+  if (params.modelVariant) {
+    args.push("--model", params.modelVariant);
+  }
+
   // Spawn the Python process in the background
-  const child = spawn(
-    "uv",
-    [
-      "run",
-      "python",
-      "-m",
-      pythonScript,
-      "--job-id",
-      params.jobId,
-      "--video-path",
-      params.videoS3Key,
-      "--callback-url",
-      params.callbackUrl,
-      "--webhook-secret",
-      env.MODAL_WEBHOOK_SECRET,
-      "--s3-bucket",
-      env.S3_BUCKET_NAME,
-    ],
-    {
+  const child = spawn("uv", args, {
       cwd: analysisDir,
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -187,7 +194,11 @@ function getVideoForDetection(video: Video): Video {
   return video;
 }
 
-export async function triggerRallyDetection(videoId: string, userId: string) {
+export async function triggerRallyDetection(
+  videoId: string,
+  userId: string,
+  modelVariant?: "indoor" | "beach"
+) {
   // userId is now required - enforced by requireUser middleware
 
   const tier = await getUserTier(userId);
@@ -344,11 +355,13 @@ export async function triggerRallyDetection(videoId: string, userId: string) {
     `[DETECTION] Using ${useLocal ? "LOCAL" : "MODAL"} detection for job ${job.id}`
   );
   console.log(`[DETECTION] Video key: ${videoKey}`);
+  console.log(`[DETECTION] Model variant: ${modelVariant || "indoor"}`);
 
   await triggerFn({
     jobId: job.id,
     videoS3Key: videoKey,
     callbackUrl,
+    modelVariant,
   }).catch(async (error) => {
     await prisma.$transaction([
       prisma.rallyDetectionJob.update({

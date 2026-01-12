@@ -131,6 +131,7 @@ def run_detection(
     callback_url: str,
     webhook_secret: str | None,
     s3_bucket: str | None = None,
+    model_variant: str = "indoor",
 ) -> None:
     """Run detection and send results via webhook."""
     start_time = time.time()
@@ -174,11 +175,17 @@ def run_detection(
             device = "cpu"
 
         print(f"[LOCAL] Using device: {device}")
+        print(f"[LOCAL] Using model: {model_variant}")
 
         # Run detection
         service = DetectionService(device=device, temp_dir=temp_dir or Path("/tmp/rallycut"))
 
+        # Import ModelVariant enum for config
+        from rallycut.service.schemas import ModelVariant
+        model_enum = ModelVariant(model_variant)
+
         config = DetectionConfig(
+            model_variant=model_enum,
             min_play_duration=5.0,  # Minimum 5 seconds for a rally
             use_proxy=True,  # Use 480p proxy for faster processing
         )
@@ -271,6 +278,12 @@ def main() -> None:
     parser.add_argument("--callback-url", required=True, help="Webhook callback URL")
     parser.add_argument("--webhook-secret", help="Webhook secret for auth")
     parser.add_argument("--s3-bucket", help="S3 bucket name (for S3 downloads)")
+    parser.add_argument(
+        "--model",
+        choices=["indoor", "beach"],
+        default="indoor",
+        help="Model variant: 'indoor' (original) or 'beach' (fine-tuned)",
+    )
 
     args = parser.parse_args()
 
@@ -280,6 +293,7 @@ def main() -> None:
         callback_url=args.callback_url,
         webhook_secret=args.webhook_secret,
         s3_bucket=args.s3_bucket,
+        model_variant=args.model,
     )
 
 

@@ -28,6 +28,7 @@ import { usePlayerStore } from '@/stores/playerStore';
 import { useCameraStore } from '@/stores/cameraStore';
 import { formatTimeShort, formatTime } from '@/utils/timeFormat';
 import { triggerRallyDetection, getDetectionStatus } from '@/services/api';
+import { ModelSelectDialog, ModelVariant } from './ModelSelectDialog';
 
 // Custom effect for rally segments
 const effects: Record<string, TimelineEffect> = {
@@ -140,6 +141,7 @@ export function Timeline() {
     activeMatch?.status ?? null
   );
   const [detectionResult, setDetectionResult] = useState<{ ralliesCount: number } | null>(null);
+  const [showModelSelect, setShowModelSelect] = useState(false);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const {
     currentTime,
@@ -1097,17 +1099,24 @@ export function Timeline() {
     return () => stopPolling();
   }, [activeMatchId, activeMatch?.status, startPolling, stopPolling, reloadCurrentMatch]);
 
-  // Handle starting rally detection
-  const handleStartDetection = async () => {
+  // Handle clicking the detect button - opens model selection dialog
+  const handleStartDetection = () => {
+    if (!activeMatchId) return;
+    setShowModelSelect(true);
+  };
+
+  // Handle model selection and start detection
+  const handleModelSelect = async (model: ModelVariant) => {
     if (!activeMatchId) return;
 
+    setShowModelSelect(false);
     setIsDetecting(true);
     setDetectionStatus('Starting analysis...');
     setDetectionProgress(0);
     setDetectionError(null);
 
     try {
-      await triggerRallyDetection(activeMatchId);
+      await triggerRallyDetection(activeMatchId, model);
       // Detection started successfully
       setDetectionStatus('Analyzing rallies...');
       startPolling();
@@ -2088,6 +2097,13 @@ export function Timeline() {
           </Stack>
         )}
       </Box>
+
+      {/* Model selection dialog */}
+      <ModelSelectDialog
+        open={showModelSelect}
+        onClose={() => setShowModelSelect(false)}
+        onSelect={handleModelSelect}
+      />
     </Box>
   );
 }

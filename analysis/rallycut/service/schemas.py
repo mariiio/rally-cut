@@ -51,9 +51,20 @@ class MatchStatistics(BaseModel):
     shortest_rally_duration: float = Field(description="Shortest rally duration in seconds")
 
 
+class ModelVariant(str, Enum):
+    """Available model variants for detection."""
+
+    INDOOR = "indoor"  # Original model trained for indoor volleyball
+    BEACH = "beach"  # Fine-tuned model for beach volleyball
+
+
 class DetectionConfig(BaseModel):
     """Optional configuration overrides for detection."""
 
+    model_variant: ModelVariant = Field(
+        default=ModelVariant.INDOOR,
+        description="Model variant: 'indoor' (original) or 'beach' (fine-tuned)",
+    )
     min_play_duration: float = Field(
         default=5.0, ge=0.0, description="Minimum rally duration to include (seconds)"
     )
