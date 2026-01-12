@@ -61,19 +61,27 @@ rallycut evaluate --model beach --iou 0.5
    ```bash
    rallycut train prepare --output training_data/
    ```
+   This generates 480p@30fps proxy videos for efficient training (VideoMAE only needs 224x224 input).
 
 4. **Run training on Modal GPU**
    ```bash
-   rallycut train modal --upload         # Upload data
-   rallycut train modal --upload-videos  # Upload videos
-   rallycut train modal --epochs 25      # Train
-   rallycut train modal --download       # Get model
+   rallycut train modal --upload         # Upload training data JSON
+   rallycut train modal --upload-videos  # Upload proxy videos (parallel, ~4GB)
+   rallycut train modal --epochs 10      # Train on T4 GPU (~$0.59/hr)
+   rallycut train modal --download       # Get trained model
    ```
+   Note: Video upload uses 3 parallel workers for faster transfers.
 
 5. **Evaluate the trained model**
    ```bash
    rallycut evaluate --model beach --iou 0.5
    ```
+
+6. **Clean up Modal storage** (recommended after training)
+   ```bash
+   rallycut train modal --cleanup  # Delete videos and model outputs from Modal
+   ```
+   Modal charges ~$0.75/GB/month for storage. Proxy videos are cached locally at `~/.cache/rallycut/proxies/` - re-upload anytime for retraining.
 
 ## Adding New Videos
 
@@ -150,6 +158,25 @@ The beach model uses optimized post-processing heuristics:
 | `min_active_density` | 0.25 | 0.15 |
 
 These heuristics are automatically applied when using `--model beach`.
+
+## Proxy Videos for Efficient Training
+
+Training uses 480p@30fps proxy videos instead of full-resolution originals:
+
+| Aspect | Original | Proxy |
+|--------|----------|-------|
+| Resolution | 1080p/4K | 480p |
+| FPS | Variable (30-60) | Normalized to 30fps |
+| Size | ~7GB (9 videos) | ~4GB (45% smaller) |
+| Quality | Full | Sufficient (VideoMAE uses 224x224) |
+
+**Why proxies?**
+- Faster upload to Modal cloud
+- Faster frame decoding during training
+- Same ML accuracy (VideoMAE downscales to 224x224 anyway)
+- 30fps normalization matches VideoMAE's temporal window (16 frames = 0.53s)
+
+Proxies are generated automatically by `rallycut train prepare` and cached in `~/.cache/rallycut/proxies/`.
 
 ## Tips
 

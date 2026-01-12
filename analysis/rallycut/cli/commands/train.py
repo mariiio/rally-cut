@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from rallycut.core.proxy import ProxyGenerator
 from rallycut.evaluation.ground_truth import load_evaluation_videos
 from rallycut.evaluation.video_resolver import VideoResolver
 from rallycut.training.config import TrainingConfig
@@ -63,22 +64,30 @@ def prepare(
     rprint(f"Total ground truth rallies: [green]{total_rallies}[/green]")
     rprint()
 
-    # Download videos
-    rprint("[bold]Downloading videos...[/bold]")
+    # Download videos and generate proxies
+    rprint("[bold]Downloading videos and generating proxies...[/bold]")
+    rprint("(Using 480p@30fps proxies for efficient training - VideoMAE only needs 224x224)")
     resolver = VideoResolver()
+    proxy_gen = ProxyGenerator()
     video_paths: dict[str, Path] = {}
 
     with Progress(console=console) as progress:
-        task = progress.add_task("Downloading...", total=len(videos))
+        task = progress.add_task("Processing...", total=len(videos))
         for video in videos:
             try:
+                # Download full video
                 local_path = resolver.resolve(video.s3_key, video.content_hash)
-                video_paths[video.id] = local_path
+
+                # Generate or get cached proxy (480p@30fps - much smaller!)
+                proxy_path = proxy_gen.generate_proxy(local_path)
+
+                # If proxy generation was skipped (already small), use original
+                video_paths[video.id] = proxy_path if proxy_path != local_path else local_path
                 progress.advance(task)
             except Exception as e:
-                rprint(f"[red]Failed to download {video.filename}: {e}[/red]")
+                rprint(f"[red]Failed to process {video.filename}: {e}[/red]")
 
-    rprint(f"Downloaded [green]{len(video_paths)}[/green] videos")
+    rprint(f"Processed [green]{len(video_paths)}[/green] videos")
     rprint()
 
     # Generate samples
@@ -264,25 +273,29 @@ def modal(
     batch_size: int = typer.Option(4, "--batch-size", "-b", help="Batch size (4-8 for T4 GPU)"),
     upload: bool = typer.Option(False, "--upload", help="Upload training data to Modal volume"),
     upload_videos: bool = typer.Option(
-        False, "--upload-videos", help="Upload videos to Modal volume"
+        False, "--upload-videos", help="Upload proxy videos to Modal (parallel)"
     ),
     download: bool = typer.Option(False, "--download", help="Download trained model from Modal"),
+    cleanup: bool = typer.Option(
+        False, "--cleanup", help="Delete videos/models from Modal (~$0.75/GB/month saved)"
+    ),
 ) -> None:
-    """Run training on Modal GPU (A10G - much faster than local).
+    """Run training on Modal GPU (T4 - ~$0.59/hr).
 
     Workflow:
-        1. rallycut train prepare                    # Prepare data locally
-        2. rallycut train modal --upload             # Upload data to Modal
-        3. rallycut train modal --upload-videos      # Upload videos to Modal
-        4. rallycut train modal --epochs 25          # Run training
-        5. rallycut train modal --download           # Download model
+        1. rallycut train prepare                    # Prepare data locally (generates proxies)
+        2. rallycut train modal --upload             # Upload training JSON to Modal
+        3. rallycut train modal --upload-videos      # Upload proxy videos (parallel)
+        4. rallycut train modal --epochs 10          # Run training on T4 GPU
+        5. rallycut train modal --download           # Download trained model
+        6. rallycut train modal --cleanup            # Delete videos from Modal (saves ~$3/mo)
     """
     import subprocess
 
     if upload:
         rprint("[bold]Uploading training data to Modal...[/bold]")
         # Use modal volume put command
-        cmd = ["modal", "volume", "put", "rallycut-training", "training_data/", "training_data/"]
+        cmd = ["python3", "-m", "modal", "volume", "put", "rallycut-training", "training_data/", "training_data/"]
         rprint(f"Running: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
@@ -292,7 +305,9 @@ def modal(
         return
 
     if upload_videos:
-        rprint("[bold]Uploading videos to Modal...[/bold]")
+        import concurrent.futures
+
+        rprint("[bold]Uploading proxy videos to Modal (parallel)...[/bold]")
         # Get video paths from training data
         video_paths_file = Path("training_data/video_paths.json")
         if not video_paths_file.exists():
@@ -302,20 +317,42 @@ def modal(
         with open(video_paths_file) as f:
             video_paths = json.load(f)
 
-        # Upload each video
+        # Prepare upload tasks
+        upload_tasks: list[tuple[Path, str]] = []
+        total_size_mb = 0
         for vid, path in video_paths.items():
             local_path = Path(path)
             if local_path.exists():
                 remote_path = f"videos/{local_path.name}"
-                cmd = ["modal", "volume", "put", "rallycut-training", str(local_path), remote_path]
-                rprint(f"Uploading {local_path.name}...")
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                if result.returncode != 0:
-                    rprint(f"[red]Failed to upload {local_path.name}: {result.stderr}[/red]")
+                upload_tasks.append((local_path, remote_path))
+                total_size_mb += local_path.stat().st_size // (1024 * 1024)
             else:
                 rprint(f"[yellow]Skipping {path} (not found)[/yellow]")
 
-        rprint("[green]Videos uploaded![/green]")
+        rprint(f"Uploading {len(upload_tasks)} proxy videos ({total_size_mb} MB total)...")
+
+        def upload_file(task: tuple[Path, str]) -> tuple[str, bool, str]:
+            local_path, remote_path = task
+            cmd = ["python3", "-m", "modal", "volume", "put", "rallycut-training", str(local_path), remote_path]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            return local_path.name, result.returncode == 0, result.stderr
+
+        # Upload in parallel (3 concurrent uploads to avoid overwhelming network)
+        success_count = 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {executor.submit(upload_file, task): task for task in upload_tasks}
+            for future in concurrent.futures.as_completed(futures):
+                name, success, error = future.result()
+                if success:
+                    success_count += 1
+                    rprint(f"[green]✓[/green] {name} ({success_count}/{len(upload_tasks)})")
+                else:
+                    rprint(f"[red]✗[/red] {name}: {error}")
+
+        if success_count == len(upload_tasks):
+            rprint(f"[green]All {success_count} videos uploaded successfully![/green]")
+        else:
+            rprint(f"[yellow]Uploaded {success_count}/{len(upload_tasks)} videos[/yellow]")
         return
 
     if download:
@@ -323,7 +360,7 @@ def modal(
         output_dir = Path("weights/videomae/beach_volleyball")
         output_dir.mkdir(parents=True, exist_ok=True)
         cmd = [
-            "modal",
+            "python3", "-m", "modal",
             "volume",
             "get",
             "rallycut-training",
@@ -334,18 +371,50 @@ def modal(
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
             rprint(f"[green]Model downloaded to {output_dir}[/green]")
+            rprint()
+            rprint("[yellow]Tip: Run 'rallycut train modal --cleanup' to delete videos from Modal")
+            rprint("and save storage costs (~$0.75/GB/month).[/yellow]")
         else:
             rprint(f"[red]Download failed: {result.stderr}[/red]")
         return
 
+    if cleanup:
+        rprint("[bold]Cleaning up Modal volume...[/bold]")
+
+        # Delete videos folder
+        rprint("Deleting videos from Modal volume...")
+        cmd = ["python3", "-m", "modal", "volume", "rm", "rallycut-training", "videos/", "-r"]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            rprint("[green]✓ Videos deleted[/green]")
+        else:
+            # Folder might not exist if already deleted
+            rprint("[yellow]Videos folder not found or already deleted[/yellow]")
+
+        # Delete trained model folder
+        rprint("Deleting model outputs from Modal volume...")
+        cmd = ["python3", "-m", "modal", "volume", "rm", "rallycut-training", "models/", "-r"]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            rprint("[green]✓ Model outputs deleted[/green]")
+        else:
+            rprint("[yellow]Model folder not found or already deleted[/yellow]")
+
+        rprint()
+        rprint("[green]Cleanup complete![/green]")
+        rprint("Training data JSON kept for reference (~4KB).")
+        rprint("Proxy videos remain cached locally at: ~/.cache/rallycut/proxies/")
+        return
+
     # Run training on Modal
-    rprint("[bold]Starting training on Modal A10G GPU...[/bold]")
+    rprint("[bold]Starting training on Modal T4 GPU...[/bold]")
     rprint(f"Epochs: {epochs}, Batch size: {batch_size}")
     rprint()
 
     cmd = [
-        "modal",
+        "python3", "-m", "modal",
         "run",
+        "--detach",  # Keep running even if local client disconnects
         "rallycut/training/modal_train.py",
         "--epochs",
         str(epochs),
