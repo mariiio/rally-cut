@@ -9,6 +9,10 @@ import {
   listRallies,
   updateRally,
 } from "../services/rallyService.js";
+import {
+  trackBallForRally,
+  getBallTrackStatus,
+} from "../services/ballTrackingService.js";
 
 const router = Router();
 
@@ -64,6 +68,51 @@ router.delete(
     try {
       await deleteRally(req.params.id);
       res.status(204).send();
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================================
+// Ball Tracking Routes
+// ============================================================================
+
+const trackBallSchema = z.object({
+  aspectRatio: z.enum(["ORIGINAL", "VERTICAL"]).optional(),
+  generateKeyframes: z.boolean().optional(),
+});
+
+router.post(
+  "/v1/rallies/:id/track-ball",
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: trackBallSchema,
+  }),
+  async (req, res, next) => {
+    try {
+      const result = await trackBallForRally(req.params.id, {
+        aspectRatio: req.body.aspectRatio,
+        generateKeyframes: req.body.generateKeyframes,
+      });
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
+  "/v1/rallies/:id/ball-track",
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    query: z.object({ includePositions: z.enum(["true", "false"]).optional() }),
+  }),
+  async (req, res, next) => {
+    try {
+      const includePositions = req.query.includePositions === "true";
+      const result = await getBallTrackStatus(req.params.id, { includePositions });
+      res.json(result);
     } catch (error) {
       next(error);
     }

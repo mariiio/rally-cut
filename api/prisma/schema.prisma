@@ -263,10 +263,45 @@ model Rally {
   video            Video            @relation(fields: [videoId], references: [id], onDelete: Cascade)
   highlightRallies HighlightRally[]
   cameraEdit       RallyCameraEdit?
+  ballTrack        BallTrack?
 
   @@index([videoId])
   @@index([videoId, startMs])
   @@map("rallies")
+}
+
+// ============================================================================
+// Ball Tracking (auto-camera generation)
+// ============================================================================
+
+enum BallTrackStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model BallTrack {
+  id               String          @id @default(uuid())
+  rallyId          String          @unique @map("rally_id")
+  status           BallTrackStatus @default(PENDING)
+
+  frameCount       Int?            @map("frame_count")
+  detectionRate    Float?          @map("detection_rate")
+  positionsJson    Json?           @map("positions_json")
+
+  processingTimeMs Int?            @map("processing_time_ms")
+  modelVersion     String?         @map("model_version")
+  error            String?
+
+  createdAt        DateTime        @default(now()) @map("created_at")
+  completedAt      DateTime?       @map("completed_at")
+
+  rally            Rally           @relation(fields: [rallyId], references: [id], onDelete: Cascade)
+
+  @@index([rallyId])
+  @@index([status])
+  @@map("ball_tracks")
 }
 
 // ============================================================================

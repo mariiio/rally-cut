@@ -71,6 +71,12 @@ interface CameraStoreState {
   // Rally-level actions
   resetCamera: (rallyId: string) => void;
   removeCameraEdit: (rallyId: string) => void;
+  // Batch operation for ball tracking (single history entry + single sync)
+  applyBallTrackingKeyframes: (
+    rallyId: string,
+    aspectRatio: AspectRatio,
+    keyframes: Array<Omit<CameraKeyframe, 'id'>>
+  ) => void;
 
   // Getters (computed at call time, not stored)
   getCameraEdit: (rallyId: string) => RallyCameraEdit;
@@ -87,6 +93,13 @@ interface CameraStoreState {
   isDirty: boolean;
   markDirty: () => void;
   clearDirty: () => void;
+
+  // Ball tracking debug visualization
+  debugBallPositions: Array<{ frameNumber: number; x: number; y: number; confidence: number }> | null;
+  debugFrameCount: number | null;
+  debugRallyId: string | null;
+  setDebugBallTracking: (rallyId: string, positions: Array<{ frameNumber: number; x: number; y: number; confidence: number }>, frameCount: number) => void;
+  clearDebugBallTracking: () => void;
 }
 
 // Generate unique keyframe ID
@@ -101,6 +114,9 @@ export const useCameraStore = create<CameraStoreState>()(
     selectedKeyframeId: null,
     dragPosition: null,
     isDirty: false,
+    debugBallPositions: null,
+    debugFrameCount: null,
+    debugRallyId: null,
 
     // Get camera edit for a rally (returns default if not set)
     getCameraEdit: (rallyId: string) => {
@@ -277,6 +293,41 @@ export const useCameraStore = create<CameraStoreState>()(
       syncService.markDirty();
     },
 
+    // Batch operation for ball tracking - single history entry + single sync
+    applyBallTrackingKeyframes: (rallyId, aspectRatio, keyframes) => {
+      pushEditorHistory();
+      set((state) => {
+        // Generate IDs for all keyframes
+        const newKeyframes: CameraKeyframe[] = keyframes.map((kf) => ({
+          id: generateKeyframeId(),
+          ...kf,
+        }));
+
+        // Sort by timeOffset
+        newKeyframes.sort((a, b) => a.timeOffset - b.timeOffset);
+
+        // Create new camera edit with all keyframes at once
+        const newEdit: RallyCameraEdit = {
+          ...DEFAULT_CAMERA_EDIT,
+          aspectRatio,
+          keyframes: {
+            ORIGINAL: aspectRatio === 'ORIGINAL' ? newKeyframes : [],
+            VERTICAL: aspectRatio === 'VERTICAL' ? newKeyframes : [],
+          },
+        };
+
+        return {
+          cameraEdits: {
+            ...state.cameraEdits,
+            [rallyId]: newEdit,
+          },
+          selectedKeyframeId: null,
+          isDirty: true,
+        };
+      });
+      syncService.markDirty();
+    },
+
     // Remove camera edit for a rally (used during merge, doesn't push history)
     removeCameraEdit: (rallyId: string) => {
       set((state) => {
@@ -344,6 +395,14 @@ export const useCameraStore = create<CameraStoreState>()(
     // Dirty tracking for sync
     markDirty: () => set({ isDirty: true }),
     clearDirty: () => set({ isDirty: false }),
+
+    // Ball tracking debug visualization
+    setDebugBallTracking: (rallyId, positions, frameCount) => {
+      set({ debugBallPositions: positions, debugFrameCount: frameCount, debugRallyId: rallyId });
+    },
+    clearDebugBallTracking: () => {
+      set({ debugBallPositions: null, debugFrameCount: null, debugRallyId: null });
+    },
   }))
 );
 
