@@ -5,7 +5,8 @@ const rallyInputSchema = z.object({
   id: z.string().uuid().optional(),
   startMs: z.number().int().min(0),
   endMs: z.number().int().min(0),
-  cameraEdit: rallyCameraEditSchema.optional(),
+  // nullish() allows: undefined (field omitted), null (explicit deletion), or object (create/update)
+  cameraEdit: rallyCameraEditSchema.nullish(),
 });
 
 const highlightInputSchema = z.object({

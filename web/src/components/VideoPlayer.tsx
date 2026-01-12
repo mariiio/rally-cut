@@ -11,6 +11,7 @@ import { calculateVideoTransform, getCameraStateWithHandheld, resetHandheldState
 import { DEFAULT_CAMERA_STATE } from '@/types/camera';
 import { designTokens } from '@/app/theme';
 import { CameraOverlay } from './CameraOverlay';
+import { BallTrackingDebugOverlay } from './BallTrackingDebugOverlay';
 
 export function VideoPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -51,6 +52,9 @@ export function VideoPlayer() {
   const dragPosition = useCameraStore((state) => state.dragPosition);
   const selectedKeyframeId = useCameraStore((state) => state.selectedKeyframeId);
   const handheldPreset = useCameraStore(selectHandheldPreset);
+  const debugBallPositions = useCameraStore((state) => state.debugBallPositions);
+  const debugFrameCount = useCameraStore((state) => state.debugFrameCount);
+  const debugRallyId = useCameraStore((state) => state.debugRallyId);
 
   // Get rallies from editor store
   const rallies = useEditorStore((state) => state.rallies);
@@ -81,18 +85,21 @@ export function VideoPlayer() {
   // Determine if camera should be applied (toggle on OR actively editing a keyframe)
   const shouldApplyCamera = applyCameraEdits || selectedKeyframeId !== null;
 
-  // Calculate video transform style based on camera state
-  const videoTransformStyle = useMemo(() => {
+  // Calculate camera state and video transform style
+  const { videoTransformStyle, cameraState: currentCameraState } = useMemo(() => {
     // Only apply when camera preview is on and we have a rally
     if (!shouldApplyCamera || !currentRally) {
-      return {};
+      return { videoTransformStyle: {}, cameraState: DEFAULT_CAMERA_STATE };
     }
 
     const aspectRatio = currentCameraEdit?.aspectRatio ?? 'ORIGINAL';
 
     // If no keyframes, show default centered position for the aspect ratio
     if (!hasCameraKeyframes) {
-      return calculateVideoTransform(DEFAULT_CAMERA_STATE, aspectRatio);
+      return {
+        videoTransformStyle: calculateVideoTransform(DEFAULT_CAMERA_STATE, aspectRatio),
+        cameraState: DEFAULT_CAMERA_STATE,
+      };
     }
 
     // Use cameraTime for camera position - updated via RAF during playback
@@ -124,7 +131,10 @@ export function VideoPlayer() {
       : cameraState;
 
     // Calculate CSS transform
-    return calculateVideoTransform(effectiveState, aspectRatio);
+    return {
+      videoTransformStyle: calculateVideoTransform(effectiveState, aspectRatio),
+      cameraState: effectiveState,
+    };
   }, [shouldApplyCamera, currentRally, hasCameraKeyframes, currentCameraEdit, cameraTime, handheldPreset, dragPosition]);
 
   // Get container aspect ratio - show aspect ratio even without keyframes when preview is on
@@ -569,6 +579,20 @@ export function VideoPlayer() {
           }}
         >
           <CameraOverlay containerRef={videoContainerRef} />
+          {/* Ball tracking debug overlay */}
+          {debugBallPositions && debugFrameCount && debugRallyId === selectedRallyId && currentRally && (
+            <BallTrackingDebugOverlay
+              positions={debugBallPositions}
+              frameCount={debugFrameCount}
+              rallyStartTime={currentRally.start_time}
+              rallyEndTime={currentRally.end_time}
+              videoRef={videoRef}
+              aspectRatio={currentCameraEdit?.aspectRatio}
+              cameraX={currentCameraState.positionX}
+              cameraY={currentCameraState.positionY}
+              zoom={currentCameraState.zoom}
+            />
+          )}
           <video
             ref={videoRef}
             src={effectiveVideoUrl}
@@ -583,7 +607,8 @@ export function VideoPlayer() {
               width: 'auto',
               height: '100%',
               willChange: 'transform',
-              transition: dragPosition ? 'none' : 'transform 0.2s ease-out',
+              // No CSS transition - camera position is interpolated at 60fps via RAF
+              // CSS transitions would conflict with JS-driven smooth updates
               ...videoTransformStyle,
             } : {
               // 16:9 mode: normal video display
@@ -591,7 +616,7 @@ export function VideoPlayer() {
               height: '100%',
               objectFit: 'contain',
               willChange: isCameraPreviewActive ? 'transform' : 'auto',
-              transition: dragPosition ? 'none' : 'transform 0.2s ease-out',
+              // No CSS transition - camera position is interpolated at 60fps via RAF
               ...videoTransformStyle,
             }}
             onTimeUpdate={handleTimeUpdate}
