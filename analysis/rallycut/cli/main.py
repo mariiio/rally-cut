@@ -4,7 +4,9 @@ import typer
 from rich.console import Console
 
 from rallycut.cli.commands.cut import cut as cut_command
+from rallycut.cli.commands.evaluate import app as evaluate_app
 from rallycut.cli.commands.profile import profile as profile_command
+from rallycut.cli.commands.train import app as train_app
 
 app = typer.Typer(
     name="rallycut",
@@ -17,6 +19,8 @@ console = Console()
 # Register commands
 app.command(name="cut")(cut_command)
 app.command(name="profile")(profile_command)
+app.add_typer(evaluate_app, name="evaluate")
+app.add_typer(train_app, name="train")
 
 
 @app.callback()

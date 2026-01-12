@@ -467,10 +467,14 @@ export async function confirmUpload(
 }
 
 // Trigger rally detection
-export async function triggerRallyDetection(videoId: string): Promise<{ jobId: string; status: string }> {
+export async function triggerRallyDetection(
+  videoId: string,
+  model?: 'indoor' | 'beach'
+): Promise<{ jobId: string; status: string }> {
   const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/detect-rallies`, {
     method: 'POST',
     headers: getHeaders(),
+    body: model ? JSON.stringify({ model }) : undefined,
   });
 
   if (!response.ok) {

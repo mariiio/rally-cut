@@ -100,6 +100,7 @@ class DetectionService:
                 min_gap_seconds=config.min_gap_seconds,
                 use_proxy=config.use_proxy,
                 stride=config.stride,
+                model_variant=config.model_variant.value,
             )
 
             def analysis_progress(pct: float, msg: str) -> None:

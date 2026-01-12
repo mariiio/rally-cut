@@ -10,14 +10,24 @@ import {
 
 const router = Router();
 
+const detectRalliesBodySchema = z
+  .object({
+    model: z.enum(["indoor", "beach"]).optional(),
+  })
+  .optional();
+
 router.post(
   "/v1/videos/:id/detect-rallies",
   requireUser,
-  validateRequest({ params: z.object({ id: uuidSchema }) }),
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: detectRalliesBodySchema,
+  }),
   async (req, res, next) => {
     try {
       const userId = req.userId as string; // Guaranteed by requireUser
-      const result = await triggerRallyDetection(req.params.id, userId);
+      const model = req.body?.model as "indoor" | "beach" | undefined;
+      const result = await triggerRallyDetection(req.params.id, userId, model);
       res.status(202).json(result);
     } catch (error) {
       next(error);

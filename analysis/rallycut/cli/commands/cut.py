@@ -218,6 +218,11 @@ def cut(  # noqa: C901
         "--debug",
         help="Show detailed ML classification diagnostics",
     ),
+    model: str = typer.Option(
+        "indoor",
+        "--model", "-m",
+        help="Model variant: 'indoor' (original) or 'beach' (fine-tuned with beach heuristics)",
+    ),
 ) -> None:
     """
     Automatically remove no-play segments from beach volleyball recordings.
@@ -256,6 +261,7 @@ def cut(  # noqa: C901
     if not dry_run:
         console.print(f"Output: [cyan]{output}[/cyan]")
     console.print(f"Device: [yellow]{device}[/yellow]")
+    console.print(f"Model: [yellow]{model}[/yellow]")
     mode_str = "Analysis only" if dry_run else "Full processing"
     console.print(f"Mode: [yellow]{mode_str}[/yellow]")
 
@@ -310,6 +316,7 @@ def cut(  # noqa: C901
         min_gap_seconds=effective_min_gap,
         auto_stride=auto_stride,
         rally_continuation_seconds=rally_continuation,
+        model_variant=model,
     )
 
     # Progress tracking

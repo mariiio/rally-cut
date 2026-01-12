@@ -1,0 +1,19 @@
+# Training Datasets Directory
+# Videos are git-ignored (large files), manifests are tracked
+
+# Ignore video files
+*.mp4
+*.MP4
+*.MOV
+*.mov
+*.avi
+*.AVI
+*.mkv
+*.MKV
+
+# Ignore generated samples (can be regenerated)
+*/samples/
+
+# But track manifest and ground truth files
+!manifest.json
+!ground_truth.json

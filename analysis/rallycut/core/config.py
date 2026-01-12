@@ -76,6 +76,49 @@ def _find_local_weights(relative_path: str) -> Path | None:
 
 
 # =============================================================================
+# Model Variants and Presets
+# =============================================================================
+
+MODEL_VARIANTS: dict[str, str] = {
+    "indoor": "weights/videomae/game_state_classifier",
+    "beach": "weights/videomae/beach_volleyball",
+}
+
+# Heuristics presets for each model variant
+# Indoor: original values from volleyball_analytics
+# Beach: optimized for beach volleyball detection
+MODEL_PRESETS: dict[str, dict[str, float]] = {
+    "indoor": {
+        "min_play_duration": 1.0,
+        "rally_continuation_seconds": 2.0,
+        "boundary_confidence_threshold": 0.35,
+        "min_active_density": 0.25,
+    },
+    "beach": {
+        "min_play_duration": 0.5,
+        "rally_continuation_seconds": 3.0,
+        "boundary_confidence_threshold": 0.25,
+        "min_active_density": 0.15,
+    },
+}
+
+
+def get_model_path(variant: str) -> Path | None:
+    """Resolve model variant to weights path.
+
+    Args:
+        variant: Model variant name ('indoor' or 'beach')
+
+    Returns:
+        Path to model weights if found, None otherwise
+    """
+    relative_path = MODEL_VARIANTS.get(variant)
+    if relative_path:
+        return _find_local_weights(relative_path)
+    return None
+
+
+# =============================================================================
 # Nested Configuration Classes
 # =============================================================================
 
@@ -111,18 +154,21 @@ class ProxyConfig(BaseModel):
 
 
 class SegmentConfig(BaseModel):
-    """Segment processing configuration."""
+    """Segment processing configuration.
 
-    # Reduced from 5.0 to 1.0 to detect shorter/partially-detected rallies
+    Note: These are the default (indoor) values. Beach-specific heuristics
+    are applied via MODEL_PRESETS when --model beach is selected.
+    """
+
+    # Minimum duration for a valid play segment
     min_play_duration: float = 1.0
     # Padding added before segment start
     padding_seconds: float = 2.0
     # Padding added after segment end
     padding_end_seconds: float = 3.0
-    # Increased from 3.0 to 5.0 to bridge larger gaps in fragmented detections
+    # Gap threshold for merging segments
     min_gap_seconds: float = 5.0
     # Rally continuation: keep rally active until N consecutive seconds of NO_PLAY
-    # This bridges gaps where the ML model incorrectly predicts NO_PLAY mid-rally
     rally_continuation_seconds: float = 2.0
 
 

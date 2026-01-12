@@ -12,8 +12,9 @@ Beach volleyball video analysis CLI. Uses ML (VideoMAE) to detect game states an
 
 ```bash
 # Core commands
-uv run rallycut cut <video.mp4>        # Remove dead time
-uv run rallycut profile <video.mp4>    # Performance profiling
+uv run rallycut cut <video.mp4>                 # Remove dead time (indoor model)
+uv run rallycut cut <video.mp4> --model beach   # Use beach volleyball model
+uv run rallycut profile <video.mp4>             # Performance profiling
 
 # Useful options for cut
 uv run rallycut cut video.mp4 --debug           # Timeline visualization + diagnostics
@@ -21,6 +22,14 @@ uv run rallycut cut video.mp4 --profile         # Performance breakdown
 uv run rallycut cut video.mp4 --json            # Export segments as JSON
 uv run rallycut cut video.mp4 --segments s.json # Load pre-computed segments
 uv run rallycut cut video.mp4 --limit 60        # Analyze first 60s only
+
+# Training (beach model fine-tuning)
+uv run rallycut train export-dataset --name beach_v1  # Export labeled data from DB
+uv run rallycut train prepare                         # Generate training samples
+uv run rallycut train modal --epochs 25               # Train on Modal GPU
+
+# Evaluation
+uv run rallycut evaluate --model beach --iou 0.5      # Evaluate beach model
 
 # Development
 uv run pytest tests                    # Run tests (excludes slow ML tests)
@@ -70,15 +79,35 @@ Analysis results cached in `~/.cache/rallycut/analysis/`:
 
 Proxy videos cached in `~/.cache/rallycut/proxies/`.
 
+## Model Variants
+
+Two model variants available via `--model` flag:
+
+| Model | Path | Use Case |
+|-------|------|----------|
+| `indoor` (default) | `weights/videomae/game_state_classifier/` | Indoor volleyball courts |
+| `beach` | `weights/videomae/beach_volleyball/` | Beach volleyball (fine-tuned) |
+
+Each model has optimized post-processing heuristics defined in `MODEL_PRESETS` (see `core/config.py`).
+
 ## Processing Heuristics
 
 The cutter applies three post-processing heuristics to fix ML errors:
 
-1. **Confidence extension**: Extends PLAY segments at boundaries where `play_confidence > 0.35`
-2. **Rally continuation**: Bridges NO_PLAY gaps < 2s within a rally (fixes mid-rally false negatives)
-3. **Density filtering**: Removes segments with < 25% active windows (filters noise)
+1. **Confidence extension**: Extends PLAY segments at boundaries where `play_confidence > threshold`
+2. **Rally continuation**: Bridges NO_PLAY gaps within a rally (fixes mid-rally false negatives)
+3. **Density filtering**: Removes segments with sparse active windows (filters noise)
 
-See `processing/cutter.py` for threshold constants.
+**Model-specific thresholds:**
+
+| Parameter | Indoor | Beach |
+|-----------|--------|-------|
+| `min_play_duration` | 1.0s | 0.5s |
+| `rally_continuation_seconds` | 2.0s | 3.0s |
+| `boundary_confidence_threshold` | 0.35 | 0.25 |
+| `min_active_density` | 0.25 | 0.15 |
+
+See `processing/cutter.py` and `core/config.py` for implementation.
 
 ## Cloud Detection (Modal)
 
