@@ -25,8 +25,12 @@ uv run rallycut cut video.mp4 --limit 60        # Analyze first 60s only
 
 # Training (beach model fine-tuning)
 uv run rallycut train export-dataset --name beach_v1  # Export labeled data from DB
-uv run rallycut train prepare                         # Generate training samples
-uv run rallycut train modal --epochs 25               # Train on Modal GPU
+uv run rallycut train prepare                         # Generate samples (uses 480p proxies)
+uv run rallycut train modal --upload                  # Upload training data to Modal
+uv run rallycut train modal --upload-videos           # Upload proxy videos (~4GB, parallel)
+uv run rallycut train modal --epochs 10               # Train on T4 GPU (~$0.59/hr)
+uv run rallycut train modal --download                # Download trained model
+uv run rallycut train modal --cleanup                 # Delete from Modal (~$0.75/GB/mo)
 
 # Evaluation
 uv run rallycut evaluate --model beach --iou 0.5      # Evaluate beach model
@@ -132,7 +136,8 @@ API triggers Modal via webhook. Results posted back on completion.
 ## Key Patterns
 
 - **Lazy loading**: ML models loaded on first use, not import
-- **Proxy videos**: 480p cached copies for faster ML (10-100x speedup)
+- **Proxy videos**: 480p@30fps cached copies for faster ML (10-100x speedup)
+- **Training proxies**: Same 480p proxies used for training (45% smaller than originals)
 - **Temporal smoothing**: Median filter on ML results fixes isolated errors
 - **Sequential reading**: Use `video.iter_frames()` not seeking
 - **FPS normalization**: High-FPS videos (60fps+) subsampled to 30fps for VideoMAE

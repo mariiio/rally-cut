@@ -4,10 +4,15 @@ Deploy with:
     modal deploy rallycut/training/modal_train.py
 
 Run training:
-    modal run rallycut/training/modal_train.py --epochs 25
+    modal run rallycut/training/modal_train.py --epochs 10
 
-Training data must be uploaded to Modal volume first:
-    modal volume put rallycut-training training_data/ training_data/
+Training data and proxy videos must be uploaded to Modal volume first:
+    rallycut train modal --upload         # Upload training JSON files
+    rallycut train modal --upload-videos  # Upload 480p proxy videos (~4GB)
+
+Note: Training uses 480p@30fps proxy videos for efficiency. VideoMAE downscales
+to 224x224 anyway, so proxies provide identical training quality with ~45% less
+storage and faster frame decoding.
 """
 
 from __future__ import annotations
