@@ -244,8 +244,8 @@ class SyncService {
             positionY: number;
             zoom: number;
             easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT';
-          }>;
-        };
+          }>
+        } | null; // null signals deletion of camera edit
       }>> = {};
 
       for (const match of currentState.session.matches) {
@@ -263,11 +263,11 @@ class SyncService {
             id: r._backendId,
             startMs: Math.round(r.start_time * 1000),
             endMs: Math.round(r.end_time * 1000),
+            // Only include cameraEdit when there's data (undefined = no change, null would mean delete)
             ...(hasKeyframes && {
               cameraEdit: {
-                enabled: true, // Always enabled if we have keyframes
+                enabled: true,
                 aspectRatio: currentAspectRatio,
-                // Backend expects a flat array of keyframes for the current aspect ratio
                 keyframes: mapKeyframes(keyframesForAspect),
               },
             }),

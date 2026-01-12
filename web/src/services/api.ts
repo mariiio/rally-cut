@@ -3,6 +3,7 @@
  */
 
 import { getVisitorId } from '@/utils/visitorId';
+import type { RallyCameraEdit } from '@/types/camera';
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -262,21 +263,9 @@ function apiSessionToFrontend(apiSession: ApiSession, cloudfrontDomain?: string)
 // Export camera edit types for external use
 export type { ApiCameraKeyframe, ApiCameraEdit };
 
-// Camera edit extraction result
+// Camera edit extraction result (uses RallyCameraEdit which has keyframes per aspect ratio)
 export interface CameraEditMap {
-  // frontendRallyId -> camera edit data
-  [rallyId: string]: {
-    enabled: boolean;
-    aspectRatio: 'ORIGINAL' | 'VERTICAL';
-    keyframes: Array<{
-      id: string;
-      timeOffset: number;
-      positionX: number;
-      positionY: number;
-      zoom: number;
-      easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT';
-    }>;
-  };
+  [rallyId: string]: RallyCameraEdit;
 }
 
 // Extract camera edits from API session response
@@ -287,17 +276,23 @@ function extractCameraEdits(apiSession: ApiSession): CameraEditMap {
     for (const rally of video.rallies) {
       if (rally.cameraEdit && rally.cameraEdit.enabled) {
         const frontendRallyId = `${video.id}_rally_${rally.order + 1}`;
+        const aspectRatio = rally.cameraEdit.aspectRatio;
+        const keyframes = rally.cameraEdit.keyframes.map(kf => ({
+          id: kf.id,
+          timeOffset: kf.timeOffset,
+          positionX: kf.positionX,
+          positionY: kf.positionY,
+          zoom: kf.zoom,
+          easing: kf.easing,
+        }));
+        // Put keyframes under the correct aspect ratio key (new format)
         result[frontendRallyId] = {
           enabled: rally.cameraEdit.enabled,
-          aspectRatio: rally.cameraEdit.aspectRatio,
-          keyframes: rally.cameraEdit.keyframes.map(kf => ({
-            id: kf.id,
-            timeOffset: kf.timeOffset,
-            positionX: kf.positionX,
-            positionY: kf.positionY,
-            zoom: kf.zoom,
-            easing: kf.easing,
-          })),
+          aspectRatio,
+          keyframes: {
+            ORIGINAL: aspectRatio === 'ORIGINAL' ? keyframes : [],
+            VERTICAL: aspectRatio === 'VERTICAL' ? keyframes : [],
+          },
         };
       }
     }
@@ -701,17 +696,23 @@ export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEd
   for (const rally of data.video.rallies) {
     if (rally.cameraEdit && rally.cameraEdit.enabled) {
       const frontendRallyId = `${videoId}_rally_${rally.order + 1}`;
+      const aspectRatio = rally.cameraEdit.aspectRatio;
+      const keyframes = rally.cameraEdit.keyframes.map(kf => ({
+        id: kf.id,
+        timeOffset: kf.timeOffset,
+        positionX: kf.positionX,
+        positionY: kf.positionY,
+        zoom: kf.zoom,
+        easing: kf.easing,
+      }));
+      // Put keyframes under the correct aspect ratio key (new format)
       cameraEdits[frontendRallyId] = {
         enabled: rally.cameraEdit.enabled,
-        aspectRatio: rally.cameraEdit.aspectRatio,
-        keyframes: rally.cameraEdit.keyframes.map(kf => ({
-          id: kf.id,
-          timeOffset: kf.timeOffset,
-          positionX: kf.positionX,
-          positionY: kf.positionY,
-          zoom: kf.zoom,
-          easing: kf.easing,
-        })),
+        aspectRatio,
+        keyframes: {
+          ORIGINAL: aspectRatio === 'ORIGINAL' ? keyframes : [],
+          VERTICAL: aspectRatio === 'VERTICAL' ? keyframes : [],
+        },
       };
     }
   }
@@ -1464,6 +1465,113 @@ export async function submitFeedback(feedback: SubmitFeedbackRequest): Promise<F
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
     throw new Error(error.error?.message || `Failed to submit feedback: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// ============================================================================
+// Ball Tracking API (Auto-Camera Generation)
+// ============================================================================
+
+export interface TrackBallOptions {
+  aspectRatio?: 'ORIGINAL' | 'VERTICAL';
+  generateKeyframes?: boolean;
+}
+
+export interface TrackBallKeyframe {
+  timeOffset: number;
+  positionX: number;
+  positionY: number;
+  zoom: number;
+  easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT';
+}
+
+export interface TrackBallQuality {
+  coverage: number;
+  averageConfidence: number;
+  isUsable: boolean;
+  recommendation: string;
+}
+
+export interface TrackBallResponse {
+  status: 'completed' | 'processing' | 'failed';
+  ballTrack?: {
+    id: string;
+    detectionRate: number;
+    frameCount: number;
+  };
+  keyframes?: TrackBallKeyframe[];
+  quality?: TrackBallQuality;
+  error?: string;
+}
+
+export interface BallPosition {
+  frameNumber: number;
+  x: number;
+  y: number;
+  confidence: number;
+}
+
+export interface BallTrackStatusResponse {
+  rallyId: string;
+  ballTrack: {
+    id: string;
+    status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+    detectionRate: number | null;
+    frameCount: number | null;
+    processingTimeMs: number | null;
+    error: string | null;
+    positions?: BallPosition[];
+  } | null;
+}
+
+/**
+ * Trigger ball tracking for a rally and generate camera keyframes.
+ * Uses AI-powered ball detection to automatically create smooth camera movements.
+ *
+ * @param rallyId - Backend rally ID (UUID)
+ * @param options - Tracking options
+ * @returns Tracking result with generated keyframes
+ */
+export async function trackBall(
+  rallyId: string,
+  options?: TrackBallOptions
+): Promise<TrackBallResponse> {
+  const response = await fetch(`${API_BASE_URL}/v1/rallies/${rallyId}/track-ball`, {
+    method: 'POST',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify(options || {}),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Ball tracking failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Get ball tracking status for a rally.
+ *
+ * @param rallyId - Backend rally ID (UUID)
+ * @param includePositions - Whether to include raw ball positions (for debug visualization)
+ * @returns Current tracking status
+ */
+export async function getBallTrackStatus(rallyId: string, includePositions = false): Promise<BallTrackStatusResponse> {
+  const url = new URL(`${API_BASE_URL}/v1/rallies/${rallyId}/ball-track`);
+  if (includePositions) {
+    url.searchParams.set('includePositions', 'true');
+  }
+
+  const response = await fetch(url.toString(), {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get ball track status: ${response.status}`);
   }
 
   return response.json();
