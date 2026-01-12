@@ -32,6 +32,14 @@ uv run rallycut train modal --epochs 10               # Train on T4 GPU (~$0.59/
 uv run rallycut train modal --download                # Download trained model
 uv run rallycut train modal --cleanup                 # Delete from Modal (~$0.75/GB/mo)
 
+# Incremental training (add more labeled videos to existing model)
+uv run rallycut train export-dataset --name beach_v2  # Export all labeled data
+uv run rallycut train prepare                         # Generate samples from all videos
+uv run rallycut train modal --upload --upload-videos  # Upload new data
+uv run rallycut train modal --upload-model            # Upload existing model weights
+uv run rallycut train modal --resume-from-model --lr 1e-5 --epochs 5  # Fine-tune
+uv run rallycut train modal --download --cleanup      # Download and clean up
+
 # Evaluation
 uv run rallycut evaluate --model beach --iou 0.5      # Evaluate beach model
 

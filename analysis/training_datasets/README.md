@@ -83,23 +83,48 @@ rallycut evaluate --model beach --iou 0.5
    ```
    Modal charges ~$0.75/GB/month for storage. Proxy videos are cached locally at `~/.cache/rallycut/proxies/` - re-upload anytime for retraining.
 
-## Adding New Videos
+## Adding New Videos (Incremental Training)
+
+When you have new labeled videos to add to an existing trained model:
 
 1. **Upload and label in web app**
    - Upload new beach volleyball video
    - Use rally editor to mark all rallies
    - Ensure rallies are saved (confidence = NULL for ground truth)
 
-2. **Re-export dataset**
+2. **Re-export dataset** (includes all videos, old + new)
    ```bash
    rallycut train export-dataset --name beach_v2
    ```
 
-3. **Retrain model**
+3. **Prepare training data**
    ```bash
    rallycut train prepare --output training_data/
-   rallycut train modal --epochs 25
    ```
+
+4. **Upload to Modal**
+   ```bash
+   rallycut train modal --upload         # Upload training JSON
+   rallycut train modal --upload-videos  # Upload proxy videos (only new ones)
+   rallycut train modal --upload-model   # Upload existing model weights
+   ```
+
+5. **Run incremental training** (lower learning rate to preserve existing knowledge)
+   ```bash
+   rallycut train modal --resume-from-model --lr 1e-5 --epochs 5
+   ```
+
+6. **Download and clean up**
+   ```bash
+   rallycut train modal --download
+   rallycut train modal --cleanup
+   ```
+
+**Why incremental training?**
+- Starts from your existing trained model, not from scratch
+- Lower learning rate (1e-5 vs 5e-5) prevents "catastrophic forgetting"
+- Fewer epochs needed (5 vs 10+) since model already knows most patterns
+- Faster and cheaper than full retraining
 
 ## Dataset Files
 

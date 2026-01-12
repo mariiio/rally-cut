@@ -69,21 +69,30 @@ def train_model(
     learning_rate: float = 5e-5,
     data_dir: str = "/data/training_data",
     output_dir: str = "/data/models/beach_volleyball",
+    resume_from_model: bool = False,
 ) -> dict:
     """
     Fine-tune VideoMAE on beach volleyball data.
 
+    Automatically resumes from the latest checkpoint if training was interrupted
+    (e.g., due to preemption). Checkpoints are saved every epoch.
+
+    For incremental training (adding more videos to existing model), set
+    resume_from_model=True and upload existing weights to /data/base_model/.
+
     Args:
         epochs: Number of training epochs
-        batch_size: Batch size (can be larger on A10G)
-        learning_rate: Learning rate
+        batch_size: Batch size (T4 has 16GB VRAM)
+        learning_rate: Learning rate (use 1e-5 for incremental training)
         data_dir: Path to training data on volume
         output_dir: Path to save model on volume
+        resume_from_model: If True, start from uploaded model at /data/base_model/
 
     Returns:
         Training results dict
     """
     import json
+    import re
     import sys
     from pathlib import Path
 
@@ -93,15 +102,45 @@ def train_model(
     from rallycut.training.sampler import TrainingSample
     from rallycut.training.train import train
 
-    print(f"Starting training on Modal A10G GPU")
+    print(f"Starting training on Modal T4 GPU")
     print(f"  Epochs: {epochs}")
     print(f"  Batch size: {batch_size}")
     print(f"  Learning rate: {learning_rate}")
     print(f"  Data dir: {data_dir}")
     print(f"  Output dir: {output_dir}")
 
-    data_path = Path(data_dir)
+    # Determine base model path
+    base_model_path = None
+    if resume_from_model:
+        uploaded_model_path = Path("/data/base_model")
+        if uploaded_model_path.exists() and (uploaded_model_path / "config.json").exists():
+            base_model_path = uploaded_model_path
+            print(f"  Base model: {base_model_path} (incremental training)")
+        else:
+            print("  Warning: --resume-from-model set but no model at /data/base_model/")
+            print("  Upload model first: rallycut train modal --upload-model")
+            print("  Falling back to default base model")
+
+    if base_model_path is None:
+        print("  Base model: default (VideoMAE game_state_classifier)")
+
     output_path = Path(output_dir)
+
+    # Check for existing checkpoints to resume from
+    resume_from_checkpoint = None
+    if output_path.exists():
+        checkpoints = list(output_path.glob("checkpoint-*"))
+        if checkpoints:
+            # Find the latest checkpoint by step number
+            def get_step(cp: Path) -> int:
+                match = re.search(r"checkpoint-(\d+)", cp.name)
+                return int(match.group(1)) if match else 0
+
+            latest_checkpoint = max(checkpoints, key=get_step)
+            resume_from_checkpoint = str(latest_checkpoint)
+            print(f"  Resuming from checkpoint: {latest_checkpoint.name}")
+
+    data_path = Path(data_dir)
 
     # Check data exists
     if not data_path.exists():
@@ -162,23 +201,29 @@ def train_model(
     print(f"Loaded {len(train_samples)} train samples, {len(val_samples)} val samples")
     print(f"Found {len(video_paths)} videos")
 
-    # Configure training for A10G GPU
-    config = TrainingConfig(
-        num_epochs=epochs,
-        batch_size=batch_size,  # Can use larger batch on A10G (24GB VRAM)
-        gradient_accumulation_steps=2,  # Effective batch = batch_size * 2
-        learning_rate=learning_rate,
-        output_dir=output_path,
-        use_mps=False,  # Use CUDA on Modal
-        dataloader_num_workers=4,  # Can use multiprocessing on Modal
-    )
+    # Configure training for T4 GPU
+    config_kwargs = {
+        "num_epochs": epochs,
+        "batch_size": batch_size,  # T4 has 16GB VRAM
+        "gradient_accumulation_steps": 2,  # Effective batch = batch_size * 2
+        "learning_rate": learning_rate,
+        "output_dir": output_path,
+        "use_mps": False,  # Use CUDA on Modal
+        "dataloader_num_workers": 4,  # Can use multiprocessing on Modal
+    }
 
-    # Run training
+    if base_model_path is not None:
+        config_kwargs["base_model_path"] = base_model_path
+
+    config = TrainingConfig(**config_kwargs)
+
+    # Run training (auto-resumes from checkpoint if available)
     model_path = train(
         train_samples=train_samples,
         val_samples=val_samples,
         video_paths=video_paths,
         config=config,
+        resume_from_checkpoint=resume_from_checkpoint,
     )
 
     # Commit volume to persist results
@@ -244,11 +289,12 @@ def main(
     learning_rate: float = 5e-5,
     upload_data: bool = False,
     download: bool = False,
+    resume_from_model: bool = False,
 ) -> None:
     """
     Train VideoMAE on Modal GPU.
 
-    Usage:
+    Initial training:
         # First, upload training data
         modal run rallycut/training/modal_train.py --upload-data
 
@@ -260,6 +306,13 @@ def main(
 
         # Download trained model
         modal run rallycut/training/modal_train.py --download
+
+    Incremental training (add more labeled videos):
+        # Upload existing model weights
+        modal volume put rallycut-training weights/videomae/beach_volleyball/ base_model/
+
+        # Train with lower learning rate
+        modal run rallycut/training/modal_train.py --resume-from-model --learning-rate 1e-5
     """
     import json
 
@@ -280,11 +333,14 @@ def main(
     print(f"  Epochs: {epochs}")
     print(f"  Batch size: {batch_size}")
     print(f"  Learning rate: {learning_rate}")
+    if resume_from_model:
+        print("  Mode: Incremental (resume from existing model)")
 
     result = train_model.remote(
         epochs=epochs,
         batch_size=batch_size,
         learning_rate=learning_rate,
+        resume_from_model=resume_from_model,
     )
 
     print(f"\nTraining complete!")

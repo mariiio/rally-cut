@@ -271,26 +271,72 @@ def run(
 def modal(
     epochs: int = typer.Option(25, "--epochs", "-e", help="Number of training epochs"),
     batch_size: int = typer.Option(4, "--batch-size", "-b", help="Batch size (4-8 for T4 GPU)"),
+    learning_rate: float = typer.Option(5e-5, "--lr", help="Learning rate (use 1e-5 for fine-tuning)"),
     upload: bool = typer.Option(False, "--upload", help="Upload training data to Modal volume"),
     upload_videos: bool = typer.Option(
         False, "--upload-videos", help="Upload proxy videos to Modal (parallel)"
+    ),
+    upload_model: bool = typer.Option(
+        False, "--upload-model", help="Upload local model weights for incremental training"
     ),
     download: bool = typer.Option(False, "--download", help="Download trained model from Modal"),
     cleanup: bool = typer.Option(
         False, "--cleanup", help="Delete videos/models from Modal (~$0.75/GB/month saved)"
     ),
+    resume_from_model: bool = typer.Option(
+        False, "--resume-from-model", help="Continue training from existing beach model weights"
+    ),
 ) -> None:
     """Run training on Modal GPU (T4 - ~$0.59/hr).
 
-    Workflow:
+    Initial training workflow:
         1. rallycut train prepare                    # Prepare data locally (generates proxies)
         2. rallycut train modal --upload             # Upload training JSON to Modal
         3. rallycut train modal --upload-videos      # Upload proxy videos (parallel)
         4. rallycut train modal --epochs 10          # Run training on T4 GPU
         5. rallycut train modal --download           # Download trained model
-        6. rallycut train modal --cleanup            # Delete videos from Modal (saves ~$3/mo)
+        6. rallycut train modal --cleanup            # Delete from Modal (saves storage costs)
+
+    Incremental training (add more labeled videos):
+        1. Label new videos in the app
+        2. rallycut train export-dataset --name beach_v2
+        3. rallycut train prepare
+        4. rallycut train modal --upload --upload-videos
+        5. rallycut train modal --upload-model                     # Upload existing weights
+        6. rallycut train modal --resume-from-model --lr 1e-5      # Fine-tune with lower LR
+        7. rallycut train modal --download --cleanup
     """
     import subprocess
+
+    if upload_model:
+        rprint("[bold]Uploading local model weights to Modal...[/bold]")
+        model_dir = Path("weights/videomae/beach_volleyball")
+        if not model_dir.exists():
+            rprint(f"[red]Model not found at {model_dir}[/red]")
+            rprint("Train a model first or download one.")
+            raise typer.Exit(1)
+
+        # Check for required model files
+        required_files = ["config.json", "model.safetensors", "preprocessor_config.json"]
+        missing = [f for f in required_files if not (model_dir / f).exists()]
+        if missing:
+            rprint(f"[red]Missing model files: {missing}[/red]")
+            raise typer.Exit(1)
+
+        cmd = [
+            "python3", "-m", "modal", "volume", "put",
+            "rallycut-training", str(model_dir) + "/", "base_model/"
+        ]
+        rprint(f"Running: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            rprint("[green]Model weights uploaded successfully![/green]")
+            rprint()
+            rprint("Now run training with --resume-from-model flag:")
+            rprint("  [cyan]rallycut train modal --resume-from-model --lr 1e-5 --epochs 5[/cyan]")
+        else:
+            rprint(f"[red]Upload failed: {result.stderr}[/red]")
+        return
 
     if upload:
         rprint("[bold]Uploading training data to Modal...[/bold]")
@@ -400,6 +446,15 @@ def modal(
         else:
             rprint("[yellow]Model folder not found or already deleted[/yellow]")
 
+        # Delete base model folder (uploaded for incremental training)
+        rprint("Deleting base model from Modal volume...")
+        cmd = ["python3", "-m", "modal", "volume", "rm", "rallycut-training", "base_model/", "-r"]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            rprint("[green]✓ Base model deleted[/green]")
+        else:
+            rprint("[yellow]Base model folder not found or already deleted[/yellow]")
+
         rprint()
         rprint("[green]Cleanup complete![/green]")
         rprint("Training data JSON kept for reference (~4KB).")
@@ -408,7 +463,9 @@ def modal(
 
     # Run training on Modal
     rprint("[bold]Starting training on Modal T4 GPU...[/bold]")
-    rprint(f"Epochs: {epochs}, Batch size: {batch_size}")
+    rprint(f"Epochs: {epochs}, Batch size: {batch_size}, Learning rate: {learning_rate}")
+    if resume_from_model:
+        rprint("[cyan]Resuming from existing beach volleyball model weights[/cyan]")
     rprint()
 
     cmd = [
@@ -420,7 +477,13 @@ def modal(
         str(epochs),
         "--batch-size",
         str(batch_size),
+        "--learning-rate",
+        str(learning_rate),
     ]
+
+    if resume_from_model:
+        cmd.append("--resume-from-model")
+
     rprint(f"Running: {' '.join(cmd)}")
     rprint()
 
