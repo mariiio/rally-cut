@@ -545,6 +545,25 @@ export async function renameVideo(videoId: string, name: string): Promise<void> 
   }
 }
 
+// Update session
+export async function updateSession(
+  sessionId: string,
+  data: { name?: string }
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}`, {
+    method: 'PATCH',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(
+      error.error?.message || `Failed to update session: ${response.status}`
+    );
+  }
+}
+
 // ============================================================================
 // Video Library API (user-scoped videos)
 // ============================================================================

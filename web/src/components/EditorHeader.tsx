@@ -20,6 +20,7 @@ import {
   DialogContent,
   DialogActions,
   Button,
+  TextField,
 } from '@mui/material';
 import SportsVolleyballIcon from '@mui/icons-material/SportsVolleyball';
 import UndoIcon from '@mui/icons-material/Undo';
@@ -30,6 +31,7 @@ import ShareIcon from '@mui/icons-material/Share';
 import PeopleIcon from '@mui/icons-material/People';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import DeleteIcon from '@mui/icons-material/Delete';
+import EditIcon from '@mui/icons-material/Edit';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import DiamondIcon from '@mui/icons-material/Diamond';
 import Chip from '@mui/material/Chip';
@@ -37,7 +39,7 @@ import { useEditorStore } from '@/stores/editorStore';
 import { useUploadStore } from '@/stores/uploadStore';
 import { useTierStore } from '@/stores/tierStore';
 import { isValidVideoFile } from '@/utils/fileHandlers';
-import { deleteSession } from '@/services/api';
+import { deleteSession, updateSession } from '@/services/api';
 import { designTokens } from '@/app/theme';
 import { ConfirmDialog } from './ConfirmDialog';
 import { SyncStatus } from './SyncStatus';
@@ -56,6 +58,9 @@ export function EditorHeader() {
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [editValue, setEditValue] = useState('');
+  const [isRenaming, setIsRenaming] = useState(false);
 
   const {
     session,
@@ -70,6 +75,7 @@ export function EditorHeader() {
     reloadSession,
     showAddVideoModal,
     setShowAddVideoModal,
+    renameSession,
   } = useEditorStore();
 
   const { isUploading, uploadVideo } = useUploadStore();
@@ -135,6 +141,42 @@ export function EditorHeader() {
 
   const handleDeleteCancel = () => {
     setShowDeleteDialog(false);
+  };
+
+  const handleStartEditName = () => {
+    if (!session) return;
+    setEditValue(session.name);
+    setEditingName(true);
+  };
+
+  const handleSaveEditName = async () => {
+    if (!session || !editValue.trim()) {
+      setEditingName(false);
+      return;
+    }
+
+    const newName = editValue.trim();
+    if (newName === session.name) {
+      setEditingName(false);
+      return;
+    }
+
+    setIsRenaming(true);
+    try {
+      await updateSession(session.id, { name: newName });
+      renameSession(newName);
+    } catch (err) {
+      console.error('Failed to rename session:', err);
+      setError('Failed to rename session');
+    } finally {
+      setIsRenaming(false);
+      setEditingName(false);
+    }
+  };
+
+  const handleCancelEditName = () => {
+    setEditingName(false);
+    setEditValue('');
   };
 
   return (
@@ -204,18 +246,64 @@ export function EditorHeader() {
           {session ? (
             <>
               {/* Session name */}
-              <Typography
-                variant="body2"
-                sx={{
-                  color: 'text.primary',
-                  fontWeight: 600,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {session.name}
-              </Typography>
+              {editingName ? (
+                <TextField
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  onBlur={handleSaveEditName}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleSaveEditName();
+                    }
+                    if (e.key === 'Escape') {
+                      handleCancelEditName();
+                    }
+                  }}
+                  autoFocus
+                  size="small"
+                  disabled={isRenaming}
+                  sx={{
+                    minWidth: 150,
+                    '& .MuiInputBase-input': {
+                      py: 0.5,
+                      fontSize: '0.875rem',
+                      fontWeight: 600,
+                    },
+                  }}
+                />
+              ) : (
+                <Stack direction="row" alignItems="center">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.primary',
+                      fontWeight: 600,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {session.name}
+                  </Typography>
+                  {userRole === 'owner' && (
+                    <Tooltip title="Rename session">
+                      <IconButton
+                        size="small"
+                        onClick={handleStartEditName}
+                        sx={{
+                          color: 'text.secondary',
+                          p: 0.5,
+                          ml: 1,
+                          '&:hover': { color: 'text.primary' },
+                        }}
+                      >
+                        <EditIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    </Tooltip>
+                  )}
+                </Stack>
+              )}
 
               {/* Add Video Button - hide in single video mode */}
               {!singleVideoMode && (

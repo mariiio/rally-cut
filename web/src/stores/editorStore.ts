@@ -173,6 +173,7 @@ interface EditorState {
   reloadCurrentMatch: () => Promise<{ ralliesCount: number } | null>;
   setActiveMatch: (matchId: string) => void;
   renameMatch: (matchId: string, name: string) => void;
+  renameSession: (name: string) => void;
   getActiveMatch: () => Match | null;
   getAllRallies: () => Rally[];
   getRallyMatch: (rallyId: string) => Match | null;
@@ -955,6 +956,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         matches: state.session.matches.map((m) =>
           m.id === matchId ? { ...m, name } : m
         ),
+      },
+    });
+  },
+
+  renameSession: (name: string) => {
+    const state = get();
+    if (!state.session) return;
+
+    set({
+      session: {
+        ...state.session,
+        name,
       },
     });
   },
