@@ -20,7 +20,7 @@ export const TIER_LIMITS = {
   },
   PREMIUM: {
     detectionsPerMonth: 9,
-    maxVideoDurationMs: 25 * 60 * 1000, // 25 minutes
+    maxVideoDurationMs: 30 * 60 * 1000, // 30 minutes
     maxFileSizeBytes: 2.5 * 1024 * 1024 * 1024, // 2.5 GB
     monthlyUploadCount: null as number | null, // unlimited
     exportQuality: "original" as const,

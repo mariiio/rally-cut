@@ -49,7 +49,7 @@ const plans = [
       '9 AI detections/month',
       'Unlimited uploads',
       'Up to 2 GB per video',
-      'Up to 25 min per video',
+      'Up to 30 min per video',
       'Original quality exports',
       'No watermark',
       'Fast server-side export',
@@ -313,7 +313,7 @@ export function Pricing() {
             <Box component="span" sx={{ color: 'primary.main', fontWeight: 600 }}>
               $0.99 per match
             </Box>{' '}
-            (up to 25 minutes). No subscription required. Credits never expire.
+            (up to 30 minutes). No subscription required. Credits never expire.
           </Typography>
         </Box>
       </Container>
