@@ -9,7 +9,7 @@ import {
   completeMultipartUpload,
   abortMultipartUpload,
 } from '@/services/api';
-import { useTierStore, PREMIUM_LIMITS } from './tierStore';
+import { useTierStore, TIER_LIMITS_DISPLAY } from './tierStore';
 
 interface UploadResult {
   success: boolean;
@@ -104,8 +104,8 @@ async function validateUploadLimits(fileSize: number, durationMs: number): Promi
   const { limits, usage, tier } = useTierStore.getState();
 
   // Check upload quota
-  if (usage.uploadsRemaining !== null && usage.uploadsRemaining <= 0) {
-    return `Monthly upload limit reached (${usage.uploadsThisMonth}/${usage.uploadsLimit}). Upgrade to Premium for unlimited uploads, or wait until next month.`;
+  if (usage.uploadsRemaining <= 0) {
+    return `Monthly upload limit reached (${usage.uploadsThisMonth}/${usage.uploadsLimit}). Upgrade to a higher tier for more uploads, or wait until next month.`;
   }
 
   // Check file size
@@ -113,14 +113,24 @@ async function validateUploadLimits(fileSize: number, durationMs: number): Promi
     const fileSizeMB = Math.round(fileSize / (1024 * 1024));
     const limitMB = Math.round(limits.maxFileSizeBytes / (1024 * 1024));
     const limitStr = limitMB >= 1024 ? `${limitMB / 1024} GB` : `${limitMB} MB`;
-    return `File size (${fileSizeMB} MB) exceeds ${limitStr} limit for ${tier} tier.${tier === 'FREE' ? ` Upgrade to Premium for ${PREMIUM_LIMITS.maxFileSizeGB} GB uploads.` : ''}`;
+    const upgradeHint = tier === 'FREE'
+      ? ` Upgrade to Pro or Elite for larger uploads (up to ${TIER_LIMITS_DISPLAY.ELITE.maxFileSizeGB} GB).`
+      : tier === 'PRO'
+        ? ` Upgrade to Elite for ${TIER_LIMITS_DISPLAY.ELITE.maxFileSizeGB} GB uploads.`
+        : '';
+    return `File size (${fileSizeMB} MB) exceeds ${limitStr} limit for ${tier} tier.${upgradeHint}`;
   }
 
   // Check duration
   if (durationMs > limits.maxVideoDurationMs) {
     const durationMin = Math.round(durationMs / 60000);
     const limitMin = Math.round(limits.maxVideoDurationMs / 60000);
-    return `Video duration (${durationMin} min) exceeds ${limitMin} minute limit for ${tier} tier.${tier === 'FREE' ? ` Upgrade to Premium for ${PREMIUM_LIMITS.maxVideoDurationMin} minute videos.` : ''}`;
+    const upgradeHint = tier === 'FREE'
+      ? ` Upgrade to Pro or Elite for longer videos (up to ${TIER_LIMITS_DISPLAY.ELITE.maxVideoDurationMin} min).`
+      : tier === 'PRO'
+        ? ` Upgrade to Elite for ${TIER_LIMITS_DISPLAY.ELITE.maxVideoDurationMin} minute videos.`
+        : '';
+    return `Video duration (${durationMin} min) exceeds ${limitMin} minute limit for ${tier} tier.${upgradeHint}`;
   }
 
   return null;

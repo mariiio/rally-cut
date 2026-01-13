@@ -79,7 +79,8 @@ export function EditorHeader() {
   } = useEditorStore();
 
   const { isUploading, uploadVideo } = useUploadStore();
-  const isPremium = useTierStore((state) => state.isPremium());
+  const isPaidTier = useTierStore((state) => state.isPaidTier());
+  const userTier = useTierStore((state) => state.tier);
   const fetchTier = useTierStore((state) => state.fetchTier);
 
   // Fetch tier on mount
@@ -324,11 +325,11 @@ export function EditorHeader() {
               {/* Sync Status Indicator */}
               <SyncStatus />
 
-              {/* Premium badge */}
-              {isPremium && (
+              {/* Tier badge */}
+              {isPaidTier && (
                 <Chip
                   icon={<DiamondIcon sx={{ fontSize: 14 }} />}
-                  label="Premium"
+                  label={userTier === 'ELITE' ? 'Elite' : 'Pro'}
                   size="small"
                   variant="outlined"
                   sx={{

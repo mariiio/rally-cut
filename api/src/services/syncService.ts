@@ -25,7 +25,7 @@ export async function syncState(
 
   if (!limits.serverSyncEnabled) {
     throw new ForbiddenError(
-      "Cross-device sync requires Premium tier. Your changes are saved locally."
+      "Cross-device sync requires a paid tier (Pro or Elite). Your changes are saved locally."
     );
   }
 

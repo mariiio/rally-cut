@@ -22,19 +22,19 @@ import { WaitlistModal } from './WaitlistModal';
 
 const plans = [
   {
-    name: 'Free',
+    name: 'Basic',
     subtitle: 'Perfect for trying out',
     price: { monthly: 0, yearly: 0 },
     features: [
-      '1 AI detection/month',
-      '5 uploads/month',
-      'Up to 1 GB per video',
+      '2 AI detections/month',
+      '3 uploads/month',
+      'Up to 500 MB per video',
       'Up to 15 min per video',
+      '1 GB storage cap',
       'Full quality exports for 3 days',
       '720p exports after 3 days',
       'Watermark on exports',
       'Browser-based export',
-      'Unlimited video storage',
       'Local storage only',
     ],
     cta: 'Start Free',
@@ -44,23 +44,43 @@ const plans = [
   {
     name: 'Pro',
     subtitle: 'For regular players',
-    price: { monthly: 7.99, yearly: 76 },
+    price: { monthly: 9.99, yearly: 95.9 },
     features: [
-      '9 AI detections/month',
-      'Unlimited uploads',
+      '15 AI detections/month',
+      '20 uploads/month',
       'Up to 2 GB per video',
-      'Up to 30 min per video',
-      'Original quality exports',
+      'Up to 45 min per video',
+      '20 GB storage cap',
+      'Original quality for 14 days',
       'No watermark',
       'Fast server-side export',
-      'Original quality forever',
-      'Never auto-deleted',
       'Cross-device sync',
+      '6 months video retention',
     ],
     cta: 'Join Waitlist',
     href: null,
     highlighted: true,
     badge: 'Most Popular',
+  },
+  {
+    name: 'Elite',
+    subtitle: 'For coaches & teams',
+    price: { monthly: 24.99, yearly: 239.9 },
+    features: [
+      '50 AI detections/month',
+      '50 uploads/month',
+      'Up to 5 GB per video',
+      'Up to 90 min per video',
+      '75 GB storage cap',
+      'Original quality for 60 days',
+      'No watermark',
+      'Fast server-side export',
+      'Cross-device sync',
+      '1 year video retention',
+    ],
+    cta: 'Join Waitlist',
+    href: null,
+    highlighted: false,
   },
 ];
 
@@ -147,9 +167,9 @@ export function Pricing() {
         </Box>
         </motion.div>
 
-        <Grid container spacing={4} justifyContent="center">
+        <Grid container spacing={3} justifyContent="center">
           {plans.map((plan, index) => (
-            <Grid size={{ xs: 12, sm: 6, md: 5 }} key={plan.name}>
+            <Grid size={{ xs: 12, sm: 6, md: 4 }} key={plan.name}>
               <motion.div
                 initial={shouldReduceMotion ? {} : { opacity: 0, y: 40 }}
                 animate={isInView ? { opacity: 1, y: 0 } : {}}
@@ -163,7 +183,7 @@ export function Pricing() {
               <Paper
                 elevation={0}
                 sx={{
-                  p: 4,
+                  p: 3,
                   height: '100%',
                   bgcolor: plan.highlighted
                     ? designTokens.colors.surface[2]
@@ -196,10 +216,10 @@ export function Pricing() {
                   />
                 )}
 
-                <Stack spacing={3}>
+                <Stack spacing={2.5}>
                   {/* Plan Name */}
                   <Box>
-                    <Typography variant="h4" fontWeight={700}>
+                    <Typography variant="h5" fontWeight={700}>
                       {plan.name}
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
@@ -214,6 +234,7 @@ export function Pricing() {
                         variant="h3"
                         sx={{
                           fontWeight: 800,
+                          fontSize: { xs: '2rem', md: '2.5rem' },
                           background: plan.highlighted
                             ? designTokens.gradients.primary
                             : 'inherit',
@@ -224,13 +245,13 @@ export function Pricing() {
                       >
                         ${yearly ? plan.price.yearly : plan.price.monthly}
                       </Typography>
-                      <Typography variant="body1" color="text.secondary">
-                        {plan.price.monthly > 0 ? (yearly ? '/year' : '/month') : ''}
+                      <Typography variant="body2" color="text.secondary">
+                        {plan.price.monthly > 0 ? (yearly ? '/year' : '/mo') : ''}
                       </Typography>
                     </Stack>
                     {yearly && plan.price.monthly > 0 && (
                       <Typography variant="caption" color="text.disabled">
-                        ${(plan.price.yearly / 12).toFixed(2)}/month billed annually
+                        ${(plan.price.yearly / 12).toFixed(2)}/mo billed annually
                       </Typography>
                     )}
                   </Box>
@@ -238,17 +259,17 @@ export function Pricing() {
                   <Divider />
 
                   {/* Features */}
-                  <Stack spacing={1.5}>
+                  <Stack spacing={1}>
                     {plan.features.map((feature) => (
-                      <Stack key={feature} direction="row" spacing={1.5} alignItems="flex-start">
+                      <Stack key={feature} direction="row" spacing={1} alignItems="flex-start">
                         <CheckIcon
                           sx={{
-                            fontSize: 20,
+                            fontSize: 18,
                             color: plan.highlighted ? 'primary.main' : 'secondary.main',
-                            mt: 0.25,
+                            mt: 0.2,
                           }}
                         />
-                        <Typography variant="body2" color="text.secondary">
+                        <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.85rem' }}>
                           {feature}
                         </Typography>
                       </Stack>
@@ -313,7 +334,7 @@ export function Pricing() {
             <Box component="span" sx={{ color: 'primary.main', fontWeight: 600 }}>
               $0.99 per match
             </Box>{' '}
-            (up to 30 minutes). No subscription required. Credits never expire.
+            (up to 30 minutes). Perfect for Basic tier users who need occasional AI detections.
           </Typography>
         </Box>
       </Container>

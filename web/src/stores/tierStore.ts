@@ -15,48 +15,71 @@ interface TierState {
 interface TierActions {
   fetchTier: (force?: boolean) => Promise<void>;
   setTier: (tier: UserTier, limits: TierLimits, usage: UsageQuota) => void;
-  isPremium: () => boolean;
+  isPaidTier: () => boolean;
   canDetect: () => boolean;
   canUpload: () => boolean;
-  getUploadsRemaining: () => number | null;
+  getUploadsRemaining: () => number;
   canSyncToServer: () => boolean;
   shouldShowWatermark: () => boolean;
   canUseLambdaExport: () => boolean;
   shouldRefetch: () => boolean;
+  getStorageUsedPercent: () => number;
 }
 
 // Cache TTL for tier data (5 minutes)
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
-// Premium tier limits for upgrade prompts (must match backend tierService.ts)
-export const PREMIUM_LIMITS = {
-  maxFileSizeGB: 2.5,
-  maxVideoDurationMin: 30,
+// Tier limits for upgrade prompts (must match backend tier config)
+export const TIER_LIMITS_DISPLAY = {
+  FREE: {
+    maxFileSizeMB: 500,
+    maxVideoDurationMin: 15,
+    storageCapGB: 1,
+    detectionsPerMonth: 2,
+    uploadsPerMonth: 3,
+  },
+  PRO: {
+    maxFileSizeGB: 2,
+    maxVideoDurationMin: 45,
+    storageCapGB: 20,
+    detectionsPerMonth: 15,
+    uploadsPerMonth: 20,
+  },
+  ELITE: {
+    maxFileSizeGB: 5,
+    maxVideoDurationMin: 90,
+    storageCapGB: 75,
+    detectionsPerMonth: 50,
+    uploadsPerMonth: 50,
+  },
 } as const;
 
 // Default FREE tier limits (in case fetch fails)
 const DEFAULT_FREE_LIMITS: TierLimits = {
-  detectionsPerMonth: 1,
+  detectionsPerMonth: 2,
   maxVideoDurationMs: 15 * 60 * 1000,
-  maxFileSizeBytes: 1 * 1024 * 1024 * 1024, // 1 GB
-  monthlyUploadCount: 5,
+  maxFileSizeBytes: 500 * 1024 * 1024, // 500 MB
+  monthlyUploadCount: 3,
+  storageCapBytes: 1 * 1024 * 1024 * 1024, // 1 GB
   exportQuality: '720p',
   exportWatermark: true,
   lambdaExportEnabled: false,
-  retentionDays: null, // Deprecated
   originalQualityDays: 3,
-  inactivityDeleteDays: 60,
+  inactivityDeleteDays: 30,
   serverSyncEnabled: false,
   highlightsEnabled: true,
 };
 
 const DEFAULT_FREE_USAGE: UsageQuota = {
   detectionsUsed: 0,
-  detectionsLimit: 1,
-  detectionsRemaining: 1,
+  detectionsLimit: 2,
+  detectionsRemaining: 2,
   uploadsThisMonth: 0,
-  uploadsLimit: 5,
-  uploadsRemaining: 5,
+  uploadsLimit: 3,
+  uploadsRemaining: 3,
+  storageUsedBytes: 0,
+  storageLimitBytes: 1 * 1024 * 1024 * 1024,
+  storageRemainingBytes: 1 * 1024 * 1024 * 1024,
   periodStart: new Date().toISOString(),
 };
 
@@ -87,10 +110,10 @@ export const useTierStore = create<TierState & TierActions>((set, get) => ({
         lastFetched: new Date(),
       });
 
-      // If upgraded from FREE to PREMIUM, trigger sync to push localStorage data to server
+      // If upgraded from FREE to a paid tier, trigger sync to push localStorage data to server
       // Use a short delay to ensure editor/syncService has initialized
-      if (previousTier === 'FREE' && user.tier === 'PREMIUM') {
-        console.log('[TierStore] Upgraded to PREMIUM - triggering sync for localStorage data');
+      if (previousTier === 'FREE' && (user.tier === 'PRO' || user.tier === 'ELITE')) {
+        console.log(`[TierStore] Upgraded to ${user.tier} - triggering sync for localStorage data`);
         // Immediate attempt
         syncService.markDirty();
         // Retry after editor likely initialized (in case page is still loading)
@@ -112,7 +135,10 @@ export const useTierStore = create<TierState & TierActions>((set, get) => ({
     set({ tier, limits, usage });
   },
 
-  isPremium: () => get().tier === 'PREMIUM',
+  isPaidTier: () => {
+    const tier = get().tier;
+    return tier === 'PRO' || tier === 'ELITE';
+  },
 
   canDetect: () => {
     const { usage } = get();
@@ -121,8 +147,6 @@ export const useTierStore = create<TierState & TierActions>((set, get) => ({
 
   canUpload: () => {
     const { usage } = get();
-    // null means unlimited
-    if (usage.uploadsRemaining === null) return true;
     return usage.uploadsRemaining > 0;
   },
 
@@ -138,5 +162,11 @@ export const useTierStore = create<TierState & TierActions>((set, get) => ({
     const { lastFetched } = get();
     if (!lastFetched) return true;
     return Date.now() - lastFetched.getTime() > CACHE_TTL_MS;
+  },
+
+  getStorageUsedPercent: () => {
+    const { usage } = get();
+    if (usage.storageLimitBytes === 0) return 0;
+    return Math.round((usage.storageUsedBytes / usage.storageLimitBytes) * 100);
   },
 }));

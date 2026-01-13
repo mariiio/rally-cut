@@ -35,7 +35,7 @@ src/
 │   ├── HighlightsPanel
 │   ├── CameraPanel   # Camera edit controls
 │   ├── CameraOverlay # Visual preview overlay
-│   └── OriginalQualityBanner # FREE tier upgrade prompt (7-day quality warning)
+│   └── OriginalQualityBanner # FREE tier upgrade prompt (3-day quality warning)
 ├── stores/           # Zustand stores (see below)
 ├── services/
 │   ├── api.ts        # REST client
@@ -98,7 +98,7 @@ Also uses: `preload="metadata"`, 1280px poster thumbnail.
 ## State Persistence
 
 - **localStorage**: Immediate save on every mutation
-- **Backend sync**: 5s debounce after `markDirty()`, PREMIUM only
+- **Backend sync**: 5s debounce after `markDirty()`, paid tiers only (Pro/Elite)
 - **Undo/redo**: 50 entries, stored in `past[]`/`future[]` arrays
 
 ## API Integration
@@ -111,7 +111,7 @@ Also uses: `preload="metadata"`, 1280px poster thumbnail.
 
 - `exportServerSide()` triggers Lambda export via API
 - Polls for progress, downloads when complete
-- FREE = 720p + watermark, PREMIUM = original + camera effects
+- FREE = 720p + watermark (browser export), PRO/ELITE = original + camera effects (server export)
 
 ## Caveats
 

@@ -974,17 +974,17 @@ export async function restoreVideo(videoId: string): Promise<void> {
 // User API
 // ============================================================================
 
-export type UserTier = 'FREE' | 'PREMIUM';
+export type UserTier = 'FREE' | 'PRO' | 'ELITE';
 
 export interface TierLimits {
   detectionsPerMonth: number;
   maxVideoDurationMs: number;
   maxFileSizeBytes: number;
-  monthlyUploadCount: number | null;
+  monthlyUploadCount: number;
+  storageCapBytes: number;
   exportQuality: '720p' | 'original';
   exportWatermark: boolean;
   lambdaExportEnabled: boolean;
-  retentionDays: number | null; // Deprecated - use originalQualityDays/inactivityDeleteDays
   originalQualityDays: number | null;
   inactivityDeleteDays: number | null;
   serverSyncEnabled: boolean;
@@ -996,8 +996,11 @@ export interface UsageQuota {
   detectionsLimit: number;
   detectionsRemaining: number;
   uploadsThisMonth: number;
-  uploadsLimit: number | null;
-  uploadsRemaining: number | null;
+  uploadsLimit: number;
+  uploadsRemaining: number;
+  storageUsedBytes: number;
+  storageLimitBytes: number;
+  storageRemainingBytes: number;
   periodStart: string;
 }
 
@@ -1303,7 +1306,7 @@ export async function rejectAccessRequest(
 // Export Jobs API
 // ============================================================================
 
-export type ExportTier = 'FREE' | 'PREMIUM';
+export type ExportTier = 'FREE' | 'PRO' | 'ELITE';
 export type ExportStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
 
 export interface ExportJobResponse {

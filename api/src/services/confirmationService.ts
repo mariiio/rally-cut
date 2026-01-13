@@ -86,8 +86,8 @@ export async function initiateConfirmation(
   const userTier = await getUserTier(userId);
   const limits = getTierLimits(userTier);
 
-  if (userTier !== "PREMIUM") {
-    throw new ForbiddenError("Rally confirmation requires Premium tier.");
+  if (userTier === "FREE") {
+    throw new ForbiddenError("Rally confirmation requires Pro or Elite tier.");
   }
 
   // Get video with rallies
@@ -258,8 +258,8 @@ export async function restoreOriginal(
 ): Promise<{ success: boolean }> {
   // Check user tier
   const userTier = await getUserTier(userId);
-  if (userTier !== "PREMIUM") {
-    throw new ForbiddenError("Rally confirmation requires Premium tier.");
+  if (userTier === "FREE") {
+    throw new ForbiddenError("Rally confirmation requires Pro or Elite tier.");
   }
 
   const video = await prisma.video.findFirst({
@@ -750,7 +750,7 @@ async function triggerLambdaProcessing(
   // Lambda will generate ONLY a 720p proxy (no full-quality trimmed video)
   const payload = {
     jobId: confirmationId,  // Lambda expects jobId
-    tier: "PREMIUM",        // Confirmation is PREMIUM-only
+    tier: "PRO",            // Confirmation is paid tier only (PRO or ELITE)
     format: "mp4",
     isConfirmation: true,   // Enables proxy-only confirmation mode in Lambda
     proxyOnly: true,        // Explicitly request proxy-only output

@@ -36,7 +36,7 @@ type BannerState = 'none' | 'countdown' | 'downgraded';
 export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerProps) {
   const [isCountdownDismissed, setIsCountdownDismissed] = useState(false);
   const [isDowngradedDismissed, setIsDowngradedDismissed] = useState(false);
-  const isPremium = useTierStore((state) => state.isPremium());
+  const isPaidTier = useTierStore((state) => state.isPaidTier());
   const originalQualityDays = useTierStore((state) => state.limits.originalQualityDays);
 
   const countdownDismissedKey = currentMatch ? `${DISMISSED_KEY_PREFIX}${currentMatch.id}` : null;
@@ -67,7 +67,7 @@ export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerPro
   // Determine banner state
   const bannerState: BannerState = useMemo(() => {
     // Don't show for premium users
-    if (isPremium) return 'none';
+    if (isPaidTier) return 'none';
 
     // Don't show if no match
     if (!currentMatch) return 'none';
@@ -95,7 +95,7 @@ export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerPro
     }
 
     return 'none';
-  }, [isPremium, currentMatch, daysUntilDowngrade, isCountdownDismissed, isDowngradedDismissed]);
+  }, [isPaidTier, currentMatch, daysUntilDowngrade, isCountdownDismissed, isDowngradedDismissed]);
 
   const handleDismissCountdown = () => {
     if (countdownDismissedKey) {

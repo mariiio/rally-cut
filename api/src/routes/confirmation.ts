@@ -15,7 +15,7 @@ const router = Router();
  * POST /v1/videos/:id/confirm-rallies
  * Initiate rally confirmation for a video.
  * Creates a trimmed video with only rally segments (dead time removed).
- * PREMIUM tier only.
+ * Paid tiers only (Pro/Elite).
  */
 router.post(
   "/v1/videos/:id/confirm-rallies",
@@ -55,7 +55,7 @@ router.get(
  * POST /v1/videos/:id/restore-original
  * Restore the original video, deleting the trimmed version.
  * Reverts rally timestamps to original values.
- * PREMIUM tier only.
+ * Paid tiers only (Pro/Elite).
  */
 router.post(
   "/v1/videos/:id/restore-original",

@@ -71,10 +71,12 @@ async function validateUploadRequest(
     const fileSizeMB = Math.round(params.fileSize / (1024 * 1024));
     const limitMB = Math.round(limits.maxFileSizeBytes / (1024 * 1024));
     const limitGB = limitMB >= 1024 ? `${limitMB / 1024} GB` : `${limitMB} MB`;
-    const premiumLimitGB = TIER_LIMITS.PREMIUM.maxFileSizeBytes / (1024 * 1024 * 1024);
+    const eliteLimitGB = TIER_LIMITS.ELITE.maxFileSizeBytes / (1024 * 1024 * 1024);
     const upgradeHint = tier === "FREE"
-      ? ` Upgrade to Premium for ${premiumLimitGB} GB uploads.`
-      : " Consider compressing the video or splitting it into parts.";
+      ? ` Upgrade to Pro or Elite for larger uploads (up to ${eliteLimitGB} GB).`
+      : tier === "PRO"
+        ? ` Upgrade to Elite for ${eliteLimitGB} GB uploads.`
+        : " Consider compressing the video or splitting it into parts.";
     throw new LimitExceededError(
       `File size (${fileSizeMB} MB) exceeds ${limitGB} limit for ${tier} tier.${upgradeHint}`,
       { fileSize: params.fileSize, limit: limits.maxFileSizeBytes, tier }
@@ -85,9 +87,14 @@ async function validateUploadRequest(
   if (params.durationMs && params.durationMs > limits.maxVideoDurationMs) {
     const durationMin = Math.round(params.durationMs / 60000);
     const limitMin = Math.round(limits.maxVideoDurationMs / 60000);
-    const premiumLimitMin = Math.round(TIER_LIMITS.PREMIUM.maxVideoDurationMs / 60000);
+    const eliteLimitMin = Math.round(TIER_LIMITS.ELITE.maxVideoDurationMs / 60000);
+    const upgradeHint = tier === "FREE"
+      ? ` Upgrade to Pro or Elite for longer videos (up to ${eliteLimitMin} min).`
+      : tier === "PRO"
+        ? ` Upgrade to Elite for ${eliteLimitMin} minute videos.`
+        : "";
     throw new LimitExceededError(
-      `Video duration (${durationMin} min) exceeds ${limitMin} minute limit for ${tier} tier.${tier === "FREE" ? ` Upgrade to Premium for ${premiumLimitMin} minute videos.` : ""}`,
+      `Video duration (${durationMin} min) exceeds ${limitMin} minute limit for ${tier} tier.${upgradeHint}`,
       { duration: params.durationMs, limit: limits.maxVideoDurationMs }
     );
   }
@@ -96,7 +103,7 @@ async function validateUploadRequest(
   const uploadQuota = await checkUploadQuota(params.userId);
   if (!uploadQuota.allowed) {
     throw new LimitExceededError(
-      `Monthly upload limit reached (${uploadQuota.used}/${uploadQuota.limit}). Upgrade to Premium for unlimited uploads, or wait until next month.`,
+      `Monthly upload limit reached (${uploadQuota.used}/${uploadQuota.limit}). Upgrade to a higher tier for more uploads, or wait until next month.`,
       { used: uploadQuota.used, limit: uploadQuota.limit }
     );
   }
@@ -456,7 +463,7 @@ export async function confirmVideoUpload(
 
   if (!quotaResult.allowed) {
     throw new LimitExceededError(
-      `Monthly upload limit reached (${quotaResult.used}/${quotaResult.limit}). Upgrade to Premium for unlimited uploads, or wait until next month.`,
+      `Monthly upload limit reached (${quotaResult.used}/${quotaResult.limit}). Upgrade for more uploads, or wait until next month.`,
       { used: quotaResult.used, limit: quotaResult.limit }
     );
   }
@@ -908,7 +915,7 @@ export async function confirmUpload(
 
   if (!quotaResult.allowed) {
     throw new LimitExceededError(
-      `Monthly upload limit reached (${quotaResult.used}/${quotaResult.limit}). Upgrade to Premium for unlimited uploads, or wait until next month.`,
+      `Monthly upload limit reached (${quotaResult.used}/${quotaResult.limit}). Upgrade for more uploads, or wait until next month.`,
       { used: quotaResult.used, limit: quotaResult.limit }
     );
   }
