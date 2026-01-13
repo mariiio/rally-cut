@@ -77,6 +77,7 @@ export function AddVideoModal({
   const [addingVideos, setAddingVideos] = useState(false);
   const [search, setSearch] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { isUploading, progress, currentStep, uploadVideo } = useUploadStore();
@@ -179,6 +180,7 @@ export function AddVideoModal({
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
+    setIsDragOver(false);
     const file = e.dataTransfer.files[0];
     if (!file) return;
 
@@ -196,6 +198,18 @@ export function AddVideoModal({
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    // Only set to false if leaving the drop zone entirely (not entering a child)
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setIsDragOver(false);
   };
 
   return (
@@ -233,15 +247,18 @@ export function AddVideoModal({
           <Box
             onDrop={handleDrop}
             onDragOver={handleDragOver}
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
             onClick={() => !isUploading && fileInputRef.current?.click()}
             sx={{
               border: '2px dashed',
-              borderColor: 'grey.600',
+              borderColor: isDragOver && !isUploading ? 'primary.main' : 'grey.600',
               borderRadius: 2,
               p: 4,
               textAlign: 'center',
               cursor: isUploading ? 'default' : 'pointer',
               transition: 'all 0.2s',
+              bgcolor: isDragOver && !isUploading ? 'action.hover' : 'transparent',
               '&:hover': {
                 borderColor: isUploading ? 'grey.600' : 'primary.main',
                 bgcolor: isUploading ? 'transparent' : 'action.hover',
