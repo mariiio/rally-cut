@@ -418,8 +418,10 @@ def modal(
         if result.returncode == 0:
             rprint(f"[green]Model downloaded to {output_dir}[/green]")
             rprint()
-            rprint("[yellow]Tip: Run 'rallycut train modal --cleanup' to delete videos from Modal")
-            rprint("and save storage costs (~$0.75/GB/month).[/yellow]")
+            rprint(
+                "[yellow]Tip: Run 'rallycut train modal --cleanup' to delete videos from Modal\n"
+                "and save storage costs (~$0.75/GB/month).[/yellow]"
+            )
         else:
             rprint(f"[red]Download failed: {result.stderr}[/red]")
         return
