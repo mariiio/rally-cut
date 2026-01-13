@@ -101,24 +101,31 @@ When you have new labeled videos to add to an existing trained model:
    rallycut train export-dataset --name beach_v2
    ```
 
-3. **Prepare training data**
+3. **Commit dataset to git** (backup labels in case DB resets)
+   ```bash
+   cd training_datasets/beach_v2
+   git add manifest.json ground_truth.json
+   git commit -m "Add beach_v2 dataset (N videos, M rallies)"
+   ```
+
+4. **Prepare training data**
    ```bash
    rallycut train prepare --output training_data/
    ```
 
-4. **Upload to Modal**
+5. **Upload to Modal**
    ```bash
    rallycut train modal --upload         # Upload training JSON
    rallycut train modal --upload-videos  # Upload proxy videos (only new ones)
    rallycut train modal --upload-model   # Upload existing model weights
    ```
 
-5. **Run incremental training** (lower learning rate to preserve existing knowledge)
+6. **Run incremental training** (lower learning rate to preserve existing knowledge)
    ```bash
    rallycut train modal --resume-from-model --lr 1e-5 --epochs 5
    ```
 
-6. **Download and clean up**
+7. **Download and clean up**
    ```bash
    rallycut train modal --download
    rallycut train modal --cleanup
