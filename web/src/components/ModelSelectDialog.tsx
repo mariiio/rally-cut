@@ -79,30 +79,38 @@ export function ModelSelectDialog({
         <Typography
           variant="body2"
           color="text.secondary"
-          sx={{ mb: 2.5, textAlign: 'center' }}
+          sx={{ mb: 3, textAlign: 'center' }}
         >
           Select the model that best matches your video type
         </Typography>
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+        <Box sx={{ display: 'flex', gap: 2 }}>
           {MODEL_OPTIONS.map((option) => (
             <Paper
               key={option.id}
               onClick={() => onSelect(option.id)}
               elevation={0}
               sx={{
-                p: 2,
+                flex: 1,
+                p: 3,
                 cursor: 'pointer',
                 border: '2px solid',
                 borderColor: 'divider',
                 borderRadius: 2,
                 display: 'flex',
+                flexDirection: 'column',
                 alignItems: 'center',
-                gap: 2,
+                textAlign: 'center',
+                gap: 1.5,
                 transition: 'all 0.15s ease',
+                position: 'relative',
                 '&:hover': {
                   borderColor: 'primary.main',
                   bgcolor: (theme) => alpha(theme.palette.primary.main, 0.04),
                   '& .model-icon': {
+                    color: 'primary.main',
+                    bgcolor: (theme) => alpha(theme.palette.primary.main, 0.12),
+                  },
+                  '& .check-icon': {
                     color: 'primary.main',
                   },
                 },
@@ -111,6 +119,17 @@ export function ModelSelectDialog({
                 },
               }}
             >
+              <CheckCircleIcon
+                className="check-icon"
+                sx={{
+                  position: 'absolute',
+                  top: 12,
+                  right: 12,
+                  fontSize: 20,
+                  color: 'transparent',
+                  transition: 'color 0.15s ease',
+                }}
+              />
               <Box
                 className="model-icon"
                 sx={{
@@ -118,19 +137,19 @@ export function ModelSelectDialog({
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  width: 48,
-                  height: 48,
-                  borderRadius: 1.5,
+                  width: 56,
+                  height: 56,
+                  borderRadius: 2,
                   bgcolor: 'action.hover',
-                  transition: 'color 0.15s ease',
+                  transition: 'all 0.15s ease',
                 }}
               >
                 {option.icon}
               </Box>
-              <Box sx={{ flex: 1 }}>
+              <Box>
                 <Typography
                   variant="subtitle1"
-                  sx={{ fontWeight: 600, lineHeight: 1.3 }}
+                  sx={{ fontWeight: 600, lineHeight: 1.3, mb: 0.5 }}
                 >
                   {option.title}
                 </Typography>
@@ -142,16 +161,6 @@ export function ModelSelectDialog({
                   {option.description}
                 </Typography>
               </Box>
-              <CheckCircleIcon
-                sx={{
-                  fontSize: 24,
-                  color: 'transparent',
-                  transition: 'color 0.15s ease',
-                  '.MuiPaper-root:hover &': {
-                    color: 'primary.main',
-                  },
-                }}
-              />
             </Paper>
           ))}
         </Box>

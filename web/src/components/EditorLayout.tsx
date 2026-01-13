@@ -41,6 +41,7 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
     canUndo,
     canRedo,
     rallies,
+    getAllRallies,
     highlights,
     createHighlight,
     canCreateHighlight,
@@ -266,7 +267,7 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
             <Stack spacing={1}>
               <Tooltip title="Rallies" placement="right">
                 <Badge
-                  badgeContent={rallies?.length || 0}
+                  badgeContent={getAllRallies().length}
                   color="primary"
                   max={99}
                   sx={{
@@ -335,7 +336,7 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
             >
               <Tab
                 value="rallies"
-                label={`Rallies (${rallies?.length ?? 0})`}
+                label={`Rallies (${getAllRallies().length})`}
                 icon={<ListAltIcon sx={{ fontSize: 16 }} />}
                 iconPosition="start"
                 sx={{ minHeight: 36 }}

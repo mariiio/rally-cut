@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import {
   Box,
   Typography,
@@ -74,6 +74,8 @@ export function RallyList() {
     downloadAllRalliesServerSide,
   } = useExportStore();
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
 
   // Track which matches are expanded
   const [expandedMatches, setExpandedMatches] = useState<Set<string>>(
@@ -156,6 +158,13 @@ export function RallyList() {
     return () => clearInterval(intervalId);
   }, [isConfirming, activeMatchId, confirmationStatus, setConfirmationStatus, setIsConfirming, reloadSession]);
 
+  // Update URL param when switching videos
+  const updateVideoUrlParam = useCallback((videoId: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('video', videoId);
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  }, [pathname, searchParams, router]);
+
   const handleMatchClick = (match: Match) => {
     const isActiveMatch = activeMatchId === match.id;
     // Use rallies from store for active match (live updates), session for others
@@ -177,6 +186,7 @@ export function RallyList() {
       // Switch to video in player for videos with no rallies
       if (!isActiveMatch) {
         setActiveMatch(match.id);
+        updateVideoUrlParam(match.id);
       }
     }
   };
@@ -185,6 +195,7 @@ export function RallyList() {
     // Switch match if needed
     if (matchId !== activeMatchId) {
       setActiveMatch(matchId);
+      updateVideoUrlParam(matchId);
       // Expand the match if collapsed
       setExpandedMatches((prev) => new Set(prev).add(matchId));
     }
@@ -192,7 +203,7 @@ export function RallyList() {
     seek(rally.start_time);
     // Exit camera edit mode when clicking on a rally
     setIsCameraTabActive(false);
-  }, [activeMatchId, setActiveMatch, selectRally, seek, setIsCameraTabActive]);
+  }, [activeMatchId, setActiveMatch, updateVideoUrlParam, selectRally, seek, setIsCameraTabActive]);
 
   // Get the active match from session
   const activeMatch = useMemo(
