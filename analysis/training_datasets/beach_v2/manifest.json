@@ -1,0 +1,103 @@
+{
+  "name": "beach_v2",
+  "description": "Training dataset: beach_v2",
+  "created": "2026-01-13T15:36:38.307769",
+  "videos": [
+    {
+      "filename": "IMG_1819.MOV",
+      "video_id": "0a8cf86d-9753-4f1a-8936-f09b89fe0ba5",
+      "content_hash": "144c4f6fcab7047c00e25a29fec42e479f76fd888af4589bd2b71637fe0500dd",
+      "duration_ms": 1028894,
+      "rally_count": 37
+    },
+    {
+      "filename": "IMG_1889.MOV",
+      "video_id": "246c84db-3f6a-4fa4-b2c4-203054617314",
+      "content_hash": "20b0a29e625c41b319108e929ae0572fec5672ac72b5802e94e957587f0cdcc2",
+      "duration_ms": 332683,
+      "rally_count": 13
+    },
+    {
+      "filename": "IMG_1821.MOV",
+      "video_id": "4490a905-4e0e-4509-b642-7e621cb80621",
+      "content_hash": "ebbf840d4841702c4fe46c0bd7bf11841905feca35691ddc7d26ae02c9eaa655",
+      "duration_ms": 1185067,
+      "rally_count": 41
+    },
+    {
+      "filename": "IMG_1887.MOV",
+      "video_id": "708dbc8c-e559-4e20-a58b-e7e2f0888b73",
+      "content_hash": "fe7527122e93a954052356471f9ad2386411349ac8dee270f2469ba6bb56a83a",
+      "duration_ms": 1341803,
+      "rally_count": 48
+    },
+    {
+      "filename": "IMG_1820.MOV",
+      "video_id": "96fd349f-69f5-490f-b671-8187630a5dda",
+      "content_hash": "a6ab35488bcefea5ddad042163033df76d134fb7dc422c035158ce24fff7951a",
+      "duration_ms": 1208555,
+      "rally_count": 36
+    },
+    {
+      "filename": "matahtach.mp4",
+      "video_id": "9d0744ef-0d3c-4cb2-9d62-1ee4ff19cf93",
+      "content_hash": "a95f6b77a01f7fb886e319f50115b7381e34dc5d4cb0c0265a3e1466c18579c9",
+      "duration_ms": 433766,
+      "rally_count": 15
+    },
+    {
+      "filename": "match.mp4",
+      "video_id": "a7901364-9d71-4467-ab3e-deeb6a371cf0",
+      "content_hash": "96cf9a5c21fc4821aad0f69be208ab948e18d6a420f87129f85ee8f3b21a5dec",
+      "duration_ms": 834400,
+      "rally_count": 31
+    },
+    {
+      "filename": "dark.mp4",
+      "video_id": "b02f6586-0851-4e0f-943e-61da8c75a51c",
+      "content_hash": "67b57630574fa0381b09c2ab9fca5fce3ae801fd11aaa7510f86dd359fadcdc4",
+      "duration_ms": 357033,
+      "rally_count": 11
+    },
+    {
+      "filename": "IMG_1817.MOV",
+      "video_id": "b774172b-2f6b-4e54-b489-7ab0df818810",
+      "content_hash": "039c43e316d0b3332874a8c8455ed4a084707a05dc45896ec586e9cff5216cf9",
+      "duration_ms": 1054820,
+      "rally_count": 39
+    },
+    {
+      "filename": "IMG_1888.MOV",
+      "video_id": "bf31b858-cfb3-428c-94f9-a848d7e6e208",
+      "content_hash": "418d0650f9005a01694c9f8d001a9afd63d67d5c0295d39a0446af65c039138c",
+      "duration_ms": 1334783,
+      "rally_count": 43
+    },
+    {
+      "filename": "match-2.MOV",
+      "video_id": "e086d8e9-20f0-486a-9ad7-1650582134b7",
+      "content_hash": "983f2f351ea2120d14792ea165b296835f0eea0843746480993a0bbfe8112a0e",
+      "duration_ms": 739071,
+      "rally_count": 23
+    },
+    {
+      "filename": "matchc.mp4",
+      "video_id": "f691aae0-0105-4eee-8cfc-764c81934613",
+      "content_hash": "46eb0ed3eca0dbcf71ff99abe48566671989fbf8fb3bd08ebf14b62d0c10c33d",
+      "duration_ms": 291724,
+      "rally_count": 9
+    },
+    {
+      "filename": "natch.mp4",
+      "video_id": "fcd69f14-7540-4578-ab4e-d4e1523c62b1",
+      "content_hash": "28b6d76171fd9a2a48dcbed74fadc6120f062eb17da85a6b12c11e9f862544bb",
+      "duration_ms": 464700,
+      "rally_count": 11
+    }
+  ],
+  "stats": {
+    "total_videos": 13,
+    "total_rallies": 357,
+    "total_duration_min": 176.8
+  }
+}
