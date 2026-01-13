@@ -60,10 +60,11 @@ class TrainingConfig:
     use_mps: bool = True
     dataloader_num_workers: int = 0  # MPS issues with multiprocessing
 
-    # Logging
+    # Logging and checkpointing
     logging_steps: int = 10
     eval_steps: int = 50
-    save_steps: int = 100
+    save_steps: int = 100  # Used when save_strategy="steps"
+    save_strategy: str = "epoch"  # "epoch" for local, "steps" for Modal (preemption resilience)
 
     @property
     def effective_batch_size(self) -> int:

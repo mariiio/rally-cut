@@ -62,6 +62,11 @@ training_volume = modal.Volume.from_name("rallycut-training", create_if_missing=
     timeout=14400,  # 4 hours max
     volumes={"/data": training_volume},
     memory=16384,  # 16GB RAM
+    retries=modal.Retries(
+        max_retries=2,  # Retry up to 2 times on preemption (3 total attempts)
+        initial_delay=5.0,  # Wait 5s before first retry
+        backoff_coefficient=2.0,  # Double delay each retry (5s, 10s)
+    ),
 )
 def train_model(
     epochs: int = 25,
@@ -210,6 +215,9 @@ def train_model(
         "output_dir": output_path,
         "use_mps": False,  # Use CUDA on Modal
         "dataloader_num_workers": 4,  # Can use multiprocessing on Modal
+        "save_strategy": "steps",  # Save every N steps for preemption resilience
+        "save_steps": 100,  # Checkpoint every ~5 min, max loss on preemption
+        "eval_steps": 100,  # Evaluate at same frequency as saves
     }
 
     if base_model_path is not None:
