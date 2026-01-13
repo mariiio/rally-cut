@@ -70,7 +70,11 @@ rallycut evaluate --model beach --iou 0.5
    rallycut train modal --epochs 10      # Train on T4 GPU (~$0.59/hr)
    rallycut train modal --download       # Get trained model
    ```
-   Note: Video upload uses 3 parallel workers for faster transfers.
+
+   **Preemption resilience:** Training automatically handles GPU preemption:
+   - Auto-retries up to 2 times (3 total attempts)
+   - Checkpoints saved every 100 steps (~5 min max progress loss)
+   - Resumes from latest checkpoint on restart
 
 5. **Evaluate the trained model**
    ```bash
