@@ -44,27 +44,37 @@ All endpoints require `X-Visitor-Id` header (UUID):
 
 ## Tier System
 
-| Feature | FREE | PREMIUM |
-|---------|------|---------|
-| Detections/month | 1 | 9 |
-| Max video duration | 15 min | 30 min |
-| Max file size | 1 GB | 2 GB |
-| Monthly uploads | 5 | Unlimited |
-| Export quality | 720p + watermark | Original |
-| Server sync | No (localStorage only) | Yes |
-| Original quality | 3 days (then 720p proxy) | Forever |
-| Video retention | Until 2 months inactive | Forever |
+| Feature | FREE | PRO ($9.99) | ELITE ($24.99) |
+|---------|------|-------------|----------------|
+| Detections/month | 2 | 15 | 50 |
+| Monthly uploads | 3 | 20 | 50 |
+| Max video duration | 15 min | 45 min | 90 min |
+| Max file size | 500 MB | 2 GB | 5 GB |
+| Storage cap | 1 GB | 20 GB | 75 GB |
+| Export quality | 720p + watermark | Original | Original |
+| Server export | No (browser only) | Lambda | Lambda |
+| Server sync | No (localStorage only) | Yes | Yes |
+| Original quality retention | 3 days | 14 days | 60 days |
+| Inactivity deletion | 30 days | 6 months | 1 year |
 
-Tier checked via `tierService.ts`. Premium expires → auto-downgrade to FREE.
+**Configuration**: All limits defined in `src/config/tiers.ts` (single source of truth).
+**Enforcement**: `tierService.ts` checks limits, `getUserTier()` resolves tier from user.
+**Expiration**: Paid tier expires → auto-downgrade to FREE.
 
 ### Retention Policy
 
-FREE tier videos follow a two-phase cleanup:
-1. **Day 3**: Original/optimized quality deleted, video remains accessible at 720p proxy
-2. **2 months inactive**: All content hard deleted (videos, sessions, S3 files)
+Videos follow a two-phase cleanup based on tier:
+
+1. **Original quality downgrade**: After `originalQualityDays` (FREE: 3, PRO: 14, ELITE: 60):
+   - Original/optimized quality deleted, video accessible at 720p proxy only
+
+2. **Inactivity deletion**: After `inactivityDeleteDays` inactive (FREE: 30, PRO: 180, ELITE: 365):
+   - All content hard deleted (videos, sessions, S3 files)
+
+**Storage quota**: Enforced per-user, calculated from all video `fileSizeBytes`. Upload blocked when over cap.
 
 Activity tracking: User's `lastActiveAt` updated (1hr debounce) when accessing sessions.
-Cleanup job: `cleanupExpiredContent()` handles both phases.
+Cleanup job: `cleanupExpiredContent()` handles both phases per tier.
 
 ## Key Flows
 
@@ -97,7 +107,7 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
 ### Export
 - `POST /v1/export-jobs` → triggers Lambda or local FFmpeg
 - Supports camera edits (keyframes per rally)
-- FREE = 720p + watermark, PREMIUM = original quality
+- FREE = 720p + watermark (browser export), PRO/ELITE = original quality (server export)
 - Poll `GET /v1/export-jobs/:id` for status
 
 ### Session Sharing
@@ -151,4 +161,4 @@ CLOUDFRONT_DOMAIN, CLOUDFRONT_KEY_PAIR_ID  # For signed URLs
 - **Soft vs hard delete**: Sessions use soft delete (`deletedAt`), videos have both soft delete AND hard `DELETE` endpoint
 - **Fire-and-forget Lambda**: API returns 202 immediately, relies on webhooks for completion
 - **Content hash**: SHA-256 of first+last 10MB + metadata for large file deduplication
-- **Rally confirmation**: Separate feature that creates trimmed videos (PREMIUM only), stores timestamp mappings
+- **Rally confirmation**: Separate feature that creates trimmed videos (PRO/ELITE only), stores timestamp mappings

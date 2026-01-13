@@ -1,43 +1,31 @@
 import { prisma } from "../lib/prisma.js";
+import {
+  type UserTier,
+  type TierConfig,
+  TIER_CONFIG,
+  getTierConfig,
+} from "../config/tiers.js";
 
-// Define UserTier locally until Prisma client is regenerated
-export type UserTier = "FREE" | "PREMIUM";
+// Re-export types and config for backward compatibility
+export type { UserTier, TierConfig };
+export { TIER_CONFIG, getTierConfig };
 
+// Legacy export for backward compatibility with existing code
+// Maps the new config structure to the old TIER_LIMITS format
 export const TIER_LIMITS = {
-  FREE: {
-    detectionsPerMonth: 1,
-    maxVideoDurationMs: 15 * 60 * 1000, // 15 minutes
-    maxFileSizeBytes: 1 * 1024 * 1024 * 1024, // 1 GB
-    monthlyUploadCount: 5,
-    exportQuality: "720p" as const,
-    exportWatermark: true,
-    lambdaExportEnabled: false,
-    retentionDays: null, // Videos kept until 2 months inactive
-    originalQualityDays: 3, // Original quality kept for 3 days, then downgraded to 720p proxy
-    inactivityDeleteDays: 60, // Hard delete after 2 months of inactivity
-    serverSyncEnabled: false,
-    highlightsEnabled: true,
-  },
-  PREMIUM: {
-    detectionsPerMonth: 9,
-    maxVideoDurationMs: 30 * 60 * 1000, // 30 minutes
-    maxFileSizeBytes: 2.5 * 1024 * 1024 * 1024, // 2.5 GB
-    monthlyUploadCount: null as number | null, // unlimited
-    exportQuality: "original" as const,
-    exportWatermark: false,
-    lambdaExportEnabled: true,
-    retentionDays: null, // indefinite
-    originalQualityDays: null, // Original quality kept forever
-    inactivityDeleteDays: null, // Never auto-deleted
-    serverSyncEnabled: true,
-    highlightsEnabled: true,
+  FREE: TIER_CONFIG.FREE,
+  PRO: TIER_CONFIG.PRO,
+  ELITE: TIER_CONFIG.ELITE,
+  // Legacy alias - remove after migration
+  get PREMIUM() {
+    return TIER_CONFIG.PRO;
   },
 } as const;
 
-export type TierLimits = (typeof TIER_LIMITS)["FREE"] | (typeof TIER_LIMITS)["PREMIUM"];
+export type TierLimits = TierConfig;
 
 export function getTierLimits(tier: UserTier): TierLimits {
-  return tier === "PREMIUM" ? TIER_LIMITS.PREMIUM : TIER_LIMITS.FREE;
+  return getTierConfig(tier);
 }
 
 export async function getUserTier(userId: string | undefined): Promise<UserTier> {
@@ -54,8 +42,8 @@ export async function getUserTier(userId: string | undefined): Promise<UserTier>
     return "FREE";
   }
 
-  // Check if tier has expired
-  if (user.tier === "PREMIUM" && user.tierExpiresAt) {
+  // Check if tier has expired (for paid tiers)
+  if ((user.tier === "PRO" || user.tier === "ELITE") && user.tierExpiresAt) {
     if (new Date() > user.tierExpiresAt) {
       // Tier expired, downgrade to FREE
       await prisma.user.update({
@@ -66,7 +54,7 @@ export async function getUserTier(userId: string | undefined): Promise<UserTier>
     }
   }
 
-  return user.tier;
+  return user.tier as UserTier;
 }
 
 export async function getUserTierLimits(
@@ -230,8 +218,8 @@ export async function checkAndReserveDetectionQuota(
 export interface UploadQuotaResult {
   allowed: boolean;
   used: number;
-  limit: number | null;
-  remaining: number | null;
+  limit: number;
+  remaining: number;
 }
 
 export async function checkUploadQuota(
@@ -244,16 +232,6 @@ export async function checkUploadQuota(
   const tier = await getUserTier(userId);
   const limits = getTierLimits(tier);
   const quota = await getOrCreateUsageQuota(userId);
-
-  // null limit means unlimited
-  if (limits.monthlyUploadCount === null) {
-    return {
-      allowed: true,
-      used: quota.uploadsThisMonth,
-      limit: null,
-      remaining: null,
-    };
-  }
 
   const remaining = Math.max(0, limits.monthlyUploadCount - quota.uploadsThisMonth);
   const allowed = quota.uploadsThisMonth < limits.monthlyUploadCount;
@@ -316,22 +294,6 @@ export async function checkAndReserveUploadQuota(
       });
     }
 
-    // Null limit means unlimited - just increment and return
-    if (tierLimits.monthlyUploadCount === null) {
-      const updated = await tx.userUsageQuota.update({
-        where: { userId },
-        data: {
-          uploadsThisMonth: { increment: 1 },
-        },
-      });
-      return {
-        allowed: true,
-        used: updated.uploadsThisMonth,
-        limit: null,
-        remaining: null,
-      };
-    }
-
     // Check if we can reserve a slot
     if (quota.uploadsThisMonth >= tierLimits.monthlyUploadCount) {
       return {
@@ -357,4 +319,74 @@ export async function checkAndReserveUploadQuota(
       remaining: Math.max(0, tierLimits.monthlyUploadCount - updated.uploadsThisMonth),
     };
   });
+}
+
+// ============================================================================
+// Storage Quota
+// ============================================================================
+
+export interface StorageQuotaResult {
+  allowed: boolean;
+  usedBytes: number;
+  limitBytes: number;
+  remainingBytes: number;
+}
+
+/**
+ * Calculate total storage used by a user.
+ * Sums up file sizes of all non-deleted videos.
+ */
+export async function calculateUserStorageUsed(userId: string): Promise<number> {
+  const result = await prisma.video.aggregate({
+    where: {
+      userId,
+      deletedAt: null,
+    },
+    _sum: {
+      fileSizeBytes: true,
+    },
+  });
+
+  return Number(result._sum.fileSizeBytes ?? 0);
+}
+
+/**
+ * Check if user has storage capacity for a new upload.
+ */
+export async function checkStorageQuota(
+  userId: string,
+  newFileSizeBytes: number
+): Promise<StorageQuotaResult> {
+  const tier = await getUserTier(userId);
+  const limits = getTierLimits(tier);
+  const usedBytes = await calculateUserStorageUsed(userId);
+
+  const wouldUse = usedBytes + newFileSizeBytes;
+  const allowed = wouldUse <= limits.storageCapBytes;
+
+  return {
+    allowed,
+    usedBytes,
+    limitBytes: limits.storageCapBytes,
+    remainingBytes: Math.max(0, limits.storageCapBytes - usedBytes),
+  };
+}
+
+/**
+ * Get current storage usage for a user.
+ */
+export async function getStorageUsage(userId: string): Promise<{
+  usedBytes: number;
+  limitBytes: number;
+  usedPercent: number;
+}> {
+  const tier = await getUserTier(userId);
+  const limits = getTierLimits(tier);
+  const usedBytes = await calculateUserStorageUsed(userId);
+
+  return {
+    usedBytes,
+    limitBytes: limits.storageCapBytes,
+    usedPercent: Math.round((usedBytes / limits.storageCapBytes) * 100),
+  };
 }

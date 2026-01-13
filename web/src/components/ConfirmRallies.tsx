@@ -20,10 +20,10 @@ import { ConfirmDialog } from './ConfirmDialog';
 
 interface ConfirmRalliesProps {
   matchId: string;
-  isPremium: boolean;
+  isPaidTier: boolean;
 }
 
-export function ConfirmRallies({ matchId, isPremium }: ConfirmRalliesProps) {
+export function ConfirmRallies({ matchId, isPaidTier }: ConfirmRalliesProps) {
   const {
     confirmationStatus,
     setConfirmationStatus,
@@ -106,8 +106,8 @@ export function ConfirmRallies({ matchId, isPremium }: ConfirmRalliesProps) {
   }, [isProcessing, matchId, setConfirmationStatus, setIsConfirming, reloadCurrentMatch]);
 
   const handleConfirm = useCallback(async () => {
-    if (!isPremium) {
-      setError('Rally confirmation requires Premium tier');
+    if (!isPaidTier) {
+      setError('Rally confirmation requires a paid tier');
       return;
     }
 
@@ -136,7 +136,7 @@ export function ConfirmRallies({ matchId, isPremium }: ConfirmRalliesProps) {
       setIsConfirming(false);
       setError(e instanceof Error ? e.message : 'Failed to confirm rallies');
     }
-  }, [isPremium, rallies.length, matchId, setConfirmationStatus, setIsConfirming]);
+  }, [isPaidTier, rallies.length, matchId, setConfirmationStatus, setIsConfirming]);
 
   const handleRestore = useCallback(async () => {
     setShowRestoreDialog(false);
@@ -155,10 +155,10 @@ export function ConfirmRallies({ matchId, isPremium }: ConfirmRalliesProps) {
     }
   }, [matchId, setConfirmationStatus, reloadCurrentMatch]);
 
-  // Not Premium - show disabled button
-  if (!isPremium) {
+  // Not paid tier - show disabled button
+  if (!isPaidTier) {
     return (
-      <Tooltip title="Rally confirmation requires Premium tier">
+      <Tooltip title="Rally confirmation requires a paid tier">
         <span>
           <Button
             variant="outlined"

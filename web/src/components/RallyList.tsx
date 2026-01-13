@@ -64,7 +64,7 @@ export function RallyList() {
     setIsConfirming,
     setShowAddVideoModal,
   } = useEditorStore();
-  const isPremium = useTierStore((state) => state.isPremium());
+  const isPaidTier = useTierStore((state) => state.isPaidTier());
   const { currentTime, seek } = usePlayerStore();
   const {
     isExporting,
@@ -843,13 +843,13 @@ export function RallyList() {
         ) : (
           <MenuItem
             onClick={() => {
-              if (!videoMenuAnchor || !isPremium) return;
+              if (!videoMenuAnchor || !isPaidTier) return;
               setMatchToConfirm(videoMenuAnchor.match);
               setVideoMenuAnchor(null);
               setShowConfirmRalliesDialog(true);
             }}
             disabled={
-              !isPremium ||
+              !isPaidTier ||
               isConfirming ||
               (videoMenuAnchor?.match.rallies.length ?? 0) === 0 ||
               confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'PENDING' ||
@@ -857,7 +857,7 @@ export function RallyList() {
             }
           >
             <ListItemIcon>
-              {!isPremium ? (
+              {!isPaidTier ? (
                 <LockIcon fontSize="small" />
               ) : (
                 <CheckCircleIcon fontSize="small" />
@@ -866,8 +866,8 @@ export function RallyList() {
             <ListItemText
               primary="Confirm Rallies"
               secondary={
-                !isPremium
-                  ? 'Premium feature'
+                !isPaidTier
+                  ? 'Paid feature'
                   : (videoMenuAnchor?.match.rallies.length ?? 0) === 0
                   ? 'Add rallies first'
                   : 'Trim video to keep only rallies'

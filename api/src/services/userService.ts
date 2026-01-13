@@ -5,6 +5,7 @@ import {
   getUserTier,
   getTierLimits,
   getOrCreateUsageQuota,
+  calculateUserStorageUsed,
 } from "./tierService.js";
 
 /**
@@ -109,11 +110,7 @@ export async function getUserById(id: string): Promise<UserResponse> {
   const tier = await getUserTier(id);
   const tierLimits = getTierLimits(tier);
   const quota = await getOrCreateUsageQuota(id);
-
-  const uploadsRemaining =
-    tierLimits.monthlyUploadCount === null
-      ? null
-      : Math.max(0, tierLimits.monthlyUploadCount - quota.uploadsThisMonth);
+  const storageUsedBytes = await calculateUserStorageUsed(id);
 
   return {
     id: user.id,
@@ -131,7 +128,10 @@ export async function getUserById(id: string): Promise<UserResponse> {
       ),
       uploadsThisMonth: quota.uploadsThisMonth,
       uploadsLimit: tierLimits.monthlyUploadCount,
-      uploadsRemaining,
+      uploadsRemaining: Math.max(0, tierLimits.monthlyUploadCount - quota.uploadsThisMonth),
+      storageUsedBytes,
+      storageLimitBytes: tierLimits.storageCapBytes,
+      storageRemainingBytes: Math.max(0, tierLimits.storageCapBytes - storageUsedBytes),
       periodStart: quota.periodStart.toISOString(),
     },
     createdAt: user.createdAt.toISOString(),
@@ -170,11 +170,7 @@ export async function updateUser(
   const tier = await getUserTier(id);
   const tierLimits = getTierLimits(tier);
   const quota = await getOrCreateUsageQuota(id);
-
-  const uploadsRemaining =
-    tierLimits.monthlyUploadCount === null
-      ? null
-      : Math.max(0, tierLimits.monthlyUploadCount - quota.uploadsThisMonth);
+  const storageUsedBytes = await calculateUserStorageUsed(id);
 
   return {
     id: user.id,
@@ -192,7 +188,10 @@ export async function updateUser(
       ),
       uploadsThisMonth: quota.uploadsThisMonth,
       uploadsLimit: tierLimits.monthlyUploadCount,
-      uploadsRemaining,
+      uploadsRemaining: Math.max(0, tierLimits.monthlyUploadCount - quota.uploadsThisMonth),
+      storageUsedBytes,
+      storageLimitBytes: tierLimits.storageCapBytes,
+      storageRemainingBytes: Math.max(0, tierLimits.storageCapBytes - storageUsedBytes),
       periodStart: quota.periodStart.toISOString(),
     },
     createdAt: user.createdAt.toISOString(),

@@ -20,17 +20,17 @@ type ExportQuality = "original" | "720p";
 
 /**
  * Determine export quality for a video based on tier and upload age.
- * FREE users get original quality exports for the first 3 days, then 720p.
- * PREMIUM users always get original quality.
+ * FREE users get original quality exports for their grace period (originalQualityDays), then 720p.
+ * PRO and ELITE users get original quality based on their tier's originalQualityDays.
  */
 function getExportQuality(tier: UserTier, videoCreatedAt: Date): ExportQuality {
-  if (tier === "PREMIUM") return "original";
+  const limits = getTierLimits(tier);
 
-  const originalQualityDays = TIER_LIMITS.FREE.originalQualityDays;
-  if (!originalQualityDays) return "720p"; // No grace period configured
+  // If tier has no original quality limit (null), always use original
+  if (limits.originalQualityDays === null) return "original";
 
   const daysSinceUpload = (Date.now() - videoCreatedAt.getTime()) / (24 * 60 * 60 * 1000);
-  return daysSinceUpload <= originalQualityDays ? "original" : "720p";
+  return daysSinceUpload <= limits.originalQualityDays ? "original" : "720p";
 }
 
 // Check if we should use local FFmpeg (development mode)
@@ -79,7 +79,7 @@ interface CreateExportJobInput {
 // Internal interface with tier and exportQuality for trigger functions
 interface ExportTriggerInput {
   sessionId: string;
-  tier: "FREE" | "PREMIUM";
+  tier: UserTier;
   config: {
     format: "mp4" | "webm";
   };
@@ -292,7 +292,7 @@ export async function createExportJob(
   if (!useLocal && !limits.lambdaExportEnabled) {
     // FREE users cannot use Lambda export - they must use browser export
     throw new ForbiddenError(
-      "Server-side export requires Premium tier. Please use browser export instead."
+      "Server-side export requires a paid tier (Pro or Elite). Please use browser export instead."
     );
   }
 

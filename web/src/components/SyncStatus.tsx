@@ -11,7 +11,7 @@ import { useTierStore } from '@/stores/tierStore';
 /**
  * Subtle sync status indicator showing cloud sync state.
  * FREE tier: Shows "saved locally" icon
- * PREMIUM tier: Shows cloud sync status with retry option
+ * Paid tiers (Pro/Elite): Shows cloud sync status with retry option
  */
 export function SyncStatus() {
   const syncStatus = useEditorStore((state) => state.syncStatus);
@@ -26,7 +26,7 @@ export function SyncStatus() {
   // This takes priority over all other states (syncing, error, etc.)
   if (!canSyncToServer()) {
     return (
-      <Tooltip title="Changes saved locally. Upgrade to Premium for cloud sync.">
+      <Tooltip title="Changes saved locally. Upgrade to Pro for cloud sync.">
         <SaveIcon
           sx={{
             fontSize: 18,
@@ -38,7 +38,7 @@ export function SyncStatus() {
     );
   }
 
-  // PREMIUM tier states below
+  // Paid tier states below (Pro/Elite)
 
   const handleRetry = () => {
     syncNow();

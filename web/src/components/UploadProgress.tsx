@@ -22,18 +22,18 @@ export function UploadProgress() {
   const { isUploading, progress, currentStep, error, cancel, clearError, reset } = useUploadStore();
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [showSuccessInfo, setShowSuccessInfo] = useState(false);
-  const isPremium = useTierStore((state) => state.isPremium());
+  const isPaidTier = useTierStore((state) => state.isPaidTier());
 
   const isComplete = !isUploading && progress === 100;
 
   // Show success info snackbar for FREE users after upload completes
   useEffect(() => {
-    if (isComplete && !isPremium) {
+    if (isComplete && !isPaidTier) {
       // Small delay to let the progress bar finish animation
       const timer = setTimeout(() => setShowSuccessInfo(true), 500);
       return () => clearTimeout(timer);
     }
-  }, [isComplete, isPremium]);
+  }, [isComplete, isPaidTier]);
 
   // Warn user before leaving page during upload
   useEffect(() => {
