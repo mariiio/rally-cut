@@ -40,6 +40,11 @@ uv run rallycut train modal --upload-model            # Upload existing model we
 uv run rallycut train modal --resume-from-model --lr 1e-5 --epochs 5  # Fine-tune
 uv run rallycut train modal --download --cleanup      # Download and clean up
 
+# Training is preemption-resilient:
+# - Auto-retries up to 2 times on GPU preemption
+# - Checkpoints saved every 100 steps (~5 min max loss)
+# - Resumes from latest checkpoint automatically
+
 # Evaluation
 uv run rallycut evaluate --model beach --iou 0.5      # Evaluate beach model
 
