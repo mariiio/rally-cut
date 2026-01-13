@@ -47,7 +47,7 @@ All endpoints require `X-Visitor-Id` header (UUID):
 | Feature | FREE | PREMIUM |
 |---------|------|---------|
 | Detections/month | 1 | 9 |
-| Max video duration | 15 min | 25 min |
+| Max video duration | 15 min | 30 min |
 | Max file size | 1 GB | 2 GB |
 | Monthly uploads | 5 | Unlimited |
 | Export quality | 720p + watermark | Original |

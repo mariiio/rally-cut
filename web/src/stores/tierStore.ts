@@ -31,7 +31,7 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 // Premium tier limits for upgrade prompts (must match backend tierService.ts)
 export const PREMIUM_LIMITS = {
   maxFileSizeGB: 2.5,
-  maxVideoDurationMin: 25,
+  maxVideoDurationMin: 30,
 } as const;
 
 // Default FREE tier limits (in case fetch fails)
