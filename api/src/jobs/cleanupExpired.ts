@@ -1,6 +1,10 @@
 import { prisma } from "../lib/prisma.js";
 import { deleteObject } from "../lib/s3.js";
 import { TIER_LIMITS, type UserTier } from "../services/tierService.js";
+import {
+  MAX_PROCESSING_ATTEMPTS,
+  queueVideoProcessing,
+} from "../services/processingService.js";
 
 /**
  * Cleanup for each tier based on their retention settings:
@@ -24,6 +28,7 @@ export interface CleanupResult {
   hardDeletedUsers: number;
   hardDeletedVideos: number;
   hardDeletedSessions: number;
+  stuckProcessingRecovered: number;
   errors: string[];
 }
 
@@ -35,6 +40,7 @@ export async function cleanupExpiredContent(): Promise<CleanupResult> {
   let hardDeletedUsers = 0;
   let hardDeletedVideos = 0;
   let hardDeletedSessions = 0;
+  let stuckProcessingRecovered = 0;
 
   console.log("[CLEANUP] Starting cleanup...");
   console.log(`[CLEANUP] Current time: ${now.toISOString()}`);
@@ -268,6 +274,54 @@ export async function cleanupExpiredContent(): Promise<CleanupResult> {
   }
 
   // ============================================================================
+  // Phase C: Recover stuck processing videos
+  // ============================================================================
+
+  // Videos stuck in PENDING with processingAttempts > 0 and "retrying" in error
+  // for more than 60 seconds indicate a server restart during retry delay.
+  const stuckCutoff = new Date(now.getTime() - 60 * 1000); // 60 seconds ago
+  const stuckVideos = await prisma.video.findMany({
+    where: {
+      processingStatus: "PENDING",
+      processingAttempts: { gt: 0 },
+      processingError: { contains: "retrying" },
+      updatedAt: { lt: stuckCutoff },
+      deletedAt: null,
+      userId: { not: null }, // Required for retry
+    },
+    select: { id: true, userId: true, processingAttempts: true },
+  });
+
+  if (stuckVideos.length > 0) {
+    console.log(`[CLEANUP] Found ${stuckVideos.length} stuck processing videos to recover`);
+
+    for (const video of stuckVideos) {
+      try {
+        if (video.processingAttempts >= MAX_PROCESSING_ATTEMPTS) {
+          // Max attempts exceeded, mark as permanently failed
+          await prisma.video.update({
+            where: { id: video.id },
+            data: {
+              processingStatus: "FAILED",
+              processingError: "Processing failed (recovered from stuck state)",
+            },
+          });
+          console.log(`[CLEANUP] Marked stuck video ${video.id} as FAILED (max attempts exceeded)`);
+        } else {
+          // Retry processing
+          await queueVideoProcessing(video.id, video.userId!, true);
+          console.log(`[CLEANUP] Requeued stuck video ${video.id} for processing`);
+        }
+        stuckProcessingRecovered++;
+      } catch (error) {
+        const message = `Failed to recover stuck video ${video.id}: ${error}`;
+        console.error(`[CLEANUP] ${message}`);
+        errors.push(message);
+      }
+    }
+  }
+
+  // ============================================================================
   // Summary
   // ============================================================================
 
@@ -276,6 +330,7 @@ export async function cleanupExpiredContent(): Promise<CleanupResult> {
   console.log(`  - Hard deleted users (inactive): ${hardDeletedUsers}`);
   console.log(`  - Hard deleted videos: ${hardDeletedVideos}`);
   console.log(`  - Hard deleted sessions: ${hardDeletedSessions}`);
+  console.log(`  - Stuck processing recovered: ${stuckProcessingRecovered}`);
   console.log(`  - Errors: ${errors.length}`);
 
   return {
@@ -283,6 +338,7 @@ export async function cleanupExpiredContent(): Promise<CleanupResult> {
     hardDeletedUsers,
     hardDeletedVideos,
     hardDeletedSessions,
+    stuckProcessingRecovered,
     errors,
   };
 }
@@ -303,6 +359,7 @@ export async function resetMonthlyQuotas(): Promise<number> {
     data: {
       periodStart: monthStart,
       detectionsUsed: 0,
+      uploadsThisMonth: 0,
     },
   });
 

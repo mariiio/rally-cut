@@ -29,7 +29,12 @@ interface TierActions {
 // Cache TTL for tier data (5 minutes)
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
-// Tier limits for upgrade prompts (must match backend tier config)
+/**
+ * Tier limits for upgrade prompts and display text.
+ * IMPORTANT: Keep in sync with api/src/config/tiers.ts (source of truth).
+ * These are ONLY used for static UI text before API data is fetched.
+ * Actual enforcement happens server-side via tierService.
+ */
 export const TIER_LIMITS_DISPLAY = {
   FREE: {
     maxFileSizeMB: 500,

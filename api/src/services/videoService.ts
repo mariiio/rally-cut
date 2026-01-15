@@ -29,7 +29,8 @@ import {
 } from "./tierService.js";
 import { queueVideoProcessing, generatePosterImmediate } from "./processingService.js";
 
-const MAX_VIDEOS_PER_SESSION = 5;
+// Limit videos per session for frontend editor performance (timeline rendering, state management)
+const MAX_VIDEOS_PER_SESSION = 6;
 
 // Type for Prisma transaction client
 type PrismaTransaction = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
