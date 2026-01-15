@@ -386,7 +386,8 @@ export default function HomePage() {
   return (
     <Box
       sx={{
-        minHeight: '100vh',
+        height: '100vh',
+        overflow: 'auto',
         bgcolor: designTokens.colors.surface[0],
         color: 'text.primary',
         py: 4,
