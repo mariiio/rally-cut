@@ -162,15 +162,14 @@ export function Features() {
                 mb: 2,
               }}
             >
-              Everything You Need to Create Highlight Reels
+              Powerful Features, Zero Complexity
             </Typography>
             <Typography
               variant="body1"
               color="text.secondary"
               sx={{ maxWidth: 600, mx: 'auto' }}
             >
-              Powerful features that make video editing effortless, so you can focus on the game,
-              not the software.
+              Professional video editing tools designed for athletes, not editors.
             </Typography>
           </Box>
         </motion.div>

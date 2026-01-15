@@ -42,15 +42,14 @@ export function Demo() {
                 mb: 2,
               }}
             >
-              See RallyCut in Action
+              How It Works
             </Typography>
             <Typography
               variant="body1"
               color="text.secondary"
               sx={{ maxWidth: 550, mx: 'auto', lineHeight: 1.7 }}
             >
-              Watch how our AI automatically identifies rallies and helps you create highlight reels
-              in just three simple steps.
+              Upload your footage, let AI detect the action, and export your highlights in minutes.
             </Typography>
           </Box>
         </AnimatedSection>
