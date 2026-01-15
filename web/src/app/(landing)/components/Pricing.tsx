@@ -5,38 +5,26 @@ import {
   Box,
   Container,
   Typography,
-  Grid,
-  Paper,
   Button,
   Stack,
   Chip,
   Switch,
   FormControlLabel,
-  Divider,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import { motion, useInView, useReducedMotion } from 'framer-motion';
 import CheckIcon from '@mui/icons-material/Check';
+import CloseIcon from '@mui/icons-material/Close';
 import Link from 'next/link';
 import { designTokens } from '@/app/theme';
 import { WaitlistModal } from './WaitlistModal';
 
-const plans = [
+const tiers = [
   {
     name: 'Basic',
     subtitle: 'Perfect for trying out',
     price: { monthly: 0, yearly: 0 },
-    features: [
-      '2 AI detections/month',
-      '3 uploads/month',
-      'Up to 500 MB per video',
-      'Up to 15 min per video',
-      '1 GB storage cap',
-      'Full quality exports for 3 days',
-      '720p exports after 3 days',
-      'Watermark on exports',
-      'Browser-based export',
-      'Local storage only',
-    ],
     cta: 'Start Free',
     href: '/sessions',
     highlighted: false,
@@ -45,18 +33,6 @@ const plans = [
     name: 'Pro',
     subtitle: 'For regular players',
     price: { monthly: 9.99, yearly: 95.9 },
-    features: [
-      '15 AI detections/month',
-      '20 uploads/month',
-      'Up to 2 GB per video',
-      'Up to 45 min per video',
-      '20 GB storage cap',
-      'Original quality for 14 days',
-      'No watermark',
-      'Fast server-side export',
-      'Cross-device sync',
-      '6 months video retention',
-    ],
     cta: 'Join Waitlist',
     href: null,
     highlighted: true,
@@ -66,23 +42,40 @@ const plans = [
     name: 'Elite',
     subtitle: 'For coaches & teams',
     price: { monthly: 24.99, yearly: 239.9 },
-    features: [
-      '50 AI detections/month',
-      '50 uploads/month',
-      'Up to 5 GB per video',
-      'Up to 90 min per video',
-      '75 GB storage cap',
-      'Original quality for 60 days',
-      'No watermark',
-      'Fast server-side export',
-      'Cross-device sync',
-      '1 year video retention',
-    ],
     cta: 'Join Waitlist',
     href: null,
     highlighted: false,
   },
 ];
+
+const features = [
+  { name: 'AI Detections/month', basic: '2', pro: '15', elite: '50' },
+  { name: 'Uploads/month', basic: '3', pro: '20', elite: '50' },
+  { name: 'Max video size', basic: '500 MB', pro: '2 GB', elite: '5 GB' },
+  { name: 'Max duration', basic: '15 min', pro: '45 min', elite: '90 min' },
+  { name: 'Storage cap', basic: '1 GB', pro: '20 GB', elite: '75 GB' },
+  { name: 'Export quality', basic: '720p', pro: 'Original', elite: 'Original' },
+  { name: 'No watermark', basic: false, pro: true, elite: true },
+  { name: 'Server export', basic: false, pro: true, elite: true },
+  { name: 'Cloud sync', basic: false, pro: true, elite: true },
+  { name: 'Quality retention', basic: '3 days', pro: '14 days', elite: '60 days' },
+  { name: 'Video retention', basic: '30 days', pro: '6 months', elite: '1 year' },
+];
+
+function FeatureValue({ value }: { value: string | boolean }) {
+  if (typeof value === 'boolean') {
+    return value ? (
+      <CheckIcon sx={{ fontSize: 20, color: 'secondary.main' }} />
+    ) : (
+      <CloseIcon sx={{ fontSize: 20, color: 'text.disabled' }} />
+    );
+  }
+  return (
+    <Typography variant="body2" sx={{ fontWeight: 500 }}>
+      {value}
+    </Typography>
+  );
+}
 
 export function Pricing() {
   const [yearly, setYearly] = useState(false);
@@ -91,6 +84,8 @@ export function Pricing() {
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: '-80px' });
   const shouldReduceMotion = useReducedMotion();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
   const handleWaitlistOpen = (tier: string) => {
     setSelectedTier(tier);
@@ -114,205 +109,272 @@ export function Pricing() {
           transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
         >
           <Box sx={{ textAlign: 'center', mb: 6 }}>
-          <Typography
-            variant="h2"
-            sx={{
-              fontSize: { xs: '2rem', md: '2.5rem' },
-              fontWeight: 700,
-              mb: 2,
-            }}
-          >
-            Simple Pricing for Every Player
-          </Typography>
-          <Typography
-            variant="body1"
-            color="text.secondary"
-            sx={{ maxWidth: 600, mx: 'auto', mb: 4 }}
-          >
-            Start free, upgrade when you need more. No hidden fees.
-          </Typography>
+            <Typography
+              variant="h2"
+              sx={{
+                fontSize: { xs: '2rem', md: '2.5rem' },
+                fontWeight: 700,
+                mb: 2,
+              }}
+            >
+              Simple Pricing for Every Player
+            </Typography>
+            <Typography
+              variant="body1"
+              color="text.secondary"
+              sx={{ maxWidth: 600, mx: 'auto', mb: 4 }}
+            >
+              Start free, upgrade when you need more. No hidden fees.
+            </Typography>
 
-          {/* Yearly Toggle */}
-          <FormControlLabel
-            control={
-              <Switch
-                checked={yearly}
-                onChange={(e) => setYearly(e.target.checked)}
-                sx={{
-                  '& .MuiSwitch-switchBase.Mui-checked': {
-                    color: 'primary.main',
-                  },
-                  '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': {
-                    bgcolor: 'primary.main',
-                  },
-                }}
-              />
-            }
-            label={
-              <Stack direction="row" alignItems="center" spacing={1}>
-                <Typography>Yearly billing</Typography>
-                <Chip
-                  label="Save 20%"
-                  size="small"
+            {/* Yearly Toggle */}
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={yearly}
+                  onChange={(e) => setYearly(e.target.checked)}
                   sx={{
-                    bgcolor: 'secondary.main',
-                    color: 'black',
-                    fontWeight: 600,
-                    fontSize: '0.7rem',
+                    '& .MuiSwitch-switchBase.Mui-checked': {
+                      color: 'primary.main',
+                    },
+                    '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': {
+                      bgcolor: 'primary.main',
+                    },
                   }}
                 />
-              </Stack>
-            }
-          />
-        </Box>
+              }
+              label={
+                <Stack direction="row" alignItems="center" spacing={1}>
+                  <Typography>Yearly billing</Typography>
+                  <Chip
+                    label="Save 20%"
+                    size="small"
+                    sx={{
+                      bgcolor: 'secondary.main',
+                      color: 'black',
+                      fontWeight: 600,
+                      fontSize: '0.7rem',
+                    }}
+                  />
+                </Stack>
+              }
+            />
+          </Box>
         </motion.div>
 
-        <Grid container spacing={3} justifyContent="center">
-          {plans.map((plan, index) => (
-            <Grid size={{ xs: 12, sm: 6, md: 4 }} key={plan.name}>
-              <motion.div
-                initial={shouldReduceMotion ? {} : { opacity: 0, y: 40 }}
-                animate={isInView ? { opacity: 1, y: 0 } : {}}
-                transition={{
-                  duration: 0.6,
-                  delay: index * 0.15,
-                  ease: [0.22, 1, 0.36, 1],
-                }}
-                style={{ height: '100%' }}
-              >
-              <Paper
-                elevation={0}
+        {/* Comparison Table */}
+        <motion.div
+          initial={shouldReduceMotion ? {} : { opacity: 0, y: 40 }}
+          animate={isInView ? { opacity: 1, y: 0 } : {}}
+          transition={{ duration: 0.6, delay: 0.15, ease: [0.22, 1, 0.36, 1] }}
+        >
+          <Box
+            sx={{
+              overflowX: 'auto',
+              borderRadius: 3,
+              border: '1px solid',
+              borderColor: 'divider',
+              bgcolor: designTokens.colors.surface[1],
+              width: 'fit-content',
+              mx: 'auto',
+            }}
+          >
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '150px 110px 110px 110px', md: '200px 180px 180px 180px' },
+              }}
+            >
+              {/* Header Row */}
+              <Box
                 sx={{
-                  p: 3,
-                  height: '100%',
-                  bgcolor: plan.highlighted
-                    ? designTokens.colors.surface[2]
-                    : designTokens.colors.surface[1],
-                  border: '2px solid',
-                  borderColor: plan.highlighted ? 'primary.main' : 'divider',
-                  borderRadius: 3,
-                  position: 'relative',
-                  transition: 'all 0.3s ease',
-                  '&:hover': {
-                    transform: 'translateY(-4px)',
-                    boxShadow: plan.highlighted
-                      ? designTokens.shadows.glow.primary
-                      : designTokens.shadows.lg,
+                  display: 'contents',
+                  '& > *': {
+                    bgcolor: designTokens.colors.surface[2],
+                  },
+                  '& > *:first-of-type': {
+                    borderRadius: '12px 0 0 0',
+                  },
+                  '& > *:last-child': {
+                    borderRadius: '0 12px 0 0',
                   },
                 }}
               >
-                {/* Badge */}
-                {plan.badge && (
-                  <Chip
-                    label={plan.badge}
+                <Box sx={{ py: 2, px: 2, borderBottom: '1px solid', borderColor: 'divider' }} />
+                {tiers.map((tier) => (
+                  <Box
+                    key={tier.name}
                     sx={{
-                      position: 'absolute',
-                      top: -12,
-                      right: 24,
-                      bgcolor: 'primary.main',
-                      color: 'white',
-                      fontWeight: 600,
+                      py: 1.5,
+                      px: 2,
+                      textAlign: 'center',
+                      borderLeft: '1px solid',
+                      borderBottom: '1px solid',
+                      borderColor: 'divider',
+                      bgcolor: tier.highlighted ? 'rgba(255, 107, 74, 0.08)' : 'transparent',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'center',
                     }}
-                  />
-                )}
-
-                <Stack spacing={2.5}>
-                  {/* Plan Name */}
-                  <Box>
-                    <Typography variant="h5" fontWeight={700}>
-                      {plan.name}
+                  >
+                    {tier.badge ? (
+                      <Chip
+                        label={tier.badge}
+                        size="small"
+                        sx={{
+                          alignSelf: 'center',
+                          mb: 0.5,
+                          bgcolor: 'primary.main',
+                          color: 'white',
+                          fontWeight: 600,
+                          fontSize: '0.6rem',
+                          height: 18,
+                        }}
+                      />
+                    ) : (
+                      <Box sx={{ height: 18, mb: 0.5 }} />
+                    )}
+                    <Typography variant="subtitle1" fontWeight={700} lineHeight={1.2}>
+                      {tier.name}
                     </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {plan.subtitle}
+                    <Typography variant="caption" color="text.secondary">
+                      {tier.subtitle}
                     </Typography>
                   </Box>
+                ))}
+              </Box>
 
-                  {/* Price */}
-                  <Box>
-                    <Stack direction="row" alignItems="baseline" spacing={0.5}>
+              {/* Price Row */}
+              <Box
+                sx={{
+                  display: 'contents',
+                }}
+              >
+                <Box sx={{ p: 2, display: 'flex', alignItems: 'center', borderBottom: '1px solid', borderColor: 'divider' }}>
+                  <Typography variant="body2" fontWeight={600}>
+                    Price
+                  </Typography>
+                </Box>
+                {tiers.map((tier) => (
+                  <Box
+                    key={tier.name}
+                    sx={{
+                      p: 2,
+                      textAlign: 'center',
+                      borderLeft: '1px solid',
+                      borderBottom: '1px solid',
+                      borderColor: 'divider',
+                      bgcolor: tier.highlighted ? 'rgba(255, 107, 74, 0.08)' : 'transparent',
+                    }}
+                  >
+                    <Stack direction="row" justifyContent="center" alignItems="baseline" spacing={0.5}>
                       <Typography
-                        variant="h3"
+                        variant="h4"
                         sx={{
                           fontWeight: 800,
-                          fontSize: { xs: '2rem', md: '2.5rem' },
-                          background: plan.highlighted
-                            ? designTokens.gradients.primary
-                            : 'inherit',
-                          backgroundClip: plan.highlighted ? 'text' : 'inherit',
-                          WebkitBackgroundClip: plan.highlighted ? 'text' : 'inherit',
-                          WebkitTextFillColor: plan.highlighted ? 'transparent' : 'inherit',
+                          background: tier.highlighted ? designTokens.gradients.primary : 'inherit',
+                          backgroundClip: tier.highlighted ? 'text' : 'inherit',
+                          WebkitBackgroundClip: tier.highlighted ? 'text' : 'inherit',
+                          WebkitTextFillColor: tier.highlighted ? 'transparent' : 'inherit',
                         }}
                       >
-                        ${yearly ? plan.price.yearly : plan.price.monthly}
+                        ${yearly ? tier.price.yearly : tier.price.monthly}
                       </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        {plan.price.monthly > 0 ? (yearly ? '/year' : '/mo') : ''}
+                      <Typography variant="caption" color="text.secondary">
+                        {tier.price.monthly > 0 ? (yearly ? '/yr' : '/mo') : ''}
                       </Typography>
                     </Stack>
-                    {yearly && plan.price.monthly > 0 && (
+                    {yearly && tier.price.monthly > 0 && (
                       <Typography variant="caption" color="text.disabled">
-                        ${(plan.price.yearly / 12).toFixed(2)}/mo billed annually
+                        ${(tier.price.yearly / 12).toFixed(2)}/mo
                       </Typography>
                     )}
                   </Box>
+                ))}
+              </Box>
 
-                  <Divider />
-
-                  {/* Features */}
-                  <Stack spacing={1}>
-                    {plan.features.map((feature) => (
-                      <Stack key={feature} direction="row" spacing={1} alignItems="flex-start">
-                        <CheckIcon
-                          sx={{
-                            fontSize: 18,
-                            color: plan.highlighted ? 'primary.main' : 'secondary.main',
-                            mt: 0.2,
-                          }}
-                        />
-                        <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.85rem' }}>
-                          {feature}
-                        </Typography>
-                      </Stack>
-                    ))}
-                  </Stack>
-
-                  {/* CTA */}
-                  {plan.href ? (
-                    <Button
-                      component={Link}
-                      href={plan.href}
-                      variant={plan.highlighted ? 'contained' : 'outlined'}
-                      size="large"
-                      fullWidth
+              {/* Feature Rows */}
+              {features.map((feature) => (
+                <Box
+                  key={feature.name}
+                  sx={{
+                    display: 'contents',
+                  }}
+                >
+                  <Box sx={{ py: 1.5, px: 2, display: 'flex', alignItems: 'center', borderBottom: '1px solid', borderColor: 'divider' }}>
+                    <Typography variant="body2" color="text.secondary" fontSize="0.85rem">
+                      {feature.name}
+                    </Typography>
+                  </Box>
+                  {(['basic', 'pro', 'elite'] as const).map((tierKey, tierIndex) => (
+                    <Box
+                      key={tierKey}
                       sx={{
                         py: 1.5,
-                        fontWeight: 600,
-                        mt: 'auto',
+                        px: 2,
+                        display: 'flex',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        borderLeft: '1px solid',
+                        borderBottom: '1px solid',
+                        borderColor: 'divider',
+                        bgcolor: tiers[tierIndex].highlighted ? 'rgba(255, 107, 74, 0.08)' : 'transparent',
                       }}
                     >
-                      {plan.cta}
-                    </Button>
-                  ) : (
-                    <Button
-                      variant={plan.highlighted ? 'contained' : 'outlined'}
-                      size="large"
-                      fullWidth
-                      onClick={() => handleWaitlistOpen(plan.name.toLowerCase())}
-                      sx={{
-                        py: 1.5,
-                        fontWeight: 600,
-                        mt: 'auto',
-                      }}
-                    >
-                      {plan.cta}
-                    </Button>
-                  )}
-                </Stack>
-              </Paper>
-              </motion.div>
-            </Grid>
-          ))}
-        </Grid>
+                      <FeatureValue value={feature[tierKey]} />
+                    </Box>
+                  ))}
+                </Box>
+              ))}
+
+              {/* CTA Row */}
+              <Box
+                sx={{
+                  display: 'contents',
+                  '& > *': {
+                    bgcolor: designTokens.colors.surface[2],
+                  },
+                }}
+              >
+                <Box sx={{ p: 2 }} />
+                {tiers.map((tier) => (
+                  <Box
+                    key={tier.name}
+                    sx={{
+                      p: 2,
+                      display: 'flex',
+                      justifyContent: 'center',
+                      borderLeft: '1px solid',
+                      borderColor: 'divider',
+                      bgcolor: tier.highlighted ? 'rgba(255, 107, 74, 0.08)' : 'transparent',
+                    }}
+                  >
+                    {tier.href ? (
+                      <Button
+                        component={Link}
+                        href={tier.href}
+                        variant={tier.highlighted ? 'contained' : 'outlined'}
+                        size="small"
+                        sx={{ fontWeight: 600, fontSize: '0.8rem' }}
+                      >
+                        {tier.cta}
+                      </Button>
+                    ) : (
+                      <Button
+                        variant={tier.highlighted ? 'contained' : 'outlined'}
+                        size="small"
+                        onClick={() => handleWaitlistOpen(tier.name.toLowerCase())}
+                        sx={{ fontWeight: 600, fontSize: '0.8rem' }}
+                      >
+                        {tier.cta}
+                      </Button>
+                    )}
+                  </Box>
+                ))}
+              </Box>
+            </Box>
+          </Box>
+        </motion.div>
 
         {/* Pay per match callout */}
         <Box

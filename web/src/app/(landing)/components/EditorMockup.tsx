@@ -44,11 +44,11 @@ function RallyMarker({
 function AnimatedCursor() {
   return (
     <motion.div
-      initial={{ opacity: 0, x: '10%', y: '30%' }}
+      initial={{ opacity: 0, x: '15%', y: '40%' }}
       animate={{
         opacity: [0, 1, 1, 1, 0],
-        x: ['10%', '25%', '25%', '25%', '25%'],
-        y: ['30%', '70%', '70%', '70%', '70%'],
+        x: ['15%', '22%', '22%', '22%', '22%'],
+        y: ['40%', '88%', '88%', '88%', '88%'],
       }}
       transition={{
         duration: 4,
@@ -75,7 +75,7 @@ function AnimatedCursor() {
   );
 }
 
-// Selection highlight effect
+// Selection highlight effect - highlights the second rally marker
 function SelectionHighlight() {
   return (
     <motion.div
@@ -93,13 +93,13 @@ function SelectionHighlight() {
       }}
       style={{
         position: 'absolute',
-        left: '18%',
-        top: '62%',
-        width: '15%',
-        height: '20%',
+        left: '19.5%',
+        bottom: '8%',
+        width: '9%',
+        height: '6%',
         border: '2px solid #00D4AA',
-        borderRadius: 6,
-        background: 'rgba(0, 212, 170, 0.1)',
+        borderRadius: 4,
+        background: 'rgba(0, 212, 170, 0.15)',
         pointerEvents: 'none',
       }}
     />
@@ -127,13 +127,13 @@ export function EditorMockup() {
         delay: 0.3,
         ease: [0.22, 1, 0.36, 1],
       }}
+      style={{ width: '100%' }}
     >
       <Box
         sx={{
           position: 'relative',
           width: '100%',
-          maxWidth: 500,
-          aspectRatio: '4/3',
+          aspectRatio: '16/10',
           borderRadius: 3,
           overflow: 'hidden',
           bgcolor: designTokens.colors.surface[1],
@@ -181,13 +181,16 @@ export function EditorMockup() {
         {/* Fake video area */}
         <Box
           sx={{
-            height: '55%',
+            height: '60%',
             bgcolor: designTokens.colors.surface[0],
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             position: 'relative',
             overflow: 'hidden',
+            mx: 2,
+            mt: 1.5,
+            borderRadius: 1,
           }}
         >
           {/* Volleyball court placeholder */}
@@ -228,22 +231,23 @@ export function EditorMockup() {
           <Box
             sx={{
               position: 'absolute',
-              width: 50,
-              height: 50,
+              width: 56,
+              height: 56,
               borderRadius: '50%',
               bgcolor: 'rgba(255, 255, 255, 0.9)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
+              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
             }}
           >
             <Box
               sx={{
                 width: 0,
                 height: 0,
-                borderTop: '10px solid transparent',
-                borderBottom: '10px solid transparent',
-                borderLeft: '16px solid #0D0E12',
+                borderTop: '12px solid transparent',
+                borderBottom: '12px solid transparent',
+                borderLeft: '18px solid #0D0E12',
                 ml: 0.5,
               }}
             />
@@ -253,9 +257,10 @@ export function EditorMockup() {
         {/* Timeline area */}
         <Box
           sx={{
-            height: 'calc(45% - 40px)',
+            height: 'calc(40% - 40px)',
             bgcolor: designTokens.colors.surface[2],
-            p: 2,
+            px: 3,
+            py: 2,
             position: 'relative',
           }}
         >
@@ -275,7 +280,7 @@ export function EditorMockup() {
           {/* Timeline track */}
           <Box
             sx={{
-              height: 40,
+              height: 48,
               bgcolor: designTokens.colors.surface[0],
               borderRadius: 1,
               position: 'relative',

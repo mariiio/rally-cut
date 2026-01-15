@@ -22,7 +22,7 @@ const faqs = [
   {
     question: 'How accurate is the AI rally detection?',
     answer:
-      'Our AI achieves 95%+ accuracy on beach volleyball footage. It uses a specialized VideoMAE model trained specifically on volleyball content. You can always fine-tune any detection using the timeline editor.',
+      'Our AI achieves 95%+ accuracy on volleyball footage. It uses a specialized VideoMAE model trained specifically on volleyball content. You can always fine-tune any detection using the timeline editor.',
   },
   {
     question: 'Can I use RallyCut on my phone?',
@@ -42,7 +42,7 @@ const faqs = [
   {
     question: 'What about other sports?',
     answer:
-      'RallyCut is currently optimized for beach volleyball. Support for indoor volleyball and other racket sports is on our roadmap. Let us know what sports you\'d like to see!',
+      'RallyCut is optimized for beach and indoor volleyball. Support for other racket sports is on our roadmap. Let us know what sports you\'d like to see!',
   },
   {
     question: 'Can I cancel my subscription anytime?',

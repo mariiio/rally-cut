@@ -69,8 +69,8 @@ export function Footer() {
                 </Typography>
               </Stack>
               <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 280 }}>
-                AI-powered video analysis for beach volleyball. Turn hours of footage into
-                minutes of highlights.
+                AI-powered video analysis for volleyball. Turn hours of footage into minutes of
+                highlights.
               </Typography>
               {/* Social Icons */}
               <Stack direction="row" spacing={1}>
@@ -195,7 +195,7 @@ export function Footer() {
             © {new Date().getFullYear()} RallyCut. All rights reserved.
           </Typography>
           <Typography variant="body2" color="text.disabled">
-            Made with ❤️ for beach volleyball players
+            Made with ❤️ for volleyball players
           </Typography>
         </Stack>
       </Container>

@@ -1,6 +1,6 @@
 'use client';
 
-import { Box, Container, Typography, Button, Stack, Chip } from '@mui/material';
+import { Box, Container, Typography, Button, Stack } from '@mui/material';
 import { motion, useReducedMotion } from 'framer-motion';
 import Link from 'next/link';
 import { designTokens } from '@/app/theme';
@@ -95,24 +95,6 @@ export function Hero() {
             style={{ flex: 1 }}
           >
             <Box sx={{ maxWidth: 580 }}>
-              {/* Badge */}
-              <MotionBox {...(!shouldReduceMotion && { variants: fadeInUp })}>
-                <Chip
-                  label="AI-Powered Video Analysis"
-                  sx={{
-                    mb: 3,
-                    bgcolor: 'rgba(255, 107, 74, 0.12)',
-                    color: 'primary.light',
-                    fontWeight: 600,
-                    fontSize: '0.85rem',
-                    border: '1px solid rgba(255, 107, 74, 0.25)',
-                    '& .MuiChip-label': {
-                      px: 1.5,
-                    },
-                  }}
-                />
-              </MotionBox>
-
               {/* Headline */}
               <MotionBox {...(!shouldReduceMotion && { variants: fadeInUp })}>
                 <Typography
@@ -144,8 +126,7 @@ export function Hero() {
                   }}
                 >
                   RallyCut uses AI to automatically detect rallies and remove dead time from your
-                  beach volleyball videos. Create highlight reels in minutes, no editing skills
-                  required.
+                  volleyball videos. Create highlight reels in minutes, no editing skills required.
                 </Typography>
               </MotionBox>
 
@@ -228,11 +209,9 @@ export function Hero() {
           {/* Right mockup */}
           <Box
             sx={{
-              flex: 1,
-              display: 'flex',
-              justifyContent: 'center',
+              flex: { lg: 1.2 },
               width: '100%',
-              maxWidth: { xs: 450, lg: 'none' },
+              maxWidth: { xs: '100%', sm: 500, lg: 600 },
             }}
           >
             <EditorMockup />
