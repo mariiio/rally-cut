@@ -16,10 +16,6 @@ export const TIER_LIMITS = {
   FREE: TIER_CONFIG.FREE,
   PRO: TIER_CONFIG.PRO,
   ELITE: TIER_CONFIG.ELITE,
-  // Legacy alias - remove after migration
-  get PREMIUM() {
-    return TIER_CONFIG.PRO;
-  },
 } as const;
 
 export type TierLimits = TierConfig;

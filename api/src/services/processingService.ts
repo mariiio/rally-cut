@@ -19,6 +19,10 @@ const lambdaClient = new LambdaClient({
   region: env.AWS_REGION,
 });
 
+// Retry configuration
+export const MAX_PROCESSING_ATTEMPTS = 2;
+const RETRY_DELAYS_MS = [10000]; // 10s delay before retry
+
 // Check if we should use local FFmpeg (development mode)
 function shouldUseLocalProcessing(): boolean {
   // Use local if no Lambda configured
@@ -113,11 +117,12 @@ export async function generatePosterImmediate(
 
 /**
  * Queue a video for optimization processing.
- * Called after upload confirmation.
+ * Called after upload confirmation or for retry.
  */
 export async function queueVideoProcessing(
   videoId: string,
-  userId: string
+  userId: string,
+  isRetry: boolean = false
 ): Promise<void> {
   const video = await prisma.video.findFirst({
     where: { id: videoId, userId, deletedAt: null },
@@ -127,48 +132,112 @@ export async function queueVideoProcessing(
     throw new NotFoundError("Video", videoId);
   }
 
-  // Skip if already processed or processing
-  if (video.processingStatus !== ProcessingStatus.PENDING) {
-    console.log(
-      `[PROCESSING] Video ${videoId} already ${video.processingStatus}, skipping`
-    );
-    return;
+  // Skip if already processed or processing (unless this is a retry of a failed video)
+  if (!isRetry && video.processingStatus !== ProcessingStatus.PENDING) {
+    // Allow reprocessing of FAILED videos via manual trigger
+    if (video.processingStatus === ProcessingStatus.FAILED) {
+      console.log(`[PROCESSING] Reprocessing failed video ${videoId}`);
+    } else {
+      console.log(
+        `[PROCESSING] Video ${videoId} already ${video.processingStatus}, skipping`
+      );
+      return;
+    }
   }
 
   // Mark as queued and store original file size
+  // Reset attempts only if not a retry (fresh queue or manual reprocess)
+  const updateData: {
+    processingStatus: ProcessingStatus;
+    originalFileSizeBytes?: bigint | null;
+    processingAttempts?: number;
+    processingError?: null;
+  } = {
+    processingStatus: ProcessingStatus.QUEUED,
+    originalFileSizeBytes: video.fileSizeBytes,
+  };
+
+  if (!isRetry) {
+    updateData.processingAttempts = 0;
+    updateData.processingError = null;
+  }
+
   await prisma.video.update({
     where: { id: videoId },
-    data: {
-      processingStatus: ProcessingStatus.QUEUED,
-      originalFileSizeBytes: video.fileSizeBytes,
-    },
+    data: updateData,
   });
 
   const userTier = await getUserTier(userId);
   const useLocal = shouldUseLocalProcessing();
 
   console.log(
-    `[PROCESSING] Queuing video ${videoId} for optimization (${useLocal ? "LOCAL" : "LAMBDA"})`
+    `[PROCESSING] Queuing video ${videoId} for optimization (${useLocal ? "LOCAL" : "LAMBDA"})${isRetry ? " [RETRY]" : ""}`
   );
 
   const triggerFn = useLocal ? triggerLocalProcessing : triggerLambdaProcessing;
 
   // Trigger processing (async, don't wait)
-  triggerFn(videoId, video.s3Key, userTier).catch((error) => {
+  triggerFn(videoId, video.s3Key, userTier, userId).catch((error) => {
     console.error(
       `[PROCESSING] Failed to trigger for video ${videoId}:`,
       error
     );
-    prisma.video
-      .update({
-        where: { id: videoId },
-        data: {
-          processingStatus: ProcessingStatus.FAILED,
-          processingError: String(error),
-        },
-      })
-      .catch(console.error);
+    handleProcessingFailure(videoId, userId, String(error)).catch(console.error);
   });
+}
+
+/**
+ * Handle processing failure with retry logic.
+ */
+async function handleProcessingFailure(
+  videoId: string,
+  userId: string,
+  errorMessage: string
+): Promise<void> {
+  const video = await prisma.video.findUnique({
+    where: { id: videoId },
+    select: { processingAttempts: true, posterS3Key: true },
+  });
+
+  if (!video) return;
+
+  const attempts = video.processingAttempts;
+
+  if (attempts < MAX_PROCESSING_ATTEMPTS) {
+    const delayMs = RETRY_DELAYS_MS[attempts] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1];
+    console.log(
+      `[PROCESSING] Video ${videoId} attempt ${attempts} failed, scheduling retry ${attempts + 1}/${MAX_PROCESSING_ATTEMPTS} in ${delayMs / 1000}s...`
+    );
+
+    // Update status to show we're waiting for retry
+    await prisma.video.update({
+      where: { id: videoId },
+      data: {
+        processingStatus: ProcessingStatus.PENDING,
+        processingError: `${errorMessage} (retrying...)`,
+      },
+    });
+
+    // Schedule retry after fixed delay
+    setTimeout(() => {
+      queueVideoProcessing(videoId, userId, true).catch((err) => {
+        console.error(`[PROCESSING] Retry scheduling failed for ${videoId}:`, err);
+      });
+    }, delayMs);
+  } else {
+    // Max retries exceeded, mark as permanently failed
+    console.log(
+      `[PROCESSING] Video ${videoId} failed after ${attempts} attempts, marking as FAILED`
+    );
+
+    await prisma.video.update({
+      where: { id: videoId },
+      data: {
+        processingStatus: ProcessingStatus.FAILED,
+        processingError: `${errorMessage} (failed after ${attempts} attempts)`,
+      },
+    });
+  }
 }
 
 /**
@@ -184,6 +253,7 @@ export interface ProcessingCompletePayload {
   proxy_size_bytes?: number;
   was_optimized?: boolean;
   error_message?: string;
+  user_id?: string; // For retry handling
 }
 
 export async function handleProcessingComplete(
@@ -198,31 +268,43 @@ export async function handleProcessingComplete(
   ];
 
   if (payload.status === "failed") {
-    const result = await prisma.video.updateMany({
-      where: {
-        id: payload.video_id,
-        processingStatus: { in: allowedStatuses },
-      },
-      data: {
-        processingStatus: ProcessingStatus.FAILED,
-        processingError: payload.error_message ?? "Unknown error",
-      },
+    // Check if video exists and get userId for retry
+    const video = await prisma.video.findUnique({
+      where: { id: payload.video_id },
+      select: { id: true, userId: true, processingStatus: true },
     });
 
-    if (result.count === 0) {
-      // Either video not found or already processed
-      const video = await prisma.video.findUnique({
-        where: { id: payload.video_id },
-        select: { id: true },
-      });
-      if (!video) {
-        throw new NotFoundError("Video", payload.video_id);
-      }
+    if (!video) {
+      throw new NotFoundError("Video", payload.video_id);
+    }
+
+    if (!(allowedStatuses as ProcessingStatus[]).includes(video.processingStatus)) {
       return { success: true, message: "Already processed" };
     }
 
-    console.log(`[PROCESSING] Video ${payload.video_id} failed: ${payload.error_message}`);
-    return { success: false, message: payload.error_message };
+    const errorMessage = payload.error_message ?? "Unknown error";
+    const userId = payload.user_id ?? video.userId;
+
+    // If we have a userId, use retry logic; otherwise mark as failed immediately
+    if (userId) {
+      console.log(`[PROCESSING] Video ${payload.video_id} failed: ${errorMessage}`);
+      await handleProcessingFailure(payload.video_id, userId, errorMessage);
+      return { success: false, message: errorMessage };
+    }
+
+    // No userId available, mark as failed without retry
+    // This should not happen - video.userId is required, log warning if it does
+    console.warn(`[PROCESSING] Video ${payload.video_id} has no userId - cannot retry, marking as FAILED`);
+    await prisma.video.update({
+      where: { id: payload.video_id },
+      data: {
+        processingStatus: ProcessingStatus.FAILED,
+        processingError: errorMessage,
+      },
+    });
+
+    console.log(`[PROCESSING] Video ${payload.video_id} failed (no retry): ${errorMessage}`);
+    return { success: false, message: errorMessage };
   }
 
   if (payload.status === "skipped") {
@@ -350,9 +432,16 @@ export async function handleProcessingComplete(
 async function triggerLambdaProcessing(
   videoId: string,
   s3Key: string,
-  tier: string
+  tier: string,
+  userId: string
 ): Promise<void> {
   const functionName = env.PROCESSING_LAMBDA_FUNCTION_NAME!;
+
+  // Increment attempt counter
+  await prisma.video.update({
+    where: { id: videoId },
+    data: { processingAttempts: { increment: 1 } },
+  });
 
   const payload = {
     videoId,
@@ -361,6 +450,7 @@ async function triggerLambdaProcessing(
     callbackUrl: `${env.API_BASE_URL}/v1/webhooks/processing-complete`,
     webhookSecret: env.MODAL_WEBHOOK_SECRET,
     tier,
+    userId, // Pass userId for retry handling in webhook
   };
 
   const command = new InvokeCommand({
@@ -387,15 +477,19 @@ async function triggerLambdaProcessing(
 async function triggerLocalProcessing(
   videoId: string,
   s3Key: string,
-  tier: string
+  tier: string,
+  userId: string
 ): Promise<void> {
-  console.log(`[LOCAL PROCESSING] Starting video ${videoId} (tier: ${tier})`);
-
-  // Update status to processing
-  await prisma.video.update({
+  // Increment attempt counter
+  const video = await prisma.video.update({
     where: { id: videoId },
-    data: { processingStatus: ProcessingStatus.PROCESSING },
+    data: {
+      processingAttempts: { increment: 1 },
+      processingStatus: ProcessingStatus.PROCESSING,
+    },
   });
+
+  console.log(`[LOCAL PROCESSING] Starting video ${videoId} (tier: ${tier}, attempt ${video.processingAttempts})`);
 
   // Create temp directory
   const tmpDir = path.join(os.tmpdir(), `rallycut-processing-${videoId}`);
@@ -537,24 +631,15 @@ async function triggerLocalProcessing(
     console.log(`[LOCAL PROCESSING] Video ${videoId} completed successfully`);
   } catch (error) {
     console.error(`[LOCAL PROCESSING] Video ${videoId} failed:`, error);
-    // If poster was uploaded before failure, still save it
+    // If poster was uploaded before failure, preserve it
     if (uploadedPosterKey) {
-      console.log(`[LOCAL PROCESSING] Preserving poster ${uploadedPosterKey} despite failure`);
       await prisma.video.update({
         where: { id: videoId },
-        data: {
-          processingStatus: ProcessingStatus.FAILED,
-          processingError: String(error),
-          posterS3Key: uploadedPosterKey,
-        },
-      });
-    } else {
-      await handleProcessingComplete({
-        video_id: videoId,
-        status: "failed",
-        error_message: String(error),
+        data: { posterS3Key: uploadedPosterKey },
       });
     }
+    // Use retry handler instead of marking as failed immediately
+    await handleProcessingFailure(videoId, userId, String(error));
   } finally {
     // Cleanup temp directory
     try {
