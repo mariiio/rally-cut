@@ -8,7 +8,7 @@ import { useEditorStore } from '@/stores/editorStore';
 import { useUploadStore } from '@/stores/uploadStore';
 import { useCameraStore, selectHandheldPreset } from '@/stores/cameraStore';
 import { calculateVideoTransform, getCameraStateWithHandheld, resetHandheldState } from '@/utils/cameraInterpolation';
-import { DEFAULT_CAMERA_STATE } from '@/types/camera';
+import { DEFAULT_CAMERA_STATE, DEFAULT_GLOBAL_CAMERA, GlobalCameraSettings, CameraState } from '@/types/camera';
 import { designTokens } from '@/app/theme';
 import { CameraOverlay } from './CameraOverlay';
 import { BallTrackingDebugOverlay } from './BallTrackingDebugOverlay';
@@ -46,9 +46,11 @@ export function VideoPlayer() {
   const setBufferedRanges = usePlayerStore((state) => state.setBufferedRanges);
   const applyCameraEdits = usePlayerStore((state) => state.applyCameraEdits);
   const currentTime = usePlayerStore((state) => state.currentTime);
+  const playbackRate = usePlayerStore((state) => state.playbackRate);
 
   // Camera state
   const cameraEdits = useCameraStore((state) => state.cameraEdits);
+  const globalCameraSettings = useCameraStore((state) => state.globalCameraSettings);
   const dragPosition = useCameraStore((state) => state.dragPosition);
   const selectedKeyframeId = useCameraStore((state) => state.selectedKeyframeId);
   const handheldPreset = useCameraStore(selectHandheldPreset);
@@ -78,9 +80,39 @@ export function VideoPlayer() {
     return cameraEdits[currentRally.id] ?? null;
   }, [currentRally, cameraEdits]);
 
+  // Get video ID from rally ID (format: `${videoId}_rally_${n}`)
+  const currentVideoId = useMemo(() => {
+    if (!currentRally) return null;
+    const parts = currentRally.id.split('_rally_');
+    return parts.length > 0 ? parts[0] : null;
+  }, [currentRally]);
+
+  // Get global settings for current video
+  const currentGlobalSettings = useMemo((): GlobalCameraSettings => {
+    if (!currentVideoId) return DEFAULT_GLOBAL_CAMERA;
+    return globalCameraSettings[currentVideoId] ?? DEFAULT_GLOBAL_CAMERA;
+  }, [currentVideoId, globalCameraSettings]);
+
+  // Helper to combine global settings with per-rally state
+  const combineWithGlobal = useCallback((rallyState: CameraState): CameraState => {
+    const global = currentGlobalSettings;
+    return {
+      zoom: global.zoom * rallyState.zoom,
+      positionX: Math.max(0, Math.min(1, global.positionX + (rallyState.positionX - 0.5))),
+      positionY: Math.max(0, Math.min(1, global.positionY + (rallyState.positionY - 0.5))),
+      rotation: global.rotation + rallyState.rotation,
+    };
+  }, [currentGlobalSettings]);
+
   // Check if camera edit has keyframes for the active aspect ratio
   const hasCameraKeyframes = currentCameraEdit &&
     (currentCameraEdit.keyframes[currentCameraEdit.aspectRatio]?.length ?? 0) > 0;
+
+  // Check if we have any camera adjustments (global or per-rally)
+  const hasGlobalCameraSettings = currentGlobalSettings.zoom !== 1.0 ||
+    currentGlobalSettings.positionX !== 0.5 ||
+    currentGlobalSettings.positionY !== 0.5 ||
+    currentGlobalSettings.rotation !== 0;
 
   // Determine if camera should be applied (toggle on OR actively editing a keyframe)
   const shouldApplyCamera = applyCameraEdits || selectedKeyframeId !== null;
@@ -94,11 +126,12 @@ export function VideoPlayer() {
 
     const aspectRatio = currentCameraEdit?.aspectRatio ?? 'ORIGINAL';
 
-    // If no keyframes, show default centered position for the aspect ratio
+    // If no keyframes but we have global settings, apply global settings only
     if (!hasCameraKeyframes) {
+      const baseState = combineWithGlobal(DEFAULT_CAMERA_STATE);
       return {
-        videoTransformStyle: calculateVideoTransform(DEFAULT_CAMERA_STATE, aspectRatio),
-        cameraState: DEFAULT_CAMERA_STATE,
+        videoTransformStyle: calculateVideoTransform(baseState, aspectRatio),
+        cameraState: baseState,
       };
     }
 
@@ -117,7 +150,7 @@ export function VideoPlayer() {
     const keyframes = currentCameraEdit?.keyframes[aspectRatio] ?? [];
 
     // Get interpolated camera state with handheld motion applied
-    const cameraState = getCameraStateWithHandheld(
+    const rawCameraState = getCameraStateWithHandheld(
       keyframes,
       clampedOffset,
       effectiveTime,
@@ -125,7 +158,11 @@ export function VideoPlayer() {
       handheldPreset
     );
 
+    // Combine with global settings
+    const cameraState = combineWithGlobal(rawCameraState);
+
     // If dragging, override position with drag position for live preview
+    // Note: drag position is in combined space, so we apply it after global settings
     const effectiveState = dragPosition
       ? { ...cameraState, positionX: dragPosition.x, positionY: dragPosition.y }
       : cameraState;
@@ -135,7 +172,7 @@ export function VideoPlayer() {
       videoTransformStyle: calculateVideoTransform(effectiveState, aspectRatio),
       cameraState: effectiveState,
     };
-  }, [shouldApplyCamera, currentRally, hasCameraKeyframes, currentCameraEdit, cameraTime, handheldPreset, dragPosition]);
+  }, [shouldApplyCamera, currentRally, hasCameraKeyframes, currentCameraEdit, cameraTime, handheldPreset, dragPosition, combineWithGlobal]);
 
   // Get container aspect ratio - show aspect ratio even without keyframes when preview is on
   const containerAspectRatio = useMemo(() => {
@@ -157,6 +194,13 @@ export function VideoPlayer() {
       video.pause();
     }
   }, [isPlaying]);
+
+  // Apply playback rate to video element
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.playbackRate = playbackRate;
+    }
+  }, [playbackRate]);
 
   // RAF loop for smooth camera updates during playback
   // This runs at 60fps to sample video.currentTime for smooth panning

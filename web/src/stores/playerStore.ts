@@ -23,6 +23,7 @@ interface PlayerState {
   playOnlyRallies: boolean; // Skip dead time between rallies
   applyCameraEdits: boolean; // Apply camera edits during playback
   bufferedRanges: BufferedRange[]; // Which parts of the video are buffered
+  playbackRate: number; // Playback speed (0.5, 1, 2)
 
   // Highlight playback state
   playingHighlightId: string | null;
@@ -43,6 +44,8 @@ interface PlayerState {
   togglePlayOnlyRallies: () => void;
   toggleApplyCameraEdits: () => void;
   setApplyCameraEdits: (apply: boolean) => void;
+  setPlaybackRate: (rate: number) => void;
+  cyclePlaybackRate: (direction: 'faster' | 'slower') => void;
 
   // Highlight playback actions
   startHighlightPlayback: (highlightId: string, playlist: PlaylistRally[], startIndex?: number) => void;
@@ -62,6 +65,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   playOnlyRallies: false,
   applyCameraEdits: true,
   bufferedRanges: [],
+  playbackRate: 1,
 
   // Highlight playback state
   playingHighlightId: null,
@@ -105,6 +109,24 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     if (typeof window !== 'undefined') {
       localStorage.setItem('rallycut-apply-camera-edits', String(apply));
     }
+  },
+
+  setPlaybackRate: (rate) => {
+    const validRates = [0.5, 1, 2];
+    if (!validRates.includes(rate)) return;
+    set({ playbackRate: rate });
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('rallycut-playback-rate', String(rate));
+    }
+  },
+
+  cyclePlaybackRate: (direction) => {
+    const rates = [0.5, 1, 2];
+    const idx = rates.indexOf(get().playbackRate);
+    const newIdx = direction === 'faster'
+      ? Math.min(rates.length - 1, idx + 1)
+      : Math.max(0, idx - 1);
+    get().setPlaybackRate(rates[newIdx]);
   },
 
   // Highlight playback actions
@@ -183,5 +205,12 @@ if (typeof window !== 'undefined') {
   const savedPlayOnlyRallies = localStorage.getItem('rallycut-play-only-rallies');
   if (savedPlayOnlyRallies !== null) {
     usePlayerStore.setState({ playOnlyRallies: savedPlayOnlyRallies === 'true' });
+  }
+  const savedRate = localStorage.getItem('rallycut-playback-rate');
+  if (savedRate) {
+    const rate = parseFloat(savedRate);
+    if ([0.5, 1, 2].includes(rate)) {
+      usePlayerStore.setState({ playbackRate: rate });
+    }
   }
 }
