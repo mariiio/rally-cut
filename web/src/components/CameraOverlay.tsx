@@ -223,9 +223,11 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
           const edit = useCameraStore.getState().cameraEdits[currentSelectedRallyId];
           const keyframes = edit ? edit.keyframes[edit.aspectRatio] ?? [] : [];
 
-          // Find nearest keyframe within threshold
+          // Find nearest keyframe within threshold (convert seconds to timeOffset)
+          const rallyDuration = selectedRally ? selectedRally.end_time - selectedRally.start_time : 0;
+          const thresholdOffset = rallyDuration > 0 ? KEYFRAME_TIME_THRESHOLD / rallyDuration : 0;
           const nearestKeyframe = keyframes.find(
-            (kf) => Math.abs(kf.timeOffset - currentTimeOffset) < KEYFRAME_TIME_THRESHOLD
+            (kf) => Math.abs(kf.timeOffset - currentTimeOffset) < thresholdOffset
           );
 
           if (nearestKeyframe) {

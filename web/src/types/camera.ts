@@ -107,8 +107,8 @@ export const ROTATION_MIN = -30;
 export const ROTATION_MAX = 30;
 export const ROTATION_STEP = 0.5;
 
-/** Time threshold for keyframe proximity (5% of rally duration) */
-export const KEYFRAME_TIME_THRESHOLD = 0.05;
+/** Time threshold for keyframe proximity in seconds */
+export const KEYFRAME_TIME_THRESHOLD = 0.3;
 
 /** Handheld camera motion preset (simple on/off) */
 export type HandheldPreset = 'OFF' | 'NATURAL';
