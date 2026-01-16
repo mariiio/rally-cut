@@ -179,14 +179,11 @@ async function evictIfNeeded(db: IDBDatabase, newEntrySize: number): Promise<voi
  * Cache video data in memory, and IndexedDB for small videos
  */
 async function cacheVideo(key: string, data: Uint8Array): Promise<void> {
-  const sizeMB = (data.length / 1024 / 1024).toFixed(1);
-
   // Always store in memory for current session
   memoryCache.set(key, data);
 
   // Only persist small videos to IndexedDB (large videos would fill up storage)
   if (data.length >= MAX_INDEXEDDB_VIDEO_SIZE) {
-    console.log(`[VideoExport] Cached in memory only (too large for IndexedDB): ${key.substring(0, 50)}... (${sizeMB} MB)`);
     return;
   }
 
@@ -207,10 +204,8 @@ async function cacheVideo(key: string, data: Uint8Array): Promise<void> {
       timestamp: Date.now(),
     };
     store.put(entry);
-
-    console.log(`[VideoExport] Cached in IndexedDB: ${key.substring(0, 50)}... (${sizeMB} MB)`);
-  } catch (err) {
-    console.warn('[VideoExport] Failed to cache in IndexedDB:', err);
+  } catch {
+    // Ignore IndexedDB cache failures - memory cache still works
   }
 }
 
@@ -225,7 +220,6 @@ export async function clearVideoCache(): Promise<void> {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
     store.clear();
-    console.log('[VideoExport] Video cache cleared');
   } catch {
     // Ignore errors
   }
@@ -539,12 +533,10 @@ async function fetchFileData(source: VideoSource, onProgress?: (loaded: number, 
     const cacheKey = `file:${source.name}:${source.size}`;
     const cached = await getCachedVideo(cacheKey);
     if (cached) {
-      console.log(`[VideoExport] Cache hit for file ${source.name} (${(cached.length / 1024 / 1024).toFixed(1)} MB)`);
       onProgress?.(cached.length, cached.length);
       // Return a copy (.slice()) to avoid ArrayBuffer detachment issues with FFmpeg worker
       return cached.slice();
     }
-    console.log(`[VideoExport] Cache miss for file ${source.name}, reading...`);
 
     const buffer = await source.arrayBuffer();
     const data = new Uint8Array(buffer);
@@ -556,12 +548,10 @@ async function fetchFileData(source: VideoSource, onProgress?: (loaded: number, 
     const cacheKey = source;
     const cached = await getCachedVideo(cacheKey);
     if (cached) {
-      console.log(`[VideoExport] Cache hit for ${cacheKey.substring(0, 50)}... (${(cached.length / 1024 / 1024).toFixed(1)} MB)`);
       onProgress?.(cached.length, cached.length);
       // Return a copy (.slice()) to avoid ArrayBuffer detachment issues with FFmpeg worker
       return cached.slice();
     }
-    console.log(`[VideoExport] Cache miss for ${cacheKey.substring(0, 50)}..., downloading...`);
 
     let url = source;
 
