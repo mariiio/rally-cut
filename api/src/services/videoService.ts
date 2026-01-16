@@ -1020,7 +1020,7 @@ export async function getVideoById(id: string) {
  * Returns the video with rallies, camera edits, and filtered highlights.
  */
 export async function getVideoForEditor(videoId: string, userId: string) {
-  // Fetch video with rallies, camera edits, and confirmation status
+  // Fetch video with rallies, camera edits, confirmation status, and global camera settings
   const video = await prisma.video.findFirst({
     where: { id: videoId, userId, deletedAt: null },
     include: {
@@ -1037,6 +1037,7 @@ export async function getVideoForEditor(videoId: string, userId: string) {
         },
       },
       confirmation: true,
+      cameraSettings: true,
     },
   });
 
@@ -1102,6 +1103,7 @@ export async function getVideoForEditor(videoId: string, userId: string) {
       width: video.width,
       height: video.height,
       rallies: video.rallies,
+      cameraSettings: video.cameraSettings,
     },
     allVideosSessionId: allVideosSession.id,
     highlights,

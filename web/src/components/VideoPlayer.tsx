@@ -7,8 +7,8 @@ import { usePlayerStore } from '@/stores/playerStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useUploadStore } from '@/stores/uploadStore';
 import { useCameraStore } from '@/stores/cameraStore';
-import { calculateVideoTransform, getCameraStateWithHandheld } from '@/utils/cameraInterpolation';
-import { DEFAULT_CAMERA_STATE, DEFAULT_GLOBAL_CAMERA, GlobalCameraSettings, CameraState } from '@/types/camera';
+import { calculateVideoTransform, getCameraStateWithHandheld, interpolateCameraState } from '@/utils/cameraInterpolation';
+import { DEFAULT_CAMERA_STATE, DEFAULT_GLOBAL_CAMERA, GlobalCameraSettings, CameraState, CameraKeyframe } from '@/types/camera';
 import { designTokens } from '@/app/theme';
 import { CameraOverlay } from './CameraOverlay';
 import { BallTrackingDebugOverlay } from './BallTrackingDebugOverlay';
@@ -23,6 +23,17 @@ export function VideoPlayer() {
   const [bufferProgress, setBufferProgress] = useState(0);
   // Camera time for seeking (when paused, we may need to update camera position)
   const [, setCameraTime] = useState(0);
+
+  // Ref for RAF loop - stores camera data to avoid effect restarts
+  const rafDataRef = useRef<{
+    rallyStart: number;
+    rallyEnd: number;
+    keyframes: CameraKeyframe[];
+    aspectRatio: 'ORIGINAL' | 'VERTICAL';
+    globalSettings: GlobalCameraSettings;
+  } | null>(null);
+  // Ref for transform wrapper
+  const transformWrapperRef = useRef<HTMLDivElement>(null);
 
   const videoUrl = useEditorStore((state) => state.videoUrl);
   const posterUrl = useEditorStore((state) => state.posterUrl);
@@ -54,7 +65,6 @@ export function VideoPlayer() {
   const cameraEdits = useCameraStore((state) => state.cameraEdits);
   const globalCameraSettings = useCameraStore((state) => state.globalCameraSettings);
   const dragPosition = useCameraStore((state) => state.dragPosition);
-  const selectedKeyframeId = useCameraStore((state) => state.selectedKeyframeId);
   const debugBallPositions = useCameraStore((state) => state.debugBallPositions);
   const debugFrameCount = useCameraStore((state) => state.debugFrameCount);
   const debugRallyId = useCameraStore((state) => state.debugRallyId);
@@ -119,8 +129,17 @@ export function VideoPlayer() {
   // Determine if camera should be applied - only when preview toggle is ON
   const shouldApplyCamera = applyCameraEdits;
 
+  // Track last camera state for when RAF is controlling
+  const lastCameraStateRef = useRef<CameraState>(DEFAULT_CAMERA_STATE);
+
   // Calculate camera state and video transform style
   const { videoTransformStyle, cameraState: currentCameraState } = useMemo(() => {
+    // During playback with keyframes, RAF controls the transform directly via DOM manipulation
+    // Return empty styles so React doesn't interfere - RAF updates lastCameraStateRef
+    if (isPlaying && hasCameraKeyframes) {
+      return { videoTransformStyle: {}, cameraState: DEFAULT_CAMERA_STATE };
+    }
+
     // If no camera preview and no global settings, return defaults
     if (!shouldApplyCamera) {
       return { videoTransformStyle: {}, cameraState: DEFAULT_CAMERA_STATE };
@@ -154,7 +173,6 @@ export function VideoPlayer() {
     }
 
     // Use currentTime from playerStore for camera position calculation
-    // CSS transitions smooth between discrete timeupdate events
     const effectiveTime = currentTime;
 
     // Calculate time offset within the rally (0-1)
@@ -186,11 +204,13 @@ export function VideoPlayer() {
       : cameraState;
 
     // Calculate CSS transform
+    const transform = calculateVideoTransform(effectiveState, aspectRatio);
+
     return {
-      videoTransformStyle: calculateVideoTransform(effectiveState, aspectRatio),
+      videoTransformStyle: transform,
       cameraState: effectiveState,
     };
-  }, [shouldApplyCamera, currentRally, hasCameraKeyframes, hasGlobalCameraSettings, currentCameraEdit, currentTime, dragPosition, combineWithGlobal]);
+  }, [shouldApplyCamera, currentRally, hasCameraKeyframes, hasGlobalCameraSettings, currentCameraEdit, currentTime, dragPosition, combineWithGlobal, isPlaying]);
 
   // Get container aspect ratio - show aspect ratio even without keyframes when preview is on
   const containerAspectRatio = useMemo(() => {
@@ -220,15 +240,83 @@ export function VideoPlayer() {
     }
   }, [playbackRate]);
 
-  // Camera animation: React updates transforms via useMemo, CSS transition smooths between updates
+  // Update RAF data ref when camera data changes
+  useEffect(() => {
+    if (!currentRally || !currentCameraEdit) {
+      rafDataRef.current = null;
+      return;
+    }
+    const aspectRatio = currentCameraEdit.aspectRatio;
+    rafDataRef.current = {
+      rallyStart: currentRally.start_time,
+      rallyEnd: currentRally.end_time,
+      keyframes: currentCameraEdit.keyframes[aspectRatio] ?? [],
+      aspectRatio,
+      globalSettings: currentGlobalSettings,
+    };
+  }, [currentRally, currentCameraEdit, currentGlobalSettings]);
+
+  // RAF loop for smooth 60fps camera animation during playback
+  useEffect(() => {
+    if (!isPlaying || !shouldApplyCamera || !hasCameraKeyframes) {
+      return;
+    }
+
+    const video = videoRef.current;
+    if (!video) return;
+
+    let rafId: number;
+
+    const updateTransform = () => {
+      const data = rafDataRef.current;
+      if (!data) {
+        rafId = requestAnimationFrame(updateTransform);
+        return;
+      }
+
+      const { rallyStart, rallyEnd, keyframes, aspectRatio, globalSettings } = data;
+      const t = video.currentTime;
+      const duration = rallyEnd - rallyStart;
+      const offset = duration > 0 ? (t - rallyStart) / duration : 0;
+      const clampedOffset = Math.max(0, Math.min(1, offset));
+
+      // Pure interpolation - no handheld effects
+      const raw = interpolateCameraState(keyframes, clampedOffset);
+
+      // Combine with global settings
+      const state: CameraState = {
+        zoom: raw.zoom !== 1.0 ? raw.zoom : globalSettings.zoom,
+        positionX: raw.positionX !== 0.5 ? raw.positionX : globalSettings.positionX,
+        positionY: raw.positionY !== 0.5 ? raw.positionY : globalSettings.positionY,
+        rotation: raw.rotation !== 0 ? raw.rotation : globalSettings.rotation,
+      };
+
+      const transform = calculateVideoTransform(state, aspectRatio);
+
+      // Update the ref so React has the correct state when playback stops
+      lastCameraStateRef.current = state;
+
+      // Apply to transform wrapper for compositor optimization
+      const target = transformWrapperRef.current || video;
+      target.style.transform = transform.transform as string;
+      target.style.transformOrigin = transform.transformOrigin as string;
+
+      rafId = requestAnimationFrame(updateTransform);
+    };
+
+    rafId = requestAnimationFrame(updateTransform);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+    };
+  }, [isPlaying, shouldApplyCamera, hasCameraKeyframes]);
 
   // Handle manual seek requests
   useEffect(() => {
     if (seekTo !== null && videoRef.current) {
       videoRef.current.currentTime = seekTo;
       // Update cameraTime immediately for smooth preview when paused
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: syncing camera time with seek
-      setCameraTime(seekTo);
+      setCameraTime(seekTo); // eslint-disable-line react-hooks/set-state-in-effect -- intentional: syncing camera time with seek
       clearSeek();
       // Resume playback if we're supposed to be playing
       if (isPlaying) {
@@ -247,11 +335,24 @@ export function VideoPlayer() {
 
   // Track if we're in the middle of a match switch
   const switchingMatchRef = useRef(false);
+  // Throttle time updates during camera animation to reduce React interference
+  const lastTimeUpdateRef = useRef(0);
 
   // Time update handler - check for rally end during highlight playback
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
+
+    // During camera keyframe playback, throttle React state updates to reduce main thread work
+    // This prevents React re-renders from interfering with RAF animation
+    const now = performance.now();
+    if (isPlaying && hasCameraKeyframes) {
+      // Only update React state every 250ms during camera animation
+      if (now - lastTimeUpdateRef.current < 250) {
+        return;
+      }
+      lastTimeUpdateRef.current = now;
+    }
 
     setCurrentTime(video.currentTime);
 
@@ -283,7 +384,7 @@ export function VideoPlayer() {
         }
       }
     }
-  }, [setCurrentTime, setActiveMatch]);
+  }, [setCurrentTime, setActiveMatch, isPlaying, hasCameraKeyframes]);
 
   // Handle video metadata loaded
   const handleLoadedMetadata = useCallback(() => {
@@ -642,42 +743,50 @@ export function VideoPlayer() {
               zoom={currentCameraState.zoom}
             />
           )}
-          <video
-            ref={videoRef}
-            src={effectiveVideoUrl}
-            poster={posterUrl || undefined}
-            preload="metadata"
-            crossOrigin={process.env.NODE_ENV === 'production' ? 'anonymous' : undefined}
+          {/* Transform wrapper for compositor optimization */}
+          <div
+            ref={transformWrapperRef}
             style={containerAspectRatio === '9/16' ? {
-              // 9:16 mode: position video at center, transform handles panning
               position: 'absolute',
               top: 0,
               left: '50%',
               width: 'auto',
               height: '100%',
               willChange: 'transform',
-              // Smooth transition for camera movement
-              transition: isPlaying && hasCameraKeyframes ? 'transform 100ms linear' : 'none',
-              ...videoTransformStyle,
+              transition: isPlaying && hasCameraKeyframes ? 'transform 150ms ease-out' : 'none',
+              ...(isPlaying && hasCameraKeyframes ? {} : videoTransformStyle),
             } : {
-              // 16:9 mode: normal video display with optional transforms
               width: '100%',
               height: '100%',
-              objectFit: 'contain',
               willChange: isCameraPreviewActive ? 'transform' : 'auto',
-              // Smooth transition for camera movement
-              transition: isPlaying && hasCameraKeyframes ? 'transform 100ms linear' : 'none',
-              ...videoTransformStyle,
+              transition: isPlaying && hasCameraKeyframes ? 'transform 150ms ease-out' : 'none',
+              ...(isPlaying && hasCameraKeyframes ? {} : videoTransformStyle),
             }}
-            onTimeUpdate={handleTimeUpdate}
-            onSeeked={handleSeeked}
-            onLoadedMetadata={handleLoadedMetadata}
-            onLoadStart={handleLoadStart}
-            onProgress={handleProgress}
-            onWaiting={handleWaiting}
-            onCanPlay={handleCanPlay}
-            playsInline
-          />
+          >
+            <video
+              ref={videoRef}
+              src={effectiveVideoUrl}
+              poster={posterUrl || undefined}
+              preload="metadata"
+              crossOrigin={process.env.NODE_ENV === 'production' ? 'anonymous' : undefined}
+              style={containerAspectRatio === '9/16' ? {
+                width: 'auto',
+                height: '100%',
+              } : {
+                width: '100%',
+                height: '100%',
+                objectFit: 'contain',
+              }}
+              onTimeUpdate={handleTimeUpdate}
+              onSeeked={handleSeeked}
+              onLoadedMetadata={handleLoadedMetadata}
+              onLoadStart={handleLoadStart}
+              onProgress={handleProgress}
+              onWaiting={handleWaiting}
+              onCanPlay={handleCanPlay}
+              playsInline
+            />
+          </div>
         </Box>
       </Box>
     </Box>

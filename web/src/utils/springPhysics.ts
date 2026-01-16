@@ -15,8 +15,32 @@ export interface SpringConfig {
 }
 
 /**
+ * Perform a single spring step with fixed timestep.
+ */
+function springStepInternal(
+  state: SpringState,
+  target: number,
+  config: SpringConfig,
+  dt: number
+): SpringState {
+  const { stiffness, damping, mass } = config;
+
+  // F = -k(x - target) - c*v
+  const displacement = state.position - target;
+  const springForce = -stiffness * displacement;
+  const dampingForce = -damping * state.velocity;
+  const acceleration = (springForce + dampingForce) / mass;
+
+  // Semi-implicit Euler (velocity first, then position)
+  const newVelocity = state.velocity + acceleration * dt;
+  const newPosition = state.position + newVelocity * dt;
+
+  return { position: newPosition, velocity: newVelocity };
+}
+
+/**
  * Step the spring simulation forward by deltaTime seconds.
- * Uses semi-implicit Euler integration for stability.
+ * Uses sub-stepping for stability and smooth tracking of fast-moving targets.
  *
  * @param state Current spring state
  * @param target Target position
@@ -30,22 +54,21 @@ export function stepSpring(
   config: SpringConfig,
   dt: number
 ): SpringState {
-  const { stiffness, damping, mass } = config;
+  // Sub-step for stability and smooth fast transitions
+  // Fixed timestep of ~8ms (120fps internal simulation)
+  const FIXED_STEP = 0.008;
+  const maxSteps = 8; // Cap at ~64ms to prevent runaway
 
-  // Clamp dt to prevent instability with large time steps
-  const clampedDt = Math.min(dt, 0.05);
+  const clampedDt = Math.min(dt, FIXED_STEP * maxSteps);
+  const numSteps = Math.ceil(clampedDt / FIXED_STEP);
+  const stepDt = clampedDt / numSteps;
 
-  // F = -k(x - target) - c*v
-  const displacement = state.position - target;
-  const springForce = -stiffness * displacement;
-  const dampingForce = -damping * state.velocity;
-  const acceleration = (springForce + dampingForce) / mass;
+  let currentState = state;
+  for (let i = 0; i < numSteps; i++) {
+    currentState = springStepInternal(currentState, target, config, stepDt);
+  }
 
-  // Semi-implicit Euler (velocity first, then position)
-  const newVelocity = state.velocity + acceleration * clampedDt;
-  const newPosition = state.position + newVelocity * clampedDt;
-
-  return { position: newPosition, velocity: newVelocity };
+  return currentState;
 }
 
 /**

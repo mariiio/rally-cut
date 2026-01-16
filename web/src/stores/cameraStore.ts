@@ -5,9 +5,11 @@ import {
   CameraKeyframe,
   RallyCameraEdit,
   CameraState,
+  GlobalCameraSettings,
   DEFAULT_CAMERA_EDIT,
   DEFAULT_KEYFRAME,
   DEFAULT_CAMERA_STATE,
+  DEFAULT_GLOBAL_CAMERA,
   migrateCameraEdit,
   HandheldPreset,
 } from '@/types/camera';
@@ -45,12 +47,16 @@ interface CameraStoreState {
   // Per-rally camera edits (rallyId -> edit)
   cameraEdits: CameraEditsRecord;
 
+  // Global video-level camera settings (videoId -> settings)
+  globalCameraSettings: Record<string, GlobalCameraSettings>;
+
   // Handheld motion preset (global, applies to all rallies)
   handheldPreset: HandheldPreset;
 
   // UI state
   selectedKeyframeId: string | null;
   dragPosition: { x: number; y: number } | null; // Position during active drag
+  isAdjustingRotation: boolean; // Show grid overlay while adjusting rotation
 
   // Actions
   setCameraEdit: (rallyId: string, edit: RallyCameraEdit) => void;
@@ -64,9 +70,15 @@ interface CameraStoreState {
   // UI actions
   selectKeyframe: (id: string | null) => void;
   setDragPosition: (pos: { x: number; y: number } | null) => void;
+  setIsAdjustingRotation: (isAdjusting: boolean) => void;
 
   // Handheld motion actions
   setHandheldPreset: (preset: HandheldPreset) => void;
+
+  // Global camera settings actions
+  getGlobalSettings: (videoId: string) => GlobalCameraSettings;
+  setGlobalSettings: (videoId: string, settings: Partial<GlobalCameraSettings>) => void;
+  resetGlobalSettings: (videoId: string) => void;
 
   // Rally-level actions
   resetCamera: (rallyId: string) => void;
@@ -82,11 +94,16 @@ interface CameraStoreState {
   getCameraEdit: (rallyId: string) => RallyCameraEdit;
   getActiveKeyframes: (rallyId: string) => CameraKeyframe[];
   getCameraStateAtTime: (rallyId: string, timeOffset: number) => CameraState;
+  getCombinedCameraStateAtTime: (videoId: string, rallyId: string, timeOffset: number) => CameraState;
   hasKeyframes: (rallyId: string) => boolean;
   hasAnyKeyframes: (rallyId: string) => boolean;
+  hasGlobalSettings: (videoId: string) => boolean;
 
   // Bulk operations (accepts both old and new format - migration is automatic)
-  loadCameraEdits: (edits: CameraEditsRecord | LegacyCameraEditsRecord | Map<string, RallyCameraEdit>) => void;
+  loadCameraEdits: (
+    edits: CameraEditsRecord | LegacyCameraEditsRecord | Map<string, RallyCameraEdit>,
+    globalSettings?: Record<string, GlobalCameraSettings>
+  ) => void;
   clearAll: () => void;
 
   // Dirty tracking for sync
@@ -110,9 +127,11 @@ export const useCameraStore = create<CameraStoreState>()(
   subscribeWithSelector((set, get) => ({
     // Initial state
     cameraEdits: {},
+    globalCameraSettings: {},
     handheldPreset: 'OFF' as HandheldPreset,
     selectedKeyframeId: null,
     dragPosition: null,
+    isAdjustingRotation: false,
     isDirty: false,
     debugBallPositions: null,
     debugFrameCount: null,
@@ -268,6 +287,7 @@ export const useCameraStore = create<CameraStoreState>()(
     // UI state
     selectKeyframe: (id: string | null) => set({ selectedKeyframeId: id }),
     setDragPosition: (pos: { x: number; y: number } | null) => set({ dragPosition: pos }),
+    setIsAdjustingRotation: (isAdjusting: boolean) => set({ isAdjustingRotation: isAdjusting }),
 
     // Handheld motion
     setHandheldPreset: (preset: HandheldPreset) => {
@@ -276,6 +296,39 @@ export const useCameraStore = create<CameraStoreState>()(
       if (typeof window !== 'undefined') {
         localStorage.setItem('rallycut-handheld-preset', preset);
       }
+    },
+
+    // Global camera settings
+    getGlobalSettings: (videoId: string): GlobalCameraSettings => {
+      return get().globalCameraSettings[videoId] ?? { ...DEFAULT_GLOBAL_CAMERA };
+    },
+
+    setGlobalSettings: (videoId: string, settings: Partial<GlobalCameraSettings>) => {
+      pushEditorHistory();
+      set((state) => {
+        const existing = state.globalCameraSettings[videoId] ?? { ...DEFAULT_GLOBAL_CAMERA };
+        return {
+          globalCameraSettings: {
+            ...state.globalCameraSettings,
+            [videoId]: { ...existing, ...settings },
+          },
+          isDirty: true,
+        };
+      });
+      syncService.markDirty();
+    },
+
+    resetGlobalSettings: (videoId: string) => {
+      pushEditorHistory();
+      set((state) => {
+        const newSettings = { ...state.globalCameraSettings };
+        delete newSettings[videoId];
+        return {
+          globalCameraSettings: newSettings,
+          isDirty: true,
+        };
+      });
+      syncService.markDirty();
     },
 
     // Reset camera for a rally (remove all keyframes and settings)
@@ -367,8 +420,36 @@ export const useCameraStore = create<CameraStoreState>()(
              (edit.keyframes.VERTICAL?.length ?? 0) > 0;
     },
 
+    // Check if video has global camera settings
+    hasGlobalSettings: (videoId: string) => {
+      const settings = get().globalCameraSettings[videoId];
+      if (!settings) return false;
+      // Check if any setting differs from default
+      return settings.zoom !== 1.0 ||
+             settings.positionX !== 0.5 ||
+             settings.positionY !== 0.5 ||
+             settings.rotation !== 0;
+    },
+
+    // Get combined camera state (global + per-rally) at a time offset
+    getCombinedCameraStateAtTime: (videoId: string, rallyId: string, timeOffset: number): CameraState => {
+      const global = get().globalCameraSettings[videoId] ?? DEFAULT_GLOBAL_CAMERA;
+      const rallyState = get().getCameraStateAtTime(rallyId, timeOffset);
+
+      // Combine: zoom is multiplicative, position is additive from center, rotation is additive
+      return {
+        zoom: global.zoom * rallyState.zoom,
+        positionX: Math.max(0, Math.min(1, global.positionX + (rallyState.positionX - 0.5))),
+        positionY: Math.max(0, Math.min(1, global.positionY + (rallyState.positionY - 0.5))),
+        rotation: global.rotation + rallyState.rotation,
+      };
+    },
+
     // Load camera edits from backend/storage (migrates old format if needed)
-    loadCameraEdits: (edits: CameraEditsRecord | LegacyCameraEditsRecord | Map<string, RallyCameraEdit>) => {
+    loadCameraEdits: (
+      edits: CameraEditsRecord | LegacyCameraEditsRecord | Map<string, RallyCameraEdit>,
+      globalSettings?: Record<string, GlobalCameraSettings>
+    ) => {
       // Convert Map to object if needed
       const rawRecord = edits instanceof Map
         ? Object.fromEntries(edits)
@@ -380,14 +461,20 @@ export const useCameraStore = create<CameraStoreState>()(
         record[rallyId] = migrateCameraEdit(edit);
       }
 
-      set({ cameraEdits: record, isDirty: false });
+      set({
+        cameraEdits: record,
+        globalCameraSettings: globalSettings ?? {},
+        isDirty: false,
+      });
     },
 
     // Clear all camera edits
     clearAll: () => {
       set({
         cameraEdits: {},
+        globalCameraSettings: {},
         selectedKeyframeId: null,
+        isAdjustingRotation: false,
         isDirty: false,
       });
     },
@@ -410,7 +497,7 @@ export const useCameraStore = create<CameraStoreState>()(
 // If currentState is provided, uses those values instead of defaults
 export function createDefaultKeyframe(
   timeOffset: number,
-  currentState?: { positionX: number; positionY: number; zoom: number }
+  currentState?: { positionX: number; positionY: number; zoom: number; rotation?: number }
 ): Omit<CameraKeyframe, 'id'> {
   return {
     ...DEFAULT_KEYFRAME,
@@ -418,6 +505,7 @@ export function createDefaultKeyframe(
     positionX: currentState?.positionX ?? DEFAULT_KEYFRAME.positionX,
     positionY: currentState?.positionY ?? DEFAULT_KEYFRAME.positionY,
     zoom: currentState?.zoom ?? DEFAULT_KEYFRAME.zoom,
+    rotation: currentState?.rotation ?? DEFAULT_KEYFRAME.rotation,
   };
 }
 
@@ -428,6 +516,8 @@ export const selectCameraEdit = (rallyId: string | null) => (state: CameraStoreS
 export const selectSelectedKeyframeId = (state: CameraStoreState) => state.selectedKeyframeId;
 
 export const selectDragPosition = (state: CameraStoreState) => state.dragPosition;
+
+export const selectIsAdjustingRotation = (state: CameraStoreState) => state.isAdjustingRotation;
 
 export const selectHandheldPreset = (state: CameraStoreState) => state.handheldPreset;
 

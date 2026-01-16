@@ -165,6 +165,7 @@ export async function syncState(
                         positionX: kf.positionX,
                         positionY: kf.positionY,
                         zoom: kf.zoom,
+                        rotation: kf.rotation ?? 0,
                         easing: kf.easing,
                       })),
                     },
@@ -185,6 +186,7 @@ export async function syncState(
                         positionX: kf.positionX,
                         positionY: kf.positionY,
                         zoom: kf.zoom,
+                        rotation: kf.rotation ?? 0,
                         easing: kf.easing,
                       })),
                     },
@@ -206,6 +208,38 @@ export async function syncState(
           await tx.rally.deleteMany({
             where: { id: { in: toDelete } },
           });
+        }
+      }
+
+      // Sync global camera settings for each video
+      if (input.globalCameraSettings) {
+        for (const [videoId, settings] of Object.entries(input.globalCameraSettings)) {
+          if (!videoIds.has(videoId)) continue;
+
+          if (settings === null) {
+            // Explicitly delete global camera settings
+            await tx.videoCameraSettings.deleteMany({
+              where: { videoId },
+            });
+          } else if (settings) {
+            // Upsert global camera settings
+            await tx.videoCameraSettings.upsert({
+              where: { videoId },
+              create: {
+                videoId,
+                zoom: settings.zoom,
+                positionX: settings.positionX,
+                positionY: settings.positionY,
+                rotation: settings.rotation,
+              },
+              update: {
+                zoom: settings.zoom,
+                positionX: settings.positionX,
+                positionY: settings.positionY,
+                rotation: settings.rotation,
+              },
+            });
+          }
         }
       }
     }

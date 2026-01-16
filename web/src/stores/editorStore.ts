@@ -14,7 +14,7 @@ import {
   SessionManifest,
 } from '@/types/rally';
 import { usePlayerStore } from './playerStore';
-import { fetchSession as fetchSessionFromApi, fetchVideoForEditor, getCurrentUser, getConfirmationStatus, AccessDeniedError, type CameraEditMap } from '@/services/api';
+import { fetchSession as fetchSessionFromApi, fetchVideoForEditor, getCurrentUser, getConfirmationStatus, AccessDeniedError, type CameraEditMap, type GlobalCameraSettingsMap } from '@/services/api';
 import { useCameraStore } from './cameraStore';
 import type { RallyCameraEdit } from '@/types/camera';
 import { syncService } from '@/services/syncService';
@@ -163,7 +163,7 @@ interface EditorState {
   singleVideoId: string | null;
 
   // Session cache (for back navigation)
-  sessionCache: Record<string, { session: Session; cameraEdits: CameraEditMap; timestamp: number }>;
+  sessionCache: Record<string, { session: Session; cameraEdits: CameraEditMap; globalCameraSettings: GlobalCameraSettingsMap; timestamp: number }>;
   invalidateSessionCache: (sessionId?: string) => void;
 
   // Session actions
@@ -363,11 +363,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (useApi) {
         // Check session cache first (for back navigation)
         const cached = get().sessionCache[sessionId];
-        let result: { session: Session; cameraEdits: CameraEditMap };
+        let result: { session: Session; cameraEdits: CameraEditMap; globalCameraSettings: GlobalCameraSettingsMap };
 
         if (cached && Date.now() - cached.timestamp < SESSION_CACHE_TTL) {
           // Use cached data
-          result = { session: cached.session, cameraEdits: cached.cameraEdits };
+          result = { session: cached.session, cameraEdits: cached.cameraEdits, globalCameraSettings: cached.globalCameraSettings };
         } else {
           // Fetch from backend API
           result = await fetchSessionFromApi(sessionId);
@@ -379,6 +379,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               [sessionId]: {
                 session: result.session,
                 cameraEdits: result.cameraEdits,
+                globalCameraSettings: result.globalCameraSettings,
                 timestamp: Date.now(),
               },
             },
@@ -387,11 +388,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
         session = result.session;
 
-        // Load camera edits into camera store (migration handled by loadCameraEdits)
-        if (Object.keys(result.cameraEdits).length > 0) {
-          // Pass raw data - loadCameraEdits will migrate old format if needed
-          useCameraStore.getState().loadCameraEdits(result.cameraEdits);
-        }
+        // Load camera edits and global settings into camera store (migration handled by loadCameraEdits)
+        // Pass raw data - loadCameraEdits will migrate old format if needed
+        useCameraStore.getState().loadCameraEdits(result.cameraEdits, result.globalCameraSettings);
 
         // Update progress
         set({
@@ -669,10 +668,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         sessionLoadProgress: 50,
       });
 
-      // Load camera edits into camera store
-      if (Object.keys(result.cameraEdits).length > 0) {
-        useCameraStore.getState().loadCameraEdits(result.cameraEdits);
-      }
+      // Load camera edits and global settings into camera store
+      useCameraStore.getState().loadCameraEdits(result.cameraEdits, result.globalCameraSettings);
 
       // Fetch current user info
       try {
@@ -784,10 +781,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const result = await fetchSessionFromApi(state.session.id);
       const freshSession = result.session;
 
-      // Load camera edits into camera store (migration handled by loadCameraEdits)
-      if (Object.keys(result.cameraEdits).length > 0) {
-        useCameraStore.getState().loadCameraEdits(result.cameraEdits);
-      }
+      // Load camera edits and global settings into camera store (migration handled by loadCameraEdits)
+      useCameraStore.getState().loadCameraEdits(result.cameraEdits, result.globalCameraSettings);
 
       // Preserve activeMatchId if the match still exists, otherwise use first match
       const matchStillExists = freshSession.matches.some((m: { id: string }) => m.id === state.activeMatchId);
@@ -830,10 +825,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (state.singleVideoMode && state.singleVideoId) {
         const result = await fetchVideoForEditor(state.singleVideoId);
 
-        // Load camera edits into camera store
-        if (Object.keys(result.cameraEdits).length > 0) {
-          useCameraStore.getState().loadCameraEdits(result.cameraEdits);
-        }
+        // Load camera edits and global settings into camera store
+        useCameraStore.getState().loadCameraEdits(result.cameraEdits, result.globalCameraSettings);
 
         // Build updated session with fresh match data
         const updatedSession = state.session ? {
@@ -866,10 +859,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const freshSession = result.session;
       const freshMatch = freshSession.matches.find((m: { id: string }) => m.id === state.activeMatchId);
 
-      // Load camera edits into camera store (migration handled by loadCameraEdits)
-      if (Object.keys(result.cameraEdits).length > 0) {
-        useCameraStore.getState().loadCameraEdits(result.cameraEdits);
-      }
+      // Load camera edits and global settings into camera store (migration handled by loadCameraEdits)
+      useCameraStore.getState().loadCameraEdits(result.cameraEdits, result.globalCameraSettings);
 
       if (!freshMatch) return null;
 
@@ -1360,13 +1351,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const mergedAspectRatio = useVertical ? 'VERTICAL' : 'ORIGINAL';
 
       // Helper to convert keyframe timeOffset to new merged rally coordinates
-      const convertEarlierKeyframe = (kf: { id: string; timeOffset: number; positionX: number; positionY: number; zoom: number; easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT' }) => ({
+      const convertEarlierKeyframe = (kf: { id: string; timeOffset: number; positionX: number; positionY: number; zoom: number; rotation: number; easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT' }) => ({
         ...kf,
         // Earlier rally starts at 0, so just scale down the offset
         timeOffset: (kf.timeOffset * earlierDuration) / mergedDuration,
       });
 
-      const convertLaterKeyframe = (kf: { id: string; timeOffset: number; positionX: number; positionY: number; zoom: number; easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT' }) => ({
+      const convertLaterKeyframe = (kf: { id: string; timeOffset: number; positionX: number; positionY: number; zoom: number; rotation: number; easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT' }) => ({
         ...kf,
         // Later rally starts after the gap, calculate absolute time then convert to offset
         timeOffset: ((later.start_time - earlier.start_time) + kf.timeOffset * laterDuration) / mergedDuration,
