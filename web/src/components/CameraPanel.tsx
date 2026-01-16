@@ -268,9 +268,11 @@ export function CameraPanel() {
     const selectedKf = activeKeyframes.find((kf) => kf.id === selectedKeyframeId);
     if (!selectedKf || !selectedRally) return;
 
+    const rallyDuration = selectedRally.end_time - selectedRally.start_time;
+    const thresholdOffset = rallyDuration > 0 ? KEYFRAME_TIME_THRESHOLD / rallyDuration : 0;
     const distance = Math.abs(currentTimeOffset - selectedKf.timeOffset);
 
-    if (distance > KEYFRAME_TIME_THRESHOLD) {
+    if (distance > thresholdOffset) {
       selectKeyframe(null);
     }
   }, [currentTimeOffset, selectedKeyframeId, cameraEdit, selectedRally, activeKeyframes, dragPosition, selectKeyframe]);
@@ -398,7 +400,7 @@ export function CameraPanel() {
 
   const handleZoomChange = useCallback(
     (_: Event, value: number | number[]) => {
-      if (!selectedRallyId) return;
+      if (!selectedRallyId || !selectedRally) return;
       const newZoom = value as number;
 
       // Enter camera edit mode when changing zoom
@@ -409,8 +411,10 @@ export function CameraPanel() {
         updateKeyframe(selectedRallyId, selectedKeyframeId, { zoom: newZoom });
       } else {
         // No keyframe selected - check for nearby keyframe or create new
+        const rallyDuration = selectedRally.end_time - selectedRally.start_time;
+        const thresholdOffset = rallyDuration > 0 ? KEYFRAME_TIME_THRESHOLD / rallyDuration : 0;
         const nearestKeyframe = activeKeyframes.find(
-          (kf) => Math.abs(kf.timeOffset - currentTimeOffset) < KEYFRAME_TIME_THRESHOLD
+          (kf) => Math.abs(kf.timeOffset - currentTimeOffset) < thresholdOffset
         );
 
         if (nearestKeyframe) {
@@ -429,12 +433,12 @@ export function CameraPanel() {
         }
       }
     },
-    [selectedRallyId, selectedKeyframeId, currentTimeOffset, activeKeyframes, updateKeyframe, addKeyframe, selectKeyframe, getCameraStateAtTime, setIsCameraTabActive]
+    [selectedRallyId, selectedRally, selectedKeyframeId, currentTimeOffset, activeKeyframes, updateKeyframe, addKeyframe, selectKeyframe, getCameraStateAtTime, setIsCameraTabActive]
   );
 
   const handleRotationChange = useCallback(
     (_: Event, value: number | number[]) => {
-      if (!selectedRallyId) return;
+      if (!selectedRallyId || !selectedRally) return;
       const newRotation = value as number;
 
       // Enter camera edit mode when changing rotation
@@ -445,8 +449,10 @@ export function CameraPanel() {
         updateKeyframe(selectedRallyId, selectedKeyframeId, { rotation: newRotation });
       } else {
         // No keyframe selected - check for nearby keyframe or create new
+        const rallyDuration = selectedRally.end_time - selectedRally.start_time;
+        const thresholdOffset = rallyDuration > 0 ? KEYFRAME_TIME_THRESHOLD / rallyDuration : 0;
         const nearestKeyframe = activeKeyframes.find(
-          (kf) => Math.abs(kf.timeOffset - currentTimeOffset) < KEYFRAME_TIME_THRESHOLD
+          (kf) => Math.abs(kf.timeOffset - currentTimeOffset) < thresholdOffset
         );
 
         if (nearestKeyframe) {
@@ -466,7 +472,7 @@ export function CameraPanel() {
         }
       }
     },
-    [selectedRallyId, selectedKeyframeId, currentTimeOffset, activeKeyframes, updateKeyframe, addKeyframe, selectKeyframe, getCameraStateAtTime, setIsCameraTabActive]
+    [selectedRallyId, selectedRally, selectedKeyframeId, currentTimeOffset, activeKeyframes, updateKeyframe, addKeyframe, selectKeyframe, getCameraStateAtTime, setIsCameraTabActive]
   );
 
   // Global settings handlers
