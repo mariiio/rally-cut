@@ -6,12 +6,14 @@ import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useUploadStore } from '@/stores/uploadStore';
-import { useCameraStore, selectHandheldPreset } from '@/stores/cameraStore';
-import { calculateVideoTransform, getCameraStateWithHandheld, resetHandheldState } from '@/utils/cameraInterpolation';
+import { useCameraStore } from '@/stores/cameraStore';
+import { calculateVideoTransform, getCameraStateWithHandheld } from '@/utils/cameraInterpolation';
 import { DEFAULT_CAMERA_STATE, DEFAULT_GLOBAL_CAMERA, GlobalCameraSettings, CameraState } from '@/types/camera';
 import { designTokens } from '@/app/theme';
 import { CameraOverlay } from './CameraOverlay';
 import { BallTrackingDebugOverlay } from './BallTrackingDebugOverlay';
+import { RotationGridOverlay } from './RotationGridOverlay';
+import { CropMaskOverlay } from './CropMaskOverlay';
 
 export function VideoPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -19,8 +21,8 @@ export function VideoPlayer() {
   const [isLoading, setIsLoading] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
   const [bufferProgress, setBufferProgress] = useState(0);
-  // Camera time updated via RAF for smooth camera panning during playback
-  const [cameraTime, setCameraTime] = useState(0);
+  // Camera time for seeking (when paused, we may need to update camera position)
+  const [, setCameraTime] = useState(0);
 
   const videoUrl = useEditorStore((state) => state.videoUrl);
   const posterUrl = useEditorStore((state) => state.posterUrl);
@@ -53,10 +55,10 @@ export function VideoPlayer() {
   const globalCameraSettings = useCameraStore((state) => state.globalCameraSettings);
   const dragPosition = useCameraStore((state) => state.dragPosition);
   const selectedKeyframeId = useCameraStore((state) => state.selectedKeyframeId);
-  const handheldPreset = useCameraStore(selectHandheldPreset);
   const debugBallPositions = useCameraStore((state) => state.debugBallPositions);
   const debugFrameCount = useCameraStore((state) => state.debugFrameCount);
   const debugRallyId = useCameraStore((state) => state.debugRallyId);
+  const isAdjustingRotation = useCameraStore((state) => state.isAdjustingRotation);
 
   // Get rallies from editor store
   const rallies = useEditorStore((state) => state.rallies);
@@ -80,27 +82,27 @@ export function VideoPlayer() {
     return cameraEdits[currentRally.id] ?? null;
   }, [currentRally, cameraEdits]);
 
-  // Get video ID from rally ID (format: `${videoId}_rally_${n}`)
-  const currentVideoId = useMemo(() => {
-    if (!currentRally) return null;
-    const parts = currentRally.id.split('_rally_');
-    return parts.length > 0 ? parts[0] : null;
-  }, [currentRally]);
-
-  // Get global settings for current video
+  // Get global settings for current video (use activeMatchId directly)
   const currentGlobalSettings = useMemo((): GlobalCameraSettings => {
-    if (!currentVideoId) return DEFAULT_GLOBAL_CAMERA;
-    return globalCameraSettings[currentVideoId] ?? DEFAULT_GLOBAL_CAMERA;
-  }, [currentVideoId, globalCameraSettings]);
+    if (!activeMatchId) return DEFAULT_GLOBAL_CAMERA;
+    return globalCameraSettings[activeMatchId] ?? DEFAULT_GLOBAL_CAMERA;
+  }, [activeMatchId, globalCameraSettings]);
 
   // Helper to combine global settings with per-rally state
+  // Rally-specific values OVERRIDE global values when explicitly set (not default)
   const combineWithGlobal = useCallback((rallyState: CameraState): CameraState => {
     const global = currentGlobalSettings;
+    // If rally has non-default value, use it; otherwise use global
+    const hasRallyZoom = rallyState.zoom !== 1.0;
+    const hasRallyPositionX = rallyState.positionX !== 0.5;
+    const hasRallyPositionY = rallyState.positionY !== 0.5;
+    const hasRallyRotation = rallyState.rotation !== 0;
+
     return {
-      zoom: global.zoom * rallyState.zoom,
-      positionX: Math.max(0, Math.min(1, global.positionX + (rallyState.positionX - 0.5))),
-      positionY: Math.max(0, Math.min(1, global.positionY + (rallyState.positionY - 0.5))),
-      rotation: global.rotation + rallyState.rotation,
+      zoom: hasRallyZoom ? rallyState.zoom : global.zoom,
+      positionX: hasRallyPositionX ? rallyState.positionX : global.positionX,
+      positionY: hasRallyPositionY ? rallyState.positionY : global.positionY,
+      rotation: hasRallyRotation ? rallyState.rotation : global.rotation,
     };
   }, [currentGlobalSettings]);
 
@@ -114,17 +116,33 @@ export function VideoPlayer() {
     currentGlobalSettings.positionY !== 0.5 ||
     currentGlobalSettings.rotation !== 0;
 
-  // Determine if camera should be applied (toggle on OR actively editing a keyframe)
-  const shouldApplyCamera = applyCameraEdits || selectedKeyframeId !== null;
+  // Determine if camera should be applied - only when preview toggle is ON
+  const shouldApplyCamera = applyCameraEdits;
 
   // Calculate camera state and video transform style
   const { videoTransformStyle, cameraState: currentCameraState } = useMemo(() => {
-    // Only apply when camera preview is on and we have a rally
-    if (!shouldApplyCamera || !currentRally) {
+    // If no camera preview and no global settings, return defaults
+    if (!shouldApplyCamera) {
       return { videoTransformStyle: {}, cameraState: DEFAULT_CAMERA_STATE };
     }
 
     const aspectRatio = currentCameraEdit?.aspectRatio ?? 'ORIGINAL';
+
+    // No current rally - apply global settings only (entire video)
+    if (!currentRally) {
+      if (!hasGlobalCameraSettings && !dragPosition) {
+        return { videoTransformStyle: {}, cameraState: DEFAULT_CAMERA_STATE };
+      }
+      const globalState = combineWithGlobal(DEFAULT_CAMERA_STATE);
+      // Apply drag position for live preview in global mode
+      const effectiveState = dragPosition
+        ? { ...globalState, positionX: dragPosition.x, positionY: dragPosition.y }
+        : globalState;
+      return {
+        videoTransformStyle: calculateVideoTransform(effectiveState, 'ORIGINAL'),
+        cameraState: effectiveState,
+      };
+    }
 
     // If no keyframes but we have global settings, apply global settings only
     if (!hasCameraKeyframes) {
@@ -135,9 +153,9 @@ export function VideoPlayer() {
       };
     }
 
-    // Use cameraTime for camera position - updated via RAF during playback
-    // and via seeked event when scrubbing
-    const effectiveTime = cameraTime;
+    // Use currentTime from playerStore for camera position calculation
+    // CSS transitions smooth between discrete timeupdate events
+    const effectiveTime = currentTime;
 
     // Calculate time offset within the rally (0-1)
     const rallyDuration = currentRally.end_time - currentRally.start_time;
@@ -149,13 +167,13 @@ export function VideoPlayer() {
     // Get keyframes for the active aspect ratio
     const keyframes = currentCameraEdit?.keyframes[aspectRatio] ?? [];
 
-    // Get interpolated camera state with handheld motion applied
+    // Get interpolated camera state (handheld disabled for smooth transitions)
     const rawCameraState = getCameraStateWithHandheld(
       keyframes,
       clampedOffset,
       effectiveTime,
       currentRally.id,
-      handheldPreset
+      'OFF'
     );
 
     // Combine with global settings
@@ -172,7 +190,7 @@ export function VideoPlayer() {
       videoTransformStyle: calculateVideoTransform(effectiveState, aspectRatio),
       cameraState: effectiveState,
     };
-  }, [shouldApplyCamera, currentRally, hasCameraKeyframes, currentCameraEdit, cameraTime, handheldPreset, dragPosition, combineWithGlobal]);
+  }, [shouldApplyCamera, currentRally, hasCameraKeyframes, hasGlobalCameraSettings, currentCameraEdit, currentTime, dragPosition, combineWithGlobal]);
 
   // Get container aspect ratio - show aspect ratio even without keyframes when preview is on
   const containerAspectRatio = useMemo(() => {
@@ -202,30 +220,7 @@ export function VideoPlayer() {
     }
   }, [playbackRate]);
 
-  // RAF loop for smooth camera updates during playback
-  // This runs at 60fps to sample video.currentTime for smooth panning
-  useEffect(() => {
-    if (!isPlaying || !shouldApplyCamera || !hasCameraKeyframes) {
-      return;
-    }
-
-    let rafId: number;
-    const updateCameraTime = () => {
-      const video = videoRef.current;
-      if (video) {
-        setCameraTime(video.currentTime);
-      }
-      rafId = requestAnimationFrame(updateCameraTime);
-    };
-
-    rafId = requestAnimationFrame(updateCameraTime);
-
-    return () => {
-      cancelAnimationFrame(rafId);
-      // Reset handheld state when playback stops to avoid stale spring physics
-      resetHandheldState();
-    };
-  }, [isPlaying, shouldApplyCamera, hasCameraKeyframes]);
+  // Camera animation: React updates transforms via useMemo, CSS transition smooths between updates
 
   // Handle manual seek requests
   useEffect(() => {
@@ -447,6 +442,8 @@ export function VideoPlayer() {
         boxShadow: designTokens.colors.video.shadow,
         // When in vertical mode, contain the vertical video within a 16:9 outer frame
         aspectRatio: '16/9',
+        // Clip video content at player boundaries (important for 9:16 mode where video extends beyond inner container)
+        overflow: 'hidden',
         // Premium border effect
         '&::before': {
           content: '""',
@@ -595,6 +592,11 @@ export function VideoPlayer() {
         </Box>
       )}
 
+      {/* Semi-transparent overlay showing excluded areas in 9:16 mode */}
+      {containerAspectRatio === '9/16' && shouldApplyCamera && (
+        <CropMaskOverlay aspectRatio="VERTICAL" />
+      )}
+
       {/* Unified video container - single video element to prevent remounting on aspect ratio change */}
       <Box
         sx={{
@@ -609,7 +611,8 @@ export function VideoPlayer() {
           height: '100%',
           left: containerAspectRatio === '9/16' ? '50%' : undefined,
           transform: containerAspectRatio === '9/16' ? 'translateX(-50%)' : undefined,
-          overflow: 'hidden',
+          // Allow video to extend beyond container in 9:16 mode so excluded areas are visible
+          overflow: containerAspectRatio === '9/16' ? 'visible' : 'hidden',
         }}
       >
         <Box
@@ -619,10 +622,12 @@ export function VideoPlayer() {
             inset: containerAspectRatio === '9/16' ? 0 : undefined,
             width: '100%',
             height: '100%',
-            overflow: 'hidden',
+            // Allow video to extend beyond container in 9:16 mode
+            overflow: containerAspectRatio === '9/16' ? 'visible' : 'hidden',
           }}
         >
           <CameraOverlay containerRef={videoContainerRef} />
+          <RotationGridOverlay isVisible={isAdjustingRotation} />
           {/* Ball tracking debug overlay */}
           {debugBallPositions && debugFrameCount && debugRallyId === selectedRallyId && currentRally && (
             <BallTrackingDebugOverlay
@@ -651,16 +656,17 @@ export function VideoPlayer() {
               width: 'auto',
               height: '100%',
               willChange: 'transform',
-              // No CSS transition - camera position is interpolated at 60fps via RAF
-              // CSS transitions would conflict with JS-driven smooth updates
+              // Smooth transition for camera movement
+              transition: isPlaying && hasCameraKeyframes ? 'transform 100ms linear' : 'none',
               ...videoTransformStyle,
             } : {
-              // 16:9 mode: normal video display
+              // 16:9 mode: normal video display with optional transforms
               width: '100%',
               height: '100%',
               objectFit: 'contain',
               willChange: isCameraPreviewActive ? 'transform' : 'auto',
-              // No CSS transition - camera position is interpolated at 60fps via RAF
+              // Smooth transition for camera movement
+              transition: isPlaying && hasCameraKeyframes ? 'transform 100ms linear' : 'none',
               ...videoTransformStyle,
             }}
             onTimeUpdate={handleTimeUpdate}
