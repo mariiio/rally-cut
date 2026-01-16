@@ -7,7 +7,7 @@ import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { getValidPositionRange } from '@/utils/cameraInterpolation';
 import type { AspectRatio } from '@/types/camera';
-import { KEYFRAME_TIME_THRESHOLD } from '@/types/camera';
+import { KEYFRAME_TIME_THRESHOLD, DEFAULT_GLOBAL_CAMERA } from '@/types/camera';
 
 interface DragState {
   isDragging: boolean;
@@ -28,12 +28,18 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
   // Track if user has explicitly exited camera edit mode for current rally
   const [exitedForRally, setExitedForRally] = useState<string | null>(null);
 
-  // Get selected rally
+  // Get selected rally and active match
   const selectedRallyId = useEditorStore((state) => state.selectedRallyId);
+  const activeMatchId = useEditorStore((state) => state.activeMatchId);
   const rallies = useEditorStore((state) => state.rallies);
   const isCameraTabActive = useEditorStore((state) => state.isCameraTabActive);
   const setIsCameraTabActive = useEditorStore((state) => state.setIsCameraTabActive);
   const selectedRally = rallies.find((r) => r.id === selectedRallyId) ?? null;
+
+  // Global camera settings
+  const globalCameraSettings = useCameraStore((state) => state.globalCameraSettings);
+  const setGlobalSettings = useCameraStore((state) => state.setGlobalSettings);
+  const currentGlobalSettings = activeMatchId ? globalCameraSettings[activeMatchId] ?? DEFAULT_GLOBAL_CAMERA : DEFAULT_GLOBAL_CAMERA;
 
   // Track when user exits camera edit mode - hide overlay until they select a different rally
   const prevIsCameraTabActive = useRef(isCameraTabActive);
@@ -81,12 +87,26 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
     (cameraEdit.keyframes.VERTICAL?.length ?? 0) > 0
   );
 
+  // Check if we have global camera settings
+  const hasGlobalCameraSettings = currentGlobalSettings.zoom !== 1.0 ||
+    currentGlobalSettings.positionX !== 0.5 ||
+    currentGlobalSettings.positionY !== 0.5 ||
+    currentGlobalSettings.rotation !== 0;
+
+  // Check if position dragging would have any visible effect in global mode
+  // (only if there's zoom > 1 or rotation, otherwise position changes aren't visible)
+  const canDragInGlobalMode = currentGlobalSettings.zoom > 1.0 || currentGlobalSettings.rotation !== 0;
+
+  // Mode: are we editing global settings (no rally selected) or per-rally?
+  const isGlobalMode = !selectedRallyId && activeMatchId;
+
   // Show overlay when:
-  // - In camera edit mode (isCameraTabActive), OR
-  // - Rally with camera edits is selected (for quick editing), unless user exited edit mode for this rally
-  const isActive = selectedRallyId && selectedRally && (
+  // - In camera edit mode (isCameraTabActive) with a rally selected, OR
+  // - Rally with camera edits is selected (for quick editing), unless user exited edit mode for this rally, OR
+  // - In global mode (no rally selected) with zoom or rotation that makes position dragging useful
+  const isActive = (selectedRallyId && selectedRally && (
     isCameraTabActive || (hasCameraEdits && exitedForRally !== selectedRallyId)
-  );
+  )) || (isGlobalMode && canDragInGlobalMode);
 
   // Get aspect ratio
   const aspectRatio: AspectRatio = cameraEdit?.aspectRatio ?? 'ORIGINAL';
@@ -94,7 +114,8 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
 
   // Handle mouse down - start drag
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (!selectedRallyId) return;
+    // Need either a selected rally or global mode
+    if (!selectedRallyId && !isGlobalMode) return;
 
     e.preventDefault();
     e.stopPropagation();
@@ -104,16 +125,21 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
       setIsCameraTabActive(true);
     }
 
-    // Get starting position - from selected keyframe or current camera state
+    // Get starting position
     let startPosX: number;
     let startPosY: number;
 
-    if (selectedKeyframe) {
+    if (isGlobalMode) {
+      // Global mode: use global settings position
+      startPosX = currentGlobalSettings.positionX;
+      startPosY = currentGlobalSettings.positionY;
+    } else if (selectedKeyframe) {
+      // Per-rally mode with selected keyframe
       startPosX = selectedKeyframe.positionX;
       startPosY = selectedKeyframe.positionY;
     } else {
-      // Get current camera state at playhead position
-      const currentState = getCameraStateAtTime(selectedRallyId, currentTimeOffset);
+      // Per-rally mode: get current camera state at playhead position
+      const currentState = getCameraStateAtTime(selectedRallyId!, currentTimeOffset);
       startPosX = currentState.positionX;
       startPosY = currentState.positionY;
     }
@@ -129,10 +155,12 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
       x: startPosX,
       y: startPosY,
     });
-  }, [selectedKeyframe, selectedRallyId, getCameraStateAtTime, currentTimeOffset, isCameraTabActive, setIsCameraTabActive]);
+  }, [selectedKeyframe, selectedRallyId, isGlobalMode, currentGlobalSettings, getCameraStateAtTime, currentTimeOffset, isCameraTabActive, setIsCameraTabActive]);
 
-  // Get current zoom level from selected keyframe or current camera state
-  const currentZoom = selectedKeyframe?.zoom ?? (selectedRallyId ? getCameraStateAtTime(selectedRallyId, currentTimeOffset).zoom : 1);
+  // Get current zoom level from selected keyframe, global settings, or current camera state
+  const currentZoom = isGlobalMode
+    ? currentGlobalSettings.zoom
+    : (selectedKeyframe?.zoom ?? (selectedRallyId ? getCameraStateAtTime(selectedRallyId, currentTimeOffset).zoom : 1));
 
   // Handle mouse move - update position locally AND in store for live preview
   useEffect(() => {
@@ -163,47 +191,61 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
     };
 
     const handleMouseUp = () => {
-      if (!localPosition || !selectedRallyId) {
+      if (!localPosition) {
         setDragState(null);
         setLocalPosition(null);
         setDragPosition(null);
         return;
       }
 
-      if (selectedKeyframeId) {
-        // Keyframe is selected: update it
-        updateKeyframe(selectedRallyId, selectedKeyframeId, {
+      // Check current mode (can't rely on closure for isGlobalMode)
+      const currentSelectedRallyId = useEditorStore.getState().selectedRallyId;
+      const currentActiveMatchId = useEditorStore.getState().activeMatchId;
+      const isCurrentlyGlobalMode = !currentSelectedRallyId && currentActiveMatchId;
+
+      if (isCurrentlyGlobalMode && currentActiveMatchId) {
+        // Global mode: update global settings
+        setGlobalSettings(currentActiveMatchId, {
           positionX: localPosition.x,
           positionY: localPosition.y,
         });
-      } else {
-        // No keyframe selected - check for nearby keyframe or create new
-        // Access activeKeyframes via cameraEdit to avoid stale closure
-        const edit = useCameraStore.getState().cameraEdits[selectedRallyId];
-        const keyframes = edit ? edit.keyframes[edit.aspectRatio] ?? [] : [];
-
-        // Find nearest keyframe within threshold
-        const nearestKeyframe = keyframes.find(
-          (kf) => Math.abs(kf.timeOffset - currentTimeOffset) < KEYFRAME_TIME_THRESHOLD
-        );
-
-        if (nearestKeyframe) {
-          // Update nearby keyframe and select it
-          updateKeyframe(selectedRallyId, nearestKeyframe.id, {
+      } else if (currentSelectedRallyId) {
+        // Per-rally mode
+        if (selectedKeyframeId) {
+          // Keyframe is selected: update it
+          updateKeyframe(currentSelectedRallyId, selectedKeyframeId, {
             positionX: localPosition.x,
             positionY: localPosition.y,
           });
-          selectKeyframe(nearestKeyframe.id);
         } else {
-          // Create new keyframe at current position
-          const currentState = getCameraStateAtTime(selectedRallyId, currentTimeOffset);
-          const newKeyframe = createDefaultKeyframe(currentTimeOffset, {
-            positionX: localPosition.x,
-            positionY: localPosition.y,
-            zoom: currentState.zoom,
-          });
-          addKeyframe(selectedRallyId, newKeyframe);
-          // addKeyframe automatically selects the new keyframe
+          // No keyframe selected - check for nearby keyframe or create new
+          // Access activeKeyframes via cameraEdit to avoid stale closure
+          const edit = useCameraStore.getState().cameraEdits[currentSelectedRallyId];
+          const keyframes = edit ? edit.keyframes[edit.aspectRatio] ?? [] : [];
+
+          // Find nearest keyframe within threshold
+          const nearestKeyframe = keyframes.find(
+            (kf) => Math.abs(kf.timeOffset - currentTimeOffset) < KEYFRAME_TIME_THRESHOLD
+          );
+
+          if (nearestKeyframe) {
+            // Update nearby keyframe and select it
+            updateKeyframe(currentSelectedRallyId, nearestKeyframe.id, {
+              positionX: localPosition.x,
+              positionY: localPosition.y,
+            });
+            selectKeyframe(nearestKeyframe.id);
+          } else {
+            // Create new keyframe at current position
+            const currentState = getCameraStateAtTime(currentSelectedRallyId, currentTimeOffset);
+            const newKeyframe = createDefaultKeyframe(currentTimeOffset, {
+              positionX: localPosition.x,
+              positionY: localPosition.y,
+              zoom: currentState.zoom,
+            });
+            addKeyframe(currentSelectedRallyId, newKeyframe);
+            // addKeyframe automatically selects the new keyframe
+          }
         }
       }
 
@@ -220,7 +262,7 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [dragState, containerRef, isVertical, currentZoom, localPosition, selectedRallyId, selectedKeyframeId, currentTimeOffset, updateKeyframe, addKeyframe, selectKeyframe, getCameraStateAtTime, setDragPosition]);
+  }, [dragState, containerRef, isVertical, currentZoom, localPosition, selectedRallyId, selectedKeyframeId, currentTimeOffset, updateKeyframe, addKeyframe, selectKeyframe, getCameraStateAtTime, setDragPosition, setGlobalSettings]);
 
   if (!isActive) return null;
 
@@ -262,7 +304,11 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
           }}
         >
           <Typography variant="caption" sx={{ color: 'white', whiteSpace: 'nowrap' }}>
-            {selectedKeyframe ? 'Drag to reposition' : 'Drag to add keyframe'}
+            {isGlobalMode
+              ? 'Drag to position camera'
+              : selectedKeyframe
+                ? 'Drag to reposition'
+                : 'Drag to add keyframe'}
           </Typography>
         </Box>
       )}

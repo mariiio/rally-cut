@@ -52,6 +52,7 @@ interface CameraKeyframe {
   positionX: number;   // 0.0-1.0
   positionY: number;   // 0.0-1.0
   zoom: number;        // 1.0-3.0
+  rotation: number;    // degrees, typically -30 to +30
   easing: "LINEAR" | "EASE_IN" | "EASE_OUT" | "EASE_IN_OUT";
 }
 
@@ -138,17 +139,24 @@ function generateCameraFilter(
   // Sort keyframes by time
   const sortedKeyframes = [...keyframes].sort((a, b) => a.timeOffset - b.timeOffset);
 
-  // For single keyframe, use static position with zoom
+  // For single keyframe, use static position with zoom and rotation
   if (sortedKeyframes.length === 1) {
     const kf = sortedKeyframes[0];
     const zoom = Math.max(1, Math.min(3, kf.zoom));
+    const rotation = kf.rotation ?? 0;
     const croppedW = Math.round(outputWidth / zoom);
     const croppedH = Math.round(outputHeight / zoom);
     const maxX = inputWidth - croppedW;
     const maxY = inputHeight - croppedH;
     const x = Math.round(kf.positionX * maxX);
     const y = Math.round(kf.positionY * maxY);
-    return `crop=${croppedW}:${croppedH}:${x}:${y},scale=${outputWidth}:${outputHeight}`;
+    let filter = `crop=${croppedW}:${croppedH}:${x}:${y},scale=${outputWidth}:${outputHeight}`;
+    // Add rotation filter if non-zero (angle in radians, fill with transparent black)
+    if (Math.abs(rotation) > 0.01) {
+      const angleRad = rotation * Math.PI / 180;
+      filter += `,rotate=${angleRad}:ow=iw:oh=ih:c=black@0`;
+    }
+    return filter;
   }
 
   // Build FFmpeg expression for animated crop
@@ -258,6 +266,10 @@ function generateCameraFilter(
   const zoomExpr = buildPiecewiseExpr(sortedKeyframes, kf => Math.max(1, Math.min(3, kf.zoom)), totalFrames);
   const pxExpr = buildPiecewiseExpr(sortedKeyframes, kf => kf.positionX, totalFrames);
   const pyExpr = buildPiecewiseExpr(sortedKeyframes, kf => kf.positionY, totalFrames);
+  const rotExpr = buildPiecewiseExpr(sortedKeyframes, kf => kf.rotation ?? 0, totalFrames);
+
+  // Check if any keyframe has non-zero rotation
+  const hasRotation = sortedKeyframes.some(kf => Math.abs(kf.rotation ?? 0) > 0.01);
 
   // Calculate base crop dimensions (at zoom=1) for output aspect ratio
   const baseW = outputWidth;
@@ -273,7 +285,16 @@ function generateCameraFilter(
   const hExprFinal = `floor(${baseH}/(${zoomExpr}))`;
 
   // Use crop with expressions, then scale to output size
-  return `crop=w='${wExprFinal}':h='${hExprFinal}':x='${xExprFinal}':y='${yExprFinal}',scale=${outputWidth}:${outputHeight}`;
+  let filter = `crop=w='${wExprFinal}':h='${hExprFinal}':x='${xExprFinal}':y='${yExprFinal}',scale=${outputWidth}:${outputHeight}`;
+
+  // Add rotation filter if any keyframe has rotation
+  // Convert degrees to radians: angle * PI / 180
+  if (hasRotation) {
+    const rotRadExpr = `(${rotExpr})*PI/180`;
+    filter += `,rotate='${rotRadExpr}':ow=iw:oh=ih:c=black@0`;
+  }
+
+  return filter;
 }
 
 export async function createExportJob(

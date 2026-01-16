@@ -195,11 +195,12 @@ model Video {
   // Quality downgrade tracking (FREE tier loses original quality after 7 days)
   qualityDowngradedAt   DateTime?        @map("quality_downgraded_at")
 
-  user          User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
-  sessionVideos SessionVideo[]
-  rallies       Rally[]
-  detectionJobs RallyDetectionJob[]
-  confirmation  RallyConfirmation?
+  user           User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
+  sessionVideos  SessionVideo[]
+  rallies        Rally[]
+  detectionJobs  RallyDetectionJob[]
+  confirmation   RallyConfirmation?
+  cameraSettings VideoCameraSettings?
 
   @@index([userId])
   @@index([userId, deletedAt])
@@ -343,6 +344,7 @@ model CameraKeyframe {
   positionX     Float        @default(0.5) @map("position_x") // 0-1, center=0.5
   positionY     Float        @default(0.5) @map("position_y")
   zoom          Float        @default(1.0) // 1.0-3.0
+  rotation      Float        @default(0.0) // degrees, clockwise positive
   easing        CameraEasing @default(EASE_IN_OUT)
   createdAt     DateTime     @default(now()) @map("created_at")
 
@@ -350,6 +352,22 @@ model CameraKeyframe {
 
   @@index([rallyCameraId])
   @@map("camera_keyframes")
+}
+
+// Global camera settings at video level (applies as base for all rallies)
+model VideoCameraSettings {
+  id        String   @id @default(uuid())
+  videoId   String   @unique @map("video_id")
+  zoom      Float    @default(1.0)
+  positionX Float    @default(0.5) @map("position_x")
+  positionY Float    @default(0.5) @map("position_y")
+  rotation  Float    @default(0.0) // degrees
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@map("video_camera_settings")
 }
 
 enum ServingTeam {

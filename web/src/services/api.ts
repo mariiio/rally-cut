@@ -67,6 +67,15 @@ interface ApiSession {
   userRole?: 'owner' | 'member' | null;
 }
 
+interface ApiVideoCameraSettings {
+  id: string;
+  videoId: string;
+  zoom: number;
+  positionX: number;
+  positionY: number;
+  rotation: number;
+}
+
 interface ApiVideo {
   id: string;
   sessionId: string;
@@ -84,6 +93,7 @@ interface ApiVideo {
   proxyS3Key?: string | null;
   order: number;
   rallies: ApiRally[];
+  cameraSettings?: ApiVideoCameraSettings | null;
   createdAt: string;
   qualityDowngradedAt?: string | null;
 }
@@ -94,6 +104,7 @@ interface ApiCameraKeyframe {
   positionX: number;
   positionY: number;
   zoom: number;
+  rotation?: number;  // degrees, defaults to 0
   easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT';
 }
 
@@ -283,6 +294,7 @@ function extractCameraEdits(apiSession: ApiSession): CameraEditMap {
           positionX: kf.positionX,
           positionY: kf.positionY,
           zoom: kf.zoom,
+          rotation: kf.rotation ?? 0,
           easing: kf.easing,
         }));
         // Put keyframes under the correct aspect ratio key (new format)
@@ -301,10 +313,39 @@ function extractCameraEdits(apiSession: ApiSession): CameraEditMap {
   return result;
 }
 
+// Global camera settings map (videoId -> settings)
+export interface GlobalCameraSettingsMap {
+  [videoId: string]: {
+    zoom: number;
+    positionX: number;
+    positionY: number;
+    rotation: number;
+  };
+}
+
+// Extract global camera settings from API session response
+function extractGlobalCameraSettings(apiSession: ApiSession): GlobalCameraSettingsMap {
+  const result: GlobalCameraSettingsMap = {};
+
+  for (const video of apiSession.videos) {
+    if (video.cameraSettings) {
+      result[video.id] = {
+        zoom: video.cameraSettings.zoom,
+        positionX: video.cameraSettings.positionX,
+        positionY: video.cameraSettings.positionY,
+        rotation: video.cameraSettings.rotation,
+      };
+    }
+  }
+
+  return result;
+}
+
 // Session fetch result including camera edits
 export interface FetchSessionResult {
   session: Session;
   cameraEdits: CameraEditMap;
+  globalCameraSettings: GlobalCameraSettingsMap;
 }
 
 // API client functions
@@ -334,12 +375,14 @@ export async function fetchSession(sessionId: string): Promise<FetchSessionResul
   // Get CloudFront domain from env if available
   const cloudfrontDomain = process.env.NEXT_PUBLIC_CLOUDFRONT_DOMAIN;
 
-  // Extract camera edits before transforming
+  // Extract camera edits and global settings before transforming
   const cameraEdits = extractCameraEdits(apiSession);
+  const globalCameraSettings = extractGlobalCameraSettings(apiSession);
 
   return {
     session: apiSessionToFrontend(apiSession, cloudfrontDomain),
     cameraEdits,
+    globalCameraSettings,
   };
 }
 
@@ -640,6 +683,7 @@ interface ApiVideoEditorResponse {
     height: number | null;
     rallies: ApiRally[];
     status: 'PENDING' | 'UPLOADED' | 'DETECTING' | 'DETECTED' | 'ERROR';
+    cameraSettings?: ApiVideoCameraSettings | null;
   };
   allVideosSessionId: string;
   highlights: ApiHighlight[];
@@ -663,6 +707,7 @@ export interface FetchVideoEditorResult {
   highlights: Highlight[];
   allVideosSessionId: string;
   cameraEdits: CameraEditMap;
+  globalCameraSettings: GlobalCameraSettingsMap;
 }
 
 /**
@@ -722,6 +767,7 @@ export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEd
         positionX: kf.positionX,
         positionY: kf.positionY,
         zoom: kf.zoom,
+        rotation: kf.rotation ?? 0,
         easing: kf.easing,
       }));
       // Put keyframes under the correct aspect ratio key (new format)
@@ -789,6 +835,17 @@ export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEd
     };
   });
 
+  // Extract global camera settings for this video
+  const globalCameraSettings: GlobalCameraSettingsMap = {};
+  if (data.video.cameraSettings) {
+    globalCameraSettings[videoId] = {
+      zoom: data.video.cameraSettings.zoom,
+      positionX: data.video.cameraSettings.positionX,
+      positionY: data.video.cameraSettings.positionY,
+      rotation: data.video.cameraSettings.rotation,
+    };
+  }
+
   return {
     video: {
       id: data.video.id,
@@ -806,6 +863,7 @@ export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEd
     highlights,
     allVideosSessionId: data.allVideosSessionId,
     cameraEdits,
+    globalCameraSettings,
   };
 }
 
@@ -1506,6 +1564,7 @@ export interface TrackBallKeyframe {
   positionX: number;
   positionY: number;
   zoom: number;
+  rotation?: number;  // degrees, defaults to 0
   easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT';
 }
 

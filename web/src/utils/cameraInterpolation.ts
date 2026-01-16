@@ -37,6 +37,40 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 /**
+ * Calculate minimum zoom needed to prevent black corners when rotation is applied.
+ * When a video is rotated, the corners extend outside the original bounds.
+ * We need to zoom in enough to ensure the rotated video covers the entire viewport.
+ *
+ * Formula: For a rectangle rotated by θ, the bounding box grows. To ensure the
+ * rotated rectangle fully covers an axis-aligned viewport of the same aspect ratio,
+ * we need: zoom = |cos(θ)| + |sin(θ)| * aspectRatio (for landscape)
+ *
+ * @param rotationDegrees - Rotation angle in degrees
+ * @param aspectRatio - Target aspect ratio ('ORIGINAL' for 16:9, 'VERTICAL' for 9:16)
+ * @returns Minimum zoom factor to prevent black corners
+ */
+export function getMinZoomForRotation(
+  rotationDegrees: number,
+  aspectRatio: 'ORIGINAL' | 'VERTICAL'
+): number {
+  if (rotationDegrees === 0) return 1;
+
+  const theta = Math.abs(rotationDegrees) * Math.PI / 180;
+  const cosTheta = Math.cos(theta);
+  const sinTheta = Math.sin(theta);
+
+  // For 16:9 source video:
+  // - ORIGINAL mode: cropping 16:9 from 16:9, use aspect ratio 16/9
+  // - VERTICAL mode: cropping 9:16 from 16:9, the crop is narrower so use 16/9 as well
+  //   (the limiting factor is still the source video's aspect ratio)
+  const r = 16 / 9;
+
+  // The zoom needed to ensure the rotated rectangle covers the viewport
+  // This is derived from the bounding box of a rotated rectangle
+  return cosTheta + sinTheta * r;
+}
+
+/**
  * Linear interpolation between two values.
  */
 function lerp(a: number, b: number, t: number): number {
@@ -106,6 +140,7 @@ export function interpolateCameraState(
       positionX: kf.positionX,
       positionY: kf.positionY,
       zoom: kf.zoom,
+      rotation: kf.rotation ?? 0,
     };
   }
 
@@ -119,6 +154,7 @@ export function interpolateCameraState(
       positionX: first.positionX,
       positionY: first.positionY,
       zoom: first.zoom,
+      rotation: first.rotation ?? 0,
     };
   }
 
@@ -129,6 +165,7 @@ export function interpolateCameraState(
       positionX: last.positionX,
       positionY: last.positionY,
       zoom: last.zoom,
+      rotation: last.rotation ?? 0,
     };
   }
 
@@ -157,6 +194,7 @@ export function interpolateCameraState(
     positionX: lerp(before.positionX, after.positionX, easedT),
     positionY: lerp(before.positionY, after.positionY, easedT),
     zoom: lerp(before.zoom, after.zoom, easedT),
+    rotation: lerp(before.rotation ?? 0, after.rotation ?? 0, easedT),
   };
 }
 
@@ -175,7 +213,11 @@ export function calculateVideoTransform(
   state: CameraState,
   aspectRatio: 'ORIGINAL' | 'VERTICAL'
 ): React.CSSProperties {
-  const { positionX, positionY, zoom } = state;
+  const { positionX, positionY, zoom, rotation } = state;
+
+  // Calculate rotation compensation zoom to prevent black corners
+  const rotationZoom = getMinZoomForRotation(rotation, aspectRatio);
+  const effectiveZoom = zoom * rotationZoom;
 
   if (aspectRatio === 'ORIGINAL') {
     // For original 16:9 aspect ratio with zoom/pan
@@ -184,8 +226,8 @@ export function calculateVideoTransform(
 
     // Calculate pan range: at zoom Z, we see 1/Z of the video
     // Pan range is (Z - 1) / Z of the video width/height
-    const panRangeX = (zoom - 1) / zoom;
-    const panRangeY = (zoom - 1) / zoom;
+    const panRangeX = (effectiveZoom - 1) / effectiveZoom;
+    const panRangeY = (effectiveZoom - 1) / effectiveZoom;
 
     // Map position (0-1) to translation
     // Position 0.5 = center = 0 translation
@@ -194,8 +236,12 @@ export function calculateVideoTransform(
     const translateX = (0.5 - positionX) * panRangeX * 100;
     const translateY = (0.5 - positionY) * panRangeY * 100;
 
+    // Build transform string with optional rotation
+    // Use 3D transforms for GPU acceleration
+    const rotateStr = rotation !== 0 ? ` rotate3d(0, 0, 1, ${rotation}deg)` : '';
+
     return {
-      transform: `scale(${zoom}) translate(${translateX}%, ${translateY}%)`,
+      transform: `scale3d(${effectiveZoom}, ${effectiveZoom}, 1) translate3d(${translateX}%, ${translateY}%, 0)${rotateStr}`,
       transformOrigin: 'center center',
     };
   } else {
@@ -232,11 +278,15 @@ export function calculateVideoTransform(
     // Simplified: originX = 15.8 + positionX * 68.4 (for 16:9 in 9:16)
 
     // Vertical translate: only available when zoomed in (like 16:9)
-    const panRangeY = (zoom - 1) / zoom;
+    const panRangeY = (effectiveZoom - 1) / effectiveZoom;
     const translateY = (0.5 - positionY) * panRangeY * 100;
 
+    // Build transform string with optional rotation
+    // Use 3D transforms for GPU acceleration
+    const rotateStr = rotation !== 0 ? ` rotate3d(0, 0, 1, ${rotation}deg)` : '';
+
     return {
-      transform: `translateX(${translateX}%) translateY(${translateY}%) scale(${zoom})`,
+      transform: `translate3d(${translateX}%, ${translateY}%, 0) scale3d(${effectiveZoom}, ${effectiveZoom}, 1)${rotateStr}`,
       transformOrigin: `${originX}% 50%`,
     };
   }
@@ -351,6 +401,7 @@ export function getCameraStateWithHandheld(
       positionX: handheldState.springState.x.position,
       positionY: handheldState.springState.y.position,
       zoom: handheldState.springState.zoom.position,
+      rotation: baseState.rotation, // Rotation is not spring-animated
     };
   }
 

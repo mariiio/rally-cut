@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { rallyCameraEditSchema } from "./camera.js";
+import { rallyCameraEditSchema, globalCameraSettingsSchema } from "./camera.js";
 
 const rallyInputSchema = z.object({
   id: z.string().uuid().optional(),
@@ -19,6 +19,9 @@ const highlightInputSchema = z.object({
 export const syncStateSchema = z.object({
   ralliesPerVideo: z.record(z.string().uuid(), z.array(rallyInputSchema)),
   highlights: z.array(highlightInputSchema),
+  // Global camera settings per video (videoId -> settings)
+  // nullish per-video: undefined (omit), null (delete), object (create/update)
+  globalCameraSettings: z.record(z.string().uuid(), globalCameraSettingsSchema.nullish()).optional(),
 });
 
 export type SyncStateInput = z.infer<typeof syncStateSchema>;

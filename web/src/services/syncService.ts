@@ -221,12 +221,14 @@ class SyncService {
         positionX: number;
         positionY: number;
         zoom: number;
+        rotation?: number;
         easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT';
       }>) => keyframes.map(kf => ({
         timeOffset: kf.timeOffset,
         positionX: kf.positionX,
         positionY: kf.positionY,
         zoom: kf.zoom,
+        rotation: kf.rotation ?? 0,
         easing: kf.easing,
       }));
 
@@ -243,6 +245,7 @@ class SyncService {
             positionX: number;
             positionY: number;
             zoom: number;
+            rotation: number;
             easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT';
           }>
         } | null; // null signals deletion of camera edit
@@ -256,21 +259,30 @@ class SyncService {
         ralliesPerVideo[match.id] = rallies.map(r => {
           const cameraEdit = cameraEdits[r.id];
           // Only include camera edit if it has keyframes for the current aspect ratio
-          const currentAspectRatio = cameraEdit?.aspectRatio ?? 'ORIGINAL';
+          const currentAspectRatio: 'ORIGINAL' | 'VERTICAL' = cameraEdit?.aspectRatio ?? 'ORIGINAL';
           const keyframesForAspect = cameraEdit?.keyframes[currentAspectRatio] ?? [];
           const hasKeyframes = keyframesForAspect.length > 0;
+
+          // Determine camera edit value: data to upsert, null to delete, or undefined to skip
+          let cameraEditValue: { enabled: boolean; aspectRatio: 'ORIGINAL' | 'VERTICAL'; keyframes: ReturnType<typeof mapKeyframes> } | null | undefined;
+          if (hasKeyframes) {
+            cameraEditValue = {
+              enabled: true,
+              aspectRatio: currentAspectRatio,
+              keyframes: mapKeyframes(keyframesForAspect),
+            };
+          } else if (r._backendId) {
+            // Rally exists in backend but has no keyframes - send null to delete camera edit
+            cameraEditValue = null;
+          }
+          // else: new rally without keyframes - don't include cameraEdit at all
+
           return {
             id: r._backendId,
             startMs: Math.round(r.start_time * 1000),
             endMs: Math.round(r.end_time * 1000),
-            // Only include cameraEdit when there's data (undefined = no change, null would mean delete)
-            ...(hasKeyframes && {
-              cameraEdit: {
-                enabled: true,
-                aspectRatio: currentAspectRatio,
-                keyframes: mapKeyframes(keyframesForAspect),
-              },
-            }),
+            // Include cameraEdit when we have data to upsert or null to delete
+            ...(cameraEditValue !== undefined && { cameraEdit: cameraEditValue }),
           };
         });
       }
@@ -283,6 +295,28 @@ class SyncService {
         rallyIds: h.rallyIds,
       }));
 
+      // Build global camera settings (only include non-default values)
+      const globalCameraSettings = useCameraStore.getState().globalCameraSettings;
+      const globalSettingsPayload: Record<string, {
+        zoom: number;
+        positionX: number;
+        positionY: number;
+        rotation: number;
+      } | null> = {};
+
+      for (const match of currentState.session.matches) {
+        const settings = globalCameraSettings[match.id];
+        if (settings) {
+          // Check if settings differ from defaults
+          const isDefault = settings.zoom === 1.0 &&
+                           settings.positionX === 0.5 &&
+                           settings.positionY === 0.5 &&
+                           settings.rotation === 0;
+          // Send null to delete, or the settings to upsert
+          globalSettingsPayload[match.id] = isDefault ? null : settings;
+        }
+      }
+
       // Send to backend
       const response = await fetch(`${API_BASE_URL}/v1/sessions/${this.state.sessionId}/sync-state`, {
         method: 'POST',
@@ -290,6 +324,7 @@ class SyncService {
         body: JSON.stringify({
           ralliesPerVideo,
           highlights,
+          globalCameraSettings: globalSettingsPayload,
         }),
       });
 

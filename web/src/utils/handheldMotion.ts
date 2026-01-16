@@ -89,22 +89,22 @@ export function applyHandheldMotion(
   let moveShakeY = 0;
 
   if (velocityMagnitude > VELOCITY_THRESHOLD) {
-    // Scale shake based on velocity (capped at 3x normal wobble)
-    const shakeMultiplier = Math.min((velocityMagnitude - VELOCITY_THRESHOLD) * 8, 2);
+    // Scale shake based on velocity - kept subtle to avoid jitter during fast transitions
+    const shakeMultiplier = Math.min((velocityMagnitude - VELOCITY_THRESHOLD) * 4, 1);
 
-    // Higher frequency noise during movement for jittery feel
+    // Higher frequency noise during movement for subtle jitter
     const moveNoiseScale = 2.5;
     moveShakeX =
       cameraNoiseGenerator.noise2D(time * moveNoiseScale, 50) *
       MAX_WOBBLE.position *
-      0.5 *
+      0.3 *
       panIntensity *
       intensity *
       shakeMultiplier;
     moveShakeY =
       cameraNoiseGenerator.noise2D(50, time * moveNoiseScale) *
       MAX_WOBBLE.position *
-      0.5 *
+      0.3 *
       panIntensity *
       intensity *
       shakeMultiplier;
@@ -114,6 +114,7 @@ export function applyHandheldMotion(
     positionX: baseState.positionX + wobbleX + moveShakeX,
     positionY: baseState.positionY + wobbleY + breathingOffset + moveShakeY,
     zoom: baseState.zoom * (1 + wobbleZoom),
+    rotation: baseState.rotation, // Rotation passed through without handheld motion
   };
 }
 

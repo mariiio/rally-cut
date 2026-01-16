@@ -5,7 +5,6 @@ import {
   Box,
   Typography,
   IconButton,
-  Switch,
   Slider,
   ToggleButton,
   ToggleButtonGroup,
@@ -30,15 +29,14 @@ import VideocamIcon from '@mui/icons-material/Videocam';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
-import WavesIcon from '@mui/icons-material/Waves';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import BugReportIcon from '@mui/icons-material/BugReport';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
-import { useCameraStore, createDefaultKeyframe, selectCameraEdit, selectSelectedKeyframeId, selectHandheldPreset } from '@/stores/cameraStore';
+import { useCameraStore, createDefaultKeyframe, selectCameraEdit, selectSelectedKeyframeId } from '@/stores/cameraStore';
 import { designTokens } from '@/app/theme';
 import type { AspectRatio, CameraKeyframe } from '@/types/camera';
-import { ZOOM_MAX, ZOOM_STEP, KEYFRAME_TIME_THRESHOLD } from '@/types/camera';
+import { ZOOM_MAX, ZOOM_STEP, KEYFRAME_TIME_THRESHOLD, ROTATION_MIN, ROTATION_MAX, ROTATION_STEP, DEFAULT_GLOBAL_CAMERA } from '@/types/camera';
 import { trackBall, getBallTrackStatus } from '@/services/api';
 
 // Format time as MM:SS.ms
@@ -109,6 +107,7 @@ const KeyframeItem = memo(function KeyframeItem({
         </Typography>
         <Typography variant="caption" sx={{ color: 'text.secondary', ml: 1 }}>
           {keyframe.zoom.toFixed(1)}x
+          {keyframe.rotation !== 0 && ` · ${keyframe.rotation.toFixed(0)}°`}
         </Typography>
       </Box>
       {/* Delete with confirmation */}
@@ -153,8 +152,9 @@ const KeyframeItem = memo(function KeyframeItem({
 });
 
 export function CameraPanel() {
-  // Local state for reset confirmation dialog
+  // Local state for reset confirmation dialogs
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showGlobalResetConfirm, setShowGlobalResetConfirm] = useState(false);
   // Local state for keyframe delete confirmation
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   // Ball tracking state
@@ -167,6 +167,7 @@ export function CameraPanel() {
   // Editor store - get selected rally and camera tab state
   const selectedRallyId = useEditorStore((state) => state.selectedRallyId);
   const rallies = useEditorStore((state) => state.rallies);
+  const activeMatchId = useEditorStore((state) => state.activeMatchId);
   const setIsCameraTabActive = useEditorStore((state) => state.setIsCameraTabActive);
 
   const selectedRally = useMemo(
@@ -183,8 +184,6 @@ export function CameraPanel() {
   // Camera store - use optimized selectors
   const cameraEdit = useCameraStore(selectCameraEdit(selectedRallyId));
   const selectedKeyframeId = useCameraStore(selectSelectedKeyframeId);
-  const handheldPreset = useCameraStore(selectHandheldPreset);
-  const setHandheldPreset = useCameraStore((state) => state.setHandheldPreset);
   const debugRallyId = useCameraStore((state) => state.debugRallyId);
   const setDebugBallTracking = useCameraStore((state) => state.setDebugBallTracking);
   const clearDebugBallTracking = useCameraStore((state) => state.clearDebugBallTracking);
@@ -199,6 +198,14 @@ export function CameraPanel() {
   const resetCamera = useCameraStore((state) => state.resetCamera);
   const applyBallTrackingKeyframes = useCameraStore((state) => state.applyBallTrackingKeyframes);
   const getCameraStateAtTime = useCameraStore((state) => state.getCameraStateAtTime);
+  const setIsAdjustingRotation = useCameraStore((state) => state.setIsAdjustingRotation);
+
+  // Global camera settings
+  const globalCameraSettings = useCameraStore((state) => state.globalCameraSettings);
+  const getGlobalSettings = useCameraStore((state) => state.getGlobalSettings);
+  const setGlobalSettings = useCameraStore((state) => state.setGlobalSettings);
+  const resetGlobalSettings = useCameraStore((state) => state.resetGlobalSettings);
+  const hasGlobalSettings = useCameraStore((state) => state.hasGlobalSettings);
 
   // Get active keyframes for the current aspect ratio
   const activeKeyframes = useMemo(() => {
@@ -225,6 +232,30 @@ export function CameraPanel() {
     () => selectedRally ? selectedRally.end_time - selectedRally.start_time : 0,
     [selectedRally]
   );
+
+  // Get current video/match ID - use activeMatchId (works even when no rally selected)
+  const currentVideoId = useMemo(() => {
+    // First try to get from selected rally for consistency
+    if (selectedRallyId) {
+      // Rally IDs are formatted as `${matchId}_rally_${n}`
+      const parts = selectedRallyId.split('_rally_');
+      if (parts.length > 0) return parts[0];
+    }
+    // Fall back to activeMatchId (for when no rally is selected)
+    return activeMatchId;
+  }, [selectedRallyId, activeMatchId]);
+
+  // Get current global settings for this video
+  const currentGlobalSettings = useMemo(() => {
+    if (!currentVideoId) return DEFAULT_GLOBAL_CAMERA;
+    return getGlobalSettings(currentVideoId);
+  }, [currentVideoId, getGlobalSettings, globalCameraSettings]); // Include globalCameraSettings to re-compute when it changes
+
+  // Check if current video has non-default global settings
+  const videoHasGlobalSettings = useMemo(() => {
+    if (!currentVideoId) return false;
+    return hasGlobalSettings(currentVideoId);
+  }, [currentVideoId, hasGlobalSettings, globalCameraSettings]);
 
   // Get drag position to detect active dragging
   const dragPosition = useCameraStore((state) => state.dragPosition);
@@ -273,6 +304,7 @@ export function CameraPanel() {
             positionX: kf.positionX,
             positionY: kf.positionY,
             zoom: kf.zoom,
+            rotation: kf.rotation ?? 0,
             easing: kf.easing,
           }))
         );
@@ -400,16 +432,72 @@ export function CameraPanel() {
     [selectedRallyId, selectedKeyframeId, currentTimeOffset, activeKeyframes, updateKeyframe, addKeyframe, selectKeyframe, getCameraStateAtTime, setIsCameraTabActive]
   );
 
+  const handleRotationChange = useCallback(
+    (_: Event, value: number | number[]) => {
+      if (!selectedRallyId) return;
+      const newRotation = value as number;
+
+      // Enter camera edit mode when changing rotation
+      setIsCameraTabActive(true);
+
+      if (selectedKeyframeId) {
+        // Keyframe is selected: update it
+        updateKeyframe(selectedRallyId, selectedKeyframeId, { rotation: newRotation });
+      } else {
+        // No keyframe selected - check for nearby keyframe or create new
+        const nearestKeyframe = activeKeyframes.find(
+          (kf) => Math.abs(kf.timeOffset - currentTimeOffset) < KEYFRAME_TIME_THRESHOLD
+        );
+
+        if (nearestKeyframe) {
+          // Update nearby keyframe and select it
+          updateKeyframe(selectedRallyId, nearestKeyframe.id, { rotation: newRotation });
+          selectKeyframe(nearestKeyframe.id);
+        } else {
+          // Create new keyframe at current position with new rotation
+          const currentState = getCameraStateAtTime(selectedRallyId, currentTimeOffset);
+          const keyframe = createDefaultKeyframe(currentTimeOffset, {
+            positionX: currentState.positionX,
+            positionY: currentState.positionY,
+            zoom: currentState.zoom,
+            rotation: newRotation,
+          });
+          addKeyframe(selectedRallyId, keyframe);
+        }
+      }
+    },
+    [selectedRallyId, selectedKeyframeId, currentTimeOffset, activeKeyframes, updateKeyframe, addKeyframe, selectKeyframe, getCameraStateAtTime, setIsCameraTabActive]
+  );
+
+  // Global settings handlers
+  const handleGlobalZoomChange = useCallback(
+    (_: Event, value: number | number[]) => {
+      if (!currentVideoId) return;
+      setGlobalSettings(currentVideoId, { zoom: value as number });
+    },
+    [currentVideoId, setGlobalSettings]
+  );
+
+  const handleGlobalRotationChange = useCallback(
+    (_: Event, value: number | number[]) => {
+      if (!currentVideoId) return;
+      setGlobalSettings(currentVideoId, { rotation: value as number });
+    },
+    [currentVideoId, setGlobalSettings]
+  );
+
+  const handleResetGlobalSettings = useCallback(() => {
+    if (!currentVideoId) return;
+    resetGlobalSettings(currentVideoId);
+    setShowGlobalResetConfirm(false);
+  }, [currentVideoId, resetGlobalSettings]);
+
   const handleResetCamera = useCallback(() => {
     if (selectedRallyId) {
       resetCamera(selectedRallyId);
       setShowResetConfirm(false);
     }
   }, [selectedRallyId, resetCamera]);
-
-  const handleHandheldToggle = useCallback(() => {
-    setHandheldPreset(handheldPreset === 'OFF' ? 'NATURAL' : 'OFF');
-  }, [handheldPreset, setHandheldPreset]);
 
   // Handle auto ball tracking
   const handleAutoTrack = useCallback(async () => {
@@ -468,6 +556,7 @@ export function CameraPanel() {
             positionX: kf.positionX,
             positionY: kf.positionY,
             zoom: kf.zoom,
+            rotation: kf.rotation ?? 0,
             easing: kf.easing,
           });
         }
@@ -554,115 +643,156 @@ export function CameraPanel() {
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* Global preview toggle and handheld preset - always visible when camera edits exist */}
-      {hasAnyCameraEdits && (
-        <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
-          <Stack spacing={1}>
-            {/* Preview toggle */}
-            <Box
-              onClick={toggleApplyCameraEdits}
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1.25,
-                py: 0.75,
-                cursor: 'pointer',
-                borderRadius: 1,
-                '&:hover': { bgcolor: 'action.hover' },
-              }}
-            >
-              {applyCameraEdits ? (
-                <VisibilityIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
-              ) : (
-                <VisibilityOffIcon sx={{ fontSize: 18, color: 'text.disabled' }} />
-              )}
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography variant="body2" sx={{ lineHeight: 1.3 }}>
-                  Preview Effects
-                </Typography>
-                <Typography variant="caption" sx={{ color: 'text.disabled', lineHeight: 1.2 }}>
-                  Show zoom, pan & motion
-                </Typography>
-              </Box>
-              <Switch
-                checked={applyCameraEdits}
-                color="primary"
-                size="small"
-                onClick={(e) => e.stopPropagation()}
-                onChange={toggleApplyCameraEdits}
-              />
-            </Box>
-
-            {/* Natural motion toggle */}
-            <Box
-              onClick={handleHandheldToggle}
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1.25,
-                py: 0.75,
-                cursor: 'pointer',
-                borderRadius: 1,
-                '&:hover': { bgcolor: 'action.hover' },
-              }}
-            >
-              <WavesIcon sx={{ fontSize: 18, color: handheldPreset === 'NATURAL' ? 'text.secondary' : 'text.disabled' }} />
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography variant="body2" sx={{ lineHeight: 1.3 }}>
-                  Natural Motion
-                </Typography>
-                <Typography variant="caption" sx={{ color: 'text.disabled', lineHeight: 1.2 }}>
-                  Subtle handheld sway
-                </Typography>
-              </Box>
-              <Switch
-                checked={handheldPreset === 'NATURAL'}
-                color="primary"
-                size="small"
-                onClick={(e) => e.stopPropagation()}
-                onChange={handleHandheldToggle}
-              />
-            </Box>
-          </Stack>
-        </Box>
-      )}
-
-      {/* Empty state - no rally selected */}
+      {/* Global Video Settings - shown when no rally is selected */}
       {!selectedRally ? (
-        <Box
-          sx={{
-            flex: 1,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            p: 3,
-            color: 'text.secondary',
-          }}
-        >
-          <VideocamIcon sx={{ fontSize: 48, mb: 2, opacity: 0.3 }} />
-          <Typography variant="body2" sx={{ textAlign: 'center' }}>
-            Select a rally to edit camera
-          </Typography>
-          <Typography variant="caption" sx={{ textAlign: 'center', mt: 1, color: 'text.disabled' }}>
-            Click on a rally from the list to start editing
-          </Typography>
-        </Box>
+        currentVideoId ? (
+          <Box sx={{ flex: 1, overflowY: 'auto', p: 2 }}>
+            <Box sx={{ mb: 2, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+              <Box>
+                <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
+                  Video Camera Settings
+                </Typography>
+                <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block' }}>
+                  Base settings that apply to all rallies
+                </Typography>
+              </Box>
+              {hasAnyCameraEdits && (
+                <Tooltip title={applyCameraEdits ? 'Hide preview' : 'Show preview'}>
+                  <IconButton
+                    size="small"
+                    onClick={toggleApplyCameraEdits}
+                    sx={{ color: applyCameraEdits ? 'primary.main' : 'text.disabled', mt: -0.5 }}
+                  >
+                    {applyCameraEdits ? <VisibilityIcon fontSize="small" /> : <VisibilityOffIcon fontSize="small" />}
+                  </IconButton>
+                </Tooltip>
+              )}
+            </Box>
+
+            {/* Global Zoom */}
+            <Box sx={{ mb: 3, opacity: applyCameraEdits ? 1 : 0.5 }}>
+              <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                Zoom: {currentGlobalSettings.zoom.toFixed(1)}x
+              </Typography>
+              <Slider
+                value={currentGlobalSettings.zoom}
+                onChange={handleGlobalZoomChange}
+                min={1.0}
+                max={2.0}
+                step={0.1}
+                size="small"
+                disabled={!applyCameraEdits}
+              />
+            </Box>
+
+            {/* Global Rotation */}
+            <Box sx={{ mb: 3, opacity: applyCameraEdits ? 1 : 0.5 }}>
+              <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                Rotation: {currentGlobalSettings.rotation.toFixed(1)}°
+              </Typography>
+              <Slider
+                value={currentGlobalSettings.rotation}
+                onChange={handleGlobalRotationChange}
+                onChangeCommitted={() => setIsAdjustingRotation(false)}
+                onMouseDown={() => setIsAdjustingRotation(true)}
+                min={ROTATION_MIN}
+                max={ROTATION_MAX}
+                step={ROTATION_STEP}
+                size="small"
+                disabled={!applyCameraEdits}
+                marks={[
+                  { value: ROTATION_MIN, label: `${ROTATION_MIN}°` },
+                  { value: 0, label: '0°' },
+                  { value: ROTATION_MAX, label: `${ROTATION_MAX}°` },
+                ]}
+              />
+            </Box>
+
+            {videoHasGlobalSettings && (
+              <Button
+                size="small"
+                variant="text"
+                onClick={() => setShowGlobalResetConfirm(true)}
+                disabled={!applyCameraEdits}
+                startIcon={<RestartAltIcon sx={{ fontSize: 16 }} />}
+                sx={{ color: 'text.secondary' }}
+              >
+                Reset to Defaults
+              </Button>
+            )}
+
+            {/* Global settings reset confirmation dialog */}
+            <Dialog
+              open={showGlobalResetConfirm}
+              onClose={() => setShowGlobalResetConfirm(false)}
+              maxWidth="xs"
+            >
+              <DialogTitle>Reset Video Camera Settings?</DialogTitle>
+              <DialogContent>
+                <DialogContentText>
+                  This will reset zoom, position, and rotation to their default values for this video.
+                </DialogContentText>
+              </DialogContent>
+              <DialogActions>
+                <Button onClick={() => setShowGlobalResetConfirm(false)}>Cancel</Button>
+                <Button onClick={handleResetGlobalSettings} color="error" variant="contained">
+                  Reset
+                </Button>
+              </DialogActions>
+            </Dialog>
+
+            <Divider sx={{ my: 2 }} />
+
+            <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block', textAlign: 'center' }}>
+              Select a rally for per-rally camera editing
+            </Typography>
+          </Box>
+        ) : (
+          <Box
+            sx={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              p: 3,
+              color: 'text.secondary',
+            }}
+          >
+            <VideocamIcon sx={{ fontSize: 48, mb: 2, opacity: 0.3 }} />
+            <Typography variant="body2" sx={{ textAlign: 'center' }}>
+              No video loaded
+            </Typography>
+          </Box>
+        )
       ) : (
         <>
           {/* Rally-specific header */}
-          <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
-            <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
-              Camera Edit
-            </Typography>
-            <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-              Rally {rallyIndex}: {formatTime(selectedRally.start_time)} -{' '}
-              {formatTime(selectedRally.end_time)}
-            </Typography>
+          <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: 'divider', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+            <Box>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
+                Camera Edit
+              </Typography>
+              <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                Rally {rallyIndex}: {formatTime(selectedRally.start_time)} -{' '}
+                {formatTime(selectedRally.end_time)}
+              </Typography>
+            </Box>
+            {hasAnyCameraEdits && (
+              <Tooltip title={applyCameraEdits ? 'Hide preview' : 'Show preview'}>
+                <IconButton
+                  size="small"
+                  onClick={toggleApplyCameraEdits}
+                  sx={{ color: applyCameraEdits ? 'primary.main' : 'text.disabled', mt: -0.5 }}
+                >
+                  {applyCameraEdits ? <VisibilityIcon fontSize="small" /> : <VisibilityOffIcon fontSize="small" />}
+                </IconButton>
+              </Tooltip>
+            )}
           </Box>
 
           {/* Controls */}
-          <Box sx={{ flex: 1, overflowY: 'auto', p: 2 }}>
+          <Box sx={{ flex: 1, overflowY: 'auto', p: 2, opacity: applyCameraEdits ? 1 : 0.5 }}>
             {/* Aspect ratio selector */}
             <Box sx={{ mb: 3 }}>
               <Typography variant="caption" sx={{ color: 'text.secondary', mb: 1, display: 'block' }}>
@@ -673,6 +803,7 @@ export function CameraPanel() {
                 exclusive
                 onChange={handleAspectRatioChange}
                 size="small"
+                disabled={!applyCameraEdits}
                 sx={{ width: '100%' }}
               >
                 <ToggleButton value="ORIGINAL" sx={{ flex: 1 }}>
@@ -684,110 +815,6 @@ export function CameraPanel() {
                   9:16
                 </ToggleButton>
               </ToggleButtonGroup>
-
-              {/* Auto Track Ball button */}
-              <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  onClick={handleAutoTrack}
-                  disabled={isTracking || !selectedRally?._backendId}
-                  startIcon={isTracking ? <CircularProgress size={16} color="inherit" /> : <AutoFixHighIcon />}
-                  sx={{ flex: 1 }}
-                >
-                  {isTracking ? 'Tracking...' : 'Auto Track Ball'}
-                </Button>
-                <Tooltip title={isDebugActive ? 'Hide ball tracking overlay' : 'Show ball tracking overlay'}>
-                  <span>
-                    <Button
-                      variant={isDebugActive ? 'contained' : 'outlined'}
-                      size="small"
-                      onClick={handleToggleDebug}
-                      disabled={isLoadingDebug || !selectedRally?._backendId}
-                      sx={{ minWidth: 40, px: 1 }}
-                    >
-                      {isLoadingDebug ? <CircularProgress size={16} color="inherit" /> : <BugReportIcon fontSize="small" />}
-                    </Button>
-                  </span>
-                </Tooltip>
-              </Stack>
-
-              {/* Progress steps during tracking */}
-              {isTracking && trackingStep && (
-                <Box sx={{ mt: 1.5, px: 0.5 }}>
-                  <Stack spacing={0.75}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      {trackingStep === 'extracting' ? (
-                        <CircularProgress size={12} thickness={5} />
-                      ) : (
-                        <CheckIcon sx={{ fontSize: 12, color: 'success.main' }} />
-                      )}
-                      <Typography
-                        variant="caption"
-                        sx={{
-                          color: trackingStep === 'extracting' ? 'text.primary' : 'text.secondary',
-                          fontWeight: trackingStep === 'extracting' ? 500 : 400,
-                        }}
-                      >
-                        Extracting rally clip
-                      </Typography>
-                    </Box>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      {trackingStep === 'analyzing' ? (
-                        <CircularProgress size={12} thickness={5} />
-                      ) : trackingStep === 'generating' ? (
-                        <CheckIcon sx={{ fontSize: 12, color: 'success.main' }} />
-                      ) : (
-                        <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: 'action.disabled' }} />
-                      )}
-                      <Typography
-                        variant="caption"
-                        sx={{
-                          color: trackingStep === 'analyzing' ? 'text.primary' : trackingStep === 'generating' ? 'text.secondary' : 'text.disabled',
-                          fontWeight: trackingStep === 'analyzing' ? 500 : 400,
-                        }}
-                      >
-                        Analyzing ball positions
-                      </Typography>
-                    </Box>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      {trackingStep === 'generating' ? (
-                        <CircularProgress size={12} thickness={5} />
-                      ) : (
-                        <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: 'action.disabled' }} />
-                      )}
-                      <Typography
-                        variant="caption"
-                        sx={{
-                          color: trackingStep === 'generating' ? 'text.primary' : 'text.disabled',
-                          fontWeight: trackingStep === 'generating' ? 500 : 400,
-                        }}
-                      >
-                        Generating camera path
-                      </Typography>
-                    </Box>
-                  </Stack>
-                </Box>
-              )}
-
-              {!selectedRally?._backendId && !isTracking && (
-                <Typography variant="caption" sx={{ color: 'text.disabled', mt: 0.5, display: 'block' }}>
-                  Sync to server first
-                </Typography>
-              )}
-              {trackingStatus && !trackingError && !isTracking && (
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mt: 1 }}>
-                  <CheckIcon sx={{ fontSize: 14, color: 'success.main' }} />
-                  <Typography variant="caption" sx={{ color: 'success.main' }}>
-                    {trackingStatus}
-                  </Typography>
-                </Box>
-              )}
-              {trackingError && (
-                <Alert severity="warning" sx={{ mt: 1, py: 0, '& .MuiAlert-message': { py: 0.5 } }}>
-                  <Typography variant="caption">{trackingError}</Typography>
-                </Alert>
-              )}
             </Box>
 
             <Divider sx={{ my: 2 }} />
@@ -800,13 +827,16 @@ export function CameraPanel() {
                 </Typography>
                 {hasCameraKeyframes && (
                   <Tooltip title="Reset all camera settings">
-                    <IconButton
-                      size="small"
-                      onClick={() => setShowResetConfirm(true)}
-                      sx={{ color: 'error.main', opacity: 0.7, '&:hover': { opacity: 1 } }}
-                    >
-                      <RestartAltIcon fontSize="small" />
-                    </IconButton>
+                    <span>
+                      <IconButton
+                        size="small"
+                        onClick={() => setShowResetConfirm(true)}
+                        disabled={!applyCameraEdits}
+                        sx={{ color: 'error.main', opacity: 0.7, '&:hover': { opacity: 1 } }}
+                      >
+                        <RestartAltIcon fontSize="small" />
+                      </IconButton>
+                    </span>
                   </Tooltip>
                 )}
               </Box>
@@ -873,6 +903,30 @@ export function CameraPanel() {
                   max={ZOOM_MAX}
                   step={ZOOM_STEP}
                   size="small"
+                  disabled={!applyCameraEdits}
+                />
+              </Box>
+
+              {/* Rotation slider */}
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                  Rotation: {(selectedKeyframe?.rotation ?? getCameraStateAtTime(selectedRallyId!, currentTimeOffset).rotation).toFixed(1)}°
+                </Typography>
+                <Slider
+                  value={selectedKeyframe?.rotation ?? getCameraStateAtTime(selectedRallyId!, currentTimeOffset).rotation}
+                  onChange={handleRotationChange}
+                  onChangeCommitted={() => setIsAdjustingRotation(false)}
+                  onMouseDown={() => setIsAdjustingRotation(true)}
+                  min={ROTATION_MIN}
+                  max={ROTATION_MAX}
+                  step={ROTATION_STEP}
+                  size="small"
+                  disabled={!applyCameraEdits}
+                  marks={[
+                    { value: ROTATION_MIN, label: `${ROTATION_MIN}°` },
+                    { value: 0, label: '0°' },
+                    { value: ROTATION_MAX, label: `${ROTATION_MAX}°` },
+                  ]}
                 />
               </Box>
 
