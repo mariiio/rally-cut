@@ -165,7 +165,6 @@ async function evictIfNeeded(db: IDBDatabase, newEntrySize: number): Promise<voi
       if (cursor && sizeToFree > 0) {
         const entry = cursor.value as CacheEntry;
         sizeToFree -= entry.size || 0;
-        console.log(`[VideoExport] Evicting cached video: ${entry.key.substring(0, 50)}... (${(entry.size / 1024 / 1024).toFixed(1)} MB)`);
         cursor.delete();
         cursor.continue();
       } else {

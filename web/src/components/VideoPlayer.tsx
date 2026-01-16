@@ -271,7 +271,7 @@ export function VideoPlayer() {
 
     let rafId: number;
 
-    // Smoothing factor: 0.15 = smooth but responsive, lower = smoother but laggier
+    // Smoothing factor: lower = smoother but laggier, higher = more responsive
     const SMOOTHING = 0.15;
 
     const updateTransform = () => {
@@ -774,7 +774,7 @@ export function VideoPlayer() {
               height: '100%',
               willChange: 'transform',
               // Short CSS transition bridges video decoding gaps (~100ms)
-              transition: isPlaying && hasCameraKeyframes ? 'transform 50ms linear' : 'none',
+              transition: isPlaying && hasCameraKeyframes ? 'transform 60ms ease-out' : 'none',
               ...(isPlaying && hasCameraKeyframes ? {} : videoTransformStyle),
             } : {
               width: '100%',
