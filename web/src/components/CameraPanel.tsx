@@ -841,6 +841,110 @@ export function CameraPanel() {
                 )}
               </Box>
 
+              {/* Auto Track Ball button */}
+              <Stack direction="row" spacing={1} sx={{ mb: 1.5 }}>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={handleAutoTrack}
+                  disabled={!applyCameraEdits || isTracking || !selectedRally?._backendId}
+                  startIcon={isTracking ? <CircularProgress size={16} color="inherit" /> : <AutoFixHighIcon />}
+                  sx={{ flex: 1 }}
+                >
+                  {isTracking ? 'Tracking...' : 'Auto Track Ball'}
+                </Button>
+                <Tooltip title={isDebugActive ? 'Hide ball tracking overlay' : 'Show ball tracking overlay'}>
+                  <span>
+                    <Button
+                      variant={isDebugActive ? 'contained' : 'outlined'}
+                      size="small"
+                      onClick={handleToggleDebug}
+                      disabled={!applyCameraEdits || isLoadingDebug || !selectedRally?._backendId}
+                      sx={{ minWidth: 40, px: 1 }}
+                    >
+                      {isLoadingDebug ? <CircularProgress size={16} color="inherit" /> : <BugReportIcon fontSize="small" />}
+                    </Button>
+                  </span>
+                </Tooltip>
+              </Stack>
+
+              {/* Progress steps during tracking */}
+              {isTracking && trackingStep && (
+                <Box sx={{ mb: 1.5, px: 0.5 }}>
+                  <Stack spacing={0.75}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      {trackingStep === 'extracting' ? (
+                        <CircularProgress size={12} thickness={5} />
+                      ) : (
+                        <CheckIcon sx={{ fontSize: 12, color: 'success.main' }} />
+                      )}
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          color: trackingStep === 'extracting' ? 'text.primary' : 'text.secondary',
+                          fontWeight: trackingStep === 'extracting' ? 500 : 400,
+                        }}
+                      >
+                        Extracting rally clip
+                      </Typography>
+                    </Box>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      {trackingStep === 'analyzing' ? (
+                        <CircularProgress size={12} thickness={5} />
+                      ) : trackingStep === 'generating' ? (
+                        <CheckIcon sx={{ fontSize: 12, color: 'success.main' }} />
+                      ) : (
+                        <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: 'action.disabled' }} />
+                      )}
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          color: trackingStep === 'analyzing' ? 'text.primary' : trackingStep === 'generating' ? 'text.secondary' : 'text.disabled',
+                          fontWeight: trackingStep === 'analyzing' ? 500 : 400,
+                        }}
+                      >
+                        Analyzing ball positions
+                      </Typography>
+                    </Box>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      {trackingStep === 'generating' ? (
+                        <CircularProgress size={12} thickness={5} />
+                      ) : (
+                        <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: 'action.disabled' }} />
+                      )}
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          color: trackingStep === 'generating' ? 'text.primary' : 'text.disabled',
+                          fontWeight: trackingStep === 'generating' ? 500 : 400,
+                        }}
+                      >
+                        Generating camera path
+                      </Typography>
+                    </Box>
+                  </Stack>
+                </Box>
+              )}
+
+              {!selectedRally?._backendId && !isTracking && (
+                <Typography variant="caption" sx={{ color: 'text.disabled', mb: 1.5, display: 'block' }}>
+                  Sync to server first
+                </Typography>
+              )}
+              {trackingStatus && !trackingError && !isTracking && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1.5 }}>
+                  <CheckIcon sx={{ fontSize: 14, color: 'success.main' }} />
+                  <Typography variant="caption" sx={{ color: 'success.main' }}>
+                    {trackingStatus}
+                  </Typography>
+                </Box>
+              )}
+              {trackingError && (
+                <Alert severity="warning" sx={{ mb: 1.5, py: 0, '& .MuiAlert-message': { py: 0.5 } }}>
+                  <Typography variant="caption">{trackingError}</Typography>
+                </Alert>
+              )}
+
               {/* Keyframe list */}
               <Stack spacing={0.5}>
                 {activeKeyframes.map((kf) => (
@@ -865,10 +969,10 @@ export function CameraPanel() {
                 ))}
               </Stack>
 
-              {activeKeyframes.length === 0 && (
+              {activeKeyframes.length === 0 && !isTracking && !trackingStatus && !trackingError && (
                 <Box sx={{ textAlign: 'center', py: 2 }}>
                   <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block' }}>
-                    Drag on video or adjust zoom to add keyframes
+                    Drag on video or use Auto Track Ball
                   </Typography>
                 </Box>
               )}
