@@ -34,8 +34,6 @@ export function VideoPlayer() {
   } | null>(null);
   // Ref for transform wrapper
   const transformWrapperRef = useRef<HTMLDivElement>(null);
-  // Smoothed camera state for buttery animations (exponential moving average)
-  const smoothedStateRef = useRef<CameraState | null>(null);
 
   const videoUrl = useEditorStore((state) => state.videoUrl);
   const posterUrl = useEditorStore((state) => state.posterUrl);
@@ -258,78 +256,82 @@ export function VideoPlayer() {
     };
   }, [currentRally, currentCameraEdit, currentGlobalSettings]);
 
-  // RAF loop for smooth 60fps camera animation during playback
+  // Video frame callback for smooth camera animation synced to video frames
   useEffect(() => {
     if (!isPlaying || !shouldApplyCamera || !hasCameraKeyframes) {
-      // Reset smoothed state when stopping
-      smoothedStateRef.current = null;
       return;
     }
 
     const video = videoRef.current;
     if (!video) return;
 
-    let rafId: number;
+    let callbackId: number;
+    const hasRVFC = 'requestVideoFrameCallback' in video;
 
-    // Smoothing factor: lower = smoother but laggier, higher = more responsive
-    const SMOOTHING = 0.15;
-
-    const updateTransform = () => {
+    const updateTransform = (now: DOMHighResTimeStamp, metadata?: { mediaTime: number }) => {
       const data = rafDataRef.current;
       if (!data) {
-        rafId = requestAnimationFrame(updateTransform);
+        if (hasRVFC) {
+          callbackId = (video as HTMLVideoElement & { requestVideoFrameCallback: (cb: (n: number, m: { mediaTime: number }) => void) => number }).requestVideoFrameCallback(updateTransform);
+        } else {
+          callbackId = requestAnimationFrame(() => updateTransform(performance.now()));
+        }
         return;
       }
 
       const { rallyStart, rallyEnd, keyframes, aspectRatio, globalSettings } = data;
-      const t = video.currentTime;
+      const videoTime = metadata?.mediaTime ?? video.currentTime;
+
       const duration = rallyEnd - rallyStart;
-      const offset = duration > 0 ? (t - rallyStart) / duration : 0;
+      const offset = duration > 0 ? (videoTime - rallyStart) / duration : 0;
       const clampedOffset = Math.max(0, Math.min(1, offset));
 
-      // Pure interpolation - get target state from keyframes
+      // Pure interpolation - keyframe easing provides the smoothness
       const raw = interpolateCameraState(keyframes, clampedOffset);
 
-      // Combine with global settings to get target
-      const target: CameraState = {
+      // Combine with global settings
+      const state: CameraState = {
         zoom: raw.zoom !== 1.0 ? raw.zoom : globalSettings.zoom,
         positionX: raw.positionX !== 0.5 ? raw.positionX : globalSettings.positionX,
         positionY: raw.positionY !== 0.5 ? raw.positionY : globalSettings.positionY,
         rotation: raw.rotation !== 0 ? raw.rotation : globalSettings.rotation,
       };
 
-      // Initialize smoothed state on first frame
-      if (!smoothedStateRef.current) {
-        smoothedStateRef.current = { ...target };
-      }
-
-      // Apply exponential moving average for smooth motion
-      // smoothed = smoothed + (target - smoothed) * factor
-      const smoothed = smoothedStateRef.current;
-      smoothed.positionX += (target.positionX - smoothed.positionX) * SMOOTHING;
-      smoothed.positionY += (target.positionY - smoothed.positionY) * SMOOTHING;
-      smoothed.zoom += (target.zoom - smoothed.zoom) * SMOOTHING;
-      smoothed.rotation += (target.rotation - smoothed.rotation) * SMOOTHING;
-
-      const transform = calculateVideoTransform(smoothed, aspectRatio);
+      const transform = calculateVideoTransform(state, aspectRatio);
 
       // Update the ref so React has the correct state when playback stops
-      lastCameraStateRef.current = { ...smoothed };
+      lastCameraStateRef.current = state;
 
-      // Apply directly to transform wrapper - no CSS transition needed
+      // Apply directly to transform wrapper
       const element = transformWrapperRef.current || video;
       element.style.transform = transform.transform as string;
       element.style.transformOrigin = transform.transformOrigin as string;
 
-      rafId = requestAnimationFrame(updateTransform);
+      // Schedule next update
+      if (hasRVFC) {
+        callbackId = (video as HTMLVideoElement & { requestVideoFrameCallback: (cb: (n: number, m: { mediaTime: number }) => void) => number }).requestVideoFrameCallback(updateTransform);
+      } else {
+        callbackId = requestAnimationFrame(() => updateTransform(performance.now()));
+      }
     };
 
-    rafId = requestAnimationFrame(updateTransform);
+    // Start the animation loop
+    if (hasRVFC) {
+      callbackId = (video as HTMLVideoElement & { requestVideoFrameCallback: (cb: (n: number, m: { mediaTime: number }) => void) => number }).requestVideoFrameCallback(updateTransform);
+    } else {
+      callbackId = requestAnimationFrame(() => updateTransform(performance.now()));
+    }
 
     return () => {
-      cancelAnimationFrame(rafId);
+      if (hasRVFC && 'cancelVideoFrameCallback' in video) {
+        (video as HTMLVideoElement & { cancelVideoFrameCallback: (id: number) => void }).cancelVideoFrameCallback(callbackId);
+      } else {
+        cancelAnimationFrame(callbackId);
+      }
+      // Sync currentTime when animation stops (e.g., user pauses)
+      setCurrentTime(video.currentTime);
     };
-  }, [isPlaying, shouldApplyCamera, hasCameraKeyframes]);
+  }, [isPlaying, shouldApplyCamera, hasCameraKeyframes, setCurrentTime]);
 
   // Handle manual seek requests
   useEffect(() => {
@@ -355,56 +357,46 @@ export function VideoPlayer() {
 
   // Track if we're in the middle of a match switch
   const switchingMatchRef = useRef(false);
-  // Throttle time updates during camera animation to reduce React interference
-  const lastTimeUpdateRef = useRef(0);
+
+  // Helper: check for highlight playback rally transitions
+  const checkHighlightTransition = useCallback((video: HTMLVideoElement) => {
+    if (switchingMatchRef.current) return;
+    const playerState = usePlayerStore.getState();
+    const editorState = useEditorStore.getState();
+    if (!playerState.playingHighlightId) return;
+
+    const currentRally = playerState.getCurrentPlaylistRally();
+    if (currentRally && currentRally.matchId === editorState.activeMatchId && video.currentTime >= currentRally.end_time) {
+      const nextRally = playerState.advanceHighlightPlayback();
+      if (nextRally) {
+        if (nextRally.matchId === editorState.activeMatchId) {
+          video.currentTime = nextRally.start_time;
+        } else {
+          switchingMatchRef.current = true;
+          setActiveMatch(nextRally.matchId);
+        }
+      } else {
+        playerState.stopHighlightPlayback();
+      }
+    }
+  }, [setActiveMatch]);
 
   // Time update handler - check for rally end during highlight playback
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    // During camera keyframe playback, throttle React state updates to reduce main thread work
-    // This prevents React re-renders from interfering with RAF animation
-    const now = performance.now();
+    // During camera animation, skip React state updates entirely
+    // This prevents expensive re-renders in side panels that cause jitter
+    // currentTime is synced when animation stops (in effect cleanup)
     if (isPlaying && hasCameraKeyframes) {
-      // Only update React state every 250ms during camera animation
-      if (now - lastTimeUpdateRef.current < 250) {
-        return;
-      }
-      lastTimeUpdateRef.current = now;
+      checkHighlightTransition(video);
+      return;
     }
 
     setCurrentTime(video.currentTime);
-
-    // Skip if we're in the middle of switching matches
-    if (switchingMatchRef.current) return;
-
-    // Read fresh values from stores to avoid stale closures
-    const playerState = usePlayerStore.getState();
-    const editorState = useEditorStore.getState();
-
-    // Handle highlight playback
-    if (playerState.playingHighlightId) {
-      const currentRally = playerState.getCurrentPlaylistRally();
-      // Verify the current rally belongs to the active match
-      if (currentRally && currentRally.matchId === editorState.activeMatchId && video.currentTime >= currentRally.end_time) {
-        const nextRally = playerState.advanceHighlightPlayback();
-        if (nextRally) {
-          if (nextRally.matchId === editorState.activeMatchId) {
-            // Same match, just seek
-            video.currentTime = nextRally.start_time;
-          } else {
-            // Different match - switch to that match's video
-            switchingMatchRef.current = true;
-            setActiveMatch(nextRally.matchId);
-          }
-        } else {
-          // No more rallies, stop playback
-          playerState.stopHighlightPlayback();
-        }
-      }
-    }
-  }, [setCurrentTime, setActiveMatch, isPlaying, hasCameraKeyframes]);
+    checkHighlightTransition(video);
+  }, [setCurrentTime, isPlaying, hasCameraKeyframes, checkHighlightTransition]);
 
   // Handle video metadata loaded
   const handleLoadedMetadata = useCallback(() => {
@@ -763,7 +755,7 @@ export function VideoPlayer() {
               zoom={currentCameraState.zoom}
             />
           )}
-          {/* Transform wrapper - JS smoothing + short CSS transition for smooth animation */}
+          {/* Transform wrapper - video frame callback updates, CSS transition smooths between frames */}
           <div
             ref={transformWrapperRef}
             style={containerAspectRatio === '9/16' ? {
@@ -773,14 +765,15 @@ export function VideoPlayer() {
               width: 'auto',
               height: '100%',
               willChange: 'transform',
-              // Short CSS transition bridges video decoding gaps (~100ms)
+              // CSS transition smooths between video frame updates
               transition: isPlaying && hasCameraKeyframes ? 'transform 60ms ease-out' : 'none',
               ...(isPlaying && hasCameraKeyframes ? {} : videoTransformStyle),
             } : {
               width: '100%',
               height: '100%',
               willChange: isCameraPreviewActive ? 'transform' : 'auto',
-              transition: isPlaying && hasCameraKeyframes ? 'transform 50ms linear' : 'none',
+              // CSS transition smooths between video frame updates
+              transition: isPlaying && hasCameraKeyframes ? 'transform 60ms ease-out' : 'none',
               ...(isPlaying && hasCameraKeyframes ? {} : videoTransformStyle),
             }}
           >
