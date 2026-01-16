@@ -102,12 +102,22 @@ export function getValidPositionRange(
       // Zoomed out - video letterboxed, no panning
       return { minX: 0.5, maxX: 0.5, minY: 0.5, maxY: 0.5 };
     }
-    // At zoom >= 1: full horizontal pan available
+
+    // At zoom > 1, extend horizontal range to allow reaching video edges.
+    // The transform uses a fixed excessRatio (0.684), so at higher zoom
+    // we need position values outside 0-1 to reach the actual edges.
+    const widthRatio = (16 / 9) / (9 / 16); // ~3.16
+    const baseExcessRatio = (widthRatio - 1) / widthRatio; // ~0.684
+    const effectiveWidthRatio = widthRatio * zoom;
+    const neededExcessRatio = (effectiveWidthRatio - 1) / effectiveWidthRatio;
+    const extensionFactor = neededExcessRatio / baseExcessRatio;
+    const halfRangeX = 0.5 * extensionFactor;
+
     // Vertical pan only available at zoom > 1
     const verticalPan = zoom > 1;
     return {
-      minX: 0,
-      maxX: 1,
+      minX: 0.5 - halfRangeX,
+      maxX: 0.5 + halfRangeX,
       minY: verticalPan ? 0 : 0.5,
       maxY: verticalPan ? 1 : 0.5,
     };
