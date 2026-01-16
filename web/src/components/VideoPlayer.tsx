@@ -34,6 +34,8 @@ export function VideoPlayer() {
   } | null>(null);
   // Ref for transform wrapper
   const transformWrapperRef = useRef<HTMLDivElement>(null);
+  // Smoothed camera state for buttery animations (exponential moving average)
+  const smoothedStateRef = useRef<CameraState | null>(null);
 
   const videoUrl = useEditorStore((state) => state.videoUrl);
   const posterUrl = useEditorStore((state) => state.posterUrl);
@@ -259,6 +261,8 @@ export function VideoPlayer() {
   // RAF loop for smooth 60fps camera animation during playback
   useEffect(() => {
     if (!isPlaying || !shouldApplyCamera || !hasCameraKeyframes) {
+      // Reset smoothed state when stopping
+      smoothedStateRef.current = null;
       return;
     }
 
@@ -266,6 +270,9 @@ export function VideoPlayer() {
     if (!video) return;
 
     let rafId: number;
+
+    // Smoothing factor: 0.15 = smooth but responsive, lower = smoother but laggier
+    const SMOOTHING = 0.15;
 
     const updateTransform = () => {
       const data = rafDataRef.current;
@@ -280,26 +287,39 @@ export function VideoPlayer() {
       const offset = duration > 0 ? (t - rallyStart) / duration : 0;
       const clampedOffset = Math.max(0, Math.min(1, offset));
 
-      // Pure interpolation - no handheld effects
+      // Pure interpolation - get target state from keyframes
       const raw = interpolateCameraState(keyframes, clampedOffset);
 
-      // Combine with global settings
-      const state: CameraState = {
+      // Combine with global settings to get target
+      const target: CameraState = {
         zoom: raw.zoom !== 1.0 ? raw.zoom : globalSettings.zoom,
         positionX: raw.positionX !== 0.5 ? raw.positionX : globalSettings.positionX,
         positionY: raw.positionY !== 0.5 ? raw.positionY : globalSettings.positionY,
         rotation: raw.rotation !== 0 ? raw.rotation : globalSettings.rotation,
       };
 
-      const transform = calculateVideoTransform(state, aspectRatio);
+      // Initialize smoothed state on first frame
+      if (!smoothedStateRef.current) {
+        smoothedStateRef.current = { ...target };
+      }
+
+      // Apply exponential moving average for smooth motion
+      // smoothed = smoothed + (target - smoothed) * factor
+      const smoothed = smoothedStateRef.current;
+      smoothed.positionX += (target.positionX - smoothed.positionX) * SMOOTHING;
+      smoothed.positionY += (target.positionY - smoothed.positionY) * SMOOTHING;
+      smoothed.zoom += (target.zoom - smoothed.zoom) * SMOOTHING;
+      smoothed.rotation += (target.rotation - smoothed.rotation) * SMOOTHING;
+
+      const transform = calculateVideoTransform(smoothed, aspectRatio);
 
       // Update the ref so React has the correct state when playback stops
-      lastCameraStateRef.current = state;
+      lastCameraStateRef.current = { ...smoothed };
 
-      // Apply to transform wrapper for compositor optimization
-      const target = transformWrapperRef.current || video;
-      target.style.transform = transform.transform as string;
-      target.style.transformOrigin = transform.transformOrigin as string;
+      // Apply directly to transform wrapper - no CSS transition needed
+      const element = transformWrapperRef.current || video;
+      element.style.transform = transform.transform as string;
+      element.style.transformOrigin = transform.transformOrigin as string;
 
       rafId = requestAnimationFrame(updateTransform);
     };
@@ -743,7 +763,7 @@ export function VideoPlayer() {
               zoom={currentCameraState.zoom}
             />
           )}
-          {/* Transform wrapper for compositor optimization */}
+          {/* Transform wrapper - JS smoothing + short CSS transition for smooth animation */}
           <div
             ref={transformWrapperRef}
             style={containerAspectRatio === '9/16' ? {
@@ -753,13 +773,14 @@ export function VideoPlayer() {
               width: 'auto',
               height: '100%',
               willChange: 'transform',
-              transition: isPlaying && hasCameraKeyframes ? 'transform 150ms ease-out' : 'none',
+              // Short CSS transition bridges video decoding gaps (~100ms)
+              transition: isPlaying && hasCameraKeyframes ? 'transform 50ms linear' : 'none',
               ...(isPlaying && hasCameraKeyframes ? {} : videoTransformStyle),
             } : {
               width: '100%',
               height: '100%',
               willChange: isCameraPreviewActive ? 'transform' : 'auto',
-              transition: isPlaying && hasCameraKeyframes ? 'transform 150ms ease-out' : 'none',
+              transition: isPlaying && hasCameraKeyframes ? 'transform 50ms linear' : 'none',
               ...(isPlaying && hasCameraKeyframes ? {} : videoTransformStyle),
             }}
           >
