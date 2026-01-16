@@ -118,12 +118,10 @@ export const useTierStore = create<TierState & TierActions>((set, get) => ({
       // If upgraded from FREE to a paid tier, trigger sync to push localStorage data to server
       // Use a short delay to ensure editor/syncService has initialized
       if (previousTier === 'FREE' && (user.tier === 'PRO' || user.tier === 'ELITE')) {
-        console.log(`[TierStore] Upgraded to ${user.tier} - triggering sync for localStorage data`);
         // Immediate attempt
         syncService.markDirty();
         // Retry after editor likely initialized (in case page is still loading)
         setTimeout(() => {
-          console.log('[TierStore] Retry sync after delay');
           syncService.markDirty();
         }, 2000);
       }

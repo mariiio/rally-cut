@@ -268,10 +268,7 @@ export default function HomePage() {
       setUploadError('No valid video files. Please use MP4, MOV, or WebM.');
       return;
     }
-    if (validFiles.length !== files.length) {
-      // Don't show error, just skip invalid files
-      console.log(`Skipped ${files.length - validFiles.length} invalid file(s)`);
-    }
+    // Skip invalid files silently (validFiles already filtered)
 
     // Check for duplicate session name before starting uploads
     const isNewSession = selectedSessionId === NEW_SESSION_VALUE;
