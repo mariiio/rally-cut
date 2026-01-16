@@ -16,6 +16,7 @@ import StarIcon from '@mui/icons-material/Star';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import CameraAltIcon from '@mui/icons-material/CameraAlt';
 import MergeTypeIcon from '@mui/icons-material/MergeType';
+import SpeedIcon from '@mui/icons-material/Speed';
 import {
   Timeline as TimelineEditor,
   TimelineRow,
@@ -153,12 +154,16 @@ export function Timeline() {
     playOnlyRallies,
     togglePlayOnlyRallies,
     bufferedRanges,
+    playbackRate,
+    setPlaybackRate,
+    cyclePlaybackRate,
   } = usePlayerStore();
   const timelineRef = useRef<TimelineState>(null);
   const timelineContainerRef = useRef<HTMLDivElement>(null);
   const [isDraggingCursor, setIsDraggingCursor] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [hotkeysAnchorEl, setHotkeysAnchorEl] = useState<HTMLButtonElement | null>(null);
+  const [speedAnchorEl, setSpeedAnchorEl] = useState<HTMLElement | null>(null);
   const [scrollLeft, setScrollLeft] = useState(0);
   const [containerWidth, setContainerWidth] = useState(0);
   const [keyframeBlockedRallyId, setKeyframeBlockedRallyId] = useState<string | null>(null);
@@ -438,11 +443,25 @@ export function Timeline() {
             startRallyRecording();
           }
           break;
+
+        case 'BracketLeft': // [ key
+          if (!isMod) {
+            e.preventDefault();
+            cyclePlaybackRate('slower');
+          }
+          break;
+
+        case 'BracketRight': // ] key
+          if (!isMod) {
+            e.preventDefault();
+            cyclePlaybackRate('faster');
+          }
+          break;
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, play, pause, seek, currentTime, duration, selectedRallyId, deleteConfirmId, removeRally, selectRally, isInsideSelectedRally, getSelectedRally, goToPrevRally, goToNextRally, adjustRallyStart, adjustRallyEnd, videoMetadata, rallies, createRallyAtTime, handleToggleHighlight, isLocked, isInCameraEditMode, selectedKeyframeId, removeKeyframe, selectKeyframe, isRecordingRally, startRallyRecording, stopRallyRecording, cancelRallyRecording]);
+  }, [isPlaying, play, pause, seek, currentTime, duration, selectedRallyId, deleteConfirmId, removeRally, selectRally, isInsideSelectedRally, getSelectedRally, goToPrevRally, goToNextRally, adjustRallyStart, adjustRallyEnd, videoMetadata, rallies, createRallyAtTime, handleToggleHighlight, isLocked, isInCameraEditMode, selectedKeyframeId, removeKeyframe, selectKeyframe, isRecordingRally, startRallyRecording, stopRallyRecording, cancelRallyRecording, cyclePlaybackRate]);
 
   // Jump to previous/next rally
   const jumpToPrevRally = useCallback(() => {
@@ -1159,6 +1178,35 @@ export function Timeline() {
           <Typography variant="body2" sx={{ ml: 1, fontFamily: 'monospace', minWidth: 130 }}>
             {formatTime(currentTime)} / {formatTime(duration)}
           </Typography>
+          <Box sx={{ width: 12 }} />
+          {/* Speed control with picker */}
+          <Tooltip title="Playback speed ([ / ] keys)">
+            <Box
+              onClick={(e) => setSpeedAnchorEl(e.currentTarget)}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.5,
+                px: 1,
+                py: 0.5,
+                borderRadius: 1,
+                cursor: 'pointer',
+                bgcolor: playbackRate !== 1 ? 'primary.main' : 'action.hover',
+                color: playbackRate !== 1 ? 'primary.contrastText' : 'text.secondary',
+                transition: 'all 0.2s ease',
+                minWidth: 48,
+                justifyContent: 'center',
+                '&:hover': {
+                  bgcolor: playbackRate !== 1 ? 'primary.dark' : 'action.selected',
+                },
+              }}
+            >
+              <SpeedIcon sx={{ fontSize: 14 }} />
+              <Typography variant="caption" sx={{ fontWeight: 600, fontSize: 11, userSelect: 'none' }}>
+                {playbackRate}x
+              </Typography>
+            </Box>
+          </Tooltip>
           <Tooltip title={canCreateRallyToolbar ? "Create rally at playhead" : "Cannot create rally here (inside existing rally)"} arrow>
             <span>
               <IconButton
@@ -1343,6 +1391,44 @@ export function Timeline() {
         </Stack>
       </Stack>
 
+      {/* Speed Picker Popover */}
+      <Popover
+        open={Boolean(speedAnchorEl)}
+        anchorEl={speedAnchorEl}
+        onClose={() => setSpeedAnchorEl(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <Stack sx={{ p: 0.5 }}>
+          {[0.5, 1, 2].map((rate) => (
+            <Box
+              key={rate}
+              onClick={() => {
+                setPlaybackRate(rate);
+                setSpeedAnchorEl(null);
+              }}
+              sx={{
+                px: 2,
+                py: 0.75,
+                borderRadius: 1,
+                cursor: 'pointer',
+                bgcolor: playbackRate === rate ? 'primary.main' : 'transparent',
+                color: playbackRate === rate ? 'primary.contrastText' : 'text.primary',
+                fontWeight: playbackRate === rate ? 600 : 400,
+                fontSize: 13,
+                minWidth: 60,
+                textAlign: 'center',
+                '&:hover': {
+                  bgcolor: playbackRate === rate ? 'primary.dark' : 'action.hover',
+                },
+              }}
+            >
+              {rate}x
+            </Box>
+          ))}
+        </Stack>
+      </Popover>
+
       {/* Hotkeys Legend Popover */}
       <Popover
         open={Boolean(hotkeysAnchorEl)}
@@ -1364,6 +1450,7 @@ export function Timeline() {
             <HotkeyRow keys={['Space']} description="Play / Pause" />
             <HotkeyRow keys={['←', '→']} description="Seek ±1s" />
             <HotkeyRow keys={['⌘', '←', '→']} description="Jump to prev/next rally" />
+            <HotkeyRow keys={['[', ']']} description="Slower / Faster" />
           </Stack>
 
           {/* Rally Creation */}
