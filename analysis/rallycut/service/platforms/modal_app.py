@@ -228,20 +228,30 @@ def detect(request: dict) -> dict:
 
         # Transform response to API webhook format
         # API expects: {job_id, status, rallies: [{start_ms, end_ms, confidence}], error_message}
-        # DetectionResponse has: {job_id, status, segments: [{start_time, end_time, highlight_score}]}
+        # DetectionResponse has: {job_id, status, segments: [{start_time, end_time}]}
         rallies = []
         for segment in response.segments:
             if segment.segment_type.value == "rally":
                 rallies.append({
                     "start_ms": int(segment.start_time * 1000),
                     "end_ms": int(segment.end_time * 1000),
-                    "confidence": segment.highlight_score,
                 })
+
+        # Include suggested rallies (segments that almost passed detection)
+        suggested_rallies = []
+        for sugg in response.suggested_segments:
+            suggested_rallies.append({
+                "start_ms": int(sugg.start_time * 1000),
+                "end_ms": int(sugg.end_time * 1000),
+                "confidence": sugg.avg_confidence,
+                "rejection_reason": sugg.rejection_reason.value,
+            })
 
         webhook_payload = {
             "job_id": job_id,
             "status": "completed",
             "rallies": rallies,
+            "suggested_rallies": suggested_rallies,
         }
 
         # POST result to callback URL (webhook)

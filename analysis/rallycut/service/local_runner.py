@@ -210,6 +210,16 @@ def run_detection(
                     "end_ms": int(segment.end_time * 1000),
                 })
 
+        # Include suggested rallies (segments that almost passed detection)
+        suggested_rallies = []
+        for sugg in response.suggested_segments:
+            suggested_rallies.append({
+                "start_ms": int(sugg.start_time * 1000),
+                "end_ms": int(sugg.end_time * 1000),
+                "confidence": sugg.avg_confidence,
+                "rejection_reason": sugg.rejection_reason.value,
+            })
+
         # Build full results for S3 storage
         full_results = {
             "job_id": job_id,
@@ -242,6 +252,7 @@ def run_detection(
             "job_id": job_id,
             "status": "completed",
             "rallies": rallies,
+            "suggested_rallies": suggested_rallies,
             "result_s3_key": result_s3_key,
         }
 

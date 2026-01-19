@@ -13,6 +13,14 @@ class GameState(str, Enum):
     NO_PLAY = "no_play"
 
 
+class RejectionReason(str, Enum):
+    """Reason a segment was rejected during filtering."""
+
+    INSUFFICIENT_WINDOWS = "insufficient_windows"
+    TOO_SHORT = "too_short"
+    SPARSE_DENSITY = "sparse_density"
+
+
 class ActionType(str, Enum):
     """Types of volleyball actions."""
 
@@ -117,6 +125,26 @@ class TimeSegment:
     def frame_count(self) -> int:
         """Get number of frames (inclusive)."""
         return self.end_frame - self.start_frame + 1
+
+
+@dataclass
+class SuggestedSegment:
+    """A segment rejected by filters but may still be a rally."""
+
+    start_frame: int
+    end_frame: int
+    start_time: float
+    end_time: float
+    state: GameState
+    rejection_reason: RejectionReason
+    avg_confidence: float
+    active_window_count: int
+    active_density: float | None = None
+
+    @property
+    def duration(self) -> float:
+        """Get duration in seconds."""
+        return self.end_time - self.start_time
 
 
 @dataclass

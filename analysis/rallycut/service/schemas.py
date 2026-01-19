@@ -13,6 +13,14 @@ class SegmentType(str, Enum):
     DEAD_TIME = "dead_time"  # NO_PLAY state - between rallies
 
 
+class RejectionReason(str, Enum):
+    """Reason a segment was rejected during filtering."""
+
+    INSUFFICIENT_WINDOWS = "insufficient_windows"
+    TOO_SHORT = "too_short"
+    SPARSE_DENSITY = "sparse_density"
+
+
 class DetectedSegment(BaseModel):
     """A detected video segment."""
 
@@ -23,6 +31,21 @@ class DetectedSegment(BaseModel):
     start_frame: int = Field(description="Start frame number")
     end_frame: int = Field(description="End frame number")
     duration: float = Field(description="Duration in seconds")
+
+
+class SuggestedDetectedSegment(BaseModel):
+    """A segment that almost passed detection but was rejected."""
+
+    segment_id: int = Field(description="Sequential segment identifier (1-indexed)")
+    start_time: float = Field(description="Start time in seconds")
+    end_time: float = Field(description="End time in seconds")
+    start_frame: int = Field(description="Start frame number")
+    end_frame: int = Field(description="End frame number")
+    duration: float = Field(description="Duration in seconds")
+    rejection_reason: RejectionReason = Field(description="Why this segment was rejected")
+    avg_confidence: float = Field(description="Average ML confidence for this segment")
+    active_window_count: int = Field(description="Number of active ML windows in segment")
+    active_density: float | None = Field(default=None, description="Active window density (if applicable)")
 
 
 class VideoMetadata(BaseModel):
@@ -109,6 +132,9 @@ class DetectionResponse(BaseModel):
     )
     segments: list[DetectedSegment] = Field(
         default_factory=list, description="Detected rally segments"
+    )
+    suggested_segments: list[SuggestedDetectedSegment] = Field(
+        default_factory=list, description="Segments that almost passed detection"
     )
     statistics: MatchStatistics | None = Field(
         default=None, description="Aggregated match statistics"

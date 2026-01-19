@@ -250,18 +250,20 @@ enum ProcessingStatus {
 // ============================================================================
 
 model Rally {
-  id          String       @id @default(uuid())
-  videoId     String       @map("video_id")
-  startMs     Int          @map("start_ms")
-  endMs       Int          @map("end_ms")
-  confidence  Float?
-  scoreA      Int?         @map("score_a")
-  scoreB      Int?         @map("score_b")
-  servingTeam ServingTeam? @map("serving_team")
-  notes       String?
-  order       Int          @default(0)
-  createdAt   DateTime     @default(now()) @map("created_at")
-  updatedAt   DateTime     @updatedAt @map("updated_at")
+  id              String           @id @default(uuid())
+  videoId         String           @map("video_id")
+  startMs         Int              @map("start_ms")
+  endMs           Int              @map("end_ms")
+  confidence      Float?
+  status          RallyStatus      @default(CONFIRMED)
+  rejectionReason RejectionReason? @map("rejection_reason")
+  scoreA          Int?             @map("score_a")
+  scoreB          Int?             @map("score_b")
+  servingTeam     ServingTeam?     @map("serving_team")
+  notes           String?
+  order           Int              @default(0)
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
 
   video            Video            @relation(fields: [videoId], references: [id], onDelete: Cascade)
   highlightRallies HighlightRally[]
@@ -270,6 +272,7 @@ model Rally {
 
   @@index([videoId])
   @@index([videoId, startMs])
+  @@index([videoId, status])
   @@map("rallies")
 }
 
@@ -373,6 +376,17 @@ model VideoCameraSettings {
 enum ServingTeam {
   A
   B
+}
+
+enum RallyStatus {
+  CONFIRMED
+  SUGGESTED
+}
+
+enum RejectionReason {
+  INSUFFICIENT_WINDOWS
+  TOO_SHORT
+  SPARSE_DENSITY
 }
 
 model Highlight {

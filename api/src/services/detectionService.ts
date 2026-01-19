@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { ProcessingStatus, Video } from "@prisma/client";
+import { ProcessingStatus, RejectionReason, Video } from "@prisma/client";
 
 import { env } from "../config/env.js";
 import { triggerModalDetection } from "../lib/modal.js";
@@ -444,12 +444,30 @@ interface DetectionResult {
   confidence?: number;
 }
 
+interface SuggestedResult {
+  start_ms: number;
+  end_ms: number;
+  confidence: number;
+  rejection_reason: "insufficient_windows" | "too_short" | "sparse_density";
+}
+
 interface DetectionPayload {
   job_id: string;
   status: "completed" | "failed";
   error_message?: string;
   rallies?: DetectionResult[];
+  suggested_rallies?: SuggestedResult[];
   result_s3_key?: string;
+}
+
+// Map rejection_reason string to Prisma enum
+function mapRejectionReason(reason: SuggestedResult["rejection_reason"]): RejectionReason {
+  const map: Record<SuggestedResult["rejection_reason"], RejectionReason> = {
+    insufficient_windows: "INSUFFICIENT_WINDOWS",
+    too_short: "TOO_SHORT",
+    sparse_density: "SPARSE_DENSITY",
+  };
+  return map[reason];
 }
 
 // Check if a rally was user-modified (has user-specific data)
@@ -565,7 +583,44 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
           startMs: r.start_ms,
           endMs: r.end_ms,
           confidence: r.confidence,
+          status: "CONFIRMED",
           order: userRallies.length + index,
+        })),
+      });
+    }
+
+    // Process suggested rallies (segments that almost passed detection)
+    const suggestedRallies = payload.suggested_rallies ?? [];
+
+    // Filter suggestions that overlap with existing/new confirmed rallies
+    const confirmedRanges = [
+      ...userRallies.map((r) => ({ startMs: r.startMs, endMs: r.endMs })),
+      ...clampedMlRallies.map((r) => ({ startMs: r.start_ms, endMs: r.end_ms })),
+    ];
+
+    const newSuggestions = suggestedRallies.filter((s) => {
+      const range = { startMs: s.start_ms, endMs: s.end_ms };
+      return !confirmedRanges.some((existing) => ralliesOverlap(range, existing, 0.3));
+    });
+
+    // Clamp suggested rally timestamps to video duration
+    const clampedSuggestions = newSuggestions.map((r) => ({
+      ...r,
+      start_ms: Math.max(0, Math.min(r.start_ms, durationMs)),
+      end_ms: Math.max(0, Math.min(r.end_ms, durationMs)),
+    }));
+
+    // Create suggested rallies
+    if (clampedSuggestions.length > 0) {
+      await tx.rally.createMany({
+        data: clampedSuggestions.map((r, index) => ({
+          videoId: job.videoId,
+          startMs: r.start_ms,
+          endMs: r.end_ms,
+          confidence: r.confidence,
+          status: "SUGGESTED",
+          rejectionReason: mapRejectionReason(r.rejection_reason),
+          order: userRallies.length + clampedMlRallies.length + index,
         })),
       });
     }
@@ -604,9 +659,20 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
     });
   });
 
+  const suggestedRallies = payload.suggested_rallies ?? [];
+  const confirmedRanges = [
+    ...userRallies.map((r) => ({ startMs: r.startMs, endMs: r.endMs })),
+    ...newMlRallies.map((r) => ({ startMs: r.start_ms, endMs: r.end_ms })),
+  ];
+  const createdSuggestions = suggestedRallies.filter((s) => {
+    const range = { startMs: s.start_ms, endMs: s.end_ms };
+    return !confirmedRanges.some((existing) => ralliesOverlap(range, existing, 0.3));
+  });
+
   return {
     success: true,
     ralliesCreated: newMlRallies.length,
+    suggestedRalliesCreated: createdSuggestions.length,
     userRalliesPreserved: userRallies.length,
     mlRalliesReplaced: mlOnlyRallies.length,
   };
