@@ -339,13 +339,15 @@ export function VideoPlayer() {
       videoRef.current.currentTime = seekTo;
       // Update cameraTime immediately for smooth preview when paused
       setCameraTime(seekTo); // eslint-disable-line react-hooks/set-state-in-effect -- intentional: syncing camera time with seek
+      // Also update currentTime - ensures immediate sync even when handleTimeUpdate throttles during camera animation
+      setCurrentTime(seekTo); // eslint-disable-line react-hooks/set-state-in-effect -- intentional: syncing current time with seek
       clearSeek();
       // Resume playback if we're supposed to be playing
       if (isPlaying) {
         videoRef.current.play().catch(() => {});
       }
     }
-  }, [seekTo, clearSeek, isPlaying]);
+  }, [seekTo, clearSeek, isPlaying, setCurrentTime]);
 
   // Handle seeked event - update camera time when scrubbing
   const handleSeeked = useCallback(() => {
@@ -381,22 +383,41 @@ export function VideoPlayer() {
     }
   }, [setActiveMatch]);
 
+  // Get playOnlyRallies setting for skip dead time logic
+  const playOnlyRallies = usePlayerStore((state) => state.playOnlyRallies);
+  const seek = usePlayerStore((state) => state.seek);
+
   // Time update handler - check for rally end during highlight playback
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    // During camera animation, skip React state updates entirely
-    // This prevents expensive re-renders in side panels that cause jitter
-    // currentTime is synced when animation stops (in effect cleanup)
+    const videoTime = video.currentTime;
+
+    // During camera animation, skip React state updates to prevent jitter
+    // Handle skip-dead-time logic here using video.currentTime directly
     if (isPlaying && hasCameraKeyframes) {
+      // Check if we've exited the rally into dead time
+      const inAnyRally = rallies.some(
+        (r) => videoTime >= r.start_time && videoTime <= r.end_time
+      );
+
+      if (!inAnyRally && playOnlyRallies) {
+        // In dead time with "rallies only" enabled - jump to next rally
+        const sorted = [...rallies].sort((a, b) => a.start_time - b.start_time);
+        const nextRally = sorted.find((r) => r.start_time > videoTime);
+        if (nextRally) {
+          seek(nextRally.start_time);
+        }
+      }
+
       checkHighlightTransition(video);
       return;
     }
 
-    setCurrentTime(video.currentTime);
+    setCurrentTime(videoTime);
     checkHighlightTransition(video);
-  }, [setCurrentTime, isPlaying, hasCameraKeyframes, checkHighlightTransition]);
+  }, [setCurrentTime, isPlaying, hasCameraKeyframes, rallies, playOnlyRallies, seek, checkHighlightTransition]);
 
   // Handle video metadata loaded
   const handleLoadedMetadata = useCallback(() => {
