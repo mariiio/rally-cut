@@ -339,8 +339,8 @@ export function VideoPlayer() {
       videoRef.current.currentTime = seekTo;
       // Update cameraTime immediately for smooth preview when paused
       setCameraTime(seekTo); // eslint-disable-line react-hooks/set-state-in-effect -- intentional: syncing camera time with seek
-      // Also update currentTime - ensures immediate sync even when handleTimeUpdate throttles during camera animation
-      setCurrentTime(seekTo); // eslint-disable-line react-hooks/set-state-in-effect -- intentional: syncing current time with seek
+      // Also update currentTime - ensures immediate sync since handleTimeUpdate skips updates during camera animation
+      setCurrentTime(seekTo);
       clearSeek();
       // Resume playback if we're supposed to be playing
       if (isPlaying) {
@@ -402,12 +402,18 @@ export function VideoPlayer() {
         (r) => videoTime >= r.start_time && videoTime <= r.end_time
       );
 
-      if (!inAnyRally && playOnlyRallies) {
-        // In dead time with "rallies only" enabled - jump to next rally
-        const sorted = [...rallies].sort((a, b) => a.start_time - b.start_time);
-        const nextRally = sorted.find((r) => r.start_time > videoTime);
-        if (nextRally) {
-          seek(nextRally.start_time);
+      if (!inAnyRally) {
+        if (playOnlyRallies) {
+          // In dead time with "rallies only" enabled - jump to next rally
+          const sorted = [...rallies].sort((a, b) => a.start_time - b.start_time);
+          const nextRally = sorted.find((r) => r.start_time > videoTime);
+          if (nextRally) {
+            seek(nextRally.start_time);
+          }
+        } else {
+          // Exited rally into dead time - update currentTime to allow
+          // hasCameraKeyframes to recalculate (breaks circular dependency)
+          setCurrentTime(videoTime);
         }
       }
 

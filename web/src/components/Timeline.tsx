@@ -127,6 +127,7 @@ export function Timeline() {
   const selectedKeyframeId = useCameraStore((state) => state.selectedKeyframeId);
   const removeKeyframe = useCameraStore((state) => state.removeKeyframe);
   const setCameraEdit = useCameraStore((state) => state.setCameraEdit);
+  const applyCameraEdits = usePlayerStore((state) => state.applyCameraEdits);
 
   // Get active match to access video status
   const activeMatch = getActiveMatch();
@@ -178,6 +179,9 @@ export function Timeline() {
 
   // Track if we auto-paused at segment end (for restart behavior)
   const autoPausedAtEndRef = useRef<string | null>(null); // stores segment ID if auto-paused
+
+  // Ref for RAF-based playhead positioning during camera animation
+  const playheadRef = useRef<HTMLDivElement>(null);
 
   // Clear delete confirmation when selection changes
   useEffect(() => {
@@ -692,6 +696,45 @@ export function Timeline() {
     const startLeft = 10; // matches startLeft prop
     return startLeft + (currentTime * pixelsPerSecond) - scrollLeft;
   }, [currentTime, scale, scrollLeft]);
+
+  // Check if current playback position has active camera animation
+  // (used to switch to RAF-based playhead updates to avoid jitter)
+  const hasActiveCameraAnimation = useMemo(() => {
+    if (!applyCameraEdits || !rallies) return false;
+    // Find rally at current playhead position
+    const rally = rallies.find(
+      (r) => currentTime >= r.start_time && currentTime <= r.end_time
+    );
+    if (!rally) return false;
+    // Check if rally has camera keyframes
+    const cameraEdit = cameraEdits[rally.id];
+    if (!cameraEdit) return false;
+    const keyframes = cameraEdit.keyframes[cameraEdit.aspectRatio];
+    return keyframes && keyframes.length > 0;
+  }, [applyCameraEdits, rallies, currentTime, cameraEdits]);
+
+  // RAF-based playhead positioning during camera animation
+  // This bypasses React state updates to prevent camera jitter
+  useEffect(() => {
+    if (!isPlaying || !hasActiveCameraAnimation) return;
+
+    const video = document.querySelector('video');
+    if (!video || !playheadRef.current) return;
+
+    let rafId: number;
+    const startLeft = 10;
+
+    const updatePlayhead = () => {
+      if (!playheadRef.current) return;
+      const pixelsPerSecond = SCALE_WIDTH / scale;
+      const position = startLeft + (video.currentTime * pixelsPerSecond) - scrollLeft;
+      playheadRef.current.style.left = `${position}px`;
+      rafId = requestAnimationFrame(updatePlayhead);
+    };
+
+    rafId = requestAnimationFrame(updatePlayhead);
+    return () => cancelAnimationFrame(rafId);
+  }, [isPlaying, hasActiveCameraAnimation, scale, scrollLeft]);
 
   // Calculate selected rally position for floating action buttons
   const selectedRallyPosition = useMemo(() => {
@@ -1921,8 +1964,10 @@ export function Timeline() {
         />
 
         {/* Custom cursor - line, head, and optional add button */}
-        {cursorPixelPosition > 0 && cursorPixelPosition < (containerWidth || 9999) && (
+        {/* Always render when playing with camera animation (RAF updates position) or when in view */}
+        {(hasActiveCameraAnimation || (cursorPixelPosition > 0 && cursorPixelPosition < (containerWidth || 9999))) && (
           <Box
+            ref={playheadRef}
             sx={{
               position: 'absolute',
               left: cursorPixelPosition,
