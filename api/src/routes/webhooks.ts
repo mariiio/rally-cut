@@ -42,6 +42,16 @@ const detectionCompleteSchema = z.object({
       })
     )
     .optional(),
+  suggested_rallies: z
+    .array(
+      z.object({
+        start_ms: z.number().int().nonnegative(),
+        end_ms: z.number().int().positive(),
+        confidence: z.number().min(0).max(1),
+        rejection_reason: z.enum(["insufficient_windows", "too_short", "sparse_density"]),
+      })
+    )
+    .optional(),
   result_s3_key: z.string().optional(),
 });
 

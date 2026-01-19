@@ -12,7 +12,7 @@ from rallycut.core.config import (
     get_model_path,
     get_recommended_batch_size,
 )
-from rallycut.core.models import GameStateResult, TimeSegment
+from rallycut.core.models import GameStateResult, RejectionReason, SuggestedSegment, TimeSegment
 from rallycut.core.video import Video
 from rallycut.processing.exporter import FFmpegExporter
 
@@ -29,6 +29,9 @@ DEFAULT_MIN_ACTIVE_DENSITY = 0.25
 
 # Minimum number of PLAY/SERVICE windows required to form a valid segment
 MIN_ACTIVE_WINDOWS = 1
+
+# Minimum confidence to include as a suggestion (don't suggest obvious noise)
+MIN_SUGGESTION_CONFIDENCE = 0.3
 
 
 class VideoCutter:
@@ -312,12 +315,18 @@ class VideoCutter:
 
     def _get_segments_from_results(
         self, results: list[GameStateResult], fps: float, total_frames: int | None = None
-    ) -> list[TimeSegment]:
-        """Convert analysis results to merged play segments with hysteresis."""
+    ) -> tuple[list[TimeSegment], list[SuggestedSegment]]:
+        """Convert analysis results to merged play segments with hysteresis.
+
+        Returns:
+            Tuple of (confirmed_segments, suggested_segments)
+        """
         from rallycut.core.models import GameState
 
         if not results:
-            return []
+            return [], []
+
+        suggested_segments: list[SuggestedSegment] = []
 
         # Apply confidence-based boundary extension before segment creation
         extended_results = self._apply_confidence_extension(results)
@@ -466,11 +475,33 @@ class VideoCutter:
 
             # Require minimum number of active windows
             if active_window_count < MIN_ACTIVE_WINDOWS:
+                if avg_confidence >= MIN_SUGGESTION_CONFIDENCE:
+                    suggested_segments.append(SuggestedSegment(
+                        start_frame=segment.start_frame,
+                        end_frame=segment.end_frame,
+                        start_time=segment.start_time,
+                        end_time=segment.end_time,
+                        state=segment.state,
+                        rejection_reason=RejectionReason.INSUFFICIENT_WINDOWS,
+                        avg_confidence=avg_confidence,
+                        active_window_count=active_window_count,
+                    ))
                 continue
 
             # Apply min_play_duration only to multi-window segments
             # Single confident windows should be kept (will be padded to reasonable length)
             if active_window_count > 1 and segment.frame_count < min_frames:
+                if avg_confidence >= MIN_SUGGESTION_CONFIDENCE:
+                    suggested_segments.append(SuggestedSegment(
+                        start_frame=segment.start_frame,
+                        end_frame=segment.end_frame,
+                        start_time=segment.start_time,
+                        end_time=segment.end_time,
+                        state=segment.state,
+                        rejection_reason=RejectionReason.TOO_SHORT,
+                        avg_confidence=avg_confidence,
+                        active_window_count=active_window_count,
+                    ))
                 continue
 
             # Filter out sparse detections - require minimum density of active windows
@@ -481,6 +512,18 @@ class VideoCutter:
                 segment_stride_intervals = max(1, segment.frame_count / stride_frames)
                 active_density = active_window_count / segment_stride_intervals
                 if active_density < self.min_active_density:
+                    if avg_confidence >= MIN_SUGGESTION_CONFIDENCE:
+                        suggested_segments.append(SuggestedSegment(
+                            start_frame=segment.start_frame,
+                            end_frame=segment.end_frame,
+                            start_time=segment.start_time,
+                            end_time=segment.end_time,
+                            state=segment.state,
+                            rejection_reason=RejectionReason.SPARSE_DENSITY,
+                            avg_confidence=avg_confidence,
+                            active_window_count=active_window_count,
+                            active_density=active_density,
+                        ))
                     continue
 
             padded_start = max(0, segment.start_frame - padding_start_frames)
@@ -504,7 +547,7 @@ class VideoCutter:
 
         # Merge overlapping segments
         if not play_segments:
-            return []
+            return [], suggested_segments
 
         sorted_segments = sorted(play_segments, key=lambda s: s.start_frame)
         merged = [sorted_segments[0]]
@@ -523,13 +566,13 @@ class VideoCutter:
             else:
                 merged.append(segment)
 
-        return merged
+        return merged, suggested_segments
 
     def analyze_only(
         self,
         input_path: Path,
         progress_callback: Callable[[float, str], None] | None = None,
-    ) -> list[TimeSegment]:
+    ) -> tuple[list[TimeSegment], list[SuggestedSegment]]:
         """
         Analyze video to find play segments without generating output.
 
@@ -538,7 +581,7 @@ class VideoCutter:
             progress_callback: Callback for progress updates (percentage, message)
 
         Returns:
-            List of play segments
+            Tuple of (confirmed_segments, suggested_segments)
         """
         from rallycut.core.models import GameStateResult
 
@@ -613,9 +656,9 @@ class VideoCutter:
                 results = direct_results  # type: ignore[assignment]
 
         # Convert to merged segments (clamp to source video duration)
-        merged_segments = self._get_segments_from_results(results, fps, source_frame_count)
+        merged_segments, suggested_segments = self._get_segments_from_results(results, fps, source_frame_count)
 
-        return merged_segments
+        return merged_segments, suggested_segments
 
     def analyze_with_diagnostics(
         self,
@@ -723,17 +766,18 @@ class VideoCutter:
         # Get segments before min_duration filter (by temporarily setting it to 0)
         original_min_play = self.min_play_duration
         self.min_play_duration = 0.0
-        raw_segments = self._get_segments_from_results(smoothed_results, fps, source_frame_count)
+        raw_segments, _ = self._get_segments_from_results(smoothed_results, fps, source_frame_count)
         self.min_play_duration = original_min_play
 
         # Get final segments with actual filter
-        final_segments = self._get_segments_from_results(smoothed_results, fps, source_frame_count)
+        final_segments, suggested_segments = self._get_segments_from_results(smoothed_results, fps, source_frame_count)
 
         return {
             "raw_results": raw_results,
             "smoothed_results": smoothed_results,
             "raw_segments": raw_segments,
             "final_segments": final_segments,
+            "suggested_segments": suggested_segments,
             "fps": fps,
         }
 
@@ -759,7 +803,7 @@ class VideoCutter:
             if progress_callback:
                 progress_callback(pct * 0.7, f"Analyzing: {msg}")
 
-        merged_segments = self.analyze_only(input_path, analysis_progress)
+        merged_segments, _ = self.analyze_only(input_path, analysis_progress)
 
         if not merged_segments:
             raise ValueError("No play segments detected in video")

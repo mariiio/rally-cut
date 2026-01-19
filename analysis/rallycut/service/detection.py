@@ -15,7 +15,9 @@ from rallycut.service.schemas import (
     DetectionRequest,
     DetectionResponse,
     MatchStatistics,
+    RejectionReason,
     SegmentType,
+    SuggestedDetectedSegment,
     VideoMetadata,
 )
 from rallycut.service.storage import cleanup_temp, download_video
@@ -108,7 +110,7 @@ class DetectionService:
                     # Map 0-1 to 0.1-0.9
                     progress_callback(0.1 + pct * 0.8, msg)
 
-            segments = cutter.analyze_only(local_path, analysis_progress)
+            segments, suggested = cutter.analyze_only(local_path, analysis_progress)
 
             # Phase 3: Build response (90-100% progress)
             if progress_callback:
@@ -131,6 +133,31 @@ class DetectionService:
                         start_frame=seg.start_frame,
                         end_frame=seg.end_frame,
                         duration=seg.duration,
+                    )
+                )
+
+            # Build suggested segments list
+            suggested_segments = []
+            for i, sugg in enumerate(suggested):
+                # Map RejectionReason from core models to service schemas
+                from rallycut.core.models import RejectionReason as CoreRejectionReason
+                reason_map = {
+                    CoreRejectionReason.INSUFFICIENT_WINDOWS: RejectionReason.INSUFFICIENT_WINDOWS,
+                    CoreRejectionReason.TOO_SHORT: RejectionReason.TOO_SHORT,
+                    CoreRejectionReason.SPARSE_DENSITY: RejectionReason.SPARSE_DENSITY,
+                }
+                suggested_segments.append(
+                    SuggestedDetectedSegment(
+                        segment_id=i + 1,
+                        start_time=sugg.start_time,
+                        end_time=sugg.end_time,
+                        start_frame=sugg.start_frame,
+                        end_frame=sugg.end_frame,
+                        duration=sugg.duration,
+                        rejection_reason=reason_map[sugg.rejection_reason],
+                        avg_confidence=sugg.avg_confidence,
+                        active_window_count=sugg.active_window_count,
+                        active_density=sugg.active_density,
                     )
                 )
 
@@ -161,6 +188,7 @@ class DetectionService:
                 status="completed",
                 video=video_meta,
                 segments=detected_segments,
+                suggested_segments=suggested_segments,
                 statistics=match_stats,
                 processing_time_seconds=processing_time,
                 created_at=datetime.utcnow(),
