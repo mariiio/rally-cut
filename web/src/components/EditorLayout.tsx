@@ -372,6 +372,7 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
             p: 3,
             minWidth: 0,
             position: 'relative',
+            overflow: 'hidden',
           }}
         >
           {/* Video Container */}
@@ -379,6 +380,7 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
             sx={{
               width: '100%',
               maxWidth: 1200,
+              maxHeight: '100%',
               display: 'flex',
               flexDirection: 'column',
             }}
