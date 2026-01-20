@@ -158,6 +158,7 @@ export function Timeline() {
     playbackRate,
     setPlaybackRate,
     cyclePlaybackRate,
+    toggleFullscreen,
   } = usePlayerStore();
   const timelineRef = useRef<TimelineState>(null);
   const timelineContainerRef = useRef<HTMLDivElement>(null);
@@ -461,11 +462,16 @@ export function Timeline() {
             cyclePlaybackRate('faster');
           }
           break;
+
+        case 'KeyF':
+          e.preventDefault();
+          toggleFullscreen();
+          break;
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, play, pause, seek, currentTime, duration, selectedRallyId, deleteConfirmId, removeRally, selectRally, isInsideSelectedRally, getSelectedRally, goToPrevRally, goToNextRally, adjustRallyStart, adjustRallyEnd, videoMetadata, rallies, createRallyAtTime, handleToggleHighlight, isLocked, isInCameraEditMode, selectedKeyframeId, removeKeyframe, selectKeyframe, isRecordingRally, startRallyRecording, stopRallyRecording, cancelRallyRecording, cyclePlaybackRate]);
+  }, [isPlaying, play, pause, seek, currentTime, duration, selectedRallyId, deleteConfirmId, removeRally, selectRally, isInsideSelectedRally, getSelectedRally, goToPrevRally, goToNextRally, adjustRallyStart, adjustRallyEnd, videoMetadata, rallies, createRallyAtTime, handleToggleHighlight, isLocked, isInCameraEditMode, selectedKeyframeId, removeKeyframe, selectKeyframe, isRecordingRally, startRallyRecording, stopRallyRecording, cancelRallyRecording, cyclePlaybackRate, toggleFullscreen]);
 
   // Jump to previous/next rally
   const jumpToPrevRally = useCallback(() => {
@@ -1494,6 +1500,7 @@ export function Timeline() {
             <HotkeyRow keys={['←', '→']} description="Seek ±1s" />
             <HotkeyRow keys={['⌘', '←', '→']} description="Jump to prev/next rally" />
             <HotkeyRow keys={['[', ']']} description="Slower / Faster" />
+            <HotkeyRow keys={['F']} description="Fullscreen" />
           </Stack>
 
           {/* Rally Creation */}

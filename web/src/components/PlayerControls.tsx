@@ -1,15 +1,17 @@
 'use client';
 
-import { Box, IconButton, Slider, Typography } from '@mui/material';
+import { Box, IconButton, Slider, Typography, Tooltip } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from '@mui/icons-material/Pause';
 import SkipPreviousIcon from '@mui/icons-material/SkipPrevious';
 import SkipNextIcon from '@mui/icons-material/SkipNext';
+import FullscreenIcon from '@mui/icons-material/Fullscreen';
+import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import { usePlayerStore } from '@/stores/playerStore';
 import { formatTime } from '@/utils/timeFormat';
 
 export function PlayerControls() {
-  const { isPlaying, currentTime, duration, togglePlay, seek } =
+  const { isPlaying, currentTime, duration, togglePlay, seek, isFullscreen, toggleFullscreen } =
     usePlayerStore();
 
   const handleSliderChange = (_: Event, value: number | number[]) => {
@@ -69,6 +71,14 @@ export function PlayerControls() {
         <Typography variant="body2" sx={{ ml: 2, fontFamily: 'monospace' }}>
           {formatTime(currentTime)} / {formatTime(duration)}
         </Typography>
+
+        <Box sx={{ flex: 1 }} />
+
+        <Tooltip title={isFullscreen ? 'Exit fullscreen (f)' : 'Fullscreen (f)'}>
+          <IconButton onClick={toggleFullscreen} size="small" color="inherit">
+            {isFullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
+          </IconButton>
+        </Tooltip>
       </Box>
     </Box>
   );
