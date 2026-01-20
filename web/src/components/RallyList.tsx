@@ -8,9 +8,6 @@ import {
   Chip,
   Stack,
   IconButton,
-  Popover,
-  Switch,
-  FormControlLabel,
   Button,
   Tooltip,
   CircularProgress,
@@ -41,6 +38,7 @@ import { formatTime, formatDuration } from '@/utils/timeFormat';
 import { Rally, Match } from '@/types/rally';
 import { designTokens } from '@/app/theme';
 import { ConfirmDialog } from './ConfirmDialog';
+import { ExportOptionsDialog, ExportOptions } from './ExportOptionsDialog';
 import { removeVideoFromSession, renameVideo, confirmRallies, getConfirmationStatus, restoreOriginalVideo } from '@/services/api';
 import { syncService } from '@/services/syncService';
 
@@ -82,9 +80,6 @@ export function RallyList() {
     new Set(activeMatchId ? [activeMatchId] : [])
   );
 
-  // Popover state for Download All
-  const [downloadAllAnchor, setDownloadAllAnchor] = useState<HTMLButtonElement | null>(null);
-  const [withFade, setWithFade] = useState(false);
 
   // Delete video dialog state
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -120,6 +115,12 @@ export function RallyList() {
   const [showRestoreDialog, setShowRestoreDialog] = useState(false);
   const [matchToRestore, setMatchToRestore] = useState<Match | null>(null);
   const [isRestoring, setIsRestoring] = useState(false);
+
+  // Export dialog state
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [exportType, setExportType] = useState<'match' | 'rally' | 'all'>('all');
+  const [matchToDownload, setMatchToDownload] = useState<Match | null>(null);
+  const [rallyToDownload, setRallyToDownload] = useState<Rally | null>(null);
 
   // Poll for confirmation status when confirming
   useEffect(() => {
@@ -211,18 +212,17 @@ export function RallyList() {
     [session, activeMatchId]
   );
 
-  // Server-side export for single rally (handles confirmed videos correctly)
-  const handleDownloadRally = useCallback((e: React.MouseEvent, rally: Rally, matchId: string) => {
+  // Open export dialog for single rally
+  const handleDownloadRallyClick = useCallback((e: React.MouseEvent, rally: Rally, matchId: string) => {
     e.stopPropagation();
     const match = session?.matches?.find(m => m.id === matchId);
     if (!session || !match || !match.s3Key) return;
 
-    downloadRallyServerSide(session.id, {
-      id: match.id,
-      s3Key: match.s3Key,
-      name: match.name,
-    }, rally);
-  }, [session, downloadRallyServerSide]);
+    setMatchToDownload(match);
+    setRallyToDownload(rally);
+    setExportType('rally');
+    setShowExportDialog(true);
+  }, [session]);
 
   // Sort active match rallies by start time - memoized
   const sortedRallies = useMemo(
@@ -242,17 +242,54 @@ export function RallyList() {
     [sortedRallies]
   );
 
-  // Server-side export for all rallies (handles confirmed videos correctly)
-  const handleDownloadAll = useCallback(() => {
-    if (!session || !activeMatch || !activeMatch.s3Key || !sortedRallies.length) return;
+  // Open export dialog for all rallies
+  const handleDownloadAllClick = useCallback(() => {
+    if (!activeMatch || !sortedRallies.length) return;
+    setMatchToDownload(activeMatch);
+    setRallyToDownload(null);
+    setExportType('all');
+    setShowExportDialog(true);
+  }, [activeMatch, sortedRallies]);
 
-    downloadAllRalliesServerSide(session.id, {
-      id: activeMatch.id,
-      s3Key: activeMatch.s3Key,
-      name: activeMatch.name,
-    }, sortedRallies);
-    setDownloadAllAnchor(null);
-  }, [session, activeMatch, sortedRallies, downloadAllRalliesServerSide]);
+  // Open export dialog for match (from video menu)
+  const handleDownloadMatchClick = useCallback((match: Match) => {
+    setMatchToDownload(match);
+    setRallyToDownload(null);
+    setExportType('match');
+    setShowExportDialog(true);
+  }, []);
+
+  // Handle export confirmation from dialog
+  const handleExportConfirm = useCallback((options: ExportOptions) => {
+    if (!session) return;
+
+    const match = matchToDownload;
+    if (!match || !match.s3Key) {
+      setShowExportDialog(false);
+      return;
+    }
+
+    const videoInfo = {
+      id: match.id,
+      s3Key: match.s3Key,
+      name: match.name,
+    };
+
+    if (exportType === 'rally' && rallyToDownload) {
+      downloadRallyServerSide(session.id, videoInfo, rallyToDownload, options);
+    } else {
+      // For match or all types, use the rallies from the match
+      const isActiveMatch = match.id === activeMatchId;
+      const ralliesToExport = isActiveMatch
+        ? sortedRallies
+        : [...match.rallies].sort((a, b) => a.start_time - b.start_time);
+      downloadAllRalliesServerSide(session.id, videoInfo, ralliesToExport, options);
+    }
+
+    setShowExportDialog(false);
+    setMatchToDownload(null);
+    setRallyToDownload(null);
+  }, [session, matchToDownload, rallyToDownload, exportType, activeMatchId, sortedRallies, downloadRallyServerSide, downloadAllRalliesServerSide]);
 
   const handleDeleteClick = useCallback((e: React.MouseEvent, match: Match) => {
     e.stopPropagation(); // Don't toggle expand/collapse
@@ -384,8 +421,8 @@ export function RallyList() {
             <span>
               <IconButton
                 size="small"
-                disabled={!activeMatch || isExporting}
-                onClick={(e) => setDownloadAllAnchor(e.currentTarget)}
+                disabled={!activeMatch || isExporting || sortedRallies.length === 0}
+                onClick={handleDownloadAllClick}
                 sx={{
                   color: exportingAll ? 'primary.main' : 'text.secondary',
                 }}
@@ -401,44 +438,6 @@ export function RallyList() {
         </Box>
       )}
 
-
-      {/* Download All Popover */}
-      <Popover
-        open={Boolean(downloadAllAnchor)}
-        anchorEl={downloadAllAnchor}
-        onClose={() => setDownloadAllAnchor(null)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-      >
-        <Box sx={{ p: 2, minWidth: 200 }}>
-          <Typography variant="subtitle2" sx={{ mb: 1.5 }}>
-            Export Options
-          </Typography>
-          <FormControlLabel
-            control={
-              <Switch
-                size="small"
-                checked={withFade}
-                onChange={(e) => setWithFade(e.target.checked)}
-              />
-            }
-            label={
-              <Typography variant="body2">Add fade (0.5s)</Typography>
-            }
-          />
-          <Button
-            fullWidth
-            variant="contained"
-            size="small"
-            startIcon={<FileDownloadIcon />}
-            onClick={handleDownloadAll}
-            disabled={isExporting}
-            sx={{ mt: 2 }}
-          >
-            Download All
-          </Button>
-        </Box>
-      </Popover>
 
       {/* Match list with collapsible rallies */}
       <Box sx={{ flex: 1, overflow: 'auto' }}>
@@ -750,7 +749,7 @@ export function RallyList() {
       >
         <MenuItem
           onClick={(e) => {
-            handleDownloadRally(e, rallyMenuAnchor!.rally, rallyMenuAnchor!.matchId);
+            handleDownloadRallyClick(e, rallyMenuAnchor!.rally, rallyMenuAnchor!.matchId);
             setRallyMenuAnchor(null);
           }}
           disabled={isExporting}
@@ -820,6 +819,28 @@ export function RallyList() {
             <DeleteIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText>Remove from session</ListItemText>
+        </MenuItem>
+        <Divider />
+        <MenuItem
+          onClick={() => {
+            if (videoMenuAnchor) {
+              handleDownloadMatchClick(videoMenuAnchor.match);
+            }
+            setVideoMenuAnchor(null);
+          }}
+          disabled={(videoMenuAnchor?.match.rallies.length ?? 0) === 0 || isExporting}
+        >
+          <ListItemIcon>
+            <FileDownloadIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText
+            primary="Download Match"
+            secondary={
+              (videoMenuAnchor?.match.rallies.length ?? 0) === 0
+                ? 'No rallies'
+                : `${videoMenuAnchor?.match.rallies.length} rallies`
+            }
+          />
         </MenuItem>
         <Divider />
         {confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'CONFIRMED' ? (
@@ -973,6 +994,36 @@ export function RallyList() {
           setShowRestoreDialog(false);
           setMatchToRestore(null);
         }}
+      />
+
+      {/* Export options dialog */}
+      <ExportOptionsDialog
+        open={showExportDialog}
+        onClose={() => {
+          setShowExportDialog(false);
+          setMatchToDownload(null);
+          setRallyToDownload(null);
+        }}
+        onExport={handleExportConfirm}
+        title={
+          exportType === 'rally'
+            ? 'Download Rally'
+            : exportType === 'match'
+            ? 'Download Match'
+            : 'Download All Rallies'
+        }
+        rallies={
+          exportType === 'rally' && rallyToDownload
+            ? [rallyToDownload]
+            : matchToDownload
+            ? matchToDownload.id === activeMatchId
+              ? sortedRallies
+              : matchToDownload.rallies
+            : []
+        }
+        videoId={matchToDownload?.id}
+        showFadeOption={exportType !== 'rally'}
+        isExporting={isExporting}
       />
     </Box>
   );

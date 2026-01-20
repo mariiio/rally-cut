@@ -8,10 +8,6 @@ import {
   Chip,
   TextField,
   Tooltip,
-  Popover,
-  Switch,
-  FormControlLabel,
-  Button,
   CircularProgress,
   Stack,
   Collapse,
@@ -57,10 +53,11 @@ import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useExportStore } from '@/stores/exportStore';
 import { Rally } from '@/types/rally';
-import { RallyWithSource, FADE_DURATION } from '@/utils/videoExport';
+import { RallyWithSource } from '@/utils/videoExport';
 import { designTokens } from '@/app/theme';
 import { NamePromptModal } from './NamePromptModal';
 import { ConfirmDialog } from './ConfirmDialog';
+import { ExportOptionsDialog, ExportOptions } from './ExportOptionsDialog';
 
 // Helper to create composite ID for drag and drop
 function createDragId(highlightId: string, rallyId: string): string {
@@ -341,8 +338,7 @@ export function HighlightsPanel() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-  const [downloadAnchor, setDownloadAnchor] = useState<{ el: HTMLButtonElement; id: string } | null>(null);
-  const [withFade, setWithFade] = useState(false);
+  const [highlightToDownload, setHighlightToDownload] = useState<string | null>(null);
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [overHighlightId, setOverHighlightId] = useState<string | null>(null);
   // Track preselected rally per highlight (highlightId -> rallyId)
@@ -575,15 +571,15 @@ export function HighlightsPanel() {
     setDeleteConfirmId(null);
   }, []);
 
-  const handleDownloadClick = useCallback((highlightId: string, e: React.MouseEvent<HTMLButtonElement>) => {
-    e.stopPropagation();
-    setDownloadAnchor({ el: e.currentTarget, id: highlightId });
+  const handleDownloadClick = useCallback((highlightId: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setHighlightToDownload(highlightId);
   }, []);
 
-  const handleDownload = useCallback(() => {
-    if (!downloadAnchor) return;
+  const handleDownload = useCallback((options: ExportOptions) => {
+    if (!highlightToDownload) return;
 
-    const highlight = highlights?.find((h) => h.id === downloadAnchor.id);
+    const highlight = highlights?.find((h) => h.id === highlightToDownload);
     if (!highlight) return;
 
     // Build rallies with their video sources from their respective matches
@@ -601,9 +597,9 @@ export function HighlightsPanel() {
 
     if (ralliesWithSource.length === 0) return;
 
-    downloadHighlight(ralliesWithSource, highlight.id, highlight.name, withFade);
-    setDownloadAnchor(null);
-  }, [downloadAnchor, highlights, allRallies, getRallyMatch, videoSource, withFade, downloadHighlight]);
+    downloadHighlight(ralliesWithSource, highlight.id, highlight.name, options.withFade);
+    setHighlightToDownload(null);
+  }, [highlightToDownload, highlights, allRallies, getRallyMatch, videoSource, downloadHighlight]);
 
   // Empty state
   if (!highlights || highlights.length === 0) {
@@ -933,9 +929,9 @@ export function HighlightsPanel() {
 
         {/* Download */}
         <MenuItem
-          onClick={(e) => {
+          onClick={() => {
             if (highlightMenuAnchor) {
-              setDownloadAnchor({ el: highlightMenuAnchor.el as HTMLButtonElement, id: highlightMenuAnchor.highlight.id });
+              handleDownloadClick(highlightMenuAnchor.highlight.id);
             }
             setHighlightMenuAnchor(null);
           }}
@@ -968,43 +964,22 @@ export function HighlightsPanel() {
         )}
       </Menu>
 
-      {/* Download Popover */}
-      <Popover
-        open={Boolean(downloadAnchor)}
-        anchorEl={downloadAnchor?.el}
-        onClose={() => setDownloadAnchor(null)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-      >
-        <Box sx={{ p: 2, minWidth: 200 }}>
-          <Typography variant="subtitle2" sx={{ mb: 1.5 }}>
-            Export Options
-          </Typography>
-          <FormControlLabel
-            control={
-              <Switch
-                size="small"
-                checked={withFade}
-                onChange={(e) => setWithFade(e.target.checked)}
-              />
-            }
-            label={
-              <Typography variant="body2">Add fade ({FADE_DURATION}s)</Typography>
-            }
-          />
-          <Button
-            fullWidth
-            variant="contained"
-            size="small"
-            startIcon={<FileDownloadIcon />}
-            onClick={handleDownload}
-            disabled={isExporting}
-            sx={{ mt: 2 }}
-          >
-            Download
-          </Button>
-        </Box>
-      </Popover>
+      {/* Export Options Dialog */}
+      <ExportOptionsDialog
+        open={highlightToDownload !== null}
+        onClose={() => setHighlightToDownload(null)}
+        onExport={handleDownload}
+        title="Download Highlight"
+        rallies={
+          highlightToDownload
+            ? (highlights?.find(h => h.id === highlightToDownload)?.rallyIds
+                .map(id => allRallies.find(r => r.id === id))
+                .filter((r): r is Rally => r !== undefined)) ?? []
+            : []
+        }
+        showFadeOption={true}
+        isExporting={isExporting}
+      />
 
       {/* Name Prompt Modal */}
       <NamePromptModal

@@ -1377,17 +1377,36 @@ export interface ExportJobResponse {
   updatedAt: string;
 }
 
+// Camera keyframe for export (matches backend schema)
+export interface ExportCameraKeyframe {
+  timeOffset: number;
+  positionX: number;
+  positionY: number;
+  zoom: number;
+  rotation: number;
+  easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT';
+}
+
+// Camera edit configuration for export
+export interface ExportCameraEdit {
+  aspectRatio: 'ORIGINAL';
+  keyframes: ExportCameraKeyframe[];
+}
+
 export interface CreateExportJobRequest {
   sessionId: string;
   tier?: ExportTier;
   config?: {
     format?: 'mp4' | 'webm';
+    quality?: 'original' | '720p';
+    withFade?: boolean;
   };
   rallies: Array<{
     videoId: string;
     videoS3Key: string;
     startMs: number;
     endMs: number;
+    camera?: ExportCameraEdit;
   }>;
 }
 

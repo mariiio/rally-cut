@@ -11,11 +11,29 @@ import {
 
 const router = Router();
 
+// Camera keyframe schema for export
+const cameraKeyframeSchema = z.object({
+  timeOffset: z.number().min(0).max(1),
+  positionX: z.number().min(0).max(1),
+  positionY: z.number().min(0).max(1),
+  zoom: z.number().min(0.5).max(3),
+  rotation: z.number().min(-30).max(30),
+  easing: z.enum(["LINEAR", "EASE_IN", "EASE_OUT", "EASE_IN_OUT"]),
+});
+
+// Camera edit schema for export (only ORIGINAL aspect ratio supported)
+const cameraEditSchema = z.object({
+  aspectRatio: z.literal("ORIGINAL"),
+  keyframes: z.array(cameraKeyframeSchema),
+});
+
 const createExportJobSchema = z.object({
   sessionId: uuidSchema,
   // tier is intentionally NOT accepted from client - determined by backend from user
   config: z.object({
     format: z.enum(["mp4", "webm"]).default("mp4"),
+    quality: z.enum(["original", "720p"]).optional(),
+    withFade: z.boolean().optional(),
   }),
   rallies: z.array(
     z.object({
@@ -23,6 +41,7 @@ const createExportJobSchema = z.object({
       videoS3Key: z.string(),
       startMs: z.number().int().min(0),
       endMs: z.number().int().min(0),
+      camera: cameraEditSchema.optional(),
     })
   ),
 });
