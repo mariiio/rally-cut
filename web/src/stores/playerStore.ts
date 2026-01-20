@@ -24,12 +24,16 @@ interface PlayerState {
   applyCameraEdits: boolean; // Apply camera edits during playback
   bufferedRanges: BufferedRange[]; // Which parts of the video are buffered
   playbackRate: number; // Playback speed (0.5, 1, 2)
+  isFullscreen: boolean; // Whether video is in fullscreen mode
 
   // Highlight playback state
   playingHighlightId: string | null;
   highlightPlaylist: PlaylistRally[]; // Stable list of rallies to play
   highlightRallyIndex: number;
   pendingMatchSwitch: string | null; // Match ID we're switching to
+
+  // Fullscreen toggle function (registered by VideoPlayer)
+  _toggleFullscreenFn: (() => void) | null;
 
   // Actions
   play: () => void;
@@ -46,6 +50,9 @@ interface PlayerState {
   setApplyCameraEdits: (apply: boolean) => void;
   setPlaybackRate: (rate: number) => void;
   cyclePlaybackRate: (direction: 'faster' | 'slower') => void;
+  setFullscreen: (value: boolean) => void;
+  toggleFullscreen: () => void;
+  registerToggleFullscreen: (fn: () => void) => void;
 
   // Highlight playback actions
   startHighlightPlayback: (highlightId: string, playlist: PlaylistRally[], startIndex?: number) => void;
@@ -66,12 +73,16 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   applyCameraEdits: true,
   bufferedRanges: [],
   playbackRate: 1,
+  isFullscreen: false,
 
   // Highlight playback state
   playingHighlightId: null,
   highlightPlaylist: [],
   highlightRallyIndex: 0,
   pendingMatchSwitch: null,
+
+  // Fullscreen toggle function (registered by VideoPlayer)
+  _toggleFullscreenFn: null,
 
   play: () => set({ isPlaying: true }),
   pause: () => set({ isPlaying: false }),
@@ -128,6 +139,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       : Math.max(0, idx - 1);
     get().setPlaybackRate(rates[newIdx]);
   },
+
+  setFullscreen: (value) => set({ isFullscreen: value }),
+
+  toggleFullscreen: () => {
+    const fn = get()._toggleFullscreenFn;
+    if (fn) fn();
+  },
+
+  registerToggleFullscreen: (fn) => set({ _toggleFullscreenFn: fn }),
 
   // Highlight playback actions
   startHighlightPlayback: (highlightId: string, playlist: PlaylistRally[], startIndex = 0) => {

@@ -18,6 +18,7 @@ import { CropMaskOverlay } from './CropMaskOverlay';
 export function VideoPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoContainerRef = useRef<HTMLDivElement>(null);
+  const fullscreenContainerRef = useRef<HTMLDivElement>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
   const [bufferProgress, setBufferProgress] = useState(0);
@@ -60,6 +61,8 @@ export function VideoPlayer() {
   const applyCameraEdits = usePlayerStore((state) => state.applyCameraEdits);
   const currentTime = usePlayerStore((state) => state.currentTime);
   const playbackRate = usePlayerStore((state) => state.playbackRate);
+  const setFullscreen = usePlayerStore((state) => state.setFullscreen);
+  const registerToggleFullscreen = usePlayerStore((state) => state.registerToggleFullscreen);
 
   // Camera state
   const cameraEdits = useCameraStore((state) => state.cameraEdits);
@@ -488,6 +491,29 @@ export function VideoPlayer() {
     setIsBuffering(false);
   }, []);
 
+  // Fullscreen toggle function
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      fullscreenContainerRef.current?.requestFullscreen();
+    }
+  }, []);
+
+  // Register fullscreen toggle with store and sync fullscreen state
+  useEffect(() => {
+    registerToggleFullscreen(toggleFullscreen);
+
+    const handleFullscreenChange = () => {
+      setFullscreen(!!document.fullscreenElement);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, [toggleFullscreen, registerToggleFullscreen, setFullscreen]);
+
   const handleEmptyStateClick = () => {
     // Trigger file upload via EditorHeader's exposed function
     const triggerFn = (window as unknown as { triggerVideoUpload?: () => void }).triggerVideoUpload;
@@ -571,6 +597,7 @@ export function VideoPlayer() {
 
   return (
     <Box
+      ref={fullscreenContainerRef}
       sx={{
         width: '100%',
         display: 'flex',
