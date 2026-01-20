@@ -62,6 +62,7 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
 
   // Player state
   const currentTime = usePlayerStore((state) => state.currentTime);
+  const isFullscreen = usePlayerStore((state) => state.isFullscreen);
 
   // Camera state
   const cameraEdit = useCameraStore(selectCameraEdit(selectedRallyId));
@@ -101,12 +102,13 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
   const isGlobalMode = !selectedRallyId && activeMatchId;
 
   // Show overlay when:
+  // - Not in fullscreen mode, AND
   // - In camera edit mode (isCameraTabActive) with a rally selected, OR
   // - Rally with camera edits is selected (for quick editing), unless user exited edit mode for this rally, OR
   // - In global mode (no rally selected) with zoom or rotation that makes position dragging useful
-  const isActive = (selectedRallyId && selectedRally && (
+  const isActive = !isFullscreen && ((selectedRallyId && selectedRally && (
     isCameraTabActive || (hasCameraEdits && exitedForRally !== selectedRallyId)
-  )) || (isGlobalMode && canDragInGlobalMode);
+  )) || (isGlobalMode && canDragInGlobalMode));
 
   // Get aspect ratio
   const aspectRatio: AspectRatio = cameraEdit?.aspectRatio ?? 'ORIGINAL';
