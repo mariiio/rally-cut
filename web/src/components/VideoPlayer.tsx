@@ -139,12 +139,6 @@ export function VideoPlayer() {
 
   // Calculate camera state and video transform style
   const { videoTransformStyle, cameraState: currentCameraState } = useMemo(() => {
-    // During playback with keyframes, RAF controls the transform directly via DOM manipulation
-    // Return empty styles so React doesn't interfere - RAF updates lastCameraStateRef
-    if (isPlaying && hasCameraKeyframes) {
-      return { videoTransformStyle: {}, cameraState: DEFAULT_CAMERA_STATE };
-    }
-
     // If no camera preview and no global settings, return defaults
     if (!shouldApplyCamera) {
       return { videoTransformStyle: {}, cameraState: DEFAULT_CAMERA_STATE };
@@ -215,7 +209,7 @@ export function VideoPlayer() {
       videoTransformStyle: transform,
       cameraState: effectiveState,
     };
-  }, [shouldApplyCamera, currentRally, hasCameraKeyframes, hasGlobalCameraSettings, currentCameraEdit, currentTime, dragPosition, combineWithGlobal, isPlaying]);
+  }, [shouldApplyCamera, currentRally, hasCameraKeyframes, hasGlobalCameraSettings, currentCameraEdit, currentTime, dragPosition, combineWithGlobal]);
 
   // Get container aspect ratio - show aspect ratio even without keyframes when preview is on
   const containerAspectRatio = useMemo(() => {
@@ -825,14 +819,14 @@ export function VideoPlayer() {
               willChange: 'transform',
               // CSS transition smooths between video frame updates
               transition: isPlaying && hasCameraKeyframes ? 'transform 60ms ease-out' : 'none',
-              ...(isPlaying && hasCameraKeyframes ? {} : videoTransformStyle),
+              ...videoTransformStyle,
             } : {
               position: 'absolute',
               inset: 0,
               willChange: isCameraPreviewActive ? 'transform' : 'auto',
               // CSS transition smooths between video frame updates
               transition: isPlaying && hasCameraKeyframes ? 'transform 60ms ease-out' : 'none',
-              ...(isPlaying && hasCameraKeyframes ? {} : videoTransformStyle),
+              ...videoTransformStyle,
             }}
           >
             <video
