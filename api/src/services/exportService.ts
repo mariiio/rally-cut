@@ -19,18 +19,36 @@ const lambdaClient = new LambdaClient({
 type ExportQuality = "original" | "720p";
 
 /**
- * Determine export quality for a video based on tier and upload age.
+ * Determine export quality for a video based on tier, upload age, and user preference.
  * FREE users get original quality exports for their grace period (originalQualityDays), then 720p.
  * PRO and ELITE users get original quality based on their tier's originalQualityDays.
+ * User can request lower quality (720p) but cannot request original if not allowed by tier.
  */
-function getExportQuality(tier: UserTier, videoCreatedAt: Date): ExportQuality {
+function getExportQuality(
+  tier: UserTier,
+  videoCreatedAt: Date,
+  userRequestedQuality?: ExportQuality
+): ExportQuality {
   const limits = getTierLimits(tier);
 
-  // If tier has no original quality limit (null), always use original
+  // If user explicitly requested 720p, honor that
+  if (userRequestedQuality === "720p") {
+    return "720p";
+  }
+
+  // If tier has no original quality limit (null), always allow original
   if (limits.originalQualityDays === null) return "original";
 
+  // Check if within grace period
   const daysSinceUpload = (Date.now() - videoCreatedAt.getTime()) / (24 * 60 * 60 * 1000);
-  return daysSinceUpload <= limits.originalQualityDays ? "original" : "720p";
+  const withinGracePeriod = daysSinceUpload <= limits.originalQualityDays;
+
+  // FREE tier cannot get original quality after grace period
+  if (userRequestedQuality === "original" && !limits.lambdaExportEnabled && !withinGracePeriod) {
+    return "720p";
+  }
+
+  return withinGracePeriod ? "original" : "720p";
 }
 
 // Check if we should use local FFmpeg (development mode)
@@ -57,8 +75,7 @@ interface CameraKeyframe {
 }
 
 interface CameraEdit {
-  enabled: boolean;
-  aspectRatio: "ORIGINAL" | "VERTICAL";
+  aspectRatio: "ORIGINAL" | "VERTICAL";  // VERTICAL reserved for future use
   keyframes: CameraKeyframe[];
 }
 
@@ -67,6 +84,8 @@ interface CreateExportJobInput {
   // tier is NOT in input - determined by backend from user
   config: {
     format: "mp4" | "webm";
+    quality?: ExportQuality;  // User requested quality
+    withFade?: boolean;       // Add fade between rallies
   };
   rallies: Array<{
     videoId: string;
@@ -102,16 +121,17 @@ interface ExportTriggerInput {
  * @param durationSec - Rally duration in seconds
  * @param inputWidth - Source video width (default 1920)
  * @param inputHeight - Source video height (default 1080)
+ * @param targetHeight - Optional target output height (e.g., 720 for 720p)
  * @returns FFmpeg -vf filter string
  */
 function generateCameraFilter(
   camera: CameraEdit,
   durationSec: number,
   inputWidth = 1920,
-  inputHeight = 1080
+  inputHeight = 1080,
+  targetHeight?: number
 ): string {
-  const fps = 30;
-  const totalFrames = Math.ceil(durationSec * fps);
+  // Use time-based expressions (t) instead of frame-based (n) to be FPS-independent
 
   // Calculate output dimensions based on aspect ratio
   let outputWidth: number;
@@ -133,7 +153,8 @@ function generateCameraFilter(
   if (!keyframes || keyframes.length === 0) {
     const x = Math.round((inputWidth - outputWidth) / 2);
     const y = Math.round((inputHeight - outputHeight) / 2);
-    return `crop=${outputWidth}:${outputHeight}:${x}:${y}`;
+    const scaleExpr = targetHeight ? `,scale=-2:${targetHeight}` : '';
+    return `crop=${outputWidth}:${outputHeight}:${x}:${y}${scaleExpr}`;
   }
 
   // Sort keyframes by time
@@ -150,7 +171,10 @@ function generateCameraFilter(
     const maxY = inputHeight - croppedH;
     const x = Math.round(kf.positionX * maxX);
     const y = Math.round(kf.positionY * maxY);
-    let filter = `crop=${croppedW}:${croppedH}:${x}:${y},scale=${outputWidth}:${outputHeight}`;
+    const scaleExpr = targetHeight
+      ? `scale=-2:${targetHeight}`
+      : `scale=${outputWidth}:${outputHeight}`;
+    let filter = `crop=${croppedW}:${croppedH}:${x}:${y},${scaleExpr}`;
     // Add rotation filter if non-zero (angle in radians, fill with transparent black)
     if (Math.abs(rotation) > 0.01) {
       const angleRad = rotation * Math.PI / 180;
@@ -176,97 +200,72 @@ function generateCameraFilter(
     }
   };
 
-  // Generate expressions for x, y positions and zoom
-  // FFmpeg uses 'n' for frame number in expressions
-  const segments: string[] = [];
-
-  for (let i = 0; i < sortedKeyframes.length - 1; i++) {
-    const kf1 = sortedKeyframes[i];
-    const kf2 = sortedKeyframes[i + 1];
-
-    const frame1 = Math.round(kf1.timeOffset * totalFrames);
-    const frame2 = Math.round(kf2.timeOffset * totalFrames);
-
-    // Linear interpolation with easing
-    const tExpr = `((n-${frame1})/${Math.max(1, frame2 - frame1)})`;
-    const easedT = easingExpr(tExpr, kf2.easing);
-
-    // Interpolate zoom
-    const z1 = Math.max(1, Math.min(3, kf1.zoom));
-    const z2 = Math.max(1, Math.min(3, kf2.zoom));
-    const zoomExpr = `(${z1}+${easedT}*(${z2}-${z1}))`;
-
-    // Interpolate position (0-1 normalized)
-    const px1 = kf1.positionX;
-    const px2 = kf2.positionX;
-    const py1 = kf1.positionY;
-    const py2 = kf2.positionY;
-    const pxExpr = `(${px1}+${easedT}*(${px2}-${px1}))`;
-    const pyExpr = `(${py1}+${easedT}*(${py2}-${py1}))`;
-
-    // Width/height expressions accounting for zoom
-    const wExpr = `floor(${outputWidth}/${zoomExpr})`;
-    const hExpr = `floor(${outputHeight}/${zoomExpr})`;
-
-    // X/Y position expressions (position is relative to valid crop area)
-    const xExpr = `floor(${pxExpr}*(${inputWidth}-${wExpr}))`;
-    const yExpr = `floor(${pyExpr}*(${inputHeight}-${hExpr}))`;
-
-    segments.push({
-      frame1,
-      frame2,
-      wExpr,
-      hExpr,
-      xExpr,
-      yExpr,
-    } as unknown as string); // We'll process this differently
-  }
-
-  // For simplicity with complex expressions, we'll use a simpler approach:
-  // Generate a static filter based on first keyframe if expressions get too complex
-  // FFmpeg expressions have limits on complexity
-
-  // Simplified approach: Use zoompan filter which handles this better
-  // Format: zoompan=z='zoom_expr':x='x_expr':y='y_expr':d=frames:s=WxH:fps=fps
-
-  // Build zoom, x, y expressions as piecewise
+  // Build zoom, x, y expressions as piecewise using time (t) instead of frame number (n)
+  // This makes the filter FPS-independent
   const buildPiecewiseExpr = (
     keyframes: CameraKeyframe[],
     getValue: (kf: CameraKeyframe) => number,
-    totalFrames: number
+    durationSec: number
   ): string => {
     if (keyframes.length === 1) {
       return String(getValue(keyframes[0]));
     }
 
-    let expr = "";
-    for (let i = keyframes.length - 2; i >= 0; i--) {
+    // Check if all values are the same (constant) - no interpolation needed
+    const values = keyframes.map(getValue);
+    const allSame = values.every(v => Math.abs(v - values[0]) < 0.0001);
+    if (allSame) {
+      return String(values[0]);
+    }
+
+    // Build piecewise expression with proper segment boundaries
+    // Each segment: if(lt(t, endTime), segmentExpr, nextSegment)
+    // Using time (t) in seconds for FPS independence
+    const segments: Array<{ endTime: number; expr: string }> = [];
+
+    for (let i = 0; i < keyframes.length - 1; i++) {
       const kf1 = keyframes[i];
       const kf2 = keyframes[i + 1];
-      const frame1 = Math.round(kf1.timeOffset * totalFrames);
-      const frame2 = Math.round(kf2.timeOffset * totalFrames);
+      // Convert timeOffset (0-1) to actual time in seconds
+      const time1 = kf1.timeOffset * durationSec;
+      const time2 = kf2.timeOffset * durationSec;
       const v1 = getValue(kf1);
       const v2 = getValue(kf2);
 
-      const tExpr = `(on-${frame1})/${Math.max(1, frame2 - frame1)}`;
-      const easedT = easingExpr(tExpr, kf2.easing);
-      const interpExpr = `${v1}+${easedT}*(${v2}-${v1})`;
-
-      if (i === keyframes.length - 2) {
-        // Last segment (innermost)
-        expr = `if(lt(on,${frame1}),${v1},${interpExpr})`;
-      } else {
-        // Wrap with condition for this segment
-        expr = `if(lt(on,${frame1}),${v1},if(lt(on,${frame2}),${interpExpr},${expr}))`;
+      // If values are the same, use constant for this segment
+      if (Math.abs(v2 - v1) < 0.0001) {
+        segments.push({ endTime: time2, expr: String(v1) });
+        continue;
       }
+
+      const timeDiff = Math.max(0.001, time2 - time1);
+      // Linear interpolation: progress = (t - start) / (end - start), clamped to [0,1]
+      const progressExpr = `min(1,max(0,(t-${time1.toFixed(4)})/${timeDiff.toFixed(4)}))`;
+      const interpExpr = `(${v1}+${progressExpr}*(${v2}-${v1}))`;
+
+      segments.push({ endTime: time2, expr: interpExpr });
     }
-    return expr || String(getValue(keyframes[0]));
+
+    if (segments.length === 0) {
+      return String(values[0]);
+    }
+
+    // Build final expression from inside out:
+    // if(lt(t,t1),expr1,if(lt(t,t2),expr2,...,lastValue))
+    const lastValue = getValue(keyframes[keyframes.length - 1]);
+    let expr = String(lastValue);
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const seg = segments[i];
+      expr = `if(lt(t,${seg.endTime.toFixed(4)}),${seg.expr},${expr})`;
+    }
+
+    return expr;
   };
 
-  const zoomExpr = buildPiecewiseExpr(sortedKeyframes, kf => Math.max(1, Math.min(3, kf.zoom)), totalFrames);
-  const pxExpr = buildPiecewiseExpr(sortedKeyframes, kf => kf.positionX, totalFrames);
-  const pyExpr = buildPiecewiseExpr(sortedKeyframes, kf => kf.positionY, totalFrames);
-  const rotExpr = buildPiecewiseExpr(sortedKeyframes, kf => kf.rotation ?? 0, totalFrames);
+  const zoomExpr = buildPiecewiseExpr(sortedKeyframes, kf => Math.max(1, Math.min(3, kf.zoom)), durationSec);
+  const pxExpr = buildPiecewiseExpr(sortedKeyframes, kf => kf.positionX, durationSec);
+  const pyExpr = buildPiecewiseExpr(sortedKeyframes, kf => kf.positionY, durationSec);
+  const rotExpr = buildPiecewiseExpr(sortedKeyframes, kf => kf.rotation ?? 0, durationSec);
 
   // Check if any keyframe has non-zero rotation
   const hasRotation = sortedKeyframes.some(kf => Math.abs(kf.rotation ?? 0) > 0.01);
@@ -285,7 +284,11 @@ function generateCameraFilter(
   const hExprFinal = `floor(${baseH}/(${zoomExpr}))`;
 
   // Use crop with expressions, then scale to output size
-  let filter = `crop=w='${wExprFinal}':h='${hExprFinal}':x='${xExprFinal}':y='${yExprFinal}',scale=${outputWidth}:${outputHeight}`;
+  // If targetHeight specified, scale to that (maintaining aspect ratio)
+  const scaleExpr = targetHeight
+    ? `scale=-2:${targetHeight}`
+    : `scale=${outputWidth}:${outputHeight}`;
+  let filter = `crop=w='${wExprFinal}':h='${hExprFinal}':x='${xExprFinal}':y='${yExprFinal}',${scaleExpr}`;
 
   // Add rotation filter if any keyframe has rotation
   // Convert degrees to radians: angle * PI / 180
@@ -301,6 +304,16 @@ export async function createExportJob(
   userId: string,
   input: CreateExportJobInput
 ) {
+  console.log('[EXPORT] Received export request:', JSON.stringify({
+    config: input.config,
+    ralliesCount: input.rallies.length,
+    rallies: input.rallies.map(r => ({
+      videoId: r.videoId,
+      hasCamera: !!r.camera,
+      cameraKeyframes: r.camera?.keyframes?.length ?? 0,
+    })),
+  }, null, 2));
+
   // Get user's actual tier - don't trust frontend tier parameter
   const userTier = await getUserTier(userId);
   const limits = getTierLimits(userTier);
@@ -356,11 +369,16 @@ export async function createExportJob(
   const confirmationMap = new Map(confirmations.map((c) => [c.videoId, c]));
 
   // Add exportQuality and reverse-map timestamps for confirmed videos
+  const userRequestedQuality = input.config.quality;
+  console.log(`[EXPORT] User requested quality: ${userRequestedQuality}, tier: ${effectiveTier}`);
+
   const ralliesWithQuality = input.rallies.map((rally) => {
     const videoCreatedAt = videoCreatedAtMap.get(rally.videoId);
     const exportQuality = videoCreatedAt
-      ? getExportQuality(effectiveTier, videoCreatedAt)
+      ? getExportQuality(effectiveTier, videoCreatedAt, userRequestedQuality)
       : "720p"; // Default to 720p if video not found
+
+    console.log(`[EXPORT] Rally quality: requested=${userRequestedQuality}, effective=${exportQuality}, hasCamera=${!!rally.camera}, keyframes=${rally.camera?.keyframes?.length ?? 0}`);
 
     // Check if this video is confirmed
     const confirmation = confirmationMap.get(rally.videoId);
@@ -510,7 +528,7 @@ async function triggerLocalExport(
       const durationSec = (rally.endMs - rally.startMs) / 1000;
 
       // Check if this rally has camera edits
-      const hasCamera = rally.camera?.enabled && rally.camera?.keyframes?.length > 0;
+      const hasCamera = rally.camera?.keyframes && rally.camera.keyframes.length > 0;
 
       console.log(`[LOCAL EXPORT] Extracting clip ${i + 1}/${input.rallies.length}${hasCamera ? ' with camera effects' : ''}...`);
 
@@ -519,11 +537,9 @@ async function triggerLocalExport(
 
       if (hasCamera) {
         // Camera edits require re-encoding
-        const cameraFilter = generateCameraFilter(rally.camera!, durationSec);
-        // If 720p quality, add scale filter after camera filter
-        const vf = quality === "720p"
-          ? `${cameraFilter},scale=-2:720`
-          : cameraFilter;
+        // Pass target height for 720p quality to avoid double scaling
+        const targetHeight = quality === "720p" ? 720 : undefined;
+        const vf = generateCameraFilter(rally.camera!, durationSec, 1920, 1080, targetHeight);
         console.log(`[LOCAL EXPORT] Camera filter (${quality}): ${vf}`);
 
         await runFFmpeg([
@@ -691,8 +707,8 @@ async function triggerExportLambda(jobId: string, input: ExportTriggerInput) {
       startMs: r.startMs,
       endMs: r.endMs,
       exportQuality: r.exportQuality, // Per-rally quality based on video age
-      // Include camera edit if present and enabled
-      ...(r.camera?.enabled && {
+      // Include camera edit if present
+      ...(r.camera?.keyframes?.length && {
         camera: {
           aspectRatio: r.camera.aspectRatio,
           keyframes: r.camera.keyframes,

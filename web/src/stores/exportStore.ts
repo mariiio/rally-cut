@@ -17,6 +17,14 @@ import {
   getExportJobStatus,
   getExportDownloadUrl,
 } from '@/services/api';
+import { useCameraStore } from './cameraStore';
+
+// Export options from dialog
+export interface ExportOptions {
+  quality: 'original' | '720p';
+  applyCameraEdits: boolean;
+  withFade: boolean;
+}
 
 const BROWSER_NOT_SUPPORTED_ERROR =
   'Your browser does not support video export. Please use a modern browser like Chrome, Firefox, or Edge.';
@@ -57,12 +65,14 @@ interface ExportState {
   downloadRallyServerSide: (
     sessionId: string,
     video: ExportVideoInfo,
-    rally: Rally
+    rally: Rally,
+    options?: ExportOptions
   ) => Promise<void>;
   downloadAllRalliesServerSide: (
     sessionId: string,
     video: ExportVideoInfo,
-    rallies: Rally[]
+    rallies: Rally[],
+    options?: ExportOptions
   ) => Promise<void>;
 
   cancel: () => void;
@@ -257,7 +267,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
   },
 
   // Server-side export for single rally (handles confirmed videos)
-  downloadRallyServerSide: async (sessionId: string, video: ExportVideoInfo, rally: Rally) => {
+  downloadRallyServerSide: async (sessionId: string, video: ExportVideoInfo, rally: Rally, options?: ExportOptions) => {
     if (get().isExporting) {
       return;
     }
@@ -279,17 +289,61 @@ export const useExportStore = create<ExportState>((set, get) => ({
       const startMs = Math.round(rally.start_time * 1000);
       const endMs = Math.round(rally.end_time * 1000);
 
+      // Get camera edits if applicable
+      const cameraStore = useCameraStore.getState();
+      let camera: { aspectRatio: 'ORIGINAL'; keyframes: Array<{ timeOffset: number; positionX: number; positionY: number; zoom: number; rotation: number; easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT' }> } | undefined;
+
+      if (options?.applyCameraEdits) {
+        const globalSettings = cameraStore.getGlobalSettings(video.id);
+        const rallyCameraEdit = cameraStore.cameraEdits[rally.id];
+
+        // Only use ORIGINAL aspect ratio keyframes (VERTICAL not supported for export)
+        const keyframes = rallyCameraEdit?.keyframes?.ORIGINAL ?? [];
+
+        // Combine global settings with rally keyframes
+        if (keyframes.length > 0 || cameraStore.hasGlobalSettings(video.id)) {
+          camera = {
+            aspectRatio: 'ORIGINAL',
+            keyframes: keyframes.map(kf => ({
+              timeOffset: kf.timeOffset,
+              // Combine global + rally positions
+              positionX: Math.max(0, Math.min(1, globalSettings.positionX + (kf.positionX - 0.5))),
+              positionY: Math.max(0, Math.min(1, globalSettings.positionY + (kf.positionY - 0.5))),
+              zoom: globalSettings.zoom * kf.zoom,
+              rotation: globalSettings.rotation + kf.rotation,
+              easing: kf.easing,
+            })),
+          };
+          // If only global settings and no keyframes, create a single static keyframe
+          if (camera.keyframes.length === 0 && cameraStore.hasGlobalSettings(video.id)) {
+            camera.keyframes = [{
+              timeOffset: 0,
+              positionX: globalSettings.positionX,
+              positionY: globalSettings.positionY,
+              zoom: globalSettings.zoom,
+              rotation: globalSettings.rotation,
+              easing: 'LINEAR',
+            }];
+          }
+        }
+      }
+
       // Create export job - backend handles reverse timestamp mapping for confirmed videos
-      const job = await createExportJob({
+      const exportRequest = {
         sessionId,
-        config: { format: 'mp4' },
+        config: {
+          format: 'mp4' as const,
+          quality: options?.quality,
+        },
         rallies: [{
           videoId: video.id,
           videoS3Key: video.s3Key,
           startMs,
           endMs,
+          camera,
         }],
-      });
+      };
+      const job = await createExportJob(exportRequest);
 
       set({ progress: 5, currentStep: 'Processing...' });
 
@@ -336,7 +390,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
   },
 
   // Server-side export for all rallies (handles confirmed videos)
-  downloadAllRalliesServerSide: async (sessionId: string, video: ExportVideoInfo, rallies: Rally[]) => {
+  downloadAllRalliesServerSide: async (sessionId: string, video: ExportVideoInfo, rallies: Rally[], options?: ExportOptions) => {
     if (get().isExporting) {
       return;
     }
@@ -359,20 +413,68 @@ export const useExportStore = create<ExportState>((set, get) => ({
     });
 
     try {
-      // Convert rally timestamps (seconds) to milliseconds
-      const exportRallies = rallies.map(rally => ({
-        videoId: video.id,
-        videoS3Key: video.s3Key,
-        startMs: Math.round(rally.start_time * 1000),
-        endMs: Math.round(rally.end_time * 1000),
-      }));
+      // Get camera edits if applicable
+      const cameraStore = useCameraStore.getState();
+      const globalSettings = cameraStore.getGlobalSettings(video.id);
+
+      // Convert rally timestamps (seconds) to milliseconds and include camera edits
+      const exportRallies = rallies.map(rally => {
+        let camera: { aspectRatio: 'ORIGINAL'; keyframes: Array<{ timeOffset: number; positionX: number; positionY: number; zoom: number; rotation: number; easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT' }> } | undefined;
+
+        if (options?.applyCameraEdits) {
+          const rallyCameraEdit = cameraStore.cameraEdits[rally.id];
+
+          // Only use ORIGINAL aspect ratio keyframes (VERTICAL not supported for export)
+          const keyframes = rallyCameraEdit?.keyframes?.ORIGINAL ?? [];
+
+          // Combine global settings with rally keyframes
+          if (keyframes.length > 0 || cameraStore.hasGlobalSettings(video.id)) {
+            camera = {
+              aspectRatio: 'ORIGINAL',
+              keyframes: keyframes.map(kf => ({
+                timeOffset: kf.timeOffset,
+                // Combine global + rally positions
+                positionX: Math.max(0, Math.min(1, globalSettings.positionX + (kf.positionX - 0.5))),
+                positionY: Math.max(0, Math.min(1, globalSettings.positionY + (kf.positionY - 0.5))),
+                zoom: globalSettings.zoom * kf.zoom,
+                rotation: globalSettings.rotation + kf.rotation,
+                easing: kf.easing,
+              })),
+            };
+            // If only global settings and no keyframes, create a single static keyframe
+            if (camera.keyframes.length === 0 && cameraStore.hasGlobalSettings(video.id)) {
+              camera.keyframes = [{
+                timeOffset: 0,
+                positionX: globalSettings.positionX,
+                positionY: globalSettings.positionY,
+                zoom: globalSettings.zoom,
+                rotation: globalSettings.rotation,
+                easing: 'LINEAR',
+              }];
+            }
+          }
+        }
+
+        return {
+          videoId: video.id,
+          videoS3Key: video.s3Key,
+          startMs: Math.round(rally.start_time * 1000),
+          endMs: Math.round(rally.end_time * 1000),
+          camera,
+        };
+      });
 
       // Create export job - backend handles reverse timestamp mapping for confirmed videos
-      const job = await createExportJob({
+      const exportRequest = {
         sessionId,
-        config: { format: 'mp4' },
+        config: {
+          format: 'mp4' as const,
+          quality: options?.quality,
+          withFade: options?.withFade,
+        },
         rallies: exportRallies,
-      });
+      };
+      const job = await createExportJob(exportRequest);
 
       set({ progress: 5, currentStep: 'Processing...' });
 
