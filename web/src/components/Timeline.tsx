@@ -722,7 +722,7 @@ export function Timeline() {
   // RAF-based playhead positioning during camera animation
   // This bypasses React state updates to prevent camera jitter
   useEffect(() => {
-    if (!isPlaying || !hasActiveCameraAnimation) return;
+    if (!isPlaying || !hasActiveCameraAnimation || isDraggingCursor) return;
 
     const video = document.querySelector('video');
     if (!video || !playheadRef.current) return;
@@ -739,8 +739,14 @@ export function Timeline() {
     };
 
     rafId = requestAnimationFrame(updatePlayhead);
-    return () => cancelAnimationFrame(rafId);
-  }, [isPlaying, hasActiveCameraAnimation, scale, scrollLeft]);
+    return () => {
+      cancelAnimationFrame(rafId);
+      // Clear inline style so React's sx prop can control position again
+      if (playheadRef.current) {
+        playheadRef.current.style.left = '';
+      }
+    };
+  }, [isPlaying, hasActiveCameraAnimation, scale, scrollLeft, isDraggingCursor]);
 
   // Calculate selected rally position for floating action buttons
   const selectedRallyPosition = useMemo(() => {
