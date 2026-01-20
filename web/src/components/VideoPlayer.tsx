@@ -24,6 +24,8 @@ export function VideoPlayer() {
   const [bufferProgress, setBufferProgress] = useState(0);
   // Camera time for seeking (when paused, we may need to update camera position)
   const [, setCameraTime] = useState(0);
+  // Track video's actual aspect ratio to avoid letterboxing/cropping
+  const [videoAspectRatio, setVideoAspectRatio] = useState<string>('16/9');
 
   // Ref for RAF loop - stores camera data to avoid effect restarts
   const rafDataRef = useRef<{
@@ -437,6 +439,11 @@ export function VideoPlayer() {
     setReady(true);
     setIsLoading(false);
 
+    // Capture video's actual aspect ratio to avoid letterboxing/cropping
+    if (video.videoWidth && video.videoHeight) {
+      setVideoAspectRatio(`${video.videoWidth}/${video.videoHeight}`);
+    }
+
     // Read fresh values from stores to avoid stale closures
     const playerState = usePlayerStore.getState();
     const editorState = useEditorStore.getState();
@@ -600,14 +607,11 @@ export function VideoPlayer() {
       ref={fullscreenContainerRef}
       sx={{
         width: '100%',
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
         bgcolor: '#000',
         borderRadius: 2,
         position: 'relative',
         boxShadow: designTokens.colors.video.shadow,
-        // When in vertical mode, contain the vertical video within a 16:9 outer frame
+        // Fixed 16:9 outer frame
         aspectRatio: '16/9',
         // Clip video content at player boundaries (important for 9:16 mode where video extends beyond inner container)
         overflow: 'hidden',
@@ -767,17 +771,17 @@ export function VideoPlayer() {
       {/* Unified video container - single video element to prevent remounting on aspect ratio change */}
       <Box
         sx={{
-          position: containerAspectRatio === '9/16' ? 'absolute' : 'relative',
-          top: containerAspectRatio === '9/16' ? 0 : undefined,
+          position: 'absolute',
+          top: containerAspectRatio === '9/16' ? 0 : '50%',
           bottom: containerAspectRatio === '9/16' ? 0 : undefined,
+          left: '50%',
+          transform: containerAspectRatio === '9/16' ? 'translateX(-50%)' : 'translate(-50%, -50%)',
           // For 9:16: Calculate width explicitly for 9:16 in a 16:9 parent
-          // width = height * (9/16), but height = parentHeight
-          // parentWidth = parentHeight * (16/9)
-          // so width as % of parent = (9/16) / (16/9) = 31.64%
-          width: containerAspectRatio === '9/16' ? `${(9/16) / (16/9) * 100}%` : '100%',
+          // For 16:9: Use video's actual aspect ratio to size the container
+          width: containerAspectRatio === '9/16' ? `${(9/16) / (16/9) * 100}%` : 'auto',
           height: '100%',
-          left: containerAspectRatio === '9/16' ? '50%' : undefined,
-          transform: containerAspectRatio === '9/16' ? 'translateX(-50%)' : undefined,
+          aspectRatio: containerAspectRatio === '9/16' ? undefined : videoAspectRatio,
+          maxWidth: '100%',
           // Allow video to extend beyond container in 9:16 mode so excluded areas are visible
           overflow: containerAspectRatio === '9/16' ? 'visible' : 'hidden',
         }}
@@ -823,8 +827,8 @@ export function VideoPlayer() {
               transition: isPlaying && hasCameraKeyframes ? 'transform 60ms ease-out' : 'none',
               ...(isPlaying && hasCameraKeyframes ? {} : videoTransformStyle),
             } : {
-              width: '100%',
-              height: '100%',
+              position: 'absolute',
+              inset: 0,
               willChange: isCameraPreviewActive ? 'transform' : 'auto',
               // CSS transition smooths between video frame updates
               transition: isPlaying && hasCameraKeyframes ? 'transform 60ms ease-out' : 'none',
@@ -843,7 +847,6 @@ export function VideoPlayer() {
               } : {
                 width: '100%',
                 height: '100%',
-                objectFit: 'contain',
               }}
               onTimeUpdate={handleTimeUpdate}
               onSeeked={handleSeeked}
