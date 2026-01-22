@@ -19,6 +19,8 @@ import MergeTypeIcon from '@mui/icons-material/MergeType';
 import SpeedIcon from '@mui/icons-material/Speed';
 import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
+import ZoomInIcon from '@mui/icons-material/ZoomIn';
+import ZoomOutIcon from '@mui/icons-material/ZoomOut';
 import {
   Timeline as TimelineEditor,
   TimelineRow,
@@ -45,6 +47,8 @@ const SCALE_WIDTH = 160; // pixels per scale unit
 
 // Zoom limits - will be calculated based on video duration
 const MIN_SCALE = 5; // 5 seconds per marker (very zoomed in)
+const MAX_SCALE = 120; // 120 seconds per marker (very zoomed out)
+const ZOOM_FACTOR = 3; // Zoom step multiplier (bigger = fewer steps)
 
 // Hotkey row component for the legend
 function HotkeyRow({ keys, description, secondary }: { keys: string[]; description: string; secondary?: boolean }) {
@@ -171,6 +175,46 @@ export function Timeline() {
   const [speedAnchorEl, setSpeedAnchorEl] = useState<HTMLElement | null>(null);
   const [scrollLeft, setScrollLeft] = useState(0);
   const [containerWidth, setContainerWidth] = useState(0);
+
+  // Zoom state - placed here so it's available for keyboard shortcuts
+  const [scale, setScale] = useState(() => 30);
+  const [hasManualZoom, setHasManualZoom] = useState(false);
+
+  // Calculate optimal scale based on video duration and container width
+  const getAutoScale = useCallback(() => {
+    if (duration > 0 && containerWidth > 0) {
+      const exactScale = (duration * SCALE_WIDTH) / containerWidth;
+      return Math.max(MIN_SCALE, exactScale);
+    }
+    return 30;
+  }, [duration, containerWidth]);
+
+  // Calculate zoom percentage (100% = auto-fit scale)
+  const autoScale = getAutoScale();
+  const zoomPercentage = Math.round((autoScale / scale) * 100);
+
+  // Zoom handlers
+  const handleZoomIn = useCallback(() => {
+    setScale((prev) => {
+      const newScale = prev / ZOOM_FACTOR;
+      return Math.max(MIN_SCALE, newScale);
+    });
+    setHasManualZoom(true);
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    setScale((prev) => {
+      const newScale = prev * ZOOM_FACTOR;
+      return Math.min(MAX_SCALE, newScale);
+    });
+    setHasManualZoom(true);
+  }, []);
+
+  const handleZoomReset = useCallback(() => {
+    setScale(getAutoScale());
+    setHasManualZoom(false);
+  }, [getAutoScale]);
+
   const [keyframeBlockedRallyId, setKeyframeBlockedRallyId] = useState<string | null>(null);
   const keyframeBlockedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Pending resize position - used to keep library in sync during drag
@@ -470,11 +514,35 @@ export function Timeline() {
           e.preventDefault();
           toggleFullscreen();
           break;
+
+        case 'Equal': // + or = key
+        case 'NumpadAdd':
+          if (isMod) {
+            e.preventDefault();
+            handleZoomIn();
+          }
+          break;
+
+        case 'Minus': // - key
+        case 'NumpadSubtract':
+          if (isMod) {
+            e.preventDefault();
+            handleZoomOut();
+          }
+          break;
+
+        case 'Digit0':
+        case 'Numpad0':
+          if (isMod) {
+            e.preventDefault();
+            handleZoomReset();
+          }
+          break;
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, play, pause, seek, currentTime, duration, selectedRallyId, deleteConfirmId, removeRally, selectRally, isInsideSelectedRally, getSelectedRally, goToPrevRally, goToNextRally, adjustRallyStart, adjustRallyEnd, videoMetadata, rallies, createRallyAtTime, handleToggleHighlight, isLocked, isInCameraEditMode, selectedKeyframeId, removeKeyframe, selectKeyframe, isRecordingRally, startRallyRecording, stopRallyRecording, cancelRallyRecording, cyclePlaybackRate, toggleFullscreen]);
+  }, [isPlaying, play, pause, seek, currentTime, duration, selectedRallyId, deleteConfirmId, removeRally, selectRally, isInsideSelectedRally, getSelectedRally, goToPrevRally, goToNextRally, adjustRallyStart, adjustRallyEnd, videoMetadata, rallies, createRallyAtTime, handleToggleHighlight, isLocked, isInCameraEditMode, selectedKeyframeId, removeKeyframe, selectKeyframe, isRecordingRally, startRallyRecording, stopRallyRecording, cancelRallyRecording, cyclePlaybackRate, toggleFullscreen, handleZoomIn, handleZoomOut, handleZoomReset]);
 
   // Jump to previous/next rally
   const jumpToPrevRally = useCallback(() => {
@@ -526,28 +594,14 @@ export function Timeline() {
   // Note: Highlight playback (including cross-match) is now handled by VideoPlayer
   // using a stable playlist stored in playerStore
 
-  // Calculate optimal scale based on video duration and container width
-  // scale = seconds per marker, SCALE_WIDTH = pixels per marker
-  // totalWidth = (duration / scale) * SCALE_WIDTH
-  // We want totalWidth = containerWidth, so scale = duration * SCALE_WIDTH / containerWidth
-  const getAutoScale = useCallback(() => {
-    if (duration > 0 && containerWidth > 0) {
-      const exactScale = (duration * SCALE_WIDTH) / containerWidth;
-      return Math.max(MIN_SCALE, exactScale);
-    }
-    return 30;
-  }, [duration, containerWidth]);
-
-  const [scale, setScale] = useState(() => 30);
-
-  // Auto-fit scale when duration or container width changes
+  // Auto-fit scale when duration or container width changes (only if not manually zoomed)
   useEffect(() => {
-    if (duration > 0 && containerWidth > 0) {
+    if (duration > 0 && containerWidth > 0 && !hasManualZoom) {
       const newScale = getAutoScale();
       // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional auto-fit on resize
       setScale(newScale);
     }
-  }, [duration, containerWidth, getAutoScale]);
+  }, [duration, containerWidth, getAutoScale, hasManualZoom]);
 
   // Track previous camera edit mode state and store original scale/scroll
   const prevCameraEditModeRef = useRef<boolean>(false);
@@ -1520,6 +1574,16 @@ export function Timeline() {
             <HotkeyRow keys={['Del']} description="Delete (press twice)" />
           </Stack>
 
+          {/* Zoom */}
+          <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, textTransform: 'uppercase', fontSize: 10, letterSpacing: 0.5 }}>
+            Timeline Zoom
+          </Typography>
+          <Stack spacing={0.75} sx={{ mt: 0.75, mb: 2 }}>
+            <HotkeyRow keys={['⌘', '+']} description="Zoom in" />
+            <HotkeyRow keys={['⌘', '-']} description="Zoom out" />
+            <HotkeyRow keys={['⌘', '0']} description="Fit to window" />
+          </Stack>
+
           {/* General */}
           <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, textTransform: 'uppercase', fontSize: 10, letterSpacing: 0.5 }}>
             General
@@ -2232,6 +2296,84 @@ export function Timeline() {
             )}
           </Stack>
         )}
+
+        {/* Floating Zoom Controls - bottom right */}
+        <Stack
+          direction="row"
+          alignItems="center"
+          spacing={0.5}
+          sx={{
+            position: 'absolute',
+            right: 12,
+            bottom: 8,
+            zIndex: 100,
+            bgcolor: 'rgba(0, 0, 0, 0.75)',
+            backdropFilter: 'blur(8px)',
+            borderRadius: 1.5,
+            px: 1,
+            py: 0.5,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+          }}
+        >
+          <Tooltip title="Zoom out (⌘ -)">
+            <IconButton
+              size="small"
+              onClick={handleZoomOut}
+              disabled={scale >= MAX_SCALE}
+              sx={{
+                color: 'rgba(255,255,255,0.8)',
+                p: 0.5,
+                '&:hover': { color: 'white', bgcolor: 'rgba(255,255,255,0.1)' },
+                '&.Mui-disabled': { color: 'rgba(255,255,255,0.3)' },
+              }}
+            >
+              <ZoomOutIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title={hasManualZoom ? "Fit to window (⌘ 0)" : "Zoom level"}>
+            <Box
+              onClick={hasManualZoom ? handleZoomReset : undefined}
+              sx={{
+                px: 1,
+                py: 0.25,
+                borderRadius: 1,
+                cursor: hasManualZoom ? 'pointer' : 'default',
+                minWidth: 42,
+                textAlign: 'center',
+                '&:hover': hasManualZoom ? {
+                  bgcolor: 'rgba(255,255,255,0.1)',
+                } : {},
+              }}
+            >
+              <Typography
+                variant="caption"
+                sx={{
+                  fontWeight: 600,
+                  fontSize: 11,
+                  color: hasManualZoom ? 'primary.main' : 'rgba(255,255,255,0.7)',
+                  userSelect: 'none',
+                }}
+              >
+                {zoomPercentage}%
+              </Typography>
+            </Box>
+          </Tooltip>
+          <Tooltip title="Zoom in (⌘ +)">
+            <IconButton
+              size="small"
+              onClick={handleZoomIn}
+              disabled={scale <= MIN_SCALE}
+              sx={{
+                color: 'rgba(255,255,255,0.8)',
+                p: 0.5,
+                '&:hover': { color: 'white', bgcolor: 'rgba(255,255,255,0.1)' },
+                '&.Mui-disabled': { color: 'rgba(255,255,255,0.3)' },
+              }}
+            >
+              <ZoomInIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+          </Tooltip>
+        </Stack>
       </Box>
 
       {/* Model selection dialog */}
