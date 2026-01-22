@@ -505,7 +505,7 @@ export default function HomePage() {
                     boxShadow: `0 20px 40px rgba(0, 0, 0, 0.4), ${designTokens.shadows.glow.primary}`,
                     borderColor: 'rgba(255, 107, 74, 0.4)',
                     '& .thumbnail-strip': {
-                      transform: 'scale(1.05)',
+                      filter: 'brightness(1.1)',
                     },
                     '& .arrow-icon': {
                       transform: 'translateX(4px)',
@@ -533,7 +533,7 @@ export default function HomePage() {
                         display: 'flex',
                         position: 'absolute',
                         inset: 0,
-                        transition: 'transform 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
+                        transition: 'filter 0.3s ease',
                       }}
                     >
                       {readyVideos.slice(0, 6).map((video, index) => (
