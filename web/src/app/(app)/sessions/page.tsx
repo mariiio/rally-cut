@@ -59,7 +59,6 @@ import { VolleyballProgress } from '@/components/VolleyballProgress';
 import { AddVideoModal } from '@/components/AddVideoModal';
 import {
   PageHeader,
-  StatsBar,
   SessionCard,
   SectionHeader,
   EmptyState,
@@ -487,15 +486,8 @@ export default function HomePage() {
             )}
           </>
         ) : (
-          /* Has videos - show stats, All Videos card and sessions */
+          /* Has videos - show All Videos card and sessions */
           <>
-            {/* Stats Bar */}
-            <StatsBar
-              videoCount={readyVideos.length}
-              sessionCount={groupedVideos.length + emptySessions.length}
-              loading={loading}
-            />
-
             {/* All Videos Hero Card */}
             {allVideosSession && (
               <Card
