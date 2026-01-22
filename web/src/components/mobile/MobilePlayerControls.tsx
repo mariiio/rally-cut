@@ -30,7 +30,10 @@ export function MobilePlayerControls() {
     createRallyAtTime,
     reloadCurrentMatch,
     videoUrl,
+    isRallyEditingLocked,
   } = useEditorStore();
+
+  const isLocked = isRallyEditingLocked();
 
   // Detection state
   const [isDetecting, setIsDetecting] = useState(false);
@@ -232,7 +235,7 @@ export function MobilePlayerControls() {
             onClick={handleCreateRally}
             size="small"
             color="primary"
-            disabled={!hasVideo || isInsideRally}
+            disabled={!hasVideo || isInsideRally || isLocked}
             sx={{
               minWidth: designTokens.mobile.touchTarget,
               minHeight: designTokens.mobile.touchTarget,

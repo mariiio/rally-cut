@@ -10,8 +10,10 @@ interface MiniTimelineProps {
   rally: Rally;
   videoDuration: number;
   currentTime: number;
-  onStartChange: (newStart: number) => void;
-  onEndChange: (newEnd: number) => void;
+  /** Called when start time changes. If undefined, start handle is disabled. */
+  onStartChange?: (newStart: number) => void;
+  /** Called when end time changes. If undefined, end handle is disabled. */
+  onEndChange?: (newEnd: number) => void;
   onSeek: (time: number) => void;
   adjacentRallies?: {
     prev?: { end_time: number };
@@ -155,10 +157,14 @@ export function MiniTimeline({
     if (!startHandle || !endHandle || !container) return;
 
     const handleTouchStart = (edge: 'start' | 'end') => (e: TouchEvent) => {
+      const state = stateRef.current;
+      // Don't allow dragging if callback is not provided
+      if (edge === 'start' && !state.onStartChange) return;
+      if (edge === 'end' && !state.onEndChange) return;
+
       e.preventDefault();
       e.stopPropagation();
       const touch = e.touches[0];
-      const state = stateRef.current;
       dragStartRef.current = {
         x: touch.clientX,
         time: edge === 'start' ? state.rallyStartTime : state.rallyEndTime,
@@ -201,9 +207,9 @@ export function MiniTimeline({
       const state = stateRef.current;
 
       // Commit the change
-      if (draggingRef.current === 'start' && state.localStart !== null) {
+      if (draggingRef.current === 'start' && state.localStart !== null && state.onStartChange) {
         state.onStartChange(state.localStart);
-      } else if (draggingRef.current === 'end' && state.localEnd !== null) {
+      } else if (draggingRef.current === 'end' && state.localEnd !== null && state.onEndChange) {
         state.onEndChange(state.localEnd);
       }
 
@@ -348,14 +354,15 @@ export function MiniTimeline({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            cursor: 'ew-resize',
+            cursor: onStartChange ? 'ew-resize' : 'default',
             zIndex: 2,
-            '&:active': {
+            opacity: onStartChange ? 1 : 0.4,
+            '&:active': onStartChange ? {
               '& > div': {
                 transform: 'scaleX(1.5)',
                 bgcolor: 'primary.main',
               },
-            },
+            } : undefined,
           }}
         >
           <Box
@@ -380,14 +387,15 @@ export function MiniTimeline({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            cursor: 'ew-resize',
+            cursor: onEndChange ? 'ew-resize' : 'default',
             zIndex: 2,
-            '&:active': {
+            opacity: onEndChange ? 1 : 0.4,
+            '&:active': onEndChange ? {
               '& > div': {
                 transform: 'scaleX(1.5)',
                 bgcolor: 'primary.main',
               },
-            },
+            } : undefined,
           }}
         >
           <Box

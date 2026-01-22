@@ -43,7 +43,10 @@ export function MobileRallyEditorModal({
     removeRallyFromHighlight,
     getHighlightsForRally,
     getActiveMatch,
+    isRallyEditingLocked,
   } = useEditorStore();
+
+  const isLocked = isRallyEditingLocked();
   const { currentTime, isPlaying, seek, play, pause } = usePlayerStore();
 
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -226,8 +229,8 @@ export function MobileRallyEditorModal({
           rally={rally}
           videoDuration={videoDuration}
           currentTime={currentTime}
-          onStartChange={handleStartChange}
-          onEndChange={handleEndChange}
+          onStartChange={isLocked ? undefined : handleStartChange}
+          onEndChange={isLocked ? undefined : handleEndChange}
           onSeek={handleSeek}
           adjacentRallies={adjacentRallies}
         />
@@ -313,42 +316,45 @@ export function MobileRallyEditorModal({
           </Typography>
         )}
 
-        <Divider sx={{ my: 2 }} />
-
-        {/* Delete */}
-        <Box sx={{ display: 'flex', justifyContent: 'center' }}>
-          {deleteConfirm ? (
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Typography variant="body2" color="error.main">
-                Delete this rally?
-              </Typography>
-              <IconButton
-                size="small"
-                onClick={handleCancelDelete}
-                sx={{ color: 'text.secondary' }}
-              >
-                <CloseIcon fontSize="small" />
-              </IconButton>
-              <IconButton
-                size="small"
-                onClick={handleDelete}
-                sx={{ color: 'error.main' }}
-              >
-                <CheckIcon fontSize="small" />
-              </IconButton>
-            </Stack>
-          ) : (
-            <Button
-              variant="text"
-              color="error"
-              startIcon={<DeleteIcon />}
-              onClick={handleDelete}
-              sx={{ minHeight: designTokens.mobile.touchTarget }}
-            >
-              Delete Rally
-            </Button>
-          )}
-        </Box>
+        {/* Delete - only show for owners */}
+        {!isLocked && (
+          <>
+            <Divider sx={{ my: 2 }} />
+            <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+              {deleteConfirm ? (
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Typography variant="body2" color="error.main">
+                    Delete this rally?
+                  </Typography>
+                  <IconButton
+                    size="small"
+                    onClick={handleCancelDelete}
+                    sx={{ color: 'text.secondary' }}
+                  >
+                    <CloseIcon fontSize="small" />
+                  </IconButton>
+                  <IconButton
+                    size="small"
+                    onClick={handleDelete}
+                    sx={{ color: 'error.main' }}
+                  >
+                    <CheckIcon fontSize="small" />
+                  </IconButton>
+                </Stack>
+              ) : (
+                <Button
+                  variant="text"
+                  color="error"
+                  startIcon={<DeleteIcon />}
+                  onClick={handleDelete}
+                  sx={{ minHeight: designTokens.mobile.touchTarget }}
+                >
+                  Delete Rally
+                </Button>
+              )}
+            </Box>
+          </>
+        )}
       </Box>
 
       {/* Safe area padding */}
