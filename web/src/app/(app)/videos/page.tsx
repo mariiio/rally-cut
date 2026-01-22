@@ -6,10 +6,7 @@ import {
   Box,
   Container,
   Typography,
-  Card,
-  CardContent,
   Grid,
-  Chip,
   IconButton,
   Pagination,
   TextField,
@@ -18,41 +15,36 @@ import {
   MenuItem,
   ListItemIcon,
   ListItemText,
-  Skeleton,
   Dialog,
   DialogTitle,
   DialogContent,
-  DialogContentText,
   DialogActions,
   Button,
   Divider,
+  Stack,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import FolderIcon from '@mui/icons-material/Folder';
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import MoreVertIcon from '@mui/icons-material/MoreVert';
+import ClearIcon from '@mui/icons-material/Clear';
+import VideoLibraryIcon from '@mui/icons-material/VideoLibrary';
+import CollectionsIcon from '@mui/icons-material/Collections';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import { designTokens } from '@/app/theme';
 import {
   listVideos,
   listSessions,
-  getVideoStreamUrl,
   deleteVideo,
   renameVideo,
   type VideoListItem,
   type SessionType,
 } from '@/services/api';
-
-function formatDuration(ms: number | null): string {
-  if (!ms) return '--:--';
-  const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-}
+import {
+  PageHeader,
+  VideoCard,
+  VideoCardSkeleton,
+  EmptyState,
+} from '@/components/dashboard';
 
 interface VideoSession {
   id: string;
@@ -66,10 +58,11 @@ export default function VideosPage() {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [totalVideos, setTotalVideos] = useState(0);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [allVideosSessionId, setAllVideosSessionId] = useState<string | null>(null);
-  const limit = 20;
+  const limit = 24;
 
   // Video menu state
   const [menuAnchor, setMenuAnchor] = useState<{
@@ -77,8 +70,6 @@ export default function VideosPage() {
     video: VideoListItem;
   } | null>(null);
 
-  // Session submenu state
-  const [sessionSubmenuAnchor, setSessionSubmenuAnchor] = useState<HTMLElement | null>(null);
 
   // Rename dialog state
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
@@ -134,6 +125,7 @@ export default function VideosPage() {
       const result = await listVideos(page, limit, search || undefined);
       setVideos(result.data);
       setTotalPages(result.pagination.totalPages);
+      setTotalVideos(result.pagination.total);
     } catch (error) {
       console.error('Failed to load videos:', error);
     } finally {
@@ -153,20 +145,24 @@ export default function VideosPage() {
 
   const handleMenuClose = () => {
     setMenuAnchor(null);
-    setSessionSubmenuAnchor(null);
   };
 
-  const handleSessionSubmenuOpen = (event: React.MouseEvent<HTMLElement>) => {
-    setSessionSubmenuAnchor(event.currentTarget);
-  };
-
-  const handleSessionSubmenuClose = () => {
-    setSessionSubmenuAnchor(null);
-  };
-
-  const handleGoToSession = (sessionId: string) => {
-    router.push(`/sessions/${sessionId}`);
+  const handleOpenInLibrary = () => {
+    if (menuAnchor?.video && allVideosSessionId) {
+      router.push(`/sessions/${allVideosSessionId}?video=${menuAnchor.video.id}`);
+    }
     handleMenuClose();
+  };
+
+  const handleVideoClick = (video: VideoListItem) => {
+    const regularSessions = getRegularSessions(video);
+    if (regularSessions.length > 0) {
+      // Go to first regular session with video selected
+      router.push(`/sessions/${regularSessions[0].id}?video=${video.id}`);
+    } else if (allVideosSessionId) {
+      // Fallback to ALL_VIDEOS session
+      router.push(`/sessions/${allVideosSessionId}?video=${video.id}`);
+    }
   };
 
   // Rename handlers
@@ -230,234 +226,189 @@ export default function VideosPage() {
     setDeleteVideoTarget(null);
   };
 
+  const handleClearSearch = () => {
+    setSearchInput('');
+    setSearch('');
+    setPage(1);
+  };
+
+  // Calculate showing range
+  const startItem = (page - 1) * limit + 1;
+  const endItem = Math.min(page * limit, totalVideos);
+
   return (
     <Box
       sx={{
         minHeight: '100vh',
-        bgcolor: 'background.default',
-        pb: 4,
+        overflow: 'auto',
+        bgcolor: designTokens.colors.surface[0],
+        color: 'text.primary',
+        py: 4,
+        position: 'relative',
+        '&::before': {
+          content: '""',
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 400,
+          background: 'radial-gradient(ellipse at 50% 0%, rgba(255, 107, 74, 0.08) 0%, transparent 70%)',
+          pointerEvents: 'none',
+        },
       }}
     >
-      {/* Header */}
-      <Box
-        sx={{
-          borderBottom: '1px solid',
-          borderColor: 'divider',
-          bgcolor: designTokens.colors.surface[1],
-        }}
-      >
-        <Container maxWidth="xl" sx={{ py: 3 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
-            <IconButton
+      <Container maxWidth="lg" sx={{ position: 'relative' }}>
+        {/* Header */}
+        <PageHeader
+          icon={<VideoLibraryIcon />}
+          title="Video Library"
+          subtitle={totalVideos > 0 ? `${totalVideos} video${totalVideos !== 1 ? 's' : ''} in your library` : undefined}
+          action={
+            <Button
+              variant="outlined"
               onClick={() => router.push('/sessions')}
-              sx={{ color: 'text.secondary' }}
+              sx={{
+                borderColor: 'rgba(255, 255, 255, 0.2)',
+                color: 'text.secondary',
+                '&:hover': {
+                  borderColor: 'primary.main',
+                  color: 'primary.main',
+                  bgcolor: 'rgba(255, 107, 74, 0.08)',
+                },
+              }}
             >
-              <ArrowBackIcon />
-            </IconButton>
-            <Typography variant="h4" component="h1" fontWeight={700}>
-              Videos
-            </Typography>
-          </Box>
+              Back to Sessions
+            </Button>
+          }
+        />
 
-          {/* Search */}
+        {/* Search Bar */}
+        <Box sx={{ mb: 4, maxWidth: 400 }}>
           <TextField
             placeholder="Search videos..."
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
+            fullWidth
             size="small"
             sx={{
-              maxWidth: 400,
               '& .MuiOutlinedInput-root': {
-                bgcolor: designTokens.colors.surface[0],
+                bgcolor: designTokens.colors.surface[1],
+                borderRadius: 2,
+                transition: 'all 0.2s ease',
+                '&:hover': {
+                  '& fieldset': {
+                    borderColor: 'rgba(255, 107, 74, 0.5)',
+                  },
+                },
+                '&.Mui-focused': {
+                  bgcolor: designTokens.colors.surface[2],
+                },
               },
             }}
             slotProps={{
               input: {
                 startAdornment: (
                   <InputAdornment position="start">
-                    <SearchIcon sx={{ color: 'text.secondary' }} />
+                    <SearchIcon sx={{ color: 'text.secondary', fontSize: 20 }} />
+                  </InputAdornment>
+                ),
+                endAdornment: searchInput && (
+                  <InputAdornment position="end">
+                    <IconButton
+                      size="small"
+                      onClick={handleClearSearch}
+                      sx={{ color: 'text.secondary' }}
+                    >
+                      <ClearIcon fontSize="small" />
+                    </IconButton>
                   </InputAdornment>
                 ),
               },
             }}
           />
-        </Container>
-      </Box>
+        </Box>
 
-      {/* Content */}
-      <Container maxWidth="xl" sx={{ mt: 4 }}>
+        {/* Content */}
         {loading ? (
-          <Grid container spacing={2}>
+          <Grid container spacing={2.5}>
             {Array.from({ length: 8 }).map((_, i) => (
-              <Grid size={{ xs: 6, sm: 4, md: 3, lg: 2 }} key={i}>
-                <Skeleton
-                  variant="rectangular"
-                  sx={{ aspectRatio: '16/9', borderRadius: 2 }}
-                />
-                <Skeleton sx={{ mt: 1 }} />
+              <Grid size={{ xs: 6, sm: 4, md: 3 }} key={i}>
+                <VideoCardSkeleton />
               </Grid>
             ))}
           </Grid>
         ) : readyVideos.length === 0 ? (
-          <Box sx={{ textAlign: 'center', py: 8 }}>
-            <Typography variant="h6" color="text.secondary">
-              {search ? 'No videos found matching your search' : 'No videos yet'}
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-              {!search && 'Upload videos from the Sessions page to get started'}
-            </Typography>
-          </Box>
+          search ? (
+            <EmptyState
+              variant="search-no-results"
+              onAction={handleClearSearch}
+              title="No videos found"
+              description={`No videos match "${search}". Try a different search term.`}
+              actionLabel="Clear Search"
+            />
+          ) : (
+            <EmptyState
+              variant="no-videos"
+              onAction={() => router.push('/sessions')}
+              title="No videos yet"
+              description="Upload videos from the Sessions page to get started"
+              actionLabel="Go to Sessions"
+            />
+          )
         ) : (
           <>
-            <Grid container spacing={2}>
+            {/* Results info */}
+            {totalVideos > limit && (
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ mb: 2 }}
+              >
+                Showing {startItem}-{endItem} of {totalVideos} videos
+              </Typography>
+            )}
+
+            {/* Video Grid */}
+            <Grid container spacing={2.5}>
               {readyVideos.map((video) => {
                 const regularSessions = getRegularSessions(video);
+                const firstSession = regularSessions[0];
 
                 return (
-                  <Grid size={{ xs: 6, sm: 4, md: 3, lg: 2 }} key={video.id}>
-                    <Card
-                      sx={{
-                        bgcolor: designTokens.colors.surface[2],
-                        borderRadius: 2,
-                        overflow: 'hidden',
-                        border: '1px solid',
-                        borderColor: 'transparent',
-                        transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                        cursor: 'pointer',
-                        '&:hover': {
-                          transform: 'translateY(-4px) scale(1.02)',
-                          boxShadow: designTokens.shadows.lg,
-                          borderColor: 'primary.main',
-                          '& .thumbnail-overlay': {
+                  <Grid size={{ xs: 6, sm: 4, md: 3 }} key={video.id}>
+                    <Box sx={{ position: 'relative' }}>
+                      <VideoCard
+                        id={video.id}
+                        name={video.name}
+                        durationMs={video.durationMs}
+                        posterS3Key={video.posterS3Key}
+                        status={video.status}
+                        sessionTag={firstSession?.name}
+                        onClick={() => handleVideoClick(video)}
+                      />
+                      <IconButton
+                        size="small"
+                        onClick={(e) => handleMenuOpen(e, video)}
+                        sx={{
+                          position: 'absolute',
+                          top: 8,
+                          right: 8,
+                          bgcolor: 'rgba(0, 0, 0, 0.5)',
+                          backdropFilter: 'blur(4px)',
+                          color: 'white',
+                          opacity: 0,
+                          transition: 'opacity 0.2s ease',
+                          '.MuiGrid-root:hover &': {
                             opacity: 1,
                           },
-                          '& .play-icon': {
-                            transform: 'translate(-50%, -50%) scale(1)',
-                            opacity: 1,
+                          '&:hover': {
+                            bgcolor: 'rgba(0, 0, 0, 0.7)',
                           },
-                        },
-                      }}
-                      onClick={() => {
-                        if (allVideosSessionId) {
-                          router.push(`/sessions/${allVideosSessionId}?video=${video.id}`);
-                        }
-                      }}
-                    >
-                      <Box sx={{ position: 'relative', aspectRatio: '16/9' }}>
-                        <video
-                          src={getVideoStreamUrl(video.s3Key)}
-                          poster={
-                            video.posterS3Key
-                              ? getVideoStreamUrl(video.posterS3Key)
-                              : undefined
-                          }
-                          preload="metadata"
-                          muted
-                          style={{
-                            width: '100%',
-                            height: '100%',
-                            objectFit: 'cover',
-                            backgroundColor: designTokens.colors.surface[0],
-                            display: 'block',
-                          }}
-                        />
-                        {/* Gradient overlay */}
-                        <Box
-                          sx={{
-                            position: 'absolute',
-                            inset: 0,
-                            background:
-                              'linear-gradient(to top, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.1) 40%, transparent 100%)',
-                            pointerEvents: 'none',
-                          }}
-                        />
-                        {/* Hover overlay */}
-                        <Box
-                          className="thumbnail-overlay"
-                          sx={{
-                            position: 'absolute',
-                            inset: 0,
-                            background: 'rgba(0, 0, 0, 0.3)',
-                            opacity: 0,
-                            transition: 'opacity 0.2s ease',
-                            pointerEvents: 'none',
-                          }}
-                        />
-                        {/* Play icon */}
-                        <Box
-                          className="play-icon"
-                          sx={{
-                            position: 'absolute',
-                            top: '50%',
-                            left: '50%',
-                            transform: 'translate(-50%, -50%) scale(0.8)',
-                            opacity: 0,
-                            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                            width: 40,
-                            height: 40,
-                            borderRadius: '50%',
-                            bgcolor: 'rgba(255, 107, 74, 0.9)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            boxShadow: designTokens.shadows.glow.primary,
-                            pointerEvents: 'none',
-                          }}
-                        >
-                          <PlayArrowIcon sx={{ color: 'white', fontSize: 24 }} />
-                        </Box>
-                        {/* Duration badge */}
-                        <Chip
-                          label={formatDuration(video.durationMs)}
-                          size="small"
-                          sx={{
-                            position: 'absolute',
-                            bottom: 6,
-                            right: 6,
-                            bgcolor: 'rgba(0, 0, 0, 0.75)',
-                            color: 'white',
-                            fontSize: '0.7rem',
-                            fontWeight: 600,
-                            height: 22,
-                            backdropFilter: 'blur(4px)',
-                          }}
-                        />
-                      </Box>
-                      <CardContent
-                        sx={{ py: 1.5, px: 1.5, '&:last-child': { pb: 1.5 } }}
+                        }}
                       >
-                        <Box
-                          sx={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: 1,
-                          }}
-                        >
-                          <Typography
-                            variant="body2"
-                            noWrap
-                            title={video.name}
-                            sx={{ fontWeight: 500, color: 'text.primary', flex: 1 }}
-                          >
-                            {video.name}
-                          </Typography>
-                          <IconButton
-                            size="small"
-                            onClick={(e) => handleMenuOpen(e, video)}
-                            sx={{
-                              color: 'text.secondary',
-                              '&:hover': {
-                                color: 'text.primary',
-                                bgcolor: 'action.hover',
-                              },
-                            }}
-                          >
-                            <MoreVertIcon fontSize="small" />
-                          </IconButton>
-                        </Box>
-                      </CardContent>
-                    </Card>
+                        <MoreVertIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
                   </Grid>
                 );
               })}
@@ -465,19 +416,37 @@ export default function VideosPage() {
 
             {/* Pagination */}
             {totalPages > 1 && (
-              <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
+              <Stack
+                direction={{ xs: 'column', sm: 'row' }}
+                alignItems="center"
+                justifyContent="center"
+                spacing={2}
+                sx={{ mt: 5 }}
+              >
+                <Typography variant="body2" color="text.secondary">
+                  Page {page} of {totalPages}
+                </Typography>
                 <Pagination
                   count={totalPages}
                   page={page}
                   onChange={(_, newPage) => setPage(newPage)}
                   color="primary"
+                  shape="rounded"
                   sx={{
                     '& .MuiPaginationItem-root': {
                       color: 'text.primary',
+                      borderColor: 'divider',
+                      '&.Mui-selected': {
+                        bgcolor: 'primary.main',
+                        color: 'white',
+                        '&:hover': {
+                          bgcolor: 'primary.dark',
+                        },
+                      },
                     },
                   }}
                 />
-              </Box>
+              </Stack>
             )}
           </>
         )}
@@ -490,36 +459,42 @@ export default function VideosPage() {
         onClose={handleMenuClose}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
         transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+        slotProps={{
+          paper: {
+            sx: {
+              minWidth: 200,
+              bgcolor: designTokens.colors.surface[3],
+              border: '1px solid',
+              borderColor: 'divider',
+            },
+          },
+        }}
       >
-        {/* Go to Session - only show if video has sessions */}
-        {menuAnchor?.video && getRegularSessions(menuAnchor.video).length > 0 && [
-          getRegularSessions(menuAnchor.video).length === 1 ? (
-            <MenuItem
-              key="session"
-              onClick={() => handleGoToSession(getRegularSessions(menuAnchor.video)[0].id)}
-            >
-              <ListItemIcon>
-                <FolderIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText primary={`Go to ${getRegularSessions(menuAnchor.video)[0].name}`} />
-            </MenuItem>
-          ) : (
-            <MenuItem
-              key="sessions"
-              onClick={handleSessionSubmenuOpen}
-              sx={{ display: 'flex', justifyContent: 'space-between' }}
-            >
-              <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                <ListItemIcon>
-                  <FolderIcon fontSize="small" />
-                </ListItemIcon>
-                <ListItemText primary="Go to session" />
-              </Box>
-              <ChevronRightIcon fontSize="small" sx={{ color: 'text.secondary' }} />
-            </MenuItem>
-          ),
-          <Divider key="divider1" />,
-        ]}
+        {/* Open in Library option */}
+        {allVideosSessionId && (
+          <MenuItem
+            onClick={handleOpenInLibrary}
+            sx={{
+              '&:hover': {
+                bgcolor: 'rgba(255, 107, 74, 0.08)',
+              },
+            }}
+          >
+            <ListItemIcon>
+              <CollectionsIcon fontSize="small" sx={{ color: 'primary.main' }} />
+            </ListItemIcon>
+            <ListItemText
+              primary="Open in Library"
+              secondary="View without session context"
+              slotProps={{
+                secondary: {
+                  sx: { fontSize: '0.7rem', color: 'text.disabled' },
+                },
+              }}
+            />
+          </MenuItem>
+        )}
+        {allVideosSessionId && <Divider />}
         <MenuItem onClick={handleRenameClick}>
           <ListItemIcon>
             <EditIcon fontSize="small" />
@@ -532,25 +507,6 @@ export default function VideosPage() {
           </ListItemIcon>
           <ListItemText primary="Delete" />
         </MenuItem>
-      </Menu>
-
-      {/* Session submenu */}
-      <Menu
-        anchorEl={sessionSubmenuAnchor}
-        open={Boolean(sessionSubmenuAnchor)}
-        onClose={handleSessionSubmenuClose}
-        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
-        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-      >
-        {menuAnchor?.video &&
-          getRegularSessions(menuAnchor.video).map((session) => (
-            <MenuItem key={session.id} onClick={() => handleGoToSession(session.id)}>
-              <ListItemIcon>
-                <FolderIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText primary={session.name} />
-            </MenuItem>
-          ))}
       </Menu>
 
       {/* Rename dialog */}
@@ -571,7 +527,7 @@ export default function VideosPage() {
             sx={{ mt: 1 }}
           />
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={handleRenameCancel} disabled={renaming}>
             Cancel
           </Button>

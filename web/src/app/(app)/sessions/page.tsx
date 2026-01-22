@@ -39,7 +39,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import CollectionsIcon from '@mui/icons-material/Collections';
 import SportsVolleyballIcon from '@mui/icons-material/SportsVolleyball';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import FolderIcon from '@mui/icons-material/Folder';
 import { designTokens } from '@/app/theme';
 import {
   listSessions,
@@ -57,6 +57,13 @@ import { useUploadStore } from '@/stores/uploadStore';
 import { isValidVideoFile } from '@/utils/fileHandlers';
 import { VolleyballProgress } from '@/components/VolleyballProgress';
 import { AddVideoModal } from '@/components/AddVideoModal';
+import {
+  PageHeader,
+  StatsBar,
+  SessionCard,
+  SectionHeader,
+  EmptyState,
+} from '@/components/dashboard';
 
 interface SessionGroup {
   session: {
@@ -64,14 +71,7 @@ interface SessionGroup {
     name: string;
   };
   videos: VideoListItem[];
-}
-
-function formatDuration(ms: number | null): string {
-  if (!ms) return '--:--';
-  const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  updatedAt: string;
 }
 
 const NEW_SESSION_VALUE = '__new__';
@@ -130,13 +130,22 @@ export default function HomePage() {
           groups.set(session.id, {
             session: { id: session.id, name: session.name },
             videos: [],
+            updatedAt: video.createdAt,
           });
         }
-        groups.get(session.id)!.videos.push(video);
+        const group = groups.get(session.id)!;
+        group.videos.push(video);
+        // Track most recent video date
+        if (new Date(video.createdAt) > new Date(group.updatedAt)) {
+          group.updatedAt = video.createdAt;
+        }
       });
     });
 
-    return Array.from(groups.values());
+    // Sort by most recently updated
+    return Array.from(groups.values()).sort(
+      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+    );
   }, [readyVideos]);
 
   // Find empty sessions (sessions with no videos)
@@ -158,7 +167,7 @@ export default function HomePage() {
       setError(null);
       const [sessionsResponse, videosResponse, sharedResponse] = await Promise.all([
         listSessions(),
-        listVideos(1, 30),
+        listVideos(1, 100),
         listSharedSessions().catch(() => ({ data: [] })),
       ]);
       setSessions(sessionsResponse.data);
@@ -212,14 +221,6 @@ export default function HomePage() {
     setSessionToDelete(null);
   };
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  };
-
   const generateSessionName = () => {
     const baseName = `Session - ${new Date().toLocaleDateString('en-US', {
       month: 'short',
@@ -268,7 +269,6 @@ export default function HomePage() {
       setUploadError('No valid video files. Please use MP4, MOV, or WebM.');
       return;
     }
-    // Skip invalid files silently (validFiles already filtered)
 
     // Check for duplicate session name before starting uploads
     const isNewSession = selectedSessionId === NEW_SESSION_VALUE;
@@ -296,13 +296,12 @@ export default function HomePage() {
 
       const result = await uploadVideoToLibrary(file);
       if (!result.success || !result.videoId) {
-        // Get the error from the store after the failed upload
         const storeError = useUploadStore.getState().error;
         if (storeError) {
           lastUploadError = storeError;
         }
         console.error(`Failed to upload ${file.name}`);
-        continue; // Continue with next file
+        continue;
       }
       uploadedVideoIds.push(result.videoId);
     }
@@ -351,7 +350,6 @@ export default function HomePage() {
     if (addedCount === 0) {
       setUploadQueue([]);
       setUploadError(lastAddError || 'Failed to add videos to session. Please try again.');
-      // Reload data to refresh the UI since videos are in library
       loadData();
       return;
     }
@@ -383,7 +381,7 @@ export default function HomePage() {
   return (
     <Box
       sx={{
-        height: '100vh',
+        minHeight: '100vh',
         overflow: 'auto',
         bgcolor: designTokens.colors.surface[0],
         color: 'text.primary',
@@ -395,70 +393,39 @@ export default function HomePage() {
           top: 0,
           left: 0,
           right: 0,
-          height: 300,
-          background: 'radial-gradient(ellipse at 50% 0%, rgba(255, 107, 74, 0.06) 0%, transparent 70%)',
+          height: 400,
+          background: 'radial-gradient(ellipse at 50% 0%, rgba(255, 107, 74, 0.08) 0%, transparent 70%)',
           pointerEvents: 'none',
         },
       }}
     >
       <Container maxWidth="lg" sx={{ position: 'relative' }}>
         {/* Header */}
-        <Box
-          component="header"
-          sx={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            mb: 5,
-            py: 1,
-          }}
-        >
-          <Stack direction="row" alignItems="center" spacing={2}>
-            <SportsVolleyballIcon
-              sx={{
-                fontSize: 40,
-                color: 'primary.main',
-                filter: 'drop-shadow(0 2px 8px rgba(255, 107, 74, 0.4))',
-              }}
-            />
-            <Box>
-              <Typography
-                variant="h4"
+        <PageHeader
+          icon={<SportsVolleyballIcon />}
+          title="RallyCut"
+          subtitle="Beach Volleyball Video Analysis"
+          action={
+            hasVideos && (
+              <Button
+                variant="contained"
+                startIcon={<CloudUploadIcon />}
+                onClick={handleUploadDialogOpen}
                 sx={{
-                  fontWeight: 700,
-                  background: designTokens.gradients.primary,
-                  backgroundClip: 'text',
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
-                  letterSpacing: '-0.02em',
+                  px: 3,
+                  py: 1.25,
+                  transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                  '&:hover': {
+                    transform: 'translateY(-2px)',
+                    boxShadow: '0 6px 20px rgba(255, 107, 74, 0.4)',
+                  },
                 }}
               >
-                RallyCut
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ letterSpacing: '0.01em' }}>
-                Beach Volleyball Video Analysis
-              </Typography>
-            </Box>
-          </Stack>
-          {hasVideos && (
-            <Button
-              variant="contained"
-              startIcon={<CloudUploadIcon />}
-              onClick={handleUploadDialogOpen}
-              sx={{
-                px: 3,
-                py: 1,
-                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                '&:hover': {
-                  transform: 'translateY(-2px)',
-                  boxShadow: '0 6px 20px rgba(255, 107, 74, 0.4)',
-                },
-              }}
-            >
-              Upload Video
-            </Button>
-          )}
-        </Box>
+                Upload Video
+              </Button>
+            )
+          }
+        />
 
         {loading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
@@ -479,660 +446,386 @@ export default function HomePage() {
             {!loadingShared && sharedSessions.length > 0 ? (
               /* Has shared sessions but no own videos */
               <>
-                <Box sx={{ textAlign: 'center', py: 6, mb: 5 }}>
-                  <Box
-                    sx={{
-                      width: 100,
-                      height: 100,
-                      mx: 'auto',
-                      mb: 3,
-                      borderRadius: '50%',
-                      background: `linear-gradient(135deg, ${designTokens.colors.surface[2]} 0%, ${designTokens.colors.surface[1]} 100%)`,
-                      border: '2px dashed',
-                      borderColor: 'rgba(255, 107, 74, 0.3)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <SportsVolleyballIcon
-                      sx={{
-                        fontSize: 48,
-                        color: 'primary.main',
-                        filter: 'drop-shadow(0 4px 12px rgba(255, 107, 74, 0.3))',
-                      }}
-                    />
-                  </Box>
-                  <Typography
-                    variant="h6"
-                    sx={{
-                      mb: 1,
-                      fontWeight: 600,
-                      background: designTokens.gradients.primary,
-                      backgroundClip: 'text',
-                      WebkitBackgroundClip: 'text',
-                      WebkitTextFillColor: 'transparent',
-                    }}
-                  >
-                    Start your own session
-                  </Typography>
-                  <Typography color="text.secondary" sx={{ mb: 3, maxWidth: 360, mx: 'auto' }}>
-                    Upload a volleyball video to create your first session
-                  </Typography>
-                  <Button
-                    variant="contained"
-                    size="large"
-                    startIcon={<CloudUploadIcon />}
-                    onClick={handleUploadDialogOpen}
-                    sx={{
-                      px: 4,
-                      py: 1.5,
-                      transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                      '&:hover': {
-                        transform: 'translateY(-2px)',
-                        boxShadow: '0 8px 24px rgba(255, 107, 74, 0.4)',
-                      },
-                    }}
-                  >
-                    Upload Video
-                  </Button>
-                </Box>
-                <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mb: 2 }}>
-                  <Box
-                    sx={{
-                      width: 28,
-                      height: 28,
-                      borderRadius: 1,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      bgcolor: 'rgba(0, 212, 170, 0.15)',
-                    }}
-                  >
-                    <PeopleIcon sx={{ fontSize: 16, color: 'secondary.main' }} />
-                  </Box>
-                  <Typography variant="subtitle2" color="text.secondary" fontWeight={500}>
-                    Shared with me
-                  </Typography>
-                  <Chip
-                    label={sharedSessions.length}
-                    size="small"
-                    sx={{
-                      bgcolor: 'rgba(0, 212, 170, 0.2)',
-                      color: 'secondary.main',
-                      fontWeight: 600,
-                      height: 20,
-                      minWidth: 24,
-                    }}
+                <EmptyState
+                  variant="no-videos"
+                  onAction={handleUploadDialogOpen}
+                  title="Start your own session"
+                  description="Upload a volleyball video to create your first session"
+                  actionLabel="Upload Video"
+                />
+
+                <Box sx={{ mt: 6 }}>
+                  <SectionHeader
+                    icon={<PeopleIcon />}
+                    title="Shared with me"
+                    count={sharedSessions.length}
+                    color="secondary"
                   />
-                </Stack>
-                <Grid container spacing={3}>
-                  {sharedSessions.map((session) => (
-                    <Grid size={{ xs: 12, sm: 6, md: 4 }} key={session.id}>
-                      <Card
-                        sx={{
-                          bgcolor: designTokens.colors.surface[1],
-                          border: '1px solid',
-                          borderColor: 'divider',
-                          borderRadius: 2,
-                          overflow: 'hidden',
-                          transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-                          '&:hover': {
-                            transform: 'translateY(-4px)',
-                            boxShadow: designTokens.shadows.lg,
-                            borderColor: 'secondary.main',
-                          },
-                        }}
-                      >
-                        <Box sx={{ height: 3, background: designTokens.gradients.secondary }} />
-                        <CardActionArea onClick={() => router.push(`/sessions/${session.id}`)}>
-                          <CardContent sx={{ p: 2.5 }}>
-                            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
-                              <Box
-                                sx={{
-                                  width: 22,
-                                  height: 22,
-                                  borderRadius: '50%',
-                                  bgcolor: 'rgba(0, 212, 170, 0.2)',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                }}
-                              >
-                                <PeopleIcon sx={{ fontSize: 12, color: 'secondary.main' }} />
-                              </Box>
-                              <Typography variant="caption" color="secondary.main" fontWeight={500}>
-                                Shared by {session.ownerName || 'Unknown'}
-                              </Typography>
-                            </Stack>
-                            <Typography variant="h6" fontWeight={600} noWrap sx={{ mb: 1.5 }}>
-                              {session.name}
-                            </Typography>
-                            <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
-                              <Chip
-                                label={`${session.videoCount} videos`}
-                                size="small"
-                                sx={{ bgcolor: designTokens.colors.surface[3], fontWeight: 500 }}
-                              />
-                              <Chip
-                                label={`${session.highlightCount} highlights`}
-                                size="small"
-                                sx={{ bgcolor: designTokens.colors.surface[3], fontWeight: 500 }}
-                              />
-                            </Stack>
-                            <Typography variant="caption" color="text.disabled">
-                              Joined {formatDate(session.joinedAt)}
-                            </Typography>
-                          </CardContent>
-                        </CardActionArea>
-                      </Card>
-                    </Grid>
-                  ))}
-                </Grid>
+                  <Grid container spacing={3}>
+                    {sharedSessions.map((session) => (
+                      <Grid size={{ xs: 12, sm: 6, md: 4 }} key={session.id}>
+                        <SessionCard
+                          id={session.id}
+                          name={session.name}
+                          videoCount={session.videoCount}
+                          highlightCount={session.highlightCount}
+                          variant="shared"
+                          sharedBy={session.ownerName || 'Unknown'}
+                          onClick={() => router.push(`/sessions/${session.id}`)}
+                        />
+                      </Grid>
+                    ))}
+                  </Grid>
+                </Box>
               </>
             ) : (
               /* No videos, no shared sessions - Main empty state */
-              <Box sx={{ textAlign: 'center', py: 12 }}>
-                <Box
-                  sx={{
-                    width: 120,
-                    height: 120,
-                    mx: 'auto',
-                    mb: 4,
-                    borderRadius: '50%',
-                    background: `linear-gradient(135deg, ${designTokens.colors.surface[2]} 0%, ${designTokens.colors.surface[1]} 100%)`,
-                    border: '2px dashed',
-                    borderColor: 'rgba(255, 107, 74, 0.3)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    position: 'relative',
-                    animation: 'pulse 3s ease-in-out infinite',
-                    '@keyframes pulse': {
-                      '0%, 100%': {
-                        borderColor: 'rgba(255, 107, 74, 0.3)',
-                        transform: 'scale(1)',
-                      },
-                      '50%': {
-                        borderColor: 'rgba(255, 107, 74, 0.6)',
-                        transform: 'scale(1.02)',
-                      },
-                    },
-                  }}
-                >
-                  <SportsVolleyballIcon
-                    sx={{
-                      fontSize: 56,
-                      color: 'primary.main',
-                      filter: 'drop-shadow(0 4px 12px rgba(255, 107, 74, 0.3))',
-                    }}
-                  />
-                </Box>
-                <Typography
-                  variant="h5"
-                  sx={{
-                    mb: 1,
-                    fontWeight: 600,
-                    background: designTokens.gradients.primary,
-                    backgroundClip: 'text',
-                    WebkitBackgroundClip: 'text',
-                    WebkitTextFillColor: 'transparent',
-                  }}
-                >
-                  Get started with RallyCut
-                </Typography>
-                <Typography
-                  variant="body1"
-                  color="text.secondary"
-                  sx={{ mb: 4, maxWidth: 400, mx: 'auto' }}
-                >
-                  Upload your beach volleyball video to begin analyzing rallies and creating highlights
-                </Typography>
-                <Button
-                  variant="contained"
-                  size="large"
-                  startIcon={<CloudUploadIcon />}
-                  onClick={handleUploadDialogOpen}
-                  sx={{
-                    px: 4,
-                    py: 1.5,
-                    fontSize: '1rem',
-                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                    '&:hover': {
-                      transform: 'translateY(-3px)',
-                      boxShadow: '0 8px 24px rgba(255, 107, 74, 0.4)',
-                    },
-                  }}
-                >
-                  Upload Your First Video
-                </Button>
-              </Box>
+              <EmptyState
+                variant="no-videos"
+                onAction={handleUploadDialogOpen}
+              />
             )}
           </>
         ) : (
-          /* Has videos - show All Videos card and sessions */
+          /* Has videos - show stats, All Videos card and sessions */
           <>
-            {/* Pinned All Videos Card */}
+            {/* Stats Bar */}
+            <StatsBar
+              videoCount={readyVideos.length}
+              sessionCount={groupedVideos.length + emptySessions.length}
+              loading={loading}
+            />
+
+            {/* All Videos Hero Card */}
             {allVideosSession && (
               <Card
                 sx={{
                   mb: 4,
                   position: 'relative',
                   overflow: 'hidden',
-                  bgcolor: designTokens.colors.surface[2],
-                  border: '1px solid',
-                  borderColor: 'primary.main',
+                  bgcolor: designTokens.colors.surface[1],
                   borderRadius: 3,
-                  transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-                  '&::before': {
-                    content: '""',
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    height: 3,
-                    background: designTokens.gradients.sunset,
-                  },
+                  border: '1px solid',
+                  borderColor: 'rgba(255, 107, 74, 0.2)',
+                  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                   '&:hover': {
                     transform: 'translateY(-4px)',
-                    boxShadow: `${designTokens.shadows.xl}, ${designTokens.shadows.glow.primary}`,
-                    borderColor: 'primary.light',
+                    boxShadow: `0 20px 40px rgba(0, 0, 0, 0.4), ${designTokens.shadows.glow.primary}`,
+                    borderColor: 'rgba(255, 107, 74, 0.4)',
+                    '& .thumbnail-strip': {
+                      transform: 'scale(1.05)',
+                    },
+                    '& .arrow-icon': {
+                      transform: 'translateX(4px)',
+                    },
+                    '& .view-text': {
+                      opacity: 1,
+                      transform: 'translateX(0)',
+                    },
                   },
                 }}
               >
                 <CardActionArea onClick={() => router.push('/videos')}>
-                  <CardContent sx={{ py: 3, px: 3 }}>
-                    <Stack direction="row" alignItems="center" spacing={2}>
-                      <Box
-                        sx={{
-                          width: 48,
-                          height: 48,
-                          borderRadius: 2,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          background: 'rgba(255, 107, 74, 0.15)',
-                          border: '1px solid rgba(255, 107, 74, 0.3)',
-                        }}
-                      >
-                        <CollectionsIcon sx={{ color: 'primary.main', fontSize: 26 }} />
-                      </Box>
-                      <Box sx={{ flex: 1 }}>
-                        <Typography variant="h5" fontWeight={600}>
-                          All Videos
+                  {/* Thumbnail Strip Background */}
+                  <Box
+                    sx={{
+                      position: 'relative',
+                      height: { xs: 100, sm: 120 },
+                      overflow: 'hidden',
+                    }}
+                  >
+                    {/* Thumbnail Grid */}
+                    <Box
+                      className="thumbnail-strip"
+                      sx={{
+                        display: 'flex',
+                        position: 'absolute',
+                        inset: 0,
+                        transition: 'transform 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
+                      }}
+                    >
+                      {readyVideos.slice(0, 6).map((video, index) => (
+                        <Box
+                          key={video.id}
+                          sx={{
+                            flex: 1,
+                            minWidth: { xs: '33.33%', sm: '16.66%' },
+                            height: '100%',
+                            position: 'relative',
+                            display: index >= 3 ? { xs: 'none', sm: 'block' } : 'block',
+                          }}
+                        >
+                          {video.posterS3Key ? (
+                            <img
+                              src={getVideoStreamUrl(video.posterS3Key)}
+                              alt=""
+                              style={{
+                                width: '100%',
+                                height: '100%',
+                                objectFit: 'cover',
+                                display: 'block',
+                              }}
+                            />
+                          ) : (
+                            <Box
+                              sx={{
+                                width: '100%',
+                                height: '100%',
+                                bgcolor: designTokens.colors.surface[2],
+                              }}
+                            />
+                          )}
+                        </Box>
+                      ))}
+                      {/* Fill remaining slots if less than 6 videos */}
+                      {readyVideos.length < 6 &&
+                        Array.from({ length: 6 - readyVideos.length }).map((_, i) => (
+                          <Box
+                            key={`empty-${i}`}
+                            sx={{
+                              flex: 1,
+                              minWidth: { xs: '33.33%', sm: '16.66%' },
+                              height: '100%',
+                              bgcolor: designTokens.colors.surface[2],
+                              display: i + readyVideos.length >= 3 ? { xs: 'none', sm: 'block' } : 'block',
+                            }}
+                          />
+                        ))}
+                    </Box>
+
+                    {/* Gradient Overlays */}
+                    <Box
+                      sx={{
+                        position: 'absolute',
+                        inset: 0,
+                        background: 'linear-gradient(to bottom, rgba(13, 14, 18, 0.3) 0%, rgba(13, 14, 18, 0.95) 100%)',
+                        pointerEvents: 'none',
+                      }}
+                    />
+                    <Box
+                      sx={{
+                        position: 'absolute',
+                        inset: 0,
+                        background: 'linear-gradient(135deg, rgba(255, 107, 74, 0.15) 0%, transparent 50%)',
+                        pointerEvents: 'none',
+                      }}
+                    />
+                  </Box>
+
+                  {/* Content */}
+                  <CardContent
+                    sx={{
+                      position: 'relative',
+                      py: 2.5,
+                      px: 3,
+                      mt: -4,
+                    }}
+                  >
+                    <Stack
+                      direction="row"
+                      alignItems="center"
+                      justifyContent="space-between"
+                      spacing={2}
+                    >
+                      <Stack direction="row" alignItems="center" spacing={2}>
+                        <Box
+                          sx={{
+                            width: 48,
+                            height: 48,
+                            borderRadius: 2,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            background: designTokens.gradients.primary,
+                            boxShadow: designTokens.shadows.glow.primary,
+                          }}
+                        >
+                          <CollectionsIcon sx={{ color: 'white', fontSize: 24 }} />
+                        </Box>
+                        <Box>
+                          <Typography
+                            variant="h5"
+                            fontWeight={700}
+                            sx={{
+                              background: 'linear-gradient(135deg, #FFFFFF 0%, #A1A7B4 100%)',
+                              backgroundClip: 'text',
+                              WebkitBackgroundClip: 'text',
+                              WebkitTextFillColor: 'transparent',
+                            }}
+                          >
+                            Video Library
+                          </Typography>
+                          <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mt: 0.5 }}>
+                            <Chip
+                              label={`${readyVideos.length} video${readyVideos.length !== 1 ? 's' : ''}`}
+                              size="small"
+                              sx={{
+                                bgcolor: 'rgba(255, 107, 74, 0.2)',
+                                color: 'primary.light',
+                                fontWeight: 600,
+                                fontSize: '0.75rem',
+                                height: 24,
+                              }}
+                            />
+                            <Typography variant="body2" color="text.secondary">
+                              Browse & create highlights
+                            </Typography>
+                          </Stack>
+                        </Box>
+                      </Stack>
+
+                      <Stack direction="row" alignItems="center" spacing={1}>
+                        <Typography
+                          className="view-text"
+                          variant="body2"
+                          sx={{
+                            color: 'primary.main',
+                            fontWeight: 600,
+                            opacity: 0,
+                            transform: 'translateX(-8px)',
+                            transition: 'all 0.2s ease',
+                          }}
+                        >
+                          View all
                         </Typography>
-                        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                          Browse all your videos and create highlights
-                        </Typography>
-                      </Box>
-                      <Chip
-                        label={`${readyVideos.length} video${readyVideos.length !== 1 ? 's' : ''}`}
-                        sx={{
-                          bgcolor: 'rgba(255, 107, 74, 0.2)',
-                          color: 'primary.light',
-                          fontWeight: 600,
-                          fontSize: '0.8rem',
-                        }}
-                      />
-                      <ChevronRightIcon sx={{ color: 'text.secondary', fontSize: 28 }} />
+                        <Box
+                          sx={{
+                            width: 36,
+                            height: 36,
+                            borderRadius: '50%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            bgcolor: 'rgba(255, 107, 74, 0.1)',
+                            border: '1px solid rgba(255, 107, 74, 0.3)',
+                          }}
+                        >
+                          <ChevronRightIcon
+                            className="arrow-icon"
+                            sx={{
+                              color: 'primary.main',
+                              fontSize: 22,
+                              transition: 'transform 0.2s ease',
+                            }}
+                          />
+                        </Box>
+                      </Stack>
                     </Stack>
                   </CardContent>
                 </CardActionArea>
               </Card>
             )}
 
-            {/* Sessions with Video Previews */}
+            {/* Your Sessions */}
             {groupedVideos.length > 0 && (
-              <Box sx={{ mb: 4 }}>
-                <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 2, fontWeight: 500 }}>
-                  Your Sessions
-                </Typography>
-                {groupedVideos.map(({ session, videos: sessionVideos }) => (
-                  <Card
-                    key={session.id}
-                    sx={{
-                      mb: 3,
-                      bgcolor: designTokens.colors.surface[1],
-                      borderRadius: 3,
-                      overflow: 'hidden',
-                      border: '1px solid',
-                      borderColor: 'divider',
-                      transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-                      '&:hover': {
-                        borderColor: 'rgba(255, 107, 74, 0.3)',
-                        boxShadow: designTokens.shadows.lg,
-                      },
-                    }}
-                  >
-                    {/* Session Header */}
-                    <Box
-                      sx={{
-                        p: 2,
-                        display: 'flex',
-                        alignItems: 'center',
-                        background: designTokens.gradients.toolbar,
-                        borderBottom: '1px solid',
-                        borderColor: 'divider',
-                      }}
-                    >
-                      <Typography variant="subtitle1" fontWeight={600} sx={{ flex: 1 }}>
-                        {session.name}
-                      </Typography>
-                      <Chip
-                        label={`${sessionVideos.length} video${sessionVideos.length !== 1 ? 's' : ''}`}
-                        size="small"
-                        sx={{
-                          bgcolor: 'rgba(0, 212, 170, 0.15)',
-                          color: 'secondary.main',
-                          fontWeight: 500,
-                        }}
-                      />
-                      <IconButton
-                        size="small"
-                        onClick={(e) => handleMenuOpen(e, session.id, session.name)}
-                        sx={{
-                          ml: 2,
-                          color: 'text.secondary',
-                          '&:hover': { color: 'text.primary', bgcolor: 'action.hover' },
-                        }}
-                      >
-                        <MoreVertIcon fontSize="small" />
-                      </IconButton>
-                    </Box>
-                    {/* Video Grid */}
-                    <Box sx={{ p: 2, bgcolor: designTokens.colors.surface[0] }}>
-                      <Grid container spacing={2}>
-                        {sessionVideos.map((video) => (
-                          <Grid size={{ xs: 6, sm: 4, md: 3, lg: 2 }} key={video.id}>
-                            <Card
-                              sx={{
-                                bgcolor: designTokens.colors.surface[2],
-                                borderRadius: 2,
-                                overflow: 'hidden',
-                                border: '1px solid',
-                                borderColor: 'transparent',
-                                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                                cursor: 'pointer',
-                                '&:hover': {
-                                  transform: 'translateY(-4px) scale(1.02)',
-                                  boxShadow: designTokens.shadows.lg,
-                                  borderColor: 'primary.main',
-                                  '& .thumbnail-overlay': {
-                                    opacity: 1,
-                                  },
-                                  '& .play-icon': {
-                                    transform: 'translate(-50%, -50%) scale(1)',
-                                    opacity: 1,
-                                  },
-                                },
-                              }}
-                              onClick={() => router.push(`/sessions/${session.id}?video=${video.id}`)}
-                            >
-                              <Box sx={{ position: 'relative', aspectRatio: '16/9' }}>
-                                {video.posterS3Key ? (
-                                  <img
-                                    src={getVideoStreamUrl(video.posterS3Key)}
-                                    alt={video.name}
-                                    loading="lazy"
-                                    style={{
-                                      width: '100%',
-                                      height: '100%',
-                                      objectFit: 'cover',
-                                      backgroundColor: designTokens.colors.surface[0],
-                                      display: 'block',
-                                    }}
-                                  />
-                                ) : (
-                                  <Box
-                                    sx={{
-                                      width: '100%',
-                                      height: '100%',
-                                      bgcolor: designTokens.colors.surface[0],
-                                    }}
-                                  />
-                                )}
-                                {/* Gradient overlay */}
-                                <Box
-                                  sx={{
-                                    position: 'absolute',
-                                    inset: 0,
-                                    background: 'linear-gradient(to top, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.1) 40%, transparent 100%)',
-                                    pointerEvents: 'none',
-                                  }}
-                                />
-                                {/* Hover overlay */}
-                                <Box
-                                  className="thumbnail-overlay"
-                                  sx={{
-                                    position: 'absolute',
-                                    inset: 0,
-                                    background: 'rgba(0, 0, 0, 0.3)',
-                                    opacity: 0,
-                                    transition: 'opacity 0.2s ease',
-                                    pointerEvents: 'none',
-                                  }}
-                                />
-                                {/* Play icon */}
-                                <Box
-                                  className="play-icon"
-                                  sx={{
-                                    position: 'absolute',
-                                    top: '50%',
-                                    left: '50%',
-                                    transform: 'translate(-50%, -50%) scale(0.8)',
-                                    opacity: 0,
-                                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                                    width: 40,
-                                    height: 40,
-                                    borderRadius: '50%',
-                                    bgcolor: 'rgba(255, 107, 74, 0.9)',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    boxShadow: designTokens.shadows.glow.primary,
-                                    pointerEvents: 'none',
-                                  }}
-                                >
-                                  <PlayArrowIcon sx={{ color: 'white', fontSize: 24 }} />
-                                </Box>
-                                {/* Duration badge */}
-                                <Chip
-                                  label={formatDuration(video.durationMs)}
-                                  size="small"
-                                  sx={{
-                                    position: 'absolute',
-                                    bottom: 6,
-                                    right: 6,
-                                    bgcolor: 'rgba(0, 0, 0, 0.75)',
-                                    color: 'white',
-                                    fontSize: '0.7rem',
-                                    fontWeight: 600,
-                                    height: 22,
-                                    backdropFilter: 'blur(4px)',
-                                  }}
-                                />
-                              </Box>
-                              <CardContent sx={{ py: 1.5, px: 1.5, '&:last-child': { pb: 1.5 } }}>
-                                <Typography
-                                  variant="body2"
-                                  noWrap
-                                  title={video.name}
-                                  sx={{ fontWeight: 500, color: 'text.primary' }}
-                                >
-                                  {video.name}
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
-                        ))}
-                      </Grid>
-                    </Box>
-                  </Card>
-                ))}
-              </Box>
-            )}
-
-            {/* Empty Sessions */}
-            {emptySessions.length > 0 && (
-              <Box sx={{ mb: 4 }}>
-                <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 2, fontWeight: 500 }}>
-                  Empty Sessions
-                </Typography>
-                {emptySessions.map((session) => (
-                  <Card
-                    key={session.id}
-                    sx={{
-                      mb: 2,
-                      bgcolor: designTokens.colors.surface[1],
-                      borderRadius: 2,
-                      overflow: 'hidden',
-                      border: '1px solid',
-                      borderColor: 'divider',
-                    }}
-                  >
-                    <Box
-                      sx={{
-                        p: 2,
-                        display: 'flex',
-                        alignItems: 'center',
-                        background: designTokens.gradients.toolbar,
-                      }}
-                    >
-                      <Typography variant="subtitle1" fontWeight={600} sx={{ flex: 1 }}>
-                        {session.name}
-                      </Typography>
-                      <Chip
-                        label="No videos"
-                        size="small"
-                        sx={{
-                          bgcolor: 'rgba(255, 255, 255, 0.1)',
-                          color: 'text.secondary',
-                          fontWeight: 500,
-                        }}
-                      />
-                      <Box sx={{ ml: 2, display: 'flex', gap: 1, alignItems: 'center' }}>
-                        <Button
-                          size="small"
-                          onClick={() => setAddToEmptySession({ id: session.id, name: session.name })}
-                          sx={{
-                            color: 'secondary.main',
-                            fontWeight: 600,
-                            '&:hover': {
-                              backgroundColor: 'rgba(0, 212, 170, 0.1)',
-                            },
-                          }}
-                        >
-                          Add Videos
-                        </Button>
+              <Box sx={{ mb: 5 }}>
+                <SectionHeader
+                  icon={<FolderIcon />}
+                  title="Your Sessions"
+                  count={groupedVideos.length}
+                />
+                <Grid container spacing={3}>
+                  {groupedVideos.map(({ session, videos: sessionVideos, updatedAt }) => (
+                    <Grid size={{ xs: 12, sm: 6, md: 4 }} key={session.id}>
+                      <Box sx={{ position: 'relative' }}>
+                        <SessionCard
+                          id={session.id}
+                          name={session.name}
+                          videoCount={sessionVideos.length}
+                          updatedAt={updatedAt}
+                          videos={sessionVideos.slice(0, 4).map(v => ({
+                            id: v.id,
+                            posterS3Key: v.posterS3Key,
+                          }))}
+                          onClick={() => router.push(`/sessions/${session.id}`)}
+                        />
                         <IconButton
                           size="small"
                           onClick={(e) => handleMenuOpen(e, session.id, session.name)}
                           sx={{
-                            color: 'text.secondary',
-                            '&:hover': { color: 'text.primary', bgcolor: 'action.hover' },
+                            position: 'absolute',
+                            top: 8,
+                            right: 8,
+                            bgcolor: 'rgba(0, 0, 0, 0.5)',
+                            backdropFilter: 'blur(4px)',
+                            color: 'white',
+                            '&:hover': {
+                              bgcolor: 'rgba(0, 0, 0, 0.7)',
+                            },
                           }}
                         >
                           <MoreVertIcon fontSize="small" />
                         </IconButton>
                       </Box>
-                    </Box>
-                  </Card>
-                ))}
+                    </Grid>
+                  ))}
+                </Grid>
+              </Box>
+            )}
+
+            {/* Empty Sessions */}
+            {emptySessions.length > 0 && (
+              <Box sx={{ mb: 5 }}>
+                <SectionHeader
+                  icon={<FolderIcon />}
+                  title="Empty Sessions"
+                  count={emptySessions.length}
+                />
+                <Grid container spacing={3}>
+                  {emptySessions.map((session) => (
+                    <Grid size={{ xs: 12, sm: 6, md: 4 }} key={session.id}>
+                      <Box sx={{ position: 'relative' }}>
+                        <SessionCard
+                          id={session.id}
+                          name={session.name}
+                          videoCount={0}
+                          onAddVideos={() => setAddToEmptySession({ id: session.id, name: session.name })}
+                        />
+                        <IconButton
+                          size="small"
+                          onClick={(e) => handleMenuOpen(e, session.id, session.name)}
+                          sx={{
+                            position: 'absolute',
+                            top: 8,
+                            right: 8,
+                            bgcolor: 'rgba(0, 0, 0, 0.3)',
+                            color: 'text.secondary',
+                            '&:hover': {
+                              bgcolor: 'rgba(0, 0, 0, 0.5)',
+                              color: 'white',
+                            },
+                          }}
+                        >
+                          <MoreVertIcon fontSize="small" />
+                        </IconButton>
+                      </Box>
+                    </Grid>
+                  ))}
+                </Grid>
               </Box>
             )}
 
             {/* Shared with me */}
             {!loadingShared && sharedSessions.length > 0 && (
               <Box sx={{ mt: 5 }}>
-                <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mb: 3 }}>
-                  <Box
-                    sx={{
-                      width: 32,
-                      height: 32,
-                      borderRadius: 1,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      bgcolor: 'rgba(0, 212, 170, 0.15)',
-                    }}
-                  >
-                    <PeopleIcon sx={{ fontSize: 18, color: 'secondary.main' }} />
-                  </Box>
-                  <Typography variant="subtitle1" fontWeight={600} color="text.primary">
-                    Shared with me
-                  </Typography>
-                  <Chip
-                    label={sharedSessions.length}
-                    size="small"
-                    sx={{
-                      bgcolor: 'rgba(0, 212, 170, 0.2)',
-                      color: 'secondary.main',
-                      fontWeight: 600,
-                      height: 22,
-                      minWidth: 26,
-                    }}
-                  />
-                </Stack>
+                <SectionHeader
+                  icon={<PeopleIcon />}
+                  title="Shared with me"
+                  count={sharedSessions.length}
+                  color="secondary"
+                />
                 <Grid container spacing={3}>
                   {sharedSessions.map((session) => (
                     <Grid size={{ xs: 12, sm: 6, md: 4 }} key={session.id}>
-                      <Card
-                        sx={{
-                          bgcolor: designTokens.colors.surface[1],
-                          border: '1px solid',
-                          borderColor: 'divider',
-                          borderRadius: 2,
-                          overflow: 'hidden',
-                          transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-                          '&:hover': {
-                            transform: 'translateY(-4px)',
-                            boxShadow: designTokens.shadows.lg,
-                            borderColor: 'secondary.main',
-                          },
-                        }}
-                      >
-                        <Box sx={{ height: 3, background: designTokens.gradients.secondary }} />
-                        <CardActionArea onClick={() => router.push(`/sessions/${session.id}`)}>
-                          <CardContent sx={{ p: 2.5 }}>
-                            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
-                              <Box
-                                sx={{
-                                  width: 24,
-                                  height: 24,
-                                  borderRadius: '50%',
-                                  bgcolor: 'rgba(0, 212, 170, 0.2)',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                }}
-                              >
-                                <PeopleIcon sx={{ fontSize: 14, color: 'secondary.main' }} />
-                              </Box>
-                              <Typography variant="caption" color="secondary.main" fontWeight={500}>
-                                Shared by {session.ownerName || 'Unknown'}
-                              </Typography>
-                            </Stack>
-                            <Typography variant="h6" fontWeight={600} noWrap sx={{ mb: 1.5 }}>
-                              {session.name}
-                            </Typography>
-                            <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
-                              <Chip
-                                label={`${session.videoCount} videos`}
-                                size="small"
-                                sx={{ bgcolor: designTokens.colors.surface[3], fontWeight: 500 }}
-                              />
-                              <Chip
-                                label={`${session.highlightCount} highlights`}
-                                size="small"
-                                sx={{ bgcolor: designTokens.colors.surface[3], fontWeight: 500 }}
-                              />
-                            </Stack>
-                            <Typography variant="caption" color="text.disabled">
-                              Joined {formatDate(session.joinedAt)}
-                            </Typography>
-                          </CardContent>
-                        </CardActionArea>
-                      </Card>
+                      <SessionCard
+                        id={session.id}
+                        name={session.name}
+                        videoCount={session.videoCount}
+                        highlightCount={session.highlightCount}
+                        variant="shared"
+                        sharedBy={session.ownerName || 'Unknown'}
+                        onClick={() => router.push(`/sessions/${session.id}`)}
+                      />
                     </Grid>
                   ))}
                 </Grid>
