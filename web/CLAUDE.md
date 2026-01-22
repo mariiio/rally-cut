@@ -101,6 +101,27 @@ Also uses: `preload="metadata"`, 1280px poster thumbnail.
 - **Backend sync**: 5s debounce after `markDirty()`, paid tiers only (Pro/Elite)
 - **Undo/redo**: 50 entries, stored in `past[]`/`future[]` arrays
 
+## Session/Match Architecture
+
+Sessions contain multiple matches (videos), each with their own rallies:
+
+```
+Session
+├── Match 1 (Video 1)
+│   ├── Rally 1 (match_1_rally_0)
+│   ├── Rally 2 (match_1_rally_1)
+│   └── ...
+├── Match 2 (Video 2)
+│   ├── Rally 1 (match_2_rally_0)
+│   └── ...
+└── Highlights (cross-match, reference rallies by ID)
+```
+
+- **activeMatchId**: Currently selected match/video in the editor
+- **Switching matches**: Saves current rallies to session, loads new match's rallies
+- **Rally IDs**: `{matchId}_rally_{n}` format enables match lookup from rally ID
+- **Highlights**: Can include rallies from any match in the session
+
 ## API Integration
 
 - `NEXT_PUBLIC_API_URL` for backend

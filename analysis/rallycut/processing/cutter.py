@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -217,18 +218,33 @@ class VideoCutter:
         # Convert continuation threshold from seconds to frames
         min_no_play_frames = int(self.rally_continuation_seconds * fps)
 
-        # Build a frame -> result mapping for efficient lookup
-        # Each result covers start_frame to end_frame
-        frame_to_result: dict[int, int] = {}  # frame -> result index
+        # Build sparse frame lookup using sorted intervals + binary search
+        # This avoids O(total_frames) memory for dense mapping
+        # Each entry: (start_frame, end_frame, result_index)
+        result_intervals: list[tuple[int, int, int]] = []
         for idx, r in enumerate(results):
             if r.start_frame is not None and r.end_frame is not None:
-                for f in range(r.start_frame, r.end_frame + 1):
-                    frame_to_result[f] = idx
+                result_intervals.append((r.start_frame, r.end_frame, idx))
 
-        if not frame_to_result:
+        if not result_intervals:
             return results
 
-        max_frame = max(frame_to_result.keys())
+        # Sort by start_frame for binary search
+        result_intervals.sort(key=lambda x: x[0])
+        interval_starts = [iv[0] for iv in result_intervals]
+
+        def find_result_for_frame(frame: int) -> int | None:
+            """Find result index containing frame using binary search. Returns None if no result covers the frame."""
+            # Find the rightmost interval that starts <= frame
+            i = bisect.bisect_right(interval_starts, frame) - 1
+            if i < 0:
+                return None
+            start, end, idx = result_intervals[i]
+            if start <= frame <= end:
+                return idx
+            return None
+
+        max_frame = result_intervals[-1][1]  # End frame of last interval
 
         # Track rally state
         in_rally = False
@@ -238,7 +254,7 @@ class VideoCutter:
         results_to_extend: set[int] = set()
 
         for frame in range(max_frame + 1):
-            result_idx = frame_to_result.get(frame)
+            result_idx = find_result_for_frame(frame)
             if result_idx is None:
                 # No prediction for this frame - treat as continuation
                 if in_rally:

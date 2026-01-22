@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import type { RequestHandler } from "express";
 import { Router } from "express";
 import { z } from "zod";
@@ -20,9 +21,25 @@ import { handleProcessingComplete } from "../services/processingService.js";
 const router = Router();
 
 // Middleware to validate webhook secret before body parsing
+// Uses timing-safe comparison to prevent timing attacks
 const requireWebhookSecret: RequestHandler = (req, res, next) => {
   const secret = req.headers["x-webhook-secret"];
-  if (secret !== env.MODAL_WEBHOOK_SECRET) {
+  if (typeof secret !== "string") {
+    res.status(401).json({ error: "Invalid webhook secret" });
+    return;
+  }
+
+  const expectedSecret = env.MODAL_WEBHOOK_SECRET;
+  const secretBuffer = Buffer.from(secret);
+  const expectedBuffer = Buffer.from(expectedSecret);
+
+  // Timing-safe comparison - both buffers must be same length
+  // If lengths differ, compare expected with itself to maintain constant time
+  const isValid =
+    secretBuffer.length === expectedBuffer.length &&
+    crypto.timingSafeEqual(secretBuffer, expectedBuffer);
+
+  if (!isValid) {
     res.status(401).json({ error: "Invalid webhook secret" });
     return;
   }

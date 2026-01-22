@@ -33,7 +33,7 @@ Open [http://localhost:3000](http://localhost:3000) to view the app.
 Create `.env.local`:
 
 ```bash
-NEXT_PUBLIC_API_URL=http://localhost:4000  # Backend API URL
+NEXT_PUBLIC_API_URL=http://localhost:3001  # Backend API URL
 ```
 
 ## Project Structure
@@ -41,8 +41,10 @@ NEXT_PUBLIC_API_URL=http://localhost:4000  # Backend API URL
 ```
 src/
 ├── app/                    # Next.js App Router
-│   ├── page.tsx            # Sessions list (home)
-│   ├── editor/[id]/        # Editor page
+│   ├── (landing)/          # Public landing page
+│   ├── (app)/              # Protected editor routes
+│   │   ├── sessions/[id]/  # Multi-video session editor
+│   │   └── videos/[id]/    # Single video editor
 │   └── theme.ts            # MUI theme + design tokens
 ├── components/
 │   ├── EditorLayout.tsx    # Main editor layout

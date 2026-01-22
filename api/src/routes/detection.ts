@@ -37,10 +37,12 @@ router.post(
 
 router.get(
   "/v1/videos/:id/detection-status",
+  requireUser,
   validateRequest({ params: z.object({ id: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      const status = await getDetectionStatus(req.params.id);
+      const userId = req.userId as string;
+      const status = await getDetectionStatus(req.params.id, userId);
       res.json(status);
     } catch (error) {
       next(error);

@@ -1,8 +1,8 @@
 import { prisma } from "../lib/prisma.js";
-import { NotFoundError } from "../middleware/errorHandler.js";
+import { ForbiddenError, NotFoundError } from "../middleware/errorHandler.js";
 import type { CreateRallyInput, UpdateRallyInput } from "../schemas/rally.js";
 
-export async function listRallies(videoId: string) {
+export async function listRallies(videoId: string, userId: string) {
   const video = await prisma.video.findUnique({
     where: { id: videoId },
   });
@@ -11,19 +11,27 @@ export async function listRallies(videoId: string) {
     throw new NotFoundError("Video", videoId);
   }
 
+  if (video.userId !== userId) {
+    throw new ForbiddenError("You do not have permission to access this video's rallies");
+  }
+
   return prisma.rally.findMany({
     where: { videoId },
     orderBy: { order: "asc" },
   });
 }
 
-export async function createRally(videoId: string, data: CreateRallyInput) {
+export async function createRally(videoId: string, userId: string, data: CreateRallyInput) {
   const video = await prisma.video.findUnique({
     where: { id: videoId },
   });
 
   if (video === null) {
     throw new NotFoundError("Video", videoId);
+  }
+
+  if (video.userId !== userId) {
+    throw new ForbiddenError("You do not have permission to create rallies for this video");
   }
 
   // Use MAX(order) + 1 in a transaction to prevent order collisions
@@ -49,13 +57,18 @@ export async function createRally(videoId: string, data: CreateRallyInput) {
   });
 }
 
-export async function updateRally(id: string, data: UpdateRallyInput) {
+export async function updateRally(id: string, userId: string, data: UpdateRallyInput) {
   const rally = await prisma.rally.findUnique({
     where: { id },
+    include: { video: true },
   });
 
   if (rally === null) {
     throw new NotFoundError("Rally", id);
+  }
+
+  if (rally.video.userId !== userId) {
+    throw new ForbiddenError("You do not have permission to update this rally");
   }
 
   return prisma.rally.update({
@@ -64,13 +77,18 @@ export async function updateRally(id: string, data: UpdateRallyInput) {
   });
 }
 
-export async function deleteRally(id: string) {
+export async function deleteRally(id: string, userId: string) {
   const rally = await prisma.rally.findUnique({
     where: { id },
+    include: { video: true },
   });
 
   if (rally === null) {
     throw new NotFoundError("Rally", id);
+  }
+
+  if (rally.video.userId !== userId) {
+    throw new ForbiddenError("You do not have permission to delete this rally");
   }
 
   await prisma.rally.delete({

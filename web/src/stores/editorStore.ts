@@ -121,6 +121,7 @@ interface EditorState {
 
   // Sync state
   syncStatus: SyncStatus;
+  localStorageError: string | null;
 
   // Original JSON (for preserving non-edited fields)
   originalJson: RallyFile | null;
@@ -273,6 +274,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     error: null,
     lastSyncAt: 0,
   },
+  localStorageError: null,
 
   // History state
   past: [],
@@ -984,9 +986,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   getRallyMatch: (rallyId: string) => {
     const state = get();
     if (!state.session) return null;
-    // Extract match ID from rally ID prefix (e.g., "match_1_rally_5" -> "match_1")
-    const matchId = rallyId.replace(/_rally_\d+$/, '');
-    return state.session.matches.find((m) => m.id === matchId) || null;
+    // Find match by checking each match's rallies array
+    // This avoids regex issues when match ID contains "_rally_" (e.g., "game_rally_1_rally_5")
+    return state.session.matches.find((m) => m.rallies.some((r) => r.id === rallyId)) || null;
   },
 
   setVideoFile: (file: File) => {
@@ -1655,9 +1657,34 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           cameraEdits,
           savedAt: Date.now(),
         };
-        localStorage.setItem(getStorageKey(state.session.id), JSON.stringify(data));
+
+        const serialized = JSON.stringify(data);
+
+        // Check size before saving (~5MB limit for localStorage)
+        const sizeBytes = new Blob([serialized]).size;
+        const maxBytes = 4 * 1024 * 1024; // 4MB safety margin (browser limit is ~5MB)
+        if (sizeBytes > maxBytes) {
+          console.error(
+            `[localStorage] Session data too large (${(sizeBytes / 1024 / 1024).toFixed(2)}MB). ` +
+            `Consider reducing rally count or upgrading to a paid tier for server sync.`
+          );
+          set({ localStorageError: 'Session too large for local storage. Upgrade for cloud sync.' });
+          return;
+        }
+
+        localStorage.setItem(getStorageKey(state.session.id), serialized);
+        // Clear any previous error on successful save
+        if (state.localStorageError) {
+          set({ localStorageError: null });
+        }
       } catch (e) {
-        console.warn('Failed to save to localStorage:', e);
+        // Handle QuotaExceededError specifically
+        if (e instanceof DOMException && (e.name === 'QuotaExceededError' || e.code === 22)) {
+          console.error('[localStorage] Quota exceeded. Session data not saved.');
+          set({ localStorageError: 'Storage quota exceeded. Upgrade for cloud sync.' });
+        } else {
+          console.warn('Failed to save to localStorage:', e);
+        }
       }
     }
   },

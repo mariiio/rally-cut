@@ -29,7 +29,7 @@ npx prisma migrate dev
 npm run dev
 ```
 
-Server runs at [http://localhost:4000](http://localhost:4000).
+Server runs at [http://localhost:3001](http://localhost:3001).
 
 ## Environment Variables
 
@@ -106,16 +106,19 @@ src/
 - `DELETE /v1/sessions/:id` - Delete session and all data
 
 ### Videos
+- `GET /v1/videos` - List user's videos
 - `POST /v1/videos/upload-url` - Get presigned upload URL
-- `POST /v1/videos/:id/confirm-upload` - Confirm upload complete
-- `GET /v1/videos/:id/status` - Get processing status
+- `POST /v1/videos/:id/confirm` - Confirm upload complete
+- `GET /v1/videos/:id/editor` - Get video for editor with rallies
+- `DELETE /v1/videos/:id` - Delete video
 
 ### Detection
-- `POST /v1/detection/start` - Start ML detection job
+- `POST /v1/videos/:id/detect-rallies` - Start ML detection job
+- `GET /v1/videos/:id/detection-status` - Get detection status
 
 ### Webhooks
-- `POST /v1/webhooks/detection/progress` - ML progress updates
-- `POST /v1/webhooks/detection/complete` - ML job complete
+- `POST /v1/webhooks/detection-progress` - ML progress updates
+- `POST /v1/webhooks/detection-complete` - ML job complete
 
 ### Sync
 - `POST /v1/sessions/:id/sync-state` - Sync full rally/highlight state
