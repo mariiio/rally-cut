@@ -600,13 +600,17 @@ export function RallyList() {
                         sx={{
                           display: 'flex',
                           alignItems: 'center',
-                          px: 1.5,
-                          py: 0.75,
+                          gap: 1,
+                          px: 1,
+                          py: 0.5,
+                          mx: 0.5,
+                          my: 0.25,
                           cursor: 'pointer',
-                          borderLeft: '2px solid',
-                          borderColor: isActive ? 'secondary.main' : 'transparent',
+                          borderRadius: 1,
                           bgcolor: isSelected
                             ? 'action.selected'
+                            : isActive
+                            ? 'rgba(0, 212, 170, 0.08)'
                             : 'transparent',
                           transition: designTokens.transitions.fast,
                           '&:hover': {
@@ -617,72 +621,62 @@ export function RallyList() {
                           '&:hover .more-btn': { opacity: 1 },
                         }}
                       >
-                        {/* Playing indicator */}
+                        {/* Rally number badge */}
                         <Box
                           sx={{
-                            width: 16,
+                            minWidth: 24,
+                            height: 24,
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
-                            mr: 0.5,
+                            borderRadius: 1,
+                            bgcolor: isActive
+                              ? 'rgba(0, 212, 170, 0.15)'
+                              : isSelected
+                              ? 'rgba(255, 107, 74, 0.15)'
+                              : 'rgba(255, 255, 255, 0.04)',
+                            color: isActive
+                              ? 'secondary.main'
+                              : isSelected
+                              ? 'primary.main'
+                              : 'text.disabled',
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            flexShrink: 0,
                           }}
                         >
-                          {isActive ? (
-                            <PlayArrowIcon sx={{ fontSize: 12, color: 'secondary.main' }} />
-                          ) : isSelected ? (
-                            <ChevronRightIcon sx={{ fontSize: 12, color: 'primary.main' }} />
-                          ) : null}
+                          {index + 1}
                         </Box>
 
-                        {/* Rally number */}
-                        <Typography
-                          sx={{
-                            fontFamily: 'monospace',
-                            fontSize: '0.6875rem',
-                            fontWeight: isSelected ? 600 : 400,
-                            color: isSelected ? 'text.primary' : 'text.secondary',
-                            width: 24,
-                            flexShrink: 0,
-                          }}
-                        >
-                          {String(index + 1).padStart(2, '0')}
-                        </Typography>
-
-                        {/* Time range */}
-                        <Typography
-                          sx={{
-                            fontFamily: 'monospace',
-                            fontSize: '0.6875rem',
-                            color: isSelected ? 'text.primary' : 'text.secondary',
-                            flex: 1,
-                            mx: 1,
-                          }}
-                        >
-                          {formatTime(rally.start_time)}
-                          <Box
-                            component="span"
-                            sx={{ color: 'text.disabled', mx: 0.5 }}
+                        {/* Time and duration */}
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography
+                            sx={{
+                              fontFamily: 'monospace',
+                              fontSize: '0.75rem',
+                              fontWeight: isSelected ? 500 : 400,
+                              color: isSelected ? 'text.primary' : 'text.secondary',
+                              lineHeight: 1.3,
+                            }}
                           >
-                            →
-                          </Box>
-                          {formatTime(rally.end_time)}
-                        </Typography>
-
-                        {/* Duration */}
-                        <Typography
-                          sx={{
-                            fontFamily: 'monospace',
-                            fontSize: '0.625rem',
-                            color: 'text.disabled',
-                            flexShrink: 0,
-                          }}
-                        >
-                          {rally.duration.toFixed(1)}s
-                        </Typography>
+                            {formatTime(rally.start_time)}
+                            <Box component="span" sx={{ color: 'text.disabled', mx: 0.5 }}>–</Box>
+                            {formatTime(rally.end_time)}
+                          </Typography>
+                          <Typography
+                            sx={{
+                              fontSize: '0.625rem',
+                              color: 'text.disabled',
+                              lineHeight: 1.2,
+                            }}
+                          >
+                            {rally.duration.toFixed(1)}s
+                          </Typography>
+                        </Box>
 
                         {/* Highlight color dots */}
                         {rallyHighlights.length > 0 && (
-                          <Stack direction="row" spacing={0.25} sx={{ ml: 1 }}>
+                          <Stack direction="row" spacing={0.25} sx={{ flexShrink: 0 }}>
                             {rallyHighlights.slice(0, 3).map((h) => (
                               <Box
                                 key={h.id}
@@ -715,11 +709,11 @@ export function RallyList() {
                               setRallyMenuAnchor({ el: e.currentTarget, rally, matchId: match.id });
                             }}
                             sx={{
-                              ml: 0.5,
                               p: 0.25,
                               opacity: isSelected || exportingRallyId === rally.id ? 1 : 0,
                               transition: 'opacity 0.15s',
                               color: exportingRallyId === rally.id ? 'primary.main' : 'text.secondary',
+                              flexShrink: 0,
                             }}
                           >
                             {exportingRallyId === rally.id ? (
