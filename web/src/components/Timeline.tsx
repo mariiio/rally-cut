@@ -1299,22 +1299,6 @@ export function Timeline() {
             </Stack>
           )}
 
-          {/* Create rally button */}
-          {!isLocked && (
-            <Tooltip title={canCreateRallyToolbar ? "Create rally at playhead (Cmd+Enter)" : "Cannot create rally here (inside existing rally)"} arrow>
-              <span>
-                <IconButton
-                  size="small"
-                  onClick={handleCreateRally}
-                  disabled={!canCreateRallyToolbar}
-                  color="primary"
-                >
-                  <AddIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-          )}
-
           {/* Detection status or button */}
           {isDetecting ? (
             <Stack direction="row" alignItems="center" spacing={1.5} sx={{
@@ -1385,6 +1369,7 @@ export function Timeline() {
           ) : videoDetectionStatus === 'DETECTED' || isLocked ? null : (
             <Tooltip title="Use ML to automatically detect rallies in this video">
               <Button
+                data-tutorial="detect-rallies"
                 size="small"
                 variant="outlined"
                 startIcon={<AutoFixHighIcon sx={{ fontSize: 16 }} />}
@@ -1404,36 +1389,41 @@ export function Timeline() {
 
         {/* Center - Playback controls */}
         <Stack direction="row" alignItems="center" spacing={0.5}>
-          <IconButton size="small" onClick={jumpToPrevRally} title="Previous rally">
-            <SkipPreviousIcon fontSize="small" />
-          </IconButton>
-          <IconButton
-            size="small"
-            onClick={() => isPlaying ? pause() : play()}
-            title="Play/Pause (Space)"
-            sx={{
-              bgcolor: 'primary.main',
-              color: 'primary.contrastText',
-              '&:hover': { bgcolor: 'primary.dark' },
-            }}
-          >
-            {isPlaying ? <PauseIcon /> : <PlayArrowIcon />}
-          </IconButton>
-          <IconButton size="small" onClick={jumpToNextRally} title="Next rally">
-            <SkipNextIcon fontSize="small" />
-          </IconButton>
+          <Tooltip title="Previous rally (⌘←)">
+            <IconButton size="small" onClick={jumpToPrevRally}>
+              <SkipPreviousIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Play/Pause (Space)">
+            <IconButton
+              size="small"
+              onClick={() => isPlaying ? pause() : play()}
+              sx={{
+                bgcolor: 'primary.main',
+                color: 'primary.contrastText',
+                '&:hover': { bgcolor: 'primary.dark' },
+              }}
+            >
+              {isPlaying ? <PauseIcon /> : <PlayArrowIcon />}
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Next rally (⌘→)">
+            <IconButton size="small" onClick={jumpToNextRally}>
+              <SkipNextIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
           <Typography variant="body2" sx={{ ml: 1, fontFamily: 'monospace', minWidth: 130 }}>
             {formatTime(currentTime)} / {formatTime(duration)}
           </Typography>
-          <Tooltip title="Playback speed ([ / ] keys)">
-            <Box
-              onClick={(e) => setSpeedAnchorEl(e.currentTarget)}
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 0.5,
-                ml: 1,
-                px: 1,
+          <Box style={{ marginLeft: 8 }}>
+            <Tooltip title="Playback speed ([ / ] keys)">
+              <Box
+                onClick={(e) => setSpeedAnchorEl(e.currentTarget)}
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 0.5,
+                  px: 1,
                 py: 0.5,
                 borderRadius: 1,
                 cursor: 'pointer',
@@ -1451,14 +1441,11 @@ export function Timeline() {
               <Typography variant="caption" sx={{ fontWeight: 600, fontSize: 11, userSelect: 'none' }}>
                 {playbackRate}x
               </Typography>
-            </Box>
-          </Tooltip>
-        </Stack>
-
-        {/* Right - View toggles */}
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ minWidth: 200, justifyContent: 'flex-end' }}>
+              </Box>
+            </Tooltip>
+          </Box>
           {!isLocked && (
-            <Tooltip title="Skip dead time between rallies" arrow>
+            <Tooltip title="Skip dead time between rallies">
               <IconButton
                 size="small"
                 onClick={togglePlayOnlyRallies}
@@ -1470,7 +1457,11 @@ export function Timeline() {
               </IconButton>
             </Tooltip>
           )}
-          <Tooltip title={isFullscreen ? "Exit fullscreen (f)" : "Fullscreen (f)"}>
+        </Stack>
+
+        {/* Right - View toggles */}
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ minWidth: 200, justifyContent: 'flex-end' }}>
+          <Tooltip title={isFullscreen ? "Exit fullscreen (F)" : "Fullscreen (F)"}>
             <IconButton
               size="small"
               onClick={toggleFullscreen}
@@ -1481,6 +1472,7 @@ export function Timeline() {
           </Tooltip>
           <Tooltip title="Keyboard shortcuts">
             <IconButton
+              data-tutorial="keyboard-shortcuts"
               size="small"
               onClick={(e) => setHotkeysAnchorEl(e.currentTarget)}
               sx={{ color: 'text.secondary' }}
@@ -1598,6 +1590,7 @@ export function Timeline() {
 
       {/* Timeline editor */}
       <Box
+        data-tutorial="timeline"
         ref={timelineContainerRef}
         sx={{
           height: 180,
