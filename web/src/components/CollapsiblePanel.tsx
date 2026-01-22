@@ -45,6 +45,7 @@ export function CollapsiblePanel({
 
   return (
     <Box
+      data-tutorial={isLeft ? 'rally-list' : 'camera-panel'}
       sx={{
         width: collapsed ? collapsedWidth : expandedWidth,
         transition: designTokens.transitions.normal,

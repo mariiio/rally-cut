@@ -21,6 +21,7 @@ import { OriginalQualityBanner } from './OriginalQualityBanner';
 import { NamePromptModal } from './NamePromptModal';
 import { MobileEditorLayout } from './mobile';
 import { AccessRequestForm } from './AccessRequestForm';
+import { TutorialProvider, TutorialContext } from './tutorial';
 import { useEditorStore } from '@/stores/editorStore';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { designTokens } from '@/app/theme';
@@ -53,6 +54,7 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
     setLeftPanelTab,
     getActiveMatch,
     sessionError,
+    userRole,
   } = useEditorStore();
 
   // Get current match for quality banner
@@ -212,17 +214,24 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
     return <MobileEditorLayout />;
   }
 
+  // Tutorial context - show "Add Rallies" step for owners or when no rallies exist
+  const tutorialContext: TutorialContext = {
+    userRole: userRole ?? 'owner',
+    hasRallies: (rallies?.length ?? 0) > 0,
+  };
+
   // Desktop layout
   return (
-    <Box
-      sx={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100vh',
-        bgcolor: 'background.default',
-        overflow: 'hidden',
-      }}
-    >
+    <TutorialProvider context={tutorialContext}>
+      <Box
+        sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          height: '100vh',
+          bgcolor: 'background.default',
+          overflow: 'hidden',
+        }}
+      >
       {/* Header */}
       <EditorHeader />
 
@@ -437,6 +446,7 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
         }}
         onNameSet={handleNameSet}
       />
-    </Box>
+      </Box>
+    </TutorialProvider>
   );
 }
