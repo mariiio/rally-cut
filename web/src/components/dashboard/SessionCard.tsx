@@ -38,12 +38,9 @@ function formatRelativeTime(dateString: string): string {
   return `Updated ${Math.floor(diffDays / 30)} months ago`;
 }
 
-function ThumbnailMosaic({ videos, videoCount = 0 }: { videos: VideoThumbnail[]; videoCount?: number }) {
+function ThumbnailMosaic({ videos }: { videos: VideoThumbnail[] }) {
   const thumbnails = videos.slice(0, 4);
   const gridCols = thumbnails.length === 1 ? 1 : 2;
-
-  // Show placeholder when no thumbnails but we know there are videos (e.g., shared sessions)
-  const hasVideosWithoutThumbnails = thumbnails.length === 0 && videoCount > 0;
 
   return (
     <Box
@@ -89,37 +86,6 @@ function ThumbnailMosaic({ videos, videoCount = 0 }: { videos: VideoThumbnail[];
           )}
         </Box>
       ))}
-      {thumbnails.length === 0 && (
-        <Box
-          sx={{
-            gridColumn: 'span 2',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            bgcolor: designTokens.colors.surface[1],
-          }}
-        >
-          {hasVideosWithoutThumbnails ? (
-            <Box
-              sx={{
-                width: 48,
-                height: 48,
-                borderRadius: '50%',
-                bgcolor: designTokens.colors.surface[2],
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <PeopleIcon sx={{ fontSize: 24, color: 'text.disabled' }} />
-            </Box>
-          ) : (
-            <Typography variant="caption" color="text.disabled">
-              No videos
-            </Typography>
-          )}
-        </Box>
-      )}
     </Box>
   );
 }
@@ -236,11 +202,11 @@ export function SessionCard({
     >
       <CardActionArea onClick={onClick}>
         <Box sx={{ p: 2 }}>
-          {/* Thumbnail mosaic */}
-          <ThumbnailMosaic videos={videos} videoCount={videoCount} />
+          {/* Thumbnail mosaic - only show when we have actual thumbnails */}
+          {videos.length > 0 && <ThumbnailMosaic videos={videos} />}
 
           {/* Content */}
-          <Box sx={{ mt: 2 }}>
+          <Box sx={{ mt: videos.length > 0 ? 2 : 0 }}>
             {/* Shared indicator */}
             {isShared && sharedBy && (
               <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mb: 1 }}>

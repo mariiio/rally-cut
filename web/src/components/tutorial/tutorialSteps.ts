@@ -42,7 +42,7 @@ export const tutorialSteps: TutorialStep[] = [
   {
     id: 'keyboard-shortcuts',
     title: 'Keyboard Shortcuts',
-    description: 'Press ? to view all shortcuts. Space to play, arrow keys to seek',
+    description: 'Click here for all shortcuts. Space to play, arrow keys to seek, M to mark rallies',
     placement: 'bottom',
   },
 ];
