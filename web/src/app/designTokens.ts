@@ -69,21 +69,6 @@ export const designTokens = {
       expanded: 320,
     },
   },
-  // Stats bar tokens
-  stats: {
-    iconBg: {
-      videos: 'rgba(255, 107, 74, 0.15)',     // Primary
-      sessions: 'rgba(0, 212, 170, 0.15)',    // Secondary
-      storage: 'rgba(255, 209, 102, 0.15)',   // Tertiary
-      credits: 'rgba(59, 130, 246, 0.15)',    // Blue
-    },
-    iconColor: {
-      videos: '#FF6B4A',
-      sessions: '#00D4AA',
-      storage: '#FFD166',
-      credits: '#3B82F6',
-    },
-  },
   // Card tokens
   cards: {
     featured: {
