@@ -18,7 +18,7 @@ import type { AspectRatio, BallTrackStatus, CameraEasing } from '@prisma/client'
 import { env } from '../config/env.js';
 import { generateDownloadUrl } from '../lib/s3.js';
 import { prisma } from '../lib/prisma.js';
-import { ConflictError, NotFoundError, ValidationError } from '../middleware/errorHandler.js';
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../middleware/errorHandler.js';
 import { convertBallTrackingToKeyframes, type BallPosition, type CameraKeyframe, VERTICAL_CONFIG } from '../utils/ballToKeyframes.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -64,6 +64,7 @@ interface TrackBallResult {
  */
 export async function trackBallForRally(
   rallyId: string,
+  userId: string,
   options: TrackBallOptions = {}
 ): Promise<TrackBallResult> {
   const { aspectRatio = 'ORIGINAL', generateKeyframes = true, zoom } = options;
@@ -82,6 +83,10 @@ export async function trackBallForRally(
 
   if (!rally) {
     throw new NotFoundError('Rally', rallyId);
+  }
+
+  if (rally.video.userId !== userId) {
+    throw new ForbiddenError('You do not have permission to track ball for this rally');
   }
 
   // Check for existing in-progress tracking - but allow retry if stuck for >60 seconds
@@ -450,7 +455,7 @@ async function runBallTracker(
 /**
  * Get ball tracking status for a rally.
  */
-export async function getBallTrackStatus(rallyId: string, options: { includePositions?: boolean } = {}): Promise<{
+export async function getBallTrackStatus(rallyId: string, userId: string, options: { includePositions?: boolean } = {}): Promise<{
   rallyId: string;
   ballTrack: {
     id: string;
@@ -464,11 +469,15 @@ export async function getBallTrackStatus(rallyId: string, options: { includePosi
 }> {
   const rally = await prisma.rally.findUnique({
     where: { id: rallyId },
-    include: { ballTrack: true },
+    include: { ballTrack: true, video: true },
   });
 
   if (!rally) {
     throw new NotFoundError('Rally', rallyId);
+  }
+
+  if (rally.video.userId !== userId) {
+    throw new ForbiddenError('You do not have permission to access this rally');
   }
 
   if (!rally.ballTrack) {

@@ -243,11 +243,15 @@ class ProxyGenerator:
             str(proxy_path),
         ]
 
-        try:
-            # Get video duration for progress tracking
-            duration = self._get_duration(source_video)
+        # Get video duration for progress tracking
+        duration = self._get_duration(source_video)
 
-            # Run ffmpeg with progress output to stderr
+        # Timeout: 10 minutes max, or 10x video duration, whichever is greater
+        timeout_seconds = max(600, int(duration * 10)) if duration > 0 else 600
+
+        # Run ffmpeg with progress output to stderr
+        process: subprocess.Popen[bytes] | None = None
+        try:
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -281,7 +285,7 @@ class ProxyGenerator:
                             last_progress = progress
                             progress_callback(progress, "Preparing for analysis...")
 
-            process.wait()
+            process.wait(timeout=timeout_seconds)
 
             if process.returncode != 0:
                 # Clean up failed proxy
@@ -292,6 +296,20 @@ class ProxyGenerator:
 
         except FileNotFoundError:
             raise RuntimeError("ffmpeg not found. Please install ffmpeg.")
+        except subprocess.TimeoutExpired:
+            # Kill the hung process
+            if process is not None:
+                process.kill()
+                process.wait(timeout=5)
+            proxy_path.unlink(missing_ok=True)
+            raise RuntimeError(f"ffmpeg timed out after {timeout_seconds}s")
+        except Exception:
+            # Ensure process is cleaned up on any error
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            proxy_path.unlink(missing_ok=True)
+            raise
 
     def get_or_create(
         self,

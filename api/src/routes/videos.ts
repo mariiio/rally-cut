@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { Readable } from "stream";
 import { z } from "zod";
+import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import { getObject, generateDownloadUrl } from "../lib/s3.js";
 import { requireUser } from "../middleware/resolveUser.js";
@@ -56,8 +57,8 @@ router.get(
         res.setHeader("Content-Type", s3Response.ContentType);
       }
 
-      // CORS headers for fetch
-      res.setHeader("Access-Control-Allow-Origin", "*");
+      // CORS headers for fetch - use configured origin
+      res.setHeader("Access-Control-Allow-Origin", env.CORS_ORIGIN);
       res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
       res.setHeader("Accept-Ranges", "bytes");
 
@@ -134,8 +135,8 @@ router.get(
         res.setHeader("Content-Type", s3Response.ContentType);
       }
 
-      // CORS headers for fetch
-      res.setHeader("Access-Control-Allow-Origin", "*");
+      // CORS headers for fetch - use configured origin
+      res.setHeader("Access-Control-Allow-Origin", env.CORS_ORIGIN);
       res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
       res.setHeader("Accept-Ranges", "bytes");
 

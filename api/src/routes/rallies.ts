@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { requireUser } from "../middleware/resolveUser.js";
 import { validateRequest } from "../middleware/validateRequest.js";
 import { uuidSchema } from "../schemas/common.js";
 import { createRallySchema, updateRallySchema } from "../schemas/rally.js";
@@ -18,10 +19,11 @@ const router = Router();
 
 router.get(
   "/v1/videos/:videoId/rallies",
+  requireUser,
   validateRequest({ params: z.object({ videoId: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      const rallies = await listRallies(req.params.videoId);
+      const rallies = await listRallies(req.params.videoId, req.userId!);
       res.json(rallies);
     } catch (error) {
       next(error);
@@ -31,13 +33,14 @@ router.get(
 
 router.post(
   "/v1/videos/:videoId/rallies",
+  requireUser,
   validateRequest({
     params: z.object({ videoId: uuidSchema }),
     body: createRallySchema,
   }),
   async (req, res, next) => {
     try {
-      const rally = await createRally(req.params.videoId, req.body);
+      const rally = await createRally(req.params.videoId, req.userId!, req.body);
       res.status(201).json(rally);
     } catch (error) {
       next(error);
@@ -47,13 +50,14 @@ router.post(
 
 router.patch(
   "/v1/rallies/:id",
+  requireUser,
   validateRequest({
     params: z.object({ id: uuidSchema }),
     body: updateRallySchema,
   }),
   async (req, res, next) => {
     try {
-      const rally = await updateRally(req.params.id, req.body);
+      const rally = await updateRally(req.params.id, req.userId!, req.body);
       res.json(rally);
     } catch (error) {
       next(error);
@@ -63,10 +67,11 @@ router.patch(
 
 router.delete(
   "/v1/rallies/:id",
+  requireUser,
   validateRequest({ params: z.object({ id: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      await deleteRally(req.params.id);
+      await deleteRally(req.params.id, req.userId!);
       res.status(204).send();
     } catch (error) {
       next(error);
@@ -85,13 +90,14 @@ const trackBallSchema = z.object({
 
 router.post(
   "/v1/rallies/:id/track-ball",
+  requireUser,
   validateRequest({
     params: z.object({ id: uuidSchema }),
     body: trackBallSchema,
   }),
   async (req, res, next) => {
     try {
-      const result = await trackBallForRally(req.params.id, {
+      const result = await trackBallForRally(req.params.id, req.userId!, {
         aspectRatio: req.body.aspectRatio,
         generateKeyframes: req.body.generateKeyframes,
       });
@@ -104,6 +110,7 @@ router.post(
 
 router.get(
   "/v1/rallies/:id/ball-track",
+  requireUser,
   validateRequest({
     params: z.object({ id: uuidSchema }),
     query: z.object({ includePositions: z.enum(["true", "false"]).optional() }),
@@ -111,7 +118,7 @@ router.get(
   async (req, res, next) => {
     try {
       const includePositions = req.query.includePositions === "true";
-      const result = await getBallTrackStatus(req.params.id, { includePositions });
+      const result = await getBallTrackStatus(req.params.id, req.userId!, { includePositions });
       res.json(result);
     } catch (error) {
       next(error);

@@ -272,77 +272,93 @@ export async function triggerRallyDetection(
 
   // Quota is now reserved - proceed with detection
 
-  // Check for existing job with same contentHash (completed, pending, or running)
-  // This prevents duplicate ML processing for the same content
-  const existingJob = await prisma.rallyDetectionJob.findFirst({
-    where: {
-      contentHash: video.contentHash,
-      status: { in: ["COMPLETED", "PENDING", "RUNNING"] },
-    },
-    include: {
-      video: {
-        include: {
-          rallies: true,
+  // Atomically check for existing job and create new one if needed
+  // Uses serializable isolation to prevent race conditions where concurrent
+  // requests both pass the "no existing job" check and create duplicates
+  const { job, existingJob, cached } = await prisma.$transaction(
+    async (tx) => {
+      // Check for existing job with same contentHash (completed, pending, or running)
+      // This prevents duplicate ML processing for the same content
+      const existing = await tx.rallyDetectionJob.findFirst({
+        where: {
+          contentHash: video.contentHash,
+          status: { in: ["COMPLETED", "PENDING", "RUNNING"] },
         },
-      },
-    },
-    orderBy: { createdAt: "desc" },
-  });
-
-  if (existingJob !== null) {
-    if (existingJob.status === "COMPLETED") {
-      // Reuse cached results from completed job
-      await prisma.$transaction(async (tx) => {
-        const rallies = existingJob.video.rallies.map((r, index) => ({
-          videoId,
-          startMs: r.startMs,
-          endMs: r.endMs,
-          confidence: r.confidence,
-          order: index,
-        }));
-
-        await tx.rally.createMany({ data: rallies });
-        await tx.video.update({
-          where: { id: videoId },
-          data: { status: "DETECTED" },
-        });
+        include: {
+          video: {
+            include: {
+              rallies: true,
+            },
+          },
+        },
+        orderBy: { createdAt: "desc" },
       });
 
-      // Quota was already reserved atomically above - no separate increment needed
+      if (existing !== null) {
+        if (existing.status === "COMPLETED") {
+          // Reuse cached results from completed job
+          const rallies = existing.video.rallies.map((r, index) => ({
+            videoId,
+            startMs: r.startMs,
+            endMs: r.endMs,
+            confidence: r.confidence,
+            order: index,
+          }));
+
+          await tx.rally.createMany({ data: rallies });
+          await tx.video.update({
+            where: { id: videoId },
+            data: { status: "DETECTED" },
+          });
+
+          return { job: null, existingJob: existing, cached: true };
+        }
+
+        // Job is PENDING or RUNNING - link this video to the existing job
+        await tx.video.update({
+          where: { id: videoId },
+          data: { status: "DETECTING" },
+        });
+
+        return { job: null, existingJob: existing, cached: false };
+      }
+
+      // No existing job - create new one atomically within same transaction
+      const createdJob = await tx.rallyDetectionJob.create({
+        data: {
+          videoId,
+          contentHash: video.contentHash,
+          status: "PENDING",
+        },
+      });
+
+      await tx.video.update({
+        where: { id: videoId },
+        data: { status: "DETECTING" },
+      });
+
+      return { job: createdJob, existingJob: null, cached: false };
+    },
+    {
+      isolationLevel: "Serializable",
+    }
+  );
+
+  // Handle existing job cases (returned from transaction)
+  if (existingJob !== null) {
+    if (cached) {
       return { jobId: existingJob.id, status: "completed", cached: true };
     }
-
-    // Job is PENDING or RUNNING - link this video to the existing job
-    // Update video status to DETECTING and return the existing job
-    await prisma.video.update({
-      where: { id: videoId },
-      data: { status: "DETECTING" },
-    });
-
     return {
       jobId: existingJob.id,
       status: existingJob.status.toLowerCase() as "pending" | "running",
       cached: false,
-      shared: true, // Indicates this video is sharing detection with another
+      shared: true,
     };
   }
 
-  const job = await prisma.$transaction(async (tx) => {
-    const createdJob = await tx.rallyDetectionJob.create({
-      data: {
-        videoId,
-        contentHash: video.contentHash,
-        status: "PENDING",
-      },
-    });
-
-    await tx.video.update({
-      where: { id: videoId },
-      data: { status: "DETECTING" },
-    });
-
-    return createdJob;
-  });
+  // New job was created - job is guaranteed non-null here
+  const createdJob = job!;
 
   const callbackUrl = `${env.CORS_ORIGIN.replace("localhost:3000", "localhost:3001")}/v1/webhooks/detection-complete`;
 
@@ -354,20 +370,20 @@ export async function triggerRallyDetection(
   const useLocal = shouldUseLocalDetection();
   const videoKey = detectionVideo.proxyS3Key ?? detectionVideo.s3Key;
   console.log(
-    `[DETECTION] Using ${useLocal ? "LOCAL" : "MODAL"} detection for job ${job.id}`
+    `[DETECTION] Using ${useLocal ? "LOCAL" : "MODAL"} detection for job ${createdJob.id}`
   );
   console.log(`[DETECTION] Video key: ${videoKey}`);
   console.log(`[DETECTION] Model variant: ${modelVariant || "indoor"}`);
 
   await triggerFn({
-    jobId: job.id,
+    jobId: createdJob.id,
     videoS3Key: videoKey,
     callbackUrl,
     modelVariant,
   }).catch(async (error) => {
     await prisma.$transaction([
       prisma.rallyDetectionJob.update({
-        where: { id: job.id },
+        where: { id: createdJob.id },
         data: { status: "FAILED", errorMessage: String(error) },
       }),
       prisma.video.update({
@@ -379,21 +395,25 @@ export async function triggerRallyDetection(
   });
 
   await prisma.rallyDetectionJob.update({
-    where: { id: job.id },
+    where: { id: createdJob.id },
     data: { status: "RUNNING", startedAt: new Date() },
   });
 
   // Quota was already reserved atomically above - no separate increment needed
-  return { jobId: job.id, status: "pending", cached: false };
+  return { jobId: createdJob.id, status: "pending", cached: false };
 }
 
-export async function getDetectionStatus(videoId: string) {
+export async function getDetectionStatus(videoId: string, userId: string) {
   const video = await prisma.video.findUnique({
     where: { id: videoId },
   });
 
   if (video === null) {
     throw new NotFoundError("Video", videoId);
+  }
+
+  if (video.userId !== userId) {
+    throw new ForbiddenError("You do not have permission to access this video's detection status");
   }
 
   const job = await prisma.rallyDetectionJob.findFirst({
