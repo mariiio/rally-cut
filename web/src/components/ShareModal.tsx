@@ -21,8 +21,11 @@ import {
   Avatar,
   Alert,
   Divider,
+  Stack,
+  Tooltip,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
+import CheckIcon from '@mui/icons-material/Check';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import LinkIcon from '@mui/icons-material/Link';
 import PersonIcon from '@mui/icons-material/Person';
@@ -48,6 +51,8 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [removingMember, setRemovingMember] = useState<string | null>(null);
+  const [confirmingRemove, setConfirmingRemove] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   const shareUrl = shareInfo
@@ -92,6 +97,8 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
       setShareInfo(null);
       setError(null);
       setCopied(false);
+      setConfirmingRemove(null);
+      setConfirmingDelete(false);
     }
   }, [open]);
 
@@ -105,8 +112,19 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
     }
   };
 
+  const handleRemoveClick = (userId: string) => {
+    if (confirmingRemove === userId) {
+      // Second click - actually remove
+      handleRemoveMember(userId);
+    } else {
+      // First click - show confirmation
+      setConfirmingRemove(userId);
+    }
+  };
+
   const handleRemoveMember = async (userId: string) => {
     try {
+      setConfirmingRemove(null);
       setRemovingMember(userId);
       await removeShareMember(sessionId, userId);
       // Refresh share info
@@ -119,12 +137,27 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
     }
   };
 
-  const handleDeleteShare = async () => {
-    if (!confirm('This will revoke access for all members. Are you sure?')) {
-      return;
-    }
+  // Auto-cancel confirmations after 3 seconds
+  useEffect(() => {
+    if (!confirmingRemove && !confirmingDelete) return;
+    const timeout = setTimeout(() => {
+      setConfirmingRemove(null);
+      setConfirmingDelete(false);
+    }, 3000);
+    return () => clearTimeout(timeout);
+  }, [confirmingRemove, confirmingDelete]);
 
+  const handleDeleteClick = () => {
+    if (confirmingDelete) {
+      handleDeleteShare();
+    } else {
+      setConfirmingDelete(true);
+    }
+  };
+
+  const handleDeleteShare = async () => {
     try {
+      setConfirmingDelete(false);
       setDeleting(true);
       await deleteShare(sessionId);
       onClose();
@@ -225,18 +258,44 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
                         secondary={`Joined ${new Date(member.joinedAt).toLocaleDateString()}`}
                       />
                       <ListItemSecondaryAction>
-                        <IconButton
-                          edge="end"
-                          onClick={() => handleRemoveMember(member.userId)}
-                          disabled={removingMember === member.userId}
-                          size="small"
-                        >
-                          {removingMember === member.userId ? (
-                            <CircularProgress size={20} />
-                          ) : (
+                        {removingMember === member.userId ? (
+                          <CircularProgress size={20} />
+                        ) : confirmingRemove === member.userId ? (
+                          <Stack direction="row" spacing={0.25}>
+                            <Tooltip title="Confirm remove">
+                              <IconButton
+                                size="small"
+                                onClick={() => handleRemoveClick(member.userId)}
+                                sx={{
+                                  color: 'white',
+                                  bgcolor: 'error.main',
+                                  width: 24,
+                                  height: 24,
+                                  '&:hover': { bgcolor: 'error.light' },
+                                }}
+                              >
+                                <CheckIcon sx={{ fontSize: 14 }} />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Cancel">
+                              <IconButton
+                                size="small"
+                                onClick={() => setConfirmingRemove(null)}
+                                sx={{ width: 24, height: 24 }}
+                              >
+                                <CloseIcon sx={{ fontSize: 14 }} />
+                              </IconButton>
+                            </Tooltip>
+                          </Stack>
+                        ) : (
+                          <IconButton
+                            edge="end"
+                            onClick={() => handleRemoveClick(member.userId)}
+                            size="small"
+                          >
                             <DeleteIcon />
-                          )}
-                        </IconButton>
+                          </IconButton>
+                        )}
                       </ListItemSecondaryAction>
                     </ListItem>
                   ))}
@@ -248,14 +307,50 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
       </DialogContent>
 
       <DialogActions sx={{ px: 3, pb: 2, justifyContent: 'space-between' }}>
-        <Button
-          color="error"
-          onClick={handleDeleteShare}
-          disabled={deleting || loading}
-          startIcon={deleting ? <CircularProgress size={16} /> : <DeleteIcon />}
-        >
-          Delete Share
-        </Button>
+        {deleting ? (
+          <Button color="error" disabled startIcon={<CircularProgress size={16} />}>
+            Deleting...
+          </Button>
+        ) : confirmingDelete ? (
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Typography variant="body2" color="text.secondary">
+              Revoke all access?
+            </Typography>
+            <Tooltip title="Confirm delete">
+              <IconButton
+                size="small"
+                onClick={handleDeleteClick}
+                sx={{
+                  color: 'white',
+                  bgcolor: 'error.main',
+                  width: 28,
+                  height: 28,
+                  '&:hover': { bgcolor: 'error.light' },
+                }}
+              >
+                <CheckIcon sx={{ fontSize: 16 }} />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Cancel">
+              <IconButton
+                size="small"
+                onClick={() => setConfirmingDelete(false)}
+                sx={{ width: 28, height: 28 }}
+              >
+                <CloseIcon sx={{ fontSize: 16 }} />
+              </IconButton>
+            </Tooltip>
+          </Stack>
+        ) : (
+          <Button
+            color="error"
+            onClick={handleDeleteClick}
+            disabled={loading}
+            startIcon={<DeleteIcon />}
+          >
+            Delete Share
+          </Button>
+        )}
         <Button onClick={onClose}>Close</Button>
       </DialogActions>
     </Dialog>
