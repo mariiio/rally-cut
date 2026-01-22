@@ -32,6 +32,8 @@ export const tutorialSteps: TutorialStep[] = [
     title: 'Edit Rallies',
     description: 'Drag rally edges to adjust timing, or use arrow keys when selected',
     placement: 'top',
+    // Only owners can edit rallies
+    shouldShow: (ctx) => ctx.userRole === 'owner',
   },
   {
     id: 'camera-panel',
