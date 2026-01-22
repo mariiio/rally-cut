@@ -1983,9 +1983,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     });
   },
 
-  // Check if rally editing is locked (video is confirmed)
+  // Check if rally editing is locked (video confirmed or user is guest)
   isRallyEditingLocked: () => {
     const state = get();
+    // Guest users (members) cannot edit rallies
+    if (state.userRole === 'member') return true;
     if (!state.activeMatchId) return false;
     const confirmation = state.confirmationStatus[state.activeMatchId];
     return confirmation?.status === 'CONFIRMED';
