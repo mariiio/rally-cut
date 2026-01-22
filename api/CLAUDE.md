@@ -42,6 +42,14 @@ All endpoints require `X-Visitor-Id` header (UUID):
 - Maps to User via AnonymousIdentity table
 - Returns 400 if header missing (except health/webhooks)
 
+## Security
+
+- All `/v1/*` routes must use `requireUser` middleware (except webhooks)
+- Service functions must verify `resource.userId === userId` before mutations
+- Use `crypto.timingSafeEqual()` for secret comparison (prevents timing attacks)
+- Use `env.CORS_ORIGIN` for CORS headers, never `*`
+- Wrap check-then-act patterns in `prisma.$transaction()` to prevent race conditions
+
 ## Tier System
 
 | Feature | FREE | PRO ($9.99) | ELITE ($24.99) |
