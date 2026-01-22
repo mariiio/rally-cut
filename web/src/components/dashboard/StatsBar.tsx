@@ -1,6 +1,6 @@
 'use client';
 
-import { Box, Stack, Typography, Skeleton } from '@mui/material';
+import { Box, Typography, Skeleton } from '@mui/material';
 import VideoLibraryIcon from '@mui/icons-material/VideoLibrary';
 import FolderIcon from '@mui/icons-material/Folder';
 import StorageIcon from '@mui/icons-material/Storage';
@@ -11,76 +11,115 @@ interface StatItemProps {
   icon: React.ReactNode;
   value: string | number;
   label: string;
-  iconBg: string;
+  color: string;
+  glowColor: string;
   loading?: boolean;
 }
 
-function StatItem({ icon, value, label, iconBg, loading }: StatItemProps) {
+function StatItem({ icon, value, label, color, glowColor, loading }: StatItemProps) {
   return (
     <Box
       sx={{
+        position: 'relative',
         display: 'flex',
         alignItems: 'center',
-        gap: 1.5,
-        px: 2,
-        py: 1.5,
+        gap: 2,
+        px: 2.5,
+        py: 2,
         bgcolor: designTokens.colors.surface[1],
-        borderRadius: 2,
+        borderRadius: 2.5,
         border: '1px solid',
-        borderColor: 'divider',
-        flex: 1,
-        minWidth: 0,
-        transition: 'all 0.2s ease',
+        borderColor: 'rgba(255, 255, 255, 0.06)',
+        overflow: 'hidden',
+        transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+        cursor: 'default',
+        '&::before': {
+          content: '""',
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: '2px',
+          background: `linear-gradient(90deg, ${color}, transparent)`,
+          opacity: 0.6,
+        },
+        '&::after': {
+          content: '""',
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          background: `radial-gradient(circle at 0% 0%, ${glowColor} 0%, transparent 60%)`,
+          opacity: 0,
+          transition: 'opacity 0.3s ease',
+          pointerEvents: 'none',
+        },
         '&:hover': {
           borderColor: 'rgba(255, 255, 255, 0.12)',
-          bgcolor: designTokens.colors.surface[2],
+          transform: 'translateY(-2px)',
+          boxShadow: `0 8px 24px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.05)`,
+          '&::after': {
+            opacity: 1,
+          },
+          '& .stat-icon': {
+            transform: 'scale(1.1)',
+          },
         },
       }}
     >
+      {/* Icon */}
       <Box
+        className="stat-icon"
         sx={{
-          width: 36,
-          height: 36,
-          borderRadius: 1.5,
+          width: 44,
+          height: 44,
+          borderRadius: 2,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          bgcolor: iconBg,
+          background: `linear-gradient(135deg, ${color}20 0%, ${color}10 100%)`,
+          border: `1px solid ${color}30`,
           flexShrink: 0,
+          transition: 'transform 0.3s ease',
           '& svg': {
-            fontSize: 20,
+            fontSize: 22,
+            color: color,
+            filter: `drop-shadow(0 2px 4px ${color}40)`,
           },
         }}
       >
         {icon}
       </Box>
-      <Box sx={{ minWidth: 0 }}>
+
+      {/* Content */}
+      <Box sx={{ minWidth: 0, position: 'relative', zIndex: 1 }}>
         {loading ? (
           <>
-            <Skeleton width={40} height={24} />
-            <Skeleton width={60} height={16} />
+            <Skeleton width={50} height={32} sx={{ bgcolor: 'rgba(255,255,255,0.1)' }} />
+            <Skeleton width={70} height={18} sx={{ bgcolor: 'rgba(255,255,255,0.05)' }} />
           </>
         ) : (
           <>
             <Typography
-              variant="h6"
               sx={{
                 fontWeight: 700,
-                lineHeight: 1.2,
-                fontSize: '1.1rem',
+                fontSize: '1.5rem',
+                lineHeight: 1.1,
+                letterSpacing: '-0.02em',
+                color: 'text.primary',
               }}
             >
               {value}
             </Typography>
             <Typography
-              variant="caption"
-              color="text.secondary"
               sx={{
-                display: 'block',
-                lineHeight: 1.2,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
+                fontSize: '0.75rem',
+                fontWeight: 500,
+                color: 'text.secondary',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+                mt: 0.25,
               }}
             >
               {label}
@@ -109,56 +148,58 @@ export function StatsBar({
 }: StatsBarProps) {
   const stats = [
     {
-      icon: <VideoLibraryIcon sx={{ color: designTokens.stats.iconColor.videos }} />,
+      icon: <VideoLibraryIcon />,
       value: videoCount,
       label: 'Videos',
-      iconBg: designTokens.stats.iconBg.videos,
+      color: '#FF6B4A',
+      glowColor: 'rgba(255, 107, 74, 0.15)',
     },
     {
-      icon: <FolderIcon sx={{ color: designTokens.stats.iconColor.sessions }} />,
+      icon: <FolderIcon />,
       value: sessionCount,
       label: 'Sessions',
-      iconBg: designTokens.stats.iconBg.sessions,
+      color: '#00D4AA',
+      glowColor: 'rgba(0, 212, 170, 0.15)',
     },
     ...(storageUsed !== undefined
       ? [
           {
-            icon: <StorageIcon sx={{ color: designTokens.stats.iconColor.storage }} />,
+            icon: <StorageIcon />,
             value: storageUsed,
             label: 'Storage',
-            iconBg: designTokens.stats.iconBg.storage,
+            color: '#FFD166',
+            glowColor: 'rgba(255, 209, 102, 0.15)',
           },
         ]
       : []),
     ...(aiCredits !== undefined
       ? [
           {
-            icon: <AutoAwesomeIcon sx={{ color: designTokens.stats.iconColor.credits }} />,
+            icon: <AutoAwesomeIcon />,
             value: aiCredits,
             label: 'AI Credits',
-            iconBg: designTokens.stats.iconBg.credits,
+            color: '#3B82F6',
+            glowColor: 'rgba(59, 130, 246, 0.15)',
           },
         ]
       : []),
   ];
 
   return (
-    <Stack
-      direction={{ xs: 'column', sm: 'row' }}
-      spacing={1.5}
+    <Box
       sx={{
-        mb: 4,
         display: 'grid',
         gridTemplateColumns: {
           xs: '1fr 1fr',
           sm: `repeat(${stats.length}, 1fr)`,
         },
-        gap: 1.5,
+        gap: 2,
+        mb: 4,
       }}
     >
       {stats.map((stat, index) => (
         <StatItem key={index} {...stat} loading={loading} />
       ))}
-    </Stack>
+    </Box>
   );
 }
