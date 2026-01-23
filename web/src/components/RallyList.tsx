@@ -29,7 +29,6 @@ import MenuItem from '@mui/material/MenuItem';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import AddIcon from '@mui/icons-material/Add';
-import FolderIcon from '@mui/icons-material/Folder';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useExportStore } from '@/stores/exportStore';
@@ -41,7 +40,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { ExportOptionsDialog, ExportOptions } from './ExportOptionsDialog';
 import { removeVideoFromSession, renameVideo, confirmRallies, getConfirmationStatus, restoreOriginalVideo } from '@/services/api';
 import { syncService } from '@/services/syncService';
-import { ManageSessionsDialog } from './ManageSessionsDialog';
+import { ConfirmationStatus } from '@/constants/enums';
 
 export function RallyList() {
   const {
@@ -62,6 +61,7 @@ export function RallyList() {
     isConfirming,
     setIsConfirming,
     setShowAddVideoModal,
+    singleVideoMode,
   } = useEditorStore();
   const isPaidTier = useTierStore((state) => state.isPaidTier());
   const { currentTime, seek } = usePlayerStore();
@@ -123,16 +123,12 @@ export function RallyList() {
   const [matchToDownload, setMatchToDownload] = useState<Match | null>(null);
   const [rallyToDownload, setRallyToDownload] = useState<Rally | null>(null);
 
-  // Manage sessions dialog state
-  const [showManageSessionsDialog, setShowManageSessionsDialog] = useState(false);
-  const [matchToManageSessions, setMatchToManageSessions] = useState<Match | null>(null);
-
   // Poll for confirmation status when confirming
   useEffect(() => {
     if (!isConfirming || !activeMatchId) return;
 
     const status = confirmationStatus[activeMatchId];
-    const isProcessing = status?.status === 'PENDING' || status?.status === 'PROCESSING';
+    const isProcessing = status?.status === ConfirmationStatus.PENDING || status?.status === ConfirmationStatus.PROCESSING;
     if (!isProcessing) return;
 
     const intervalId = setInterval(async () => {
@@ -149,9 +145,9 @@ export function RallyList() {
             trimmedDurationMs: result.confirmation.trimmedDurationMs,
           });
 
-          if (result.confirmation.status === 'CONFIRMED' || result.confirmation.status === 'FAILED') {
+          if (result.confirmation.status === ConfirmationStatus.CONFIRMED || result.confirmation.status === ConfirmationStatus.FAILED) {
             setIsConfirming(false);
-            if (result.confirmation.status === 'CONFIRMED') {
+            if (result.confirmation.status === ConfirmationStatus.CONFIRMED) {
               await reloadSession();
             }
           }
@@ -553,14 +549,14 @@ export function RallyList() {
                 </Typography>
 
                 {/* Locked indicator */}
-                {confirmationStatus[match.id]?.status === 'CONFIRMED' && (
+                {confirmationStatus[match.id]?.status === ConfirmationStatus.CONFIRMED && (
                   <Tooltip title="Rallies confirmed">
                     <LockIcon sx={{ fontSize: 14, color: 'success.main', ml: 0.5 }} />
                   </Tooltip>
                 )}
 
                 {/* Processing indicator */}
-                {(confirmationStatus[match.id]?.status === 'PENDING' || confirmationStatus[match.id]?.status === 'PROCESSING') && (
+                {(confirmationStatus[match.id]?.status === ConfirmationStatus.PENDING || confirmationStatus[match.id]?.status === ConfirmationStatus.PROCESSING) && (
                   <CircularProgress size={14} sx={{ ml: 0.5 }} />
                 )}
 
@@ -783,20 +779,6 @@ export function RallyList() {
       >
         <MenuItem
           onClick={() => {
-            if (videoMenuAnchor) {
-              setMatchToManageSessions(videoMenuAnchor.match);
-              setShowManageSessionsDialog(true);
-            }
-            setVideoMenuAnchor(null);
-          }}
-        >
-          <ListItemIcon>
-            <FolderIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText>Manage Sessions</ListItemText>
-        </MenuItem>
-        <MenuItem
-          onClick={() => {
             const matchToRename = videoMenuAnchor?.match;
             setVideoMenuAnchor(null);
             if (matchToRename) {
@@ -813,20 +795,22 @@ export function RallyList() {
           </ListItemIcon>
           <ListItemText>Rename</ListItemText>
         </MenuItem>
-        <MenuItem
-          onClick={() => {
-            if (videoMenuAnchor) {
-              setMatchToDelete(videoMenuAnchor.match);
-              setShowDeleteDialog(true);
-            }
-            setVideoMenuAnchor(null);
-          }}
-        >
-          <ListItemIcon>
-            <DeleteIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText>Remove from session</ListItemText>
-        </MenuItem>
+        {!singleVideoMode && (
+          <MenuItem
+            onClick={() => {
+              if (videoMenuAnchor) {
+                setMatchToDelete(videoMenuAnchor.match);
+                setShowDeleteDialog(true);
+              }
+              setVideoMenuAnchor(null);
+            }}
+          >
+            <ListItemIcon>
+              <DeleteIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>Remove from session</ListItemText>
+          </MenuItem>
+        )}
         <Divider />
         <MenuItem
           onClick={() => {
@@ -850,7 +834,7 @@ export function RallyList() {
           />
         </MenuItem>
         <Divider />
-        {confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'CONFIRMED' ? (
+        {confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === ConfirmationStatus.CONFIRMED ? (
           <MenuItem
             onClick={() => {
               if (!videoMenuAnchor) return;
@@ -880,8 +864,8 @@ export function RallyList() {
               !isPaidTier ||
               isConfirming ||
               (videoMenuAnchor?.match.rallies.length ?? 0) === 0 ||
-              confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'PENDING' ||
-              confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === 'PROCESSING'
+              confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === ConfirmationStatus.PENDING ||
+              confirmationStatus[videoMenuAnchor?.match.id ?? '']?.status === ConfirmationStatus.PROCESSING
             }
           >
             <ListItemIcon>
@@ -1033,16 +1017,6 @@ export function RallyList() {
         isExporting={isExporting}
       />
 
-      {/* Manage sessions dialog */}
-      <ManageSessionsDialog
-        open={showManageSessionsDialog}
-        onClose={() => {
-          setShowManageSessionsDialog(false);
-          setMatchToManageSessions(null);
-        }}
-        video={matchToManageSessions ? { id: matchToManageSessions.id, name: matchToManageSessions.name } : null}
-        onChanged={reloadSession}
-      />
     </Box>
   );
 }

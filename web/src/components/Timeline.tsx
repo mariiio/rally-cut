@@ -1182,17 +1182,15 @@ export function Timeline() {
 
   // Sync detection status when match changes
   useEffect(() => {
-    if (activeMatch?.status) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional sync on match change
-      setVideoDetectionStatus(activeMatch.status);
-      // If match is DETECTING, set up the detecting UI state
-      if (activeMatch.status === 'DETECTING') {
-        setIsDetecting(true);
-        setDetectionStatus('Analyzing rallies...');
-        setDetectionError(null);
-      }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional sync on match change
+    setVideoDetectionStatus(activeMatch?.status ?? null);
+    // If match is DETECTING, set up the detecting UI state
+    if (activeMatch?.status === 'DETECTING') {
+      setIsDetecting(true);
+      setDetectionStatus('Analyzing rallies...');
+      setDetectionError(null);
     }
-  }, [activeMatch?.status]);
+  }, [activeMatchId, activeMatch?.status]);
 
   // Fetch job progress if video is DETECTING (to get progress/elapsed time)
   useEffect(() => {
