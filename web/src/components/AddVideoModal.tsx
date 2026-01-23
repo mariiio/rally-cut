@@ -206,16 +206,12 @@ export function AddVideoModal({
     }
   };
 
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  // Shared upload logic for both file select and drag-drop
+  const handleUpload = async (file: File) => {
     if (!isValidVideoFile(file)) {
       setError('Invalid video format. Please use MP4, MOV, or WebM.');
       return;
     }
-
-    e.target.value = '';
 
     // If sessionId is provided, upload directly to that session
     if (sessionId) {
@@ -264,62 +260,19 @@ export function AddVideoModal({
     }
   };
 
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    await handleUpload(file);
+  };
+
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
     const file = e.dataTransfer.files[0];
     if (!file) return;
-
-    if (!isValidVideoFile(file)) {
-      setError('Invalid video format. Please use MP4, MOV, or WebM.');
-      return;
-    }
-
-    // If sessionId is provided, upload directly to that session
-    if (sessionId) {
-      const success = await uploadVideo(sessionId, file);
-      if (success) {
-        onVideoAdded();
-        onClose();
-      }
-      return;
-    }
-
-    // Session selection mode
-    try {
-      let targetSessionId: string | null = null;
-
-      // Create new session if needed
-      if (selectedSessionId === 'new') {
-        if (!newSessionName.trim()) {
-          setError('Please enter a session name');
-          return;
-        }
-        setCreatingSession(true);
-        const session = await createSession(newSessionName.trim());
-        targetSessionId = session.id;
-        setCreatingSession(false);
-      } else if (selectedSessionId !== 'library') {
-        targetSessionId = selectedSessionId;
-      }
-
-      // Upload to library first
-      const result = await uploadVideoToLibrary(file);
-      if (!result.success || !result.videoId) {
-        return; // Error handled by uploadStore
-      }
-
-      // Add to session if one was selected
-      if (targetSessionId) {
-        await addVideoToSession(targetSessionId, result.videoId);
-      }
-
-      onVideoAdded();
-      onClose();
-    } catch (err) {
-      setCreatingSession(false);
-      setError(err instanceof Error ? err.message : 'Upload failed');
-    }
+    await handleUpload(file);
   };
 
   const handleDragOver = (e: React.DragEvent) => {

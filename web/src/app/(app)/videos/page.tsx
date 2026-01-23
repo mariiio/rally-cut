@@ -175,7 +175,7 @@ export default function VideosPage() {
 
   const handleVideoClick = (video: VideoListItem) => {
     // Open single video directly in the editor
-    router.push(`/videos/${video.id}`);
+    router.push(`/video/${video.id}`);
   };
 
   // Rename handlers
