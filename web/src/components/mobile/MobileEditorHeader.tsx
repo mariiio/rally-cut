@@ -109,13 +109,15 @@ export function MobileEditorHeader() {
           </ListItemIcon>
           <ListItemText>Home</ListItemText>
         </MenuItem>
-        <Divider />
-        <MenuItem onClick={handleMenuClose} disabled>
-          <ListItemIcon>
-            <ShareIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText>Share</ListItemText>
-        </MenuItem>
+        {!singleVideoMode && <Divider />}
+        {!singleVideoMode && (
+          <MenuItem onClick={handleMenuClose} disabled>
+            <ListItemIcon>
+              <ShareIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>Share</ListItemText>
+          </MenuItem>
+        )}
         <MenuItem onClick={handleMenuClose} disabled>
           <ListItemIcon>
             <DownloadIcon fontSize="small" />

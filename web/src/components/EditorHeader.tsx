@@ -364,8 +364,8 @@ export function EditorHeader() {
           )}
         </Stack>
 
-        {/* Share Button (only for owners) */}
-        {session && userRole === 'owner' && (
+        {/* Share Button (only for owners, not in single video mode) */}
+        {session && userRole === 'owner' && !singleVideoMode && (
           <Tooltip title="Share session">
             <IconButton
               size="small"
@@ -377,8 +377,8 @@ export function EditorHeader() {
           </Tooltip>
         )}
 
-        {/* Pending Access Requests (only for owners) */}
-        {session && userRole === 'owner' && (
+        {/* Pending Access Requests (only for owners, not in single video mode) */}
+        {session && userRole === 'owner' && !singleVideoMode && (
           <PendingAccessRequests sessionId={session.id} />
         )}
 
