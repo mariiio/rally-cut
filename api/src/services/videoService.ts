@@ -1,3 +1,5 @@
+import { VideoStatus, ConfirmationStatus } from "@prisma/client";
+
 import { prisma } from "../lib/prisma.js";
 import {
   generateUploadUrl,
@@ -148,7 +150,7 @@ async function findOrCreatePendingVideo(
 
   if (existingVideo) {
     // Reuse PENDING videos (allows retrying failed uploads)
-    if (existingVideo.status === "PENDING") {
+    if (existingVideo.status === VideoStatus.PENDING) {
       // Update metadata in case file size or duration changed
       // Keep original s3Key and filename to avoid orphaned S3 files
       await tx.video.update({
@@ -409,7 +411,7 @@ export async function completeMultipartUpload(
   parts: { partNumber: number; etag: string }[]
 ) {
   const video = await prisma.video.findFirst({
-    where: { id: videoId, userId, status: "PENDING" },
+    where: { id: videoId, userId, status: VideoStatus.PENDING },
   });
 
   if (!video) {
@@ -469,7 +471,7 @@ export async function confirmVideoUpload(
   const updated = await prisma.video.update({
     where: { id: videoId },
     data: {
-      status: "UPLOADED",
+      status: VideoStatus.UPLOADED,
       durationMs: data.durationMs,
       width: data.width,
       height: data.height,
@@ -901,7 +903,7 @@ export async function confirmUpload(
   const updated = await prisma.video.update({
     where: { id: data.videoId },
     data: {
-      status: "UPLOADED",
+      status: VideoStatus.UPLOADED,
       durationMs: data.durationMs,
       width: data.width,
       height: data.height,
@@ -1027,7 +1029,7 @@ export async function getVideoForEditor(videoId: string, userId: string) {
   }
 
   // Check if video is confirmed
-  const isConfirmed = video.confirmation?.status === "CONFIRMED";
+  const isConfirmed = video.confirmation?.status === ConfirmationStatus.CONFIRMED;
   // For confirmed videos, use the confirmation proxy for editing
   // and the trimmed duration for the player timeline
   const confirmationProxy = isConfirmed ? video.confirmation?.proxyS3Key : null;

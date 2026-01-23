@@ -1,7 +1,7 @@
 {
   "name": "RallyCut",
   "short_name": "RallyCut",
-  "description": "Beach volleyball video editor - detect rallies, create highlights",
+  "description": "Volleyball video editor - detect rallies, create highlights",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0F1116",

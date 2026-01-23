@@ -1,4 +1,4 @@
-"""RallyCut - Beach volleyball video analysis CLI."""
+"""RallyCut - Volleyball video analysis CLI."""
 
 __version__ = "0.1.0"
 

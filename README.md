@@ -1,6 +1,6 @@
 # RallyCut
 
-Beach volleyball video analysis and editing platform. Automatically detects rallies and removes dead time using machine learning.
+Volleyball video analysis and editing platform. Automatically detects rallies and removes dead time using machine learning.
 
 ## Overview
 

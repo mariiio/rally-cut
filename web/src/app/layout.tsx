@@ -11,13 +11,13 @@ const GA_MEASUREMENT_ID = 'G-XPC77Q8RWV';
 export const metadata: Metadata = {
   metadataBase: new URL('https://rallycut.com'),
   title: {
-    default: 'RallyCut - AI-Powered Beach Volleyball Video Analysis',
+    default: 'RallyCut - AI-Powered Volleyball Video Analysis',
     template: '%s | RallyCut',
   },
   description:
-    'Turn hours of beach volleyball footage into minutes of action. RallyCut uses AI to automatically detect rallies and create highlight reels. No editing skills required.',
+    'Turn hours of volleyball footage into minutes of action. RallyCut uses AI to automatically detect rallies and create highlight reels. No editing skills required.',
   keywords: [
-    'beach volleyball',
+    'volleyball',
     'video analysis',
     'rally detection',
     'highlights',
@@ -42,7 +42,7 @@ export const metadata: Metadata = {
     },
   },
   openGraph: {
-    title: 'RallyCut - AI-Powered Beach Volleyball Video Analysis',
+    title: 'RallyCut - AI-Powered Volleyball Video Analysis',
     description: 'Turn hours of footage into minutes of action with AI-powered rally detection.',
     url: 'https://rallycut.com',
     siteName: 'RallyCut',
@@ -53,13 +53,13 @@ export const metadata: Metadata = {
         url: '/og-image.png',
         width: 1200,
         height: 630,
-        alt: 'RallyCut - AI-Powered Beach Volleyball Video Analysis',
+        alt: 'RallyCut - AI-Powered Volleyball Video Analysis',
       },
     ],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'RallyCut - AI Beach Volleyball Video Analysis',
+    title: 'RallyCut - AI Volleyball Video Analysis',
     description: 'Turn hours of footage into minutes of action with AI-powered rally detection.',
     images: ['/og-image.png'],
   },

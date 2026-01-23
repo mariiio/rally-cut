@@ -1,6 +1,6 @@
 # RallyCut
 
-Beach volleyball video analysis platform. Monorepo with ML pipeline, web editor, and REST API.
+Volleyball video analysis platform. Monorepo with ML pipeline, web editor, and REST API.
 
 ## Projects
 

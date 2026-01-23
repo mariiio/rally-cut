@@ -27,7 +27,7 @@ const variants: Record<EmptyStateVariant, {
   'no-videos': {
     icon: SportsVolleyballIcon,
     defaultTitle: 'Get started with RallyCut',
-    defaultDescription: 'Upload your beach volleyball video to begin analyzing rallies and creating highlights',
+    defaultDescription: 'Upload your volleyball video to begin analyzing rallies and creating highlights',
     defaultActionLabel: 'Upload Your First Video',
     showAnimation: true,
   },

@@ -1,6 +1,6 @@
 # RallyCut Web
 
-Rally editor web application for beach volleyball video editing.
+Rally editor web application for volleyball video editing.
 
 ## Stack
 

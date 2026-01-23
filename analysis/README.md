@@ -1,6 +1,6 @@
 # RallyCut
 
-Beach volleyball video analysis CLI - auto-cut dead time from recordings.
+Volleyball video analysis CLI - auto-cut dead time from recordings.
 
 ## Features
 
@@ -35,7 +35,7 @@ uv run rallycut cut match.mp4 --dry-run
 
 ### Dead Time Removal (`cut`)
 
-Remove no-play segments from beach volleyball recordings:
+Remove no-play segments from volleyball recordings:
 
 ```bash
 # Basic usage - outputs to match_cut.mp4
@@ -139,7 +139,7 @@ Models are adapted from [volleyball_analytics](https://github.com/masouduut94/vo
 
 ## Known Limitations
 
-- Game state detection accuracy is optimized for standard beach volleyball footage
+- Game state detection accuracy is optimized for standard volleyball footage
 
 ## License
 

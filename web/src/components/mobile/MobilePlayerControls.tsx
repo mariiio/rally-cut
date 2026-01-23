@@ -21,6 +21,7 @@ import { useEditorStore } from '@/stores/editorStore';
 import { triggerRallyDetection, getDetectionStatus } from '@/services/api';
 import { formatTime } from '@/utils/timeFormat';
 import { designTokens } from '@/app/theme';
+import { VideoStatus } from '@/constants/enums';
 
 export function MobilePlayerControls() {
   const { isPlaying, currentTime, duration, togglePlay, seek } = usePlayerStore();
@@ -57,14 +58,14 @@ export function MobilePlayerControls() {
         setDetectionStatus(status.job?.progressMessage || 'Processing...');
         setVideoDetectionStatus(status.status);
 
-        if (status.status === 'DETECTED') {
+        if (status.status === VideoStatus.DETECTED) {
           setIsDetecting(false);
           if (pollIntervalRef.current) {
             clearInterval(pollIntervalRef.current);
           }
           // Reload the match data to get the new rallies
           reloadCurrentMatch();
-        } else if (status.status === 'FAILED') {
+        } else if (status.status === VideoStatus.ERROR) {
           setIsDetecting(false);
           setDetectionStatus('Detection failed');
           if (pollIntervalRef.current) {
@@ -85,7 +86,7 @@ export function MobilePlayerControls() {
       try {
         const status = await getDetectionStatus(activeMatchId);
         setVideoDetectionStatus(status.status);
-        if (status.status === 'DETECTING') {
+        if (status.status === VideoStatus.DETECTING) {
           setIsDetecting(true);
           setDetectionStatus(status.job?.progressMessage || 'Processing...');
           setDetectionProgress(status.job?.progress || 0);
@@ -144,7 +145,7 @@ export function MobilePlayerControls() {
   );
 
   const hasVideo = Boolean(videoUrl);
-  const canDetect = hasVideo && !isDetecting && videoDetectionStatus !== 'DETECTED';
+  const canDetect = hasVideo && !isDetecting && videoDetectionStatus !== VideoStatus.DETECTED;
 
   return (
     <Box
@@ -271,7 +272,7 @@ export function MobilePlayerControls() {
             >
               Detect
             </Button>
-          ) : videoDetectionStatus === 'DETECTED' ? (
+          ) : videoDetectionStatus === VideoStatus.DETECTED ? (
             <Typography variant="caption" color="success.main">
               {rallies?.length || 0} rallies
             </Typography>

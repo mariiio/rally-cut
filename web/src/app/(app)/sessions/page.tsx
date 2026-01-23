@@ -404,7 +404,7 @@ export default function HomePage() {
         <PageHeader
           icon={<SportsVolleyballIcon />}
           title="RallyCut"
-          subtitle="Beach Volleyball Video Analysis"
+          subtitle="Volleyball Video Analysis"
           action={
             hasVideos && (
               <Button

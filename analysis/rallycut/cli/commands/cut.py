@@ -225,7 +225,7 @@ def cut(  # noqa: C901
     ),
 ) -> None:
     """
-    Automatically remove no-play segments from beach volleyball recordings.
+    Automatically remove no-play segments from volleyball recordings.
 
     Analyzes the video to detect SERVICE, PLAY, and NO_PLAY segments,
     then exports a new video containing only the play segments with

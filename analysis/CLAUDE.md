@@ -1,6 +1,6 @@
 # RallyCut Analysis
 
-Beach volleyball video analysis CLI. Uses ML (VideoMAE) to detect game states and remove dead time.
+Volleyball video analysis CLI. Uses ML (VideoMAE) to detect game states and remove dead time.
 
 ## Stack
 

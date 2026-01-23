@@ -14,6 +14,7 @@ import { CameraOverlay } from './CameraOverlay';
 import { BallTrackingDebugOverlay } from './BallTrackingDebugOverlay';
 import { RotationGridOverlay } from './RotationGridOverlay';
 import { CropMaskOverlay } from './CropMaskOverlay';
+import { AspectRatio } from '@/constants/enums';
 
 export function VideoPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -144,7 +145,7 @@ export function VideoPlayer() {
       return { videoTransformStyle: {}, cameraState: DEFAULT_CAMERA_STATE };
     }
 
-    const aspectRatio = currentCameraEdit?.aspectRatio ?? 'ORIGINAL';
+    const aspectRatio = currentCameraEdit?.aspectRatio ?? AspectRatio.ORIGINAL;
 
     // No current rally - apply global settings only (entire video)
     if (!currentRally) {
@@ -157,7 +158,7 @@ export function VideoPlayer() {
         ? { ...globalState, positionX: dragPosition.x, positionY: dragPosition.y }
         : globalState;
       return {
-        videoTransformStyle: calculateVideoTransform(effectiveState, 'ORIGINAL'),
+        videoTransformStyle: calculateVideoTransform(effectiveState, AspectRatio.ORIGINAL),
         cameraState: effectiveState,
       };
     }
@@ -216,8 +217,8 @@ export function VideoPlayer() {
     if (!shouldApplyCamera || !currentRally) {
       return '16/9';
     }
-    const aspectRatio = currentCameraEdit?.aspectRatio ?? 'ORIGINAL';
-    return aspectRatio === 'VERTICAL' ? '9/16' : '16/9';
+    const aspectRatio = currentCameraEdit?.aspectRatio ?? AspectRatio.ORIGINAL;
+    return aspectRatio === AspectRatio.VERTICAL ? '9/16' : '16/9';
   }, [shouldApplyCamera, currentRally, currentCameraEdit]);
 
   // Play/pause based on isPlaying state
@@ -716,7 +717,7 @@ export function VideoPlayer() {
             }}
           />
           <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 500 }}>
-            {currentCameraEdit?.aspectRatio === 'VERTICAL' ? '9:16' : '16:9'} Preview
+            {currentCameraEdit?.aspectRatio === AspectRatio.VERTICAL ? '9:16' : '16:9'} Preview
           </Typography>
         </Box>
       )}
@@ -759,7 +760,7 @@ export function VideoPlayer() {
 
       {/* Semi-transparent overlay showing excluded areas in 9:16 mode */}
       {containerAspectRatio === '9/16' && shouldApplyCamera && (
-        <CropMaskOverlay aspectRatio="VERTICAL" />
+        <CropMaskOverlay aspectRatio={AspectRatio.VERTICAL} />
       )}
 
       {/* Unified video container - single video element to prevent remounting on aspect ratio change */}
