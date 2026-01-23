@@ -11,7 +11,7 @@ from rallycut.cli.commands.train import app as train_app
 
 app = typer.Typer(
     name="rallycut",
-    help="Beach volleyball video analysis CLI - rally detection",
+    help="Volleyball video analysis CLI - rally detection",
     no_args_is_help=True,
 )
 
@@ -29,7 +29,7 @@ app.add_typer(train_app, name="train")
 def main(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose output"),
 ) -> None:
-    """RallyCut - Beach volleyball video analysis CLI."""
+    """RallyCut - Volleyball video analysis CLI."""
     if verbose:
         console.print("[dim]Verbose mode enabled[/dim]")
 

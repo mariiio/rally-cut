@@ -17,6 +17,7 @@ import { useEditorStore } from '@/stores/editorStore';
 import { confirmRallies, getConfirmationStatus, restoreOriginalVideo } from '@/services/api';
 import { syncService } from '@/services/syncService';
 import { ConfirmDialog } from './ConfirmDialog';
+import { ConfirmationStatus } from '@/constants/enums';
 
 interface ConfirmRalliesProps {
   matchId: string;
@@ -39,8 +40,8 @@ export function ConfirmRallies({ matchId, isPaidTier }: ConfirmRalliesProps) {
   const [isRestoring, setIsRestoring] = useState(false);
 
   const status = confirmationStatus[matchId];
-  const isLocked = status?.status === 'CONFIRMED';
-  const isProcessing = status?.status === 'PENDING' || status?.status === 'PROCESSING';
+  const isLocked = status?.status === ConfirmationStatus.CONFIRMED;
+  const isProcessing = status?.status === ConfirmationStatus.PENDING || status?.status === ConfirmationStatus.PROCESSING;
 
   // Load initial status and poll when processing
   useEffect(() => {
@@ -66,14 +67,14 @@ export function ConfirmRallies({ matchId, isPaidTier }: ConfirmRalliesProps) {
           });
 
           // If completed or failed, stop polling and handle result
-          if (result.confirmation.status === 'CONFIRMED') {
+          if (result.confirmation.status === ConfirmationStatus.CONFIRMED) {
             setIsConfirming(false);
             if (intervalId) {
               clearInterval(intervalId);
               intervalId = null;
             }
             await reloadCurrentMatch();
-          } else if (result.confirmation.status === 'FAILED') {
+          } else if (result.confirmation.status === ConfirmationStatus.FAILED) {
             setIsConfirming(false);
             if (intervalId) {
               clearInterval(intervalId);

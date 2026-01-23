@@ -6,8 +6,9 @@ import { useCameraStore, selectCameraEdit, selectSelectedKeyframeId, createDefau
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { getValidPositionRange } from '@/utils/cameraInterpolation';
-import type { AspectRatio } from '@/types/camera';
+import type { AspectRatio as AspectRatioType } from '@/types/camera';
 import { KEYFRAME_TIME_THRESHOLD, DEFAULT_GLOBAL_CAMERA } from '@/types/camera';
+import { AspectRatio } from '@/constants/enums';
 
 interface DragState {
   isDragging: boolean;
@@ -105,8 +106,8 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
   )) || (isGlobalMode && canDragInGlobalMode));
 
   // Get aspect ratio
-  const aspectRatio: AspectRatio = cameraEdit?.aspectRatio ?? 'ORIGINAL';
-  const isVertical = aspectRatio === 'VERTICAL';
+  const aspectRatio: AspectRatioType = cameraEdit?.aspectRatio ?? AspectRatio.ORIGINAL;
+  const isVertical = aspectRatio === AspectRatio.VERTICAL;
 
   // Handle mouse down - start drag
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -171,7 +172,7 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
 
       // Get valid position range based on aspect ratio and zoom
       const { minX, maxX, minY, maxY } = getValidPositionRange(
-        isVertical ? 'VERTICAL' : 'ORIGINAL',
+        isVertical ? AspectRatio.VERTICAL : AspectRatio.ORIGINAL,
         currentZoom
       );
 

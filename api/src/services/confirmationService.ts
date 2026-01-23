@@ -116,8 +116,8 @@ export async function initiateConfirmation(
   // Check for existing pending/processing confirmation
   if (
     video.confirmation &&
-    (video.confirmation.status === "PENDING" ||
-      video.confirmation.status === "PROCESSING")
+    (video.confirmation.status === ConfirmationStatus.PENDING ||
+      video.confirmation.status === ConfirmationStatus.PROCESSING)
   ) {
     throw new ValidationError(
       "A confirmation is already in progress for this video."
@@ -241,7 +241,7 @@ export async function getConfirmationStatus(videoId: string, userId: string) {
       originalDurationMs: conf.originalDurationMs,
       trimmedDurationMs: conf.trimmedDurationMs,
       timestampMappings:
-        conf.status === "CONFIRMED"
+        conf.status === ConfirmationStatus.CONFIRMED
           ? (conf.timestampMappings as unknown as TimestampMapping[])
           : undefined,
     },
@@ -281,7 +281,7 @@ export async function restoreOriginal(
     throw new ValidationError("No confirmation exists for this video.");
   }
 
-  if (video.confirmation.status !== "CONFIRMED") {
+  if (video.confirmation.status !== ConfirmationStatus.CONFIRMED) {
     throw new ValidationError(
       "Can only restore a confirmed video. Current status: " +
         video.confirmation.status

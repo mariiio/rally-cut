@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { ProcessingStatus, RejectionReason, Video } from "@prisma/client";
+import { ProcessingStatus, RejectionReason, Video, DetectionJobStatus, VideoStatus, RallyStatus, ConfirmationStatus } from "@prisma/client";
 
 import { env } from "../config/env.js";
 import { triggerModalDetection } from "../lib/modal.js";
@@ -111,7 +111,7 @@ async function triggerLocalDetection(params: {
         prisma.rallyDetectionJob.update({
           where: { id: params.jobId },
           data: {
-            status: "FAILED",
+            status: DetectionJobStatus.FAILED,
             errorMessage: `Failed to start: ${error.message}`,
             completedAt: new Date(),
           },
@@ -121,7 +121,7 @@ async function triggerLocalDetection(params: {
             rallies: { none: {} },
             detectionJobs: { some: { id: params.jobId } },
           },
-          data: { status: "ERROR" },
+          data: { status: VideoStatus.ERROR },
         }),
       ]);
     } catch (e) {
@@ -137,12 +137,12 @@ async function triggerLocalDetection(params: {
         const job = await prisma.rallyDetectionJob.findUnique({
           where: { id: params.jobId },
         });
-        if (job && job.status === "RUNNING") {
+        if (job && job.status === DetectionJobStatus.RUNNING) {
           await prisma.$transaction([
             prisma.rallyDetectionJob.update({
               where: { id: params.jobId },
               data: {
-                status: "FAILED",
+                status: DetectionJobStatus.FAILED,
                 errorMessage: `Process exited with code ${code}`,
                 completedAt: new Date(),
               },
@@ -151,7 +151,7 @@ async function triggerLocalDetection(params: {
               where: {
                 detectionJobs: { some: { id: params.jobId } },
               },
-              data: { status: "ERROR" },
+              data: { status: VideoStatus.ERROR },
             }),
           ]);
         }
@@ -219,7 +219,7 @@ export async function triggerRallyDetection(
   const confirmation = await prisma.rallyConfirmation.findFirst({
     where: {
       videoId,
-      status: "CONFIRMED",
+      status: ConfirmationStatus.CONFIRMED,
     },
   });
 
@@ -229,7 +229,7 @@ export async function triggerRallyDetection(
     );
   }
 
-  if (video.status !== "UPLOADED") {
+  if (video.status !== VideoStatus.UPLOADED) {
     throw new ConflictError(
       `Video must be in UPLOADED status to trigger detection (current: ${video.status})`
     );
@@ -281,7 +281,7 @@ export async function triggerRallyDetection(
       const existing = await tx.rallyDetectionJob.findFirst({
         where: {
           contentHash: video.contentHash,
-          status: { in: ["COMPLETED", "PENDING", "RUNNING"] },
+          status: { in: [DetectionJobStatus.COMPLETED, DetectionJobStatus.PENDING, DetectionJobStatus.RUNNING] },
         },
         include: {
           video: {
@@ -294,7 +294,7 @@ export async function triggerRallyDetection(
       });
 
       if (existing !== null) {
-        if (existing.status === "COMPLETED") {
+        if (existing.status === DetectionJobStatus.COMPLETED) {
           // Reuse cached results from completed job
           const rallies = existing.video.rallies.map((r, index) => ({
             videoId,
@@ -307,7 +307,7 @@ export async function triggerRallyDetection(
           await tx.rally.createMany({ data: rallies });
           await tx.video.update({
             where: { id: videoId },
-            data: { status: "DETECTED" },
+            data: { status: VideoStatus.DETECTED },
           });
 
           return { job: null, existingJob: existing, cached: true };
@@ -316,7 +316,7 @@ export async function triggerRallyDetection(
         // Job is PENDING or RUNNING - link this video to the existing job
         await tx.video.update({
           where: { id: videoId },
-          data: { status: "DETECTING" },
+          data: { status: VideoStatus.DETECTING },
         });
 
         return { job: null, existingJob: existing, cached: false };
@@ -327,13 +327,13 @@ export async function triggerRallyDetection(
         data: {
           videoId,
           contentHash: video.contentHash,
-          status: "PENDING",
+          status: DetectionJobStatus.PENDING,
         },
       });
 
       await tx.video.update({
         where: { id: videoId },
-        data: { status: "DETECTING" },
+        data: { status: VideoStatus.DETECTING },
       });
 
       return { job: createdJob, existingJob: null, cached: false };
@@ -383,11 +383,11 @@ export async function triggerRallyDetection(
     await prisma.$transaction([
       prisma.rallyDetectionJob.update({
         where: { id: createdJob.id },
-        data: { status: "FAILED", errorMessage: String(error) },
+        data: { status: DetectionJobStatus.FAILED, errorMessage: String(error) },
       }),
       prisma.video.update({
         where: { id: videoId },
-        data: { status: "ERROR" },
+        data: { status: VideoStatus.ERROR },
       }),
     ]);
     throw error;
@@ -395,7 +395,7 @@ export async function triggerRallyDetection(
 
   await prisma.rallyDetectionJob.update({
     where: { id: createdJob.id },
-    data: { status: "RUNNING", startedAt: new Date() },
+    data: { status: DetectionJobStatus.RUNNING, startedAt: new Date() },
   });
 
   // Quota was already reserved atomically above - no separate increment needed
@@ -534,7 +534,7 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
     throw new NotFoundError("RallyDetectionJob", payload.job_id);
   }
 
-  if (job.status === "COMPLETED" || job.status === "FAILED") {
+  if (job.status === DetectionJobStatus.COMPLETED || job.status === DetectionJobStatus.FAILED) {
     return { ignored: true, reason: "Job already processed" };
   }
 
@@ -543,14 +543,14 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
       prisma.rallyDetectionJob.update({
         where: { id: job.id },
         data: {
-          status: "FAILED",
+          status: DetectionJobStatus.FAILED,
           errorMessage: payload.error_message ?? "Unknown error",
           completedAt: new Date(),
         },
       }),
       prisma.video.update({
         where: { id: job.videoId },
-        data: { status: "ERROR" },
+        data: { status: VideoStatus.ERROR },
       }),
     ]);
 
@@ -602,7 +602,7 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
           startMs: r.start_ms,
           endMs: r.end_ms,
           confidence: r.confidence,
-          status: "CONFIRMED",
+          status: RallyStatus.CONFIRMED,
           order: userRallies.length + index,
         })),
       });
@@ -666,7 +666,7 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
     await tx.rallyDetectionJob.update({
       where: { id: job.id },
       data: {
-        status: "COMPLETED",
+        status: DetectionJobStatus.COMPLETED,
         resultS3Key: payload.result_s3_key,
         completedAt: new Date(),
       },
@@ -674,7 +674,7 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
 
     await tx.video.update({
       where: { id: job.videoId },
-      data: { status: "DETECTED" },
+      data: { status: VideoStatus.DETECTED },
     });
   });
 

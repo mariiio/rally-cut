@@ -18,6 +18,7 @@ import {
   getExportDownloadUrl,
 } from '@/services/api';
 import { useCameraStore } from './cameraStore';
+import { CameraEasing } from '@/constants/enums';
 
 // Export options from dialog
 export interface ExportOptions {
@@ -322,7 +323,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
               positionY: globalSettings.positionY,
               zoom: globalSettings.zoom,
               rotation: globalSettings.rotation,
-              easing: 'LINEAR',
+              easing: CameraEasing.LINEAR,
             }];
           }
         }
@@ -449,7 +450,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
                 positionY: globalSettings.positionY,
                 zoom: globalSettings.zoom,
                 rotation: globalSettings.rotation,
-                easing: 'LINEAR',
+                easing: CameraEasing.LINEAR,
               }];
             }
           }

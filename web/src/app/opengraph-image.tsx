@@ -1,7 +1,7 @@
 import { ImageResponse } from 'next/og';
 
 export const runtime = 'edge';
-export const alt = 'RallyCut - AI-Powered Beach Volleyball Video Analysis';
+export const alt = 'RallyCut - AI-Powered Volleyball Video Analysis';
 export const size = {
   width: 1200,
   height: 630,
@@ -83,7 +83,7 @@ export default async function Image() {
             maxWidth: 700,
           }}
         >
-          AI-Powered Beach Volleyball Video Analysis
+          AI-Powered Volleyball Video Analysis
         </div>
 
         {/* Bottom accent */}

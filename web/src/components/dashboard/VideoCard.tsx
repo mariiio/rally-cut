@@ -6,8 +6,7 @@ import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import { designTokens } from '@/app/theme';
 import { getVideoStreamUrl } from '@/services/api';
-
-type VideoStatus = 'PENDING' | 'UPLOADED' | 'DETECTING' | 'DETECTED' | 'ERROR';
+import { VideoStatus } from '@/constants/enums';
 
 interface VideoCardProps {
   id: string;
@@ -32,13 +31,13 @@ export function VideoCard({
   name,
   durationMs,
   posterS3Key,
-  status = 'DETECTED',
+  status = VideoStatus.DETECTED,
   onClick,
   variant = 'medium',
   sessionTag,
 }: VideoCardProps) {
-  const isProcessing = status === 'DETECTING' || status === 'PENDING' || status === 'UPLOADED';
-  const isError = status === 'ERROR';
+  const isProcessing = status === VideoStatus.DETECTING || status === VideoStatus.PENDING || status === VideoStatus.UPLOADED;
+  const isError = status === VideoStatus.ERROR;
 
   const aspectRatio = variant === 'featured' ? '21/9' : '16/9';
   const playIconSize = variant === 'compact' ? 32 : variant === 'featured' ? 56 : 44;
@@ -144,7 +143,7 @@ export function VideoCard({
         />
 
         {/* Play icon */}
-        {status === 'DETECTED' && onClick && (
+        {status === VideoStatus.DETECTED && onClick && (
           <Box
             className="play-icon"
             sx={{

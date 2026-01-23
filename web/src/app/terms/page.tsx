@@ -60,7 +60,7 @@ export default function TermsPage() {
                 2. Description of Service
               </Typography>
               <Typography variant="body1" color="text.secondary" sx={{ lineHeight: 1.8 }}>
-                RallyCut is an AI-powered video analysis platform for beach volleyball. The
+                RallyCut is an AI-powered video analysis platform for volleyball. The
                 Service allows users to upload videos, automatically detect rallies using machine
                 learning, edit video segments, and export highlight reels. The Service operates
                 in your web browser and may use cloud processing for video analysis.
