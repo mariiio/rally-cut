@@ -46,6 +46,7 @@ interface PlayerState {
   setReady: (ready: boolean) => void;
   setBufferedRanges: (ranges: BufferedRange[]) => void;
   togglePlayOnlyRallies: () => void;
+  setPlayOnlyRallies: (value: boolean) => void;
   toggleApplyCameraEdits: () => void;
   setApplyCameraEdits: (apply: boolean) => void;
   setPlaybackRate: (rate: number) => void;
@@ -107,6 +108,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     if (typeof window !== 'undefined') {
       localStorage.setItem('rallycut-play-only-rallies', String(newValue));
     }
+  },
+  setPlayOnlyRallies: (value) => {
+    set({ playOnlyRallies: value });
+    // Don't save to localStorage - this is for programmatic defaults
   },
   toggleApplyCameraEdits: () => {
     const newValue = !get().applyCameraEdits;
