@@ -995,16 +995,18 @@ export async function getVideoById(id: string) {
 /**
  * Get a video with all data needed for the single-video editor.
  * Returns the video with rallies, camera edits, and filtered highlights.
+ * Camera edits and settings are filtered by userId (each user has their own camera edits).
  */
 export async function getVideoForEditor(videoId: string, userId: string) {
-  // Fetch video with rallies, camera edits, confirmation status, and global camera settings
+  // Fetch video with rallies, camera edits (filtered by user), confirmation status, and global camera settings
   const video = await prisma.video.findFirst({
     where: { id: videoId, userId, deletedAt: null },
     include: {
       rallies: {
         orderBy: { order: "asc" },
         include: {
-          cameraEdit: {
+          cameraEdits: {
+            where: { userId },
             include: {
               keyframes: {
                 orderBy: { timeOffset: "asc" },
@@ -1014,7 +1016,9 @@ export async function getVideoForEditor(videoId: string, userId: string) {
         },
       },
       confirmation: true,
-      cameraSettings: true,
+      cameraSettings: {
+        where: { userId },
+      },
     },
   });
 
@@ -1064,6 +1068,12 @@ export async function getVideoForEditor(videoId: string, userId: string) {
     },
   });
 
+  // Transform camera edits arrays to single objects for backward compatibility
+  const transformedRallies = video.rallies.map(({ cameraEdits, ...rally }) => ({
+    ...rally,
+    cameraEdit: cameraEdits[0] ?? null,
+  }));
+
   return serializeBigInts({
     video: {
       id: video.id,
@@ -1079,8 +1089,8 @@ export async function getVideoForEditor(videoId: string, userId: string) {
       durationMs: effectiveDuration,
       width: video.width,
       height: video.height,
-      rallies: video.rallies,
-      cameraSettings: video.cameraSettings,
+      rallies: transformedRallies,
+      cameraSettings: video.cameraSettings[0] ?? null,
     },
     allVideosSessionId: allVideosSession.id,
     highlights,

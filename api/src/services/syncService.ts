@@ -139,11 +139,11 @@ export async function syncState(
             seenIds.add(created.id);
           }
 
-          // Sync camera edit if provided
+          // Sync camera edit if provided (per-user: each user has their own camera edits)
           if (rally.cameraEdit) {
-            // Upsert camera edit
-            const existingCameraEdit = await tx.rallyCameraEdit.findUnique({
-              where: { rallyId },
+            // Find existing camera edit for this user
+            const existingCameraEdit = await tx.rallyCameraEdit.findFirst({
+              where: { rallyId, userId: userId ?? null },
               include: { keyframes: true },
             });
 
@@ -173,10 +173,11 @@ export async function syncState(
                 },
               });
             } else {
-              // Create new camera edit with keyframes
+              // Create new camera edit with keyframes (per-user)
               await tx.rallyCameraEdit.create({
                 data: {
                   rallyId,
+                  userId: userId ?? null,
                   enabled: rally.cameraEdit.enabled,
                   aspectRatio: rally.cameraEdit.aspectRatio,
                   keyframes: {
@@ -195,9 +196,9 @@ export async function syncState(
               });
             }
           } else if (rally.cameraEdit === null) {
-            // Explicitly delete camera edit when cameraEdit is null
+            // Explicitly delete camera edit for this user only
             await tx.rallyCameraEdit.deleteMany({
-              where: { rallyId },
+              where: { rallyId, userId: userId ?? null },
             });
           }
         }
@@ -211,34 +212,46 @@ export async function syncState(
         }
       }
 
-      // Sync global camera settings for each video
+      // Sync global camera settings for each video (per-user: each user has their own settings)
       if (input.globalCameraSettings) {
         for (const [videoId, settings] of Object.entries(input.globalCameraSettings)) {
           if (!videoIds.has(videoId)) continue;
 
           if (settings === null) {
-            // Explicitly delete global camera settings
+            // Explicitly delete global camera settings for this user only
             await tx.videoCameraSettings.deleteMany({
-              where: { videoId },
+              where: { videoId, userId: userId ?? null },
             });
           } else if (settings) {
-            // Upsert global camera settings
-            await tx.videoCameraSettings.upsert({
-              where: { videoId },
-              create: {
-                videoId,
-                zoom: settings.zoom,
-                positionX: settings.positionX,
-                positionY: settings.positionY,
-                rotation: settings.rotation,
-              },
-              update: {
-                zoom: settings.zoom,
-                positionX: settings.positionX,
-                positionY: settings.positionY,
-                rotation: settings.rotation,
-              },
+            // Find existing settings for this user
+            const existingSettings = await tx.videoCameraSettings.findFirst({
+              where: { videoId, userId: userId ?? null },
             });
+
+            if (existingSettings) {
+              // Update existing settings
+              await tx.videoCameraSettings.update({
+                where: { id: existingSettings.id },
+                data: {
+                  zoom: settings.zoom,
+                  positionX: settings.positionX,
+                  positionY: settings.positionY,
+                  rotation: settings.rotation,
+                },
+              });
+            } else {
+              // Create new settings for this user
+              await tx.videoCameraSettings.create({
+                data: {
+                  videoId,
+                  userId: userId ?? null,
+                  zoom: settings.zoom,
+                  positionX: settings.positionX,
+                  positionY: settings.positionY,
+                  rotation: settings.rotation,
+                },
+              });
+            }
           }
         }
       }

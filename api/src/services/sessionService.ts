@@ -126,6 +126,7 @@ export async function listSessions(pagination: Pagination, userId?: string) {
 
 export async function getSessionById(id: string, userId?: string) {
   // Combined query: fetch session with all related data + access check in one query
+  // Camera edits and settings are filtered by userId (each user has their own camera edits)
   const session = await prisma.session.findFirst({
     where: { id, deletedAt: null },
     include: {
@@ -137,7 +138,8 @@ export async function getSessionById(id: string, userId?: string) {
               rallies: {
                 orderBy: { order: "asc" },
                 include: {
-                  cameraEdit: {
+                  cameraEdits: {
+                    where: { userId: userId ?? null },
                     include: {
                       keyframes: {
                         orderBy: { timeOffset: "asc" },
@@ -147,7 +149,9 @@ export async function getSessionById(id: string, userId?: string) {
                 },
               },
               confirmation: true,
-              cameraSettings: true,
+              cameraSettings: {
+                where: { userId: userId ?? null },
+              },
             },
           },
         },
@@ -173,6 +177,7 @@ export async function getSessionById(id: string, userId?: string) {
         select: {
           id: true,
           name: true,
+          tier: true,
         },
       },
       // Include share membership check for access validation (always include for consistent type)
@@ -224,9 +229,11 @@ export async function getSessionById(id: string, userId?: string) {
 
   // Transform to expected format with videos array
   // For confirmed videos, use confirmation proxy and duration
+  // Camera edits and settings are now per-user, so extract first match (or undefined)
   const transformed = {
     ...session,
     userRole,
+    ownerTier: session.user?.tier ?? "FREE",
     videos: session.sessionVideos.map((sv) => {
       const video = sv.video;
       const isConfirmed = video.confirmation?.status === "CONFIRMED";
@@ -243,6 +250,13 @@ export async function getSessionById(id: string, userId?: string) {
           : video.durationMs,
         // Clear processedS3Key for confirmed (use proxy instead)
         processedS3Key: isConfirmed ? null : video.processedS3Key,
+        // Transform cameraSettings array back to single object for backward compatibility
+        cameraSettings: video.cameraSettings[0] ?? null,
+        // Transform each rally's cameraEdits array back to single cameraEdit
+        rallies: video.rallies.map(({ cameraEdits, ...rally }) => ({
+          ...rally,
+          cameraEdit: cameraEdits[0] ?? null,
+        })),
       };
     }),
   };
