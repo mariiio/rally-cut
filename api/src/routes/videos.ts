@@ -83,7 +83,7 @@ router.get(
       if (s3Response.Body) {
         const stream = s3Response.Body as Readable;
 
-        const cleanup = () => {
+        const cleanup = (): void => {
           if (!stream.destroyed) {
             stream.destroy();
           }
@@ -106,7 +106,7 @@ router.get(
         res.status(404).send("Video not found");
       }
     } catch (error: unknown) {
-      if (error && typeof error === "object" && "name" in error && error.name === "NoSuchKey") {
+      if (error !== null && error !== undefined && typeof error === "object" && "name" in error && error.name === "NoSuchKey") {
         res.status(404).send("Video not found");
       } else {
         next(error);
@@ -166,7 +166,7 @@ router.get(
 
         // Handle client disconnect (browser abort, navigation, etc.)
         // This is critical for video seeking which triggers many aborted requests
-        const cleanup = () => {
+        const cleanup = (): void => {
           if (!stream.destroyed) {
             stream.destroy();
           }
@@ -192,7 +192,7 @@ router.get(
         res.status(404).send("Video not found");
       }
     } catch (error: unknown) {
-      if (error && typeof error === "object" && "name" in error && error.name === "NoSuchKey") {
+      if (error !== null && error !== undefined && typeof error === "object" && "name" in error && error.name === "NoSuchKey") {
         res.status(404).send("Video not found");
       } else {
         next(error);

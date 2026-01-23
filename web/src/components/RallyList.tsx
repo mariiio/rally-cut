@@ -18,7 +18,6 @@ import {
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
@@ -30,6 +29,7 @@ import MenuItem from '@mui/material/MenuItem';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import AddIcon from '@mui/icons-material/Add';
+import FolderIcon from '@mui/icons-material/Folder';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useExportStore } from '@/stores/exportStore';
@@ -41,6 +41,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { ExportOptionsDialog, ExportOptions } from './ExportOptionsDialog';
 import { removeVideoFromSession, renameVideo, confirmRallies, getConfirmationStatus, restoreOriginalVideo } from '@/services/api';
 import { syncService } from '@/services/syncService';
+import { ManageSessionsDialog } from './ManageSessionsDialog';
 
 export function RallyList() {
   const {
@@ -121,6 +122,10 @@ export function RallyList() {
   const [exportType, setExportType] = useState<'match' | 'rally' | 'all'>('all');
   const [matchToDownload, setMatchToDownload] = useState<Match | null>(null);
   const [rallyToDownload, setRallyToDownload] = useState<Rally | null>(null);
+
+  // Manage sessions dialog state
+  const [showManageSessionsDialog, setShowManageSessionsDialog] = useState(false);
+  const [matchToManageSessions, setMatchToManageSessions] = useState<Match | null>(null);
 
   // Poll for confirmation status when confirming
   useEffect(() => {
@@ -290,12 +295,6 @@ export function RallyList() {
     setMatchToDownload(null);
     setRallyToDownload(null);
   }, [session, matchToDownload, rallyToDownload, exportType, activeMatchId, sortedRallies, downloadRallyServerSide, downloadAllRalliesServerSide]);
-
-  const handleDeleteClick = useCallback((e: React.MouseEvent, match: Match) => {
-    e.stopPropagation(); // Don't toggle expand/collapse
-    setMatchToDelete(match);
-    setShowDeleteDialog(true);
-  }, []);
 
   const handleConfirmRemove = useCallback(async () => {
     if (!matchToDelete || !session) return;
@@ -784,6 +783,20 @@ export function RallyList() {
       >
         <MenuItem
           onClick={() => {
+            if (videoMenuAnchor) {
+              setMatchToManageSessions(videoMenuAnchor.match);
+              setShowManageSessionsDialog(true);
+            }
+            setVideoMenuAnchor(null);
+          }}
+        >
+          <ListItemIcon>
+            <FolderIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>Manage Sessions</ListItemText>
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
             const matchToRename = videoMenuAnchor?.match;
             setVideoMenuAnchor(null);
             if (matchToRename) {
@@ -1018,6 +1031,17 @@ export function RallyList() {
         videoId={matchToDownload?.id}
         showFadeOption={exportType !== 'rally'}
         isExporting={isExporting}
+      />
+
+      {/* Manage sessions dialog */}
+      <ManageSessionsDialog
+        open={showManageSessionsDialog}
+        onClose={() => {
+          setShowManageSessionsDialog(false);
+          setMatchToManageSessions(null);
+        }}
+        video={matchToManageSessions ? { id: matchToManageSessions.id, name: matchToManageSessions.name } : null}
+        onChanged={reloadSession}
       />
     </Box>
   );

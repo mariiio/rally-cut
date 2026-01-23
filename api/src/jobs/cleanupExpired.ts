@@ -130,7 +130,7 @@ export async function cleanupExpiredContent(): Promise<CleanupResult> {
           await deleteObject(key);
           console.log(`[CLEANUP] Deleted high-quality S3 object: ${key}`);
         } catch (error) {
-          const message = `Failed to delete S3 object ${key}: ${error}`;
+          const message = `Failed to delete S3 object ${key}: ${String(error)}`;
           console.error(`[CLEANUP] ${message}`);
           errors.push(message);
         }
@@ -243,7 +243,7 @@ export async function cleanupExpiredContent(): Promise<CleanupResult> {
           if (result.status === "fulfilled") {
             console.log(`[CLEANUP] Deleted S3 object: ${key}`);
           } else {
-            const message = `Failed to delete S3 object ${key}: ${result.reason}`;
+            const message = `Failed to delete S3 object ${key}: ${String(result.reason)}`;
             console.error(`[CLEANUP] ${message}`);
             errors.push(message);
           }
@@ -314,7 +314,7 @@ export async function cleanupExpiredContent(): Promise<CleanupResult> {
         }
         stuckProcessingRecovered++;
       } catch (error) {
-        const message = `Failed to recover stuck video ${video.id}: ${error}`;
+        const message = `Failed to recover stuck video ${video.id}: ${String(error)}`;
         console.error(`[CLEANUP] ${message}`);
         errors.push(message);
       }

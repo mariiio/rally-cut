@@ -396,7 +396,7 @@ def cut(  # noqa: C901
                 # Don't cache diagnostic results
             elif dry_run:
                 # Analysis only
-                segments = cutter.analyze_only(
+                segments, _suggested = cutter.analyze_only(
                     video,
                     progress_callback=update_progress,
                 )

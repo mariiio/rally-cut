@@ -4,6 +4,7 @@ import {
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
+  type GetObjectCommandOutput,
   PutObjectCommand,
   S3Client,
   type S3ClientConfig,
@@ -90,7 +91,7 @@ export function getAnalysisS3Key(videoId: string): string {
  * Used for proxying video content in local development.
  * Supports range requests for video seeking.
  */
-export async function getObject(key: string, range?: string) {
+export async function getObject(key: string, range?: string): Promise<GetObjectCommandOutput> {
   const command = new GetObjectCommand({
     Bucket: env.S3_BUCKET_NAME,
     Key: key,

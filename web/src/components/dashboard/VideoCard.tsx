@@ -86,6 +86,7 @@ export function VideoCard({
     >
       <Box sx={{ position: 'relative', aspectRatio, flexShrink: 0 }}>
         {posterS3Key ? (
+          /* eslint-disable-next-line @next/next/no-img-element -- dynamic API URL */
           <img
             src={getVideoStreamUrl(posterS3Key)}
             alt={name}

@@ -307,11 +307,10 @@ export function HighlightsPanel() {
     moveRallyBetweenHighlights,
     removeRallyFromHighlight,
     canEditHighlight,
-    currentUserName,
-    currentUserId,
     expandedHighlightIds,
     expandHighlight,
     collapseHighlight,
+    currentUserId,
   } = useEditorStore();
 
   // Get all rallies across all matches for cross-match highlights
@@ -554,22 +553,6 @@ export function HighlightsPanel() {
     }
     setEditingId(null);
   }, [editingId, editName, renameHighlight]);
-
-  const handleDeleteClick = useCallback((id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setDeleteConfirmId(id);
-  }, []);
-
-  const handleConfirmDelete = useCallback((id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    deleteHighlight(id);
-    setDeleteConfirmId(null);
-  }, [deleteHighlight]);
-
-  const handleCancelDelete = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    setDeleteConfirmId(null);
-  }, []);
 
   const handleDownloadClick = useCallback((highlightId: string, e?: React.MouseEvent) => {
     e?.stopPropagation();

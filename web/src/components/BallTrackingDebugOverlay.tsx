@@ -49,6 +49,7 @@ export function BallTrackingDebugOverlay({
 
   // Transform ball coordinates to match current camera view
   // Uses INVERSE of video transform from calculateVideoTransform in cameraInterpolation.ts
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- complex transform function intentionally memoized
   const transformCoordinate = useMemo(() => {
     if (aspectRatio === 'ORIGINAL') {
       // 16:9: no crop when zoom <= 1
@@ -83,7 +84,6 @@ export function BallTrackingDebugOverlay({
     // Need to find container coords accounting for all transforms
 
     const widthRatio = (16 / 9) / (9 / 16); // ~3.16
-    const excessRatio = (widthRatio - 1) / widthRatio; // ~0.684
 
     // Horizontal: ball at video x maps to container position
     // Video spans from -1.08 to +2.08 in container coords (when centered)

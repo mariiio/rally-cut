@@ -40,7 +40,6 @@ export interface TierConfig {
 const GB = 1024 * 1024 * 1024;
 const MB = 1024 * 1024;
 const MINUTES = 60 * 1000;
-const DAYS = 24 * 60 * 60 * 1000;
 
 /**
  * Tier Configuration
@@ -137,7 +136,7 @@ export const TIER_CONFIG: Record<UserTier, TierConfig> = {
  * Get tier configuration.
  */
 export function getTierConfig(tier: UserTier): TierConfig {
-  return TIER_CONFIG[tier] ?? TIER_CONFIG.FREE;
+  return TIER_CONFIG[tier];
 }
 
 /**

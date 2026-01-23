@@ -107,7 +107,7 @@ def train_model(
     from rallycut.training.sampler import TrainingSample
     from rallycut.training.train import train
 
-    print(f"Starting training on Modal T4 GPU")
+    print("Starting training on Modal T4 GPU")
     print(f"  Epochs: {epochs}")
     print(f"  Batch size: {batch_size}")
     print(f"  Learning rate: {learning_rate}")
@@ -223,7 +223,7 @@ def train_model(
     if base_model_path is not None:
         config_kwargs["base_model_path"] = base_model_path
 
-    config = TrainingConfig(**config_kwargs)
+    config = TrainingConfig(**config_kwargs)  # type: ignore[arg-type]
 
     # Run training (auto-resumes from checkpoint if available)
     model_path = train(
@@ -276,7 +276,6 @@ def download_model(output_dir: str = "weights/videomae/beach_volleyball") -> dic
     from pathlib import Path
 
     volume_path = Path("/data/models/beach_volleyball/best")
-    local_path = Path(output_dir)
 
     if not volume_path.exists():
         raise ValueError(f"Model not found at {volume_path}")
@@ -337,7 +336,7 @@ def main(
         print(f"\nTo download, run:\n  {result['download_cmd']}")
         return
 
-    print(f"Starting training on Modal...")
+    print("Starting training on Modal...")
     print(f"  Epochs: {epochs}")
     print(f"  Batch size: {batch_size}")
     print(f"  Learning rate: {learning_rate}")
@@ -351,5 +350,5 @@ def main(
         resume_from_model=resume_from_model,
     )
 
-    print(f"\nTraining complete!")
+    print("\nTraining complete!")
     print(json.dumps(result, indent=2))

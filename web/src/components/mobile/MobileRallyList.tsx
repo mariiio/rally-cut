@@ -17,7 +17,7 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { formatTime, formatDuration } from '@/utils/timeFormat';
-import { Rally, Match } from '@/types/rally';
+import { Rally } from '@/types/rally';
 import { designTokens } from '@/app/theme';
 
 interface MobileRallyListProps {

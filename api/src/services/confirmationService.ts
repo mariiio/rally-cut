@@ -9,7 +9,7 @@ import { env } from "../config/env.js";
 import { generateDownloadUrl, generateUploadUrl, deleteObject } from "../lib/s3.js";
 import { prisma } from "../lib/prisma.js";
 import { ForbiddenError, NotFoundError, ValidationError } from "../middleware/errorHandler.js";
-import { getUserTier, getTierLimits } from "./tierService.js";
+import { getUserTier } from "./tierService.js";
 
 const lambdaClient = new LambdaClient({
   region: env.AWS_REGION,
@@ -84,7 +84,6 @@ export async function initiateConfirmation(
 ): Promise<ConfirmationResult> {
   // Check user tier
   const userTier = await getUserTier(userId);
-  const limits = getTierLimits(userTier);
 
   if (userTier === "FREE") {
     throw new ForbiddenError("Rally confirmation requires Pro or Elite tier.");
@@ -134,8 +133,8 @@ export async function initiateConfirmation(
     }))
   );
 
-  // Calculate trimmed duration
-  const trimmedDurationMs = mappings.reduce(
+  // Calculate trimmed duration (reserved for future use)
+  const _trimmedDurationMs = mappings.reduce(
     (sum, m) => sum + (m.trimmedEndMs - m.trimmedStartMs),
     0
   );

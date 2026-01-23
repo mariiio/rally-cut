@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Box,
@@ -30,6 +30,8 @@ import CollectionsIcon from '@mui/icons-material/Collections';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
+import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import FolderIcon from '@mui/icons-material/Folder';
 import { designTokens } from '@/app/theme';
 import {
   listVideos,
@@ -45,6 +47,8 @@ import {
   VideoCardSkeleton,
   EmptyState,
 } from '@/components/dashboard';
+import { AddVideoModal } from '@/components/AddVideoModal';
+import { ManageSessionsDialog } from '@/components/ManageSessionsDialog';
 
 interface VideoSession {
   id: string;
@@ -82,15 +86,36 @@ export default function VideosPage() {
   const [deleteVideo_target, setDeleteVideoTarget] = useState<VideoListItem | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Upload modal state
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
+
+  // Manage sessions dialog state
+  const [manageSessionsOpen, setManageSessionsOpen] = useState(false);
+  const [manageSessionsVideo, setManageSessionsVideo] = useState<VideoListItem | null>(null);
+
   // Filter out PENDING videos
   const readyVideos = useMemo(
     () => videos.filter((v) => v.status !== 'PENDING'),
     [videos]
   );
 
+  const loadVideos = useCallback(async () => {
+    try {
+      setLoading(true);
+      const result = await listVideos(page, limit, search || undefined);
+      setVideos(result.data);
+      setTotalPages(result.pagination.totalPages);
+      setTotalVideos(result.pagination.total);
+    } catch (error) {
+      console.error('Failed to load videos:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, [page, search]);
+
   useEffect(() => {
     loadVideos();
-  }, [page, search]);
+  }, [loadVideos]);
 
   // Fetch ALL_VIDEOS session ID on mount
   useEffect(() => {
@@ -119,20 +144,6 @@ export default function VideosPage() {
     return () => clearTimeout(timer);
   }, [searchInput, search]);
 
-  const loadVideos = async () => {
-    try {
-      setLoading(true);
-      const result = await listVideos(page, limit, search || undefined);
-      setVideos(result.data);
-      setTotalPages(result.pagination.totalPages);
-      setTotalVideos(result.pagination.total);
-    } catch (error) {
-      console.error('Failed to load videos:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const getRegularSessions = (video: VideoListItem): VideoSession[] => {
     return (video.sessions || []).filter((s) => s.type !== 'ALL_VIDEOS');
   };
@@ -154,15 +165,17 @@ export default function VideosPage() {
     handleMenuClose();
   };
 
-  const handleVideoClick = (video: VideoListItem) => {
-    const regularSessions = getRegularSessions(video);
-    if (regularSessions.length > 0) {
-      // Go to first regular session with video selected
-      router.push(`/sessions/${regularSessions[0].id}?video=${video.id}`);
-    } else if (allVideosSessionId) {
-      // Fallback to ALL_VIDEOS session
-      router.push(`/sessions/${allVideosSessionId}?video=${video.id}`);
+  const handleManageSessions = () => {
+    if (menuAnchor?.video) {
+      setManageSessionsVideo(menuAnchor.video);
+      setManageSessionsOpen(true);
     }
+    handleMenuClose();
+  };
+
+  const handleVideoClick = (video: VideoListItem) => {
+    // Open single video directly in the editor
+    router.push(`/videos/${video.id}`);
   };
 
   // Rename handlers
@@ -264,21 +277,30 @@ export default function VideosPage() {
           title="Video Library"
           subtitle={totalVideos > 0 ? `${totalVideos} video${totalVideos !== 1 ? 's' : ''} in your library` : undefined}
           action={
-            <Button
-              variant="outlined"
-              onClick={() => router.push('/sessions')}
-              sx={{
-                borderColor: 'rgba(255, 255, 255, 0.2)',
-                color: 'text.secondary',
-                '&:hover': {
-                  borderColor: 'primary.main',
-                  color: 'primary.main',
-                  bgcolor: 'rgba(255, 107, 74, 0.08)',
-                },
-              }}
-            >
-              Back to Sessions
-            </Button>
+            <Stack direction="row" spacing={1.5}>
+              <Button
+                variant="contained"
+                startIcon={<CloudUploadIcon />}
+                onClick={() => setUploadModalOpen(true)}
+              >
+                Upload
+              </Button>
+              <Button
+                variant="outlined"
+                onClick={() => router.push('/sessions')}
+                sx={{
+                  borderColor: 'rgba(255, 255, 255, 0.2)',
+                  color: 'text.secondary',
+                  '&:hover': {
+                    borderColor: 'primary.main',
+                    color: 'primary.main',
+                    bgcolor: 'rgba(255, 107, 74, 0.08)',
+                  },
+                }}
+              >
+                Back to Sessions
+              </Button>
+            </Stack>
           }
         />
 
@@ -495,6 +517,12 @@ export default function VideosPage() {
           </MenuItem>
         )}
         {allVideosSessionId && <Divider />}
+        <MenuItem onClick={handleManageSessions}>
+          <ListItemIcon>
+            <FolderIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="Manage Sessions" />
+        </MenuItem>
         <MenuItem onClick={handleRenameClick}>
           <ListItemIcon>
             <EditIcon fontSize="small" />
@@ -625,6 +653,24 @@ export default function VideosPage() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Upload modal */}
+      <AddVideoModal
+        open={uploadModalOpen}
+        onClose={() => setUploadModalOpen(false)}
+        onVideoAdded={loadVideos}
+      />
+
+      {/* Manage sessions dialog */}
+      <ManageSessionsDialog
+        open={manageSessionsOpen}
+        onClose={() => {
+          setManageSessionsOpen(false);
+          setManageSessionsVideo(null);
+        }}
+        video={manageSessionsVideo}
+        onChanged={loadVideos}
+      />
     </Box>
   );
 }

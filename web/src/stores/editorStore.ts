@@ -3,7 +3,6 @@ import {
   Rally,
   VideoMetadata,
   RallyFile,
-  RallyStats,
   Highlight,
   HIGHLIGHT_COLORS,
   createRally,
@@ -1278,11 +1277,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const nextRally = state.rallies
       .filter((s) => s.start_time > time)
       .sort((a, b) => a.start_time - b.start_time)[0];
-
-    // Find previous rally to avoid overlap
-    const prevRally = state.rallies
-      .filter((s) => s.end_time <= time)
-      .sort((a, b) => b.end_time - a.end_time)[0];
 
     // Check if we're inside an existing rally
     const insideRally = state.rallies.find(

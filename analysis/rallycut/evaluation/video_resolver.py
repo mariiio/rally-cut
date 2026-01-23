@@ -7,7 +7,6 @@ from pathlib import Path
 
 import boto3
 from botocore.config import Config
-
 from platformdirs import user_cache_dir
 
 

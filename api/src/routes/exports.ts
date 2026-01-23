@@ -82,7 +82,8 @@ router.get(
       }
       return res.json(job);
     } catch (error) {
-      return next(error);
+      next(error);
+      return;
     }
   }
 );
@@ -107,7 +108,8 @@ router.get(
       }
       return res.json(result);
     } catch (error) {
-      return next(error);
+      next(error);
+      return;
     }
   }
 );

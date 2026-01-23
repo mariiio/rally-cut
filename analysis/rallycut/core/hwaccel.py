@@ -24,8 +24,8 @@ try:
     PYAV_AVAILABLE = True
 except ImportError:
     PYAV_AVAILABLE = False
-    InputContainer = Any  # type: ignore[misc,assignment]
-    VideoStream = Any  # type: ignore[misc,assignment]
+    InputContainer = Any
+    VideoStream = Any
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -91,7 +91,7 @@ class HWAccelDecoder:
         if self._hwaccel_type:
             try:
                 # Configure hardware acceleration context
-                stream.codec_context.hwaccel = self._hwaccel_type  # type: ignore[attr-defined]
+                stream.codec_context.hwaccel = self._hwaccel_type
                 self._using_hwaccel = True
             except Exception:
                 # Hardware acceleration not available, use software

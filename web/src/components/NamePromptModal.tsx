@@ -23,7 +23,7 @@ export function NamePromptModal({ open, onClose, onNameSet }: NamePromptModalPro
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { setCurrentUser, currentUserId } = useEditorStore();
+  const { setCurrentUser } = useEditorStore();
 
   const handleSubmit = async () => {
     if (!name.trim()) return;

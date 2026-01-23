@@ -18,21 +18,36 @@ import {
   InputAdornment,
   IconButton,
   Alert,
+  FormControl,
+  RadioGroup,
+  FormControlLabel,
+  Radio,
+  Divider,
 } from '@mui/material';
 import { VolleyballProgress } from './VolleyballProgress';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import VideoLibraryIcon from '@mui/icons-material/VideoLibrary';
 import SearchIcon from '@mui/icons-material/Search';
 import CloseIcon from '@mui/icons-material/Close';
+import AddIcon from '@mui/icons-material/Add';
 import { RecordingGuidelines } from './RecordingGuidelines';
 import {
   listVideos,
+  listSessions,
   addVideoToSession,
+  createSession,
   getVideoStreamUrl,
   type VideoListItem,
+  type SessionType,
 } from '@/services/api';
 import { useUploadStore } from '@/stores/uploadStore';
 import { isValidVideoFile } from '@/utils/fileHandlers';
+
+interface SessionOption {
+  id: string;
+  name: string;
+  type: SessionType;
+}
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -59,8 +74,8 @@ function formatDuration(ms: number | null): string {
 interface AddVideoModalProps {
   open: boolean;
   onClose: () => void;
-  sessionId: string;
-  existingVideoIds: string[];
+  sessionId?: string;
+  existingVideoIds?: string[];
   onVideoAdded: () => void;
 }
 
@@ -68,7 +83,7 @@ export function AddVideoModal({
   open,
   onClose,
   sessionId,
-  existingVideoIds,
+  existingVideoIds = [],
   onVideoAdded,
 }: AddVideoModalProps) {
   const [tabIndex, setTabIndex] = useState(0);
@@ -81,7 +96,14 @@ export function AddVideoModal({
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const { isUploading, progress, currentStep, uploadVideo } = useUploadStore();
+  // Session selection state (when sessionId is not provided)
+  const [sessions, setSessions] = useState<SessionOption[]>([]);
+  const [loadingSessions, setLoadingSessions] = useState(false);
+  const [selectedSessionId, setSelectedSessionId] = useState<string>('library'); // 'library', session ID, or 'new'
+  const [newSessionName, setNewSessionName] = useState('');
+  const [creatingSession, setCreatingSession] = useState(false);
+
+  const { isUploading, progress, currentStep, uploadVideo, uploadVideoToLibrary } = useUploadStore();
 
   const loadVideos = useCallback(async (searchQuery?: string) => {
     try {
@@ -108,6 +130,26 @@ export function AddVideoModal({
     }
   }, [open, tabIndex, loadVideos]);
 
+  // Load available sessions when modal opens and no sessionId provided
+  useEffect(() => {
+    if (open && !sessionId) {
+      const fetchSessions = async () => {
+        try {
+          setLoadingSessions(true);
+          const result = await listSessions(1, 100);
+          // Filter to only REGULAR sessions (not ALL_VIDEOS)
+          const regularSessions = result.data.filter(s => s.type === 'REGULAR');
+          setSessions(regularSessions);
+        } catch (err) {
+          console.error('Failed to load sessions:', err);
+        } finally {
+          setLoadingSessions(false);
+        }
+      };
+      fetchSessions();
+    }
+  }, [open, sessionId]);
+
   // Debounced search
   useEffect(() => {
     if (tabIndex !== 1) return;
@@ -124,6 +166,9 @@ export function AddVideoModal({
       setSelectedVideoIds([]);
       setSearch('');
       setError(null);
+      // Reset session selection
+      setSelectedSessionId('library');
+      setNewSessionName('');
     }
   }, [open]);
 
@@ -140,7 +185,7 @@ export function AddVideoModal({
   };
 
   const handleAddSelectedVideos = async () => {
-    if (selectedVideoIds.length === 0) return;
+    if (selectedVideoIds.length === 0 || !sessionId) return;
 
     try {
       setAddingVideos(true);
@@ -172,10 +217,50 @@ export function AddVideoModal({
 
     e.target.value = '';
 
-    const success = await uploadVideo(sessionId, file);
-    if (success) {
+    // If sessionId is provided, upload directly to that session
+    if (sessionId) {
+      const success = await uploadVideo(sessionId, file);
+      if (success) {
+        onVideoAdded();
+        onClose();
+      }
+      return;
+    }
+
+    // Session selection mode
+    try {
+      let targetSessionId: string | null = null;
+
+      // Create new session if needed
+      if (selectedSessionId === 'new') {
+        if (!newSessionName.trim()) {
+          setError('Please enter a session name');
+          return;
+        }
+        setCreatingSession(true);
+        const session = await createSession(newSessionName.trim());
+        targetSessionId = session.id;
+        setCreatingSession(false);
+      } else if (selectedSessionId !== 'library') {
+        targetSessionId = selectedSessionId;
+      }
+
+      // Upload to library first
+      const result = await uploadVideoToLibrary(file);
+      if (!result.success || !result.videoId) {
+        return; // Error handled by uploadStore
+      }
+
+      // Add to session if one was selected
+      if (targetSessionId) {
+        await addVideoToSession(targetSessionId, result.videoId);
+      }
+
       onVideoAdded();
       onClose();
+    } catch (err) {
+      setCreatingSession(false);
+      setError(err instanceof Error ? err.message : 'Upload failed');
     }
   };
 
@@ -190,10 +275,50 @@ export function AddVideoModal({
       return;
     }
 
-    const success = await uploadVideo(sessionId, file);
-    if (success) {
+    // If sessionId is provided, upload directly to that session
+    if (sessionId) {
+      const success = await uploadVideo(sessionId, file);
+      if (success) {
+        onVideoAdded();
+        onClose();
+      }
+      return;
+    }
+
+    // Session selection mode
+    try {
+      let targetSessionId: string | null = null;
+
+      // Create new session if needed
+      if (selectedSessionId === 'new') {
+        if (!newSessionName.trim()) {
+          setError('Please enter a session name');
+          return;
+        }
+        setCreatingSession(true);
+        const session = await createSession(newSessionName.trim());
+        targetSessionId = session.id;
+        setCreatingSession(false);
+      } else if (selectedSessionId !== 'library') {
+        targetSessionId = selectedSessionId;
+      }
+
+      // Upload to library first
+      const result = await uploadVideoToLibrary(file);
+      if (!result.success || !result.videoId) {
+        return; // Error handled by uploadStore
+      }
+
+      // Add to session if one was selected
+      if (targetSessionId) {
+        await addVideoToSession(targetSessionId, result.videoId);
+      }
+
       onVideoAdded();
       onClose();
+    } catch (err) {
+      setCreatingSession(false);
+      setError(err instanceof Error ? err.message : 'Upload failed');
     }
   };
 
@@ -245,33 +370,100 @@ export function AddVideoModal({
         )}
 
         <TabPanel value={tabIndex} index={0}>
+          {/* Session selector - only show when sessionId is not provided */}
+          {!sessionId && !isUploading && (
+            <Box sx={{ mb: 3 }}>
+              <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5 }}>
+                Add to session
+              </Typography>
+              {loadingSessions ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+                  <CircularProgress size={24} />
+                </Box>
+              ) : (
+                <FormControl component="fieldset" fullWidth>
+                  <RadioGroup
+                    value={selectedSessionId}
+                    onChange={(e) => setSelectedSessionId(e.target.value)}
+                  >
+                    <FormControlLabel
+                      value="library"
+                      control={<Radio size="small" />}
+                      label={
+                        <Typography variant="body2">
+                          Library only
+                          <Typography component="span" variant="caption" color="text.disabled" sx={{ ml: 1 }}>
+                            (no session)
+                          </Typography>
+                        </Typography>
+                      }
+                      sx={{ mb: 0.5 }}
+                    />
+                    {sessions.map((session) => (
+                      <FormControlLabel
+                        key={session.id}
+                        value={session.id}
+                        control={<Radio size="small" />}
+                        label={<Typography variant="body2">{session.name}</Typography>}
+                        sx={{ mb: 0.5 }}
+                      />
+                    ))}
+                    <Divider sx={{ my: 1 }} />
+                    <FormControlLabel
+                      value="new"
+                      control={<Radio size="small" />}
+                      label={
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                          <AddIcon sx={{ fontSize: 16 }} />
+                          <Typography variant="body2">Create new session</Typography>
+                        </Box>
+                      }
+                    />
+                    {selectedSessionId === 'new' && (
+                      <TextField
+                        placeholder="Session name"
+                        value={newSessionName}
+                        onChange={(e) => setNewSessionName(e.target.value)}
+                        size="small"
+                        fullWidth
+                        autoFocus
+                        disabled={creatingSession}
+                        sx={{ ml: 4, mt: 1, maxWidth: 250 }}
+                      />
+                    )}
+                  </RadioGroup>
+                </FormControl>
+              )}
+            </Box>
+          )}
+
           <Box
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragEnter={handleDragEnter}
             onDragLeave={handleDragLeave}
-            onClick={() => !isUploading && fileInputRef.current?.click()}
+            onClick={() => !isUploading && !creatingSession && fileInputRef.current?.click()}
             sx={{
               border: '2px dashed',
               borderColor: isDragOver && !isUploading ? 'primary.main' : 'grey.600',
               borderRadius: 2,
               p: 4,
               textAlign: 'center',
-              cursor: isUploading ? 'default' : 'pointer',
+              cursor: isUploading || creatingSession ? 'default' : 'pointer',
               transition: 'all 0.2s',
               bgcolor: isDragOver && !isUploading ? 'action.hover' : 'transparent',
               '&:hover': {
-                borderColor: isUploading ? 'grey.600' : 'primary.main',
-                bgcolor: isUploading ? 'transparent' : 'action.hover',
+                borderColor: isUploading || creatingSession ? 'grey.600' : 'primary.main',
+                bgcolor: isUploading || creatingSession ? 'transparent' : 'action.hover',
               },
             }}
           >
-            {isUploading ? (
+            {isUploading || creatingSession ? (
               <VolleyballProgress
-                progress={progress}
-                stepText={currentStep}
+                progress={creatingSession ? 5 : progress}
+                stepText={creatingSession ? 'Creating session...' : currentStep}
                 size="md"
-                showPercentage
+                showPercentage={!creatingSession}
               />
             ) : (
               <>
@@ -287,7 +479,7 @@ export function AddVideoModal({
           </Box>
 
           {/* Recording Guidelines - only show when not uploading */}
-          {!isUploading && <RecordingGuidelines />}
+          {!isUploading && !creatingSession && <RecordingGuidelines />}
 
           <input
             type="file"

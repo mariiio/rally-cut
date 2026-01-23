@@ -10,8 +10,6 @@ import {
   Chip,
   Switch,
   FormControlLabel,
-  useMediaQuery,
-  useTheme,
 } from '@mui/material';
 import { motion, useInView, useReducedMotion } from 'framer-motion';
 import CheckIcon from '@mui/icons-material/Check';
@@ -84,8 +82,6 @@ export function Pricing() {
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: '-80px' });
   const shouldReduceMotion = useReducedMotion();
-  const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
   const handleWaitlistOpen = (tier: string) => {
     setSelectedTier(tier);

@@ -225,7 +225,7 @@ export const VERTICAL_CONFIG: Partial<BallToKeyframesConfig> = {
  * Uses median (robust to outliers) instead of mean for baseline calculation.
  * Requires minimum baseline before accepting detections to establish stable trajectory.
  */
-function filterOutliers(
+function _filterOutliers(
   positions: BallPosition[],
   maxJumpDistance: number,
   windowFrames: number,
@@ -308,7 +308,7 @@ function filterOutliers(
  * Filter positions by physics constraints - ball can't teleport.
  * Rejects detections that exceed maximum velocity from previous position.
  */
-function filterByPhysics(
+function _filterByPhysics(
   positions: BallPosition[],
   maxVelocityPerFrame: number,
   minConfidence: number
@@ -350,7 +350,7 @@ function filterByPhysics(
  * - Movement is physically plausible
  * - Confidence is above threshold
  */
-function findReliableSegments(
+function _findReliableSegments(
   positions: BallPosition[],
   minConfidence: number,
   maxGapFrames: number,
@@ -445,7 +445,7 @@ function createSegment(positions: BallPosition[]): TrackingSegment {
  * Build a smooth camera path from reliable segments.
  * Uses best segments as anchors, interpolates gaps smoothly.
  */
-function buildCameraPathFromSegments(
+function _buildCameraPathFromSegments(
   segments: TrackingSegment[],
   totalFrames: number,
   marginX: number,
@@ -557,7 +557,7 @@ function buildCameraPathFromSegments(
  * Build a smooth camera path from individual ball positions (simpler approach).
  * Uses all positions with interpolation for gaps.
  */
-function buildCameraPathFromPositions(
+function _buildCameraPathFromPositions(
   positions: BallPosition[],
   totalFrames: number,
   marginX: number,
@@ -665,7 +665,7 @@ function buildCameraPathFromPositions(
  * Uses edge padding to maintain array length.
  * NOTE: This creates inherent delay (half window size). Use exponentialSmoothing for responsive tracking.
  */
-function movingAverage(values: number[], windowSize: number): number[] {
+function _movingAverage(values: number[], windowSize: number): number[] {
   if (values.length === 0) return [];
   if (values.length === 1) return [...values];
 
@@ -702,7 +702,7 @@ function movingAverage(values: number[], windowSize: number): number[] {
  * @param values - Array of values to smooth
  * @param alpha - Smoothing factor (0-1): higher = more responsive, lower = smoother
  */
-function exponentialSmoothing(values: number[], alpha: number): number[] {
+function _exponentialSmoothing(values: number[], alpha: number): number[] {
   if (values.length === 0) return [];
   if (values.length === 1) return [...values];
 
@@ -723,7 +723,7 @@ function exponentialSmoothing(values: number[], alpha: number): number[] {
  * @param lookaheadFrames - Number of frames to look ahead
  * @param lookaheadWeight - Blend weight (0 = current only, 1 = future only)
  */
-function applyLookahead(
+function _applyLookahead(
   smoothedX: number[],
   smoothedY: number[],
   lookaheadFrames: number,
@@ -752,7 +752,7 @@ function applyLookahead(
  * @param config - Configuration with thresholds
  * @returns Array of frame indices where keyframes should be placed
  */
-function detectSmartKeyframeIndices(
+function _detectSmartKeyframeIndices(
   xValues: number[],
   yValues: number[],
   fps: number,
@@ -837,7 +837,7 @@ function detectSmartKeyframeIndices(
  *                            to compensate for ML model being ahead of actual video
  * @param fps - Frames per second, used to convert syncOffsetSeconds to frames
  */
-function buildFramePositions(
+function _buildFramePositions(
   positions: BallPosition[],
   maxFrame: number,
   minConfidence: number,
@@ -1213,7 +1213,7 @@ function deduplicateKeyframes(keyframes: CameraKeyframe[]): CameraKeyframe[] {
   }
 
   // Convert map back to sorted array
-  for (const [_, kf] of Array.from(timeOffsetMap.entries()).sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]))) {
+  for (const [_timeKey, kf] of Array.from(timeOffsetMap.entries()).sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]))) {
     result.push(kf);
   }
 

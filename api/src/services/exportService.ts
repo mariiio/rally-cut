@@ -9,7 +9,7 @@ import { env } from "../config/env.js";
 import { generateDownloadUrl, generateUploadUrl } from "../lib/s3.js";
 import { prisma } from "../lib/prisma.js";
 import { ForbiddenError, NotFoundError } from "../middleware/errorHandler.js";
-import { getUserTier, getTierLimits, TIER_LIMITS, type UserTier } from "./tierService.js";
+import { getUserTier, getTierLimits, type UserTier } from "./tierService.js";
 import type { TimestampMapping } from "./confirmationService.js";
 
 const lambdaClient = new LambdaClient({
@@ -186,8 +186,8 @@ function generateCameraFilter(
   // Build FFmpeg expression for animated crop
   // We'll generate a piecewise expression using if() functions
 
-  // Helper to generate easing expression
-  const easingExpr = (t: string, easing: string): string => {
+  // Helper to generate easing expression (reserved for future animated crop)
+  const _easingExpr = (t: string, easing: string): string => {
     switch (easing) {
       case "EASE_IN":
         return `(${t}*${t})`;
@@ -417,7 +417,7 @@ export async function createExportJob(
     data: {
       sessionId: input.sessionId,
       userId,
-      tier: effectiveTier as UserTier,
+      tier: effectiveTier,
       status: ExportStatus.PENDING,
       config: input.config,
       rallies: input.rallies as unknown as Parameters<typeof prisma.exportJob.create>[0]['data']['rallies'],

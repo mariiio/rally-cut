@@ -117,6 +117,23 @@ python_version = "3.11"
 warn_return_any = true
 warn_unused_ignores = true
 disallow_untyped_defs = true
+disable_error_code = ["import-untyped"]
+
+[[tool.mypy.overrides]]
+module = [
+    "av",
+    "av.*",
+    "boto3",
+    "boto3.*",
+    "botocore",
+    "botocore.*",
+    "onnxruntime",
+    "onnxruntime.*",
+    "evaluate",
+    "evaluate.*",
+]
+ignore_missing_imports = true
+follow_imports = "skip"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
