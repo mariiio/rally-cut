@@ -597,6 +597,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         hasUnsavedChanges: false,
       });
 
+      // Enable "skip dead time" by default for guests with rallies (if no explicit preference)
+      const hasRallies = session.matches.some(m => m.rallies.length > 0);
+      const isGuest = session.userRole === 'member';
+      const hasExplicitPreference = typeof window !== 'undefined' &&
+        localStorage.getItem('rallycut-play-only-rallies') !== null;
+
+      if (isGuest && hasRallies && !hasExplicitPreference) {
+        usePlayerStore.getState().setPlayOnlyRallies(true);
+      }
+
       // Load confirmation status for all matches
       for (const match of session.matches) {
         try {
@@ -822,6 +832,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const state = get();
     if (!state.activeMatchId) return null;
 
+    // Track previous rally count to detect when detection adds rallies
+    const previousRalliesCount = state.rallies.length;
+
     try {
       // Handle single video mode differently - fetch video directly
       if (state.singleVideoMode && state.singleVideoId) {
@@ -849,6 +862,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           future: [],
           hasUnsavedChanges: false,
         });
+
+        // Enable "skip dead time" when detection adds rallies (if no explicit preference)
+        const ralliesAdded = previousRalliesCount === 0 && result.match.rallies.length > 0;
+        const hasExplicitPreference = typeof window !== 'undefined' &&
+          localStorage.getItem('rallycut-play-only-rallies') !== null;
+
+        if (ralliesAdded && !hasExplicitPreference) {
+          usePlayerStore.getState().setPlayOnlyRallies(true);
+        }
 
         return { ralliesCount: result.match.rallies.length };
       }
@@ -891,6 +913,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         future: [],
         hasUnsavedChanges: false,
       });
+
+      // Enable "skip dead time" when detection adds rallies (if no explicit preference)
+      const ralliesAdded = previousRalliesCount === 0 && freshMatch.rallies.length > 0;
+      const hasExplicitPreference = typeof window !== 'undefined' &&
+        localStorage.getItem('rallycut-play-only-rallies') !== null;
+
+      if (ralliesAdded && !hasExplicitPreference) {
+        usePlayerStore.getState().setPlayOnlyRallies(true);
+      }
 
       return { ralliesCount: freshMatch.rallies.length };
     } catch (error) {
