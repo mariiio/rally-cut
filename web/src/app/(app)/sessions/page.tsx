@@ -63,6 +63,7 @@ import {
   SectionHeader,
   EmptyState,
 } from '@/components/dashboard';
+import { RecordingGuidelines } from '@/components/RecordingGuidelines';
 
 interface SessionGroup {
   session: {
@@ -548,6 +549,7 @@ export default function HomePage() {
                           }}
                         >
                           {video.posterS3Key ? (
+                            /* eslint-disable-next-line @next/next/no-img-element -- dynamic API URL */
                             <img
                               src={getVideoStreamUrl(video.posterS3Key)}
                               alt=""
@@ -997,6 +999,10 @@ export default function HomePage() {
                 </>
               )}
             </Box>
+
+            {/* Recording Guidelines - only show when not uploading */}
+            {!isUploading && !creatingSession && <RecordingGuidelines />}
+
             <input
               type="file"
               ref={fileInputRef}

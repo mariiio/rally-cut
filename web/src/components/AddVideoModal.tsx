@@ -24,6 +24,7 @@ import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import VideoLibraryIcon from '@mui/icons-material/VideoLibrary';
 import SearchIcon from '@mui/icons-material/Search';
 import CloseIcon from '@mui/icons-material/Close';
+import { RecordingGuidelines } from './RecordingGuidelines';
 import {
   listVideos,
   addVideoToSession,
@@ -284,6 +285,10 @@ export function AddVideoModal({
               </>
             )}
           </Box>
+
+          {/* Recording Guidelines - only show when not uploading */}
+          {!isUploading && <RecordingGuidelines />}
+
           <input
             type="file"
             ref={fileInputRef}
@@ -359,6 +364,7 @@ export function AddVideoModal({
                       {/* Poster */}
                       <Box sx={{ position: 'relative', aspectRatio: '16/9', bgcolor: 'grey.800' }}>
                         {video.posterS3Key ? (
+                          /* eslint-disable-next-line @next/next/no-img-element -- dynamic API URL */
                           <img
                             src={getVideoStreamUrl(video.posterS3Key)}
                             alt={video.name}
