@@ -64,6 +64,7 @@ function ThumbnailMosaic({ videos }: { videos: VideoThumbnail[] }) {
           }}
         >
           {video.posterS3Key ? (
+            /* eslint-disable-next-line @next/next/no-img-element -- dynamic API URL */
             <img
               src={getVideoStreamUrl(video.posterS3Key)}
               alt=""

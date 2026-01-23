@@ -270,12 +270,12 @@ class BallTracker:
         largest_contour = max(contours, key=cv2.contourArea)
 
         # Get centroid using moments
-        M = cv2.moments(largest_contour)
-        if M["m00"] == 0:
+        moments = cv2.moments(largest_contour)
+        if moments["m00"] == 0:
             return 0.5, 0.5, 0.0
 
-        cx = M["m10"] / M["m00"]
-        cy = M["m01"] / M["m00"]
+        cx = moments["m10"] / moments["m00"]
+        cy = moments["m01"] / moments["m00"]
 
         # Normalize to 0-1 (heatmap is in model space: height=288, width=512)
         x_norm = cx / heatmap.shape[1]
@@ -413,7 +413,7 @@ class BallTracker:
             # Process frames with stride optimization
             # Model takes 9 frames and outputs 3 predictions for middle frames
             # So we can stride by 3 frames instead of 1 to avoid redundant inference
-            OUTPUT_FRAMES = 3  # Model outputs 3 frames per inference
+            output_frames = 3  # Model outputs 3 frames per inference
             positions: list[BallPosition] = []
             frame_buffer: list[np.ndarray] = []
             frame_idx = start_frame
@@ -456,9 +456,9 @@ class BallTracker:
                     )
                     positions.extend(decoded_positions)
 
-                    # Clear buffer and keep last (SEQUENCE_LENGTH - OUTPUT_FRAMES) frames
-                    # This gives us a stride of OUTPUT_FRAMES for ~3x speedup
-                    frame_buffer = frame_buffer[OUTPUT_FRAMES:]
+                    # Clear buffer and keep last (SEQUENCE_LENGTH - output_frames) frames
+                    # This gives us a stride of output_frames for ~3x speedup
+                    frame_buffer = frame_buffer[output_frames:]
 
                 # Progress callback
                 if progress_callback and frame_idx % 30 == 0:
@@ -504,7 +504,7 @@ class BallTracker:
         Yields:
             BallPosition for each frame (after initial buffer fills)
         """
-        OUTPUT_FRAMES = 3  # Model outputs 3 frames per inference
+        output_frames = 3  # Model outputs 3 frames per inference
         session = self._load_session()
         frame_buffer: list[np.ndarray] = []
         frame_idx = 0
@@ -525,5 +525,5 @@ class BallTracker:
                 middle_frame = frame_idx - SEQUENCE_LENGTH + SEQUENCE_LENGTH // 2 - 1
                 yield from self._decode_output(output, middle_frame, video_width, video_height)
 
-                # Stride optimization: keep last (SEQUENCE_LENGTH - OUTPUT_FRAMES) frames
-                frame_buffer = frame_buffer[OUTPUT_FRAMES:]
+                # Stride optimization: keep last (SEQUENCE_LENGTH - output_frames) frames
+                frame_buffer = frame_buffer[output_frames:]

@@ -6,7 +6,6 @@ from itertools import product
 
 from rallycut.evaluation.cached_analysis import PostProcessingParams
 
-
 # Default parameters from cutter.py and config.py
 DEFAULT_PARAMS = PostProcessingParams(
     min_gap_seconds=5.0,

@@ -88,12 +88,6 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
     (cameraEdit.keyframes.VERTICAL?.length ?? 0) > 0
   );
 
-  // Check if we have global camera settings
-  const hasGlobalCameraSettings = currentGlobalSettings.zoom !== 1.0 ||
-    currentGlobalSettings.positionX !== 0.5 ||
-    currentGlobalSettings.positionY !== 0.5 ||
-    currentGlobalSettings.rotation !== 0;
-
   // Check if position dragging would have any visible effect in global mode
   // (only if there's zoom > 1 or rotation, otherwise position changes aren't visible)
   const canDragInGlobalMode = currentGlobalSettings.zoom > 1.0 || currentGlobalSettings.rotation !== 0;
@@ -266,7 +260,7 @@ export function CameraOverlay({ containerRef }: CameraOverlayProps) {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [dragState, containerRef, isVertical, currentZoom, localPosition, selectedRallyId, selectedKeyframeId, currentTimeOffset, updateKeyframe, addKeyframe, selectKeyframe, getCameraStateAtTime, setDragPosition, setGlobalSettings]);
+  }, [dragState, containerRef, isVertical, currentZoom, localPosition, selectedRallyId, selectedKeyframeId, currentTimeOffset, updateKeyframe, addKeyframe, selectKeyframe, getCameraStateAtTime, setDragPosition, setGlobalSettings, selectedRally]);
 
   if (!isActive) return null;
 

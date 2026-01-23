@@ -796,11 +796,13 @@ export function Timeline() {
     };
 
     rafId = requestAnimationFrame(updatePlayhead);
+    // Capture ref value for cleanup
+    const playheadElement = playheadRef.current;
     return () => {
       cancelAnimationFrame(rafId);
       // Clear inline style so React's sx prop can control position again
-      if (playheadRef.current) {
-        playheadRef.current.style.left = '';
+      if (playheadElement) {
+        playheadElement.style.left = '';
       }
     };
   }, [isPlaying, hasActiveCameraAnimation, scale, scrollLeft, isDraggingCursor]);
@@ -1104,15 +1106,6 @@ export function Timeline() {
   const handleCreateRally = useCallback(() => {
     createRallyAtTime(currentTime);
   }, [createRallyAtTime, currentTime]);
-
-  // Check if we can create a rally at current time (for toolbar button)
-  const canCreateRallyToolbar = useMemo(() => {
-    if (!videoMetadata || !rallies || isLocked) return false;
-    const insideRally = rallies.some(
-      (s) => currentTime >= s.start_time && currentTime <= s.end_time
-    );
-    return !insideRally;
-  }, [rallies, currentTime, videoMetadata, isLocked]);
 
   // Check if we should show the floating + button on cursor
   const showFloatingAddButton = useMemo(() => {

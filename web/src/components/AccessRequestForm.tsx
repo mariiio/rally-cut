@@ -14,7 +14,6 @@ import {
   Alert,
 } from '@mui/material';
 import LockIcon from '@mui/icons-material/Lock';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import PersonIcon from '@mui/icons-material/Person';
 import { requestAccess } from '@/services/api';

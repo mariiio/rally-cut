@@ -196,7 +196,6 @@ export function CameraPanel() {
   const removeKeyframe = useCameraStore((state) => state.removeKeyframe);
   const selectKeyframe = useCameraStore((state) => state.selectKeyframe);
   const resetCamera = useCameraStore((state) => state.resetCamera);
-  const applyBallTrackingKeyframes = useCameraStore((state) => state.applyBallTrackingKeyframes);
   const getCameraStateAtTime = useCameraStore((state) => state.getCameraStateAtTime);
   const setIsAdjustingRotation = useCameraStore((state) => state.setIsAdjustingRotation);
 

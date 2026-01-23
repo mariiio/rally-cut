@@ -37,8 +37,8 @@ export function MobilePlayerControls() {
 
   // Detection state
   const [isDetecting, setIsDetecting] = useState(false);
-  const [detectionStatus, setDetectionStatus] = useState<string | null>(null);
   const [detectionProgress, setDetectionProgress] = useState(0);
+  const [_detectionStatus, setDetectionStatus] = useState<string>('');
   const [videoDetectionStatus, setVideoDetectionStatus] = useState<string | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -116,7 +116,7 @@ export function MobilePlayerControls() {
       await triggerRallyDetection(activeMatchId);
       setDetectionStatus('Processing...');
       startPolling();
-    } catch (err) {
+    } catch {
       setIsDetecting(false);
       setDetectionStatus('Failed to start');
     }

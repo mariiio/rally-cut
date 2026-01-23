@@ -1,6 +1,6 @@
 'use client';
 
-import { createTheme, alpha } from '@mui/material/styles';
+import { createTheme } from '@mui/material/styles';
 
 // Extend MUI breakpoints with custom 'mobile' breakpoint
 declare module '@mui/material/styles' {

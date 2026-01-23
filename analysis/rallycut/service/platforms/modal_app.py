@@ -18,7 +18,7 @@ Environment setup:
 
 from __future__ import annotations
 
-import modal  # type: ignore[import-not-found]
+import modal
 
 # Define the Modal app
 app = modal.App("rallycut-detection")

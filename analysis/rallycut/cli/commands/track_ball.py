@@ -4,7 +4,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
 from rallycut.cli.utils import handle_errors, validate_video_file
 from rallycut.tracking.ball_tracker import BallTracker
@@ -95,7 +95,7 @@ def track_ball(
 
     # Print summary
     if not quiet:
-        console.print(f"\n[green]Ball tracking complete![/green]")
+        console.print("\n[green]Ball tracking complete![/green]")
         console.print(f"  Frames processed: {result.frame_count}")
         console.print(f"  Detection rate: {result.detection_rate * 100:.1f}%")
         console.print(f"  Processing time: {result.processing_time_ms / 1000:.2f}s")

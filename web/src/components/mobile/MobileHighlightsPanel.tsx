@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import {
   Box,
   Typography,
@@ -38,7 +38,6 @@ export function MobileHighlightsPanel({ onRallyTap }: MobileHighlightsPanelProps
     activeMatchId,
     rallies,
     highlights,
-    selectedHighlightId,
     selectHighlight,
     createHighlight,
     deleteHighlight,

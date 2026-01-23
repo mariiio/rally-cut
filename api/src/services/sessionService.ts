@@ -9,7 +9,6 @@ import type {
   CreateSessionInput,
   UpdateSessionInput,
 } from "../schemas/session.js";
-import { getUserTier } from "./tierService.js";
 
 const ALL_VIDEOS_SESSION_NAME = "All Videos";
 
@@ -220,7 +219,7 @@ export async function getSessionById(id: string, userId?: string) {
     }
 
     // Track activity for inactivity-based cleanup (fire-and-forget)
-    trackUserActivity(userId);
+    void trackUserActivity(userId);
   }
 
   // Transform to expected format with videos array
@@ -249,7 +248,7 @@ export async function getSessionById(id: string, userId?: string) {
   };
 
   // Remove internal fields from response (sessionVideos replaced by videos, share/accessRequests for access check)
-  const { sessionVideos: _, share: __, accessRequests: ___, ...result } = transformed;
+  const { sessionVideos: _sessionVideos, share: _share, accessRequests: _accessRequests, ...result } = transformed;
 
   // Convert BigInt fields to strings for JSON serialization
   return serializeBigInts(result);

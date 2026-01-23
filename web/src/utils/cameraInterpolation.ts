@@ -51,7 +51,7 @@ function clamp(value: number, min: number, max: number): number {
  */
 export function getMinZoomForRotation(
   rotationDegrees: number,
-  aspectRatio: 'ORIGINAL' | 'VERTICAL'
+  _aspectRatio: 'ORIGINAL' | 'VERTICAL'
 ): number {
   if (rotationDegrees === 0) return 1;
 

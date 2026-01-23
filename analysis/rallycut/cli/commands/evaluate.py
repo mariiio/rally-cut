@@ -10,7 +10,7 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 from rallycut.cli.utils import handle_errors
@@ -227,7 +227,7 @@ def _run_evaluation(
     stride: int,
     use_cache: bool,
     progress: Progress | None = None,
-    task_id: int | None = None,
+    task_id: TaskID | None = None,
 ) -> list[VideoEvaluationResult]:
     """Run evaluation on a list of videos."""
     results: list[VideoEvaluationResult] = []

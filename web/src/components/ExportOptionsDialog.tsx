@@ -87,7 +87,8 @@ export function ExportOptionsDialog({
   const [applyCameraEdits, setApplyCameraEdits] = useState(true);
   const [withFade, setWithFade] = useState(false);
 
-  // Reset state when dialog opens
+  // Reset state when dialog opens - setState in effect is intentional for dialog reset pattern
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (open) {
       setQuality(isPaidTier ? 'original' : '720p');
@@ -95,6 +96,7 @@ export function ExportOptionsDialog({
       setWithFade(false);
     }
   }, [open, isPaidTier]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Camera edits disabled when any rally has vertical (9:16) edits
   const cameraEditsDisabled = hasVerticalEdits;

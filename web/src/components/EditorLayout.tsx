@@ -1,11 +1,10 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
-import { Box, IconButton, Tooltip, Badge, Skeleton, Typography, Stack, LinearProgress, Tabs, Tab } from '@mui/material';
+import { Box, IconButton, Tooltip, Badge, Typography, Stack, Tabs, Tab } from '@mui/material';
 import ListAltIcon from '@mui/icons-material/ListAlt';
 import StarIcon from '@mui/icons-material/Star';
 import AddIcon from '@mui/icons-material/Add';
-import SportsVolleyballIcon from '@mui/icons-material/SportsVolleyball';
 import VideocamIcon from '@mui/icons-material/Videocam';
 import { VideoPlayer } from './VideoPlayer';
 import { Timeline } from './Timeline';
@@ -168,7 +167,7 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
     selectHighlight(newId);
   };
 
-  const handleNameSet = (name: string) => {
+  const handleNameSet = (_name: string) => {
     // If there was a pending highlight creation, complete it now
     if (pendingCreateHighlight) {
       setPendingCreateHighlight(false);

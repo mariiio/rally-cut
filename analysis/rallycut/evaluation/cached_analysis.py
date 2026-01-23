@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -334,9 +334,6 @@ def apply_post_processing(
         List of detected rally segments.
     """
     from rallycut.processing.cutter import (
-        BOUNDARY_CONFIDENCE_THRESHOLD,
-        MIN_ACTIVE_DENSITY,
-        MIN_ACTIVE_WINDOWS,
         VideoCutter,
     )
 
@@ -360,7 +357,7 @@ def apply_post_processing(
 
     # Apply heuristics using the cutter's methods
     # Note: This reuses the existing well-tested logic
-    segments = cutter._get_segments_from_results(
+    segments, _suggested = cutter._get_segments_from_results(
         cached.raw_results,
         cached.fps,
         cached.frame_count,
@@ -540,7 +537,6 @@ def _build_segments(
 
     min_no_play_frames = int(params.min_gap_seconds * fps)
     min_bridge_duration_frames = int(1.0 * fps)
-    max_internal_gap_frames = int(1.5 * fps)
 
     # First pass: merge adjacent same-state
     raw_segments: list[TimeSegment] = []

@@ -18,7 +18,7 @@ import type { AspectRatio, BallTrackStatus, CameraEasing } from '@prisma/client'
 import { env } from '../config/env.js';
 import { generateDownloadUrl } from '../lib/s3.js';
 import { prisma } from '../lib/prisma.js';
-import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../middleware/errorHandler.js';
+import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errorHandler.js';
 import { convertBallTrackingToKeyframes, type BallPosition, type CameraKeyframe, VERTICAL_CONFIG } from '../utils/ballToKeyframes.js';
 
 const __filename = fileURLToPath(import.meta.url);

@@ -13,7 +13,7 @@ import {
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import LockIcon from '@mui/icons-material/Lock';
 import RestoreIcon from '@mui/icons-material/Restore';
-import { useEditorStore, ConfirmationStatus } from '@/stores/editorStore';
+import { useEditorStore } from '@/stores/editorStore';
 import { confirmRallies, getConfirmationStatus, restoreOriginalVideo } from '@/services/api';
 import { syncService } from '@/services/syncService';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -29,7 +29,6 @@ export function ConfirmRallies({ matchId, isPaidTier }: ConfirmRalliesProps) {
     setConfirmationStatus,
     isConfirming,
     setIsConfirming,
-    updateConfirmationProgress,
     rallies,
     reloadCurrentMatch,
   } = useEditorStore();
