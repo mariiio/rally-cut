@@ -29,9 +29,6 @@ import {
 } from "./tierService.js";
 import { queueVideoProcessing, generatePosterImmediate } from "./processingService.js";
 
-// Limit videos per session for frontend editor performance (timeline rendering, state management)
-const MAX_VIDEOS_PER_SESSION = 6;
-
 // Type for Prisma transaction client
 type PrismaTransaction = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
@@ -644,9 +641,6 @@ export async function addVideoToSession(
   // Verify session belongs to user
   const session = await prisma.session.findFirst({
     where: { id: sessionId, userId },
-    include: {
-      _count: { select: { sessionVideos: true } },
-    },
   });
 
   if (!session) {
@@ -657,13 +651,6 @@ export async function addVideoToSession(
   if (session.type === "ALL_VIDEOS") {
     throw new ValidationError(
       "Cannot manually add videos to 'All Videos' session"
-    );
-  }
-
-  if (session._count.sessionVideos >= MAX_VIDEOS_PER_SESSION) {
-    throw new LimitExceededError(
-      `Maximum of ${MAX_VIDEOS_PER_SESSION} videos per session`,
-      { current: session._count.sessionVideos, limit: MAX_VIDEOS_PER_SESSION }
     );
   }
 
@@ -813,20 +800,10 @@ export async function requestUploadUrl(
 ) {
   const session = await prisma.session.findFirst({
     where: { id: sessionId, userId },
-    include: {
-      _count: { select: { sessionVideos: true } },
-    },
   });
 
   if (!session) {
     throw new NotFoundError("Session", sessionId);
-  }
-
-  if (session._count.sessionVideos >= MAX_VIDEOS_PER_SESSION) {
-    throw new LimitExceededError(
-      `Maximum of ${MAX_VIDEOS_PER_SESSION} videos per session`,
-      { current: session._count.sessionVideos, limit: MAX_VIDEOS_PER_SESSION }
-    );
   }
 
   // Validate upload request (size, duration, quota, duplicates)
