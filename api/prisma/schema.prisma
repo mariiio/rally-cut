@@ -37,6 +37,8 @@ model User {
   feedback            Feedback[]
   accessRequests      AccessRequest[]  @relation("accessRequests")
   resolvedRequests    AccessRequest[]  @relation("resolvedRequests")
+  cameraEdits         RallyCameraEdit[]
+  videoCameraSettings VideoCameraSettings[]
 
   @@index([tier])
   @@map("users")
@@ -195,12 +197,12 @@ model Video {
   // Quality downgrade tracking (FREE tier loses original quality after 7 days)
   qualityDowngradedAt   DateTime?        @map("quality_downgraded_at")
 
-  user           User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user           User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
   sessionVideos  SessionVideo[]
   rallies        Rally[]
   detectionJobs  RallyDetectionJob[]
   confirmation   RallyConfirmation?
-  cameraSettings VideoCameraSettings?
+  cameraSettings VideoCameraSettings[]
 
   @@index([userId])
   @@index([userId, deletedAt])
@@ -265,9 +267,9 @@ model Rally {
   createdAt       DateTime         @default(now()) @map("created_at")
   updatedAt       DateTime         @updatedAt @map("updated_at")
 
-  video            Video            @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  video            Video             @relation(fields: [videoId], references: [id], onDelete: Cascade)
   highlightRallies HighlightRally[]
-  cameraEdit       RallyCameraEdit?
+  cameraEdits      RallyCameraEdit[]
   ballTrack        BallTrack?
 
   @@index([videoId])
@@ -328,15 +330,19 @@ enum CameraEasing {
 
 model RallyCameraEdit {
   id          String      @id @default(uuid())
-  rallyId     String      @unique @map("rally_id")
+  rallyId     String      @map("rally_id")
+  userId      String?     @map("user_id")
   aspectRatio AspectRatio @default(ORIGINAL) @map("aspect_ratio")
   enabled     Boolean     @default(false)
   createdAt   DateTime    @default(now()) @map("created_at")
   updatedAt   DateTime    @updatedAt @map("updated_at")
 
   rally     Rally            @relation(fields: [rallyId], references: [id], onDelete: Cascade)
+  user      User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
   keyframes CameraKeyframe[]
 
+  @@unique([rallyId, userId])
+  @@index([userId])
   @@map("rally_camera_edits")
 }
 
@@ -360,7 +366,8 @@ model CameraKeyframe {
 // Global camera settings at video level (applies as base for all rallies)
 model VideoCameraSettings {
   id        String   @id @default(uuid())
-  videoId   String   @unique @map("video_id")
+  videoId   String   @map("video_id")
+  userId    String?  @map("user_id")
   zoom      Float    @default(1.0)
   positionX Float    @default(0.5) @map("position_x")
   positionY Float    @default(0.5) @map("position_y")
@@ -369,7 +376,10 @@ model VideoCameraSettings {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  user  User? @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@unique([videoId, userId])
+  @@index([userId])
   @@map("video_camera_settings")
 }
 
