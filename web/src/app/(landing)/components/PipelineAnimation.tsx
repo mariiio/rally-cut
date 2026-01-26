@@ -75,7 +75,7 @@ function WindowChrome({ title }: { title: string }) {
         alignItems: 'center',
         gap: 0.75,
         px: 1.5,
-        py: 1,
+        py: 0.75,
         bgcolor: designTokens.colors.surface[2],
         borderBottom: '1px solid',
         borderColor: 'divider',
@@ -84,7 +84,7 @@ function WindowChrome({ title }: { title: string }) {
       {['#FF5F56', '#FFBD2E', '#27C93F'].map((color) => (
         <Box
           key={color}
-          sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: color }}
+          sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: color }}
         />
       ))}
       <Typography
@@ -132,8 +132,8 @@ function VideoFrame({ title }: { title: string }) {
         {/* Play button */}
         <Box
           sx={{
-            width: 40,
-            height: 40,
+            width: 34,
+            height: 34,
             borderRadius: '50%',
             border: '2px solid rgba(255,255,255,0.15)',
             display: 'flex',
@@ -145,10 +145,10 @@ function VideoFrame({ title }: { title: string }) {
             sx={{
               width: 0,
               height: 0,
-              borderTop: '8px solid transparent',
-              borderBottom: '8px solid transparent',
-              borderLeft: '13px solid rgba(255,255,255,0.2)',
-              ml: '3px',
+              borderTop: '7px solid transparent',
+              borderBottom: '7px solid transparent',
+              borderLeft: '11px solid rgba(255,255,255,0.2)',
+              ml: '2px',
             }}
           />
         </Box>
@@ -173,10 +173,10 @@ function SegmentTimeline({
   label?: string;
 }) {
   return (
-    <Box sx={{ mt: 1.5 }}>
+    <Box sx={{ mt: 1 }}>
       <Box
         sx={{
-          height: 28,
+          height: 24,
           bgcolor: designTokens.colors.surface[0],
           borderRadius: 1,
           position: 'relative',
@@ -342,7 +342,7 @@ function ProcessingConnector({
           gap: 0.75,
           px: 1.5,
           py: 0.75,
-          mb: 2,
+          mb: 1.5,
           bgcolor: designTokens.colors.surface[2],
           borderRadius: 2,
           border: '1px solid',
@@ -452,7 +452,7 @@ function ProcessingConnector({
             fontSize: '0.7rem',
             whiteSpace: 'nowrap',
             textAlign: 'center',
-            mt: 2,
+            mt: 1.5,
           }}
         >
           91% dead time removed
@@ -573,6 +573,8 @@ export function PipelineAnimation() {
           alignItems: { xs: 'stretch', md: 'center' },
           gap: 3,
           mt: { xs: 3, md: 4 },
+          maxWidth: { md: 880 },
+          mx: 'auto',
         }}
       >
         <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -604,6 +606,8 @@ export function PipelineAnimation() {
           alignItems: { xs: 'stretch', md: 'center' },
           gap: { xs: 2, md: 3 },
           mt: { xs: 3, md: 4 },
+          maxWidth: { md: 880 },
+          mx: 'auto',
         }}
       >
         {/* Input Stage */}
