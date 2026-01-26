@@ -3,7 +3,7 @@
 import { Box, Typography, useMediaQuery, useTheme } from '@mui/material';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { designTokens } from '@/app/theme';
 
 type AnimationPhase = 'idle' | 'scanning' | 'revealing' | 'complete';
@@ -61,7 +61,7 @@ const PHASE_TIMING = {
   idle: 1000,
   scanning: 3000,
   revealing: 2000,
-  complete: 2000,
+  complete: 5000,
   fadeOut: 1000,
 };
 
@@ -102,12 +102,27 @@ function VideoFrame({
   src,
   webmSrc,
   poster,
+  playing,
 }: {
   title: string;
   src?: string;
   webmSrc?: string;
   poster?: string;
+  playing?: boolean;
 }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const controlled = playing !== undefined;
+
+  useEffect(() => {
+    if (!controlled || !videoRef.current) return;
+    if (playing) {
+      videoRef.current.currentTime = 0;
+      videoRef.current.play().catch(() => {});
+    } else {
+      videoRef.current.pause();
+    }
+  }, [playing, controlled]);
+
   return (
     <Box
       sx={{
@@ -131,24 +146,92 @@ function VideoFrame({
         }}
       >
         {src ? (
-          <Box
-            component="video"
-            autoPlay
-            loop
-            muted
-            playsInline
-            poster={poster}
-            sx={{
-              position: 'absolute',
-              inset: 0,
-              width: '100%',
-              height: '100%',
-              objectFit: 'cover',
-            }}
-          >
-            {webmSrc && <source src={webmSrc} type="video/webm" />}
-            <source src={src} type="video/mp4" />
-          </Box>
+          <>
+            <Box
+              component="video"
+              ref={videoRef}
+              {...(!controlled && { autoPlay: true, loop: true })}
+              muted
+              playsInline
+              poster={poster}
+              sx={{
+                position: 'absolute',
+                inset: 0,
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+              }}
+            >
+              {webmSrc && <source src={webmSrc} type="video/webm" />}
+              <source src={src} type="video/mp4" />
+            </Box>
+            {/* Processing overlay — visible while waiting for AI */}
+            {controlled && (
+              <Box
+                sx={{
+                  position: 'absolute',
+                  inset: 0,
+                  bgcolor: 'rgba(13, 14, 18, 0.7)',
+                  opacity: playing ? 0 : 1,
+                  transition: 'opacity 0.5s',
+                  pointerEvents: 'none',
+                  overflow: 'hidden',
+                }}
+              >
+                {/* Shimmer sweep */}
+                <Box
+                  sx={{
+                    position: 'absolute',
+                    inset: 0,
+                    background:
+                      'linear-gradient(90deg, transparent 0%, rgba(255,107,74,0.06) 50%, transparent 100%)',
+                    animation: playing ? 'none' : 'shimmerSweep 2s ease-in-out infinite',
+                    '@keyframes shimmerSweep': {
+                      '0%': { transform: 'translateX(-100%)' },
+                      '100%': { transform: 'translateX(100%)' },
+                    },
+                  }}
+                />
+                {/* Waiting indicator */}
+                <Box
+                  sx={{
+                    position: 'absolute',
+                    inset: 0,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 1,
+                  }}
+                >
+                  <Box
+                    sx={{
+                      width: 24,
+                      height: 24,
+                      border: '2px solid rgba(255,107,74,0.15)',
+                      borderTopColor: 'rgba(255,107,74,0.5)',
+                      borderRadius: '50%',
+                      animation: 'spin 1s linear infinite',
+                      '@keyframes spin': {
+                        '0%': { transform: 'rotate(0deg)' },
+                        '100%': { transform: 'rotate(360deg)' },
+                      },
+                    }}
+                  />
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: 'rgba(255,255,255,0.3)',
+                      fontSize: '0.6rem',
+                      letterSpacing: '0.05em',
+                    }}
+                  >
+                    Analyzing...
+                  </Typography>
+                </Box>
+              </Box>
+            )}
+          </>
         ) : (
           <>
             {/* Subtle gradient for depth */}
@@ -727,6 +810,7 @@ export function PipelineAnimation() {
               src="/hero/highlights.mp4"
               webmSrc="/hero/highlights.webm"
               poster="/hero/highlights-poster.webp"
+              playing={outputVisible}
             />
           <SegmentTimeline
             segments={OUTPUT_SEGMENTS}
