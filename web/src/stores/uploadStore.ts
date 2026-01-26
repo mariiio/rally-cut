@@ -31,7 +31,7 @@ interface UploadState {
   localVideoUrls: Map<string, string>;
 
   // Actions
-  uploadVideo: (sessionId: string, file: File) => Promise<boolean>;
+  uploadVideo: (sessionId: string, file: File) => Promise<string | false>;
   uploadVideoToLibrary: (file: File) => Promise<UploadResult>;
   cancel: () => void;
   clearError: () => void;
@@ -315,7 +315,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         abortController: null,
       });
 
-      return true;
+      return videoId;
     } catch (err) {
       const isCancelled = err instanceof Error && err.message === 'Upload cancelled';
       if (!isCancelled) {

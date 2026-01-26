@@ -104,9 +104,9 @@ export function EditorHeader() {
 
     e.target.value = '';
 
-    const success = await uploadVideo(session.id, file);
-    if (success) {
-      await reloadSession();
+    const videoId = await uploadVideo(session.id, file);
+    if (videoId) {
+      await reloadSession(videoId);
     }
   };
 
@@ -487,7 +487,7 @@ export function EditorHeader() {
           onClose={() => setShowAddVideoModal(false)}
           sessionId={session.id}
           existingVideoIds={session.matches.map((m) => m.id)}
-          onVideoAdded={() => reloadSession()}
+          onVideoAdded={(videoId) => reloadSession(videoId)}
         />
       )}
 

@@ -76,7 +76,7 @@ interface AddVideoModalProps {
   onClose: () => void;
   sessionId?: string;
   existingVideoIds?: string[];
-  onVideoAdded: () => void;
+  onVideoAdded: (videoId?: string) => void;
 }
 
 export function AddVideoModal({
@@ -196,7 +196,7 @@ export function AddVideoModal({
         await addVideoToSession(sessionId, videoId);
       }
 
-      onVideoAdded();
+      onVideoAdded(selectedVideoIds[selectedVideoIds.length - 1]);
       onClose();
     } catch (err) {
       console.error('Failed to add videos:', err);
@@ -215,9 +215,9 @@ export function AddVideoModal({
 
     // If sessionId is provided, upload directly to that session
     if (sessionId) {
-      const success = await uploadVideo(sessionId, file);
-      if (success) {
-        onVideoAdded();
+      const videoId = await uploadVideo(sessionId, file);
+      if (videoId) {
+        onVideoAdded(videoId);
         onClose();
       }
       return;
