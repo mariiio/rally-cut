@@ -169,7 +169,7 @@ interface EditorState {
   // Session actions
   loadSession: (sessionId: string, initialVideoId?: string) => Promise<void>;
   loadVideo: (videoId: string) => Promise<void>;
-  reloadSession: () => Promise<void>;
+  reloadSession: (selectVideoId?: string) => Promise<void>;
   reloadCurrentMatch: () => Promise<{ ralliesCount: number } | null>;
   setActiveMatch: (matchId: string) => void;
   renameMatch: (matchId: string, name: string) => void;
@@ -783,7 +783,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
   },
 
-  reloadSession: async () => {
+  reloadSession: async (selectVideoId?: string) => {
     const state = get();
     if (!state.session) return;
 
@@ -795,9 +795,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // Load camera edits and global settings into camera store (migration handled by loadCameraEdits)
       useCameraStore.getState().loadCameraEdits(result.cameraEdits, result.globalCameraSettings);
 
-      // Preserve activeMatchId if the match still exists, otherwise use first match
+      // If selectVideoId is provided and exists in fetched matches, use it; otherwise preserve current or fallback to first
+      const selectMatch = selectVideoId ? freshSession.matches.some((m: { id: string }) => m.id === selectVideoId) : false;
       const matchStillExists = freshSession.matches.some((m: { id: string }) => m.id === state.activeMatchId);
-      const activeMatchId = matchStillExists ? state.activeMatchId : freshSession.matches[0]?.id || null;
+      const activeMatchId = selectMatch ? selectVideoId! : matchStillExists ? state.activeMatchId : freshSession.matches[0]?.id || null;
       const activeMatch = freshSession.matches.find((m: { id: string }) => m.id === activeMatchId);
 
       // Update original rallies for all matches
