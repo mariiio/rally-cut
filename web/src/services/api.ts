@@ -1399,7 +1399,6 @@ export interface CreateExportJobRequest {
   config?: {
     format?: 'mp4' | 'webm';
     quality?: 'original' | '720p';
-    withFade?: boolean;
   };
   rallies: Array<{
     videoId: string;

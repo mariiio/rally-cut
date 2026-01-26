@@ -16,9 +16,6 @@ const FFMPEG_PIXEL_FORMAT = ['-pix_fmt', 'yuv420p'];
 const FFMPEG_AUDIO_CODEC = ['-c:a', 'aac', '-b:a', '128k'];
 const FFMPEG_ENCODE_SETTINGS = [...FFMPEG_VIDEO_CODEC, ...FFMPEG_PIXEL_FORMAT, ...FFMPEG_AUDIO_CODEC];
 
-// Fade transition duration in seconds
-export const FADE_DURATION = 0.5;
-
 // Watermark settings
 const WATERMARK_FILENAME = 'watermark.png';
 let watermarkLoaded = false;
@@ -278,7 +275,6 @@ const messages = {
     return `${verb} rally ${current} of ${total}...`;
   },
   joiningClips: 'Running the play...',
-  applyingFade: 'Adding smooth transitions...',
   finalizing: 'Match point...',
   complete: 'Game, set, match!',
   processing: 'In play...',
@@ -744,7 +740,6 @@ export async function exportSingleRally(
 export async function exportConcatenated(
   videoSource: VideoSource,
   rallies: Rally[],
-  withFade: boolean,
   withWatermark: boolean = true,
   onProgress?: ProgressCallback
 ): Promise<Blob> {
@@ -791,13 +786,7 @@ export async function exportConcatenated(
     await loadWatermark(ff);
   }
 
-  if (withFade) {
-    // With fade transitions - requires re-encoding
-    await exportWithFade(ff, inputName, outputName, rallies, withWatermark);
-  } else {
-    // Without transitions - use concat demuxer (fast if no watermark)
-    await exportWithConcat(ff, inputName, outputName, ext, rallies, withWatermark);
-  }
+  await exportWithConcat(ff, inputName, outputName, ext, rallies, withWatermark);
 
   reportProgress(95, messages.finalizing);
 
@@ -821,7 +810,6 @@ export async function exportConcatenated(
  */
 export async function exportMultiSourceConcatenated(
   ralliesWithSource: RallyWithSource[],
-  withFade: boolean,
   withWatermark: boolean = true,
   onProgress?: ProgressCallback
 ): Promise<Blob> {
@@ -850,7 +838,6 @@ export async function exportMultiSourceConcatenated(
     return exportConcatenated(
       firstSource,
       ralliesWithSource.map((r) => r.rally),
-      withFade,
       withWatermark,
       onProgress
     );
@@ -931,51 +918,46 @@ export async function exportMultiSourceConcatenated(
   // Now concatenate all clips
   const outputName = 'output.mp4';
 
-  if (withFade) {
-    reportProgress(70, messages.applyingFade);
-    await exportMultiSourceWithFade(ff, clipNames, outputName, ralliesWithSource.map((r) => r.rally), withWatermark);
+  reportProgress(70, messages.joiningClips);
+  // Use concat demuxer - stream copy if no watermark, re-encode with overlay if watermark
+  const concatList = clipNames.map((name) => `file '${name}'`).join('\n');
+  await ff.writeFile('concat.txt', concatList);
+
+  if (withWatermark) {
+    // Concatenate with watermark overlay
+    const tempConcat = 'temp_concat.mp4';
+    await ff.exec([
+      '-f', 'concat',
+      '-safe', '0',
+      '-i', 'concat.txt',
+      '-c', 'copy',
+      tempConcat,
+    ]);
+
+    // Apply watermark overlay
+    await ff.exec([
+      '-i', tempConcat,
+      '-i', WATERMARK_FILENAME,
+      '-filter_complex', '[0:v][1:v]overlay=W-w-20:H-h-20:format=auto[v]',
+      '-map', '[v]',
+      '-map', '0:a?',
+      ...FFMPEG_ENCODE_SETTINGS,
+      '-y',
+      outputName,
+    ]);
+
+    await ff.deleteFile(tempConcat);
   } else {
-    reportProgress(70, messages.joiningClips);
-    // Use concat demuxer - stream copy if no watermark, re-encode with overlay if watermark
-    const concatList = clipNames.map((name) => `file '${name}'`).join('\n');
-    await ff.writeFile('concat.txt', concatList);
-
-    if (withWatermark) {
-      // Concatenate with watermark overlay
-      const tempConcat = 'temp_concat.mp4';
-      await ff.exec([
-        '-f', 'concat',
-        '-safe', '0',
-        '-i', 'concat.txt',
-        '-c', 'copy',
-        tempConcat,
-      ]);
-
-      // Apply watermark overlay
-      await ff.exec([
-        '-i', tempConcat,
-        '-i', WATERMARK_FILENAME,
-        '-filter_complex', '[0:v][1:v]overlay=W-w-20:H-h-20:format=auto[v]',
-        '-map', '[v]',
-        '-map', '0:a?',
-        ...FFMPEG_ENCODE_SETTINGS,
-        '-y',
-        outputName,
-      ]);
-
-      await ff.deleteFile(tempConcat);
-    } else {
-      await ff.exec([
-        '-f', 'concat',
-        '-safe', '0',
-        '-i', 'concat.txt',
-        '-c', 'copy',
-        outputName,
-      ]);
-    }
-
-    await ff.deleteFile('concat.txt');
+    await ff.exec([
+      '-f', 'concat',
+      '-safe', '0',
+      '-i', 'concat.txt',
+      '-c', 'copy',
+      outputName,
+    ]);
   }
+
+  await ff.deleteFile('concat.txt');
 
   reportProgress(95, messages.finalizing);
 
@@ -992,90 +974,6 @@ export async function exportMultiSourceConcatenated(
 
   const uint8Data = data instanceof Uint8Array ? new Uint8Array(data) : data;
   return new Blob([uint8Data], { type: 'video/mp4' });
-}
-
-/**
- * Apply crossfade transitions for multi-source export (clips already extracted)
- * Uses xfade filter for smooth blending between clips
- */
-async function exportMultiSourceWithFade(
-  ff: FFmpegInstance,
-  clipNames: string[],
-  outputName: string,
-  rallies: Rally[],
-  withWatermark: boolean
-): Promise<void> {
-  const fadeDuration = FADE_DURATION;
-  // If watermark, output to temp file first, then apply watermark
-  const fadeOutputName = withWatermark ? 'temp_multi_faded.mp4' : outputName;
-
-  // For 2 clips, use simple xfade
-  if (clipNames.length === 2) {
-    const offset = Math.max(0, rallies[0].duration - fadeDuration);
-
-    await ff.exec([
-      '-i', clipNames[0],
-      '-i', clipNames[1],
-      '-filter_complex',
-      `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${offset},format=yuv420p[v];[0:a][1:a]acrossfade=d=${fadeDuration}[a]`,
-      '-map', '[v]',
-      '-map', '[a]',
-      ...FFMPEG_VIDEO_CODEC,
-      '-c:a', 'aac',
-      '-movflags', '+faststart',
-      '-y',
-      fadeOutputName,
-    ]);
-  } else {
-    // For 3+ clips, chain xfade operations iteratively (process pairs)
-    let currentInput = clipNames[0];
-    let currentDuration = rallies[0].duration;
-
-    for (let i = 1; i < clipNames.length; i++) {
-      const nextClip = clipNames[i];
-      const isLast = i === clipNames.length - 1;
-      const tempOutput = isLast ? fadeOutputName : `xfade_temp_${i}.mp4`;
-      const offset = Math.max(0, currentDuration - fadeDuration);
-
-      await ff.exec([
-        '-i', currentInput,
-        '-i', nextClip,
-        '-filter_complex',
-        `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${offset},format=yuv420p[v];[0:a][1:a]acrossfade=d=${fadeDuration}[a]`,
-        '-map', '[v]',
-        '-map', '[a]',
-        ...FFMPEG_VIDEO_CODEC,
-        '-c:a', 'aac',
-        '-movflags', '+faststart',
-        '-y',
-        tempOutput,
-      ]);
-
-      // Clean up previous temp file (not the original clips)
-      if (i > 1) {
-        await ff.deleteFile(currentInput);
-      }
-
-      currentInput = tempOutput;
-      // New duration = previous duration + next clip duration - fade overlap
-      currentDuration = currentDuration + rallies[i].duration - fadeDuration;
-    }
-  }
-
-  // Apply watermark if enabled
-  if (withWatermark) {
-    await ff.exec([
-      '-i', fadeOutputName,
-      '-i', WATERMARK_FILENAME,
-      '-filter_complex', '[0:v][1:v]overlay=W-w-20:H-h-20:format=auto[v]',
-      '-map', '[v]',
-      '-map', '0:a?',
-      ...FFMPEG_ENCODE_SETTINGS,
-      '-y',
-      outputName,
-    ]);
-    await ff.deleteFile(fadeOutputName);
-  }
 }
 
 /**
@@ -1155,124 +1053,6 @@ async function exportWithConcat(
   await ff.deleteFile('concat.txt');
   for (const clipName of clipNames) {
     await ff.deleteFile(clipName);
-  }
-}
-
-/**
- * Export with crossfade transitions (requires re-encoding)
- * Uses xfade filter for smooth blending between clips
- */
-async function exportWithFade(
-  ff: FFmpegInstance,
-  inputName: string,
-  outputName: string,
-  rallies: Rally[],
-  withWatermark: boolean
-): Promise<void> {
-  const fadeDuration = FADE_DURATION;
-  // If watermark, output to temp file first, then apply watermark
-  const fadeOutputName = withWatermark ? 'temp_faded.mp4' : outputName;
-
-  // First extract all clips with consistent format
-  const clipNames: string[] = [];
-
-  for (let i = 0; i < rallies.length; i++) {
-    const rally = rallies[i];
-    const clipName = `clip_${i}.mp4`;
-    clipNames.push(clipName);
-
-    const progressBase = 10 + (i / rallies.length) * 40;
-    reportProgress(Math.round(progressBase), messages.encodingClip(i + 1, rallies.length));
-
-    await ff.exec([
-      '-ss', rally.start_time.toString(),
-      '-i', inputName,
-      '-t', rally.duration.toString(),
-      ...FFMPEG_ENCODE_SETTINGS,
-      '-avoid_negative_ts', 'make_zero',
-      '-y',
-      clipName,
-    ]);
-  }
-
-  reportProgress(55, messages.applyingFade);
-
-  // For 2 clips, use simple xfade
-  if (clipNames.length === 2) {
-    const offset = Math.max(0, rallies[0].duration - fadeDuration);
-
-    await ff.exec([
-      '-i', clipNames[0],
-      '-i', clipNames[1],
-      '-filter_complex',
-      `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${offset},format=yuv420p[v];[0:a][1:a]acrossfade=d=${fadeDuration}[a]`,
-      '-map', '[v]',
-      '-map', '[a]',
-      ...FFMPEG_VIDEO_CODEC,
-      '-c:a', 'aac',
-      '-movflags', '+faststart',
-      '-y',
-      fadeOutputName,
-    ]);
-  } else {
-    // For 3+ clips, chain xfade operations iteratively
-    let currentInput = clipNames[0];
-    let currentDuration = rallies[0].duration;
-
-    for (let i = 1; i < clipNames.length; i++) {
-      const nextClip = clipNames[i];
-      const isLast = i === clipNames.length - 1;
-      const tempOutput = isLast ? fadeOutputName : `xfade_temp_${i}.mp4`;
-      const offset = Math.max(0, currentDuration - fadeDuration);
-
-      reportProgress(55 + Math.round((i / clipNames.length) * 35), messages.applyingFade);
-
-      await ff.exec([
-        '-i', currentInput,
-        '-i', nextClip,
-        '-filter_complex',
-        `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${offset},format=yuv420p[v];[0:a][1:a]acrossfade=d=${fadeDuration}[a]`,
-        '-map', '[v]',
-        '-map', '[a]',
-        ...FFMPEG_VIDEO_CODEC,
-        '-c:a', 'aac',
-        '-movflags', '+faststart',
-        '-y',
-        tempOutput,
-      ]);
-
-      // Clean up previous temp file (not original clips yet)
-      if (i > 1) {
-        await ff.deleteFile(currentInput);
-      }
-
-      currentInput = tempOutput;
-      currentDuration = currentDuration + rallies[i].duration - fadeDuration;
-    }
-  }
-
-  // Apply watermark if enabled
-  if (withWatermark) {
-    await ff.exec([
-      '-i', fadeOutputName,
-      '-i', WATERMARK_FILENAME,
-      '-filter_complex', '[0:v][1:v]overlay=W-w-20:H-h-20:format=auto[v]',
-      '-map', '[v]',
-      '-map', '0:a?',
-      ...FFMPEG_ENCODE_SETTINGS,
-      '-y',
-      outputName,
-    ]);
-    await ff.deleteFile(fadeOutputName);
-  }
-
-  // Cleanup original clips
-  for (const clipName of clipNames) {
-    try {
-      await ff.deleteFile(clipName);
-    } catch {
-      // Ignore if already deleted
-    }
   }
 }
 
