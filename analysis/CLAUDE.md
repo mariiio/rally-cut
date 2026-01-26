@@ -34,11 +34,20 @@ uv run rallycut train modal --cleanup                 # Delete from Modal (~$0.7
 
 # Incremental training (add more labeled videos to existing model)
 uv run rallycut train export-dataset --name beach_v2  # Export all labeled data
+uv run rallycut train push --name beach_v2            # Back up to S3 (deduplicates videos)
 uv run rallycut train prepare                         # Generate samples from all videos
 uv run rallycut train modal --upload --upload-videos  # Upload new data
 uv run rallycut train modal --upload-model            # Upload existing model weights
 uv run rallycut train modal --resume-from-model --lr 1e-5 --epochs 5  # Fine-tune
 uv run rallycut train modal --download --cleanup      # Download and clean up
+
+# S3 backup/restore (survives DB resets and MinIO clears)
+uv run rallycut train push --name beach_v2            # Upload dataset to S3
+uv run rallycut train pull --name beach_v2            # Download dataset from S3
+uv run rallycut train restore --name beach_v2         # Re-import ground truth into DB
+uv run rallycut train restore --name beach_v2 --upload-to-app-s3  # + upload to MinIO
+uv run rallycut train restore --name beach_v2 --dry-run  # Preview without changes
+uv run rallycut train list-remote                     # List datasets backed up in S3
 
 # Training is preemption-resilient:
 # - Auto-retries up to 2 times on GPU preemption

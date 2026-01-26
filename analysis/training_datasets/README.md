@@ -57,13 +57,18 @@ rallycut evaluate --model beach --iou 0.5
    rallycut train export-dataset --name beach_v1
    ```
 
-3. **Prepare training samples**
+3. **Back up to S3** (survives DB resets and MinIO clears)
+   ```bash
+   rallycut train push --name beach_v1
+   ```
+
+4. **Prepare training samples**
    ```bash
    rallycut train prepare --output training_data/
    ```
    This generates 480p@30fps proxy videos for efficient training (VideoMAE only needs 224x224 input).
 
-4. **Run training on Modal GPU**
+5. **Run training on Modal GPU**
    ```bash
    rallycut train modal --upload         # Upload training data JSON
    rallycut train modal --upload-videos  # Upload proxy videos (parallel, ~4GB)
@@ -76,16 +81,55 @@ rallycut evaluate --model beach --iou 0.5
    - Checkpoints saved every 100 steps (~5 min max progress loss)
    - Resumes from latest checkpoint on restart
 
-5. **Evaluate the trained model**
+6. **Evaluate the trained model**
    ```bash
    rallycut evaluate --model beach --iou 0.5
    ```
 
-6. **Clean up Modal storage** (recommended after training)
+7. **Clean up Modal storage** (recommended after training)
    ```bash
    rallycut train modal --cleanup  # Delete videos and model outputs from Modal
    ```
    Modal charges ~$0.75/GB/month for storage. Proxy videos are cached locally at `~/.cache/rallycut/proxies/` - re-upload anytime for retraining.
+
+## S3 Backup
+
+Training datasets can be backed up to AWS S3 so the complete training pipeline survives local DB resets and MinIO volume clears.
+
+### Setup
+
+```bash
+export TRAINING_S3_BUCKET=your-bucket    # Required
+# Optional (defaults shown):
+# export TRAINING_S3_PREFIX=training
+# export TRAINING_S3_REGION=us-east-1
+```
+
+Uses the default AWS credential chain (`~/.aws/credentials`, env vars, IAM roles) -- **not** the MinIO credentials used by the app.
+
+### S3 Key Structure
+
+Videos are stored by content_hash for deduplication across dataset versions:
+
+```
+{prefix}/
+  datasets/{name}/
+    manifest.json
+    ground_truth.json
+  videos/
+    {content_hash}.mp4      # Shared pool, deduplicated
+```
+
+Videos use `StorageClass=STANDARD_IA` (~$0.0125/GB/month). For ~7GB of originals, that's ~$0.09/month.
+
+### Commands
+
+| Command | Purpose |
+|---------|---------|
+| `rallycut train push --name beach_v2` | Upload dataset to S3 |
+| `rallycut train pull --name beach_v2` | Download dataset from S3 |
+| `rallycut train restore --name beach_v2` | Re-import ground truth into DB |
+| `rallycut train list-remote` | List datasets backed up in S3 |
 
 ## Adding New Videos (Incremental Training)
 
@@ -101,31 +145,36 @@ When you have new labeled videos to add to an existing trained model:
    rallycut train export-dataset --name beach_v2
    ```
 
-3. **Commit dataset to git** (backup labels in case DB resets)
+3. **Back up to S3** (only new videos are uploaded -- existing ones deduplicated by content_hash)
+   ```bash
+   rallycut train push --name beach_v2
+   ```
+
+4. **Commit manifests to git**
    ```bash
    cd training_datasets/beach_v2
    git add manifest.json ground_truth.json
    git commit -m "Add beach_v2 dataset (N videos, M rallies)"
    ```
 
-4. **Prepare training data**
+5. **Prepare training data**
    ```bash
    rallycut train prepare --output training_data/
    ```
 
-5. **Upload to Modal**
+6. **Upload to Modal**
    ```bash
    rallycut train modal --upload         # Upload training JSON
    rallycut train modal --upload-videos  # Upload proxy videos (only new ones)
    rallycut train modal --upload-model   # Upload existing model weights
    ```
 
-6. **Run incremental training** (lower learning rate to preserve existing knowledge)
+7. **Run incremental training** (lower learning rate to preserve existing knowledge)
    ```bash
    rallycut train modal --resume-from-model --lr 1e-5 --epochs 5
    ```
 
-7. **Download and clean up**
+8. **Download and clean up**
    ```bash
    rallycut train modal --download
    rallycut train modal --cleanup
@@ -136,6 +185,31 @@ When you have new labeled videos to add to an existing trained model:
 - Lower learning rate (1e-5 vs 5e-5) prevents "catastrophic forgetting"
 - Fewer epochs needed (5 vs 10+) since model already knows most patterns
 - Faster and cheaper than full retraining
+
+## Disaster Recovery
+
+After a DB reset or fresh machine setup, restore the complete training pipeline:
+
+```bash
+# See available backups
+rallycut train list-remote
+
+# Download from S3
+rallycut train pull --name beach_v2
+
+# Import into DB + upload to MinIO
+rallycut train restore --name beach_v2 --upload-to-app-s3
+
+# Videos and labels are now back in the web editor
+# Ready to train again:
+rallycut train prepare
+rallycut train modal --upload --upload-videos --epochs 10
+```
+
+Use `--dry-run` to preview what restore would do without making changes:
+```bash
+rallycut train restore --name beach_v2 --dry-run
+```
 
 ## Dataset Files
 
@@ -223,11 +297,16 @@ Proxies are generated automatically by `rallycut train prepare` and cached in `~
 
 ## Git Workflow
 
-Videos are git-ignored (large files), manifests are tracked:
+Git and S3 together form a complete backup:
+
+- **Git**: manifest.json + ground_truth.json (small, versioned metadata)
+- **S3**: video files (large, deduplicated by content_hash)
 
 ```bash
-# After exporting a new dataset
+# After exporting and pushing a dataset
 cd training_datasets/beach_v2
 git add manifest.json ground_truth.json
 git commit -m "Add beach_v2 training dataset (N videos, M rallies)"
 ```
+
+To fully restore: pull manifests from git, pull videos from S3, restore into DB.

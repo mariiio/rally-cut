@@ -172,6 +172,18 @@ class SegmentConfig(BaseModel):
     rally_continuation_seconds: float = 2.0
 
 
+class TrainingBackupConfig(BaseModel):
+    """S3 backup configuration for training datasets.
+
+    Uses the default AWS credential chain (separate from app MinIO).
+    Set TRAINING_S3_BUCKET env var or configure in rallycut.yaml.
+    """
+
+    s3_bucket: str = ""
+    s3_prefix: str = "training"
+    s3_region: str = "us-east-1"
+
+
 # =============================================================================
 # Main Configuration Class
 # =============================================================================
@@ -185,6 +197,7 @@ class RallyCutConfig(BaseSettings):
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
     segment: SegmentConfig = Field(default_factory=SegmentConfig)
     hwaccel: HWAccelConfig = Field(default_factory=HWAccelConfig)
+    training_backup: TrainingBackupConfig = Field(default_factory=TrainingBackupConfig)
 
     # Model paths
     model_cache_dir: Path = Field(
