@@ -24,7 +24,6 @@ import { CameraEasing } from '@/constants/enums';
 export interface ExportOptions {
   quality: 'original' | '720p';
   applyCameraEdits: boolean;
-  withFade: boolean;
 }
 
 const BROWSER_NOT_SUPPORTED_ERROR =
@@ -53,12 +52,11 @@ interface ExportState {
 
   // Browser-based export (legacy, for non-confirmed videos)
   downloadRally: (videoSource: VideoSource, rally: Rally, withWatermark?: boolean) => Promise<void>;
-  downloadAllRallies: (videoSource: VideoSource, rallies: Rally[], withFade: boolean, withWatermark?: boolean) => Promise<void>;
+  downloadAllRallies: (videoSource: VideoSource, rallies: Rally[], withWatermark?: boolean) => Promise<void>;
   downloadHighlight: (
     ralliesWithSource: RallyWithSource[],
     highlightId: string,
     highlightName: string,
-    withFade: boolean,
     withWatermark?: boolean
   ) => Promise<void>;
 
@@ -151,7 +149,7 @@ export const useExportStore = create<ExportState>((set, get) => ({
     }
   },
 
-  downloadAllRallies: async (videoSource: VideoSource, rallies: Rally[], withFade: boolean, withWatermark = true) => {
+  downloadAllRallies: async (videoSource: VideoSource, rallies: Rally[], withWatermark = true) => {
     if (!isFFmpegSupported()) {
       set({ error: BROWSER_NOT_SUPPORTED_ERROR });
       return;
@@ -177,13 +175,12 @@ export const useExportStore = create<ExportState>((set, get) => ({
     });
 
     try {
-      const blob = await exportConcatenated(videoSource, rallies, withFade, withWatermark, (progress, step) => {
+      const blob = await exportConcatenated(videoSource, rallies, withWatermark, (progress, step) => {
         set({ progress, currentStep: step });
       });
 
       const baseName = getVideoName(videoSource);
-      const fadeLabel = withFade ? '_fade' : '';
-      const filename = `${baseName}_all_${rallies.length}rallies${fadeLabel}.mp4`;
+      const filename = `${baseName}_all_${rallies.length}rallies.mp4`;
       downloadBlob(blob, filename);
 
       set({
@@ -209,7 +206,6 @@ export const useExportStore = create<ExportState>((set, get) => ({
     ralliesWithSource: RallyWithSource[],
     highlightId: string,
     highlightName: string,
-    withFade: boolean,
     withWatermark = true
   ) => {
     if (!isFFmpegSupported()) {
@@ -237,15 +233,14 @@ export const useExportStore = create<ExportState>((set, get) => ({
     });
 
     try {
-      const blob = await exportMultiSourceConcatenated(ralliesWithSource, withFade, withWatermark, (progress, step) => {
+      const blob = await exportMultiSourceConcatenated(ralliesWithSource, withWatermark, (progress, step) => {
         set({ progress, currentStep: step });
       });
 
       // Use the first rally's video source for the filename base
       const baseName = getVideoName(ralliesWithSource[0].videoSource);
       const safeName = highlightName.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-      const fadeLabel = withFade ? '_fade' : '';
-      const filename = `${baseName}_${safeName}${fadeLabel}.mp4`;
+      const filename = `${baseName}_${safeName}.mp4`;
       downloadBlob(blob, filename);
 
       set({
@@ -471,7 +466,6 @@ export const useExportStore = create<ExportState>((set, get) => ({
         config: {
           format: 'mp4' as const,
           quality: options?.quality,
-          withFade: options?.withFade,
         },
         rallies: exportRallies,
       };

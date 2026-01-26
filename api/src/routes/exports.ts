@@ -33,7 +33,6 @@ const createExportJobSchema = z.object({
   config: z.object({
     format: z.enum(["mp4", "webm"]).default("mp4"),
     quality: z.enum(["original", "720p"]).optional(),
-    withFade: z.boolean().optional(),
   }),
   rallies: z.array(
     z.object({

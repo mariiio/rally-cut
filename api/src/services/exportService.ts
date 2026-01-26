@@ -85,7 +85,6 @@ interface CreateExportJobInput {
   config: {
     format: "mp4" | "webm";
     quality?: ExportQuality;  // User requested quality
-    withFade?: boolean;       // Add fade between rallies
   };
   rallies: Array<{
     videoId: string;

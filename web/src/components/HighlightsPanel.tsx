@@ -57,7 +57,7 @@ import { RallyWithSource } from '@/utils/videoExport';
 import { designTokens } from '@/app/theme';
 import { NamePromptModal } from './NamePromptModal';
 import { ConfirmDialog } from './ConfirmDialog';
-import { ExportOptionsDialog, ExportOptions } from './ExportOptionsDialog';
+import { ExportOptionsDialog } from './ExportOptionsDialog';
 
 // Helper to create composite ID for drag and drop
 function createDragId(highlightId: string, rallyId: string): string {
@@ -559,7 +559,7 @@ export function HighlightsPanel() {
     setHighlightToDownload(highlightId);
   }, []);
 
-  const handleDownload = useCallback((options: ExportOptions) => {
+  const handleDownload = useCallback(() => {
     if (!highlightToDownload) return;
 
     const highlight = highlights?.find((h) => h.id === highlightToDownload);
@@ -580,7 +580,7 @@ export function HighlightsPanel() {
 
     if (ralliesWithSource.length === 0) return;
 
-    downloadHighlight(ralliesWithSource, highlight.id, highlight.name, options.withFade);
+    downloadHighlight(ralliesWithSource, highlight.id, highlight.name);
     setHighlightToDownload(null);
   }, [highlightToDownload, highlights, allRallies, getRallyMatch, videoSource, downloadHighlight]);
 
@@ -960,7 +960,6 @@ export function HighlightsPanel() {
                 .filter((r): r is Rally => r !== undefined)) ?? []
             : []
         }
-        showFadeOption={true}
         isExporting={isExporting}
       />
 

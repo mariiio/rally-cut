@@ -1013,7 +1013,6 @@ export function RallyList() {
             : []
         }
         videoId={matchToDownload?.id}
-        showFadeOption={exportType !== 'rally'}
         isExporting={isExporting}
       />
 

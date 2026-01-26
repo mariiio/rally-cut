@@ -28,7 +28,6 @@ export type ExportQuality = 'original' | '720p';
 export interface ExportOptions {
   quality: ExportQuality;
   applyCameraEdits: boolean;
-  withFade: boolean;
 }
 
 interface ExportOptionsDialogProps {
@@ -38,7 +37,6 @@ interface ExportOptionsDialogProps {
   title: string;
   rallies: Rally[];
   videoId?: string;
-  showFadeOption?: boolean;
   isExporting?: boolean;
 }
 
@@ -49,7 +47,6 @@ export function ExportOptionsDialog({
   title,
   rallies,
   videoId,
-  showFadeOption = false,
   isExporting = false,
 }: ExportOptionsDialogProps) {
   const isPaidTier = useTierStore((state) => state.isPaidTier());
@@ -85,7 +82,6 @@ export function ExportOptionsDialog({
     isPaidTier ? 'original' : '720p'
   );
   const [applyCameraEdits, setApplyCameraEdits] = useState(true);
-  const [withFade, setWithFade] = useState(false);
 
   // Reset state when dialog opens - setState in effect is intentional for dialog reset pattern
   /* eslint-disable react-hooks/set-state-in-effect */
@@ -93,7 +89,6 @@ export function ExportOptionsDialog({
     if (open) {
       setQuality(isPaidTier ? 'original' : '720p');
       setApplyCameraEdits(true);
-      setWithFade(false);
     }
   }, [open, isPaidTier]);
   /* eslint-enable react-hooks/set-state-in-effect */
@@ -108,7 +103,6 @@ export function ExportOptionsDialog({
     onExport({
       quality,
       applyCameraEdits: hasCameraEdits && applyCameraEdits && !cameraEditsDisabled,
-      withFade: showFadeOption && withFade,
     });
   };
 
@@ -153,44 +147,26 @@ export function ExportOptionsDialog({
         </Box>
 
         {/* Options Section */}
-        {/* Fade only applies when downloading multiple rallies */}
-        {(hasCameraEdits || (showFadeOption && rallies.length > 1)) && (
+        {hasCameraEdits && (
           <Box>
             <Typography variant="subtitle2" sx={{ mb: 1 }}>
               Options
             </Typography>
 
             {/* Camera Edits Toggle */}
-            {hasCameraEdits && (
-              <Tooltip title={cameraEditsTooltip} placement="top">
-                <FormControlLabel
-                  control={
-                    <Checkbox
-                      checked={applyCameraEdits && !cameraEditsDisabled}
-                      onChange={(e) => setApplyCameraEdits(e.target.checked)}
-                      disabled={cameraEditsDisabled}
-                      size="small"
-                    />
-                  }
-                  label="Apply camera effects"
-                  sx={{ mb: showFadeOption && rallies.length > 1 ? 0.5 : 0 }}
-                />
-              </Tooltip>
-            )}
-
-            {/* Fade Toggle - only for multiple rallies */}
-            {showFadeOption && rallies.length > 1 && (
+            <Tooltip title={cameraEditsTooltip} placement="top">
               <FormControlLabel
                 control={
                   <Checkbox
-                    checked={withFade}
-                    onChange={(e) => setWithFade(e.target.checked)}
+                    checked={applyCameraEdits && !cameraEditsDisabled}
+                    onChange={(e) => setApplyCameraEdits(e.target.checked)}
+                    disabled={cameraEditsDisabled}
                     size="small"
                   />
                 }
-                label="Add fade between rallies (0.5s)"
+                label="Apply camera effects"
               />
-            )}
+            </Tooltip>
           </Box>
         )}
       </DialogContent>
