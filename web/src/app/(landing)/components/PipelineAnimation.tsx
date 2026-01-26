@@ -1,7 +1,7 @@
 'use client';
 
 import { Box, Typography, useMediaQuery, useTheme } from '@mui/material';
-import { motion, useReducedMotion } from 'framer-motion';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import { useState, useEffect } from 'react';
 import { designTokens } from '@/app/theme';
@@ -164,6 +164,7 @@ function SegmentTimeline({
   staggerReveal = false,
   revealed = true,
   label,
+  labelVisible = true,
 }: {
   segments: Segment[];
   scanProgress?: number;
@@ -171,6 +172,7 @@ function SegmentTimeline({
   staggerReveal?: boolean;
   revealed?: boolean;
   label?: string;
+  labelVisible?: boolean;
 }) {
   return (
     <Box sx={{ mt: 1 }}>
@@ -291,6 +293,8 @@ function SegmentTimeline({
             mt: 0.75,
             display: 'block',
             textAlign: 'center',
+            opacity: labelVisible ? 1 : 0,
+            transition: 'opacity 0.4s',
           }}
         >
           {label}
@@ -411,48 +415,53 @@ function ProcessingConnector({
           }}
         />
 
-        {/* Flowing particles */}
-        {active && (
-          <Box
-            sx={{
-              position: 'absolute',
-              ...(vertical
-                ? { left: '50%', top: -gapPx, bottom: -gapPx, width: 20, transform: 'translateX(-50%)' }
-                : { top: '50%', left: -gapPx, right: -gapPx, height: 20, transform: 'translateY(-50%)' }),
-              overflow: 'hidden',
-              pointerEvents: 'none',
-            }}
-          >
-            {[0, 1, 2].map((i) => (
-              <motion.div
-                key={i}
-                animate={
-                  vertical
-                    ? { y: ['-10%', '110%'], opacity: [0, 1, 1, 0] }
-                    : { x: ['-10%', '110%'], opacity: [0, 1, 1, 0] }
-                }
-                transition={{
-                  duration: 1.5,
-                  delay: i * 0.5,
-                  repeat: Infinity,
-                  ease: 'linear',
-                }}
-                style={{
-                  position: 'absolute',
-                  ...(vertical
-                    ? { left: '50%', marginLeft: -3 }
-                    : { top: '50%', marginTop: -3 }),
-                  width: 6,
-                  height: 6,
-                  borderRadius: '50%',
-                  background: '#FF6B4A',
-                  boxShadow: '0 0 6px rgba(255, 107, 74, 0.6)',
-                  willChange: 'transform, opacity',
-                }}
-              />
-            ))}
-          </Box>
-        )}
+        {/* Flowing particles — only during scanning */}
+        <AnimatePresence>
+          {phase === 'scanning' && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.6 }}
+              style={{
+                position: 'absolute',
+                ...(vertical
+                  ? { left: '50%', top: -gapPx, bottom: -gapPx, width: 20, transform: 'translateX(-50%)' }
+                  : { top: '50%', left: -gapPx, right: -gapPx, height: 20, transform: 'translateY(-50%)' }),
+                overflow: 'hidden',
+                pointerEvents: 'none',
+              }}
+            >
+              {[0, 1, 2].map((i) => (
+                <motion.div
+                  key={i}
+                  animate={
+                    vertical
+                      ? { top: ['-3%', '103%'], opacity: [0, 1, 1, 0] }
+                      : { left: ['-3%', '103%'], opacity: [0, 1, 1, 0] }
+                  }
+                  transition={{
+                    duration: 2,
+                    delay: i * 0.6,
+                    repeat: Infinity,
+                    ease: 'linear',
+                  }}
+                  style={{
+                    position: 'absolute',
+                    ...(vertical
+                      ? { left: '50%', marginLeft: -3 }
+                      : { top: '50%', marginTop: -3 }),
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    background: '#FF6B4A',
+                    boxShadow: '0 0 6px rgba(255, 107, 74, 0.6)',
+                  }}
+                />
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </Box>
 
       {/* Stat — below the line */}
@@ -642,6 +651,13 @@ export function PipelineAnimation() {
             showScan={phase === 'scanning'}
             label="45 min raw footage"
           />
+          {/* Invisible spacer to match rally counter height on output side */}
+          <Typography
+            variant="caption"
+            sx={{ fontSize: '0.75rem', mt: 0.5, display: 'block', visibility: 'hidden' }}
+          >
+            &nbsp;
+          </Typography>
         </motion.div>
 
         {/* Connector */}
@@ -651,14 +667,11 @@ export function PipelineAnimation() {
           vertical={isMobile}
         />
 
-        {/* Output Stage */}
+        {/* Output Stage — frame always visible, content reveals after scanning */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
-          animate={{
-            opacity: outputVisible ? 1 : 0,
-            y: outputVisible ? 0 : 20,
-          }}
-          transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, delay: 0.2, ease: [0.22, 1, 0.36, 1] }}
           style={{ flex: 1, minWidth: 0 }}
         >
           <VideoFrame title="Highlights" />
@@ -667,15 +680,16 @@ export function PipelineAnimation() {
             staggerReveal
             revealed={outputVisible}
             label="4 min of action"
+            labelVisible={outputVisible}
           />
 
-          {/* Rally counter */}
+          {/* Rally counter — appears after segments */}
           <motion.div
             animate={{
               opacity: outputVisible ? 1 : 0,
-              y: outputVisible ? 0 : 10,
+              y: outputVisible ? 0 : 8,
             }}
-            transition={{ duration: 0.4, delay: outputVisible ? 0.5 : 0 }}
+            transition={{ duration: 0.4, delay: outputVisible ? 0.8 : 0 }}
             style={{ willChange: 'transform, opacity' }}
           >
             <Typography
