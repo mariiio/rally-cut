@@ -97,7 +97,17 @@ function WindowChrome({ title }: { title: string }) {
   );
 }
 
-function VideoFrame({ title }: { title: string }) {
+function VideoFrame({
+  title,
+  src,
+  webmSrc,
+  poster,
+}: {
+  title: string;
+  src?: string;
+  webmSrc?: string;
+  poster?: string;
+}) {
   return (
     <Box
       sx={{
@@ -120,38 +130,61 @@ function VideoFrame({ title }: { title: string }) {
           position: 'relative',
         }}
       >
-        {/* Subtle gradient for depth */}
-        <Box
-          sx={{
-            position: 'absolute',
-            inset: 0,
-            background:
-              'radial-gradient(ellipse at 50% 40%, rgba(255,255,255,0.03) 0%, transparent 70%)',
-          }}
-        />
-        {/* Play button */}
-        <Box
-          sx={{
-            width: 34,
-            height: 34,
-            borderRadius: '50%',
-            border: '2px solid rgba(255,255,255,0.15)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
+        {src ? (
           <Box
+            component="video"
+            autoPlay
+            loop
+            muted
+            playsInline
+            poster={poster}
             sx={{
-              width: 0,
-              height: 0,
-              borderTop: '7px solid transparent',
-              borderBottom: '7px solid transparent',
-              borderLeft: '11px solid rgba(255,255,255,0.2)',
-              ml: '2px',
+              position: 'absolute',
+              inset: 0,
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
             }}
-          />
-        </Box>
+          >
+            {webmSrc && <source src={webmSrc} type="video/webm" />}
+            <source src={src} type="video/mp4" />
+          </Box>
+        ) : (
+          <>
+            {/* Subtle gradient for depth */}
+            <Box
+              sx={{
+                position: 'absolute',
+                inset: 0,
+                background:
+                  'radial-gradient(ellipse at 50% 40%, rgba(255,255,255,0.03) 0%, transparent 70%)',
+              }}
+            />
+            {/* Play button placeholder */}
+            <Box
+              sx={{
+                width: 34,
+                height: 34,
+                borderRadius: '50%',
+                border: '2px solid rgba(255,255,255,0.15)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Box
+                sx={{
+                  width: 0,
+                  height: 0,
+                  borderTop: '7px solid transparent',
+                  borderBottom: '7px solid transparent',
+                  borderLeft: '11px solid rgba(255,255,255,0.2)',
+                  ml: '2px',
+                }}
+              />
+            </Box>
+          </>
+        )}
       </Box>
     </Box>
   );
@@ -605,12 +638,22 @@ export function PipelineAnimation() {
         }}
       >
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <VideoFrame title="Raw Match" />
+          <VideoFrame
+              title="Raw Match"
+              src="/hero/raw-match.mp4"
+              webmSrc="/hero/raw-match.webm"
+              poster="/hero/raw-match-poster.webp"
+            />
           <SegmentTimeline segments={INPUT_SEGMENTS} label="45 min raw footage" />
         </Box>
         <ProcessingConnector active={false} phase="complete" vertical={isMobile} />
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <VideoFrame title="Highlights" />
+          <VideoFrame
+              title="Highlights"
+              src="/hero/highlights.mp4"
+              webmSrc="/hero/highlights.webm"
+              poster="/hero/highlights-poster.webp"
+            />
           <SegmentTimeline
             segments={OUTPUT_SEGMENTS}
             label="4 min of action"
@@ -644,7 +687,12 @@ export function PipelineAnimation() {
           transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
           style={{ flex: 1, minWidth: 0 }}
         >
-          <VideoFrame title="Raw Match" />
+          <VideoFrame
+              title="Raw Match"
+              src="/hero/raw-match.mp4"
+              webmSrc="/hero/raw-match.webm"
+              poster="/hero/raw-match-poster.webp"
+            />
           <SegmentTimeline
             segments={INPUT_SEGMENTS}
             scanProgress={phase === 'scanning' ? scanProgress : phase === 'idle' ? 0 : 1}
@@ -674,7 +722,12 @@ export function PipelineAnimation() {
           transition={{ duration: 0.6, delay: 0.2, ease: [0.22, 1, 0.36, 1] }}
           style={{ flex: 1, minWidth: 0 }}
         >
-          <VideoFrame title="Highlights" />
+          <VideoFrame
+              title="Highlights"
+              src="/hero/highlights.mp4"
+              webmSrc="/hero/highlights.webm"
+              poster="/hero/highlights-poster.webp"
+            />
           <SegmentTimeline
             segments={OUTPUT_SEGMENTS}
             staggerReveal
