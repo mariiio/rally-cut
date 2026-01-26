@@ -42,6 +42,7 @@ import {
   type SessionType,
 } from '@/services/api';
 import {
+  AppHeader,
   PageHeader,
   VideoCard,
   VideoCardSkeleton,
@@ -256,7 +257,6 @@ export default function VideosPage() {
         overflow: 'auto',
         bgcolor: designTokens.colors.surface[0],
         color: 'text.primary',
-        py: 4,
         position: 'relative',
         '&::before': {
           content: '""',
@@ -270,37 +270,21 @@ export default function VideosPage() {
         },
       }}
     >
-      <Container maxWidth="lg" sx={{ position: 'relative' }}>
+      <AppHeader />
+      <Container maxWidth="lg" sx={{ position: 'relative', py: 4 }}>
         {/* Header */}
         <PageHeader
           icon={<VideoLibraryIcon />}
           title="Video Library"
           subtitle={totalVideos > 0 ? `${totalVideos} video${totalVideos !== 1 ? 's' : ''} in your library` : undefined}
           action={
-            <Stack direction="row" spacing={1.5}>
-              <Button
-                variant="contained"
-                startIcon={<CloudUploadIcon />}
-                onClick={() => setUploadModalOpen(true)}
-              >
-                Upload
-              </Button>
-              <Button
-                variant="outlined"
-                onClick={() => router.push('/sessions')}
-                sx={{
-                  borderColor: 'rgba(255, 255, 255, 0.2)',
-                  color: 'text.secondary',
-                  '&:hover': {
-                    borderColor: 'primary.main',
-                    color: 'primary.main',
-                    bgcolor: 'rgba(255, 107, 74, 0.08)',
-                  },
-                }}
-              >
-                Back to Sessions
-              </Button>
-            </Stack>
+            <Button
+              variant="contained"
+              startIcon={<CloudUploadIcon />}
+              onClick={() => setUploadModalOpen(true)}
+            >
+              Upload
+            </Button>
           }
         />
 

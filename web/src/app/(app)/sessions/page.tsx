@@ -58,6 +58,7 @@ import { isValidVideoFile } from '@/utils/fileHandlers';
 import { VolleyballProgress } from '@/components/VolleyballProgress';
 import { AddVideoModal } from '@/components/AddVideoModal';
 import {
+  AppHeader,
   PageHeader,
   SessionCard,
   SectionHeader,
@@ -385,7 +386,6 @@ export default function HomePage() {
         overflow: 'auto',
         bgcolor: designTokens.colors.surface[0],
         color: 'text.primary',
-        py: 4,
         position: 'relative',
         '&::before': {
           content: '""',
@@ -399,12 +399,13 @@ export default function HomePage() {
         },
       }}
     >
-      <Container maxWidth="lg" sx={{ position: 'relative' }}>
+      <AppHeader />
+      <Container maxWidth="lg" sx={{ position: 'relative', py: 4 }}>
         {/* Header */}
         <PageHeader
           icon={<SportsVolleyballIcon />}
-          title="RallyCut"
-          subtitle="Volleyball Video Analysis"
+          title="Dashboard"
+          subtitle="Your volleyball sessions"
           action={
             hasVideos && (
               <Button
