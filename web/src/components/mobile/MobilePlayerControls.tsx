@@ -32,6 +32,7 @@ export function MobilePlayerControls() {
     reloadCurrentMatch,
     videoUrl,
     isRallyEditingLocked,
+    setMatchStatus,
   } = useEditorStore();
 
   const isLocked = isRallyEditingLocked();
@@ -78,9 +79,15 @@ export function MobilePlayerControls() {
     }, 3000);
   }, [activeMatchId, reloadCurrentMatch]);
 
-  // Check video detection status on mount
+  // Check video detection status on mount and when match changes
   useEffect(() => {
     if (!activeMatchId) return;
+
+    // Reset detection UI state for the new match
+    setIsDetecting(false);
+    setDetectionStatus('');
+    setDetectionProgress(0);
+    setVideoDetectionStatus(null);
 
     const checkStatus = async () => {
       try {
@@ -115,6 +122,7 @@ export function MobilePlayerControls() {
 
     try {
       await triggerRallyDetection(activeMatchId);
+      setMatchStatus(activeMatchId, 'DETECTING');
       setDetectionStatus('Processing...');
       startPolling();
     } catch {
