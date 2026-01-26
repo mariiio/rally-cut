@@ -49,8 +49,7 @@ const tiers = [
 const features = [
   { name: 'AI Detections/month', basic: '2', pro: '15', elite: '50' },
   { name: 'Uploads/month', basic: '3', pro: '20', elite: '50' },
-  { name: 'Max video size', basic: '500 MB', pro: '2 GB', elite: '5 GB' },
-  { name: 'Max duration', basic: '15 min', pro: '45 min', elite: '90 min' },
+  { name: 'Max video', basic: '15 min (500 MB)', pro: '45 min (2 GB)', elite: '90 min (5 GB)' },
   { name: 'Storage cap', basic: '1 GB', pro: '20 GB', elite: '75 GB' },
   { name: 'Export quality', basic: '720p', pro: 'Original', elite: 'Original' },
   { name: 'No watermark', basic: false, pro: true, elite: true },
