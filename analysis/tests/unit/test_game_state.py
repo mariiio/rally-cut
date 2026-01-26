@@ -98,7 +98,7 @@ class TestSegmentMerging:
             GameStateResult(start_frame=60, end_frame=89, state=GameState.PLAY, confidence=0.88),
         ]
 
-        segments = cutter._get_segments_from_results(results, fps=30.0)
+        segments, _ = cutter._get_segments_from_results(results, fps=30.0)
 
         # Should have exactly 1 merged PLAY segment (after filtering)
         assert len(segments) == 1
@@ -118,7 +118,7 @@ class TestSegmentMerging:
             GameStateResult(start_frame=90, end_frame=120, state=GameState.NO_PLAY, confidence=0.88),
         ]
 
-        segments = cutter._get_segments_from_results(results, fps=30.0)
+        segments, _ = cutter._get_segments_from_results(results, fps=30.0)
 
         # Should have 1 play segment (NO_PLAY segments are filtered out)
         assert len(segments) == 1
@@ -129,8 +129,9 @@ class TestSegmentMerging:
         from rallycut.processing.cutter import VideoCutter
 
         cutter = VideoCutter()
-        segments = cutter._get_segments_from_results([], fps=30.0)
+        segments, suggested = cutter._get_segments_from_results([], fps=30.0)
         assert segments == []
+        assert suggested == []
 
     def test_single_play_result(self):
         """Test handling of two adjacent play results (minimum to pass filter)."""
@@ -144,7 +145,7 @@ class TestSegmentMerging:
             GameStateResult(start_frame=31, end_frame=60, state=GameState.PLAY, confidence=0.85),
         ]
 
-        segments = cutter._get_segments_from_results(results, fps=30.0)
+        segments, _ = cutter._get_segments_from_results(results, fps=30.0)
         assert len(segments) == 1
         assert segments[0].state == GameState.PLAY
 
@@ -162,7 +163,7 @@ class TestSegmentMerging:
             GameStateResult(start_frame=90, end_frame=149, state=GameState.PLAY, confidence=0.85),
         ]
 
-        segments = cutter._get_segments_from_results(results, fps=30.0)
+        segments, _ = cutter._get_segments_from_results(results, fps=30.0)
 
         # Should be merged into single segment (gap was short)
         assert len(segments) == 1
@@ -191,7 +192,7 @@ class TestSegmentMerging:
             GameStateResult(start_frame=390, end_frame=419, state=GameState.PLAY, confidence=0.82),
         ]
 
-        segments = cutter._get_segments_from_results(results, fps=30.0)
+        segments, _ = cutter._get_segments_from_results(results, fps=30.0)
 
         # Should be 2 separate segments (gap was too long)
         assert len(segments) == 2
@@ -217,7 +218,7 @@ class TestSegmentMerging:
             GameStateResult(start_frame=390, end_frame=419, state=GameState.PLAY, confidence=0.78),
         ]
 
-        segments = cutter._get_segments_from_results(results, fps=30.0)
+        segments, suggested = cutter._get_segments_from_results(results, fps=30.0)
 
         # Both segments should remain since both have 2+ windows
         # The first segment (40 frames = 1.33s) is below min_play_duration but
