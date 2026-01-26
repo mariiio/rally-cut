@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -35,8 +37,11 @@ from rich.progress import (
 
 from rallycut.core.config import get_config
 
-# 50 MB threshold for multipart uploads
-MULTIPART_THRESHOLD = 50 * 1024 * 1024
+# Multipart transfer tuning for large video files
+MULTIPART_THRESHOLD = 50 * 1024 * 1024  # 50 MB: switch to multipart above this
+MULTIPART_CHUNKSIZE = 25 * 1024 * 1024  # 25 MB: fewer parts than default 8 MB
+# Concurrent video transfers (HEAD checks + uploads/downloads)
+MAX_WORKERS = 4
 
 
 @dataclass
@@ -129,6 +134,9 @@ class DatasetBackup:
     ) -> PushResult:
         """Upload dataset metadata and videos to S3.
 
+        Videos are uploaded concurrently (4 workers) with per-video
+        dedup checks. boto3 upload_file handles multipart internally.
+
         Args:
             dataset_dir: Local dataset directory (with manifest.json, ground_truth.json, videos/).
             name: Dataset name used as S3 key prefix.
@@ -138,6 +146,7 @@ class DatasetBackup:
             PushResult with upload statistics.
         """
         result = PushResult()
+        lock = threading.Lock()
 
         manifest_path = dataset_dir / "manifest.json"
         ground_truth_path = dataset_dir / "ground_truth.json"
@@ -168,46 +177,47 @@ class DatasetBackup:
 
         transfer_config = boto3.s3.transfer.TransferConfig(
             multipart_threshold=MULTIPART_THRESHOLD,
+            multipart_chunksize=MULTIPART_CHUNKSIZE,
         )
 
-        for video in videos:
+        def _upload_one(video: dict[str, str]) -> None:
             content_hash = video["content_hash"]
             filename = video["filename"]
 
             try:
                 # Check if already uploaded (dedup by content hash)
                 if self._video_exists_remote(content_hash):
-                    result.skipped_videos += 1
-                    if progress and task_id is not None:
-                        progress.advance(task_id)
-                    continue
-
-                # Find the video file locally
-                local_path = self._find_video_locally(dataset_dir, content_hash, filename)
-                if local_path is None:
-                    result.errors.append(f"{filename}: not found locally")
-                    if progress and task_id is not None:
-                        progress.advance(task_id)
-                    continue
-
-                file_size = local_path.stat().st_size
-
-                self.s3.upload_file(
-                    str(local_path),
-                    self.bucket,
-                    self._video_key(content_hash),
-                    ExtraArgs={"StorageClass": "STANDARD_IA"},
-                    Config=transfer_config,
-                )
-
-                result.uploaded_videos += 1
-                result.uploaded_bytes += file_size
-
+                    with lock:
+                        result.skipped_videos += 1
+                else:
+                    # Find the video file locally
+                    local_path = self._find_video_locally(dataset_dir, content_hash, filename)
+                    if local_path is None:
+                        with lock:
+                            result.errors.append(f"{filename}: not found locally")
+                    else:
+                        file_size = local_path.stat().st_size
+                        self.s3.upload_file(
+                            str(local_path),
+                            self.bucket,
+                            self._video_key(content_hash),
+                            ExtraArgs={"StorageClass": "STANDARD_IA"},
+                            Config=transfer_config,
+                        )
+                        with lock:
+                            result.uploaded_videos += 1
+                            result.uploaded_bytes += file_size
             except Exception as e:
-                result.errors.append(f"{filename}: {e}")
+                with lock:
+                    result.errors.append(f"{filename}: {e}")
 
             if progress and task_id is not None:
                 progress.advance(task_id)
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+            futures = [pool.submit(_upload_one, v) for v in videos]
+            for future in as_completed(futures):
+                future.result()  # Propagate unexpected exceptions
 
         return result
 
@@ -219,8 +229,9 @@ class DatasetBackup:
     ) -> PullResult:
         """Download dataset metadata and videos from S3.
 
-        Videos are cached at ~/.cache/rallycut/evaluation/{content_hash}.mp4
-        and symlinked into the dataset's videos/ directory.
+        Videos are downloaded concurrently (4 workers), cached at
+        ~/.cache/rallycut/evaluation/{content_hash}.mp4, and symlinked
+        into the dataset's videos/ directory.
 
         Args:
             name: Dataset name to pull.
@@ -231,6 +242,7 @@ class DatasetBackup:
             PullResult with download statistics.
         """
         result = PullResult()
+        lock = threading.Lock()
 
         dataset_dir = output_dir / name
         videos_dir = dataset_dir / "videos"
@@ -260,9 +272,10 @@ class DatasetBackup:
 
         transfer_config = boto3.s3.transfer.TransferConfig(
             multipart_threshold=MULTIPART_THRESHOLD,
+            multipart_chunksize=MULTIPART_CHUNKSIZE,
         )
 
-        for video in videos:
+        def _download_one(video: dict[str, str]) -> None:
             content_hash = video["content_hash"]
             filename = video["filename"]
 
@@ -270,7 +283,8 @@ class DatasetBackup:
                 cache_path = self.cache_dir / f"{content_hash}.mp4"
 
                 if cache_path.exists():
-                    result.cached_videos += 1
+                    with lock:
+                        result.cached_videos += 1
                 else:
                     self.s3.download_file(
                         self.bucket,
@@ -278,20 +292,28 @@ class DatasetBackup:
                         str(cache_path),
                         Config=transfer_config,
                     )
-                    result.downloaded_videos += 1
-                    result.downloaded_bytes += cache_path.stat().st_size
+                    with lock:
+                        result.downloaded_videos += 1
+                        result.downloaded_bytes += cache_path.stat().st_size
 
-                # Symlink into dataset videos/ directory
-                link_path = videos_dir / filename
-                if link_path.exists() or link_path.is_symlink():
-                    link_path.unlink()
-                link_path.symlink_to(cache_path.resolve())
+                # Symlink into dataset videos/ directory (serialized via lock)
+                with lock:
+                    link_path = videos_dir / filename
+                    if link_path.exists() or link_path.is_symlink():
+                        link_path.unlink()
+                    link_path.symlink_to(cache_path.resolve())
 
             except Exception as e:
-                result.errors.append(f"{filename}: {e}")
+                with lock:
+                    result.errors.append(f"{filename}: {e}")
 
             if progress and task_id is not None:
                 progress.advance(task_id)
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+            futures = [pool.submit(_download_one, v) for v in videos]
+            for future in as_completed(futures):
+                future.result()  # Propagate unexpected exceptions
 
         return result
 
