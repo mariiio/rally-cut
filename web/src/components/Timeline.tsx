@@ -31,6 +31,7 @@ import {
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useCameraStore } from '@/stores/cameraStore';
+import { useAuthStore } from '@/stores/authStore';
 import { formatTimeShort, formatTime } from '@/utils/timeFormat';
 import { triggerRallyDetection, getDetectionStatus } from '@/services/api';
 import { ModelSelectDialog, ModelVariant } from './ModelSelectDialog';
@@ -119,6 +120,7 @@ export function Timeline() {
     startRallyRecording,
     stopRallyRecording,
     cancelRallyRecording,
+    setMatchStatus,
   } = useEditorStore();
 
   // Check if rally editing is locked (after confirmation)
@@ -134,6 +136,10 @@ export function Timeline() {
   const removeKeyframe = useCameraStore((state) => state.removeKeyframe);
   const setCameraEdit = useCameraStore((state) => state.setCameraEdit);
   const applyCameraEdits = usePlayerStore((state) => state.applyCameraEdits);
+
+  // Auth state for gating detection
+  const promptSignIn = useAuthStore((state) => state.promptSignIn);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
 
   // Get active match to access video status
   const activeMatch = getActiveMatch();
@@ -1184,11 +1190,16 @@ export function Timeline() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional sync on match change
     setVideoDetectionStatus(activeMatch?.status ?? null);
-    // If match is DETECTING, set up the detecting UI state
+    // Reset all detection UI state, then re-initialize if the new match is detecting
+    setDetectionProgress(0);
+    setDetectionResult(null);
+    setDetectionError(null);
     if (activeMatch?.status === 'DETECTING') {
       setIsDetecting(true);
       setDetectionStatus('Analyzing rallies...');
-      setDetectionError(null);
+    } else {
+      setIsDetecting(false);
+      setDetectionStatus(null);
     }
   }, [activeMatchId, activeMatch?.status]);
 
@@ -1231,6 +1242,13 @@ export function Timeline() {
   const handleModelSelect = async (model: ModelVariant) => {
     if (!activeMatchId) return;
 
+    // Require authentication for rally detection
+    if (!isAuthenticated) {
+      setShowModelSelect(false);
+      promptSignIn('Create an account to use AI rally detection');
+      return;
+    }
+
     setShowModelSelect(false);
     setIsDetecting(true);
     setDetectionStatus('Starting analysis...');
@@ -1239,7 +1257,8 @@ export function Timeline() {
 
     try {
       await triggerRallyDetection(activeMatchId, model);
-      // Detection started successfully
+      // Detection started successfully - update match status in store so it persists across navigation
+      setMatchStatus(activeMatchId, 'DETECTING');
       setDetectionStatus('Analyzing rallies...');
       startPolling();
     } catch (err) {

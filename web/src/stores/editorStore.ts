@@ -174,6 +174,7 @@ interface EditorState {
   setActiveMatch: (matchId: string) => void;
   renameMatch: (matchId: string, name: string) => void;
   renameSession: (name: string) => void;
+  setMatchStatus: (matchId: string, status: Match['status']) => void;
   getActiveMatch: () => Match | null;
   getAllRallies: () => Rally[];
   getRallyMatch: (rallyId: string) => Match | null;
@@ -992,6 +993,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       session: {
         ...state.session,
         name,
+      },
+    });
+  },
+
+  setMatchStatus: (matchId: string, status: Match['status']) => {
+    const state = get();
+    if (!state.session) return;
+
+    set({
+      session: {
+        ...state.session,
+        matches: state.session.matches.map((m) =>
+          m.id === matchId ? { ...m, status } : m
+        ),
       },
     });
   },
