@@ -52,25 +52,17 @@ function TrustBadge({ text }: { text: string }) {
 export function Hero() {
   const shouldReduceMotion = useReducedMotion();
 
-  const scrollToDemo = () => {
-    const element = document.querySelector('#demo');
-    if (element) {
-      element.scrollIntoView({ behavior: 'smooth' });
-    }
-  };
-
   const MotionBox = shouldReduceMotion ? Box : motion.div;
 
   return (
     <Box
       component="section"
       sx={{
-        minHeight: 'calc(100vh - 64px)',
+        minHeight: { xs: 'calc(100vh - 56px)', sm: 'calc(100vh - 64px)' },
         display: 'flex',
-        alignItems: 'center',
         position: 'relative',
         overflow: 'hidden',
-        py: { xs: 6, md: 8 },
+        py: { xs: 4, md: 5 },
       }}
     >
       {/* Animated background */}
@@ -95,7 +87,7 @@ export function Hero() {
                   fontWeight: 800,
                   lineHeight: 1.08,
                   letterSpacing: '-0.03em',
-                  mb: 3,
+                  mb: 2,
                   color: 'text.primary',
                 }}
               >
@@ -111,9 +103,9 @@ export function Hero() {
                 sx={{
                   color: 'text.secondary',
                   fontWeight: 400,
-                  mb: 4,
+                  mb: 2.5,
                   lineHeight: 1.6,
-                  fontSize: { xs: '1.05rem', md: '1.2rem' },
+                  fontSize: { xs: '0.95rem', md: '1.2rem' },
                 }}
               >
                 RallyCut uses AI to automatically detect rallies and remove dead time from your
@@ -123,69 +115,37 @@ export function Hero() {
 
             {/* CTA Section */}
             <MotionBox {...(!shouldReduceMotion && { variants: fadeInUp })}>
-              <Stack spacing={2} alignItems="center" sx={{ mb: 4 }}>
-                <Button
-                  component={Link}
-                  href="/sessions"
-                  variant="contained"
-                  size="large"
-                  sx={{
-                    px: 4,
-                    py: 1.75,
-                    fontSize: '1.1rem',
-                    fontWeight: 600,
-                    width: { xs: '100%', sm: 'auto' },
-                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                    boxShadow: '0 4px 20px rgba(255, 107, 74, 0.3)',
-                    '&:hover': {
-                      transform: 'translateY(-2px)',
-                      boxShadow: '0 8px 30px rgba(255, 107, 74, 0.4)',
-                    },
-                  }}
-                >
-                  Start Editing Free
-                </Button>
-                <Typography
-                  component="button"
-                  onClick={scrollToDemo}
-                  sx={{
-                    background: 'none',
-                    border: 'none',
-                    color: 'text.secondary',
-                    fontSize: '0.95rem',
-                    cursor: 'pointer',
-                    p: 0,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 0.5,
-                    transition: 'color 0.2s',
-                    '&:hover': {
-                      color: 'primary.main',
-                    },
-                  }}
-                >
-                  See how it works
-                  <Box
-                    component="span"
-                    sx={{
-                      display: 'inline-block',
-                      transition: 'transform 0.2s',
-                      '&:hover': { transform: 'translateX(4px)' },
-                    }}
-                  >
-                    →
-                  </Box>
-                </Typography>
-              </Stack>
+              <Button
+                component={Link}
+                href="/sessions"
+                variant="contained"
+                size="large"
+                sx={{
+                  px: 4,
+                  py: 1.75,
+                  mb: 2,
+                  fontSize: '1.1rem',
+                  fontWeight: 600,
+                  width: { xs: '100%', sm: 'auto' },
+                  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                  boxShadow: '0 4px 20px rgba(255, 107, 74, 0.3)',
+                  '&:hover': {
+                    transform: 'translateY(-2px)',
+                    boxShadow: '0 8px 30px rgba(255, 107, 74, 0.4)',
+                  },
+                }}
+              >
+                Start Editing Free
+              </Button>
             </MotionBox>
 
             {/* Trust Badges */}
             <MotionBox {...(!shouldReduceMotion && { variants: fadeInUp })}>
               <Stack
-                direction="row"
-                spacing={{ xs: 2, sm: 3 }}
+                direction={{ xs: 'column', sm: 'row' }}
+                spacing={{ xs: 0.75, sm: 3 }}
+                alignItems="center"
                 justifyContent="center"
-                sx={{ flexWrap: 'wrap' }}
               >
                 <TrustBadge text="No account required" />
                 <TrustBadge text="Works in your browser" />

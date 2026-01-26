@@ -572,7 +572,7 @@ export function PipelineAnimation() {
           flexDirection: { xs: 'column', md: 'row' },
           alignItems: { xs: 'stretch', md: 'center' },
           gap: 3,
-          mt: 6,
+          mt: { xs: 3, md: 4 },
         }}
       >
         <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -603,7 +603,7 @@ export function PipelineAnimation() {
           flexDirection: { xs: 'column', md: 'row' },
           alignItems: { xs: 'stretch', md: 'center' },
           gap: { xs: 2, md: 3 },
-          mt: 6,
+          mt: { xs: 3, md: 4 },
         }}
       >
         {/* Input Stage */}
