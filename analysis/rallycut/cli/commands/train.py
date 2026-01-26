@@ -699,4 +699,280 @@ def export_dataset(
     rprint("Next steps:")
     rprint(f"  1. [cyan]cd {dataset_dir}[/cyan]")
     rprint("  2. [cyan]git add manifest.json ground_truth.json[/cyan]")
-    rprint("  3. [cyan]rallycut train prepare --output ../training_data[/cyan]")
+    rprint("  3. [cyan]rallycut train push --name {name}[/cyan]  (back up to S3)")
+    rprint("  4. [cyan]rallycut train prepare --output ../training_data[/cyan]")
+
+
+@app.command()
+def push(
+    name: str = typer.Option(
+        ...,
+        "--name",
+        "-n",
+        help="Dataset name (must exist in training_datasets/)",
+    ),
+    datasets_dir: Path = typer.Option(
+        Path("training_datasets"),
+        "--datasets-dir",
+        help="Base directory containing datasets",
+    ),
+) -> None:
+    """Push a dataset to S3 for backup.
+
+    Uploads manifest.json, ground_truth.json, and video files.
+    Videos are deduplicated by content_hash -- only new videos are uploaded.
+
+    Example:
+        rallycut train push --name beach_v2
+    """
+    from rallycut.training.backup import DatasetBackup, make_transfer_progress
+
+    dataset_dir = datasets_dir / name
+
+    # Validate dataset exists
+    if not (dataset_dir / "manifest.json").exists():
+        rprint(f"[red]Dataset not found: {dataset_dir}/manifest.json[/red]")
+        rprint(f"Run [cyan]rallycut train export-dataset --name {name}[/cyan] first")
+        raise typer.Exit(1)
+
+    if not (dataset_dir / "ground_truth.json").exists():
+        rprint(f"[red]Missing: {dataset_dir}/ground_truth.json[/red]")
+        raise typer.Exit(1)
+
+    rprint("[bold]Pushing Dataset to S3[/bold]")
+    rprint()
+
+    try:
+        backup = DatasetBackup()
+    except ValueError as e:
+        rprint(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    # Load manifest for summary
+    with open(dataset_dir / "manifest.json") as f:
+        manifest = json.load(f)
+
+    video_count = len(manifest.get("videos", []))
+    rprint(f"  Dataset: [cyan]{name}[/cyan]")
+    rprint(f"  Videos: [cyan]{video_count}[/cyan]")
+    rprint(f"  Bucket: [cyan]{backup.bucket}[/cyan]")
+    rprint()
+
+    with make_transfer_progress() as progress:
+        result = backup.push_dataset(dataset_dir, name, progress=progress)
+
+    rprint()
+    rprint("[green]Push complete![/green]")
+    rprint(f"  Uploaded: [green]{result.uploaded_videos}[/green] videos ({_human_size(result.uploaded_bytes)})")
+    rprint(f"  Skipped: [yellow]{result.skipped_videos}[/yellow] videos (already in S3)")
+
+    if result.errors:
+        rprint()
+        rprint("[red]Errors:[/red]")
+        for err in result.errors:
+            rprint(f"  - {err}")
+
+
+@app.command()
+def pull(
+    name: str = typer.Option(
+        ...,
+        "--name",
+        "-n",
+        help="Dataset name to download from S3",
+    ),
+    output: Path = typer.Option(
+        Path("training_datasets"),
+        "--output",
+        "-o",
+        help="Output directory for dataset",
+    ),
+) -> None:
+    """Pull a dataset from S3.
+
+    Downloads manifest.json, ground_truth.json, and video files.
+    Videos are cached at ~/.cache/rallycut/evaluation/ and symlinked
+    into the dataset directory.
+
+    Example:
+        rallycut train pull --name beach_v2
+    """
+    from rallycut.training.backup import DatasetBackup, make_transfer_progress
+
+    rprint("[bold]Pulling Dataset from S3[/bold]")
+    rprint()
+
+    try:
+        backup = DatasetBackup()
+    except ValueError as e:
+        rprint(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    rprint(f"  Dataset: [cyan]{name}[/cyan]")
+    rprint(f"  Bucket: [cyan]{backup.bucket}[/cyan]")
+    rprint(f"  Output: [cyan]{output / name}[/cyan]")
+    rprint()
+
+    try:
+        with make_transfer_progress() as progress:
+            result = backup.pull_dataset(name, output, progress=progress)
+    except Exception as e:
+        rprint(f"[red]Pull failed: {e}[/red]")
+        raise typer.Exit(1)
+
+    rprint()
+    rprint("[green]Pull complete![/green]")
+    rprint(f"  Downloaded: [green]{result.downloaded_videos}[/green] videos ({_human_size(result.downloaded_bytes)})")
+    rprint(f"  Cached: [yellow]{result.cached_videos}[/yellow] videos (already local)")
+
+    if result.errors:
+        rprint()
+        rprint("[red]Errors:[/red]")
+        for err in result.errors:
+            rprint(f"  - {err}")
+
+    rprint()
+    rprint("Next steps:")
+    rprint(f"  [cyan]rallycut train restore --name {name}[/cyan]  (import into DB)")
+
+
+@app.command()
+def restore(
+    name: str = typer.Option(
+        ...,
+        "--name",
+        "-n",
+        help="Dataset name to restore",
+    ),
+    datasets_dir: Path = typer.Option(
+        Path("training_datasets"),
+        "--datasets-dir",
+        help="Base directory containing datasets",
+    ),
+    user_id: str | None = typer.Option(
+        None,
+        "--user-id",
+        help="User ID to assign videos to (auto-detects if omitted)",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Preview what would happen without making changes",
+    ),
+    upload_to_app_s3: bool = typer.Option(
+        False,
+        "--upload-to-app-s3",
+        help="Also upload videos to the app's MinIO/S3",
+    ),
+) -> None:
+    """Restore a dataset into the application database.
+
+    Inserts videos and rally annotations from a local dataset directory
+    into PostgreSQL, creating a session for web editor access.
+
+    Example:
+        rallycut train restore --name beach_v2
+        rallycut train restore --name beach_v2 --upload-to-app-s3
+        rallycut train restore --name beach_v2 --dry-run
+    """
+    from rallycut.training.restore import restore_dataset_to_db
+
+    dataset_dir = datasets_dir / name
+
+    if not (dataset_dir / "manifest.json").exists():
+        rprint(f"[red]Dataset not found: {dataset_dir}/manifest.json[/red]")
+        rprint(f"Run [cyan]rallycut train pull --name {name}[/cyan] first")
+        raise typer.Exit(1)
+
+    rprint("[bold]Restoring Dataset to Database[/bold]")
+    rprint()
+
+    try:
+        result = restore_dataset_to_db(
+            dataset_dir=dataset_dir,
+            name=name,
+            user_id=user_id,
+            dry_run=dry_run,
+            upload_to_app_s3=upload_to_app_s3,
+        )
+    except Exception as e:
+        rprint(f"[red]Restore failed: {e}[/red]")
+        raise typer.Exit(1)
+
+    if dry_run:
+        return
+
+    rprint()
+    rprint("[green]Restore complete![/green]")
+    rprint(f"  Videos inserted: [green]{result.videos_inserted}[/green]")
+    rprint(f"  Videos skipped: [yellow]{result.videos_skipped}[/yellow] (already in DB)")
+    rprint(f"  Rallies inserted: [green]{result.rallies_inserted}[/green]")
+    rprint(f"  Session: [cyan]{result.session_created}[/cyan]")
+
+    if result.errors:
+        rprint()
+        rprint("[red]Errors:[/red]")
+        for err in result.errors:
+            rprint(f"  - {err}")
+
+
+@app.command("list-remote")
+def list_remote() -> None:
+    """List datasets backed up in S3.
+
+    Example:
+        rallycut train list-remote
+    """
+    from rallycut.training.backup import DatasetBackup
+
+    try:
+        backup = DatasetBackup()
+    except ValueError as e:
+        rprint(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    rprint("[bold]Remote Datasets[/bold]")
+    rprint(f"  Bucket: [cyan]{backup.bucket}[/cyan]")
+    rprint()
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        progress.add_task("Listing datasets...", total=None)
+        datasets = backup.list_datasets()
+
+    if not datasets:
+        rprint("[yellow]No datasets found in S3[/yellow]")
+        return
+
+    table = Table(title="Backed-up Datasets")
+    table.add_column("Name", style="cyan")
+    table.add_column("Videos", justify="right", style="green")
+    table.add_column("Rallies", justify="right", style="green")
+    table.add_column("Duration", justify="right")
+    table.add_column("Created")
+
+    for ds in datasets:
+        duration = f"{ds.total_duration_min:.1f} min" if ds.total_duration_min else "-"
+        created = ds.created[:10] if ds.created else "-"
+        table.add_row(
+            ds.name,
+            str(ds.video_count),
+            str(ds.rally_count),
+            duration,
+            created,
+        )
+
+    console.print(table)
+
+
+def _human_size(size_bytes: int) -> str:
+    """Format bytes as human-readable size."""
+    size_f = float(size_bytes)
+    for unit in ["B", "KB", "MB", "GB"]:
+        if size_f < 1024:
+            return f"{size_f:.1f} {unit}"
+        size_f /= 1024
+    return f"{size_f:.1f} TB"
