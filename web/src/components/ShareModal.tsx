@@ -97,8 +97,10 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
       setShareInfo(null);
       setError(null);
       setCopied(false);
+      setRemovingMember(null);
       setConfirmingRemove(null);
       setConfirmingDelete(false);
+      setDeleting(false);
     }
   }, [open]);
 
