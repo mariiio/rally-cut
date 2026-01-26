@@ -170,73 +170,73 @@ export function VideoCard({
           </Box>
         )}
 
-        {/* Status badge */}
-        {isProcessing && (
-          <Chip
-            icon={<HourglassEmptyIcon sx={{ fontSize: 14 }} />}
-            label="Processing"
-            size="small"
+        {/* Top-left badges */}
+        {(isProcessing || isError || sessionTag) && (
+          <Box
             sx={{
               position: 'absolute',
               top: 8,
               left: 8,
-              bgcolor: 'rgba(59, 130, 246, 0.9)',
-              color: 'white',
-              fontSize: '0.7rem',
-              fontWeight: 600,
-              height: 24,
-              backdropFilter: 'blur(4px)',
-              '& .MuiChip-icon': {
-                color: 'white',
-              },
-            }}
-          />
-        )}
-
-        {isError && (
-          <Chip
-            icon={<ErrorOutlineIcon sx={{ fontSize: 14 }} />}
-            label="Error"
-            size="small"
-            sx={{
-              position: 'absolute',
-              top: 8,
-              left: 8,
-              bgcolor: 'rgba(239, 68, 68, 0.9)',
-              color: 'white',
-              fontSize: '0.7rem',
-              fontWeight: 600,
-              height: 24,
-              backdropFilter: 'blur(4px)',
-              '& .MuiChip-icon': {
-                color: 'white',
-              },
-            }}
-          />
-        )}
-
-        {/* Session tag */}
-        {sessionTag && (
-          <Chip
-            label={sessionTag}
-            size="small"
-            sx={{
-              position: 'absolute',
-              top: 8,
-              left: 8,
-              bgcolor: 'rgba(0, 212, 170, 0.9)',
-              color: 'white',
-              fontSize: '0.65rem',
-              fontWeight: 600,
-              height: 22,
-              backdropFilter: 'blur(4px)',
+              display: 'flex',
+              gap: 0.5,
               maxWidth: 'calc(100% - 16px)',
-              '& .MuiChip-label': {
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              },
             }}
-          />
+          >
+            {sessionTag && (
+              <Chip
+                label={sessionTag}
+                size="small"
+                sx={{
+                  bgcolor: 'rgba(0, 212, 170, 0.9)',
+                  color: 'white',
+                  fontSize: '0.65rem',
+                  fontWeight: 600,
+                  height: 22,
+                  backdropFilter: 'blur(4px)',
+                  '& .MuiChip-label': {
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  },
+                }}
+              />
+            )}
+            {isProcessing && (
+              <Chip
+                icon={<HourglassEmptyIcon sx={{ fontSize: 14 }} />}
+                label="Processing"
+                size="small"
+                sx={{
+                  bgcolor: 'rgba(59, 130, 246, 0.9)',
+                  color: 'white',
+                  fontSize: '0.7rem',
+                  fontWeight: 600,
+                  height: 24,
+                  backdropFilter: 'blur(4px)',
+                  '& .MuiChip-icon': {
+                    color: 'white',
+                  },
+                }}
+              />
+            )}
+            {isError && (
+              <Chip
+                icon={<ErrorOutlineIcon sx={{ fontSize: 14 }} />}
+                label="Error"
+                size="small"
+                sx={{
+                  bgcolor: 'rgba(239, 68, 68, 0.9)',
+                  color: 'white',
+                  fontSize: '0.7rem',
+                  fontWeight: 600,
+                  height: 24,
+                  backdropFilter: 'blur(4px)',
+                  '& .MuiChip-icon': {
+                    color: 'white',
+                  },
+                }}
+              />
+            )}
+          </Box>
         )}
 
         {/* Duration badge */}
