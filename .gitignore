@@ -33,6 +33,7 @@ weights/
 *.mp4
 *.MOV
 !test_*.mp4
+!web/public/hero/*.mp4
 
 # OS
 .DS_Store
