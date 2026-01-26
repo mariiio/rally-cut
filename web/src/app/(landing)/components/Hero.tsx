@@ -108,8 +108,26 @@ export function Hero() {
                   fontSize: { xs: '0.95rem', md: '1.2rem' },
                 }}
               >
-                RallyCut uses AI to automatically detect rallies and remove dead time from your
-                volleyball videos. Create highlight reels in minutes, no editing skills required.
+                Upload your volleyball match and let{' '}
+                <Box
+                  component="span"
+                  sx={{
+                    fontWeight: 700,
+                    fontSize: '1.1em',
+                    letterSpacing: '0.04em',
+                    color: 'primary.light',
+                    animation: 'aiBreathe 5s ease-in-out infinite',
+                    '@keyframes aiBreathe': {
+                      '0%, 100%': { opacity: 0.7 },
+                      '50%': { opacity: 1 },
+                    },
+                  }}
+                >
+                  AI
+                </Box>{' '}
+                cut the dead time.
+                <br />
+                Get a clean highlight reel with every rally, ready to share.
               </Typography>
             </MotionBox>
 
@@ -147,9 +165,9 @@ export function Hero() {
                 alignItems="center"
                 justifyContent="center"
               >
-                <TrustBadge text="No account required" />
+                <TrustBadge text="No editing skills needed" />
                 <TrustBadge text="Works in your browser" />
-                <TrustBadge text="Free tier available" />
+                <TrustBadge text="Indoor & beach volleyball" />
               </Stack>
             </MotionBox>
           </Box>

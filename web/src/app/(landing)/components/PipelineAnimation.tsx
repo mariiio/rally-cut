@@ -352,11 +352,29 @@ function ProcessingConnector({
         }}
       >
         <motion.div
-          animate={active && phase === 'scanning' ? { rotate: 360 } : {}}
-          transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
+          animate={
+            phase === 'scanning'
+              ? { rotate: [0, 15, -15, 0], scale: [1, 1.2, 1, 1.15, 1] }
+              : active
+                ? { scale: [1, 1.1, 1] }
+                : {}
+          }
+          transition={
+            phase === 'scanning'
+              ? { duration: 1.5, repeat: Infinity, ease: 'easeInOut' }
+              : active
+                ? { duration: 2, repeat: Infinity, ease: 'easeInOut' }
+                : {}
+          }
+          style={{ display: 'flex' }}
         >
           <AutoAwesomeIcon
-            sx={{ fontSize: 16, color: active ? 'primary.main' : 'text.disabled' }}
+            sx={{
+              fontSize: 16,
+              color: active ? 'primary.main' : 'text.disabled',
+              filter: active ? 'drop-shadow(0 0 3px rgba(255,107,74,0.5))' : 'none',
+              transition: 'filter 0.3s',
+            }}
           />
         </motion.div>
         <Typography
@@ -573,7 +591,7 @@ export function PipelineAnimation() {
           alignItems: { xs: 'stretch', md: 'center' },
           gap: 3,
           mt: { xs: 3, md: 4 },
-          maxWidth: { md: 880 },
+          maxWidth: { md: 1080 },
           mx: 'auto',
         }}
       >
@@ -606,7 +624,7 @@ export function PipelineAnimation() {
           alignItems: { xs: 'stretch', md: 'center' },
           gap: { xs: 2, md: 3 },
           mt: { xs: 3, md: 4 },
-          maxWidth: { md: 880 },
+          maxWidth: { md: 1080 },
           mx: 'auto',
         }}
       >
