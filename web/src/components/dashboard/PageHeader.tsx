@@ -3,6 +3,7 @@
 import { Box, Stack, Typography } from '@mui/material';
 import { ReactNode } from 'react';
 import { designTokens } from '@/app/theme';
+import { IconBox } from '@/components/IconBox';
 
 interface PageHeaderProps {
   icon: ReactNode;
@@ -26,25 +27,16 @@ export function PageHeader({ icon, title, subtitle, action, gradient = true }: P
       }}
     >
       <Stack direction="row" alignItems="center" spacing={2}>
-        <Box
+        <IconBox
+          icon={icon}
+          size="lg"
           sx={{
-            width: 48,
-            height: 48,
-            borderRadius: 2,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'rgba(255, 107, 74, 0.15)',
-            border: '1px solid rgba(255, 107, 74, 0.2)',
+            border: `1px solid ${designTokens.alpha.primary[20]}`,
             '& svg': {
-              fontSize: 28,
-              color: 'primary.main',
-              filter: 'drop-shadow(0 2px 8px rgba(255, 107, 74, 0.4))',
+              filter: `drop-shadow(0 2px 8px ${designTokens.alpha.primary[30]})`,
             },
           }}
-        >
-          {icon}
-        </Box>
+        />
         <Box>
           <Typography
             variant="h4"

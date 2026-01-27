@@ -15,6 +15,7 @@ import {
 } from '@/types/camera';
 import { interpolateCameraState } from '@/utils/cameraInterpolation';
 import { syncService } from '@/services/syncService';
+import { STORAGE_KEYS } from '@/constants/storageKeys';
 
 // Lazy reference to editor store to avoid circular dependency
 // The store will be accessed at runtime when pushHistory is called
@@ -294,7 +295,7 @@ export const useCameraStore = create<CameraStoreState>()(
       set({ handheldPreset: preset });
       // Persist to localStorage
       if (typeof window !== 'undefined') {
-        localStorage.setItem('rallycut-handheld-preset', preset);
+        localStorage.setItem(STORAGE_KEYS.HANDHELD_PRESET, preset);
       }
     },
 
@@ -523,7 +524,7 @@ export const selectHandheldPreset = (state: CameraStoreState) => state.handheldP
 
 // Initialize handheld preset from localStorage on client side
 if (typeof window !== 'undefined') {
-  const saved = localStorage.getItem('rallycut-handheld-preset');
+  const saved = localStorage.getItem(STORAGE_KEYS.HANDHELD_PRESET);
   if (saved && ['OFF', 'NATURAL'].includes(saved)) {
     useCameraStore.setState({ handheldPreset: saved as HandheldPreset });
   }

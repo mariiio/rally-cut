@@ -3,16 +3,28 @@
  */
 
 import { getVisitorId } from '@/utils/visitorId';
+import { getAuthToken } from '@/services/authToken';
 import type { RallyCameraEdit } from '@/types/camera';
+import { createRallyId } from '@/utils/rallyId';
+import { mapApiKeyframes } from '@/utils/cameraKeyframe';
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
 /**
- * Get default headers including X-Visitor-Id for user identification.
+ * Get default headers including auth token and/or X-Visitor-Id.
+ * JWT Authorization header takes precedence on the server side.
+ * X-Visitor-Id is still sent for backward compatibility and anonymous fallback.
  */
 export function getHeaders(contentType?: string): HeadersInit {
   const headers: HeadersInit = {};
 
+  // Add JWT token if authenticated
+  const authToken = getAuthToken();
+  if (authToken) {
+    headers['Authorization'] = `Bearer ${authToken}`;
+  }
+
+  // Always send visitor ID for backward compat / anonymous fallback
   const visitorId = getVisitorId();
   if (visitorId) {
     headers['X-Visitor-Id'] = visitorId;
@@ -167,7 +179,7 @@ function apiRallyToFrontend(apiRally: ApiRally, videoId: string, fps: number): R
   const duration = endTime - startTime;
 
   return {
-    id: `${videoId}_rally_${apiRally.order + 1}`,
+    id: createRallyId(videoId, apiRally.order + 1),
     _backendId: apiRally.id,
     start_time: startTime,
     end_time: endTime,
@@ -234,7 +246,7 @@ function apiHighlightToFrontend(apiHighlight: ApiHighlight): HighlightWithBacken
       // Map API rally IDs to frontend format
       // We need the video ID to construct the frontend rally ID
       if (hr.rally) {
-        const frontendId = `${hr.rally.videoId}_rally_${hr.rally.order + 1}`;
+        const frontendId = createRallyId(hr.rally.videoId, hr.rally.order + 1);
         rallyBackendIds[frontendId] = hr.id; // Store highlightRally ID
         return frontendId;
       }
@@ -286,17 +298,9 @@ function extractCameraEdits(apiSession: ApiSession): CameraEditMap {
   for (const video of apiSession.videos) {
     for (const rally of video.rallies) {
       if (rally.cameraEdit && rally.cameraEdit.enabled) {
-        const frontendRallyId = `${video.id}_rally_${rally.order + 1}`;
+        const frontendRallyId = createRallyId(video.id, rally.order + 1);
         const aspectRatio = rally.cameraEdit.aspectRatio;
-        const keyframes = rally.cameraEdit.keyframes.map(kf => ({
-          id: kf.id,
-          timeOffset: kf.timeOffset,
-          positionX: kf.positionX,
-          positionY: kf.positionY,
-          zoom: kf.zoom,
-          rotation: kf.rotation ?? 0,
-          easing: kf.easing,
-        }));
+        const keyframes = mapApiKeyframes(rally.cameraEdit.keyframes);
         // Put keyframes under the correct aspect ratio key (new format)
         result[frontendRallyId] = {
           enabled: rally.cameraEdit.enabled,
@@ -744,7 +748,7 @@ export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEd
     const duration = endTime - startTime;
 
     return {
-      id: `${videoId}_rally_${apiRally.order + 1}`,
+      id: createRallyId(videoId, apiRally.order + 1),
       _backendId: apiRally.id,
       start_time: startTime,
       end_time: endTime,
@@ -760,17 +764,9 @@ export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEd
   const cameraEdits: CameraEditMap = {};
   for (const rally of data.video.rallies) {
     if (rally.cameraEdit && rally.cameraEdit.enabled) {
-      const frontendRallyId = `${videoId}_rally_${rally.order + 1}`;
+      const frontendRallyId = createRallyId(videoId, rally.order + 1);
       const aspectRatio = rally.cameraEdit.aspectRatio;
-      const keyframes = rally.cameraEdit.keyframes.map(kf => ({
-        id: kf.id,
-        timeOffset: kf.timeOffset,
-        positionX: kf.positionX,
-        positionY: kf.positionY,
-        zoom: kf.zoom,
-        rotation: kf.rotation ?? 0,
-        easing: kf.easing,
-      }));
+      const keyframes = mapApiKeyframes(rally.cameraEdit.keyframes);
       // Put keyframes under the correct aspect ratio key (new format)
       cameraEdits[frontendRallyId] = {
         enabled: rally.cameraEdit.enabled,
@@ -808,7 +804,7 @@ export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEd
   // Build a map of backend rally IDs to frontend rally IDs for this video
   const backendToFrontendRallyId: Record<string, string> = {};
   for (const rally of data.video.rallies) {
-    backendToFrontendRallyId[rally.id] = `${videoId}_rally_${rally.order + 1}`;
+    backendToFrontendRallyId[rally.id] = createRallyId(videoId, rally.order + 1);
   }
 
   const highlights: Highlight[] = data.highlights.map((apiHighlight) => {
@@ -1110,7 +1106,7 @@ export async function getCurrentUser(): Promise<UserResponse> {
 }
 
 // Update current user (e.g., name)
-export async function updateCurrentUser(data: { name?: string }): Promise<UserResponse> {
+export async function updateCurrentUser(data: { name?: string; avatarUrl?: string | null }): Promise<UserResponse> {
   const response = await fetch(`${API_BASE_URL}/v1/me`, {
     method: 'PATCH',
     headers: getHeaders('application/json'),

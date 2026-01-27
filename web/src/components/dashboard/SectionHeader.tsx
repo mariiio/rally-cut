@@ -2,6 +2,8 @@
 
 import { Box, Chip, Stack, Typography } from '@mui/material';
 import { ReactNode } from 'react';
+import { IconBox } from '@/components/IconBox';
+import { designTokens } from '@/app/designTokens';
 
 interface SectionHeaderProps {
   icon?: ReactNode;
@@ -12,12 +14,9 @@ interface SectionHeaderProps {
 }
 
 export function SectionHeader({ icon, title, count, action, color = 'primary' }: SectionHeaderProps) {
-  const iconBg = color === 'primary'
-    ? 'rgba(255, 107, 74, 0.15)'
-    : 'rgba(0, 212, 170, 0.15)';
   const countBg = color === 'primary'
-    ? 'rgba(255, 107, 74, 0.2)'
-    : 'rgba(0, 212, 170, 0.2)';
+    ? designTokens.alpha.primary[20]
+    : designTokens.alpha.secondary[20];
   const countColor = color === 'primary' ? 'primary.main' : 'secondary.main';
 
   return (
@@ -28,25 +27,7 @@ export function SectionHeader({ icon, title, count, action, color = 'primary' }:
       sx={{ mb: 2.5 }}
     >
       <Stack direction="row" alignItems="center" spacing={1.5}>
-        {icon && (
-          <Box
-            sx={{
-              width: 32,
-              height: 32,
-              borderRadius: 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              bgcolor: iconBg,
-              '& svg': {
-                fontSize: 18,
-                color: color === 'primary' ? 'primary.main' : 'secondary.main',
-              },
-            }}
-          >
-            {icon}
-          </Box>
-        )}
+        {icon && <IconBox icon={icon} color={color} size="sm" />}
         <Typography
           variant="subtitle1"
           fontWeight={600}

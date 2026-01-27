@@ -21,8 +21,8 @@ import {
   DialogActions,
   Button,
   TextField,
+  Chip,
 } from '@mui/material';
-import SportsVolleyballIcon from '@mui/icons-material/SportsVolleyball';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
 import RestoreIcon from '@mui/icons-material/Restore';
@@ -33,14 +33,16 @@ import MoreVertIcon from '@mui/icons-material/MoreVert';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
-import DiamondIcon from '@mui/icons-material/Diamond';
-import Chip from '@mui/material/Chip';
 import { useEditorStore } from '@/stores/editorStore';
 import { useUploadStore } from '@/stores/uploadStore';
 import { useTierStore } from '@/stores/tierStore';
 import { isValidVideoFile } from '@/utils/fileHandlers';
 import { deleteSession, updateSession } from '@/services/api';
 import { designTokens } from '@/app/theme';
+import { useMenuAnchor } from '@/hooks/useMenuAnchor';
+import { BrandLogo } from './BrandLogo';
+import { TierBadge } from './TierBadge';
+import { UserMenu } from './UserMenu';
 import { ConfirmDialog } from './ConfirmDialog';
 import { SyncStatus } from './SyncStatus';
 import { AddVideoModal } from './AddVideoModal';
@@ -55,7 +57,7 @@ export function EditorHeader() {
   const [showResetDialog, setShowResetDialog] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
-  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  const optionsMenu = useMenuAnchor();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [editingName, setEditingName] = useState(false);
@@ -113,16 +115,8 @@ export function EditorHeader() {
   const isMac = typeof navigator !== 'undefined' && navigator.platform.includes('Mac');
   const modKey = isMac ? '⌘' : 'Ctrl';
 
-  const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
-    setMenuAnchor(event.currentTarget);
-  };
-
-  const handleMenuClose = () => {
-    setMenuAnchor(null);
-  };
-
   const handleDeleteClick = () => {
-    handleMenuClose();
+    optionsMenu.close();
     setShowDeleteDialog(true);
   };
 
@@ -198,47 +192,10 @@ export function EditorHeader() {
         }}
       >
         {/* Brand - Clickable to go home */}
-        <Tooltip title={singleVideoMode ? 'Back to videos' : 'Back to home'}>
-          <Stack
-            direction="row"
-            alignItems="center"
-            spacing={1}
-            onClick={() => router.push(singleVideoMode ? '/videos' : '/sessions')}
-            sx={{
-              minWidth: 'fit-content',
-              cursor: 'pointer',
-              borderRadius: 1,
-              px: 1,
-              py: 0.5,
-              mx: -1,
-              transition: 'background-color 0.2s',
-              '&:hover': {
-                bgcolor: 'action.hover',
-              },
-            }}
-          >
-            <SportsVolleyballIcon
-              sx={{
-                fontSize: 28,
-                color: 'primary.main',
-                filter: 'drop-shadow(0 2px 4px rgba(255, 107, 74, 0.3))',
-              }}
-            />
-            <Typography
-              variant="h6"
-              sx={{
-                fontWeight: 700,
-                background: designTokens.gradients.primary,
-                backgroundClip: 'text',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                letterSpacing: '-0.02em',
-              }}
-            >
-              RallyCut
-            </Typography>
-          </Stack>
-        </Tooltip>
+        <BrandLogo
+          onClick={() => router.push(singleVideoMode ? '/videos' : '/sessions')}
+          tooltip={singleVideoMode ? 'Back to videos' : 'Back to home'}
+        />
 
         <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
 
@@ -327,22 +284,10 @@ export function EditorHeader() {
 
               {/* Tier badge */}
               {isPaidTier && (
-                <Chip
-                  icon={<DiamondIcon sx={{ fontSize: 14 }} />}
-                  label={userTier === 'ELITE' ? 'Elite' : 'Pro'}
-                  size="small"
-                  variant="outlined"
-                  sx={{
-                    ml: 1,
-                    height: 24,
-                    borderColor: 'rgba(255, 209, 102, 0.5)',
-                    color: designTokens.colors.tertiary.main,
-                    fontWeight: 600,
-                    fontSize: '0.75rem',
-                    '& .MuiChip-icon': {
-                      color: designTokens.colors.tertiary.main,
-                    },
-                  }}
+                <TierBadge
+                  tier={userTier === 'ELITE' ? 'ELITE' : 'PRO'}
+                  size="medium"
+                  sx={{ ml: 1 }}
                 />
               )}
 
@@ -440,12 +385,15 @@ export function EditorHeader() {
         <Tooltip title="Options">
           <IconButton
             size="small"
-            onClick={handleMenuOpen}
+            onClick={optionsMenu.open}
             sx={{ color: 'text.secondary' }}
           >
             <MoreVertIcon fontSize="small" />
           </IconButton>
         </Tooltip>
+
+        {/* Auth UI */}
+        <UserMenu compact tier={userTier} />
       </Box>
 
       {/* Hidden file input */}
@@ -509,9 +457,9 @@ export function EditorHeader() {
 
       {/* Options Menu */}
       <Menu
-        anchorEl={menuAnchor}
-        open={Boolean(menuAnchor)}
-        onClose={handleMenuClose}
+        anchorEl={optionsMenu.anchor}
+        open={optionsMenu.isOpen}
+        onClose={optionsMenu.close}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
         transformOrigin={{ vertical: 'top', horizontal: 'right' }}
         slotProps={{
@@ -530,7 +478,7 @@ export function EditorHeader() {
           sx={{
             color: 'error.main',
             '&:hover': {
-              bgcolor: 'rgba(239, 68, 68, 0.1)',
+              bgcolor: designTokens.alpha.error[10],
             },
           }}
         >

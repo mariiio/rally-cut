@@ -135,7 +135,7 @@ export function VideoCard({
           sx={{
             position: 'absolute',
             inset: 0,
-            background: 'rgba(0, 0, 0, 0.3)',
+            background: designTokens.alpha.black[30],
             opacity: 0,
             transition: 'opacity 0.2s ease',
             pointerEvents: 'none',

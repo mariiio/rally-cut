@@ -121,7 +121,7 @@ export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerPro
       <Box
         sx={{
           background: 'rgba(255, 255, 255, 0.03)',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+          borderBottom: `1px solid ${designTokens.alpha.white[8]}`,
           py: 0.5,
           px: 2,
           display: 'flex',
@@ -162,7 +162,7 @@ export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerPro
             p: 0.25,
             '&:hover': {
               color: 'text.secondary',
-              bgcolor: 'rgba(255, 255, 255, 0.05)',
+              bgcolor: designTokens.alpha.white[5],
             },
           }}
           aria-label="Dismiss"
@@ -185,10 +185,10 @@ export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerPro
     <Box
       sx={{
         background: isUrgent
-          ? 'linear-gradient(90deg, rgba(255, 107, 74, 0.15) 0%, rgba(255, 209, 102, 0.1) 100%)'
+          ? `linear-gradient(90deg, ${designTokens.alpha.primary[15]} 0%, rgba(255, 209, 102, 0.1) 100%)`
           : 'linear-gradient(90deg, rgba(255, 209, 102, 0.1) 0%, rgba(0, 212, 170, 0.05) 100%)',
         borderBottom: '1px solid',
-        borderColor: isUrgent ? 'rgba(255, 107, 74, 0.3)' : 'rgba(255, 209, 102, 0.2)',
+        borderColor: isUrgent ? designTokens.alpha.primary[30] : 'rgba(255, 209, 102, 0.2)',
         py: 0.75,
         px: 2,
         display: 'flex',
@@ -204,7 +204,7 @@ export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerPro
           label={timeLabel}
           size="small"
           sx={{
-            bgcolor: isUrgent ? 'rgba(255, 107, 74, 0.2)' : 'rgba(255, 209, 102, 0.2)',
+            bgcolor: isUrgent ? designTokens.alpha.primary[20] : 'rgba(255, 209, 102, 0.2)',
             color: isUrgent ? designTokens.colors.tertiary.dark : designTokens.colors.tertiary.main,
             fontWeight: 600,
             fontSize: '0.7rem',
@@ -276,7 +276,7 @@ export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerPro
             p: 0.5,
             '&:hover': {
               color: 'text.secondary',
-              bgcolor: 'rgba(255, 255, 255, 0.05)',
+              bgcolor: designTokens.alpha.white[5],
             },
           }}
           aria-label="Dismiss"

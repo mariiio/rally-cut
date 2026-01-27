@@ -68,7 +68,7 @@ export function EmptyState({
           borderRadius: '50%',
           background: `linear-gradient(135deg, ${designTokens.colors.surface[2]} 0%, ${designTokens.colors.surface[1]} 100%)`,
           border: '2px dashed',
-          borderColor: 'rgba(255, 107, 74, 0.3)',
+          borderColor: designTokens.alpha.primary[30],
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -77,7 +77,7 @@ export function EmptyState({
             animation: 'pulse 3s ease-in-out infinite',
             '@keyframes pulse': {
               '0%, 100%': {
-                borderColor: 'rgba(255, 107, 74, 0.3)',
+                borderColor: designTokens.alpha.primary[30],
                 transform: 'scale(1)',
               },
               '50%': {
@@ -92,7 +92,7 @@ export function EmptyState({
           sx={{
             fontSize: { xs: 48, md: 56 },
             color: 'primary.main',
-            filter: 'drop-shadow(0 4px 12px rgba(255, 107, 74, 0.3))',
+            filter: `drop-shadow(0 4px 12px ${designTokens.alpha.primary[30]})`,
           }}
         />
       </Box>

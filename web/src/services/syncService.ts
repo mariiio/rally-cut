@@ -15,10 +15,11 @@ import { API_BASE_URL, getHeaders } from './api';
 import type { Rally, Highlight } from '@/types/rally';
 import { useTierStore } from '@/stores/tierStore';
 import { useCameraStore } from '@/stores/cameraStore';
+import { STORAGE_KEYS } from '@/constants/storageKeys';
+import { mapSyncKeyframes } from '@/utils/cameraKeyframe';
 
 // Sync configuration
 const SYNC_DEBOUNCE_MS = 5000; // Sync 5 seconds after last change
-const STORAGE_KEY_PREFIX = 'rallycut_sync_meta_';
 
 interface SyncMeta {
   lastSyncAt: number;
@@ -215,23 +216,6 @@ class SyncService {
       // Collect rallies from all matches, using current active match's edited rallies
       const cameraEdits = useCameraStore.getState().cameraEdits;
 
-      // Helper to map keyframes to sync format
-      const mapKeyframes = (keyframes: Array<{
-        timeOffset: number;
-        positionX: number;
-        positionY: number;
-        zoom: number;
-        rotation?: number;
-        easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT';
-      }>) => keyframes.map(kf => ({
-        timeOffset: kf.timeOffset,
-        positionX: kf.positionX,
-        positionY: kf.positionY,
-        zoom: kf.zoom,
-        rotation: kf.rotation ?? 0,
-        easing: kf.easing,
-      }));
-
       const ralliesPerVideo: Record<string, Array<{
         id?: string;
         startMs: number;
@@ -264,12 +248,12 @@ class SyncService {
           const hasKeyframes = keyframesForAspect.length > 0;
 
           // Determine camera edit value: data to upsert, null to delete, or undefined to skip
-          let cameraEditValue: { enabled: boolean; aspectRatio: 'ORIGINAL' | 'VERTICAL'; keyframes: ReturnType<typeof mapKeyframes> } | null | undefined;
+          let cameraEditValue: { enabled: boolean; aspectRatio: 'ORIGINAL' | 'VERTICAL'; keyframes: ReturnType<typeof mapSyncKeyframes> } | null | undefined;
           if (hasKeyframes) {
             cameraEditValue = {
               enabled: true,
               aspectRatio: currentAspectRatio,
-              keyframes: mapKeyframes(keyframesForAspect),
+              keyframes: mapSyncKeyframes(keyframesForAspect),
             };
           } else if (r._backendId) {
             // Rally exists in backend but has no keyframes - send null to delete camera edit
@@ -358,7 +342,7 @@ class SyncService {
   }
 
   private getStorageKey(sessionId: string): string {
-    return `${STORAGE_KEY_PREFIX}${sessionId}`;
+    return `${STORAGE_KEYS.SYNC_META_PREFIX}${sessionId}`;
   }
 
   private saveMeta(sessionId: string, meta: SyncMeta) {

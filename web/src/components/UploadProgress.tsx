@@ -2,21 +2,18 @@
 
 import { useEffect, useState } from 'react';
 import {
-  Box,
-  LinearProgress,
-  Typography,
   IconButton,
   Snackbar,
   Alert,
   Button,
 } from '@mui/material';
-import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import UpgradeIcon from '@mui/icons-material/Upgrade';
 import Link from 'next/link';
 import { useUploadStore } from '@/stores/uploadStore';
 import { useTierStore } from '@/stores/tierStore';
 import { ConfirmDialog } from './ConfirmDialog';
+import { ProgressBar } from './ProgressBar';
 
 export function UploadProgress() {
   const { isUploading, progress, currentStep, error, cancel, clearError, reset } = useUploadStore();
@@ -111,111 +108,29 @@ export function UploadProgress() {
   }
 
   return (
-    <Box
-      sx={{
-        width: '100%',
-        opacity: isUploading || isComplete ? 1 : 0,
-        transition: 'opacity 0.2s ease',
-      }}
-    >
-      {/* Progress bar */}
-      <Box sx={{ position: 'relative', height: 3 }}>
-        <LinearProgress
-          variant="determinate"
-          value={progress}
-          sx={{
-            height: 3,
-            bgcolor: 'rgba(255, 255, 255, 0.06)',
-            '& .MuiLinearProgress-bar': {
-              bgcolor: isComplete ? 'success.main' : 'primary.main',
-              transition: 'transform 0.2s ease',
-            },
-          }}
-        />
-        {/* Glow sweep */}
-        {!isComplete && progress > 0 && (
-          <Box
+    <>
+      <ProgressBar
+        progress={progress}
+        isActive={isUploading}
+        isComplete={isComplete}
+        stepText={currentStep}
+        completeText="Upload complete"
+        actions={
+          <IconButton
+            size="small"
+            onClick={() => setShowCancelDialog(true)}
             sx={{
-              position: 'absolute',
-              top: 0,
-              bottom: 0,
-              left: 0,
-              width: `${progress}%`,
-              overflow: 'hidden',
-              pointerEvents: 'none',
+              p: 0.25,
+              color: 'text.secondary',
+              '&:hover': {
+                color: 'error.main',
+              },
             }}
           >
-            <Box
-              sx={{
-                position: 'absolute',
-                top: 0,
-                bottom: 0,
-                width: 40,
-                background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent)',
-                animation: 'sweep 1.5s ease-in-out infinite',
-                '@keyframes sweep': {
-                  '0%': { left: '-40px' },
-                  '100%': { left: '100%' },
-                },
-              }}
-            />
-          </Box>
-        )}
-      </Box>
-
-      {/* Status text */}
-      <Box
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          px: 1,
-          py: 0.5,
-          bgcolor: 'rgba(0, 0, 0, 0.3)',
-        }}
-      >
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-          {isComplete && (
-            <CheckIcon sx={{ fontSize: 12, color: 'success.main' }} />
-          )}
-          <Typography
-            variant="caption"
-            sx={{
-              color: isComplete ? 'success.main' : 'text.secondary',
-              fontSize: 11,
-            }}
-          >
-            {isComplete ? 'Upload complete' : currentStep}
-          </Typography>
-        </Box>
-        {!isComplete && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Typography
-              variant="caption"
-              sx={{
-                color: 'text.secondary',
-                fontSize: 11,
-                fontFamily: 'monospace',
-              }}
-            >
-              {progress}%
-            </Typography>
-            <IconButton
-              size="small"
-              onClick={() => setShowCancelDialog(true)}
-              sx={{
-                p: 0.25,
-                color: 'text.secondary',
-                '&:hover': {
-                  color: 'error.main',
-                },
-              }}
-            >
-              <CloseIcon sx={{ fontSize: 14 }} />
-            </IconButton>
-          </Box>
-        )}
-      </Box>
+            <CloseIcon sx={{ fontSize: 14 }} />
+          </IconButton>
+        }
+      />
 
       {/* Cancel confirmation dialog */}
       <ConfirmDialog
@@ -230,6 +145,6 @@ export function UploadProgress() {
         }}
         onCancel={() => setShowCancelDialog(false)}
       />
-    </Box>
+    </>
   );
 }
