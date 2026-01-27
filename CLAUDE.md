@@ -78,7 +78,7 @@ Three subscription tiers with increasing limits:
 
 | Feature | Basic (Free) | Pro ($9.99/mo) | Elite ($24.99/mo) |
 |---------|--------------|----------------|-------------------|
-| AI Detections/month | 2 | 15 | 50 |
+| AI Detections/month | 2 | 15 | 40 |
 | Monthly uploads | 5 | 20 | 50 |
 | Max video duration | 30 min | 60 min | 90 min |
 | Max file size | 500 MB | 3 GB | 5 GB |

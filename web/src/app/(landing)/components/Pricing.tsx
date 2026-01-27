@@ -47,7 +47,7 @@ const tiers = [
 ];
 
 const features = [
-  { name: 'AI Detections/month', basic: '2', pro: '15', elite: '50' },
+  { name: 'AI Detections/month', basic: '2', pro: '15', elite: '40' },
   { name: 'Uploads/month', basic: '5', pro: '20', elite: '50' },
   { name: 'Max video', basic: '30 min (500 MB)', pro: '60 min (3 GB)', elite: '90 min (5 GB)' },
   { name: 'Storage cap', basic: '2 GB', pro: '20 GB', elite: '75 GB' },
@@ -393,6 +393,34 @@ export function Pricing() {
             </Box>
             . No subscription needed — just pay for the matches you want analyzed.
           </Typography>
+        </Box>
+
+        {/* Custom tier callout */}
+        <Box
+          sx={{
+            mt: 3,
+            p: 3,
+            borderRadius: 2,
+            bgcolor: designTokens.colors.surface[1],
+            border: '1px solid',
+            borderColor: 'divider',
+            textAlign: 'center',
+          }}
+        >
+          <Typography variant="h6" sx={{ mb: 1 }}>
+            Need more for your club or academy?
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Higher limits, priority support, and custom features — let&apos;s build a plan that fits.
+          </Typography>
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => handleWaitlistOpen('custom')}
+            sx={{ fontWeight: 600, fontSize: '0.8rem' }}
+          >
+            Contact Us
+          </Button>
         </Box>
       </Container>
 

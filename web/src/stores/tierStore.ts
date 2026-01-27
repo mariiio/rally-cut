@@ -54,7 +54,7 @@ export const TIER_LIMITS_DISPLAY = {
     maxFileSizeGB: 5,
     maxVideoDurationMin: 90,
     storageCapGB: 75,
-    detectionsPerMonth: 50,
+    detectionsPerMonth: 40,
     uploadsPerMonth: 50,
   },
 } as const;

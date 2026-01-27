@@ -54,7 +54,7 @@ All endpoints require `X-Visitor-Id` header (UUID):
 
 | Feature | FREE | PRO ($9.99) | ELITE ($24.99) |
 |---------|------|-------------|----------------|
-| Detections/month | 2 | 15 | 50 |
+| Detections/month | 2 | 15 | 40 |
 | Monthly uploads | 5 | 20 | 50 |
 | Max video duration | 30 min | 60 min | 90 min |
 | Max file size | 500 MB | 3 GB | 5 GB |
