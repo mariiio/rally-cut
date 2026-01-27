@@ -56,7 +56,7 @@ const features = [
   { name: 'Cloud export', basic: false, pro: true, elite: true },
   { name: 'Cloud sync', basic: false, pro: true, elite: true },
   { name: 'Quality retention', basic: '7 days', pro: '14 days', elite: '60 days' },
-  { name: 'Video retention', basic: '60 days', pro: '6 months', elite: '1 year' },
+  { name: 'Video retention', basic: '60 days', pro: 'While subscribed', elite: 'While subscribed' },
 ];
 
 function FeatureValue({ value }: { value: string | boolean }) {
