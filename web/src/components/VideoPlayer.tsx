@@ -16,6 +16,46 @@ import { RotationGridOverlay } from './RotationGridOverlay';
 import { CropMaskOverlay } from './CropMaskOverlay';
 import { AspectRatio } from '@/constants/enums';
 
+/** Binary search: find the rally containing the given time (O(log n)).
+ *  Requires rallies sorted by start_time with no overlaps. */
+function findRallyAtTime<T extends { start_time: number; end_time: number }>(
+  sortedRallies: T[],
+  time: number,
+): T | null {
+  let lo = 0;
+  let hi = sortedRallies.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    const rally = sortedRallies[mid]!;
+    if (time < rally.start_time) {
+      hi = mid - 1;
+    } else if (time > rally.end_time) {
+      lo = mid + 1;
+    } else {
+      return rally;
+    }
+  }
+  return null;
+}
+
+/** Binary search: find the next rally starting after the given time (O(log n)). */
+function findNextRallyAfterTime<T extends { start_time: number }>(
+  sortedRallies: T[],
+  time: number,
+): T | null {
+  let lo = 0;
+  let hi = sortedRallies.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (sortedRallies[mid]!.start_time <= time) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo < sortedRallies.length ? sortedRallies[lo]! : null;
+}
+
 export function VideoPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoContainerRef = useRef<HTMLDivElement>(null);
@@ -82,15 +122,21 @@ export function VideoPlayer() {
   const isCameraTabActive = useEditorStore((state) => state.isCameraTabActive);
   const isRecordingRally = useEditorStore((state) => state.isRecordingRally);
 
-  // Find current rally based on playhead position
+  // Memoized sorted rallies for O(log n) binary search lookups
+  const sortedRallies = useMemo(
+    () => [...rallies].sort((a, b) => a.start_time - b.start_time),
+    [rallies]
+  );
+
+  // Find current rally based on playhead position (binary search for per-frame lookups)
   const currentRally = useMemo(() => {
-    // If a rally is selected, use it for camera preview
+    // If a rally is selected, use it for camera preview (by ID, only on user click)
     if (selectedRallyId) {
       return rallies.find((r) => r.id === selectedRallyId) ?? null;
     }
-    // Otherwise find rally at current time
-    return rallies.find((r) => currentTime >= r.start_time && currentTime <= r.end_time) ?? null;
-  }, [rallies, currentTime, selectedRallyId]);
+    // Otherwise find rally at current time using binary search
+    return findRallyAtTime(sortedRallies, currentTime);
+  }, [rallies, sortedRallies, currentTime, selectedRallyId]);
 
   // Get camera edit for current rally
   const currentCameraEdit = useMemo(() => {
@@ -397,16 +443,13 @@ export function VideoPlayer() {
     // During camera animation, skip React state updates to prevent jitter
     // Handle skip-dead-time logic here using video.currentTime directly
     if (isPlaying && hasCameraKeyframes) {
-      // Check if we've exited the rally into dead time
-      const inAnyRally = rallies.some(
-        (r) => videoTime >= r.start_time && videoTime <= r.end_time
-      );
+      // Check if we've exited the rally into dead time (binary search: O(log n))
+      const inAnyRally = findRallyAtTime(sortedRallies, videoTime) !== null;
 
       if (!inAnyRally) {
         if (playOnlyRallies) {
-          // In dead time with "rallies only" enabled - jump to next rally
-          const sorted = [...rallies].sort((a, b) => a.start_time - b.start_time);
-          const nextRally = sorted.find((r) => r.start_time > videoTime);
+          // In dead time with "rallies only" enabled - jump to next rally (binary search)
+          const nextRally = findNextRallyAfterTime(sortedRallies, videoTime);
           if (nextRally) {
             seek(nextRally.start_time);
           }
@@ -423,7 +466,7 @@ export function VideoPlayer() {
 
     setCurrentTime(videoTime);
     checkHighlightTransition(video);
-  }, [setCurrentTime, isPlaying, hasCameraKeyframes, rallies, playOnlyRallies, seek, checkHighlightTransition]);
+  }, [setCurrentTime, isPlaying, hasCameraKeyframes, sortedRallies, playOnlyRallies, seek, checkHighlightTransition]);
 
   // Handle video metadata loaded
   const handleLoadedMetadata = useCallback(() => {

@@ -87,6 +87,18 @@ export async function syncState(
         });
       }
 
+      // Pre-fetch all camera edits for this user to avoid N+1 queries
+      const allExistingCameraEdits = await tx.rallyCameraEdit.findMany({
+        where: {
+          rally: { videoId: { in: [...videoIds] } },
+          userId: userId ?? null,
+        },
+        include: { keyframes: { orderBy: { timeOffset: "asc" } } },
+      });
+      const cameraEditsByRallyId = new Map(
+        allExistingCameraEdits.map((ce) => [ce.rallyId, ce])
+      );
+
       for (const [videoId, rallies] of Object.entries(input.ralliesPerVideo)) {
         if (!videoIds.has(videoId)) {
           continue; // Skip unknown videos
@@ -141,37 +153,55 @@ export async function syncState(
 
           // Sync camera edit if provided (per-user: each user has their own camera edits)
           if (rally.cameraEdit) {
-            // Find existing camera edit for this user
-            const existingCameraEdit = await tx.rallyCameraEdit.findFirst({
-              where: { rallyId, userId: userId ?? null },
-              include: { keyframes: true },
-            });
+            const existingCameraEdit = cameraEditsByRallyId.get(rallyId);
 
             if (existingCameraEdit) {
-              // Delete old keyframes and create new ones
-              await tx.cameraKeyframe.deleteMany({
-                where: { rallyCameraId: existingCameraEdit.id },
-              });
+              // Check if anything actually changed before doing delete+recreate
+              const metaChanged =
+                existingCameraEdit.enabled !== rally.cameraEdit.enabled ||
+                existingCameraEdit.aspectRatio !== rally.cameraEdit.aspectRatio;
+              const existingKfs = existingCameraEdit.keyframes;
+              const newKfs = rally.cameraEdit.keyframes;
+              const keyframesChanged =
+                existingKfs.length !== newKfs.length ||
+                existingKfs.some((kf, i) => {
+                  const nkf = newKfs[i]!;
+                  return (
+                    kf.timeOffset !== nkf.timeOffset ||
+                    kf.positionX !== nkf.positionX ||
+                    kf.positionY !== nkf.positionY ||
+                    kf.zoom !== nkf.zoom ||
+                    kf.rotation !== (nkf.rotation ?? 0) ||
+                    kf.easing !== nkf.easing
+                  );
+                });
 
-              await tx.rallyCameraEdit.update({
-                where: { id: existingCameraEdit.id },
-                data: {
-                  enabled: rally.cameraEdit.enabled,
-                  aspectRatio: rally.cameraEdit.aspectRatio,
-                  keyframes: {
-                    createMany: {
-                      data: rally.cameraEdit.keyframes.map((kf) => ({
-                        timeOffset: kf.timeOffset,
-                        positionX: kf.positionX,
-                        positionY: kf.positionY,
-                        zoom: kf.zoom,
-                        rotation: kf.rotation ?? 0,
-                        easing: kf.easing,
-                      })),
+              if (metaChanged || keyframesChanged) {
+                // Delete old keyframes and create new ones
+                await tx.cameraKeyframe.deleteMany({
+                  where: { rallyCameraId: existingCameraEdit.id },
+                });
+
+                await tx.rallyCameraEdit.update({
+                  where: { id: existingCameraEdit.id },
+                  data: {
+                    enabled: rally.cameraEdit.enabled,
+                    aspectRatio: rally.cameraEdit.aspectRatio,
+                    keyframes: {
+                      createMany: {
+                        data: rally.cameraEdit.keyframes.map((kf) => ({
+                          timeOffset: kf.timeOffset,
+                          positionX: kf.positionX,
+                          positionY: kf.positionY,
+                          zoom: kf.zoom,
+                          rotation: kf.rotation ?? 0,
+                          easing: kf.easing,
+                        })),
+                      },
                     },
                   },
-                },
-              });
+                });
+              }
             } else {
               // Create new camera edit with keyframes (per-user)
               await tx.rallyCameraEdit.create({
@@ -196,10 +226,12 @@ export async function syncState(
               });
             }
           } else if (rally.cameraEdit === null) {
-            // Explicitly delete camera edit for this user only
-            await tx.rallyCameraEdit.deleteMany({
-              where: { rallyId, userId: userId ?? null },
-            });
+            // Only delete if a camera edit actually exists for this rally
+            if (cameraEditsByRallyId.has(rallyId)) {
+              await tx.rallyCameraEdit.deleteMany({
+                where: { rallyId, userId: userId ?? null },
+              });
+            }
           }
         }
 
@@ -214,31 +246,49 @@ export async function syncState(
 
       // Sync global camera settings for each video (per-user: each user has their own settings)
       if (input.globalCameraSettings) {
+        // Pre-fetch all existing camera settings for this user to avoid N+1 queries
+        const allExistingCameraSettings = await tx.videoCameraSettings.findMany({
+          where: {
+            videoId: { in: [...videoIds] },
+            userId: userId ?? null,
+          },
+        });
+        const globalSettingsByVideoId = new Map(
+          allExistingCameraSettings.map((s) => [s.videoId, s])
+        );
+
         for (const [videoId, settings] of Object.entries(input.globalCameraSettings)) {
           if (!videoIds.has(videoId)) continue;
 
-          if (settings === null) {
-            // Explicitly delete global camera settings for this user only
-            await tx.videoCameraSettings.deleteMany({
-              where: { videoId, userId: userId ?? null },
-            });
-          } else if (settings) {
-            // Find existing settings for this user
-            const existingSettings = await tx.videoCameraSettings.findFirst({
-              where: { videoId, userId: userId ?? null },
-            });
+          const existingSettings = globalSettingsByVideoId.get(videoId);
 
+          if (settings === null) {
+            // Only delete if settings actually exist for this user
             if (existingSettings) {
-              // Update existing settings
-              await tx.videoCameraSettings.update({
-                where: { id: existingSettings.id },
-                data: {
-                  zoom: settings.zoom,
-                  positionX: settings.positionX,
-                  positionY: settings.positionY,
-                  rotation: settings.rotation,
-                },
+              await tx.videoCameraSettings.deleteMany({
+                where: { videoId, userId: userId ?? null },
               });
+            }
+          } else if (settings) {
+            if (existingSettings) {
+              // Only update if values actually changed
+              const hasChanges =
+                existingSettings.zoom !== settings.zoom ||
+                existingSettings.positionX !== settings.positionX ||
+                existingSettings.positionY !== settings.positionY ||
+                existingSettings.rotation !== settings.rotation;
+
+              if (hasChanges) {
+                await tx.videoCameraSettings.update({
+                  where: { id: existingSettings.id },
+                  data: {
+                    zoom: settings.zoom,
+                    positionX: settings.positionX,
+                    positionY: settings.positionY,
+                    rotation: settings.rotation,
+                  },
+                });
+              }
             } else {
               // Create new settings for this user
               await tx.videoCameraSettings.create({
