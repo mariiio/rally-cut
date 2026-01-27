@@ -607,25 +607,27 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         usePlayerStore.getState().setPlayOnlyRallies(true);
       }
 
-      // Load confirmation status for all matches
-      for (const match of session.matches) {
-        try {
-          const confirmResult = await getConfirmationStatus(match.id);
-          if (confirmResult.confirmation) {
-            get().setConfirmationStatus(match.id, {
-              id: confirmResult.confirmation.id,
-              status: confirmResult.confirmation.status,
-              progress: confirmResult.confirmation.progress,
-              error: confirmResult.confirmation.error,
-              confirmedAt: confirmResult.confirmation.confirmedAt,
-              originalDurationMs: confirmResult.confirmation.originalDurationMs,
-              trimmedDurationMs: confirmResult.confirmation.trimmedDurationMs,
-            });
+      // Load confirmation status for all matches in parallel
+      await Promise.all(
+        session.matches.map(async (match) => {
+          try {
+            const confirmResult = await getConfirmationStatus(match.id);
+            if (confirmResult.confirmation) {
+              get().setConfirmationStatus(match.id, {
+                id: confirmResult.confirmation.id,
+                status: confirmResult.confirmation.status,
+                progress: confirmResult.confirmation.progress,
+                error: confirmResult.confirmation.error,
+                confirmedAt: confirmResult.confirmation.confirmedAt,
+                originalDurationMs: confirmResult.confirmation.originalDurationMs,
+                trimmedDurationMs: confirmResult.confirmation.trimmedDurationMs,
+              });
+            }
+          } catch {
+            // Ignore - no confirmation exists for this video
           }
-        } catch {
-          // Ignore - no confirmation exists for this video
-        }
-      }
+        })
+      );
     } catch (error) {
       // Handle AccessDeniedError specially
       if (error instanceof AccessDeniedError) {

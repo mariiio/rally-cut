@@ -66,16 +66,18 @@ const KeyframeItem = memo(function KeyframeItem({
   keyframe: CameraKeyframe;
   isSelected: boolean;
   isDeleting: boolean;
-  onSelect: () => void;
-  onDelete: () => void;
+  onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
   onCancelDelete: () => void;
   rallyStartTime: number;
   rallyDuration: number;
 }) {
+  const handleSelect = useCallback(() => onSelect(keyframe.id), [onSelect, keyframe.id]);
+
   const handleDelete = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    onDelete();
-  }, [onDelete]);
+    onDelete(keyframe.id);
+  }, [onDelete, keyframe.id]);
 
   const handleCancelDelete = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -87,7 +89,7 @@ const KeyframeItem = memo(function KeyframeItem({
 
   return (
     <Box
-      onClick={onSelect}
+      onClick={handleSelect}
       sx={{
         p: 1,
         borderRadius: 1,
@@ -200,11 +202,8 @@ export function CameraPanel() {
   const setIsAdjustingRotation = useCameraStore((state) => state.setIsAdjustingRotation);
 
   // Global camera settings
-  const globalCameraSettings = useCameraStore((state) => state.globalCameraSettings);
-  const getGlobalSettings = useCameraStore((state) => state.getGlobalSettings);
   const setGlobalSettings = useCameraStore((state) => state.setGlobalSettings);
   const resetGlobalSettings = useCameraStore((state) => state.resetGlobalSettings);
-  const hasGlobalSettings = useCameraStore((state) => state.hasGlobalSettings);
 
   // Get active keyframes for the current aspect ratio
   const activeKeyframes = useMemo(() => {
@@ -244,17 +243,17 @@ export function CameraPanel() {
     return activeMatchId;
   }, [selectedRallyId, activeMatchId]);
 
-  // Get current global settings for this video
-  const currentGlobalSettings = useMemo(() => {
-    if (!currentVideoId) return DEFAULT_GLOBAL_CAMERA;
-    return getGlobalSettings(currentVideoId);
-  }, [currentVideoId, getGlobalSettings, globalCameraSettings]); // Include globalCameraSettings to re-compute when it changes
+  // Get current global settings for this video (targeted selector — only recomputes when THIS video's settings change)
+  const currentVideoGlobalSettings = useCameraStore(
+    useCallback((s) => s.globalCameraSettings[currentVideoId ?? ''], [currentVideoId])
+  );
+  const currentGlobalSettings = currentVideoGlobalSettings ?? DEFAULT_GLOBAL_CAMERA;
 
   // Check if current video has non-default global settings
-  const videoHasGlobalSettings = useMemo(() => {
-    if (!currentVideoId) return false;
-    return hasGlobalSettings(currentVideoId);
-  }, [currentVideoId, hasGlobalSettings, globalCameraSettings]);
+  const videoHasGlobalSettings = currentGlobalSettings.zoom !== 1.0 ||
+    currentGlobalSettings.positionX !== 0.5 ||
+    currentGlobalSettings.positionY !== 0.5 ||
+    currentGlobalSettings.rotation !== 0;
 
   // Get drag position to detect active dragging
   const dragPosition = useCameraStore((state) => state.dragPosition);
@@ -396,6 +395,16 @@ export function CameraPanel() {
   const handleCancelKeyframeDelete = useCallback(() => {
     setDeleteConfirmId(null);
   }, []);
+
+  const handleKeyframeSelect = useCallback((kfId: string) => {
+    selectKeyframe(kfId);
+    const kf = activeKeyframes.find(k => k.id === kfId);
+    if (kf && selectedRally) {
+      const keyframeTime = selectedRally.start_time + kf.timeOffset * rallyDuration;
+      seek(keyframeTime);
+    }
+    setIsCameraTabActive(true);
+  }, [selectKeyframe, activeKeyframes, selectedRally, rallyDuration, seek, setIsCameraTabActive]);
 
   const handleZoomChange = useCallback(
     (_: Event, value: number | number[]) => {
@@ -958,15 +967,8 @@ export function CameraPanel() {
                     keyframe={kf}
                     isSelected={selectedKeyframeId === kf.id}
                     isDeleting={deleteConfirmId === kf.id}
-                    onSelect={() => {
-                      selectKeyframe(kf.id);
-                      // Seek to keyframe position
-                      const keyframeTime = selectedRally.start_time + kf.timeOffset * rallyDuration;
-                      seek(keyframeTime);
-                      // Enter camera edit mode when clicking a keyframe
-                      setIsCameraTabActive(true);
-                    }}
-                    onDelete={() => handleKeyframeDeleteClick(kf.id)}
+                    onSelect={handleKeyframeSelect}
+                    onDelete={handleKeyframeDeleteClick}
                     onCancelDelete={handleCancelKeyframeDelete}
                     rallyStartTime={selectedRally.start_time}
                     rallyDuration={rallyDuration}

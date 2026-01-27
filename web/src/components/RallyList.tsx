@@ -43,28 +43,27 @@ import { syncService } from '@/services/syncService';
 import { ConfirmationStatus } from '@/constants/enums';
 
 export function RallyList() {
-  const {
-    session,
-    activeMatchId,
-    setActiveMatch,
-    renameMatch,
-    rallies,
-    selectedRallyId,
-    selectRally,
-    getHighlightsForRally,
-    reloadSession,
-    isRallyEditingLocked,
-    removeRally,
-    setIsCameraTabActive,
-    confirmationStatus,
-    setConfirmationStatus,
-    isConfirming,
-    setIsConfirming,
-    setShowAddVideoModal,
-    singleVideoMode,
-  } = useEditorStore();
+  const session = useEditorStore((s) => s.session);
+  const activeMatchId = useEditorStore((s) => s.activeMatchId);
+  const setActiveMatch = useEditorStore((s) => s.setActiveMatch);
+  const renameMatch = useEditorStore((s) => s.renameMatch);
+  const rallies = useEditorStore((s) => s.rallies);
+  const selectedRallyId = useEditorStore((s) => s.selectedRallyId);
+  const selectRally = useEditorStore((s) => s.selectRally);
+  const getHighlightsForRally = useEditorStore((s) => s.getHighlightsForRally);
+  const reloadSession = useEditorStore((s) => s.reloadSession);
+  const isRallyEditingLocked = useEditorStore((s) => s.isRallyEditingLocked);
+  const removeRally = useEditorStore((s) => s.removeRally);
+  const setIsCameraTabActive = useEditorStore((s) => s.setIsCameraTabActive);
+  const confirmationStatus = useEditorStore((s) => s.confirmationStatus);
+  const setConfirmationStatus = useEditorStore((s) => s.setConfirmationStatus);
+  const isConfirming = useEditorStore((s) => s.isConfirming);
+  const setIsConfirming = useEditorStore((s) => s.setIsConfirming);
+  const setShowAddVideoModal = useEditorStore((s) => s.setShowAddVideoModal);
+  const singleVideoMode = useEditorStore((s) => s.singleVideoMode);
   const isPaidTier = useTierStore((state) => state.isPaidTier());
-  const { currentTime, seek } = usePlayerStore();
+  const currentTime = usePlayerStore((s) => s.currentTime);
+  const seek = usePlayerStore((s) => s.seek);
   const {
     isExporting,
     exportingRallyId,
@@ -440,7 +439,9 @@ export function RallyList() {
           const isExpanded = expandedMatches.has(match.id);
           const isActiveMatch = activeMatchId === match.id;
           // Use rallies from store for active match (live updates), session for others
-          const matchRallies = [...(isActiveMatch ? rallies : match.rallies)].sort((a, b) => a.start_time - b.start_time);
+          const matchRallies = isActiveMatch
+            ? sortedRallies
+            : [...match.rallies].sort((a, b) => a.start_time - b.start_time);
           const matchDuration = matchRallies.reduce((sum, r) => sum + r.duration, 0);
 
           return (
