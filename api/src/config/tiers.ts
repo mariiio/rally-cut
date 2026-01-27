@@ -55,7 +55,7 @@ const MINUTES = 60 * 1000;
  * | Watermark                | Yes          | No           | No             |
  * | Server Export            | No           | Yes          | Yes            |
  * | Original Quality         | 7 days       | 14 days      | 60 days        |
- * | Video Retention          | 60 days      | 6 months     | 1 year         |
+ * | Video Retention          | 60 days      | While subscribed | While subscribed |
  * | Server Sync              | No           | Yes          | Yes            |
  */
 export const TIER_CONFIG: Record<UserTier, TierConfig> = {
@@ -98,9 +98,9 @@ export const TIER_CONFIG: Record<UserTier, TierConfig> = {
     exportWatermark: false,
     lambdaExportEnabled: true,
 
-    // Retention (6 months = 180 days)
+    // Retention (no inactivity deletion while subscribed)
     originalQualityDays: 14,
-    inactivityDeleteDays: 180,
+    inactivityDeleteDays: null,
 
     // Features
     serverSyncEnabled: true,
@@ -122,9 +122,9 @@ export const TIER_CONFIG: Record<UserTier, TierConfig> = {
     exportWatermark: false,
     lambdaExportEnabled: true,
 
-    // Retention (1 year = 365 days)
+    // Retention (no inactivity deletion while subscribed)
     originalQualityDays: 60,
-    inactivityDeleteDays: 365,
+    inactivityDeleteDays: null,
 
     // Features
     serverSyncEnabled: true,

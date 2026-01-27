@@ -108,8 +108,8 @@ export default function PrivacyPage() {
                 editing features.
               </Typography>
               <Typography variant="body1" color="text.secondary" sx={{ lineHeight: 1.8, mt: 2 }}>
-                <strong>Storage:</strong> Videos are stored for 60 days (free tier) to 1 year
-                (paid plans) of inactivity. After this period, videos are automatically deleted.
+                <strong>Storage:</strong> Free tier videos are deleted after 60 days of inactivity.
+                Paid plans retain videos for the duration of the subscription.
               </Typography>
               <Typography variant="body1" color="text.secondary" sx={{ lineHeight: 1.8, mt: 2 }}>
                 <strong>AI Training:</strong> We do not use your videos to train our AI models
