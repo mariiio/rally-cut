@@ -411,6 +411,7 @@ export interface ListSessionsResponse {
     updatedAt: string;
     videoCount: number;
     highlightCount: number;
+    videoPreviews: Array<{ id: string; posterS3Key: string | null }>;
   }>;
   pagination: {
     page: number;
