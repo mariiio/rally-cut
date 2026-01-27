@@ -22,6 +22,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { submitFeedback, type FeedbackType } from '@/services/api';
 import { useEditorStore } from '@/stores/editorStore';
+import { useAuthStore } from '@/stores/authStore';
 
 interface FeedbackModalProps {
   open: boolean;
@@ -35,7 +36,9 @@ const FEEDBACK_TYPES: { value: FeedbackType; label: string }[] = [
 ];
 
 export function FeedbackModal({ open, onClose }: FeedbackModalProps) {
-  const currentUserEmail = useEditorStore((state) => state.currentUserEmail);
+  const editorEmail = useEditorStore((state) => state.currentUserEmail);
+  const authEmail = useAuthStore((state) => state.email);
+  const userEmail = editorEmail || authEmail;
 
   const [type, setType] = useState<FeedbackType>('FEEDBACK');
   const [message, setMessage] = useState('');
@@ -69,7 +72,7 @@ export function FeedbackModal({ open, onClose }: FeedbackModalProps) {
       await submitFeedback({
         type,
         message: message.trim(),
-        email: !currentUserEmail && email.trim() ? email.trim() : undefined,
+        email: !userEmail && email.trim() ? email.trim() : undefined,
         pageUrl: typeof window !== 'undefined' ? window.location.href : undefined,
       });
 
@@ -88,7 +91,7 @@ export function FeedbackModal({ open, onClose }: FeedbackModalProps) {
   };
 
   const isValid = message.trim().length > 0;
-  const showEmailField = !currentUserEmail;
+  const showEmailField = !userEmail;
 
   return (
     <Dialog

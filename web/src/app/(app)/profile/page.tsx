@@ -18,7 +18,6 @@ import {
   Alert,
   LinearProgress,
 } from '@mui/material';
-import PersonIcon from '@mui/icons-material/Person';
 import VerifiedIcon from '@mui/icons-material/Verified';
 import LogoutIcon from '@mui/icons-material/Logout';
 import DiamondIcon from '@mui/icons-material/Diamond';
@@ -26,7 +25,7 @@ import { useTierStore } from '@/stores/tierStore';
 import { updateCurrentUser } from '@/services/api';
 import { clearAuthToken } from '@/services/authToken';
 import { designTokens } from '@/app/theme';
-import { AppHeader, PageHeader } from '@/components/dashboard';
+import { AppHeader } from '@/components/dashboard';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -124,16 +123,18 @@ export default function ProfilePage() {
     >
       <AppHeader />
       <Container maxWidth="lg" sx={{ position: 'relative', py: 4 }}>
-        <PageHeader
-          icon={<PersonIcon />}
-          title="Profile"
-        />
+        <Typography variant="h4" sx={{ fontWeight: 700, letterSpacing: '-0.02em', mb: 4, py: 1 }}>
+          Profile
+        </Typography>
 
         <Grid container spacing={3}>
           {/* Left column - User Info */}
           <Grid size={{ xs: 12, md: 5 }}>
             <Paper sx={{ p: 3 }}>
               <Stack spacing={3} alignItems="center">
+                <Typography variant="overline" color="text.secondary" sx={{ alignSelf: 'flex-start' }}>
+                  Personal Info
+                </Typography>
                 {/* Avatar */}
                 <Avatar
                   src={user.image ?? undefined}
@@ -170,6 +171,23 @@ export default function ProfilePage() {
                       }),
                     }}
                   />
+                  {tier === 'FREE' && (
+                    <Button
+                      variant="text"
+                      size="small"
+                      onClick={() => router.push('/upgrade')}
+                      sx={{
+                        color: designTokens.colors.tertiary.main,
+                        textTransform: 'none',
+                        fontWeight: 500,
+                        '&:hover': {
+                          bgcolor: 'rgba(255, 209, 102, 0.08)',
+                        },
+                      }}
+                    >
+                      Upgrade plan
+                    </Button>
+                  )}
                 </Stack>
 
                 <Divider flexItem />
@@ -217,27 +235,33 @@ export default function ProfilePage() {
               {/* Usage & Subscription */}
               <Paper sx={{ p: 3 }}>
                 <Stack spacing={3}>
-                  <Stack direction="row" alignItems="center" justifyContent="space-between">
-                    <Typography variant="h6" fontWeight={600}>
-                      Usage & Subscription
+                  <Box>
+                    <Typography variant="overline" color="text.secondary">
+                      Plan & Usage
                     </Typography>
-                    {tier === 'FREE' && (
-                      <Button
-                        variant="outlined"
-                        size="small"
-                        sx={{
-                          borderColor: 'rgba(255, 209, 102, 0.5)',
-                          color: designTokens.colors.tertiary.main,
-                          '&:hover': {
-                            borderColor: designTokens.colors.tertiary.main,
-                            bgcolor: 'rgba(255, 209, 102, 0.08)',
-                          },
-                        }}
-                      >
-                        Upgrade
-                      </Button>
-                    )}
-                  </Stack>
+                    <Stack direction="row" alignItems="center" justifyContent="space-between">
+                      <Typography variant="h6" fontWeight={600}>
+                        Usage & Subscription
+                      </Typography>
+                      {tier === 'FREE' && (
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          onClick={() => router.push('/upgrade')}
+                          sx={{
+                            borderColor: 'rgba(255, 209, 102, 0.5)',
+                            color: designTokens.colors.tertiary.main,
+                            '&:hover': {
+                              borderColor: designTokens.colors.tertiary.main,
+                              bgcolor: 'rgba(255, 209, 102, 0.08)',
+                            },
+                          }}
+                        >
+                          Upgrade
+                        </Button>
+                      )}
+                    </Stack>
+                  </Box>
 
                   {/* AI Detections */}
                   <Stack spacing={1}>
@@ -298,7 +322,7 @@ export default function ProfilePage() {
               {/* Account */}
               <Paper sx={{ p: 3 }}>
                 <Stack spacing={2}>
-                  <Typography variant="h6" fontWeight={600}>
+                  <Typography variant="overline" color="text.secondary">
                     Account
                   </Typography>
                   <Button

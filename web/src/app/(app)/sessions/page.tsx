@@ -37,7 +37,6 @@ import PeopleIcon from '@mui/icons-material/People';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import CloseIcon from '@mui/icons-material/Close';
 import CollectionsIcon from '@mui/icons-material/Collections';
-import SportsVolleyballIcon from '@mui/icons-material/SportsVolleyball';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import FolderIcon from '@mui/icons-material/Folder';
 import { designTokens } from '@/app/theme';
@@ -59,7 +58,6 @@ import { VolleyballProgress } from '@/components/VolleyballProgress';
 import { AddVideoModal } from '@/components/AddVideoModal';
 import {
   AppHeader,
-  PageHeader,
   SessionCard,
   SessionCardSkeleton,
   SectionHeader,
@@ -406,31 +404,21 @@ function SessionsPageContent() {
       <AppHeader />
       <Container maxWidth="lg" sx={{ position: 'relative', py: 4 }}>
         {/* Header */}
-        <PageHeader
-          icon={<SportsVolleyballIcon />}
-          title="Dashboard"
-          subtitle="Your volleyball sessions"
-          action={
-            hasVideos && (
-              <Button
-                variant="contained"
-                startIcon={<CloudUploadIcon />}
-                onClick={handleUploadDialogOpen}
-                sx={{
-                  px: 3,
-                  py: 1.25,
-                  transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                  '&:hover': {
-                    transform: 'translateY(-2px)',
-                    boxShadow: '0 6px 20px rgba(255, 107, 74, 0.4)',
-                  },
-                }}
-              >
-                Upload Video
-              </Button>
-            )
-          }
-        />
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 4, py: 1 }}>
+          <Box>
+            <Typography variant="h4" sx={{ fontWeight: 700, letterSpacing: '-0.02em' }}>
+              Sessions
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+              Your volleyball sessions
+            </Typography>
+          </Box>
+          {hasVideos && (
+            <Button variant="contained" startIcon={<CloudUploadIcon />} onClick={handleUploadDialogOpen}>
+              Upload Video
+            </Button>
+          )}
+        </Box>
 
         {loading ? (
           <Box>
