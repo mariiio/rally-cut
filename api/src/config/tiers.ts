@@ -55,7 +55,7 @@ const MINUTES = 60 * 1000;
  * | Watermark                | Yes          | No           | No             |
  * | Server Export            | No           | Yes          | Yes            |
  * | Original Quality         | 7 days       | 14 days      | 60 days        |
- * | Video Retention          | 90 days      | 6 months     | 1 year         |
+ * | Video Retention          | 60 days      | 6 months     | 1 year         |
  * | Server Sync              | No           | Yes          | Yes            |
  */
 export const TIER_CONFIG: Record<UserTier, TierConfig> = {
@@ -76,7 +76,7 @@ export const TIER_CONFIG: Record<UserTier, TierConfig> = {
 
     // Retention
     originalQualityDays: 7,
-    inactivityDeleteDays: 90,
+    inactivityDeleteDays: 60,
 
     // Features
     serverSyncEnabled: false,

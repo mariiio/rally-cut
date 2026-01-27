@@ -63,7 +63,7 @@ All endpoints require `X-Visitor-Id` header (UUID):
 | Server export | No (browser only) | Lambda | Lambda |
 | Server sync | No (localStorage only) | Yes | Yes |
 | Original quality retention | 7 days | 14 days | 60 days |
-| Inactivity deletion | 90 days | 6 months | 1 year |
+| Inactivity deletion | 60 days | 6 months | 1 year |
 
 **Configuration**: All limits defined in `src/config/tiers.ts` (single source of truth).
 **Enforcement**: `tierService.ts` checks limits, `getUserTier()` resolves tier from user.
@@ -76,7 +76,7 @@ Videos follow a two-phase cleanup based on tier:
 1. **Original quality downgrade**: After `originalQualityDays` (FREE: 7, PRO: 14, ELITE: 60):
    - Original/optimized quality deleted, video accessible at 720p proxy only
 
-2. **Inactivity deletion**: After `inactivityDeleteDays` inactive (FREE: 90, PRO: 180, ELITE: 365):
+2. **Inactivity deletion**: After `inactivityDeleteDays` inactive (FREE: 60, PRO: 180, ELITE: 365):
    - All content hard deleted (videos, sessions, S3 files)
 
 **Storage quota**: Enforced per-user, calculated from all video `fileSizeBytes`. Upload blocked when over cap.
