@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import {
   Box,
   IconButton,
@@ -19,23 +18,16 @@ import ShareIcon from '@mui/icons-material/Share';
 import DownloadIcon from '@mui/icons-material/Download';
 import { useRouter } from 'next/navigation';
 import { useEditorStore } from '@/stores/editorStore';
+import { useMenuAnchor } from '@/hooks/useMenuAnchor';
 import { designTokens } from '@/app/theme';
 
 export function MobileEditorHeader() {
   const router = useRouter();
   const { session, singleVideoMode, undo, redo, canUndo, canRedo } = useEditorStore();
-  const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
-
-  const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
-    setMenuAnchor(event.currentTarget);
-  };
-
-  const handleMenuClose = () => {
-    setMenuAnchor(null);
-  };
+  const menu = useMenuAnchor();
 
   const handleHome = () => {
-    handleMenuClose();
+    menu.close();
     router.push(singleVideoMode ? '/videos' : '/sessions');
   };
 
@@ -90,16 +82,16 @@ export function MobileEditorHeader() {
       {/* Menu */}
       <IconButton
         size="small"
-        onClick={handleMenuOpen}
+        onClick={menu.open}
         sx={{ minWidth: designTokens.mobile.touchTarget }}
       >
         <MoreVertIcon fontSize="small" />
       </IconButton>
 
       <Menu
-        anchorEl={menuAnchor}
-        open={Boolean(menuAnchor)}
-        onClose={handleMenuClose}
+        anchorEl={menu.anchor}
+        open={menu.isOpen}
+        onClose={menu.close}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
         transformOrigin={{ vertical: 'top', horizontal: 'right' }}
       >
@@ -111,14 +103,14 @@ export function MobileEditorHeader() {
         </MenuItem>
         {!singleVideoMode && <Divider />}
         {!singleVideoMode && (
-          <MenuItem onClick={handleMenuClose} disabled>
+          <MenuItem onClick={menu.close} disabled>
             <ListItemIcon>
               <ShareIcon fontSize="small" />
             </ListItemIcon>
             <ListItemText>Share</ListItemText>
           </MenuItem>
         )}
-        <MenuItem onClick={handleMenuClose} disabled>
+        <MenuItem onClick={menu.close} disabled>
           <ListItemIcon>
             <DownloadIcon fontSize="small" />
           </ListItemIcon>

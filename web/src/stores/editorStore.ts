@@ -17,6 +17,7 @@ import { fetchSession as fetchSessionFromApi, fetchVideoForEditor, getCurrentUse
 import { useCameraStore } from './cameraStore';
 import type { RallyCameraEdit } from '@/types/camera';
 import { syncService } from '@/services/syncService';
+import { STORAGE_KEYS } from '@/constants/storageKeys';
 
 // History management types
 interface HistoryEntry {
@@ -46,12 +47,11 @@ interface PersistedSession {
   savedAt: number;
 }
 
-const STORAGE_KEY_PREFIX = 'rallycut_session_';
 const MAX_HISTORY_SIZE = 50;
 const DEFAULT_RALLY_DURATION = 7;
 const SESSION_CACHE_TTL = 60 * 1000; // 1 minute
 
-const getStorageKey = (sessionId: string) => `${STORAGE_KEY_PREFIX}${sessionId}_v1`;
+const getStorageKey = (sessionId: string) => `${STORAGE_KEYS.SESSION_PREFIX}${sessionId}_v1`;
 
 // Debounce helper
 let saveTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -601,7 +601,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const hasRallies = session.matches.some(m => m.rallies.length > 0);
       const isGuest = session.userRole === 'member';
       const hasExplicitPreference = typeof window !== 'undefined' &&
-        localStorage.getItem('rallycut-play-only-rallies') !== null;
+        localStorage.getItem(STORAGE_KEYS.PLAY_ONLY_RALLIES) !== null;
 
       if (isGuest && hasRallies && !hasExplicitPreference) {
         usePlayerStore.getState().setPlayOnlyRallies(true);
@@ -869,7 +869,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         // Enable "skip dead time" when detection adds rallies (if no explicit preference)
         const ralliesAdded = previousRalliesCount === 0 && result.match.rallies.length > 0;
         const hasExplicitPreference = typeof window !== 'undefined' &&
-          localStorage.getItem('rallycut-play-only-rallies') !== null;
+          localStorage.getItem(STORAGE_KEYS.PLAY_ONLY_RALLIES) !== null;
 
         if (ralliesAdded && !hasExplicitPreference) {
           usePlayerStore.getState().setPlayOnlyRallies(true);
@@ -920,7 +920,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // Enable "skip dead time" when detection adds rallies (if no explicit preference)
       const ralliesAdded = previousRalliesCount === 0 && freshMatch.rallies.length > 0;
       const hasExplicitPreference = typeof window !== 'undefined' &&
-        localStorage.getItem('rallycut-play-only-rallies') !== null;
+        localStorage.getItem(STORAGE_KEYS.PLAY_ONLY_RALLIES) !== null;
 
       if (ralliesAdded && !hasExplicitPreference) {
         usePlayerStore.getState().setPlayOnlyRallies(true);

@@ -606,7 +606,7 @@ export function RallyList() {
                           bgcolor: isSelected
                             ? 'action.selected'
                             : isActive
-                            ? 'rgba(0, 212, 170, 0.08)'
+                            ? designTokens.alpha.secondary[8]
                             : 'transparent',
                           transition: designTokens.transitions.fast,
                           '&:hover': {
@@ -627,10 +627,10 @@ export function RallyList() {
                             justifyContent: 'center',
                             borderRadius: 1,
                             bgcolor: isActive
-                              ? 'rgba(0, 212, 170, 0.15)'
+                              ? designTokens.alpha.secondary[15]
                               : isSelected
-                              ? 'rgba(255, 107, 74, 0.15)'
-                              : 'rgba(255, 255, 255, 0.04)',
+                              ? designTokens.alpha.primary[15]
+                              : designTokens.alpha.white[4],
                             color: isActive
                               ? 'secondary.main'
                               : isSelected

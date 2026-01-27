@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { STORAGE_KEYS } from '@/constants/storageKeys';
 
 // Minimal rally info needed for playback
 interface PlaylistRally {
@@ -106,7 +107,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const newValue = !get().playOnlyRallies;
     set({ playOnlyRallies: newValue });
     if (typeof window !== 'undefined') {
-      localStorage.setItem('rallycut-play-only-rallies', String(newValue));
+      localStorage.setItem(STORAGE_KEYS.PLAY_ONLY_RALLIES, String(newValue));
     }
   },
   setPlayOnlyRallies: (value) => {
@@ -117,13 +118,13 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const newValue = !get().applyCameraEdits;
     set({ applyCameraEdits: newValue });
     if (typeof window !== 'undefined') {
-      localStorage.setItem('rallycut-apply-camera-edits', String(newValue));
+      localStorage.setItem(STORAGE_KEYS.APPLY_CAMERA_EDITS, String(newValue));
     }
   },
   setApplyCameraEdits: (apply) => {
     set({ applyCameraEdits: apply });
     if (typeof window !== 'undefined') {
-      localStorage.setItem('rallycut-apply-camera-edits', String(apply));
+      localStorage.setItem(STORAGE_KEYS.APPLY_CAMERA_EDITS, String(apply));
     }
   },
 
@@ -132,7 +133,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     if (!validRates.includes(rate)) return;
     set({ playbackRate: rate });
     if (typeof window !== 'undefined') {
-      localStorage.setItem('rallycut-playback-rate', String(rate));
+      localStorage.setItem(STORAGE_KEYS.PLAYBACK_RATE, String(rate));
     }
   },
 
@@ -223,15 +224,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
 // Initialize settings from localStorage on client side
 if (typeof window !== 'undefined') {
-  const savedApplyCameraEdits = localStorage.getItem('rallycut-apply-camera-edits');
+  const savedApplyCameraEdits = localStorage.getItem(STORAGE_KEYS.APPLY_CAMERA_EDITS);
   if (savedApplyCameraEdits !== null) {
     usePlayerStore.setState({ applyCameraEdits: savedApplyCameraEdits === 'true' });
   }
-  const savedPlayOnlyRallies = localStorage.getItem('rallycut-play-only-rallies');
+  const savedPlayOnlyRallies = localStorage.getItem(STORAGE_KEYS.PLAY_ONLY_RALLIES);
   if (savedPlayOnlyRallies !== null) {
     usePlayerStore.setState({ playOnlyRallies: savedPlayOnlyRallies === 'true' });
   }
-  const savedRate = localStorage.getItem('rallycut-playback-rate');
+  const savedRate = localStorage.getItem(STORAGE_KEYS.PLAYBACK_RATE);
   if (savedRate) {
     const rate = parseFloat(savedRate);
     if ([0.5, 1, 2].includes(rate)) {

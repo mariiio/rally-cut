@@ -121,7 +121,7 @@ export function SessionCard({
             bgcolor: designTokens.colors.surface[2],
             '& .add-icon': {
               transform: 'scale(1.1)',
-              bgcolor: 'rgba(255, 107, 74, 0.2)',
+              bgcolor: designTokens.alpha.primary[20],
             },
           },
         }}
@@ -216,7 +216,7 @@ export function SessionCard({
                     width: 20,
                     height: 20,
                     borderRadius: '50%',
-                    bgcolor: 'rgba(0, 212, 170, 0.2)',
+                    bgcolor: designTokens.alpha.secondary[20],
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -257,7 +257,7 @@ export function SessionCard({
                 label={`${videoCount} video${videoCount !== 1 ? 's' : ''}`}
                 size="small"
                 sx={{
-                  bgcolor: 'rgba(0, 212, 170, 0.15)',
+                  bgcolor: designTokens.alpha.secondary[15],
                   color: 'secondary.main',
                   fontWeight: 500,
                   height: 22,
