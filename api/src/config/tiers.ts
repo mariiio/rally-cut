@@ -46,7 +46,7 @@ const MINUTES = 60 * 1000;
  *
  * | Feature                  | BASIC (Free) | PRO ($9.99)  | ELITE ($24.99) |
  * |--------------------------|--------------|--------------|----------------|
- * | AI Detections/month      | 2            | 15           | 50             |
+ * | AI Detections/month      | 2            | 15           | 40             |
  * | Monthly Uploads          | 5            | 20           | 50             |
  * | Max Video Duration       | 30 min       | 60 min       | 90 min         |
  * | Max File Size            | 500 MB       | 3 GB         | 5 GB           |
@@ -109,7 +109,7 @@ export const TIER_CONFIG: Record<UserTier, TierConfig> = {
 
   ELITE: {
     // Limits
-    detectionsPerMonth: 50,
+    detectionsPerMonth: 40,
     monthlyUploadCount: 50,
 
     // Video Constraints

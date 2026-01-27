@@ -78,7 +78,7 @@ const TIERS: TierData[] = [
     monthlyPrice: 24.99,
     yearlyPrice: 239.90,
     features: [
-      { label: '50 AI detections / month', included: true },
+      { label: '40 AI detections / month', included: true },
       { label: '50 uploads / month', included: true },
       { label: '90 min, 5 GB max video', included: true },
       { label: '75 GB storage', included: true },
@@ -298,6 +298,31 @@ export default function UpgradePage() {
               </Typography>
             </Box>
           </Stack>
+        </Paper>
+
+        {/* Custom tier callout */}
+        <Paper
+          sx={{
+            mt: 3,
+            p: 3,
+            textAlign: 'center',
+            border: '1px solid',
+            borderColor: 'divider',
+          }}
+        >
+          <Typography variant="body1" fontWeight={600}>
+            Need more for your club or academy?
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Higher limits, priority support, and custom features — let&apos;s build a plan that fits.{' '}
+            <Box
+              component="a"
+              href="mailto:support@rallycut.com"
+              sx={{ color: 'primary.main', fontWeight: 600, textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
+            >
+              Contact us
+            </Box>
+          </Typography>
         </Paper>
       </Container>
     </Box>
