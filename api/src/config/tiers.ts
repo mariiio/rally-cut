@@ -55,7 +55,7 @@ const MINUTES = 60 * 1000;
  * | Watermark                | Yes          | No           | No             |
  * | Server Export            | No           | Yes          | Yes            |
  * | Original Quality         | 7 days       | 14 days      | 60 days        |
- * | Video Retention          | 60 days      | While subscribed | While subscribed |
+ * | Video Retention          | 60 days      | Unlimited | Unlimited |
  * | Server Sync              | No           | Yes          | Yes            |
  */
 export const TIER_CONFIG: Record<UserTier, TierConfig> = {

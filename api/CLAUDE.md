@@ -63,7 +63,7 @@ All endpoints require `X-Visitor-Id` header (UUID):
 | Server export | No (browser only) | Lambda | Lambda |
 | Server sync | No (localStorage only) | Yes | Yes |
 | Original quality retention | 7 days | 14 days | 60 days |
-| Inactivity deletion | 60 days | While subscribed | While subscribed |
+| Inactivity deletion | 60 days | Unlimited | Unlimited |
 
 **Configuration**: All limits defined in `src/config/tiers.ts` (single source of truth).
 **Enforcement**: `tierService.ts` checks limits, `getUserTier()` resolves tier from user.
