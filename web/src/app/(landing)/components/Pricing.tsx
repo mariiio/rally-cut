@@ -53,10 +53,10 @@ const features = [
   { name: 'Storage cap', basic: '2 GB', pro: '20 GB', elite: '75 GB' },
   { name: 'Export quality', basic: '720p', pro: 'Original', elite: 'Original' },
   { name: 'No watermark', basic: false, pro: true, elite: true },
-  { name: 'Server export', basic: false, pro: true, elite: true },
+  { name: 'Cloud export', basic: false, pro: true, elite: true },
   { name: 'Cloud sync', basic: false, pro: true, elite: true },
   { name: 'Quality retention', basic: '7 days', pro: '14 days', elite: '60 days' },
-  { name: 'Video retention', basic: '90 days', pro: '6 months', elite: '1 year' },
+  { name: 'Video retention', basic: '60 days', pro: '6 months', elite: '1 year' },
 ];
 
 function FeatureValue({ value }: { value: string | boolean }) {

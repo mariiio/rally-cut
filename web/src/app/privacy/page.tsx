@@ -108,7 +108,7 @@ export default function PrivacyPage() {
                 editing features.
               </Typography>
               <Typography variant="body1" color="text.secondary" sx={{ lineHeight: 1.8, mt: 2 }}>
-                <strong>Storage:</strong> Videos are stored for 90 days (free tier) to 1 year
+                <strong>Storage:</strong> Videos are stored for 60 days (free tier) to 1 year
                 (paid plans) of inactivity. After this period, videos are automatically deleted.
               </Typography>
               <Typography variant="body1" color="text.secondary" sx={{ lineHeight: 1.8, mt: 2 }}>
