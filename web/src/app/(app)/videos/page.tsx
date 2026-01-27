@@ -25,7 +25,6 @@ import {
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
-import VideoLibraryIcon from '@mui/icons-material/VideoLibrary';
 import CollectionsIcon from '@mui/icons-material/Collections';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -43,7 +42,6 @@ import {
 } from '@/services/api';
 import {
   AppHeader,
-  PageHeader,
   VideoCard,
   VideoCardSkeleton,
   EmptyState,
@@ -292,20 +290,21 @@ function VideosPageContent() {
       <AppHeader />
       <Container maxWidth="lg" sx={{ position: 'relative', py: 4 }}>
         {/* Header */}
-        <PageHeader
-          icon={<VideoLibraryIcon />}
-          title="Video Library"
-          subtitle={totalVideos > 0 ? `${totalVideos} video${totalVideos !== 1 ? 's' : ''} in your library` : undefined}
-          action={
-            <Button
-              variant="contained"
-              startIcon={<CloudUploadIcon />}
-              onClick={() => setUploadModalOpen(true)}
-            >
-              Upload
-            </Button>
-          }
-        />
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 4, py: 1 }}>
+          <Box>
+            <Typography variant="h4" sx={{ fontWeight: 700, letterSpacing: '-0.02em' }}>
+              Video Library
+            </Typography>
+            {totalVideos > 0 && (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                {totalVideos} video{totalVideos !== 1 ? 's' : ''} in your library
+              </Typography>
+            )}
+          </Box>
+          <Button variant="contained" startIcon={<CloudUploadIcon />} onClick={() => setUploadModalOpen(true)}>
+            Upload
+          </Button>
+        </Box>
 
         {/* Search Bar */}
         <Box sx={{ mb: 4, maxWidth: 400 }}>
