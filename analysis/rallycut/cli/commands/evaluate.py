@@ -231,10 +231,13 @@ def _run_evaluation(
 ) -> list[VideoEvaluationResult]:
     """Run evaluation on a list of videos."""
     results: list[VideoEvaluationResult] = []
+    total = len(videos)
 
     for i, video in enumerate(videos):
         if progress and task_id is not None:
             progress.update(task_id, description=f"Processing {video.filename[:30]}...")
+        # Plain text log visible in non-interactive/captured output
+        print(f"[{i + 1}/{total}] Processing {video.filename}...", flush=True)
 
         # Get ground truth as (start, end) tuples
         ground_truth = [(r.start_seconds, r.end_seconds) for r in video.ground_truth_rallies]
@@ -285,6 +288,13 @@ def _run_evaluation(
             processing_time=processing_time,
         )
         results.append(result)
+        m = result.rally_metrics
+        print(
+            f"[{i + 1}/{total}] {video.filename}: "
+            f"P={m.precision:.0%} R={m.recall:.0%} F1={m.f1:.0%} "
+            f"({processing_time:.1f}s)",
+            flush=True,
+        )
 
         if progress and task_id is not None:
             progress.update(task_id, advance=1)
