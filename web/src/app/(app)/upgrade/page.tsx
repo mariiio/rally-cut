@@ -40,14 +40,14 @@ const TIERS: TierData[] = [
   {
     name: 'Basic',
     key: 'FREE',
-    subtitle: 'Get started for free',
+    subtitle: 'Free forever',
     monthlyPrice: 0,
     yearlyPrice: 0,
     features: [
       { label: '2 AI detections / month', included: true },
-      { label: '3 uploads / month', included: true },
-      { label: '15 min, 500 MB max video', included: true },
-      { label: '1 GB storage', included: true },
+      { label: '5 uploads / month', included: true },
+      { label: '30 min, 500 MB max video', included: true },
+      { label: '2 GB storage', included: true },
       { label: '720p export with watermark', included: true },
       { label: 'Server export', included: false },
       { label: 'Cloud sync', included: false },
@@ -56,7 +56,7 @@ const TIERS: TierData[] = [
   {
     name: 'Pro',
     key: 'PRO',
-    subtitle: 'For regular players',
+    subtitle: 'For serious players',
     monthlyPrice: 9.99,
     yearlyPrice: 95.90,
     badge: 'Most Popular',
@@ -64,7 +64,7 @@ const TIERS: TierData[] = [
     features: [
       { label: '15 AI detections / month', included: true },
       { label: '20 uploads / month', included: true },
-      { label: '45 min, 2 GB max video', included: true },
+      { label: '60 min, 3 GB max video', included: true },
       { label: '20 GB storage', included: true },
       { label: 'Original quality export', included: true },
       { label: 'Server export', included: true },
@@ -74,7 +74,7 @@ const TIERS: TierData[] = [
   {
     name: 'Elite',
     key: 'ELITE',
-    subtitle: 'For teams & coaches',
+    subtitle: 'For coaches & teams',
     monthlyPrice: 24.99,
     yearlyPrice: 239.90,
     features: [

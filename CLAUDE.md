@@ -79,18 +79,18 @@ Three subscription tiers with increasing limits:
 | Feature | Basic (Free) | Pro ($9.99/mo) | Elite ($24.99/mo) |
 |---------|--------------|----------------|-------------------|
 | AI Detections/month | 2 | 15 | 50 |
-| Monthly uploads | 3 | 20 | 50 |
-| Max video duration | 15 min | 45 min | 90 min |
-| Max file size | 500 MB | 2 GB | 5 GB |
-| Storage cap | 1 GB | 20 GB | 75 GB |
-| Export quality | 720p | Original | Original |
+| Monthly uploads | 5 | 20 | 50 |
+| Max video duration | 30 min | 60 min | 90 min |
+| Max file size | 500 MB | 3 GB | 5 GB |
+| Storage cap | 2 GB | 20 GB | 75 GB |
+| Export quality | 720p + watermark | Original | Original |
 | Watermark | Yes | No | No |
 | Server export | No | Yes | Yes |
-| Original quality retention | 3 days | 14 days | 60 days |
-| Video retention | 30 days inactive | 6 months inactive | 1 year inactive |
+| Original quality retention | 7 days | 14 days | 60 days |
+| Video retention | 90 days inactive | 6 months inactive | 1 year inactive |
 | Cloud sync | No | Yes | Yes |
 
-Pay-per-match credits: $0.99 per match (Basic tier users needing occasional AI detection).
+Pay-per-match credits: $0.99 per match. No subscription needed.
 
 Tier configuration defined in `api/src/config/tiers.ts`. See `api/CLAUDE.md` for enforcement details.
 

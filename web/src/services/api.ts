@@ -1386,7 +1386,7 @@ export interface ExportCameraKeyframe {
 
 // Camera edit configuration for export
 export interface ExportCameraEdit {
-  aspectRatio: 'ORIGINAL';
+  aspectRatio: 'ORIGINAL' | 'VERTICAL';
   keyframes: ExportCameraKeyframe[];
 }
 

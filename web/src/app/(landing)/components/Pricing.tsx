@@ -21,7 +21,7 @@ import { WaitlistModal } from './WaitlistModal';
 const tiers = [
   {
     name: 'Basic',
-    subtitle: 'Perfect for trying out',
+    subtitle: 'Free forever',
     price: { monthly: 0, yearly: 0 },
     cta: 'Start Free',
     href: '/sessions',
@@ -29,7 +29,7 @@ const tiers = [
   },
   {
     name: 'Pro',
-    subtitle: 'For regular players',
+    subtitle: 'For serious players',
     price: { monthly: 9.99, yearly: 95.9 },
     cta: 'Join Waitlist',
     href: null,
@@ -48,15 +48,15 @@ const tiers = [
 
 const features = [
   { name: 'AI Detections/month', basic: '2', pro: '15', elite: '50' },
-  { name: 'Uploads/month', basic: '3', pro: '20', elite: '50' },
-  { name: 'Max video', basic: '15 min (500 MB)', pro: '45 min (2 GB)', elite: '90 min (5 GB)' },
-  { name: 'Storage cap', basic: '1 GB', pro: '20 GB', elite: '75 GB' },
+  { name: 'Uploads/month', basic: '5', pro: '20', elite: '50' },
+  { name: 'Max video', basic: '30 min (500 MB)', pro: '60 min (3 GB)', elite: '90 min (5 GB)' },
+  { name: 'Storage cap', basic: '2 GB', pro: '20 GB', elite: '75 GB' },
   { name: 'Export quality', basic: '720p', pro: 'Original', elite: 'Original' },
   { name: 'No watermark', basic: false, pro: true, elite: true },
   { name: 'Server export', basic: false, pro: true, elite: true },
   { name: 'Cloud sync', basic: false, pro: true, elite: true },
-  { name: 'Quality retention', basic: '3 days', pro: '14 days', elite: '60 days' },
-  { name: 'Video retention', basic: '30 days', pro: '6 months', elite: '1 year' },
+  { name: 'Quality retention', basic: '7 days', pro: '14 days', elite: '60 days' },
+  { name: 'Video retention', basic: '90 days', pro: '6 months', elite: '1 year' },
 ];
 
 function FeatureValue({ value }: { value: string | boolean }) {
@@ -390,8 +390,8 @@ export function Pricing() {
             Pay-per-match credits:{' '}
             <Box component="span" sx={{ color: 'primary.main', fontWeight: 600 }}>
               $0.99 per match
-            </Box>{' '}
-            (up to 30 minutes). Perfect for Basic tier users who need occasional AI detections.
+            </Box>
+            . No subscription needed — just pay for the matches you want analyzed.
           </Typography>
         </Box>
       </Container>

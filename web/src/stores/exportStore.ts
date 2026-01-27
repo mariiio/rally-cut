@@ -287,19 +287,20 @@ export const useExportStore = create<ExportState>((set, get) => ({
 
       // Get camera edits if applicable
       const cameraStore = useCameraStore.getState();
-      let camera: { aspectRatio: 'ORIGINAL'; keyframes: Array<{ timeOffset: number; positionX: number; positionY: number; zoom: number; rotation: number; easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT' }> } | undefined;
+      let camera: { aspectRatio: 'ORIGINAL' | 'VERTICAL'; keyframes: Array<{ timeOffset: number; positionX: number; positionY: number; zoom: number; rotation: number; easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT' }> } | undefined;
 
       if (options?.applyCameraEdits) {
         const globalSettings = cameraStore.getGlobalSettings(video.id);
         const rallyCameraEdit = cameraStore.cameraEdits[rally.id];
+        const aspectRatio = rallyCameraEdit?.aspectRatio ?? 'ORIGINAL';
 
-        // Only use ORIGINAL aspect ratio keyframes (VERTICAL not supported for export)
-        const keyframes = rallyCameraEdit?.keyframes?.ORIGINAL ?? [];
+        // Use keyframes for the active aspect ratio
+        const keyframes = rallyCameraEdit?.keyframes?.[aspectRatio] ?? [];
 
         // Combine global settings with rally keyframes
         if (keyframes.length > 0 || cameraStore.hasGlobalSettings(video.id)) {
           camera = {
-            aspectRatio: 'ORIGINAL',
+            aspectRatio,
             keyframes: keyframes.map(kf => ({
               timeOffset: kf.timeOffset,
               // Combine global + rally positions
@@ -415,18 +416,19 @@ export const useExportStore = create<ExportState>((set, get) => ({
 
       // Convert rally timestamps (seconds) to milliseconds and include camera edits
       const exportRallies = rallies.map(rally => {
-        let camera: { aspectRatio: 'ORIGINAL'; keyframes: Array<{ timeOffset: number; positionX: number; positionY: number; zoom: number; rotation: number; easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT' }> } | undefined;
+        let camera: { aspectRatio: 'ORIGINAL' | 'VERTICAL'; keyframes: Array<{ timeOffset: number; positionX: number; positionY: number; zoom: number; rotation: number; easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT' }> } | undefined;
 
         if (options?.applyCameraEdits) {
           const rallyCameraEdit = cameraStore.cameraEdits[rally.id];
+          const aspectRatio = rallyCameraEdit?.aspectRatio ?? 'ORIGINAL';
 
-          // Only use ORIGINAL aspect ratio keyframes (VERTICAL not supported for export)
-          const keyframes = rallyCameraEdit?.keyframes?.ORIGINAL ?? [];
+          // Use keyframes for the active aspect ratio
+          const keyframes = rallyCameraEdit?.keyframes?.[aspectRatio] ?? [];
 
           // Combine global settings with rally keyframes
           if (keyframes.length > 0 || cameraStore.hasGlobalSettings(video.id)) {
             camera = {
-              aspectRatio: 'ORIGINAL',
+              aspectRatio,
               keyframes: keyframes.map(kf => ({
                 timeOffset: kf.timeOffset,
                 // Combine global + rally positions

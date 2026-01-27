@@ -14,7 +14,6 @@ import {
   Typography,
   Box,
   Link,
-  Tooltip,
   CircularProgress,
 } from '@mui/material';
 import LockIcon from '@mui/icons-material/Lock';
@@ -53,28 +52,20 @@ export function ExportOptionsDialog({
   const cameraStore = useCameraStore();
 
   // Check if any rally has camera edits
-  const { hasCameraEdits, hasVerticalEdits } = useMemo(() => {
-    let hasCameraEdits = false;
-    let hasVerticalEdits = false;
-
+  const hasCameraEdits = useMemo(() => {
     // Check per-rally keyframes
     for (const rally of rallies) {
       if (cameraStore.hasAnyKeyframes(rally.id)) {
-        hasCameraEdits = true;
-        // Check if this rally has vertical keyframes
-        const edit = cameraStore.cameraEdits[rally.id];
-        if (edit?.keyframes?.VERTICAL?.length > 0) {
-          hasVerticalEdits = true;
-        }
+        return true;
       }
     }
 
     // Check global camera settings for the video
     if (videoId && cameraStore.hasGlobalSettings(videoId)) {
-      hasCameraEdits = true;
+      return true;
     }
 
-    return { hasCameraEdits, hasVerticalEdits };
+    return false;
   }, [rallies, videoId, cameraStore]);
 
   // State for options
@@ -93,16 +84,10 @@ export function ExportOptionsDialog({
   }, [open, isPaidTier]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
-  // Camera edits disabled when any rally has vertical (9:16) edits
-  const cameraEditsDisabled = hasVerticalEdits;
-  const cameraEditsTooltip = hasVerticalEdits
-    ? 'Camera effects cannot be applied when rallies have 9:16 edits'
-    : '';
-
   const handleExport = () => {
     onExport({
       quality,
-      applyCameraEdits: hasCameraEdits && applyCameraEdits && !cameraEditsDisabled,
+      applyCameraEdits: hasCameraEdits && applyCameraEdits,
     });
   };
 
@@ -154,19 +139,16 @@ export function ExportOptionsDialog({
             </Typography>
 
             {/* Camera Edits Toggle */}
-            <Tooltip title={cameraEditsTooltip} placement="top">
-              <FormControlLabel
-                control={
-                  <Checkbox
-                    checked={applyCameraEdits && !cameraEditsDisabled}
-                    onChange={(e) => setApplyCameraEdits(e.target.checked)}
-                    disabled={cameraEditsDisabled}
-                    size="small"
-                  />
-                }
-                label="Apply camera effects"
-              />
-            </Tooltip>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={applyCameraEdits}
+                  onChange={(e) => setApplyCameraEdits(e.target.checked)}
+                  size="small"
+                />
+              }
+              label="Apply camera effects"
+            />
           </Box>
         )}
       </DialogContent>

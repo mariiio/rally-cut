@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireUser } from "../middleware/resolveUser.js";
 import { validateRequest } from "../middleware/validateRequest.js";
 import { uuidSchema } from "../schemas/common.js";
+import { aspectRatioSchema } from "../schemas/camera.js";
 import {
   createExportJob,
   getExportJob,
@@ -21,9 +22,9 @@ const cameraKeyframeSchema = z.object({
   easing: z.enum(["LINEAR", "EASE_IN", "EASE_OUT", "EASE_IN_OUT"]),
 });
 
-// Camera edit schema for export (only ORIGINAL aspect ratio supported)
+// Camera edit schema for export
 const cameraEditSchema = z.object({
-  aspectRatio: z.literal("ORIGINAL"),
+  aspectRatio: aspectRatioSchema,
   keyframes: z.array(cameraKeyframeSchema),
 });
 
