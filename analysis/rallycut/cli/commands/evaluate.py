@@ -14,7 +14,7 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TextColumn
 from rich.table import Table
 
 from rallycut.cli.utils import handle_errors
-from rallycut.core.config import MODEL_PRESETS
+from rallycut.core.config import MODEL_PRESETS, get_model_path
 from rallycut.evaluation.cached_analysis import (
     AnalysisCache,
     PostProcessingParams,
@@ -226,6 +226,8 @@ def _run_evaluation(
     resolver: VideoResolver,
     stride: int,
     use_cache: bool,
+    model_path: Path | None = None,
+    model_id: str = "default",
     progress: Progress | None = None,
     task_id: TaskID | None = None,
 ) -> list[VideoEvaluationResult]:
@@ -247,7 +249,7 @@ def _run_evaluation(
 
         if use_cache:
             # Use cached analysis and apply post-processing
-            cached = cache.get(video.content_hash, stride)
+            cached = cache.get(video.content_hash, stride, model_id)
             if cached is None:
                 # Need to run analysis
                 video_path = resolver.resolve(video.s3_key, video.content_hash)
@@ -257,6 +259,8 @@ def _run_evaluation(
                     video.content_hash,
                     stride=stride,
                     cache=cache,
+                    model_path=model_path,
+                    model_id=model_id,
                 )
             segments = apply_post_processing_custom(cached, params)
         else:
@@ -268,6 +272,8 @@ def _run_evaluation(
                 video.content_hash,
                 stride=stride,
                 cache=cache,
+                model_path=model_path,
+                model_id=model_id,
             )
             segments = apply_post_processing_custom(cached, params)
 
@@ -431,6 +437,13 @@ def evaluate(
     console.print("[bold]RallyCut Evaluation Framework[/bold]")
     console.print(f"Model: [yellow]{model}[/yellow]")
 
+    # Resolve model weights path
+    model_path = get_model_path(model)
+    if model_path:
+        console.print(f"Weights: [dim]{model_path}[/dim]")
+    else:
+        console.print(f"[yellow]Warning: No local weights found for '{model}', using default[/yellow]")
+
     # Get model-specific preset
     preset = MODEL_PRESETS.get(model, MODEL_PRESETS["indoor"])
 
@@ -514,6 +527,8 @@ def evaluate(
                     video.content_hash,
                     stride=stride,
                     cache=cache,
+                    model_path=model_path,
+                    model_id=model,
                 )
                 progress.update(task, advance=1)
 
@@ -577,6 +592,8 @@ def evaluate(
             resolver=resolver,
             stride=stride,
             use_cache=use_cache,
+            model_path=model_path,
+            model_id=model,
             progress=progress,
             task_id=task,
         )
@@ -647,6 +664,14 @@ def tune(
             help="Number of top results to show",
         ),
     ] = 5,
+    model: Annotated[
+        str,
+        typer.Option(
+            "--model",
+            "-m",
+            help="Model variant: 'indoor' or 'beach'",
+        ),
+    ] = "indoor",
 ) -> None:
     """
     Run parameter sweep to find optimal settings.
@@ -656,7 +681,7 @@ def tune(
 
     Examples:
 
-        rallycut evaluate tune --grid beach
+        rallycut evaluate tune --grid beach --model beach
 
         rallycut evaluate tune --grid full -o full_sweep.json
 
@@ -664,6 +689,14 @@ def tune(
     """
     console.print()
     console.print("[bold]Parameter Tuning[/bold]")
+    console.print(f"Model: [yellow]{model}[/yellow]")
+
+    # Resolve model weights path
+    model_path = get_model_path(model)
+    if model_path:
+        console.print(f"Weights: [dim]{model_path}[/dim]")
+    else:
+        console.print(f"[yellow]Warning: No local weights found for '{model}', using default[/yellow]")
 
     # Get grid
     try:
@@ -696,7 +729,7 @@ def tune(
     console.print()
     console.print("Ensuring ML analysis is cached...")
     for video in videos:
-        if not cache.has(video.content_hash, stride):
+        if not cache.has(video.content_hash, stride, model):
             console.print(f"  Analyzing {video.filename}...")
             video_path = resolver.resolve(video.s3_key, video.content_hash)
             analyze_and_cache(
@@ -705,6 +738,8 @@ def tune(
                 video.content_hash,
                 stride=stride,
                 cache=cache,
+                model_path=model_path,
+                model_id=model,
             )
 
     # Run sweep
@@ -733,6 +768,8 @@ def tune(
                 resolver=resolver,
                 stride=stride,
                 use_cache=True,
+                model_path=model_path,
+                model_id=model,
             )
 
             aggregated = aggregate_metrics(video_results)

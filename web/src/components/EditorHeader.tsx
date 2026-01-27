@@ -292,7 +292,7 @@ export function EditorHeader() {
               )}
 
               {/* Shared badge for members */}
-              {userRole === 'member' && (
+              {userRole && userRole !== 'owner' && (
                 <Chip
                   icon={<PeopleIcon />}
                   label="Shared"
@@ -309,8 +309,18 @@ export function EditorHeader() {
           )}
         </Stack>
 
-        {/* Share Button (only for owners, not in single video mode) */}
-        {session && userRole === 'owner' && !singleVideoMode && (
+        {/* Role chip for non-owner members */}
+        {session && userRole && userRole !== 'owner' && (
+          <Chip
+            label={userRole === 'ADMIN' ? 'Admin' : userRole === 'EDITOR' ? 'Editor' : 'Viewer'}
+            size="small"
+            color={userRole === 'ADMIN' ? 'warning' : userRole === 'EDITOR' ? 'info' : 'default'}
+            sx={{ height: 22, fontSize: '0.7rem' }}
+          />
+        )}
+
+        {/* Share Button (for owners and admins, not in single video mode) */}
+        {session && (userRole === 'owner' || userRole === 'ADMIN') && !singleVideoMode && (
           <Tooltip title="Share session">
             <IconButton
               size="small"
@@ -322,8 +332,8 @@ export function EditorHeader() {
           </Tooltip>
         )}
 
-        {/* Pending Access Requests (only for owners, not in single video mode) */}
-        {session && userRole === 'owner' && !singleVideoMode && (
+        {/* Pending Access Requests (for owners and admins, not in single video mode) */}
+        {session && (userRole === 'owner' || userRole === 'ADMIN') && !singleVideoMode && (
           <PendingAccessRequests sessionId={session.id} />
         )}
 

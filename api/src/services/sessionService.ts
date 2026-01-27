@@ -196,7 +196,7 @@ export async function getSessionById(id: string, userId?: string) {
           members: userId
             ? {
                 where: { userId },
-                select: { id: true },
+                select: { id: true, role: true },
               }
             : false,
         },
@@ -216,12 +216,12 @@ export async function getSessionById(id: string, userId?: string) {
   }
 
   // Compute user role from combined query result
-  let userRole: "owner" | "member" | null = null;
+  let userRole: "owner" | "VIEWER" | "EDITOR" | "ADMIN" | null = null;
   if (userId) {
     if (session.userId === userId) {
       userRole = "owner";
     } else if (session.share?.members && session.share.members.length > 0) {
-      userRole = "member";
+      userRole = (session.share.members[0] as { role: "VIEWER" | "EDITOR" | "ADMIN" }).role;
     } else {
       // User has no access - throw AccessDeniedError with session info
       const hasPendingRequest =

@@ -10,7 +10,11 @@ import {
   getShare,
   getSharePreview,
   removeMember,
+  updateMemberRole,
+  updateDefaultRole,
 } from "../services/shareService.js";
+
+const memberRoleSchema = z.enum(["VIEWER", "EDITOR", "ADMIN"]);
 
 const router = Router();
 
@@ -21,13 +25,18 @@ const router = Router();
 router.post(
   "/v1/sessions/:id/share",
   requireUser,
-  validateRequest({ params: z.object({ id: uuidSchema }) }),
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: z.object({ defaultRole: memberRoleSchema.optional() }).optional(),
+  }),
   async (req, res, next) => {
     try {
       const userId = req.userId as string; // Guaranteed by requireUser
-      const share = await createShare(req.params.id, userId);
+      const defaultRole = req.body?.defaultRole;
+      const share = await createShare(req.params.id, userId, defaultRole);
       res.status(201).json({
         token: share.token,
+        defaultRole: share.defaultRole,
         createdAt: share.createdAt,
       });
     } catch (error) {
@@ -37,7 +46,7 @@ router.post(
 );
 
 /**
- * Get share info including members (owner only)
+ * Get share info including members (owner or admin)
  * GET /v1/sessions/:id/share
  */
 router.get(
@@ -54,12 +63,14 @@ router.get(
       }
       res.json({
         token: share.token,
+        defaultRole: share.defaultRole,
         createdAt: share.createdAt,
         members: share.members.map((m) => ({
           userId: m.user.id,
           name: m.user.name,
           email: m.user.email,
           avatarUrl: m.user.avatarUrl,
+          role: m.role,
           joinedAt: m.joinedAt,
         })),
       });
@@ -103,6 +114,59 @@ router.delete(
       const userId = req.userId as string; // Guaranteed by requireUser
       await removeMember(req.params.id, userId, req.params.userId);
       res.status(204).send();
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * Update a member's role
+ * PATCH /v1/sessions/:id/share/members/:userId/role
+ */
+router.patch(
+  "/v1/sessions/:id/share/members/:userId/role",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema, userId: uuidSchema }),
+    body: z.object({ role: memberRoleSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      const actorId = req.userId as string;
+      const updated = await updateMemberRole(
+        req.params.id,
+        actorId,
+        req.params.userId,
+        req.body.role
+      );
+      res.json({ role: updated.role });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * Update the default role for new members joining via the share link
+ * PATCH /v1/sessions/:id/share/default-role
+ */
+router.patch(
+  "/v1/sessions/:id/share/default-role",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: z.object({ defaultRole: memberRoleSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      const actorId = req.userId as string;
+      const updated = await updateDefaultRole(
+        req.params.id,
+        actorId,
+        req.body.defaultRole
+      );
+      res.json({ defaultRole: updated.defaultRole });
     } catch (error) {
       next(error);
     }

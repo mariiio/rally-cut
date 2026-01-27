@@ -101,7 +101,7 @@ interface EditorState {
   // Session state
   session: Session | null;
   activeMatchId: string | null;
-  userRole: 'owner' | 'member' | null;
+  userRole: 'owner' | 'VIEWER' | 'EDITOR' | 'ADMIN' | null;
   currentUserId: string | null;
   currentUserName: string | null;
   currentUserEmail: string | null;
@@ -231,6 +231,7 @@ interface EditorState {
   hasChangesFromOriginal: () => boolean;
   canCreateHighlight: () => boolean;
   canEditHighlight: (highlightId: string) => boolean;
+  canManageShare: () => boolean;
   getNextHighlightColor: () => string;
   getHighlightsForRally: (rallyId: string) => Highlight[];
   isRallyEditingLocked: () => boolean;
@@ -599,7 +600,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       // Enable "skip dead time" by default for guests with rallies (if no explicit preference)
       const hasRallies = session.matches.some(m => m.rallies.length > 0);
-      const isGuest = session.userRole === 'member';
+      const isGuest = session.userRole !== 'owner' && session.userRole != null;
       const hasExplicitPreference = typeof window !== 'undefined' &&
         localStorage.getItem(STORAGE_KEYS.PLAY_ONLY_RALLIES) !== null;
 
@@ -1966,6 +1967,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   canCreateHighlight: () => {
     const state = get();
+    // Viewers cannot create highlights
+    if (state.userRole === 'VIEWER') return false;
     // Can create if no highlights OR all existing highlights have at least one rally
     if (!state.highlights || state.highlights.length === 0) return true;
     return state.highlights.every((h) => h.rallyIds?.length > 0);
@@ -1973,6 +1976,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   canEditHighlight: (highlightId: string) => {
     const state = get();
+    // Viewers cannot edit highlights
+    if (state.userRole === 'VIEWER') return false;
     const highlight = state.highlights?.find((h) => h.id === highlightId);
     if (!highlight) return false;
     // If no creator ID set, anyone can edit (legacy highlights - log for tracking)
@@ -1982,6 +1987,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
     // Only creator can edit
     return highlight.createdByUserId === state.currentUserId;
+  },
+
+  canManageShare: () => {
+    const state = get();
+    return state.userRole === 'owner' || state.userRole === 'ADMIN';
   },
 
   getNextHighlightColor: () => {
@@ -2026,11 +2036,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     });
   },
 
-  // Check if rally editing is locked (video confirmed or user is guest)
+  // Check if rally editing is locked (video confirmed or user is viewer)
   isRallyEditingLocked: () => {
     const state = get();
-    // Guest users (members) cannot edit rallies
-    if (state.userRole === 'member') return true;
+    // Viewers cannot edit rallies
+    if (state.userRole === 'VIEWER') return true;
     if (!state.activeMatchId) return false;
     const confirmation = state.confirmationStatus[state.activeMatchId];
     return confirmation?.status === 'CONFIRMED';

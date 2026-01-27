@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { requireUser } from "../middleware/resolveUser.js";
+import { requireUser, requireAuthenticated } from "../middleware/resolveUser.js";
 import { validateRequest } from "../middleware/validateRequest.js";
 import { uuidSchema } from "../schemas/common.js";
 import {
@@ -18,7 +18,7 @@ const detectRalliesBodySchema = z
 
 router.post(
   "/v1/videos/:id/detect-rallies",
-  requireUser,
+  requireAuthenticated,
   validateRequest({
     params: z.object({ id: uuidSchema }),
     body: detectRalliesBodySchema,

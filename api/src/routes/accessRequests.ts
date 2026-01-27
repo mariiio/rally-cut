@@ -49,7 +49,7 @@ router.post(
 );
 
 /**
- * Get pending access requests for a session (owner only)
+ * Get pending access requests for a session (owner or admin)
  * GET /v1/sessions/:id/access-requests
  */
 router.get(
@@ -68,7 +68,7 @@ router.get(
 );
 
 /**
- * Get count of pending access requests (owner only)
+ * Get count of pending access requests (owner or admin)
  * GET /v1/sessions/:id/access-requests/count
  */
 router.get(
@@ -87,7 +87,7 @@ router.get(
 );
 
 /**
- * Accept an access request (owner only)
+ * Accept an access request (owner or admin)
  * POST /v1/sessions/:id/access-requests/:requestId/accept
  */
 router.post(
@@ -112,7 +112,7 @@ router.post(
 );
 
 /**
- * Reject an access request (owner only)
+ * Reject an access request (owner or admin)
  * POST /v1/sessions/:id/access-requests/:requestId/reject
  */
 router.post(

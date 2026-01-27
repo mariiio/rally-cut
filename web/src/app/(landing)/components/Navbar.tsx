@@ -104,7 +104,7 @@ export function Navbar() {
               href="/sessions"
               variant="contained"
               sx={{
-                ml: 2,
+                ml: 1,
                 px: 3,
                 fontWeight: 600,
                 transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',

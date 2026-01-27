@@ -34,6 +34,14 @@ const envSchema = z.object({
 
   // Video Processing Lambda (optional - local FFmpeg used if not set)
   PROCESSING_LAMBDA_FUNCTION_NAME: z.string().optional(),
+
+  // Auth JWT (must match AUTH_SECRET in web)
+  AUTH_JWT_SECRET: z.string().min(16).optional(),
+
+  // Email (AWS SES)
+  SES_FROM_EMAIL: z.string().email().default("noreply@rallycut.com"),
+  SES_REGION: z.string().default("us-east-1"),
+  FRONTEND_URL: z.string().default("http://localhost:3000"),
 });
 
 function loadEnv(): z.infer<typeof envSchema> {

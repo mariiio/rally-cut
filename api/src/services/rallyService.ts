@@ -1,17 +1,12 @@
 import { prisma } from "../lib/prisma.js";
 import { ForbiddenError, NotFoundError } from "../middleware/errorHandler.js";
 import type { CreateRallyInput, UpdateRallyInput } from "../schemas/rally.js";
+import { canAccessVideoRallies } from "./shareService.js";
 
 export async function listRallies(videoId: string, userId: string) {
-  const video = await prisma.video.findUnique({
-    where: { id: videoId },
-  });
-
-  if (video === null) {
-    throw new NotFoundError("Video", videoId);
-  }
-
-  if (video.userId !== userId) {
+  // canAccessVideoRallies throws NotFoundError if video doesn't exist
+  const hasAccess = await canAccessVideoRallies(videoId, userId, false);
+  if (!hasAccess) {
     throw new ForbiddenError("You do not have permission to access this video's rallies");
   }
 
@@ -22,15 +17,9 @@ export async function listRallies(videoId: string, userId: string) {
 }
 
 export async function createRally(videoId: string, userId: string, data: CreateRallyInput) {
-  const video = await prisma.video.findUnique({
-    where: { id: videoId },
-  });
-
-  if (video === null) {
-    throw new NotFoundError("Video", videoId);
-  }
-
-  if (video.userId !== userId) {
+  // canAccessVideoRallies throws NotFoundError if video doesn't exist
+  const hasAccess = await canAccessVideoRallies(videoId, userId, true);
+  if (!hasAccess) {
     throw new ForbiddenError("You do not have permission to create rallies for this video");
   }
 
@@ -60,14 +49,16 @@ export async function createRally(videoId: string, userId: string, data: CreateR
 export async function updateRally(id: string, userId: string, data: UpdateRallyInput) {
   const rally = await prisma.rally.findUnique({
     where: { id },
-    include: { video: true },
+    select: { videoId: true },
   });
 
   if (rally === null) {
     throw new NotFoundError("Rally", id);
   }
 
-  if (rally.video.userId !== userId) {
+  // canAccessVideoRallies throws NotFoundError if video doesn't exist
+  const hasAccess = await canAccessVideoRallies(rally.videoId, userId, true);
+  if (!hasAccess) {
     throw new ForbiddenError("You do not have permission to update this rally");
   }
 
@@ -80,14 +71,16 @@ export async function updateRally(id: string, userId: string, data: UpdateRallyI
 export async function deleteRally(id: string, userId: string) {
   const rally = await prisma.rally.findUnique({
     where: { id },
-    include: { video: true },
+    select: { videoId: true },
   });
 
   if (rally === null) {
     throw new NotFoundError("Rally", id);
   }
 
-  if (rally.video.userId !== userId) {
+  // canAccessVideoRallies throws NotFoundError if video doesn't exist
+  const hasAccess = await canAccessVideoRallies(rally.videoId, userId, true);
+  if (!hasAccess) {
     throw new ForbiddenError("You do not have permission to delete this rally");
   }
 

@@ -9,8 +9,8 @@ import { getUserTier, getTierLimits } from "./tierService.js";
  * This replaces the current rallies/highlights with the provided state.
  *
  * Permission rules:
- * - Only owners can modify rallies
- * - Members can create new highlights (they become the owner)
+ * - Owners, editors, and admins can modify rallies; viewers cannot
+ * - Owners, editors, and admins can create/edit highlights; viewers cannot
  * - Users can only edit/delete highlights they created
  * - FREE tier users cannot sync to server (localStorage only)
  */
@@ -30,7 +30,7 @@ export async function syncState(
   }
 
   // Check access
-  let userRole: "owner" | "member" | null = null;
+  let userRole: "owner" | "VIEWER" | "EDITOR" | "ADMIN" | null = null;
   if (userId) {
     const access = await canAccessSession(sessionId, userId);
     if (!access.hasAccess) {
@@ -52,18 +52,18 @@ export async function syncState(
     throw new NotFoundError("Session", sessionId);
   }
 
-  // Members cannot modify rallies
-  const isOwner = userRole === "owner" || !userId;
+  // Only owners, editors, and admins can modify rallies; viewers cannot
+  const canEditRallies = userRole === "owner" || userRole === "EDITOR" || userRole === "ADMIN" || !userId;
   const hasRallyChanges = Object.keys(input.ralliesPerVideo).length > 0;
-  if (!isOwner && hasRallyChanges) {
-    throw new ForbiddenError("Members cannot modify rallies");
+  if (!canEditRallies && hasRallyChanges) {
+    throw new ForbiddenError("Viewers cannot modify rallies");
   }
 
   const videoIds = new Set(session.sessionVideos.map((sv) => sv.videoId));
 
   await prisma.$transaction(async (tx) => {
-    // Sync rallies for each video (only if user is owner)
-    if (isOwner) {
+    // Sync rallies for each video (only if user can edit)
+    if (canEditRallies) {
       // Pre-fetch all rallies for all session videos in one query to avoid N+1
       // Include data needed for comparison to skip unchanged rallies
       const allExistingRallies = await tx.rally.findMany({
@@ -307,135 +307,138 @@ export async function syncState(
       }
     }
 
-    // Sync highlights
-    // Get existing highlights with creator info
-    const existingHighlights = await tx.highlight.findMany({
-      where: { sessionId },
-      include: { highlightRallies: true },
-    });
-    const existingHighlightMap = new Map(
-      existingHighlights.map((h) => [h.id, h])
-    );
-    const seenHighlightIds = new Set<string>();
+    // Sync highlights (viewers cannot modify highlights)
+    const canEditHighlights = canEditRallies;
+    if (canEditHighlights) {
+      // Get existing highlights with creator info
+      const existingHighlights = await tx.highlight.findMany({
+        where: { sessionId },
+        include: { highlightRallies: true },
+      });
+      const existingHighlightMap = new Map(
+        existingHighlights.map((h) => [h.id, h])
+      );
+      const seenHighlightIds = new Set<string>();
 
-    // Get all rally IDs for videos in this session for validation
-    const allRallies = await tx.rally.findMany({
-      where: {
-        video: {
-          sessionVideos: {
-            some: { sessionId },
+      // Get all rally IDs for videos in this session for validation
+      const allRallies = await tx.rally.findMany({
+        where: {
+          video: {
+            sessionVideos: {
+              some: { sessionId },
+            },
           },
         },
-      },
-      select: { id: true, videoId: true, order: true },
-    });
+        select: { id: true, videoId: true, order: true },
+      });
 
-    // Build a map from frontend rally ID pattern to backend ID
-    // Frontend uses: `${videoId}_rally_${order + 1}`
-    const rallyIdMap = new Map<string, string>();
-    for (const r of allRallies) {
-      const frontendId = `${r.videoId}_rally_${r.order + 1}`;
-      rallyIdMap.set(frontendId, r.id);
-    }
+      // Build a map from frontend rally ID pattern to backend ID
+      // Frontend uses: `${videoId}_rally_${order + 1}`
+      const rallyIdMap = new Map<string, string>();
+      for (const r of allRallies) {
+        const frontendId = `${r.videoId}_rally_${r.order + 1}`;
+        rallyIdMap.set(frontendId, r.id);
+      }
 
-    for (const highlight of input.highlights) {
-      const existingHighlight = highlight.id
-        ? existingHighlightMap.get(highlight.id)
-        : undefined;
+      for (const highlight of input.highlights) {
+        const existingHighlight = highlight.id
+          ? existingHighlightMap.get(highlight.id)
+          : undefined;
 
-      if (existingHighlight) {
-        // Check if user can edit this highlight
-        const canEdit =
-          !userId ||
-          !existingHighlight.createdByUserId ||
-          existingHighlight.createdByUserId === userId;
+        if (existingHighlight) {
+          // Check if user can edit this highlight
+          const canEdit =
+            !userId ||
+            !existingHighlight.createdByUserId ||
+            existingHighlight.createdByUserId === userId;
 
-        if (canEdit) {
-          // Update existing highlight
-          await tx.highlight.update({
-            where: { id: highlight.id },
+          if (canEdit) {
+            // Update existing highlight
+            await tx.highlight.update({
+              where: { id: highlight.id },
+              data: {
+                name: highlight.name,
+                color: highlight.color,
+              },
+            });
+
+            // Sync highlight rallies - use batch insert for performance
+            await tx.highlightRally.deleteMany({
+              where: { highlightId: highlight.id },
+            });
+
+            // Build batch of highlight rallies to create
+            const highlightRalliesToCreate = highlight.rallyIds
+              .map((frontendRallyId, order) => {
+                if (!frontendRallyId) return null;
+                const backendRallyId = rallyIdMap.get(frontendRallyId);
+                if (!backendRallyId) return null;
+                return {
+                  highlightId: highlight.id!,
+                  rallyId: backendRallyId,
+                  order,
+                };
+              })
+              .filter((r): r is NonNullable<typeof r> => r !== null);
+
+            if (highlightRalliesToCreate.length > 0) {
+              await tx.highlightRally.createMany({
+                data: highlightRalliesToCreate,
+              });
+            }
+          }
+          seenHighlightIds.add(highlight.id!);
+        } else {
+          // Create new highlight with creator tracking
+          const created = await tx.highlight.create({
             data: {
+              sessionId,
+              createdByUserId: userId,
               name: highlight.name,
               color: highlight.color,
             },
           });
+          seenHighlightIds.add(created.id);
 
-          // Sync highlight rallies - use batch insert for performance
-          await tx.highlightRally.deleteMany({
-            where: { highlightId: highlight.id },
-          });
-
-          // Build batch of highlight rallies to create
-          const highlightRalliesToCreate = highlight.rallyIds
+          // Add highlight rallies - use batch insert for performance
+          const newHighlightRallies = highlight.rallyIds
             .map((frontendRallyId, order) => {
               if (!frontendRallyId) return null;
               const backendRallyId = rallyIdMap.get(frontendRallyId);
               if (!backendRallyId) return null;
               return {
-                highlightId: highlight.id!,
+                highlightId: created.id,
                 rallyId: backendRallyId,
                 order,
               };
             })
             .filter((r): r is NonNullable<typeof r> => r !== null);
 
-          if (highlightRalliesToCreate.length > 0) {
+          if (newHighlightRallies.length > 0) {
             await tx.highlightRally.createMany({
-              data: highlightRalliesToCreate,
+              data: newHighlightRallies,
             });
           }
         }
-        seenHighlightIds.add(highlight.id!);
-      } else {
-        // Create new highlight with creator tracking
-        const created = await tx.highlight.create({
-          data: {
-            sessionId,
-            createdByUserId: userId,
-            name: highlight.name,
-            color: highlight.color,
-          },
-        });
-        seenHighlightIds.add(created.id);
-
-        // Add highlight rallies - use batch insert for performance
-        const newHighlightRallies = highlight.rallyIds
-          .map((frontendRallyId, order) => {
-            if (!frontendRallyId) return null;
-            const backendRallyId = rallyIdMap.get(frontendRallyId);
-            if (!backendRallyId) return null;
-            return {
-              highlightId: created.id,
-              rallyId: backendRallyId,
-              order,
-            };
-          })
-          .filter((r): r is NonNullable<typeof r> => r !== null);
-
-        if (newHighlightRallies.length > 0) {
-          await tx.highlightRally.createMany({
-            data: newHighlightRallies,
-          });
-        }
       }
-    }
 
-    // Delete highlights that are no longer in the list
-    // Only delete highlights the user owns
-    const highlightsToDelete = [...existingHighlightMap.entries()]
-      .filter(([id, h]) => {
-        if (seenHighlightIds.has(id)) return false;
-        // Can only delete if user is owner or created it
-        if (!userId) return true;
-        if (!h.createdByUserId) return true;
-        return h.createdByUserId === userId;
-      })
-      .map(([id]) => id);
+      // Delete highlights that are no longer in the list
+      // Only delete highlights the user owns
+      const highlightsToDelete = [...existingHighlightMap.entries()]
+        .filter(([id, h]) => {
+          if (seenHighlightIds.has(id)) return false;
+          // Can only delete if user is owner or created it
+          if (!userId) return true;
+          if (!h.createdByUserId) return true;
+          return h.createdByUserId === userId;
+        })
+        .map(([id]) => id);
 
-    if (highlightsToDelete.length > 0) {
-      await tx.highlight.deleteMany({
-        where: { id: { in: highlightsToDelete } },
-      });
+      if (highlightsToDelete.length > 0) {
+        await tx.highlight.deleteMany({
+          where: { id: { in: highlightsToDelete } },
+        });
+      }
     }
 
     // Update session timestamp

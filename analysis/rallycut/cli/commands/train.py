@@ -324,7 +324,7 @@ def modal(
             raise typer.Exit(1)
 
         cmd = [
-            "python3", "-m", "modal", "volume", "put",
+            "python3", "-m", "modal", "volume", "put", "-f",
             "rallycut-training", str(model_dir) + "/", "base_model/"
         ]
         rprint(f"Running: {' '.join(cmd)}")
@@ -340,8 +340,8 @@ def modal(
 
     if upload:
         rprint("[bold]Uploading training data to Modal...[/bold]")
-        # Use modal volume put command
-        cmd = ["python3", "-m", "modal", "volume", "put", "rallycut-training", "training_data/", "training_data/"]
+        # Use modal volume put command with --force to overwrite existing files
+        cmd = ["python3", "-m", "modal", "volume", "put", "-f", "rallycut-training", "training_data/", "training_data/"]
         rprint(f"Running: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
@@ -379,7 +379,7 @@ def modal(
 
         def upload_file(task: tuple[Path, str]) -> tuple[str, bool, str]:
             local_path, remote_path = task
-            cmd = ["python3", "-m", "modal", "volume", "put", "rallycut-training", str(local_path), remote_path]
+            cmd = ["python3", "-m", "modal", "volume", "put", "-f", "rallycut-training", str(local_path), remote_path]
             result = subprocess.run(cmd, capture_output=True, text=True)
             return local_path.name, result.returncode == 0, result.stderr
 
@@ -402,28 +402,47 @@ def modal(
         return
 
     if download:
+        import shutil
+        import tempfile
+
         rprint("[bold]Downloading trained model from Modal...[/bold]")
         output_dir = Path("weights/videomae/beach_volleyball")
         output_dir.mkdir(parents=True, exist_ok=True)
-        cmd = [
-            "python3", "-m", "modal",
-            "volume",
-            "get",
-            "rallycut-training",
-            "models/beach_volleyball/best/",
-            str(output_dir) + "/",
-        ]
-        rprint(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0:
-            rprint(f"[green]Model downloaded to {output_dir}[/green]")
-            rprint()
-            rprint(
-                "[yellow]Tip: Run 'rallycut train modal --cleanup' to delete videos from Modal\n"
-                "and save storage costs (~$0.75/GB/month).[/yellow]"
-            )
-        else:
-            rprint(f"[red]Download failed: {result.stderr}[/red]")
+
+        # Download to temp dir first, then move files to output_dir.
+        # Modal volume get creates a best/ subdirectory when downloading
+        # models/beach_volleyball/best/ — we want files at the root.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cmd = [
+                "python3", "-m", "modal",
+                "volume",
+                "get",
+                "--force",
+                "rallycut-training",
+                "models/beach_volleyball/best/",
+                tmp_dir + "/",
+            ]
+            rprint(f"Running: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                rprint(f"[red]Download failed: {result.stderr}[/red]")
+                return
+
+            # Modal may create a best/ subdirectory — flatten if needed
+            best_subdir = Path(tmp_dir) / "best"
+            source_dir = best_subdir if best_subdir.is_dir() else Path(tmp_dir)
+
+            # Move all model files to output directory
+            for f in source_dir.iterdir():
+                if f.is_file():
+                    shutil.copy2(str(f), str(output_dir / f.name))
+
+        rprint(f"[green]Model downloaded to {output_dir}[/green]")
+        rprint()
+        rprint(
+            "[yellow]Tip: Run 'rallycut train modal --cleanup' to delete videos from Modal\n"
+            "and save storage costs (~$0.75/GB/month).[/yellow]"
+        )
         return
 
     if cleanup:

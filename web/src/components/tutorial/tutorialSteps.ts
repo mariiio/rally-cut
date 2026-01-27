@@ -8,7 +8,7 @@ export interface TutorialStep {
 }
 
 export interface TutorialContext {
-  userRole: 'owner' | 'member' | null;
+  userRole: 'owner' | 'VIEWER' | 'EDITOR' | 'ADMIN' | null;
   hasRallies: boolean;
 }
 
