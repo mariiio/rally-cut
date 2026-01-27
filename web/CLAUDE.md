@@ -35,7 +35,7 @@ src/
 │   ├── HighlightsPanel
 │   ├── CameraPanel   # Camera edit controls
 │   ├── CameraOverlay # Visual preview overlay
-│   └── OriginalQualityBanner # FREE tier upgrade prompt (3-day quality warning)
+│   └── OriginalQualityBanner # FREE tier upgrade prompt (7-day quality warning)
 ├── stores/           # Zustand stores (see below)
 ├── services/
 │   ├── api.ts        # REST client

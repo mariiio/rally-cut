@@ -24,11 +24,11 @@ type BannerState = 'none' | 'countdown' | 'downgraded';
 /**
  * Banner for FREE tier users about video quality:
  *
- * 1. Countdown state (within 3 days of upload, not yet downgraded):
+ * 1. Countdown state (within grace period of upload, not yet downgraded):
  *    - Shows time remaining for full quality exports
  *    - "Full quality exports available for X days"
  *
- * 2. Downgraded state (after 3 days OR qualityDowngradedAt set):
+ * 2. Downgraded state (after grace period OR qualityDowngradedAt set):
  *    - Subtle info message
  *    - "Full quality exports no longer available. Upgrade and re-upload to restore."
  *    - Permanently dismissible per video
@@ -225,7 +225,7 @@ export function OriginalQualityBanner({ currentMatch }: OriginalQualityBannerPro
             Full quality exports available
           </Typography>
           <Tooltip
-            title="FREE tier includes full quality exports with watermark for the first 3 days. Upgrade to Pro for permanent full quality without watermark."
+            title="FREE tier includes full quality exports with watermark for the first 7 days. Upgrade to Pro for permanent full quality without watermark."
             arrow
             placement="top"
           >

@@ -47,27 +47,27 @@ const MINUTES = 60 * 1000;
  * | Feature                  | BASIC (Free) | PRO ($9.99)  | ELITE ($24.99) |
  * |--------------------------|--------------|--------------|----------------|
  * | AI Detections/month      | 2            | 15           | 50             |
- * | Monthly Uploads          | 3            | 20           | 50             |
- * | Max Video Duration       | 15 min       | 45 min       | 90 min         |
- * | Max File Size            | 500 MB       | 2 GB         | 5 GB           |
- * | Storage Cap              | 1 GB         | 20 GB        | 75 GB          |
+ * | Monthly Uploads          | 5            | 20           | 50             |
+ * | Max Video Duration       | 30 min       | 60 min       | 90 min         |
+ * | Max File Size            | 500 MB       | 3 GB         | 5 GB           |
+ * | Storage Cap              | 2 GB         | 20 GB        | 75 GB          |
  * | Export Quality           | 720p         | Original     | Original       |
  * | Watermark                | Yes          | No           | No             |
  * | Server Export            | No           | Yes          | Yes            |
- * | Original Quality         | 3 days       | 14 days      | 60 days        |
- * | Video Retention          | 30 days      | 6 months     | 1 year         |
+ * | Original Quality         | 7 days       | 14 days      | 60 days        |
+ * | Video Retention          | 90 days      | 6 months     | 1 year         |
  * | Server Sync              | No           | Yes          | Yes            |
  */
 export const TIER_CONFIG: Record<UserTier, TierConfig> = {
   FREE: {
     // Limits
     detectionsPerMonth: 2,
-    monthlyUploadCount: 3,
+    monthlyUploadCount: 5,
 
     // Video Constraints
-    maxVideoDurationMs: 15 * MINUTES,
+    maxVideoDurationMs: 30 * MINUTES,
     maxFileSizeBytes: 500 * MB,
-    storageCapBytes: 1 * GB,
+    storageCapBytes: 2 * GB,
 
     // Export
     exportQuality: "720p",
@@ -75,8 +75,8 @@ export const TIER_CONFIG: Record<UserTier, TierConfig> = {
     lambdaExportEnabled: false,
 
     // Retention
-    originalQualityDays: 3,
-    inactivityDeleteDays: 30,
+    originalQualityDays: 7,
+    inactivityDeleteDays: 90,
 
     // Features
     serverSyncEnabled: false,
@@ -89,8 +89,8 @@ export const TIER_CONFIG: Record<UserTier, TierConfig> = {
     monthlyUploadCount: 20,
 
     // Video Constraints
-    maxVideoDurationMs: 45 * MINUTES,
-    maxFileSizeBytes: 2 * GB,
+    maxVideoDurationMs: 60 * MINUTES,
+    maxFileSizeBytes: 3 * GB,
     storageCapBytes: 20 * GB,
 
     // Export

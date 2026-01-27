@@ -101,7 +101,7 @@ export function UploadProgress() {
           }
         >
           Video saved! Free accounts keep videos forever.
-          Original quality exports available for 3 days.
+          Original quality exports available for 7 days.
         </Alert>
       </Snackbar>
     );

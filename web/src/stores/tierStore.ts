@@ -38,14 +38,14 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 export const TIER_LIMITS_DISPLAY = {
   FREE: {
     maxFileSizeMB: 500,
-    maxVideoDurationMin: 15,
-    storageCapGB: 1,
+    maxVideoDurationMin: 30,
+    storageCapGB: 2,
     detectionsPerMonth: 2,
-    uploadsPerMonth: 3,
+    uploadsPerMonth: 5,
   },
   PRO: {
-    maxFileSizeGB: 2,
-    maxVideoDurationMin: 45,
+    maxFileSizeGB: 3,
+    maxVideoDurationMin: 60,
     storageCapGB: 20,
     detectionsPerMonth: 15,
     uploadsPerMonth: 20,
@@ -62,15 +62,15 @@ export const TIER_LIMITS_DISPLAY = {
 // Default FREE tier limits (in case fetch fails)
 const DEFAULT_FREE_LIMITS: TierLimits = {
   detectionsPerMonth: 2,
-  maxVideoDurationMs: 15 * 60 * 1000,
+  maxVideoDurationMs: 30 * 60 * 1000,
   maxFileSizeBytes: 500 * 1024 * 1024, // 500 MB
-  monthlyUploadCount: 3,
-  storageCapBytes: 1 * 1024 * 1024 * 1024, // 1 GB
+  monthlyUploadCount: 5,
+  storageCapBytes: 2 * 1024 * 1024 * 1024, // 2 GB
   exportQuality: '720p',
   exportWatermark: true,
   lambdaExportEnabled: false,
-  originalQualityDays: 3,
-  inactivityDeleteDays: 30,
+  originalQualityDays: 7,
+  inactivityDeleteDays: 90,
   serverSyncEnabled: false,
   highlightsEnabled: true,
 };
@@ -80,11 +80,11 @@ const DEFAULT_FREE_USAGE: UsageQuota = {
   detectionsLimit: 2,
   detectionsRemaining: 2,
   uploadsThisMonth: 0,
-  uploadsLimit: 3,
-  uploadsRemaining: 3,
+  uploadsLimit: 5,
+  uploadsRemaining: 5,
   storageUsedBytes: 0,
-  storageLimitBytes: 1 * 1024 * 1024 * 1024,
-  storageRemainingBytes: 1 * 1024 * 1024 * 1024,
+  storageLimitBytes: 2 * 1024 * 1024 * 1024,
+  storageRemainingBytes: 2 * 1024 * 1024 * 1024,
   periodStart: new Date().toISOString(),
 };
 

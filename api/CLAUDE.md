@@ -55,15 +55,15 @@ All endpoints require `X-Visitor-Id` header (UUID):
 | Feature | FREE | PRO ($9.99) | ELITE ($24.99) |
 |---------|------|-------------|----------------|
 | Detections/month | 2 | 15 | 50 |
-| Monthly uploads | 3 | 20 | 50 |
-| Max video duration | 15 min | 45 min | 90 min |
-| Max file size | 500 MB | 2 GB | 5 GB |
-| Storage cap | 1 GB | 20 GB | 75 GB |
+| Monthly uploads | 5 | 20 | 50 |
+| Max video duration | 30 min | 60 min | 90 min |
+| Max file size | 500 MB | 3 GB | 5 GB |
+| Storage cap | 2 GB | 20 GB | 75 GB |
 | Export quality | 720p + watermark | Original | Original |
 | Server export | No (browser only) | Lambda | Lambda |
 | Server sync | No (localStorage only) | Yes | Yes |
-| Original quality retention | 3 days | 14 days | 60 days |
-| Inactivity deletion | 30 days | 6 months | 1 year |
+| Original quality retention | 7 days | 14 days | 60 days |
+| Inactivity deletion | 90 days | 6 months | 1 year |
 
 **Configuration**: All limits defined in `src/config/tiers.ts` (single source of truth).
 **Enforcement**: `tierService.ts` checks limits, `getUserTier()` resolves tier from user.
@@ -73,10 +73,10 @@ All endpoints require `X-Visitor-Id` header (UUID):
 
 Videos follow a two-phase cleanup based on tier:
 
-1. **Original quality downgrade**: After `originalQualityDays` (FREE: 3, PRO: 14, ELITE: 60):
+1. **Original quality downgrade**: After `originalQualityDays` (FREE: 7, PRO: 14, ELITE: 60):
    - Original/optimized quality deleted, video accessible at 720p proxy only
 
-2. **Inactivity deletion**: After `inactivityDeleteDays` inactive (FREE: 30, PRO: 180, ELITE: 365):
+2. **Inactivity deletion**: After `inactivityDeleteDays` inactive (FREE: 90, PRO: 180, ELITE: 365):
    - All content hard deleted (videos, sessions, S3 files)
 
 **Storage quota**: Enforced per-user, calculated from all video `fileSizeBytes`. Upload blocked when over cap.
