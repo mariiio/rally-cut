@@ -87,7 +87,7 @@ Three subscription tiers with increasing limits:
 | Watermark | Yes | No | No |
 | Server export | No | Yes | Yes |
 | Original quality retention | 7 days | 14 days | 60 days |
-| Video retention | 60 days inactive | While subscribed | While subscribed |
+| Video retention | 60 days inactive | Unlimited | Unlimited |
 | Cloud sync | No | Yes | Yes |
 
 Pay-per-match credits: $0.99 per match. No subscription needed.
