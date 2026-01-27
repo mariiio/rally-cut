@@ -13,6 +13,7 @@ import exportsRouter from "./routes/exports.js";
 import feedbackRouter from "./routes/feedback.js";
 import healthRouter from "./routes/health.js";
 import highlightsRouter from "./routes/highlights.js";
+import authRouter from "./routes/auth.js";
 import identityRouter from "./routes/identity.js";
 import ralliesRouter from "./routes/rallies.js";
 import sessionsRouter from "./routes/sessions.js";
@@ -43,6 +44,9 @@ app.use(webhooksRouter);
 
 // Resolve user from X-Visitor-Id header for all other routes
 app.use(resolveUser);
+
+// Auth routes (register, verify, link)
+app.use(authRouter);
 
 // Identity routes
 app.use(identityRouter);

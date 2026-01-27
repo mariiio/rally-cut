@@ -76,7 +76,7 @@ interface ApiSession {
   updatedAt: string;
   videos: ApiVideo[];
   highlights: ApiHighlight[];
-  userRole?: 'owner' | 'member' | null;
+  userRole?: 'owner' | 'VIEWER' | 'EDITOR' | 'ADMIN' | null;
 }
 
 interface ApiVideoCameraSettings {
@@ -1129,14 +1129,18 @@ export async function updateCurrentUser(data: { name?: string; avatarUrl?: strin
 // Session Sharing API
 // ============================================================================
 
+export type MemberRole = 'VIEWER' | 'EDITOR' | 'ADMIN';
+
 export interface ShareInfo {
   token: string;
+  defaultRole: MemberRole;
   createdAt: string;
   members: Array<{
     userId: string;
     name: string | null;
     email: string | null;
     avatarUrl: string | null;
+    role: MemberRole;
     joinedAt: string;
   }>;
 }
@@ -1145,6 +1149,7 @@ export interface SharePreview {
   sessionId: string;
   sessionName: string;
   ownerName: string | null;
+  defaultRole: MemberRole;
 }
 
 export interface SharedSession {
@@ -1157,10 +1162,11 @@ export interface SharedSession {
   highlightCount: number;
   ownerName: string | null;
   joinedAt: string;
+  role: MemberRole;
 }
 
-// Create or get share link for a session (owner only)
-export async function createShare(sessionId: string): Promise<{ token: string; createdAt: string }> {
+// Create or get share link for a session (owner or admin)
+export async function createShare(sessionId: string): Promise<{ token: string; defaultRole: MemberRole; createdAt: string }> {
   const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/share`, {
     method: 'POST',
     headers: getHeaders(),
@@ -1174,7 +1180,7 @@ export async function createShare(sessionId: string): Promise<{ token: string; c
   return response.json();
 }
 
-// Get share info including members (owner only)
+// Get share info including members (owner or admin)
 export async function getShare(sessionId: string): Promise<ShareInfo | null> {
   const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/share`, {
     headers: getHeaders(),
@@ -1214,6 +1220,45 @@ export async function removeShareMember(sessionId: string, userId: string): Prom
   }
 }
 
+// Update a member's role
+export async function updateMemberRole(
+  sessionId: string,
+  userId: string,
+  role: MemberRole
+): Promise<{ role: MemberRole }> {
+  const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/share/members/${userId}/role`, {
+    method: 'PATCH',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify({ role }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to update member role: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Update the default role for new members joining via the share link
+export async function updateDefaultRole(
+  sessionId: string,
+  defaultRole: MemberRole
+): Promise<{ defaultRole: MemberRole }> {
+  const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/share/default-role`, {
+    method: 'PATCH',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify({ defaultRole }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to update default role: ${response.status}`);
+  }
+
+  return response.json();
+}
+
 // Get share preview (public - for accept page)
 export async function getSharePreview(token: string): Promise<SharePreview> {
   const response = await fetch(`${API_BASE_URL}/v1/share/${token}`, {
@@ -1229,7 +1274,7 @@ export async function getSharePreview(token: string): Promise<SharePreview> {
 }
 
 // Accept a share invite (optionally with a display name)
-export async function acceptShare(token: string, name?: string): Promise<{ sessionId: string; alreadyOwner?: boolean; alreadyMember?: boolean }> {
+export async function acceptShare(token: string, name?: string): Promise<{ sessionId: string; alreadyOwner?: boolean; alreadyMember?: boolean; role?: MemberRole }> {
   const response = await fetch(`${API_BASE_URL}/v1/share/${token}/accept`, {
     method: 'POST',
     headers: {
@@ -1293,7 +1338,7 @@ export async function requestAccess(
   return response.json();
 }
 
-// Get pending access requests for a session (owner only)
+// Get pending access requests for a session (owner or admin)
 export async function getAccessRequests(sessionId: string): Promise<{ requests: AccessRequest[] }> {
   const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/access-requests`, {
     headers: getHeaders(),
@@ -1307,7 +1352,7 @@ export async function getAccessRequests(sessionId: string): Promise<{ requests: 
   return response.json();
 }
 
-// Get count of pending access requests (owner only)
+// Get count of pending access requests (owner or admin)
 export async function getAccessRequestsCount(sessionId: string): Promise<{ pending: number }> {
   const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/access-requests/count`, {
     headers: getHeaders(),
@@ -1321,7 +1366,7 @@ export async function getAccessRequestsCount(sessionId: string): Promise<{ pendi
   return response.json();
 }
 
-// Accept an access request (owner only)
+// Accept an access request (owner or admin)
 export async function acceptAccessRequest(
   sessionId: string,
   requestId: string
@@ -1339,7 +1384,7 @@ export async function acceptAccessRequest(
   return response.json();
 }
 
-// Reject an access request (owner only)
+// Reject an access request (owner or admin)
 export async function rejectAccessRequest(
   sessionId: string,
   requestId: string

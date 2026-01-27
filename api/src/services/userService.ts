@@ -146,12 +146,13 @@ export async function getUserById(id: string): Promise<UserResponse> {
  */
 export async function updateUser(
   id: string,
-  data: { name?: string }
+  data: { name?: string; avatarUrl?: string | null }
 ): Promise<UserResponse> {
   const user = await prisma.user.update({
     where: { id },
     data: {
       name: data.name,
+      avatarUrl: data.avatarUrl,
     },
     include: {
       _count: {

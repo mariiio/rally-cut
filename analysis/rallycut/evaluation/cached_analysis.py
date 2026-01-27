@@ -124,29 +124,31 @@ class AnalysisCache:
         self.cache_dir = cache_dir or Path(user_cache_dir("rallycut")) / "evaluation"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def _get_cache_key(self, content_hash: str, stride: int) -> str:
-        """Generate cache key from content hash and stride.
+    def _get_cache_key(self, content_hash: str, stride: int, model_id: str = "default") -> str:
+        """Generate cache key from content hash, stride, and model.
 
         Different stride = different ML results (samples at different intervals).
+        Different model = different ML weights (indoor vs beach).
         """
-        return hashlib.sha256(f"{content_hash}:{stride}".encode()).hexdigest()[:16]
+        return hashlib.sha256(f"{content_hash}:{stride}:{model_id}".encode()).hexdigest()[:16]
 
-    def _get_cache_path(self, content_hash: str, stride: int) -> Path:
+    def _get_cache_path(self, content_hash: str, stride: int, model_id: str = "default") -> Path:
         """Get cache file path."""
-        key = self._get_cache_key(content_hash, stride)
+        key = self._get_cache_key(content_hash, stride, model_id)
         return self.cache_dir / f"{key}.json"
 
-    def get(self, content_hash: str, stride: int) -> CachedAnalysis | None:
+    def get(self, content_hash: str, stride: int, model_id: str = "default") -> CachedAnalysis | None:
         """Load cached analysis if available.
 
         Args:
             content_hash: Video content hash.
             stride: Stride used for analysis.
+            model_id: Model identifier (e.g. "indoor", "beach").
 
         Returns:
             CachedAnalysis if cached, None otherwise.
         """
-        cache_path = self._get_cache_path(content_hash, stride)
+        cache_path = self._get_cache_path(content_hash, stride, model_id)
         if not cache_path.exists():
             return None
 
@@ -158,26 +160,28 @@ class AnalysisCache:
             cache_path.unlink(missing_ok=True)
             return None
 
-    def put(self, analysis: CachedAnalysis) -> None:
+    def put(self, analysis: CachedAnalysis, model_id: str = "default") -> None:
         """Save analysis to cache.
 
         Args:
             analysis: Analysis results to cache.
+            model_id: Model identifier (e.g. "indoor", "beach").
         """
-        cache_path = self._get_cache_path(analysis.content_hash, analysis.stride)
+        cache_path = self._get_cache_path(analysis.content_hash, analysis.stride, model_id)
         cache_path.write_text(json.dumps(analysis.to_dict(), indent=2))
 
-    def has(self, content_hash: str, stride: int) -> bool:
+    def has(self, content_hash: str, stride: int, model_id: str = "default") -> bool:
         """Check if analysis is cached.
 
         Args:
             content_hash: Video content hash.
             stride: Stride used for analysis.
+            model_id: Model identifier (e.g. "indoor", "beach").
 
         Returns:
             True if cached.
         """
-        return self._get_cache_path(content_hash, stride).exists()
+        return self._get_cache_path(content_hash, stride, model_id).exists()
 
     def clear(self) -> int:
         """Clear all cached analyses.
@@ -201,6 +205,8 @@ def analyze_and_cache(
     progress_callback: Callable[[float, str], None] | None = None,
     cache: AnalysisCache | None = None,
     use_proxy: bool = True,
+    model_path: Path | None = None,
+    model_id: str = "default",
 ) -> CachedAnalysis:
     """Run ML analysis and cache results.
 
@@ -216,6 +222,8 @@ def analyze_and_cache(
         progress_callback: Callback for progress updates.
         cache: AnalysisCache instance. Creates default if None.
         use_proxy: Whether to use proxy video for faster analysis.
+        model_path: Path to model weights. Defaults to config videomae_model_path.
+        model_id: Model identifier for cache key (e.g. "indoor", "beach").
 
     Returns:
         CachedAnalysis with raw ML results.
@@ -232,12 +240,12 @@ def analyze_and_cache(
     if cache is None:
         cache = AnalysisCache()
 
-    cached = cache.get(content_hash, effective_stride)
+    cached = cache.get(content_hash, effective_stride, model_id)
     if cached is not None:
         return cached
 
-    # Initialize analyzer
-    analyzer = GameStateAnalyzer(device=effective_device)
+    # Initialize analyzer with specified model
+    analyzer = GameStateAnalyzer(device=effective_device, model_path=model_path)
 
     # Get video info
     with Video(video_path) as video:
@@ -312,7 +320,7 @@ def analyze_and_cache(
         stride=effective_stride,
         raw_results=results,
     )
-    cache.put(analysis)
+    cache.put(analysis, model_id)
 
     return analysis
 

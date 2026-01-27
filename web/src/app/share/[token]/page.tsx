@@ -7,6 +7,7 @@ import {
   Button,
   Card,
   CardContent,
+  Chip,
   CircularProgress,
   Container,
   TextField,
@@ -180,8 +181,21 @@ export default function AcceptSharePage() {
               &ldquo;{preview?.sessionName}&rdquo;
             </Typography>
 
+            {preview?.defaultRole && (
+              <Chip
+                label={`You'll join as ${preview.defaultRole === 'ADMIN' ? 'Admin' : preview.defaultRole === 'EDITOR' ? 'Editor' : 'Viewer'}`}
+                size="small"
+                color={preview.defaultRole === 'ADMIN' ? 'warning' : preview.defaultRole === 'EDITOR' ? 'info' : 'default'}
+                sx={{ mb: 2 }}
+              />
+            )}
+
             <Typography color="text.secondary" sx={{ mb: 3 }}>
-              Accept the invitation to view and add highlights to this session.
+              {preview?.defaultRole === 'EDITOR'
+                ? 'Accept the invitation to edit rallies and create highlights in this session.'
+                : preview?.defaultRole === 'ADMIN'
+                  ? 'Accept the invitation to manage and collaborate on this session.'
+                  : 'Accept the invitation to view rallies and highlights in this session.'}
             </Typography>
 
             {/* Name input for users without a name */}

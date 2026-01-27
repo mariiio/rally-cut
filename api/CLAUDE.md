@@ -110,7 +110,7 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
 ### State Sync
 - `POST /v1/sessions/:id/sync-state` receives full rally/highlight state
 - Reconciles: creates new, updates existing, deletes removed
-- **Permissions**: Members can view rallies but not edit them
+- **Permissions**: Role-based — Viewers are read-only, Editors/Admins can modify rallies and highlights
 
 ### Export
 - `POST /v1/export-jobs` → triggers Lambda or local FFmpeg
@@ -119,9 +119,11 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
 - Poll `GET /v1/export-jobs/:id` for status
 
 ### Session Sharing
-- `POST /v1/sessions/:id/share` → creates share token
-- `POST /v1/share/:token/accept` → join as member
-- Members can add their own highlights, view rallies (read-only)
+- `POST /v1/sessions/:id/share` → creates share token (owner or admin)
+- `POST /v1/share/:token/accept` → join as member with default role (VIEWER/EDITOR/ADMIN)
+- **Roles**: VIEWER (read-only), EDITOR (edit rallies/highlights), ADMIN (manage members/share)
+- `PATCH /v1/sessions/:id/share/members/:userId/role` → change member role
+- `PATCH /v1/sessions/:id/share/default-role` → change default role for new members
 
 ## Database Schema
 

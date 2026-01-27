@@ -55,6 +55,7 @@ export const identityResponseSchema = z.object({
 
 export const updateUserSchema = z.object({
   name: z.string().min(1).max(100).optional(),
+  avatarUrl: z.string().url().max(2048).nullable().optional(),
 });
 
 export type VisitorId = z.infer<typeof visitorIdSchema>;

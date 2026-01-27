@@ -4,6 +4,7 @@ import {
   NotFoundError,
   ConflictError,
 } from "../middleware/errorHandler.js";
+import { canAccessSession } from "./shareService.js";
 
 /**
  * Create an access request for a session
@@ -78,20 +79,13 @@ export async function createAccessRequest(
 }
 
 /**
- * Get pending access requests for a session (owner only)
+ * Get pending access requests for a session (owner or admin)
  */
-export async function getPendingRequests(sessionId: string, ownerId: string) {
-  const session = await prisma.session.findUnique({
-    where: { id: sessionId, deletedAt: null },
-    select: { userId: true },
-  });
+export async function getPendingRequests(sessionId: string, actorId: string) {
+  const { role } = await canAccessSession(sessionId, actorId);
 
-  if (!session) {
-    throw new NotFoundError("Session", sessionId);
-  }
-
-  if (session.userId !== ownerId) {
-    throw new ForbiddenError("Only the session owner can view access requests");
+  if (role !== "owner" && role !== "ADMIN") {
+    throw new ForbiddenError("Only the session owner or admin can view access requests");
   }
 
   const requests = await prisma.accessRequest.findMany({
@@ -124,14 +118,20 @@ export async function getPendingRequests(sessionId: string, ownerId: string) {
 }
 
 /**
- * Accept an access request (owner only)
+ * Accept an access request (owner or admin)
  * Creates a SessionMember and updates request status
  */
 export async function acceptRequest(
   sessionId: string,
   requestId: string,
-  ownerId: string
+  actorId: string
 ) {
+  const { role } = await canAccessSession(sessionId, actorId);
+
+  if (role !== "owner" && role !== "ADMIN") {
+    throw new ForbiddenError("Only the session owner or admin can accept requests");
+  }
+
   const session = await prisma.session.findUnique({
     where: { id: sessionId, deletedAt: null },
     include: { share: true },
@@ -139,10 +139,6 @@ export async function acceptRequest(
 
   if (!session) {
     throw new NotFoundError("Session", sessionId);
-  }
-
-  if (session.userId !== ownerId) {
-    throw new ForbiddenError("Only the session owner can accept requests");
   }
 
   const request = await prisma.accessRequest.findUnique({
@@ -165,12 +161,13 @@ export async function acceptRequest(
     });
   }
 
-  // Create member and update request in a transaction
+  // Create member with the share's default role and update request in a transaction
   await prisma.$transaction([
     prisma.sessionMember.create({
       data: {
         sessionShareId: share.id,
         userId: request.userId,
+        role: share.defaultRole,
       },
     }),
     prisma.accessRequest.update({
@@ -178,7 +175,7 @@ export async function acceptRequest(
       data: {
         status: "ACCEPTED",
         resolvedAt: new Date(),
-        resolvedBy: ownerId,
+        resolvedBy: actorId,
       },
     }),
   ]);
@@ -187,24 +184,17 @@ export async function acceptRequest(
 }
 
 /**
- * Reject an access request (owner only)
+ * Reject an access request (owner or admin)
  */
 export async function rejectRequest(
   sessionId: string,
   requestId: string,
-  ownerId: string
+  actorId: string
 ) {
-  const session = await prisma.session.findUnique({
-    where: { id: sessionId, deletedAt: null },
-    select: { userId: true },
-  });
+  const { role } = await canAccessSession(sessionId, actorId);
 
-  if (!session) {
-    throw new NotFoundError("Session", sessionId);
-  }
-
-  if (session.userId !== ownerId) {
-    throw new ForbiddenError("Only the session owner can reject requests");
+  if (role !== "owner" && role !== "ADMIN") {
+    throw new ForbiddenError("Only the session owner or admin can reject requests");
   }
 
   const request = await prisma.accessRequest.findUnique({
@@ -224,7 +214,7 @@ export async function rejectRequest(
     data: {
       status: "REJECTED",
       resolvedAt: new Date(),
-      resolvedBy: ownerId,
+      resolvedBy: actorId,
     },
   });
 
@@ -232,20 +222,13 @@ export async function rejectRequest(
 }
 
 /**
- * Get count of pending access requests (owner only)
+ * Get count of pending access requests (owner or admin)
  */
-export async function getPendingCount(sessionId: string, ownerId: string) {
-  const session = await prisma.session.findUnique({
-    where: { id: sessionId, deletedAt: null },
-    select: { userId: true },
-  });
+export async function getPendingCount(sessionId: string, actorId: string) {
+  const { role } = await canAccessSession(sessionId, actorId);
 
-  if (!session) {
-    throw new NotFoundError("Session", sessionId);
-  }
-
-  if (session.userId !== ownerId) {
-    throw new ForbiddenError("Only the session owner can view access requests");
+  if (role !== "owner" && role !== "ADMIN") {
+    throw new ForbiddenError("Only the session owner or admin can view access requests");
   }
 
   const count = await prisma.accessRequest.count({

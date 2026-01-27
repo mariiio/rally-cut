@@ -71,7 +71,7 @@ export interface Session {
   name: string;         // Display name
   matches: Match[];     // Collection of matches (videos)
   highlights: Highlight[]; // Cross-match highlights
-  userRole?: 'owner' | 'member' | null; // User's role in this session
+  userRole?: 'owner' | 'VIEWER' | 'EDITOR' | 'ADMIN' | null; // User's role in this session
   updatedAt?: string;   // ISO timestamp of last server update
 }
 
