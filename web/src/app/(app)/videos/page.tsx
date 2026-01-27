@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState, useMemo, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useState, useMemo, useCallback } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Box,
   Container,
@@ -57,17 +57,36 @@ interface VideoSession {
   type: SessionType;
 }
 
-export default function VideosPage() {
+function VideosPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [videos, setVideos] = useState<VideoListItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(() => {
+    const p = Number(searchParams.get('page'));
+    return p > 0 ? p : 1;
+  });
   const [totalPages, setTotalPages] = useState(1);
   const [totalVideos, setTotalVideos] = useState(0);
-  const [search, setSearch] = useState('');
-  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState(() => searchParams.get('search') ?? '');
+  const [searchInput, setSearchInput] = useState(() => searchParams.get('search') ?? '');
   const [allVideosSessionId, setAllVideosSessionId] = useState<string | null>(null);
   const limit = 24;
+
+  // Sync state to URL
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (page > 1) params.set('page', String(page));
+    if (search) params.set('search', search);
+    const qs = params.toString();
+    const url = qs ? `/videos?${qs}` : '/videos';
+    router.replace(url, { scroll: false });
+  }, [page, search, router]);
+
+  // Scroll to top on page change
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [page]);
 
   // Video menu state
   const [menuAnchor, setMenuAnchor] = useState<{
@@ -656,5 +675,13 @@ export default function VideosPage() {
         onChanged={loadVideos}
       />
     </Box>
+  );
+}
+
+export default function VideosPage() {
+  return (
+    <Suspense>
+      <VideosPageContent />
+    </Suspense>
   );
 }

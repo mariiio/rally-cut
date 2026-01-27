@@ -108,17 +108,27 @@ export async function listSessions(pagination: Pagination, userId?: string) {
         _count: {
           select: { sessionVideos: true, highlights: true },
         },
+        sessionVideos: {
+          take: 4,
+          orderBy: { order: "asc" },
+          select: {
+            video: { select: { id: true, posterS3Key: true } },
+          },
+        },
       },
     }),
     prisma.session.count({ where }),
   ]);
 
   return {
-    sessions: sessions.map((s) => ({
-      ...s,
-      type: s.type,
-      videoCount: s._count.sessionVideos,
-      highlightCount: s._count.highlights,
+    sessions: sessions.map(({ _count, sessionVideos, ...rest }) => ({
+      ...rest,
+      videoCount: _count.sessionVideos,
+      highlightCount: _count.highlights,
+      videoPreviews: sessionVideos.map((sv) => ({
+        id: sv.video.id,
+        posterS3Key: sv.video.posterS3Key,
+      })),
     })),
     total,
   };

@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState, useRef, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Box,
   Container,
@@ -15,7 +15,6 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  CircularProgress,
   Chip,
   Stack,
   IconButton,
@@ -29,6 +28,7 @@ import {
   ListItemIcon,
   ListItemText,
   TextField,
+  Pagination,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -61,28 +61,27 @@ import {
   AppHeader,
   PageHeader,
   SessionCard,
+  SessionCardSkeleton,
   SectionHeader,
   EmptyState,
 } from '@/components/dashboard';
 import { RecordingGuidelines } from '@/components/RecordingGuidelines';
 
-interface SessionGroup {
-  session: {
-    id: string;
-    name: string;
-  };
-  videos: VideoListItem[];
-  updatedAt: string;
-}
-
 const NEW_SESSION_VALUE = '__new__';
+const SESSIONS_PER_PAGE = 12;
 
-export default function HomePage() {
+function SessionsPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [sessions, setSessions] = useState<ListSessionsResponse['data']>([]);
-  const [videos, setVideos] = useState<VideoListItem[]>([]);
+  const [heroVideos, setHeroVideos] = useState<VideoListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(() => {
+    const p = Number(searchParams.get('page'));
+    return p > 0 ? p : 1;
+  });
+  const [totalPages, setTotalPages] = useState(1);
   const [menuAnchor, setMenuAnchor] = useState<{ element: HTMLElement; sessionId: string; sessionName: string } | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<{ id: string; name: string } | null>(null);
@@ -98,6 +97,8 @@ export default function HomePage() {
   const [currentUploadIndex, setCurrentUploadIndex] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [addToEmptySession, setAddToEmptySession] = useState<{ id: string; name: string } | null>(null);
+  // All sessions loaded lazily for upload dialog
+  const [allDialogSessions, setAllDialogSessions] = useState<ListSessionsResponse['data'] | null>(null);
 
   const { isUploading, progress, currentStep, uploadVideoToLibrary } = useUploadStore();
 
@@ -107,72 +108,52 @@ export default function HomePage() {
     [sessions]
   );
 
-  // Get regular sessions for selection
+  // Get regular sessions from current page
   const regularSessions = useMemo(
     () => sessions.filter((s) => s.type !== 'ALL_VIDEOS'),
     [sessions]
   );
 
-  // Filter out incomplete uploads (PENDING status)
-  const readyVideos = useMemo(
-    () => videos.filter((v) => v.status !== 'PENDING'),
-    [videos]
+  // Sessions to show in upload dialog (lazy-loaded to include all, not just current page)
+  const dialogSessions = useMemo(
+    () => (allDialogSessions ?? sessions).filter((s) => s.type !== 'ALL_VIDEOS'),
+    [allDialogSessions, sessions]
   );
 
-  // Group videos by their sessions (excluding ALL_VIDEOS)
-  const groupedVideos = useMemo(() => {
-    const groups: Map<string, SessionGroup> = new Map();
+  // Hero thumbnails from the small listVideos call
+  const heroThumbnails = useMemo(
+    () => heroVideos.filter((v) => v.status !== 'PENDING').slice(0, 6),
+    [heroVideos]
+  );
 
-    readyVideos.forEach((video) => {
-      video.sessions?.forEach((session) => {
-        if (session.type === 'ALL_VIDEOS') return;
+  const hasVideos = allVideosSession ? allVideosSession.videoCount > 0 : heroVideos.length > 0;
 
-        if (!groups.has(session.id)) {
-          groups.set(session.id, {
-            session: { id: session.id, name: session.name },
-            videos: [],
-            updatedAt: video.createdAt,
-          });
-        }
-        const group = groups.get(session.id)!;
-        group.videos.push(video);
-        // Track most recent video date
-        if (new Date(video.createdAt) > new Date(group.updatedAt)) {
-          group.updatedAt = video.createdAt;
-        }
-      });
-    });
-
-    // Sort by most recently updated
-    return Array.from(groups.values()).sort(
-      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-    );
-  }, [readyVideos]);
-
-  // Find empty sessions (sessions with no videos)
-  const emptySessions = useMemo(() => {
-    const sessionIdsWithVideos = new Set(groupedVideos.map((g) => g.session.id));
-    return regularSessions.filter((s) => !sessionIdsWithVideos.has(s.id));
-  }, [regularSessions, groupedVideos]);
-
-  // Check if user has any ready content
-  const hasVideos = readyVideos.length > 0;
-
+  // Sync page to URL
   useEffect(() => {
-    loadData();
-  }, []);
+    const params = new URLSearchParams();
+    if (page > 1) params.set('page', String(page));
+    const qs = params.toString();
+    const url = qs ? `/sessions?${qs}` : '/sessions';
+    router.replace(url, { scroll: false });
+  }, [page, router]);
 
-  const loadData = async () => {
+  // Scroll to top on page change
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [page]);
+
+  const loadData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       const [sessionsResponse, videosResponse, sharedResponse] = await Promise.all([
-        listSessions(),
-        listVideos(1, 100),
+        listSessions(page, SESSIONS_PER_PAGE),
+        listVideos(1, 6),
         listSharedSessions().catch(() => ({ data: [] })),
       ]);
       setSessions(sessionsResponse.data);
-      setVideos(videosResponse.data);
+      setTotalPages(sessionsResponse.pagination.totalPages);
+      setHeroVideos(videosResponse.data);
       setSharedSessions(sharedResponse.data);
       setLoadingShared(false);
     } catch (err) {
@@ -181,6 +162,14 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
+  }, [page]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const handlePageChange = (_: unknown, newPage: number) => {
+    setPage(newPage);
   };
 
   const handleMenuOpen = (event: React.MouseEvent<HTMLElement>, sessionId: string, sessionName: string) => {
@@ -205,7 +194,6 @@ export default function HomePage() {
     try {
       setDeleting(true);
       await deleteSession(sessionToDelete.id);
-      setSessions(sessions.filter((s) => s.id !== sessionToDelete.id));
       setDeleteDialogOpen(false);
       setSessionToDelete(null);
       loadData();
@@ -222,16 +210,19 @@ export default function HomePage() {
     setSessionToDelete(null);
   };
 
-  const generateSessionName = () => {
+  const generateSessionName = (sessionList?: ListSessionsResponse['data']) => {
     const baseName = `Session - ${new Date().toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
     })}`;
 
-    // Check if base name already exists
+    // Use provided list, or fall back to dialog sessions memo
+    const allRegular = sessionList
+      ? sessionList.filter((s) => s.type !== 'ALL_VIDEOS')
+      : dialogSessions;
     const existingNames = new Set(
-      regularSessions.map((s) => s.name.toLowerCase())
+      allRegular.map((s) => s.name.toLowerCase())
     );
 
     if (!existingNames.has(baseName.toLowerCase())) {
@@ -246,14 +237,27 @@ export default function HomePage() {
     return `${baseName} (${counter})`;
   };
 
-  const handleUploadDialogOpen = () => {
+  const handleUploadDialogOpen = async () => {
     setUploadDialogOpen(true);
     setUploadError(null);
-    // Default to "new session" when opening
     setSelectedSessionId(NEW_SESSION_VALUE);
-    setNewSessionName(generateSessionName());
     setUploadQueue([]);
     setCurrentUploadIndex(0);
+
+    // Lazy-load all sessions for the dialog radio list
+    let loadedSessions = allDialogSessions;
+    if (!loadedSessions) {
+      try {
+        const allResponse = await listSessions(1, 200);
+        loadedSessions = allResponse.data;
+        setAllDialogSessions(loadedSessions);
+      } catch {
+        // Fall back to current page sessions
+      }
+    }
+
+    // Pass loaded sessions directly to avoid stale state from pending setState
+    setNewSessionName(generateSessionName(loadedSessions ?? undefined));
   };
 
   const handleUploadDialogClose = () => {
@@ -275,7 +279,7 @@ export default function HomePage() {
     const isNewSession = selectedSessionId === NEW_SESSION_VALUE;
     const sessionName = isNewSession ? (newSessionName.trim() || generateSessionName()) : '';
     if (isNewSession) {
-      const existingSession = sessions.find(
+      const existingSession = (allDialogSessions ?? sessions).find(
         (s) => s.name.toLowerCase() === sessionName.toLowerCase() && s.type === 'REGULAR'
       );
       if (existingSession) {
@@ -429,8 +433,17 @@ export default function HomePage() {
         />
 
         {loading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-            <CircularProgress />
+          <Box>
+            {/* Skeleton for hero card */}
+            <Box sx={{ mb: 4, height: 160, borderRadius: 3, bgcolor: designTokens.colors.surface[1] }} />
+            {/* Skeleton for session grid */}
+            <Grid container spacing={3}>
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Grid size={{ xs: 12, sm: 6, md: 4 }} key={i}>
+                  <SessionCardSkeleton />
+                </Grid>
+              ))}
+            </Grid>
           </Box>
         ) : error ? (
           <Box sx={{ textAlign: 'center', py: 8 }}>
@@ -538,7 +551,7 @@ export default function HomePage() {
                         transition: 'filter 0.3s ease',
                       }}
                     >
-                      {readyVideos.slice(0, 6).map((video, index) => (
+                      {heroThumbnails.map((video, index) => (
                         <Box
                           key={video.id}
                           sx={{
@@ -573,8 +586,8 @@ export default function HomePage() {
                         </Box>
                       ))}
                       {/* Fill remaining slots if less than 6 videos */}
-                      {readyVideos.length < 6 &&
-                        Array.from({ length: 6 - readyVideos.length }).map((_, i) => (
+                      {heroThumbnails.length < 6 &&
+                        Array.from({ length: 6 - heroThumbnails.length }).map((_, i) => (
                           <Box
                             key={`empty-${i}`}
                             sx={{
@@ -582,7 +595,7 @@ export default function HomePage() {
                               minWidth: { xs: '33.33%', sm: '16.66%' },
                               height: '100%',
                               bgcolor: designTokens.colors.surface[2],
-                              display: i + readyVideos.length >= 3 ? { xs: 'none', sm: 'block' } : 'block',
+                              display: i + heroThumbnails.length >= 3 ? { xs: 'none', sm: 'block' } : 'block',
                             }}
                           />
                         ))}
@@ -652,7 +665,7 @@ export default function HomePage() {
                           </Typography>
                           <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mt: 0.5 }}>
                             <Chip
-                              label={`${readyVideos.length} video${readyVideos.length !== 1 ? 's' : ''}`}
+                              label={`${allVideosSession.videoCount} video${allVideosSession.videoCount !== 1 ? 's' : ''}`}
                               size="small"
                               sx={{
                                 bgcolor: 'rgba(255, 107, 74, 0.2)',
@@ -712,28 +725,37 @@ export default function HomePage() {
             )}
 
             {/* Your Sessions */}
-            {groupedVideos.length > 0 && (
+            {regularSessions.length > 0 && (
               <Box sx={{ mb: 5 }}>
                 <SectionHeader
                   icon={<FolderIcon />}
                   title="Your Sessions"
-                  count={groupedVideos.length}
+                  count={regularSessions.length}
                 />
                 <Grid container spacing={3}>
-                  {groupedVideos.map(({ session, videos: sessionVideos, updatedAt }) => (
+                  {regularSessions.map((session) => (
                     <Grid size={{ xs: 12, sm: 6, md: 4 }} key={session.id}>
                       <Box sx={{ position: 'relative' }}>
-                        <SessionCard
-                          id={session.id}
-                          name={session.name}
-                          videoCount={sessionVideos.length}
-                          updatedAt={updatedAt}
-                          videos={sessionVideos.slice(0, 4).map(v => ({
-                            id: v.id,
-                            posterS3Key: v.posterS3Key,
-                          }))}
-                          onClick={() => router.push(`/sessions/${session.id}`)}
-                        />
+                        {session.videoCount === 0 ? (
+                          <SessionCard
+                            id={session.id}
+                            name={session.name}
+                            videoCount={0}
+                            onAddVideos={() => setAddToEmptySession({ id: session.id, name: session.name })}
+                          />
+                        ) : (
+                          <SessionCard
+                            id={session.id}
+                            name={session.name}
+                            videoCount={session.videoCount}
+                            updatedAt={session.updatedAt}
+                            videos={session.videoPreviews.map((v) => ({
+                              id: v.id,
+                              posterS3Key: v.posterS3Key,
+                            }))}
+                            onClick={() => router.push(`/sessions/${session.id}`)}
+                          />
+                        )}
                         <IconButton
                           size="small"
                           onClick={(e) => handleMenuOpen(e, session.id, session.name)}
@@ -741,11 +763,12 @@ export default function HomePage() {
                             position: 'absolute',
                             top: 8,
                             right: 8,
-                            bgcolor: 'rgba(0, 0, 0, 0.5)',
-                            backdropFilter: 'blur(4px)',
-                            color: 'white',
+                            bgcolor: session.videoCount > 0 ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.3)',
+                            backdropFilter: session.videoCount > 0 ? 'blur(4px)' : undefined,
+                            color: session.videoCount > 0 ? 'white' : 'text.secondary',
                             '&:hover': {
-                              bgcolor: 'rgba(0, 0, 0, 0.7)',
+                              bgcolor: session.videoCount > 0 ? 'rgba(0, 0, 0, 0.7)' : 'rgba(0, 0, 0, 0.5)',
+                              color: 'white',
                             },
                           }}
                         >
@@ -758,46 +781,39 @@ export default function HomePage() {
               </Box>
             )}
 
-            {/* Empty Sessions */}
-            {emptySessions.length > 0 && (
-              <Box sx={{ mb: 5 }}>
-                <SectionHeader
-                  icon={<FolderIcon />}
-                  title="Empty Sessions"
-                  count={emptySessions.length}
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <Stack
+                direction={{ xs: 'column', sm: 'row' }}
+                alignItems="center"
+                justifyContent="center"
+                spacing={2}
+                sx={{ mt: 2, mb: 5 }}
+              >
+                <Typography variant="body2" color="text.secondary">
+                  Page {page} of {totalPages}
+                </Typography>
+                <Pagination
+                  count={totalPages}
+                  page={page}
+                  onChange={handlePageChange}
+                  color="primary"
+                  shape="rounded"
+                  sx={{
+                    '& .MuiPaginationItem-root': {
+                      color: 'text.primary',
+                      borderColor: 'divider',
+                      '&.Mui-selected': {
+                        bgcolor: 'primary.main',
+                        color: 'white',
+                        '&:hover': {
+                          bgcolor: 'primary.dark',
+                        },
+                      },
+                    },
+                  }}
                 />
-                <Grid container spacing={3}>
-                  {emptySessions.map((session) => (
-                    <Grid size={{ xs: 12, sm: 6, md: 4 }} key={session.id}>
-                      <Box sx={{ position: 'relative' }}>
-                        <SessionCard
-                          id={session.id}
-                          name={session.name}
-                          videoCount={0}
-                          onAddVideos={() => setAddToEmptySession({ id: session.id, name: session.name })}
-                        />
-                        <IconButton
-                          size="small"
-                          onClick={(e) => handleMenuOpen(e, session.id, session.name)}
-                          sx={{
-                            position: 'absolute',
-                            top: 8,
-                            right: 8,
-                            bgcolor: 'rgba(0, 0, 0, 0.3)',
-                            color: 'text.secondary',
-                            '&:hover': {
-                              bgcolor: 'rgba(0, 0, 0, 0.5)',
-                              color: 'white',
-                            },
-                          }}
-                        >
-                          <MoreVertIcon fontSize="small" />
-                        </IconButton>
-                      </Box>
-                    </Grid>
-                  ))}
-                </Grid>
-              </Box>
+              </Stack>
             )}
 
             {/* Shared with me */}
@@ -864,7 +880,7 @@ export default function HomePage() {
             )}
 
             {/* Session Selection - only show when user has existing sessions */}
-            {regularSessions.length > 0 && !isUploading && !creatingSession && (
+            {dialogSessions.length > 0 && !isUploading && !creatingSession && (
               <>
                 <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5, fontWeight: 500 }}>
                   Add to session
@@ -896,7 +912,7 @@ export default function HomePage() {
                       sx={{ ml: 4, mb: 1, maxWidth: 280 }}
                     />
                   )}
-                  {regularSessions.map((session) => (
+                  {dialogSessions.map((session) => (
                     <FormControlLabel
                       key={session.id}
                       value={session.id}
@@ -925,7 +941,7 @@ export default function HomePage() {
             )}
 
             {/* Session Name - show when no existing sessions */}
-            {regularSessions.length === 0 && !isUploading && !creatingSession && (
+            {dialogSessions.length === 0 && !isUploading && !creatingSession && (
               <>
                 <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5, fontWeight: 500 }}>
                   Session name
@@ -1094,5 +1110,13 @@ export default function HomePage() {
         )}
       </Container>
     </Box>
+  );
+}
+
+export default function HomePage() {
+  return (
+    <Suspense>
+      <SessionsPageContent />
+    </Suspense>
   );
 }
