@@ -1150,8 +1150,11 @@ export interface ShareInfo {
 }
 
 export interface SharePreview {
-  sessionId: string;
-  sessionName: string;
+  type: 'session' | 'video';
+  sessionId?: string;
+  sessionName?: string;
+  videoId?: string;
+  videoName?: string;
   ownerName: string | null;
   role: MemberRole;
 }
@@ -1259,7 +1262,7 @@ export async function getSharePreview(token: string): Promise<SharePreview> {
 }
 
 // Accept a share invite (optionally with a display name)
-export async function acceptShare(token: string, name?: string): Promise<{ sessionId: string; alreadyOwner?: boolean; alreadyMember?: boolean; role?: MemberRole }> {
+export async function acceptShare(token: string, name?: string): Promise<{ type?: 'session' | 'video'; sessionId?: string; videoId?: string; alreadyOwner?: boolean; alreadyMember?: boolean; role?: MemberRole }> {
   const response = await fetch(`${API_BASE_URL}/v1/share/${token}/accept`, {
     method: 'POST',
     headers: {
@@ -1285,6 +1288,97 @@ export async function listSharedSessions(): Promise<{ data: SharedSession[] }> {
 
   if (!response.ok) {
     throw new Error(`Failed to list shared sessions: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// ============================================================================
+// Video Sharing API
+// ============================================================================
+
+export interface VideoShareInfo {
+  shares: ShareLink[];
+  members: Array<{
+    userId: string;
+    name: string | null;
+    email: string | null;
+    avatarUrl: string | null;
+    role: MemberRole;
+    joinedAt: string;
+  }>;
+}
+
+// Create share links for a video (owner or admin) - creates all 3 role links
+export async function createVideoShare(videoId: string): Promise<{ shares: ShareLink[] }> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/share`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to create share: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Get video share info including members (owner or admin)
+export async function getVideoShare(videoId: string): Promise<VideoShareInfo | null> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/share`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get share: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Delete video share (revokes all access)
+export async function deleteVideoShare(videoId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/share`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to delete share: ${response.status}`);
+  }
+}
+
+// Remove a member from shared video
+export async function removeVideoShareMember(videoId: string, userId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/share/members/${userId}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to remove member: ${response.status}`);
+  }
+}
+
+// Update a video member's role
+export async function updateVideoMemberRole(
+  videoId: string,
+  userId: string,
+  role: MemberRole
+): Promise<{ role: MemberRole }> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/share/members/${userId}/role`, {
+    method: 'PATCH',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify({ role }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to update member role: ${response.status}`);
   }
 
   return response.json();

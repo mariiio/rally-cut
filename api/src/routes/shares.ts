@@ -12,6 +12,11 @@ import {
   removeMember,
   updateMemberRole,
 } from "../services/shareService.js";
+import {
+  getVideoSharePreview,
+  acceptVideoShare,
+} from "../services/videoShareService.js";
+import { NotFoundError } from "../middleware/errorHandler.js";
 
 const memberRoleSchema = z.enum(["VIEWER", "EDITOR", "ADMIN"]);
 
@@ -126,6 +131,7 @@ router.patch(
 
 /**
  * Get share preview (public - for accept page)
+ * Detects share type (session or video) and returns appropriate preview
  * GET /v1/share/:token
  */
 router.get(
@@ -133,8 +139,28 @@ router.get(
   validateRequest({ params: z.object({ token: uuidSchema }) }),
   async (req, res, next) => {
     try {
-      const preview = await getSharePreview(req.params.token);
-      res.json(preview);
+      const token = req.params.token;
+
+      // Try session share first
+      try {
+        const sessionPreview = await getSharePreview(token);
+        res.json({ type: "session", ...sessionPreview });
+        return;
+      } catch (err) {
+        // Only continue to video share if it's a NotFoundError
+        if (!(err instanceof NotFoundError)) {
+          throw err;
+        }
+      }
+
+      // Try video share
+      const videoPreview = await getVideoSharePreview(token);
+      if (videoPreview) {
+        res.json({ type: "video", ...videoPreview });
+        return;
+      }
+
+      throw new NotFoundError("Share link not found or expired");
     } catch (error) {
       next(error);
     }
@@ -142,7 +168,7 @@ router.get(
 );
 
 /**
- * Accept a share invite
+ * Accept a share invite (handles both session and video shares)
  * POST /v1/share/:token/accept
  */
 router.post(
@@ -154,10 +180,31 @@ router.post(
   }),
   async (req, res, next) => {
     try {
-      const userId = req.userId as string; // Guaranteed by requireUser
+      const userId = req.userId as string;
       const name = req.body?.name;
-      const result = await acceptShare(req.params.token, userId, name);
-      res.json(result);
+      const token = req.params.token;
+
+      // Try session share first
+      try {
+        const result = await acceptShare(token, userId, name);
+        res.json({ type: "session", ...result });
+        return;
+      } catch (err) {
+        // Only continue to video share if it's a NotFoundError
+        if (!(err instanceof NotFoundError)) {
+          throw err;
+        }
+      }
+
+      // Try video share
+      const videoPreview = await getVideoSharePreview(token);
+      if (videoPreview) {
+        const result = await acceptVideoShare(token, userId, name);
+        res.json({ type: "video", ...result });
+        return;
+      }
+
+      throw new NotFoundError("Share link not found or expired");
     } catch (error) {
       next(error);
     }

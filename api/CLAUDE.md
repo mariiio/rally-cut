@@ -126,6 +126,15 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
 - **Multiple links**: Each link grants exactly one role. Share the appropriate link based on desired access level.
 - `PATCH /v1/sessions/:id/share/members/:userId/role` → change member role after joining
 
+### Video Sharing
+- `POST /v1/videos/:id/share` → creates 3 share links (one per role: VIEWER, EDITOR, ADMIN)
+- `GET /v1/videos/:id/share` → returns all share links + members
+- `DELETE /v1/videos/:id/share` → revoke all access (owner only)
+- `DELETE /v1/videos/:id/share/members/:userId` → remove specific member
+- `PATCH /v1/videos/:id/share/members/:userId/role` → change member role
+- **Unified accept**: `GET /v1/share/:token` and `POST /v1/share/:token/accept` detect share type (session vs video)
+- **Permission checks**: `canAccessVideoRallies()` checks both direct video membership and session membership
+
 ## Database Schema
 
 ```
@@ -138,7 +147,7 @@ Video.status: PENDING → UPLOADED → DETECTING → DETECTED → ERROR
 Video.processingStatus: PENDING → PROCESSING → COMPLETED/FAILED (separate from status)
 ```
 
-Key tables: User, Session, Video, Rally, Highlight, ExportJob, RallyDetectionJob, SessionShare
+Key tables: User, Session, Video, Rally, Highlight, ExportJob, RallyDetectionJob, SessionShare, VideoShare
 
 ## Camera Edits
 

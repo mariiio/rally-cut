@@ -31,6 +31,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import FolderIcon from '@mui/icons-material/Folder';
+import ShareIcon from '@mui/icons-material/Share';
 import { designTokens } from '@/app/theme';
 import {
   listVideos,
@@ -48,6 +49,7 @@ import {
 } from '@/components/dashboard';
 import { AddVideoModal } from '@/components/AddVideoModal';
 import { ManageSessionsDialog } from '@/components/ManageSessionsDialog';
+import { VideoShareModal } from '@/components/VideoShareModal';
 
 interface VideoSession {
   id: string;
@@ -110,6 +112,10 @@ function VideosPageContent() {
   // Manage sessions dialog state
   const [manageSessionsOpen, setManageSessionsOpen] = useState(false);
   const [manageSessionsVideo, setManageSessionsVideo] = useState<VideoListItem | null>(null);
+
+  // Share modal state
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [shareVideo, setShareVideo] = useState<VideoListItem | null>(null);
 
   // Filter out PENDING videos
   const readyVideos = useMemo(
@@ -187,6 +193,14 @@ function VideosPageContent() {
     if (menuAnchor?.video) {
       setManageSessionsVideo(menuAnchor.video);
       setManageSessionsOpen(true);
+    }
+    handleMenuClose();
+  };
+
+  const handleShareClick = () => {
+    if (menuAnchor?.video) {
+      setShareVideo(menuAnchor.video);
+      setShareModalOpen(true);
     }
     handleMenuClose();
   };
@@ -519,6 +533,12 @@ function VideosPageContent() {
           </MenuItem>
         )}
         {allVideosSessionId && <Divider />}
+        <MenuItem onClick={handleShareClick}>
+          <ListItemIcon>
+            <ShareIcon fontSize="small" sx={{ color: 'primary.main' }} />
+          </ListItemIcon>
+          <ListItemText primary="Share" />
+        </MenuItem>
         <MenuItem onClick={handleManageSessions}>
           <ListItemIcon>
             <FolderIcon fontSize="small" />
@@ -673,6 +693,20 @@ function VideosPageContent() {
         video={manageSessionsVideo}
         onChanged={loadVideos}
       />
+
+      {/* Share modal */}
+      {shareVideo && (
+        <VideoShareModal
+          open={shareModalOpen}
+          onClose={() => {
+            setShareModalOpen(false);
+            setShareVideo(null);
+          }}
+          videoId={shareVideo.id}
+          videoName={shareVideo.name}
+          isOwner={true}
+        />
+      )}
     </Box>
   );
 }
