@@ -35,6 +35,7 @@ model User {
   anonymousIdentities AnonymousIdentity[]
   accounts            Account[]
   sessionMemberships  SessionMember[]
+  videoMemberships    VideoMember[]
   highlights          Highlight[]
   usageQuota          UserUsageQuota?
   feedback            Feedback[]
@@ -144,6 +145,41 @@ model SessionMember {
   @@map("session_members")
 }
 
+// ============================================================================
+// Video Sharing
+// ============================================================================
+
+model VideoShare {
+  id        String     @id @default(uuid())
+  videoId   String     @map("video_id")
+  token     String     @unique @default(uuid())
+  role      MemberRole @default(VIEWER)
+  createdAt DateTime   @default(now()) @map("created_at")
+
+  video   Video         @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  members VideoMember[]
+
+  @@unique([videoId, role])
+  @@index([videoId])
+  @@map("video_shares")
+}
+
+model VideoMember {
+  id           String     @id @default(uuid())
+  videoShareId String     @map("video_share_id")
+  userId       String     @map("user_id")
+  role         MemberRole @default(VIEWER)
+  joinedAt     DateTime   @default(now()) @map("joined_at")
+
+  videoShare VideoShare @relation(fields: [videoShareId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([videoShareId, userId])
+  @@index([userId])
+  @@index([videoShareId])
+  @@map("video_members")
+}
+
 enum AccessRequestStatus {
   PENDING
   ACCEPTED
@@ -215,6 +251,7 @@ model Video {
   durationMs    Int?        @map("duration_ms")
   width         Int?
   height        Int?
+  fps           Float?      /// Frames per second of original video
   fileSizeBytes BigInt?     @map("file_size_bytes")
   expiresAt     DateTime?   @map("expires_at")
   deletedAt     DateTime?   @map("deleted_at")
@@ -246,6 +283,7 @@ model Video {
   detectionJobs  RallyDetectionJob[]
   confirmation   RallyConfirmation?
   cameraSettings VideoCameraSettings[]
+  shares         VideoShare[]
 
   @@index([userId])
   @@index([userId, deletedAt])

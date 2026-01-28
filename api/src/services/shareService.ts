@@ -49,7 +49,7 @@ export async function canAccessSession(
 }
 
 /**
- * Check if user can access a video's rallies through session membership.
+ * Check if user can access a video's rallies through video membership or session membership.
  * Used by rally service for permission checks.
  * Throws NotFoundError if the video doesn't exist.
  */
@@ -68,6 +68,22 @@ export async function canAccessVideoRallies(
     throw new NotFoundError("Video", videoId);
   }
   if (video.userId === userId) return true;
+
+  // Check direct video membership
+  const videoMember = await prisma.videoMember.findFirst({
+    where: {
+      videoShare: { videoId },
+      userId,
+    },
+    select: { role: true },
+  });
+
+  if (videoMember) {
+    if (requireEdit) {
+      return videoMember.role === "EDITOR" || videoMember.role === "ADMIN";
+    }
+    return true;
+  }
 
   // Check via session membership
   const sessionVideo = await prisma.sessionVideo.findFirst({

@@ -15,6 +15,7 @@ import {
 } from '@mui/material';
 import PersonIcon from '@mui/icons-material/Person';
 import FolderSharedIcon from '@mui/icons-material/FolderShared';
+import VideoLibraryIcon from '@mui/icons-material/VideoLibrary';
 import { getSharePreview, acceptShare, getCurrentUser, type SharePreview } from '@/services/api';
 
 export default function AcceptSharePage() {
@@ -29,6 +30,9 @@ export default function AcceptSharePage() {
   const [userName, setUserName] = useState<string | null>(null);
   const [nameInput, setNameInput] = useState('');
   const [needsName, setNeedsName] = useState(false);
+
+  const isVideoShare = preview?.type === 'video';
+  const shareName = isVideoShare ? preview?.videoName : preview?.sessionName;
 
   useEffect(() => {
     async function loadData() {
@@ -74,20 +78,25 @@ export default function AcceptSharePage() {
       const nameToSend = needsName ? nameInput.trim() : undefined;
       const result = await acceptShare(token, nameToSend);
 
+      // Determine redirect path based on share type
+      const redirectPath = result.type === 'video'
+        ? `/video/${result.videoId}`
+        : `/sessions/${result.sessionId}`;
+
       if (result.alreadyOwner) {
         // User is the owner, just redirect
-        router.push(`/sessions/${result.sessionId}`);
+        router.push(redirectPath);
         return;
       }
 
       if (result.alreadyMember) {
         // User is already a member, just redirect
-        router.push(`/sessions/${result.sessionId}`);
+        router.push(redirectPath);
         return;
       }
 
-      // Successfully joined, redirect to session
-      router.push(`/sessions/${result.sessionId}`);
+      // Successfully joined, redirect
+      router.push(redirectPath);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to accept share');
       setAccepting(false);
@@ -153,10 +162,14 @@ export default function AcceptSharePage() {
       <Container maxWidth="sm">
         <Card sx={{ bgcolor: 'grey.800', textAlign: 'center', p: 4 }}>
           <CardContent>
-            <FolderSharedIcon sx={{ fontSize: 64, color: 'primary.main', mb: 2 }} />
+            {isVideoShare ? (
+              <VideoLibraryIcon sx={{ fontSize: 64, color: 'primary.main', mb: 2 }} />
+            ) : (
+              <FolderSharedIcon sx={{ fontSize: 64, color: 'primary.main', mb: 2 }} />
+            )}
 
             <Typography variant="h5" gutterBottom>
-              You&apos;ve been invited to a session
+              You&apos;ve been invited to {isVideoShare ? 'a video' : 'a session'}
             </Typography>
 
             <Box
@@ -178,7 +191,7 @@ export default function AcceptSharePage() {
             </Box>
 
             <Typography variant="h4" sx={{ mb: 3, fontWeight: 500 }}>
-              &ldquo;{preview?.sessionName}&rdquo;
+              &ldquo;{shareName}&rdquo;
             </Typography>
 
             {preview?.role && (
@@ -192,10 +205,10 @@ export default function AcceptSharePage() {
 
             <Typography color="text.secondary" sx={{ mb: 3 }}>
               {preview?.role === 'EDITOR'
-                ? 'Accept the invitation to edit rallies and create highlights in this session.'
+                ? `Accept the invitation to edit rallies and create highlights in this ${isVideoShare ? 'video' : 'session'}.`
                 : preview?.role === 'ADMIN'
-                  ? 'Accept the invitation to manage and collaborate on this session.'
-                  : 'Accept the invitation to view rallies and highlights in this session.'}
+                  ? `Accept the invitation to manage and collaborate on this ${isVideoShare ? 'video' : 'session'}.`
+                  : `Accept the invitation to view rallies and highlights in this ${isVideoShare ? 'video' : 'session'}.`}
             </Typography>
 
             {/* Name input for users without a name */}
