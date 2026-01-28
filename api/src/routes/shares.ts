@@ -5,13 +5,12 @@ import { validateRequest } from "../middleware/validateRequest.js";
 import { uuidSchema } from "../schemas/common.js";
 import {
   acceptShare,
-  createShare,
-  deleteShare,
-  getShare,
+  createShares,
+  deleteShares,
+  getShares,
   getSharePreview,
   removeMember,
   updateMemberRole,
-  updateDefaultRole,
 } from "../services/shareService.js";
 
 const memberRoleSchema = z.enum(["VIEWER", "EDITOR", "ADMIN"]);
@@ -19,7 +18,7 @@ const memberRoleSchema = z.enum(["VIEWER", "EDITOR", "ADMIN"]);
 const router = Router();
 
 /**
- * Create or get existing share link for a session
+ * Create share links for a session (creates all 3 role links atomically)
  * POST /v1/sessions/:id/share
  */
 router.post(
@@ -27,18 +26,12 @@ router.post(
   requireUser,
   validateRequest({
     params: z.object({ id: uuidSchema }),
-    body: z.object({ defaultRole: memberRoleSchema.optional() }).optional(),
   }),
   async (req, res, next) => {
     try {
       const userId = req.userId as string; // Guaranteed by requireUser
-      const defaultRole = req.body?.defaultRole;
-      const share = await createShare(req.params.id, userId, defaultRole);
-      res.status(201).json({
-        token: share.token,
-        defaultRole: share.defaultRole,
-        createdAt: share.createdAt,
-      });
+      const shares = await createShares(req.params.id, userId);
+      res.status(201).json({ shares });
     } catch (error) {
       next(error);
     }
@@ -46,7 +39,7 @@ router.post(
 );
 
 /**
- * Get share info including members (owner or admin)
+ * Get share info including all share links and members (owner or admin)
  * GET /v1/sessions/:id/share
  */
 router.get(
@@ -56,24 +49,8 @@ router.get(
   async (req, res, next) => {
     try {
       const userId = req.userId as string; // Guaranteed by requireUser
-      const share = await getShare(req.params.id, userId);
-      if (!share) {
-        res.json(null);
-        return;
-      }
-      res.json({
-        token: share.token,
-        defaultRole: share.defaultRole,
-        createdAt: share.createdAt,
-        members: share.members.map((m) => ({
-          userId: m.user.id,
-          name: m.user.name,
-          email: m.user.email,
-          avatarUrl: m.user.avatarUrl,
-          role: m.role,
-          joinedAt: m.joinedAt,
-        })),
-      });
+      const result = await getShares(req.params.id, userId);
+      res.json(result);
     } catch (error) {
       next(error);
     }
@@ -81,7 +58,7 @@ router.get(
 );
 
 /**
- * Delete share (revokes all access)
+ * Delete all shares (revokes all access)
  * DELETE /v1/sessions/:id/share
  */
 router.delete(
@@ -91,7 +68,7 @@ router.delete(
   async (req, res, next) => {
     try {
       const userId = req.userId as string; // Guaranteed by requireUser
-      await deleteShare(req.params.id, userId);
+      await deleteShares(req.params.id, userId);
       res.status(204).send();
     } catch (error) {
       next(error);
@@ -141,32 +118,6 @@ router.patch(
         req.body.role
       );
       res.json({ role: updated.role });
-    } catch (error) {
-      next(error);
-    }
-  }
-);
-
-/**
- * Update the default role for new members joining via the share link
- * PATCH /v1/sessions/:id/share/default-role
- */
-router.patch(
-  "/v1/sessions/:id/share/default-role",
-  requireUser,
-  validateRequest({
-    params: z.object({ id: uuidSchema }),
-    body: z.object({ defaultRole: memberRoleSchema }),
-  }),
-  async (req, res, next) => {
-    try {
-      const actorId = req.userId as string;
-      const updated = await updateDefaultRole(
-        req.params.id,
-        actorId,
-        req.body.defaultRole
-      );
-      res.json({ defaultRole: updated.defaultRole });
     } catch (error) {
       next(error);
     }

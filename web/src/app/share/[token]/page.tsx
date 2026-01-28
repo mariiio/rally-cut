@@ -181,19 +181,19 @@ export default function AcceptSharePage() {
               &ldquo;{preview?.sessionName}&rdquo;
             </Typography>
 
-            {preview?.defaultRole && (
+            {preview?.role && (
               <Chip
-                label={`You'll join as ${preview.defaultRole === 'ADMIN' ? 'Admin' : preview.defaultRole === 'EDITOR' ? 'Editor' : 'Viewer'}`}
+                label={`You'll join as ${preview.role === 'ADMIN' ? 'Admin' : preview.role === 'EDITOR' ? 'Editor' : 'Viewer'}`}
                 size="small"
-                color={preview.defaultRole === 'ADMIN' ? 'warning' : preview.defaultRole === 'EDITOR' ? 'info' : 'default'}
+                color={preview.role === 'ADMIN' ? 'warning' : preview.role === 'EDITOR' ? 'info' : 'default'}
                 sx={{ mb: 2 }}
               />
             )}
 
             <Typography color="text.secondary" sx={{ mb: 3 }}>
-              {preview?.defaultRole === 'EDITOR'
+              {preview?.role === 'EDITOR'
                 ? 'Accept the invitation to edit rallies and create highlights in this session.'
-                : preview?.defaultRole === 'ADMIN'
+                : preview?.role === 'ADMIN'
                   ? 'Accept the invitation to manage and collaborate on this session.'
                   : 'Accept the invitation to view rallies and highlights in this session.'}
             </Typography>

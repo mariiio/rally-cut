@@ -84,10 +84,12 @@ export async function cleanupExpiredContent(): Promise<CleanupResult> {
           sessionVideos: {
             some: {
               session: {
-                share: {
-                  members: {
-                    some: {
-                      user: { tier: { in: ["PRO", "ELITE"] } },
+                shares: {
+                  some: {
+                    members: {
+                      some: {
+                        user: { tier: { in: ["PRO", "ELITE"] } },
+                      },
                     },
                   },
                 },

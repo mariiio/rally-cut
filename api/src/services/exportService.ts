@@ -336,7 +336,7 @@ export async function createExportJob(
       deletedAt: null,
       OR: [
         { userId },
-        { share: { members: { some: { userId } } } },
+        { shares: { some: { members: { some: { userId } } } } },
       ],
     },
   });

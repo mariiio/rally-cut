@@ -9,8 +9,6 @@ import {
   Button,
   Box,
   Typography,
-  TextField,
-  InputAdornment,
   IconButton,
   CircularProgress,
   List,
@@ -26,42 +24,70 @@ import {
   Select,
   MenuItem,
   Chip,
-  type SelectChangeEvent,
+  Paper,
+  alpha,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import CheckIcon from '@mui/icons-material/Check';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import LinkIcon from '@mui/icons-material/Link';
 import PersonIcon from '@mui/icons-material/Person';
 import DeleteIcon from '@mui/icons-material/Delete';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import EditIcon from '@mui/icons-material/Edit';
+import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import {
   createShare,
   getShare,
   deleteShare,
   removeShareMember,
   updateMemberRole,
-  updateDefaultRole,
   type ShareInfo,
   type MemberRole,
 } from '@/services/api';
 import { useEditorStore } from '@/stores/editorStore';
 
-const ROLE_LABELS: Record<MemberRole, string> = {
-  VIEWER: 'Viewer',
-  EDITOR: 'Editor',
-  ADMIN: 'Admin',
-};
-
-const ROLE_DESCRIPTIONS: Record<MemberRole, string> = {
-  VIEWER: 'Can view rallies and highlights',
-  EDITOR: 'Can edit rallies and create highlights',
-  ADMIN: 'Can manage members and share settings',
-};
-
-const ROLE_COLORS: Record<MemberRole, 'default' | 'info' | 'warning'> = {
-  VIEWER: 'default',
-  EDITOR: 'info',
-  ADMIN: 'warning',
+const ROLE_CONFIG: Record<MemberRole, {
+  label: string;
+  permissions: string[];
+  icon: React.ReactNode;
+  color: string;
+  chipColor: 'default' | 'info' | 'warning';
+}> = {
+  VIEWER: {
+    label: 'Viewer',
+    permissions: [
+      'Watch videos and rallies',
+      'View highlights',
+      'Export highlights',
+    ],
+    icon: <VisibilityIcon />,
+    color: '#6B7280',
+    chipColor: 'default',
+  },
+  EDITOR: {
+    label: 'Editor',
+    permissions: [
+      'Everything viewers can do',
+      'Edit rally boundaries',
+      'Create and manage highlights',
+      'Add camera effects',
+    ],
+    icon: <EditIcon />,
+    color: '#3B82F6',
+    chipColor: 'info',
+  },
+  ADMIN: {
+    label: 'Admin',
+    permissions: [
+      'Everything editors can do',
+      'Invite and remove members',
+      'Change member roles',
+      'Delete shared access',
+    ],
+    icon: <AdminPanelSettingsIcon />,
+    color: '#F59E0B',
+    chipColor: 'warning',
+  },
 };
 
 interface ShareModalProps {
@@ -71,11 +97,64 @@ interface ShareModalProps {
   sessionName: string;
 }
 
+interface RoleCardProps {
+  role: MemberRole;
+  selected: boolean;
+  onClick: () => void;
+}
+
+function RoleCard({ role, selected, onClick }: RoleCardProps) {
+  const config = ROLE_CONFIG[role];
+
+  return (
+    <Paper
+      onClick={onClick}
+      elevation={0}
+      sx={{
+        flex: 1,
+        py: 1,
+        px: 1.5,
+        cursor: 'pointer',
+        border: 1.5,
+        borderColor: selected ? config.color : 'transparent',
+        bgcolor: selected ? alpha(config.color, 0.08) : 'grey.900',
+        borderRadius: 1.5,
+        transition: 'all 0.15s ease',
+        '&:hover': {
+          bgcolor: selected ? alpha(config.color, 0.12) : 'grey.800',
+          borderColor: selected ? config.color : 'grey.700',
+        },
+      }}
+    >
+      <Stack direction="row" spacing={1} alignItems="center" justifyContent="center">
+        <Box
+          sx={{
+            color: selected ? config.color : 'grey.500',
+            transition: 'color 0.15s ease',
+            '& svg': { fontSize: 18 },
+            display: 'flex',
+          }}
+        >
+          {config.icon}
+        </Box>
+        <Typography
+          variant="body2"
+          fontWeight={600}
+          sx={{ color: selected ? 'text.primary' : 'text.secondary' }}
+        >
+          {config.label}
+        </Typography>
+      </Stack>
+    </Paper>
+  );
+}
+
 export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModalProps) {
   const [loading, setLoading] = useState(true);
   const [shareInfo, setShareInfo] = useState<ShareInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [selectedRole, setSelectedRole] = useState<MemberRole>('VIEWER');
   const [removingMember, setRemovingMember] = useState<string | null>(null);
   const [confirmingRemove, setConfirmingRemove] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -85,8 +164,9 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
   const userRole = useEditorStore((s) => s.userRole);
   const isOwner = userRole === 'owner';
 
-  const shareUrl = shareInfo
-    ? `${typeof window !== 'undefined' ? window.location.origin : ''}/share/${shareInfo.token}`
+  const selectedShare = shareInfo?.shares.find((s) => s.role === selectedRole);
+  const shareUrl = selectedShare
+    ? `${typeof window !== 'undefined' ? window.location.origin : ''}/share/${selectedShare.token}`
     : '';
 
   const loadOrCreateShare = useCallback(async () => {
@@ -94,16 +174,12 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
       setLoading(true);
       setError(null);
 
-      // First try to get existing share
       let share = await getShare(sessionId);
 
-      // If no share exists, create one
-      if (!share) {
+      if (!share || share.shares.length === 0) {
         const created = await createShare(sessionId);
         share = {
-          token: created.token,
-          defaultRole: created.defaultRole,
-          createdAt: created.createdAt,
+          shares: created.shares,
           members: [],
         };
       }
@@ -128,6 +204,7 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
       setShareInfo(null);
       setError(null);
       setCopied(false);
+      setSelectedRole('VIEWER');
       setRemovingMember(null);
       setConfirmingRemove(null);
       setConfirmingDelete(false);
@@ -146,12 +223,15 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
     }
   };
 
+  const handleRoleChange = (role: MemberRole) => {
+    setSelectedRole(role);
+    setCopied(false);
+  };
+
   const handleRemoveClick = (userId: string) => {
     if (confirmingRemove === userId) {
-      // Second click - actually remove
       handleRemoveMember(userId);
     } else {
-      // First click - show confirmation
       setConfirmingRemove(userId);
     }
   };
@@ -161,7 +241,6 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
       setConfirmingRemove(null);
       setRemovingMember(userId);
       await removeShareMember(sessionId, userId);
-      // Refresh share info
       const updated = await getShare(sessionId);
       setShareInfo(updated);
     } catch (err) {
@@ -171,7 +250,6 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
     }
   };
 
-  // Auto-cancel confirmations after 3 seconds
   useEffect(() => {
     if (!confirmingRemove && !confirmingDelete) return;
     const timeout = setTimeout(() => {
@@ -201,16 +279,6 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
     }
   };
 
-  const handleDefaultRoleChange = async (event: SelectChangeEvent) => {
-    const newRole = event.target.value as MemberRole;
-    try {
-      await updateDefaultRole(sessionId, newRole);
-      setShareInfo((prev) => prev ? { ...prev, defaultRole: newRole } : prev);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update default role');
-    }
-  };
-
   const handleMemberRoleChange = async (userId: string, newRole: MemberRole) => {
     try {
       setUpdatingRole(userId);
@@ -231,139 +299,227 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
     }
   };
 
-  const defaultRoleDescription = shareInfo
-    ? `Anyone with this link will join as ${ROLE_LABELS[shareInfo.defaultRole].toLowerCase()}.`
-    : '';
+  const selectedConfig = ROLE_CONFIG[selectedRole];
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        Share &ldquo;{sessionName}&rdquo;
-        <IconButton onClick={onClose} size="small">
-          <CloseIcon />
-        </IconButton>
+    <Dialog
+      open={open}
+      onClose={onClose}
+      maxWidth="sm"
+      fullWidth
+      PaperProps={{
+        sx: {
+          borderRadius: 3,
+          bgcolor: 'grey.900',
+        },
+      }}
+    >
+      <DialogTitle sx={{ pb: 1 }}>
+        <Stack direction="row" justifyContent="space-between" alignItems="center">
+          <Box>
+            <Typography variant="h6" fontWeight={600}>
+              Share session
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {sessionName}
+            </Typography>
+          </Box>
+          <IconButton onClick={onClose} size="small" sx={{ color: 'grey.500' }}>
+            <CloseIcon />
+          </IconButton>
+        </Stack>
       </DialogTitle>
 
-      <DialogContent>
+      <DialogContent sx={{ pt: 2 }}>
         {error && (
-          <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>
+          <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2, borderRadius: 2 }}>
             {error}
           </Alert>
         )}
 
         {loading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
             <CircularProgress />
           </Box>
         ) : shareInfo ? (
           <>
+            {/* Role Selection */}
             <Box sx={{ mb: 3 }}>
-              <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+              <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 600, letterSpacing: 1 }}>
+                Access level
+              </Typography>
+              <Stack direction="row" spacing={1.5} sx={{ mt: 1 }}>
+                {(['VIEWER', 'EDITOR', 'ADMIN'] as MemberRole[]).map((role) => (
+                  <RoleCard
+                    key={role}
+                    role={role}
+                    selected={selectedRole === role}
+                    onClick={() => handleRoleChange(role)}
+                  />
+                ))}
+              </Stack>
+
+              {/* Permissions list */}
+              <Box
+                sx={{
+                  mt: 1.5,
+                  py: 1,
+                  px: 1.5,
+                  bgcolor: 'grey.800',
+                  borderRadius: 1.5,
+                  borderLeft: 2,
+                  borderColor: selectedConfig.color,
+                }}
+              >
+                <Stack spacing={0.25}>
+                  {selectedConfig.permissions.map((permission, i) => (
+                    <Stack key={i} direction="row" spacing={0.75} alignItems="center">
+                      <CheckIcon sx={{ fontSize: 12, color: selectedConfig.color }} />
+                      <Typography variant="caption" color="text.secondary">
+                        {permission}
+                      </Typography>
+                    </Stack>
+                  ))}
+                </Stack>
+              </Box>
+            </Box>
+
+            {/* Share Link */}
+            <Box sx={{ mb: 3 }}>
+              <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 600, letterSpacing: 1 }}>
                 Share link
               </Typography>
-              <TextField
-                fullWidth
-                value={shareUrl}
-                slotProps={{
-                  input: {
-                    readOnly: true,
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <LinkIcon sx={{ color: 'grey.500' }} />
-                      </InputAdornment>
-                    ),
-                    endAdornment: (
-                      <InputAdornment position="end">
-                        <IconButton onClick={handleCopyLink} edge="end">
-                          <ContentCopyIcon />
-                        </IconButton>
-                      </InputAdornment>
-                    ),
-                  }
-                }}
-                size="small"
+              <Paper
+                elevation={0}
                 sx={{
-                  '& .MuiOutlinedInput-root': {
-                    bgcolor: 'grey.900',
-                  },
+                  mt: 1,
+                  p: 0.5,
+                  pl: 2,
+                  bgcolor: 'grey.800',
+                  borderRadius: 2,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
                 }}
-              />
-              {copied && (
-                <Typography variant="caption" color="success.main" sx={{ mt: 0.5, display: 'block' }}>
-                  Link copied to clipboard!
-                </Typography>
-              )}
-
-              {/* Default role selector */}
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1.5 }}>
-                <Typography variant="caption" color="text.secondary">
-                  New members join as:
-                </Typography>
-                <Select
-                  value={shareInfo.defaultRole}
-                  onChange={handleDefaultRoleChange}
-                  size="small"
-                  variant="outlined"
-                  sx={{ minWidth: 100, '& .MuiSelect-select': { py: 0.25, fontSize: '0.75rem' } }}
+              >
+                <Typography
+                  variant="body2"
+                  sx={{
+                    flex: 1,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    color: 'text.secondary',
+                    fontFamily: 'monospace',
+                    fontSize: '0.8rem',
+                  }}
                 >
-                  <MenuItem value="VIEWER">{ROLE_LABELS.VIEWER}</MenuItem>
-                  <MenuItem value="EDITOR">{ROLE_LABELS.EDITOR}</MenuItem>
-                  <MenuItem value="ADMIN">{ROLE_LABELS.ADMIN}</MenuItem>
-                </Select>
-              </Stack>
-              <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                {defaultRoleDescription}
+                  {shareUrl}
+                </Typography>
+                <Button
+                  variant={copied ? 'contained' : 'text'}
+                  color={copied ? 'success' : 'primary'}
+                  startIcon={copied ? <CheckIcon /> : <ContentCopyIcon />}
+                  onClick={handleCopyLink}
+                  sx={{
+                    minWidth: 100,
+                    borderRadius: 1.5,
+                    textTransform: 'none',
+                    fontWeight: 600,
+                  }}
+                >
+                  {copied ? 'Copied!' : 'Copy link'}
+                </Button>
+              </Paper>
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                Anyone with this link will join as <strong style={{ color: selectedConfig.color }}>{selectedConfig.label.toLowerCase()}</strong>
               </Typography>
             </Box>
 
-            <Divider sx={{ my: 2 }} />
+            <Divider sx={{ my: 2, borderColor: 'grey.800' }} />
 
+            {/* Members List */}
             <Box>
-              <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                Members ({shareInfo.members.length})
-              </Typography>
+              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 600, letterSpacing: 1 }}>
+                  Members
+                </Typography>
+                <Chip
+                  label={shareInfo.members.length}
+                  size="small"
+                  sx={{ height: 20, fontSize: '0.7rem', bgcolor: 'grey.800' }}
+                />
+              </Stack>
 
               {shareInfo.members.length === 0 ? (
-                <Typography color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>
-                  No one has joined yet
-                </Typography>
+                <Paper
+                  elevation={0}
+                  sx={{
+                    py: 4,
+                    textAlign: 'center',
+                    bgcolor: 'grey.800',
+                    borderRadius: 2,
+                  }}
+                >
+                  <PersonIcon sx={{ fontSize: 40, color: 'grey.600', mb: 1 }} />
+                  <Typography color="text.secondary" variant="body2">
+                    No one has joined yet
+                  </Typography>
+                  <Typography color="text.secondary" variant="caption">
+                    Share the link above to invite collaborators
+                  </Typography>
+                </Paper>
               ) : (
-                <List sx={{ bgcolor: 'grey.900', borderRadius: 1 }}>
+                <List sx={{ bgcolor: 'grey.800', borderRadius: 2, py: 0.5 }}>
                   {shareInfo.members.map((member, index) => {
-                    // Admin actors can't change other admins
                     const canChangeRole = isOwner || (userRole === 'ADMIN' && member.role !== 'ADMIN');
-                    // Only show admin option if actor is owner
                     const availableRoles: MemberRole[] = isOwner
                       ? ['VIEWER', 'EDITOR', 'ADMIN']
                       : ['VIEWER', 'EDITOR'];
+                    const memberConfig = ROLE_CONFIG[member.role];
 
                     return (
                       <ListItem
                         key={member.userId}
                         divider={index < shareInfo.members.length - 1}
+                        sx={{ py: 1.5, '& .MuiListItemSecondaryAction-root': { right: 8 } }}
                       >
                         <ListItemAvatar>
-                          <Avatar sx={{ bgcolor: 'primary.main' }}>
+                          <Avatar
+                            sx={{
+                              bgcolor: alpha(memberConfig.color, 0.2),
+                              color: memberConfig.color,
+                              width: 36,
+                              height: 36,
+                              fontSize: '0.9rem',
+                              fontWeight: 600,
+                            }}
+                          >
                             {member.name ? member.name[0].toUpperCase() : <PersonIcon />}
                           </Avatar>
                         </ListItemAvatar>
                         <ListItemText
                           primary={
                             <Stack direction="row" spacing={1} alignItems="center">
-                              <span>{member.name || 'Anonymous'}</span>
+                              <Typography variant="body2" fontWeight={500}>
+                                {member.name || 'Anonymous'}
+                              </Typography>
                               <Chip
-                                label={ROLE_LABELS[member.role]}
+                                label={memberConfig.label}
                                 size="small"
-                                color={ROLE_COLORS[member.role]}
-                                sx={{ height: 20, fontSize: '0.7rem' }}
+                                color={memberConfig.chipColor}
+                                sx={{ height: 18, fontSize: '0.65rem', fontWeight: 600 }}
                               />
                             </Stack>
                           }
-                          secondary={`Joined ${new Date(member.joinedAt).toLocaleDateString()}`}
+                          secondary={
+                            <Typography variant="caption" color="text.secondary">
+                              Joined {new Date(member.joinedAt).toLocaleDateString()}
+                            </Typography>
+                          }
                         />
                         <ListItemSecondaryAction>
                           <Stack direction="row" spacing={0.5} alignItems="center">
-                            {/* Role selector */}
                             {canChangeRole && (
                               <Select
                                 value={member.role}
@@ -371,19 +527,20 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
                                 size="small"
                                 variant="outlined"
                                 disabled={updatingRole === member.userId}
-                                sx={{ minWidth: 90, '& .MuiSelect-select': { py: 0.25, fontSize: '0.75rem' } }}
+                                sx={{
+                                  minWidth: 85,
+                                  '& .MuiSelect-select': { py: 0.5, fontSize: '0.75rem' },
+                                  '& .MuiOutlinedInput-notchedOutline': { borderColor: 'grey.700' },
+                                }}
                               >
                                 {availableRoles.map((role) => (
-                                  <MenuItem key={role} value={role}>
-                                    <Tooltip title={ROLE_DESCRIPTIONS[role]} placement="left">
-                                      <span>{ROLE_LABELS[role]}</span>
-                                    </Tooltip>
+                                  <MenuItem key={role} value={role} sx={{ fontSize: '0.8rem' }}>
+                                    {ROLE_CONFIG[role].label}
                                   </MenuItem>
                                 ))}
                               </Select>
                             )}
 
-                            {/* Remove button */}
                             {removingMember === member.userId ? (
                               <CircularProgress size={20} />
                             ) : confirmingRemove === member.userId ? (
@@ -397,7 +554,7 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
                                       bgcolor: 'error.main',
                                       width: 24,
                                       height: 24,
-                                      '&:hover': { bgcolor: 'error.light' },
+                                      '&:hover': { bgcolor: 'error.dark' },
                                     }}
                                   >
                                     <CheckIcon sx={{ fontSize: 14 }} />
@@ -414,13 +571,15 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
                                 </Tooltip>
                               </Stack>
                             ) : (
-                              <IconButton
-                                edge="end"
-                                onClick={() => handleRemoveClick(member.userId)}
-                                size="small"
-                              >
-                                <DeleteIcon />
-                              </IconButton>
+                              <Tooltip title="Remove member">
+                                <IconButton
+                                  onClick={() => handleRemoveClick(member.userId)}
+                                  size="small"
+                                  sx={{ color: 'grey.500', '&:hover': { color: 'error.main' } }}
+                                >
+                                  <DeleteIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
                             )}
                           </Stack>
                         </ListItemSecondaryAction>
@@ -434,19 +593,18 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
         ) : null}
       </DialogContent>
 
-      <DialogActions sx={{ px: 3, pb: 2, justifyContent: 'space-between' }}>
-        {/* Only owner can delete share */}
+      <DialogActions sx={{ px: 3, pb: 2.5, pt: 1, justifyContent: 'space-between' }}>
         {isOwner ? (
           deleting ? (
-            <Button color="error" disabled startIcon={<CircularProgress size={16} />}>
+            <Button color="error" disabled startIcon={<CircularProgress size={16} />} sx={{ textTransform: 'none' }}>
               Deleting...
             </Button>
           ) : confirmingDelete ? (
             <Stack direction="row" spacing={1} alignItems="center">
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="body2" color="error.main" fontWeight={500}>
                 Revoke all access?
               </Typography>
-              <Tooltip title="Confirm delete">
+              <Tooltip title="Confirm">
                 <IconButton
                   size="small"
                   onClick={handleDeleteClick}
@@ -455,7 +613,7 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
                     bgcolor: 'error.main',
                     width: 28,
                     height: 28,
-                    '&:hover': { bgcolor: 'error.light' },
+                    '&:hover': { bgcolor: 'error.dark' },
                   }}
                 >
                   <CheckIcon sx={{ fontSize: 16 }} />
@@ -476,15 +634,26 @@ export function ShareModal({ open, onClose, sessionId, sessionName }: ShareModal
               color="error"
               onClick={handleDeleteClick}
               disabled={loading}
-              startIcon={<DeleteIcon />}
+              sx={{ textTransform: 'none', fontWeight: 500 }}
             >
-              Delete Share
+              Revoke access
             </Button>
           )
         ) : (
-          <Box /> // spacer for non-owners
+          <Box />
         )}
-        <Button onClick={onClose}>Close</Button>
+        <Button
+          onClick={onClose}
+          variant="contained"
+          sx={{
+            textTransform: 'none',
+            fontWeight: 600,
+            borderRadius: 2,
+            px: 3,
+          }}
+        >
+          Done
+        </Button>
       </DialogActions>
     </Dialog>
   );

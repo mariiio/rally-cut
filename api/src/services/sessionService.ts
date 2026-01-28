@@ -191,7 +191,7 @@ export async function getSessionById(id: string, userId?: string) {
         },
       },
       // Include share membership check for access validation (always include for consistent type)
-      share: {
+      shares: {
         include: {
           members: userId
             ? {
@@ -220,17 +220,23 @@ export async function getSessionById(id: string, userId?: string) {
   if (userId) {
     if (session.userId === userId) {
       userRole = "owner";
-    } else if (session.share?.members && session.share.members.length > 0) {
-      userRole = (session.share.members[0] as { role: "VIEWER" | "EDITOR" | "ADMIN" }).role;
     } else {
-      // User has no access - throw AccessDeniedError with session info
-      const hasPendingRequest =
-        session.accessRequests && session.accessRequests.length > 0;
-      throw new AccessDeniedError(
-        session.name,
-        session.user?.name ?? null,
-        hasPendingRequest
-      );
+      // Check all shares for user membership
+      const userMember = session.shares
+        .flatMap((s) => s.members)
+        .find((m) => m);
+      if (userMember) {
+        userRole = (userMember as { role: "VIEWER" | "EDITOR" | "ADMIN" }).role;
+      } else {
+        // User has no access - throw AccessDeniedError with session info
+        const hasPendingRequest =
+          session.accessRequests && session.accessRequests.length > 0;
+        throw new AccessDeniedError(
+          session.name,
+          session.user?.name ?? null,
+          hasPendingRequest
+        );
+      }
     }
 
     // Track activity for inactivity-based cleanup (fire-and-forget)
@@ -271,8 +277,8 @@ export async function getSessionById(id: string, userId?: string) {
     }),
   };
 
-  // Remove internal fields from response (sessionVideos replaced by videos, share/accessRequests for access check)
-  const { sessionVideos: _sessionVideos, share: _share, accessRequests: _accessRequests, ...result } = transformed;
+  // Remove internal fields from response (sessionVideos replaced by videos, shares/accessRequests for access check)
+  const { sessionVideos: _sessionVideos, shares: _shares, accessRequests: _accessRequests, ...result } = transformed;
 
   // Convert BigInt fields to strings for JSON serialization
   return serializeBigInts(result);

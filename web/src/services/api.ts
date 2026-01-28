@@ -1131,10 +1131,14 @@ export async function updateCurrentUser(data: { name?: string; avatarUrl?: strin
 
 export type MemberRole = 'VIEWER' | 'EDITOR' | 'ADMIN';
 
-export interface ShareInfo {
+export interface ShareLink {
   token: string;
-  defaultRole: MemberRole;
+  role: MemberRole;
   createdAt: string;
+}
+
+export interface ShareInfo {
+  shares: ShareLink[];
   members: Array<{
     userId: string;
     name: string | null;
@@ -1149,7 +1153,7 @@ export interface SharePreview {
   sessionId: string;
   sessionName: string;
   ownerName: string | null;
-  defaultRole: MemberRole;
+  role: MemberRole;
 }
 
 export interface SharedSession {
@@ -1165,8 +1169,8 @@ export interface SharedSession {
   role: MemberRole;
 }
 
-// Create or get share link for a session (owner or admin)
-export async function createShare(sessionId: string): Promise<{ token: string; defaultRole: MemberRole; createdAt: string }> {
+// Create share links for a session (owner or admin) - creates all 3 role links
+export async function createShare(sessionId: string): Promise<{ shares: ShareLink[] }> {
   const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/share`, {
     method: 'POST',
     headers: getHeaders(),
@@ -1235,25 +1239,6 @@ export async function updateMemberRole(
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
     throw new Error(error.error?.message || `Failed to update member role: ${response.status}`);
-  }
-
-  return response.json();
-}
-
-// Update the default role for new members joining via the share link
-export async function updateDefaultRole(
-  sessionId: string,
-  defaultRole: MemberRole
-): Promise<{ defaultRole: MemberRole }> {
-  const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/share/default-role`, {
-    method: 'PATCH',
-    headers: getHeaders('application/json'),
-    body: JSON.stringify({ defaultRole }),
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error?.message || `Failed to update default role: ${response.status}`);
   }
 
   return response.json();

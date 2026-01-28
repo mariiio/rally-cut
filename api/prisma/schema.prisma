@@ -114,15 +114,17 @@ enum MemberRole {
 }
 
 model SessionShare {
-  id          String     @id @default(uuid())
-  sessionId   String     @unique @map("session_id")
-  token       String     @unique @default(uuid())
-  defaultRole MemberRole @default(VIEWER) @map("default_role")
-  createdAt   DateTime   @default(now()) @map("created_at")
+  id        String     @id @default(uuid())
+  sessionId String     @map("session_id")
+  token     String     @unique @default(uuid())
+  role      MemberRole @default(VIEWER)
+  createdAt DateTime   @default(now()) @map("created_at")
 
   session Session         @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   members SessionMember[]
 
+  @@unique([sessionId, role])
+  @@index([sessionId])
   @@map("session_shares")
 }
 
@@ -190,7 +192,7 @@ model Session {
   user           User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
   sessionVideos  SessionVideo[]
   highlights     Highlight[]
-  share          SessionShare?
+  shares         SessionShare[]
   exportJobs     ExportJob[]
   accessRequests AccessRequest[]
 
