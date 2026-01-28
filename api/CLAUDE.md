@@ -119,11 +119,12 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
 - Poll `GET /v1/export-jobs/:id` for status
 
 ### Session Sharing
-- `POST /v1/sessions/:id/share` → creates share token (owner or admin)
-- `POST /v1/share/:token/accept` → join as member with default role (VIEWER/EDITOR/ADMIN)
+- `POST /v1/sessions/:id/share` → creates 3 share links (one per role: VIEWER, EDITOR, ADMIN)
+- `GET /v1/sessions/:id/share` → returns all share links + members
+- `POST /v1/share/:token/accept` → join as member with the role from the link used
 - **Roles**: VIEWER (read-only), EDITOR (edit rallies/highlights), ADMIN (manage members/share)
-- `PATCH /v1/sessions/:id/share/members/:userId/role` → change member role
-- `PATCH /v1/sessions/:id/share/default-role` → change default role for new members
+- **Multiple links**: Each link grants exactly one role. Share the appropriate link based on desired access level.
+- `PATCH /v1/sessions/:id/share/members/:userId/role` → change member role after joining
 
 ## Database Schema
 

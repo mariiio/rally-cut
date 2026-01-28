@@ -18,7 +18,7 @@ export async function createAccessRequest(
   const session = await prisma.session.findUnique({
     where: { id: sessionId, deletedAt: null },
     include: {
-      share: {
+      shares: {
         include: {
           members: {
             where: { userId },
@@ -37,8 +37,9 @@ export async function createAccessRequest(
     throw new ConflictError("You are the owner of this session");
   }
 
-  // Check if user is already a member
-  if (session.share?.members && session.share.members.length > 0) {
+  // Check if user is already a member (in any share)
+  const isMember = session.shares.some((s) => s.members.length > 0);
+  if (isMember) {
     throw new ConflictError("You already have access to this session");
   }
 
@@ -134,7 +135,7 @@ export async function acceptRequest(
 
   const session = await prisma.session.findUnique({
     where: { id: sessionId, deletedAt: null },
-    include: { share: true },
+    include: { shares: true },
   });
 
   if (!session) {
@@ -153,21 +154,28 @@ export async function acceptRequest(
     throw new ConflictError("This request has already been resolved");
   }
 
-  // Create share if it doesn't exist (needed for members)
-  let share = session.share;
-  if (!share) {
-    share = await prisma.sessionShare.create({
-      data: { sessionId },
-    });
+  // Find or create VIEWER share for access request members
+  let viewerShare = session.shares.find((s) => s.role === "VIEWER");
+  if (!viewerShare) {
+    // Create all 3 shares if none exist
+    const roles: Array<"VIEWER" | "EDITOR" | "ADMIN"> = ["VIEWER", "EDITOR", "ADMIN"];
+    const created = await prisma.$transaction(
+      roles.map((role) =>
+        prisma.sessionShare.create({
+          data: { sessionId, role },
+        })
+      )
+    );
+    viewerShare = created.find((s) => s.role === "VIEWER")!;
   }
 
-  // Create member with the share's default role and update request in a transaction
+  // Create member with VIEWER role and update request in a transaction
   await prisma.$transaction([
     prisma.sessionMember.create({
       data: {
-        sessionShareId: share.id,
+        sessionShareId: viewerShare.id,
         userId: request.userId,
-        role: share.defaultRole,
+        role: "VIEWER",
       },
     }),
     prisma.accessRequest.update({

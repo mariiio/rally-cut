@@ -18,7 +18,7 @@ export async function canAccessSession(
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
     include: {
-      share: {
+      shares: {
         include: {
           members: {
             where: { userId },
@@ -38,9 +38,11 @@ export async function canAccessSession(
     return { hasAccess: true, role: "owner" };
   }
 
-  // Check if user is a member via share - return their specific role
-  if (session.share && session.share.members.length > 0) {
-    return { hasAccess: true, role: session.share.members[0].role };
+  // Check if user is a member via any share - return their role
+  for (const share of session.shares) {
+    if (share.members.length > 0) {
+      return { hasAccess: true, role: share.members[0].role };
+    }
   }
 
   return { hasAccess: false, role: null };
@@ -73,7 +75,7 @@ export async function canAccessVideoRallies(
     include: {
       session: {
         include: {
-          share: {
+          shares: {
             include: {
               members: {
                 where: { userId },
@@ -86,31 +88,33 @@ export async function canAccessVideoRallies(
     },
   });
 
-  if (!sessionVideo?.session.share?.members.length) return false;
+  if (!sessionVideo) return false;
 
-  const role = sessionVideo.session.share.members[0].role;
-
-  if (requireEdit) {
-    return role === "EDITOR" || role === "ADMIN";
+  // Find the user's role across all shares
+  for (const share of sessionVideo.session.shares) {
+    if (share.members.length > 0) {
+      const role = share.members[0].role;
+      if (requireEdit) {
+        return role === "EDITOR" || role === "ADMIN";
+      }
+      // VIEWER, EDITOR, ADMIN can all read
+      return true;
+    }
   }
 
-  // VIEWER, EDITOR, ADMIN can all read
-  return true;
+  return false;
 }
 
 /**
- * Create or get existing share link for a session (owner or admin).
- * Uses a single query to check permissions and share existence.
+ * Create share links for a session (one for each role).
+ * Idempotent: returns existing shares if they already exist.
+ * Only owner or admin can create shares.
  */
-export async function createShare(
-  sessionId: string,
-  actorId: string,
-  defaultRole?: MemberRole
-) {
+export async function createShares(sessionId: string, actorId: string) {
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
     include: {
-      share: {
+      shares: {
         include: {
           members: {
             where: { userId: actorId },
@@ -127,30 +131,44 @@ export async function createShare(
 
   // Check permission: must be owner or admin
   const isOwner = session.userId === actorId;
-  const memberRole = session.share?.members[0]?.role;
+  const memberRole = session.shares
+    .flatMap((s) => s.members)
+    .find((m) => m)?.role;
 
   if (!isOwner && memberRole !== "ADMIN") {
     throw new ForbiddenError("Only the session owner or admin can share it");
   }
 
-  // Return existing share if one exists
-  if (session.share) {
-    return session.share;
+  // Return existing shares if they exist (idempotent)
+  if (session.shares.length > 0) {
+    return session.shares.map((s) => ({
+      token: s.token,
+      role: s.role,
+      createdAt: s.createdAt,
+    }));
   }
 
-  // Create new share
-  return prisma.sessionShare.create({
-    data: {
-      sessionId,
-      ...(defaultRole && { defaultRole }),
-    },
-  });
+  // Create all 3 role links atomically
+  const roles: MemberRole[] = ["VIEWER", "EDITOR", "ADMIN"];
+  const created = await prisma.$transaction(
+    roles.map((role) =>
+      prisma.sessionShare.create({
+        data: { sessionId, role },
+      })
+    )
+  );
+
+  return created.map((s) => ({
+    token: s.token,
+    role: s.role,
+    createdAt: s.createdAt,
+  }));
 }
 
 /**
- * Get share info including members (owner or admin)
+ * Get share info including all share links and members (owner or admin)
  */
-export async function getShare(sessionId: string, actorId: string) {
+export async function getShares(sessionId: string, actorId: string) {
   const { role } = await canAccessSession(sessionId, actorId);
 
   if (role !== "owner" && role !== "ADMIN") {
@@ -159,30 +177,50 @@ export async function getShare(sessionId: string, actorId: string) {
     );
   }
 
-  return prisma.sessionShare.findUnique({
+  const shares = await prisma.sessionShare.findMany({
     where: { sessionId },
+    orderBy: { role: "asc" }, // ADMIN, EDITOR, VIEWER
+  });
+
+  // Get all members across all shares
+  const members = await prisma.sessionMember.findMany({
+    where: {
+      sessionShareId: { in: shares.map((s) => s.id) },
+    },
     include: {
-      members: {
-        include: {
-          user: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              avatarUrl: true,
-            },
-          },
+      user: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          avatarUrl: true,
         },
-        orderBy: { joinedAt: "asc" },
       },
     },
+    orderBy: { joinedAt: "asc" },
   });
+
+  return {
+    shares: shares.map((s) => ({
+      token: s.token,
+      role: s.role,
+      createdAt: s.createdAt,
+    })),
+    members: members.map((m) => ({
+      userId: m.user.id,
+      name: m.user.name,
+      email: m.user.email,
+      avatarUrl: m.user.avatarUrl,
+      role: m.role,
+      joinedAt: m.joinedAt,
+    })),
+  };
 }
 
 /**
- * Delete share and revoke all access (owner only)
+ * Delete all shares and revoke all access (owner only)
  */
-export async function deleteShare(sessionId: string, ownerId: string) {
+export async function deleteShares(sessionId: string, ownerId: string) {
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
     select: { userId: true },
@@ -196,24 +234,15 @@ export async function deleteShare(sessionId: string, ownerId: string) {
     throw new ForbiddenError("Only the session owner can delete the share");
   }
 
-  const share = await prisma.sessionShare.findUnique({
+  // Delete all shares (cascades to delete all members)
+  await prisma.sessionShare.deleteMany({
     where: { sessionId },
-  });
-
-  if (!share) {
-    throw new NotFoundError("Share not found for this session");
-  }
-
-  // Cascades to delete all members
-  await prisma.sessionShare.delete({
-    where: { id: share.id },
   });
 }
 
 /**
  * Remove a specific member from a shared session (owner or admin).
  * Admin cannot remove other admins.
- * Uses a single query to fetch session, share, and both actor/target members.
  */
 export async function removeMember(
   sessionId: string,
@@ -223,7 +252,7 @@ export async function removeMember(
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
     include: {
-      share: {
+      shares: {
         include: {
           members: {
             where: { userId: { in: [actorId, memberUserId] } },
@@ -237,13 +266,15 @@ export async function removeMember(
     throw new NotFoundError("Session", sessionId);
   }
 
-  if (!session.share) {
+  if (session.shares.length === 0) {
     throw new NotFoundError("Share not found for this session");
   }
 
   // Determine actor role
   const isOwner = session.userId === actorId;
-  const actorMember = session.share.members.find((m) => m.userId === actorId);
+  const actorMember = session.shares
+    .flatMap((s) => s.members)
+    .find((m) => m.userId === actorId);
   const actorRole = isOwner ? "owner" : actorMember?.role ?? null;
 
   if (actorRole !== "owner" && actorRole !== "ADMIN") {
@@ -251,7 +282,10 @@ export async function removeMember(
   }
 
   // Find target member
-  const targetMember = session.share.members.find((m) => m.userId === memberUserId);
+  const targetMember = session.shares
+    .flatMap((s) => s.members)
+    .find((m) => m.userId === memberUserId);
+
   if (!targetMember) {
     throw new NotFoundError("Member not found");
   }
@@ -296,14 +330,14 @@ export async function getSharePreview(token: string) {
     sessionId: share.session.id,
     sessionName: share.session.name,
     ownerName: share.session.user?.name ?? null,
-    defaultRole: share.defaultRole,
+    role: share.role,
   };
 }
 
 /**
  * Accept a share invite (any user with valid token)
  * Optionally updates user's name if provided.
- * Assigns the share's defaultRole to the new member.
+ * Assigns the share's role to the new member.
  */
 export async function acceptShare(
   token: string,
@@ -336,10 +370,10 @@ export async function acceptShare(
     return { sessionId: share.session.id, alreadyOwner: true };
   }
 
-  // Check if already a member
+  // Check if already a member (in any share for this session)
   const existingMember = await prisma.sessionMember.findFirst({
     where: {
-      sessionShareId: share.id,
+      sessionShare: { sessionId: share.sessionId },
       userId,
     },
   });
@@ -352,12 +386,12 @@ export async function acceptShare(
     };
   }
 
-  // Add as member with the share's default role
+  // Add as member with the share's role
   const member = await prisma.sessionMember.create({
     data: {
       sessionShareId: share.id,
       userId,
-      role: share.defaultRole,
+      role: share.role,
     },
   });
 
@@ -424,17 +458,10 @@ export async function updateMemberRole(
     throw new ForbiddenError("Only the owner can promote members to admin");
   }
 
-  const share = await prisma.sessionShare.findUnique({
-    where: { sessionId },
-  });
-
-  if (!share) {
-    throw new NotFoundError("Share not found for this session");
-  }
-
+  // Find the member across all shares for this session
   const member = await prisma.sessionMember.findFirst({
     where: {
-      sessionShareId: share.id,
+      sessionShare: { sessionId },
       userId: targetUserId,
     },
   });
@@ -451,36 +478,5 @@ export async function updateMemberRole(
   return prisma.sessionMember.update({
     where: { id: member.id },
     data: { role: newRole },
-  });
-}
-
-/**
- * Update the default role assigned to new members who join via the share link.
- * Owner or admin can change this.
- */
-export async function updateDefaultRole(
-  sessionId: string,
-  actorId: string,
-  newDefaultRole: MemberRole
-) {
-  const { role: actorRole } = await canAccessSession(sessionId, actorId);
-
-  if (actorRole !== "owner" && actorRole !== "ADMIN") {
-    throw new ForbiddenError(
-      "Only the session owner or admin can change the default role"
-    );
-  }
-
-  const share = await prisma.sessionShare.findUnique({
-    where: { sessionId },
-  });
-
-  if (!share) {
-    throw new NotFoundError("Share not found for this session");
-  }
-
-  return prisma.sessionShare.update({
-    where: { id: share.id },
-    data: { defaultRole: newDefaultRole },
   });
 }

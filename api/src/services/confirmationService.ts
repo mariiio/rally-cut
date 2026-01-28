@@ -209,7 +209,7 @@ export async function getConfirmationStatus(videoId: string, userId: string) {
           sessionVideos: {
             some: {
               session: {
-                share: { members: { some: { userId } } },
+                shares: { some: { members: { some: { userId } } } },
               },
             },
           },
