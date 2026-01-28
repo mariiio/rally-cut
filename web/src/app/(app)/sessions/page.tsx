@@ -246,7 +246,7 @@ function SessionsPageContent() {
     let loadedSessions = allDialogSessions;
     if (!loadedSessions) {
       try {
-        const allResponse = await listSessions(1, 200);
+        const allResponse = await listSessions(1, 100);
         loadedSessions = allResponse.data;
         setAllDialogSessions(loadedSessions);
       } catch {
