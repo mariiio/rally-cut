@@ -48,6 +48,7 @@ class EvaluationVideo:
     s3_key: str
     content_hash: str
     duration_ms: int | None
+    fps: float | None = None
     ground_truth_rallies: list[GroundTruthRally] = field(default_factory=list)
     ml_detected_rallies: list[GroundTruthRally] = field(default_factory=list)
 
@@ -78,7 +79,7 @@ def load_evaluation_videos(
         # Note: Table names in PostgreSQL are lowercase (videos, rallies)
         query = """
             SELECT
-                v.id, v.filename, v.s3_key, v.content_hash, v.duration_ms,
+                v.id, v.filename, v.s3_key, v.content_hash, v.duration_ms, v.fps,
                 r.id as rally_id, r.start_ms, r.end_ms, r.confidence
             FROM videos v
             LEFT JOIN rallies r ON r.video_id = v.id
@@ -109,10 +110,11 @@ def load_evaluation_videos(
         s3_key = str(r[2])
         content_hash = str(r[3])
         duration_ms: int | None = int(r[4]) if r[4] is not None else None
-        rally_id: Any = r[5]  # Can be None from LEFT JOIN
-        start_ms_raw: Any = r[6]
-        end_ms_raw: Any = r[7]
-        confidence_raw: Any = r[8]
+        fps: float | None = float(r[5]) if r[5] is not None else None
+        rally_id: Any = r[6]  # Can be None from LEFT JOIN
+        start_ms_raw: Any = r[7]
+        end_ms_raw: Any = r[8]
+        confidence_raw: Any = r[9]
 
         if vid not in videos_map:
             videos_map[vid] = EvaluationVideo(
@@ -121,6 +123,7 @@ def load_evaluation_videos(
                 s3_key=s3_key,
                 content_hash=content_hash,
                 duration_ms=duration_ms,
+                fps=fps,
                 ground_truth_rallies=[],
                 ml_detected_rallies=[],
             )

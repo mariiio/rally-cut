@@ -64,11 +64,14 @@ def load_model_and_processor(
 def compute_metrics(eval_pred: Any) -> dict[str, float]:
     """Compute metrics for evaluation.
 
+    Uses macro F1 as primary metric to avoid majority class (NO_PLAY) inflating scores.
+    Also reports per-class F1 for debugging class imbalance issues.
+
     Args:
         eval_pred: Predictions from trainer
 
     Returns:
-        Dictionary of metrics
+        Dictionary of metrics including macro F1, weighted F1, and per-class F1
     """
     accuracy_metric = evaluate.load("accuracy")
     f1_metric = evaluate.load("f1")
@@ -77,14 +80,24 @@ def compute_metrics(eval_pred: Any) -> dict[str, float]:
     labels = eval_pred.label_ids
 
     accuracy = accuracy_metric.compute(predictions=predictions, references=labels)
-    f1 = f1_metric.compute(predictions=predictions, references=labels, average="weighted")
+    f1_macro = f1_metric.compute(predictions=predictions, references=labels, average="macro")
+    f1_weighted = f1_metric.compute(predictions=predictions, references=labels, average="weighted")
+    f1_per_class = f1_metric.compute(predictions=predictions, references=labels, average=None)
 
     acc_val = accuracy["accuracy"] if accuracy else 0.0
-    f1_val = f1["f1"] if f1 else 0.0
+    f1_macro_val = f1_macro["f1"] if f1_macro else 0.0
+    f1_weighted_val = f1_weighted["f1"] if f1_weighted else 0.0
+
+    # Per-class F1: 0=NO_PLAY, 1=PLAY, 2=SERVICE
+    f1_classes = f1_per_class["f1"] if f1_per_class else [0.0, 0.0, 0.0]
 
     return {
         "accuracy": acc_val,
-        "f1": f1_val,
+        "f1": f1_macro_val,  # Primary metric: macro F1 (treats all classes equally)
+        "f1_weighted": f1_weighted_val,  # Keep for reference
+        "f1_no_play": float(f1_classes[0]) if len(f1_classes) > 0 else 0.0,
+        "f1_play": float(f1_classes[1]) if len(f1_classes) > 1 else 0.0,
+        "f1_service": float(f1_classes[2]) if len(f1_classes) > 2 else 0.0,
     }
 
 
@@ -154,6 +167,7 @@ def train(
         learning_rate=config.learning_rate,
         warmup_ratio=config.warmup_ratio,
         weight_decay=config.weight_decay,
+        max_grad_norm=config.max_grad_norm,  # Clip gradients to prevent explosion
         logging_steps=config.logging_steps,
         eval_strategy="epoch" if config.save_strategy == "epoch" else "steps",
         eval_steps=config.eval_steps if config.save_strategy == "steps" else None,
@@ -186,35 +200,36 @@ def train(
         ],
     )
 
-    # Train
+    # Train with proper cleanup
     print(f"Starting training with {len(train_samples)} train samples, {len(val_samples)} val")
-    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+    try:
+        trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
-    # Save best model
-    best_model_path = config.output_dir / "best"
-    trainer.save_model(str(best_model_path))
-    processor.save_pretrained(str(best_model_path))
+        # Save best model
+        best_model_path = config.output_dir / "best"
+        trainer.save_model(str(best_model_path))
+        processor.save_pretrained(str(best_model_path))
 
-    # Save training info
-    info = {
-        "train_samples": len(train_samples),
-        "val_samples": len(val_samples),
-        "config": {
-            "learning_rate": config.learning_rate,
-            "batch_size": config.batch_size,
-            "epochs": config.num_epochs,
-            "effective_batch_size": config.effective_batch_size,
-        },
-        "best_metrics": trainer.state.best_metric,
-    }
-    with open(config.output_dir / "training_info.json", "w") as f:
-        json.dump(info, f, indent=2)
+        # Save training info
+        info = {
+            "train_samples": len(train_samples),
+            "val_samples": len(val_samples),
+            "config": {
+                "learning_rate": config.learning_rate,
+                "batch_size": config.batch_size,
+                "epochs": config.num_epochs,
+                "effective_batch_size": config.effective_batch_size,
+            },
+            "best_metrics": trainer.state.best_metric,
+        }
+        with open(config.output_dir / "training_info.json", "w") as f:
+            json.dump(info, f, indent=2)
 
-    print(f"Training complete! Model saved to: {best_model_path}")
-    print(f"Best F1: {trainer.state.best_metric:.4f}")
+        print(f"Training complete! Model saved to: {best_model_path}")
+        print(f"Best F1: {trainer.state.best_metric:.4f}")
 
-    # Clean up datasets
-    train_dataset.close()
-    val_dataset.close()
-
-    return best_model_path
+        return best_model_path
+    finally:
+        # Clean up datasets (releases video file handles)
+        train_dataset.close()
+        val_dataset.close()

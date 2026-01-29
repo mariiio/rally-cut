@@ -75,6 +75,7 @@ def train_model(
     data_dir: str = "/data/training_data",
     output_dir: str = "/data/models/beach_volleyball",
     resume_from_model: bool = False,
+    fresh: bool = False,
 ) -> dict:
     """
     Fine-tune VideoMAE on beach volleyball data.
@@ -133,7 +134,16 @@ def train_model(
 
     # Check for existing checkpoints to resume from
     resume_from_checkpoint = None
-    if output_path.exists():
+    if fresh:
+        print("  Fresh training: ignoring existing checkpoints")
+        # Delete old checkpoints to start clean
+        if output_path.exists():
+            import shutil
+
+            for cp in output_path.glob("checkpoint-*"):
+                shutil.rmtree(cp)
+                print(f"    Deleted: {cp.name}")
+    elif output_path.exists():
         checkpoints = list(output_path.glob("checkpoint-*"))
         if checkpoints:
             # Find the latest checkpoint by step number
@@ -214,7 +224,7 @@ def train_model(
         "learning_rate": learning_rate,
         "output_dir": output_path,
         "use_mps": False,  # Use CUDA on Modal
-        "dataloader_num_workers": 4,  # Can use multiprocessing on Modal
+        "dataloader_num_workers": 0,  # cv2.VideoCapture not safe for multiprocessing
         "save_strategy": "steps",  # Save every N steps for preemption resilience
         "save_steps": 100,  # Checkpoint every ~5 min, max loss on preemption
         "eval_steps": 100,  # Evaluate at same frequency as saves
@@ -297,6 +307,7 @@ def main(
     upload_data: bool = False,
     download: bool = False,
     resume_from_model: bool = False,
+    fresh: bool = False,
 ) -> None:
     """
     Train VideoMAE on Modal GPU.
@@ -340,6 +351,8 @@ def main(
     print(f"  Epochs: {epochs}")
     print(f"  Batch size: {batch_size}")
     print(f"  Learning rate: {learning_rate}")
+    if fresh:
+        print("  Mode: Fresh (ignoring existing checkpoints)")
     if resume_from_model:
         print("  Mode: Incremental (resume from existing model)")
 
@@ -348,6 +361,7 @@ def main(
         batch_size=batch_size,
         learning_rate=learning_rate,
         resume_from_model=resume_from_model,
+        fresh=fresh,
     )
 
     print("\nTraining complete!")

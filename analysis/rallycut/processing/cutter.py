@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import bisect
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -197,11 +196,8 @@ class VideoCutter:
         rally_continuation_seconds of consecutive NO_PLAY predictions.
         This bridges gaps where the ML model incorrectly predicts NO_PLAY mid-rally.
 
-        The heuristic works on a frame-level basis:
-        1. Track whether we're "in a rally" (saw recent PLAY/SERVICE)
-        2. Count consecutive NO_PLAY frames
-        3. Only end the rally when NO_PLAY count exceeds threshold
-        4. Convert NO_PLAY results to PLAY while in active rally
+        Optimized to iterate over results (O(n)) instead of frames (O(frames)).
+        For a 30-minute video, this reduces iterations from ~54,000 to ~1,000.
 
         Args:
             results: List of GameStateResult from ML analysis
@@ -218,68 +214,43 @@ class VideoCutter:
         # Convert continuation threshold from seconds to frames
         min_no_play_frames = int(self.rally_continuation_seconds * fps)
 
-        # Build sparse frame lookup using sorted intervals + binary search
-        # This avoids O(total_frames) memory for dense mapping
-        # Each entry: (start_frame, end_frame, result_index)
-        result_intervals: list[tuple[int, int, int]] = []
-        for idx, r in enumerate(results):
-            if r.start_frame is not None and r.end_frame is not None:
-                result_intervals.append((r.start_frame, r.end_frame, idx))
-
-        if not result_intervals:
-            return results
-
-        # Sort by start_frame for binary search
-        result_intervals.sort(key=lambda x: x[0])
-        interval_starts = [iv[0] for iv in result_intervals]
-
-        def find_result_for_frame(frame: int) -> int | None:
-            """Find result index containing frame using binary search. Returns None if no result covers the frame."""
-            # Find the rightmost interval that starts <= frame
-            i = bisect.bisect_right(interval_starts, frame) - 1
-            if i < 0:
-                return None
-            start, end, idx = result_intervals[i]
-            if start <= frame <= end:
-                return idx
-            return None
-
-        max_frame = result_intervals[-1][1]  # End frame of last interval
-
-        # Track rally state
+        # Track rally state and which results to extend
         in_rally = False
-        consecutive_no_play = 0
-
-        # Track which results should be converted to PLAY
+        no_play_start_frame: int | None = None  # Frame where NO_PLAY streak started
+        pending_no_play_indices: list[int] = []  # NO_PLAY results waiting to be extended
         results_to_extend: set[int] = set()
 
-        for frame in range(max_frame + 1):
-            result_idx = find_result_for_frame(frame)
-            if result_idx is None:
-                # No prediction for this frame - treat as continuation
-                if in_rally:
-                    consecutive_no_play += 1
-                    if consecutive_no_play >= min_no_play_frames:
-                        in_rally = False
+        for idx, result in enumerate(results):
+            if result.start_frame is None or result.end_frame is None:
                 continue
 
-            result = results[result_idx]
             is_active = result.state in (GameState.PLAY, GameState.SERVICE)
 
             if is_active:
-                # Active prediction - we're in a rally
+                if in_rally and pending_no_play_indices:
+                    # We're back to PLAY - extend all pending NO_PLAY results
+                    results_to_extend.update(pending_no_play_indices)
+                # Start or continue rally
                 in_rally = True
-                consecutive_no_play = 0
+                no_play_start_frame = None
+                pending_no_play_indices = []
             else:
-                # NO_PLAY prediction
+                # NO_PLAY result
                 if in_rally:
-                    consecutive_no_play += 1
-                    if consecutive_no_play >= min_no_play_frames:
-                        # Enough consecutive NO_PLAY - end the rally
+                    if no_play_start_frame is None:
+                        # Start of NO_PLAY streak
+                        no_play_start_frame = result.start_frame
+
+                    # Check if NO_PLAY streak exceeds threshold
+                    no_play_duration = result.end_frame - no_play_start_frame
+                    if no_play_duration >= min_no_play_frames:
+                        # End the rally - don't extend pending NO_PLAY results
                         in_rally = False
+                        no_play_start_frame = None
+                        pending_no_play_indices = []
                     else:
-                        # Still in rally - mark this result for extension
-                        results_to_extend.add(result_idx)
+                        # Still within threshold - mark for potential extension
+                        pending_no_play_indices.append(idx)
 
         # Create modified results list
         extended = []

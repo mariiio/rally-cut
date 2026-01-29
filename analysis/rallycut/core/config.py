@@ -151,6 +151,9 @@ class ProxyConfig(BaseModel):
     enabled: bool = True
     height: int = 480
     fps: int = 30  # Normalize to 30fps for optimal ML temporal dynamics
+    # FPS threshold: videos above this are normalized to `fps` in proxies
+    # VideoMAE's 16-frame window needs ~0.5s of content; high FPS compresses this
+    fps_normalize_threshold: float = 40.0
 
 
 class SegmentConfig(BaseModel):

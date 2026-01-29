@@ -87,8 +87,9 @@ class GameStateAnalyzer:
         # FPS normalization: subsample high-FPS videos to ~30fps
         # The model's 16-frame window needs ~0.5s of content to recognize patterns
         # At 60fps, 16 frames = 0.27s (too short); subsampling fixes this
-        target_fps = 30.0
-        if fps > 40:  # Likely 50fps or 60fps
+        target_fps = float(config.proxy.fps)
+        fps_threshold = config.proxy.fps_normalize_threshold
+        if fps > fps_threshold:  # Likely 50fps or 60fps
             frame_step = round(fps / target_fps)
         else:
             frame_step = 1
