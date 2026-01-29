@@ -18,7 +18,11 @@ from transformers import (
 )
 
 from rallycut.training.config import LABEL_MAP, TrainingConfig
-from rallycut.training.dataset import BeachVolleyballDataset, create_data_collator
+from rallycut.training.dataset import (
+    BeachVolleyballDataset,
+    PreExtractedFramesDataset,
+    create_data_collator,
+)
 from rallycut.training.sampler import TrainingSample
 
 
@@ -104,24 +108,38 @@ def compute_metrics(eval_pred: Any) -> dict[str, float]:
 def train(
     train_samples: list[TrainingSample],
     val_samples: list[TrainingSample],
-    video_paths: dict[str, Path],
+    video_paths: dict[str, Path] | None = None,
     config: TrainingConfig | None = None,
     resume_from_checkpoint: str | None = None,
+    train_frames_dir: Path | None = None,
+    val_frames_dir: Path | None = None,
 ) -> Path:
     """Train VideoMAE model on beach volleyball data.
 
+    Supports two modes:
+    1. Video mode: Pass video_paths to load frames from video files on-the-fly
+    2. Pre-extracted mode: Pass train_frames_dir and val_frames_dir with .npy files
+       (10x faster, enables multiprocessing)
+
     Args:
-        train_samples: Training samples
-        val_samples: Validation samples
-        video_paths: Mapping from video_id to local file path
+        train_samples: Training samples (used for labels in pre-extracted mode)
+        val_samples: Validation samples (used for labels in pre-extracted mode)
+        video_paths: Mapping from video_id to local file path (video mode)
         config: Training configuration
         resume_from_checkpoint: Path to checkpoint to resume from
+        train_frames_dir: Directory with pre-extracted train frame .npy files
+        val_frames_dir: Directory with pre-extracted val frame .npy files
 
     Returns:
         Path to the trained model
     """
     if config is None:
         config = TrainingConfig()
+
+    # Determine mode
+    use_preextracted = train_frames_dir is not None and val_frames_dir is not None
+    if not use_preextracted and video_paths is None:
+        raise ValueError("Must provide either video_paths or (train_frames_dir, val_frames_dir)")
 
     # Create output directory
     config.output_dir.mkdir(parents=True, exist_ok=True)
@@ -141,21 +159,49 @@ def train(
     model.to(device)  # type: ignore[arg-type]
 
     # Create datasets
-    train_dataset = BeachVolleyballDataset(
-        samples=train_samples,
-        video_paths=video_paths,
-        processor=processor,
-        config=config,
-        augment=True,
-    )
+    train_dataset: BeachVolleyballDataset | PreExtractedFramesDataset
+    val_dataset: BeachVolleyballDataset | PreExtractedFramesDataset
 
-    val_dataset = BeachVolleyballDataset(
-        samples=val_samples,
-        video_paths=video_paths,
-        processor=processor,
-        config=config,
-        augment=False,
-    )
+    if use_preextracted:
+        print("Using pre-extracted frames (multiprocessing enabled)")
+        train_labels = [s.label for s in train_samples]
+        val_labels = [s.label for s in val_samples]
+        assert train_frames_dir is not None
+        assert val_frames_dir is not None
+
+        train_dataset = PreExtractedFramesDataset(
+            frames_dir=train_frames_dir,
+            labels=train_labels,
+            processor=processor,
+            config=config,
+            augment=True,
+        )
+
+        val_dataset = PreExtractedFramesDataset(
+            frames_dir=val_frames_dir,
+            labels=val_labels,
+            processor=processor,
+            config=config,
+            augment=False,
+        )
+    else:
+        print("Using video loading (sequential, slower)")
+        assert video_paths is not None
+        train_dataset = BeachVolleyballDataset(
+            samples=train_samples,
+            video_paths=video_paths,
+            processor=processor,
+            config=config,
+            augment=True,
+        )
+
+        val_dataset = BeachVolleyballDataset(
+            samples=val_samples,
+            video_paths=video_paths,
+            processor=processor,
+            config=config,
+            augment=False,
+        )
 
     # Training arguments
     training_args = TrainingArguments(

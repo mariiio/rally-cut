@@ -195,28 +195,48 @@ def train_model(
         for s in val_data
     ]
 
-    # Video paths - need to remap to volume location
-    video_paths = {}
-    for vid, path in video_paths_data.items():
-        # Original paths are local, remap to volume
-        # Videos should be uploaded to /data/videos/
-        filename = Path(path).name
-        volume_path = Path("/data/videos") / filename
-        if volume_path.exists():
-            video_paths[vid] = volume_path
-        else:
-            print(f"Warning: Video not found at {volume_path}")
+    # Check for pre-extracted frames (fast mode)
+    train_frames_dir = data_path / "train_frames"
+    val_frames_dir = data_path / "val_frames"
+    use_preextracted = train_frames_dir.exists() and val_frames_dir.exists()
 
-    if not video_paths:
-        raise ValueError(
-            "No videos found. Upload videos with: "
-            "modal volume put rallycut-training <local_video_dir>/ videos/"
-        )
+    if use_preextracted:
+        # Verify frame count matches sample count
+        train_frame_count = len(list(train_frames_dir.glob("*.npy")))
+        val_frame_count = len(list(val_frames_dir.glob("*.npy")))
+        if train_frame_count != len(train_samples) or val_frame_count != len(val_samples):
+            print(f"Warning: Frame count mismatch. Train: {train_frame_count} vs {len(train_samples)}, Val: {val_frame_count} vs {len(val_samples)}")
+            use_preextracted = False
+        else:
+            print(f"Found pre-extracted frames: {train_frame_count} train, {val_frame_count} val")
+            print("  Using fast mode with multiprocessing!")
+
+    # Video paths - needed for fallback mode
+    video_paths = {}
+    if not use_preextracted:
+        for vid, path in video_paths_data.items():
+            # Original paths are local, remap to volume
+            # Videos should be uploaded to /data/videos/
+            filename = Path(path).name
+            volume_path = Path("/data/videos") / filename
+            if volume_path.exists():
+                video_paths[vid] = volume_path
+            else:
+                print(f"Warning: Video not found at {volume_path}")
+
+        if not video_paths:
+            raise ValueError(
+                "No videos found. Upload videos with: "
+                "modal volume put rallycut-training <local_video_dir>/ videos/"
+            )
+        print("Using video loading mode (slower)")
+        print(f"  Found {len(video_paths)} videos")
 
     print(f"Loaded {len(train_samples)} train samples, {len(val_samples)} val samples")
-    print(f"Found {len(video_paths)} videos")
 
     # Configure training for T4 GPU
+    # Enable multiprocessing only with pre-extracted frames (cv2 not fork-safe)
+    num_workers = 4 if use_preextracted else 0
     config_kwargs = {
         "num_epochs": epochs,
         "batch_size": batch_size,  # T4 has 16GB VRAM
@@ -224,7 +244,7 @@ def train_model(
         "learning_rate": learning_rate,
         "output_dir": output_path,
         "use_mps": False,  # Use CUDA on Modal
-        "dataloader_num_workers": 0,  # cv2.VideoCapture not safe for multiprocessing
+        "dataloader_num_workers": num_workers,
         "save_strategy": "steps",  # Save every N steps for preemption resilience
         "save_steps": 100,  # Checkpoint every ~5 min, max loss on preemption
         "eval_steps": 100,  # Evaluate at same frequency as saves
@@ -236,13 +256,23 @@ def train_model(
     config = TrainingConfig(**config_kwargs)  # type: ignore[arg-type]
 
     # Run training (auto-resumes from checkpoint if available)
-    model_path = train(
-        train_samples=train_samples,
-        val_samples=val_samples,
-        video_paths=video_paths,
-        config=config,
-        resume_from_checkpoint=resume_from_checkpoint,
-    )
+    if use_preextracted:
+        model_path = train(
+            train_samples=train_samples,
+            val_samples=val_samples,
+            config=config,
+            resume_from_checkpoint=resume_from_checkpoint,
+            train_frames_dir=train_frames_dir,
+            val_frames_dir=val_frames_dir,
+        )
+    else:
+        model_path = train(
+            train_samples=train_samples,
+            val_samples=val_samples,
+            video_paths=video_paths,
+            config=config,
+            resume_from_checkpoint=resume_from_checkpoint,
+        )
 
     # Commit volume to persist results
     training_volume.commit()
