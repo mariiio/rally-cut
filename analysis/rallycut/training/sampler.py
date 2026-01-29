@@ -6,6 +6,7 @@ import random
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from rallycut.core.proxy import ProxyGenerator
 from rallycut.training.config import LABEL_TO_ID, TrainingConfig
 
 if TYPE_CHECKING:
@@ -59,8 +60,11 @@ def generate_training_samples(
         if not video.ground_truth_rallies:
             continue
 
-        # Get video FPS (default to 30 if not available)
-        fps = config.fps
+        # Use proxy FPS for sampling (training uses 480p proxy videos)
+        # High-FPS videos (>40fps) are normalized to 30fps in proxies (see proxy.py)
+        # Low-FPS videos keep their original FPS
+        original_fps = video.fps if video.fps else config.fps
+        fps = config.fps if original_fps > ProxyGenerator.FPS_NORMALIZE_THRESHOLD else original_fps
         frame_count = int((video.duration_ms or 0) / 1000 * fps) if video.duration_ms else 0
 
         # Sort rallies by start time
@@ -109,8 +113,8 @@ def _sample_from_rally(
     if rally_frames < config.num_frames * 2:
         return samples
 
-    # SERVICE samples: first 1 second of rally
-    service_end_frame = start_frame + int(1.0 * fps)  # First 1 second
+    # SERVICE samples: first 1.5 seconds of rally (serves can take 2-3s)
+    service_end_frame = start_frame + int(1.5 * fps)  # First 1.5 seconds
     service_range = service_end_frame - start_frame - config.num_frames
 
     if service_range > 0:

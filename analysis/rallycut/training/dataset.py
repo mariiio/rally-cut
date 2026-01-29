@@ -31,6 +31,7 @@ class BeachVolleyballDataset(Dataset[dict[str, Any]]):
         processor: VideoMAEImageProcessor | None = None,
         config: TrainingConfig | None = None,
         augment: bool = False,
+        sort_for_io: bool = True,
     ):
         """Initialize dataset.
 
@@ -40,8 +41,16 @@ class BeachVolleyballDataset(Dataset[dict[str, Any]]):
             processor: VideoMAE image processor (loaded if not provided)
             config: Training configuration
             augment: Whether to apply data augmentation
+            sort_for_io: Sort samples by (video_id, start_frame) to optimize sequential
+                reading. When True, samples within the same video are read in order,
+                minimizing expensive video rewinds. Default True.
         """
-        self.samples = samples
+        # Sort samples by (video_id, start_frame) to maximize sequential read efficiency
+        # This reduces rewind operations when reading frames from the same video
+        if sort_for_io:
+            self.samples = sorted(samples, key=lambda s: (s.video_id, s.start_frame))
+        else:
+            self.samples = samples
         self.video_paths = video_paths
         self.config = config or TrainingConfig()
         self.augment = augment
@@ -97,6 +106,9 @@ class BeachVolleyballDataset(Dataset[dict[str, Any]]):
     def _load_frames(self, video_id: str, start_frame: int) -> np.ndarray:
         """Load 16 consecutive frames from video.
 
+        Uses sequential reading instead of seeking for reliability with MOV files.
+        OpenCV's CAP_PROP_POS_FRAMES seeking is unreliable for some containers.
+
         Args:
             video_id: Video identifier
             start_frame: Starting frame number
@@ -111,9 +123,24 @@ class BeachVolleyballDataset(Dataset[dict[str, Any]]):
         # Get or create video capture
         cap = self._get_video_capture(video_id, video_path)
 
-        # Seek to start frame
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        # Get current frame position
+        current_frame = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
 
+        # If we're past the start frame, need to reopen the capture
+        if current_frame > start_frame:
+            cap.release()
+            cap = cv2.VideoCapture(str(video_path))
+            if not cap.isOpened():
+                raise RuntimeError(f"Failed to reopen video: {video_path}")
+            self._video_caps[video_id] = cap
+            current_frame = 0
+
+        # Skip frames sequentially to reach start_frame (grab is faster than read)
+        while current_frame < start_frame:
+            cap.grab()
+            current_frame += 1
+
+        # Read the required frames
         frames: list[np.ndarray] = []
         for _ in range(self.config.num_frames):
             ret, frame = cap.read()

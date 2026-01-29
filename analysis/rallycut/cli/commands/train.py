@@ -67,9 +67,13 @@ def prepare(
     # Download videos and generate proxies
     rprint("[bold]Downloading videos and generating proxies...[/bold]")
     rprint("(Using 480p@30fps proxies for efficient training - VideoMAE only needs 224x224)")
+
+    from rallycut.core.video import Video as VideoReader
+
     resolver = VideoResolver()
     proxy_gen = ProxyGenerator()
     video_paths: dict[str, Path] = {}
+    video_metadata: dict[str, dict[str, float | int]] = {}
 
     with Progress(console=console) as progress:
         task = progress.add_task("Processing...", total=len(videos))
@@ -77,6 +81,21 @@ def prepare(
             try:
                 # Download full video
                 local_path = resolver.resolve(video.s3_key, video.content_hash)
+
+                # Get video FPS and frame count
+                # Training uses proxy videos which normalize high-FPS to 30fps
+                with VideoReader(local_path) as v:
+                    original_fps = v.info.fps
+                    original_frame_count = v.info.frame_count
+
+                # Proxy FPS matches ProxyGenerator.FPS_NORMALIZE_THRESHOLD
+                proxy_fps = 30.0 if original_fps > ProxyGenerator.FPS_NORMALIZE_THRESHOLD else original_fps
+
+                video_metadata[video.id] = {
+                    "original_fps": original_fps,
+                    "proxy_fps": proxy_fps,
+                    "frame_count": original_frame_count,
+                }
 
                 # Generate or get cached proxy (480p@30fps - much smaller!)
                 proxy_path = proxy_gen.generate_proxy(local_path)
@@ -149,6 +168,10 @@ def prepare(
     paths_data = {vid: str(path) for vid, path in video_paths.items()}
     with open(output / "video_paths.json", "w") as f:
         json.dump(paths_data, f, indent=2)
+
+    # Save video metadata (fps, frame_count) for accurate training
+    with open(output / "video_metadata.json", "w") as f:
+        json.dump(video_metadata, f, indent=2)
 
     # Save metadata
     metadata = {
@@ -285,6 +308,9 @@ def modal(
     ),
     resume_from_model: bool = typer.Option(
         False, "--resume-from-model", help="Continue training from existing beach model weights"
+    ),
+    fresh: bool = typer.Option(
+        False, "--fresh", help="Start fresh training, ignoring existing checkpoints"
     ),
 ) -> None:
     """Run training on Modal GPU (T4 - ~$0.59/hr).
@@ -433,9 +459,9 @@ def modal(
             source_dir = best_subdir if best_subdir.is_dir() else Path(tmp_dir)
 
             # Move all model files to output directory
-            for f in source_dir.iterdir():
-                if f.is_file():
-                    shutil.copy2(str(f), str(output_dir / f.name))
+            for model_file in source_dir.iterdir():
+                if model_file.is_file():
+                    shutil.copy2(str(model_file), str(output_dir / model_file.name))
 
         rprint(f"[green]Model downloaded to {output_dir}[/green]")
         rprint()
@@ -485,6 +511,8 @@ def modal(
     # Run training on Modal
     rprint("[bold]Starting training on Modal T4 GPU...[/bold]")
     rprint(f"Epochs: {epochs}, Batch size: {batch_size}, Learning rate: {learning_rate}")
+    if fresh:
+        rprint("[yellow]Fresh training: ignoring existing checkpoints[/yellow]")
     if resume_from_model:
         rprint("[cyan]Resuming from existing beach volleyball model weights[/cyan]")
     rprint()
@@ -504,6 +532,9 @@ def modal(
 
     if resume_from_model:
         cmd.append("--resume-from-model")
+
+    if fresh:
+        cmd.append("--fresh")
 
     rprint(f"Running: {' '.join(cmd)}")
     rprint()

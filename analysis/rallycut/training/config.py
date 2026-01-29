@@ -25,7 +25,8 @@ class TrainingConfig:
     )
 
     # Training hyperparameters (optimized for small dataset + MPS)
-    learning_rate: float = 5e-5
+    # Note: 1e-5 is stable for fine-tuning; use 5e-5 only for aggressive training
+    learning_rate: float = 1e-5
     batch_size: int = 2  # Very small for MPS memory limits
     gradient_accumulation_steps: int = 8  # Effective batch = 16
     num_epochs: int = 25
@@ -35,6 +36,7 @@ class TrainingConfig:
     # Regularization
     dropout: float = 0.1
     label_smoothing: float = 0.1
+    max_grad_norm: float = 1.0  # Gradient clipping threshold
 
     # Early stopping
     early_stopping_patience: int = 5

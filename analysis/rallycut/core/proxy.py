@@ -57,11 +57,11 @@ class FrameMapper:
 
     def source_to_proxy(self, source_frame: int) -> int:
         """Convert source frame index to proxy frame index."""
-        return int(source_frame / self.ratio)
+        return round(source_frame / self.ratio)
 
     def proxy_to_source(self, proxy_frame: int) -> int:
         """Convert proxy frame index to source frame index."""
-        return int(proxy_frame * self.ratio)
+        return round(proxy_frame * self.ratio)
 
     def time_to_proxy_frame(self, time_seconds: float) -> int:
         """Convert time in seconds to proxy frame index."""
@@ -83,9 +83,9 @@ class FrameMapper:
 class ProxyGenerator:
     """Generates and manages cached proxy videos for ML analysis."""
 
-    # Only normalize FPS if source exceeds this threshold
-    # Matches the threshold in game_state.py for consistency
-    FPS_NORMALIZE_THRESHOLD = 40.0
+    # Class-level default (for backward compatibility)
+    # Instance uses config.fps_normalize_threshold if available
+    FPS_NORMALIZE_THRESHOLD: float = 40.0
 
     def __init__(
         self,
@@ -95,6 +95,10 @@ class ProxyGenerator:
         self.config = config or ProxyConfig()
         self.cache_dir = cache_dir or Path(user_cache_dir("rallycut")) / "proxies"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        # Use config value, falling back to class constant for backward compatibility
+        self._fps_threshold: float = getattr(
+            self.config, 'fps_normalize_threshold', self.FPS_NORMALIZE_THRESHOLD
+        )
 
     def _get_video_info(self, video_path: Path) -> tuple[float, int]:
         """Get source video FPS and height in a single ffprobe call.
@@ -166,7 +170,7 @@ class ProxyGenerator:
         For repeated calls, use _get_proxy_path_for_fps directly.
         """
         source_fps = self._get_source_fps(source_video)
-        should_normalize = source_fps > self.FPS_NORMALIZE_THRESHOLD
+        should_normalize = source_fps > self._fps_threshold
         return self._get_proxy_path_for_fps(source_video, should_normalize)
 
     def _get_proxy_path_for_fps(self, source_video: Path, fps_normalized: bool) -> Path:
@@ -201,7 +205,7 @@ class ProxyGenerator:
         """
         # Get source video info in single ffprobe call
         source_fps, source_height = self._get_video_info(source_video)
-        should_normalize_fps = source_fps > self.FPS_NORMALIZE_THRESHOLD
+        should_normalize_fps = source_fps > self._fps_threshold
         is_already_small = source_height <= 720
 
         # Skip proxy generation if input is already small enough (e.g., API-generated 720p proxy)
@@ -331,7 +335,7 @@ class ProxyGenerator:
         """
         proxy_path = self.generate_proxy(source_video, progress_callback)
         # Determine actual proxy FPS based on whether normalization was applied
-        should_normalize = source_fps > self.FPS_NORMALIZE_THRESHOLD
+        should_normalize = source_fps > self._fps_threshold
         proxy_fps = float(self.config.fps) if should_normalize else source_fps
         mapper = FrameMapper(source_fps, proxy_fps)
         return proxy_path, mapper
