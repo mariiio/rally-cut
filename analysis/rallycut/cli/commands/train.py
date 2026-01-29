@@ -33,16 +33,21 @@ def extract_frames_for_sample(
     cap: cv2.VideoCapture,
     start_frame: int,
     num_frames: int = 16,
+    target_size: tuple[int, int] = (224, 224),
 ) -> np.ndarray:
     """Extract frames for a single sample.
+
+    Frames are resized to target_size during extraction to minimize storage
+    and eliminate resize overhead during training.
 
     Args:
         cap: OpenCV video capture (should be at or before start_frame)
         start_frame: Starting frame number
         num_frames: Number of frames to extract (default 16 for VideoMAE)
+        target_size: (width, height) to resize frames to (default 224x224 for VideoMAE)
 
     Returns:
-        Array of shape (num_frames, H, W, 3) in RGB format
+        Array of shape (num_frames, H, W, 3) in RGB format, resized to target_size
     """
     # Seek to start frame
     current_pos = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
@@ -65,11 +70,12 @@ def extract_frames_for_sample(
             if frames:
                 frames.append(frames[-1].copy())
             else:
-                # Black fallback
-                frames.append(np.zeros((480, 854, 3), dtype=np.uint8))
+                # Black fallback at target size
+                frames.append(np.zeros((target_size[1], target_size[0], 3), dtype=np.uint8))
         else:
-            # Convert BGR to RGB
-            frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            # Resize and convert BGR to RGB
+            frame_resized = cv2.resize(frame, target_size, interpolation=cv2.INTER_LINEAR)
+            frames.append(cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB))
 
     return np.array(frames, dtype=np.uint8)
 
