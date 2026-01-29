@@ -291,7 +291,7 @@ class BeachVolleyballDataset(Dataset[dict[str, Any]]):
         """
         # Random horizontal flip (50% chance)
         if np.random.random() < 0.5:
-            frames = frames[:, :, ::-1, :]
+            frames = frames[:, :, ::-1, :].copy()  # copy() needed for contiguous array
 
         # Random brightness adjustment (-10% to +10%)
         brightness = np.random.uniform(0.9, 1.1)
