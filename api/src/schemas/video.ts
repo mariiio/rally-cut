@@ -17,6 +17,7 @@ export const confirmUploadSchema = z.object({
   durationMs: z.number().int().positive(),
   width: z.number().int().positive().optional(),
   height: z.number().int().positive().optional(),
+  fps: z.number().positive().optional(),
 });
 
 export const updateVideoSchema = z.object({

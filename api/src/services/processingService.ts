@@ -63,6 +63,36 @@ export async function generatePosterImmediate(
     const buffer = await response.arrayBuffer();
     await fs.writeFile(inputPath, Buffer.from(buffer));
 
+    // Extract video metadata (FPS, width, height) using ffprobe
+    let fps: number | null = null;
+    let width: number | null = null;
+    let height: number | null = null;
+    try {
+      const probeResult = await runFFprobe([
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=r_frame_rate,width,height",
+        "-of", "json",
+        inputPath,
+      ]);
+      const probeInfo = JSON.parse(probeResult);
+      const stream = probeInfo?.streams?.[0];
+      if (stream) {
+        // Parse frame rate (format: "30/1" or "60000/1001")
+        if (stream.r_frame_rate) {
+          const [num, den] = stream.r_frame_rate.split("/").map(Number);
+          if (num && den) {
+            fps = num / den;
+          }
+        }
+        if (stream.width) width = parseInt(stream.width, 10);
+        if (stream.height) height = parseInt(stream.height, 10);
+        console.log(`[POSTER] Video ${videoId} metadata: ${width}x${height} @ ${fps?.toFixed(2)}fps`);
+      }
+    } catch (err) {
+      console.log(`[POSTER] Failed to extract video metadata for ${videoId}:`, err);
+    }
+
     // Generate S3 key for poster
     const keyParts = s3Key.split("/");
     const filename = keyParts.pop()!;
@@ -98,10 +128,16 @@ export async function generatePosterImmediate(
     const posterData = await fs.readFile(posterPath);
     await uploadPoster(posterKey, posterData);
 
-    // Update database
+    // Update database with poster and extracted metadata
     await prisma.video.update({
       where: { id: videoId },
-      data: { posterS3Key: posterKey },
+      data: {
+        posterS3Key: posterKey,
+        // Only update if we successfully extracted metadata and frontend didn't provide it
+        ...(fps !== null && { fps }),
+        ...(width !== null && { width }),
+        ...(height !== null && { height }),
+      },
     });
 
     console.log(`[POSTER] Generated poster for video ${videoId}: ${posterKey}`);
