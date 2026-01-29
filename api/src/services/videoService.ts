@@ -446,7 +446,7 @@ export async function abortMultipartUpload(
 export async function confirmVideoUpload(
   videoId: string,
   userId: string,
-  data: { durationMs?: number; width?: number; height?: number }
+  data: { durationMs?: number; width?: number; height?: number; fps?: number }
 ) {
   const video = await prisma.video.findFirst({
     where: { id: videoId, userId },
@@ -475,6 +475,7 @@ export async function confirmVideoUpload(
       durationMs: data.durationMs,
       width: data.width,
       height: data.height,
+      fps: data.fps,
     },
   });
 
