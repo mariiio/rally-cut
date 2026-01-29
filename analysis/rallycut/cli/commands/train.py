@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import json
 import random
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+import cv2
+import numpy as np
 import typer
 from rich import print as rprint
 from rich.console import Console
@@ -18,8 +22,111 @@ from rallycut.evaluation.video_resolver import VideoResolver
 from rallycut.training.config import TrainingConfig
 from rallycut.training.sampler import generate_training_samples, get_sample_statistics
 
+if TYPE_CHECKING:
+    from rallycut.training.sampler import TrainingSample
+
 app = typer.Typer(help="Train VideoMAE model on beach volleyball data")
 console = Console()
+
+
+def extract_frames_for_sample(
+    cap: cv2.VideoCapture,
+    start_frame: int,
+    num_frames: int = 16,
+) -> np.ndarray:
+    """Extract frames for a single sample.
+
+    Args:
+        cap: OpenCV video capture (should be at or before start_frame)
+        start_frame: Starting frame number
+        num_frames: Number of frames to extract (default 16 for VideoMAE)
+
+    Returns:
+        Array of shape (num_frames, H, W, 3) in RGB format
+    """
+    # Seek to start frame
+    current_pos = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+    if current_pos > start_frame:
+        # Need to rewind - seek from beginning
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        current_pos = 0
+
+    # Skip to start frame using grab (faster than read)
+    while current_pos < start_frame:
+        cap.grab()
+        current_pos += 1
+
+    # Read frames
+    frames: list[np.ndarray] = []
+    for _ in range(num_frames):
+        ret, frame = cap.read()
+        if not ret:
+            # Repeat last frame if video ends early
+            if frames:
+                frames.append(frames[-1].copy())
+            else:
+                # Black fallback
+                frames.append(np.zeros((480, 854, 3), dtype=np.uint8))
+        else:
+            # Convert BGR to RGB
+            frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+
+    return np.array(frames, dtype=np.uint8)
+
+
+def extract_all_frames(
+    samples: list[TrainingSample],
+    video_paths: dict[str, Path],
+    output_dir: Path,
+    num_frames: int = 16,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> None:
+    """Extract frames for all samples and save as .npy files.
+
+    Samples are processed in order sorted by (video_id, start_frame) to minimize
+    video seeking/rewinding.
+
+    Args:
+        samples: List of training samples
+        video_paths: Mapping from video_id to video file path
+        output_dir: Directory to save extracted frames
+        num_frames: Frames per sample (default 16)
+        progress_callback: Optional callback(current, total) for progress updates
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Sort samples by video and frame for sequential reading
+    indexed_samples = list(enumerate(samples))
+    indexed_samples.sort(key=lambda x: (x[1].video_id, x[1].start_frame))
+
+    # Track current video capture
+    current_video_id: str | None = None
+    cap: cv2.VideoCapture | None = None
+
+    try:
+        for i, (original_idx, sample) in enumerate(indexed_samples):
+            # Open new video if needed
+            if sample.video_id != current_video_id:
+                if cap is not None:
+                    cap.release()
+                video_path = video_paths[sample.video_id]
+                cap = cv2.VideoCapture(str(video_path))
+                if not cap.isOpened():
+                    raise RuntimeError(f"Failed to open video: {video_path}")
+                current_video_id = sample.video_id
+
+            # Extract frames (cap is guaranteed not None here)
+            assert cap is not None
+            frames = extract_frames_for_sample(cap, sample.start_frame, num_frames)
+
+            # Save with original index (maintains correspondence with labels)
+            np.save(output_dir / f"{original_idx}.npy", frames)
+
+            if progress_callback is not None:
+                progress_callback(i + 1, len(samples))
+    finally:
+        if cap is not None:
+            cap.release()
 
 
 @app.callback(invoke_without_command=True)
@@ -186,10 +293,45 @@ def prepare(
     with open(output / "metadata.json", "w") as f:
         json.dump(metadata, f, indent=2)
 
+    # Extract frames for fast training
+    rprint()
+    rprint("[bold]Extracting frames for all samples...[/bold]")
+    rprint("(Pre-extraction enables multiprocessing and ~10x faster training)")
+
+    train_frames_dir = output / "train_frames"
+    val_frames_dir = output / "val_frames"
+
+    with Progress(console=console) as progress:
+        # Extract training frames
+        task = progress.add_task("Extracting train frames...", total=len(train_samples))
+        extract_all_frames(
+            train_samples,
+            video_paths,
+            train_frames_dir,
+            num_frames=config.num_frames,
+            progress_callback=lambda cur, _: progress.update(task, completed=cur),
+        )
+
+        # Extract validation frames
+        task = progress.add_task("Extracting val frames...", total=len(val_samples))
+        extract_all_frames(
+            val_samples,
+            video_paths,
+            val_frames_dir,
+            num_frames=config.num_frames,
+            progress_callback=lambda cur, _: progress.update(task, completed=cur),
+        )
+
+    # Calculate total size
+    train_size = sum(f.stat().st_size for f in train_frames_dir.glob("*.npy"))
+    val_size = sum(f.stat().st_size for f in val_frames_dir.glob("*.npy"))
+    total_mb = (train_size + val_size) / (1024 * 1024)
+    rprint(f"Extracted frames: [green]{total_mb:.0f} MB[/green]")
+
     rprint()
     rprint(f"[green]Data saved to: {output}[/green]")
     rprint()
-    rprint("Next step: [cyan]rallycut train run --data training_data/[/cyan]")
+    rprint("Next step: [cyan]rallycut train modal --upload --epochs 10[/cyan]")
 
 
 @app.command()

@@ -17,6 +17,114 @@ if TYPE_CHECKING:
     from rallycut.training.sampler import TrainingSample
 
 
+class PreExtractedFramesDataset(Dataset[dict[str, Any]]):
+    """Dataset that loads pre-extracted frames from .npy files.
+
+    This is much faster than loading from video files because:
+    1. No video decoding overhead
+    2. Safe for multiprocessing (no cv2.VideoCapture)
+    3. Direct numpy array loading
+
+    Expected directory structure:
+        frames_dir/
+            {sample_idx}.npy  # Shape: (16, H, W, 3), dtype: uint8, RGB
+    """
+
+    def __init__(
+        self,
+        frames_dir: Path,
+        labels: list[int],
+        processor: VideoMAEImageProcessor | None = None,
+        config: TrainingConfig | None = None,
+        augment: bool = False,
+    ):
+        """Initialize dataset.
+
+        Args:
+            frames_dir: Directory containing pre-extracted .npy frame files
+            labels: List of integer labels corresponding to each sample
+            processor: VideoMAE image processor (loaded if not provided)
+            config: Training configuration
+            augment: Whether to apply data augmentation
+        """
+        self.frames_dir = Path(frames_dir)
+        self.labels = labels
+        self.config = config or TrainingConfig()
+        self.augment = augment
+
+        # Verify frame files exist
+        self.frame_files = sorted(self.frames_dir.glob("*.npy"), key=lambda p: int(p.stem))
+        if len(self.frame_files) != len(labels):
+            raise ValueError(
+                f"Mismatch: {len(self.frame_files)} frame files vs {len(labels)} labels"
+            )
+
+        # Load processor
+        if processor is None:
+            model_path = self.config.base_model_path
+            if model_path.exists():
+                self.processor = VideoMAEImageProcessor.from_pretrained(str(model_path))
+            else:
+                self.processor = VideoMAEImageProcessor.from_pretrained(
+                    "MCG-NJU/videomae-base-finetuned-kinetics"
+                )
+        else:
+            self.processor = processor
+
+    def __len__(self) -> int:
+        """Number of samples."""
+        return len(self.labels)
+
+    def __getitem__(self, idx: int) -> dict[str, Any]:
+        """Get a training sample.
+
+        Returns:
+            dict with 'pixel_values' (tensor) and 'labels' (int)
+        """
+        # Load pre-extracted frames
+        frame_file = self.frames_dir / f"{idx}.npy"
+        frames = np.load(frame_file)  # Shape: (16, H, W, 3), RGB
+
+        # Apply augmentation if enabled
+        if self.augment:
+            frames = self._augment_frames(frames)
+
+        # Process frames with VideoMAE processor
+        inputs = self.processor(
+            list(frames),
+            return_tensors="pt",
+        )
+
+        # Remove batch dimension (added by processor)
+        pixel_values = inputs["pixel_values"].squeeze(0)
+
+        return {
+            "pixel_values": pixel_values,
+            "labels": self.labels[idx],
+        }
+
+    def _augment_frames(self, frames: np.ndarray) -> np.ndarray:
+        """Apply data augmentation to frames."""
+        # Random horizontal flip (50% chance)
+        if np.random.random() < 0.5:
+            frames = frames[:, :, ::-1, :].copy()
+
+        # Random brightness adjustment (-10% to +10%)
+        brightness = np.random.uniform(0.9, 1.1)
+        frames = np.clip(frames * brightness, 0, 255).astype(np.uint8)
+
+        # Random contrast adjustment
+        contrast = np.random.uniform(0.9, 1.1)
+        mean = frames.mean()
+        frames = np.clip((frames - mean) * contrast + mean, 0, 255).astype(np.uint8)
+
+        return frames
+
+    def close(self) -> None:
+        """No-op for compatibility."""
+        pass
+
+
 class BeachVolleyballDataset(Dataset[dict[str, Any]]):
     """Dataset for VideoMAE fine-tuning on beach volleyball.
 
