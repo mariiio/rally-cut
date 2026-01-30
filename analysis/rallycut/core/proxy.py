@@ -119,7 +119,8 @@ class ProxyGenerator:
             # Output format: "fps_num/fps_den,height" e.g. "30/1,1080"
             parts = result.stdout.strip().split(",")
             if len(parts) >= 2:
-                fps_str, height_str = parts[0], parts[1]
+                # ffprobe outputs fields alphabetically: height, r_frame_rate
+                height_str, fps_str = parts[0], parts[1]
                 # Parse FPS
                 if "/" in fps_str:
                     num, den = fps_str.split("/")
