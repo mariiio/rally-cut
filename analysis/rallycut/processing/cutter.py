@@ -68,7 +68,7 @@ class VideoCutter:
         self.base_stride = stride if stride is not None else config.game_state.stride
         self.limit_seconds = limit_seconds
         self.use_proxy = use_proxy if use_proxy is not None else config.proxy.enabled
-        self.min_gap_seconds = min_gap_seconds if min_gap_seconds is not None else config.segment.min_gap_seconds
+        self.min_gap_seconds = min_gap_seconds if min_gap_seconds is not None else preset.get("min_gap_seconds", config.segment.min_gap_seconds)
         self.auto_stride = auto_stride
         self.rally_continuation_seconds = rally_continuation_seconds if rally_continuation_seconds is not None else preset.get("rally_continuation_seconds", config.segment.rally_continuation_seconds)
 

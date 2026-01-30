@@ -23,22 +23,33 @@ uv run rallycut cut video.mp4 --json            # Export segments as JSON
 uv run rallycut cut video.mp4 --segments s.json # Load pre-computed segments
 uv run rallycut cut video.mp4 --limit 60        # Analyze first 60s only
 
-# Training (beach model fine-tuning)
+# Training (beach model fine-tuning) - FULL WORKFLOW
+rm -rf training_data/                                 # Clean old local data
 uv run rallycut train export-dataset --name beach_v1  # Export labeled data from DB
-uv run rallycut train prepare                         # Generate samples (uses 480p proxies)
-uv run rallycut train modal --upload                  # Upload training data to Modal
-uv run rallycut train modal --upload-videos           # Upload proxy videos (~4GB, parallel)
-uv run rallycut train modal --epochs 10               # Train on T4 GPU (~$0.59/hr)
+uv run rallycut train prepare                         # Generate samples + extract frames (~6.6GB)
+modal volume rm -r rallycut-training training_data/   # Clean old Modal data (IMPORTANT!)
+modal volume put -f rallycut-training training_data/ training_data/  # Upload fresh data
+uv run rallycut train modal --epochs 30 --fresh       # Train on T4 GPU (~4hrs, ~$0.59/hr)
 uv run rallycut train modal --download                # Download trained model
 uv run rallycut train modal --cleanup                 # Delete from Modal (~$0.75/GB/mo)
 
+# Training optimizations (applied by default):
+# - 2-class training (SERVICE merged into PLAY) - reduces class confusion
+# - Video-level train/val split prevents data leakage (honest validation)
+# - 9/12 encoder layers frozen to prevent catastrophic forgetting
+# - Lower learning rate (5e-6) for stable fine-tuning
+# - Pre-extracted frames for 15x faster training (~1.4s/step vs 20s/step)
+# - Use --freeze-layers 0 and --lr 1e-5 for full fine-tuning (not recommended)
+
 # Incremental training (add more labeled videos to existing model)
+rm -rf training_data/
 uv run rallycut train export-dataset --name beach_v2  # Export all labeled data
 uv run rallycut train push --name beach_v2            # Back up to S3 (deduplicates videos)
 uv run rallycut train prepare                         # Generate samples from all videos
-uv run rallycut train modal --upload --upload-videos  # Upload new data
+modal volume rm -r rallycut-training training_data/   # Clean old Modal data
+modal volume put -f rallycut-training training_data/ training_data/  # Upload fresh
 uv run rallycut train modal --upload-model            # Upload existing model weights
-uv run rallycut train modal --resume-from-model --lr 1e-5 --epochs 5  # Fine-tune
+uv run rallycut train modal --resume-from-model --lr 1e-6 --epochs 10 --fresh
 uv run rallycut train modal --download --cleanup      # Download and clean up
 
 # S3 backup/restore (survives DB resets and MinIO clears)
@@ -109,10 +120,12 @@ Proxy videos cached in `~/.cache/rallycut/proxies/`.
 
 Two model variants available via `--model` flag:
 
-| Model | Path | Use Case |
-|-------|------|----------|
+| Model | Weights | Use Case |
+|-------|---------|----------|
 | `indoor` (default) | `weights/videomae/game_state_classifier/` | Indoor volleyball courts |
-| `beach` | `weights/videomae/beach_volleyball/` | Beach volleyball (fine-tuned) |
+| `beach` | Same as indoor (tuned heuristics) | Beach volleyball |
+
+**Note:** Beach uses indoor model weights with tuned post-processing heuristics. Fine-tuning made the model less discriminative (48% PLAY predictions vs indoor's 24%), causing merged 130-second "rallies". Indoor model's visual understanding transfers well to beach; we just need different post-processing thresholds.
 
 Each model has optimized post-processing heuristics defined in `MODEL_PRESETS` (see `core/config.py`).
 
@@ -128,10 +141,13 @@ The cutter applies three post-processing heuristics to fix ML errors:
 
 | Parameter | Indoor | Beach |
 |-----------|--------|-------|
-| `min_play_duration` | 1.0s | 0.5s |
-| `rally_continuation_seconds` | 2.0s | 3.0s |
-| `boundary_confidence_threshold` | 0.35 | 0.25 |
-| `min_active_density` | 0.25 | 0.15 |
+| `min_play_duration` | 1.0s | 1.0s |
+| `rally_continuation_seconds` | 2.0s | 1.5s |
+| `boundary_confidence_threshold` | 0.35 | 0.4 |
+| `min_active_density` | 0.25 | 0.3 |
+| `min_gap_seconds` | 5.0s | 3.0s |
+
+Beach heuristics are tuned to be more discriminative (higher thresholds) to prevent over-merging of rallies.
 
 See `processing/cutter.py` and `core/config.py` for implementation.
 
