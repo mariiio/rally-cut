@@ -36,16 +36,17 @@ FULL_GRID: dict[str, list[float | int]] = {
 }
 
 
-# Beach volleyball optimized grid (108 combinations)
-# Focused on beach volleyball characteristics:
-# - Shorter rallies than indoor (lower min_play_duration)
-# - More ambient noise between points (higher min_gap_seconds)
-# - Outdoor lighting variations (lower boundary_confidence_threshold)
+# Beach volleyball optimized grid (48 combinations)
+# Focused on being MORE DISCRIMINATIVE to prevent over-merging:
+# - Shorter rally continuation (beach rallies are shorter, more dead time)
+# - Shorter min_gap (clearer breaks between rallies in beach)
+# - Higher confidence thresholds (be more selective)
+# - Higher density requirements (filter noise)
 BEACH_GRID: dict[str, list[float | int]] = {
-    "min_gap_seconds": [4.0, 5.0, 6.0, 8.0],
-    "rally_continuation_seconds": [1.5, 2.0, 2.5],
-    "min_play_duration": [0.5, 1.0, 1.5],
-    "boundary_confidence_threshold": [0.30, 0.35, 0.40],
+    "min_gap_seconds": [2.0, 3.0, 4.0],
+    "rally_continuation_seconds": [1.0, 1.5, 2.0],
+    "boundary_confidence_threshold": [0.35, 0.40, 0.45, 0.50],
+    "min_active_density": [0.25, 0.30, 0.35],
 }
 
 

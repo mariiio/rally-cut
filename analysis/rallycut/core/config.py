@@ -79,14 +79,20 @@ def _find_local_weights(relative_path: str) -> Path | None:
 # Model Variants and Presets
 # =============================================================================
 
+# Model weights paths
+# NOTE: Beach uses indoor weights with beach-specific heuristics.
+# Fine-tuning made the beach model LESS discriminative (48% PLAY vs 24%),
+# causing 130-second merged segments. Indoor model + tuned heuristics works better.
 MODEL_VARIANTS: dict[str, str] = {
     "indoor": "weights/videomae/game_state_classifier",
-    "beach": "weights/videomae/beach_volleyball",
+    "beach": "weights/videomae/game_state_classifier",  # Use indoor weights
 }
 
 # Heuristics presets for each model variant
 # Indoor: original values from volleyball_analytics
-# Beach: optimized for beach volleyball detection
+# Beach: tuned for indoor model applied to beach volleyball
+#   - Higher thresholds to be more discriminative (prevent over-merging)
+#   - Shorter rally continuation (beach rallies are shorter, more dead time)
 MODEL_PRESETS: dict[str, dict[str, float]] = {
     "indoor": {
         "min_play_duration": 1.0,
@@ -95,10 +101,11 @@ MODEL_PRESETS: dict[str, dict[str, float]] = {
         "min_active_density": 0.25,
     },
     "beach": {
-        "min_play_duration": 0.5,
-        "rally_continuation_seconds": 3.0,
-        "boundary_confidence_threshold": 0.25,
-        "min_active_density": 0.15,
+        "min_play_duration": 1.0,  # Same as indoor
+        "rally_continuation_seconds": 1.5,  # Shorter - beach rallies are shorter
+        "boundary_confidence_threshold": 0.4,  # Higher - more discriminative
+        "min_active_density": 0.3,  # Higher - filter sparse predictions
+        "min_gap_seconds": 3.0,  # Shorter - beach has more clear gaps between rallies
     },
 }
 
