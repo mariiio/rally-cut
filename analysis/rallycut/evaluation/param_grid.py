@@ -36,7 +36,7 @@ FULL_GRID: dict[str, list[float | int]] = {
 }
 
 
-# Beach volleyball optimized grid (48 combinations)
+# Beach volleyball optimized grid (108 combinations: 3×3×4×3)
 # Focused on being MORE DISCRIMINATIVE to prevent over-merging:
 # - Shorter rally continuation (beach rallies are shorter, more dead time)
 # - Shorter min_gap (clearer breaks between rallies in beach)
