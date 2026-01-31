@@ -116,10 +116,10 @@ class ProxyGenerator:
         ]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            # Output format: "fps_num/fps_den,height" e.g. "30/1,1080"
+            # ffprobe outputs fields alphabetically: height, r_frame_rate
+            # Output format: "height,fps_num/fps_den" e.g. "1080,30/1"
             parts = result.stdout.strip().split(",")
             if len(parts) >= 2:
-                # ffprobe outputs fields alphabetically: height, r_frame_rate
                 height_str, fps_str = parts[0], parts[1]
                 # Parse FPS
                 if "/" in fps_str:
