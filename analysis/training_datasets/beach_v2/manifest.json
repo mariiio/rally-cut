@@ -4,20 +4,6 @@
   "created": "2026-01-13T15:36:38.307769",
   "videos": [
     {
-      "filename": "IMG_1819.MOV",
-      "video_id": "0a8cf86d-9753-4f1a-8936-f09b89fe0ba5",
-      "content_hash": "144c4f6fcab7047c00e25a29fec42e479f76fd888af4589bd2b71637fe0500dd",
-      "duration_ms": 1028894,
-      "rally_count": 37
-    },
-    {
-      "filename": "IMG_1889.MOV",
-      "video_id": "246c84db-3f6a-4fa4-b2c4-203054617314",
-      "content_hash": "20b0a29e625c41b319108e929ae0572fec5672ac72b5802e94e957587f0cdcc2",
-      "duration_ms": 332683,
-      "rally_count": 13
-    },
-    {
       "filename": "IMG_1821.MOV",
       "video_id": "4490a905-4e0e-4509-b642-7e621cb80621",
       "content_hash": "ebbf840d4841702c4fe46c0bd7bf11841905feca35691ddc7d26ae02c9eaa655",
@@ -60,20 +46,6 @@
       "rally_count": 11
     },
     {
-      "filename": "IMG_1817.MOV",
-      "video_id": "b774172b-2f6b-4e54-b489-7ab0df818810",
-      "content_hash": "039c43e316d0b3332874a8c8455ed4a084707a05dc45896ec586e9cff5216cf9",
-      "duration_ms": 1054820,
-      "rally_count": 39
-    },
-    {
-      "filename": "IMG_1888.MOV",
-      "video_id": "bf31b858-cfb3-428c-94f9-a848d7e6e208",
-      "content_hash": "418d0650f9005a01694c9f8d001a9afd63d67d5c0295d39a0446af65c039138c",
-      "duration_ms": 1334783,
-      "rally_count": 43
-    },
-    {
       "filename": "match-2.MOV",
       "video_id": "e086d8e9-20f0-486a-9ad7-1650582134b7",
       "content_hash": "983f2f351ea2120d14792ea165b296835f0eea0843746480993a0bbfe8112a0e",
@@ -96,8 +68,8 @@
     }
   ],
   "stats": {
-    "total_videos": 13,
-    "total_rallies": 357,
-    "total_duration_min": 176.8
+    "total_videos": 9,
+    "total_rallies": 225,
+    "total_duration_min": 114.3
   }
 }
