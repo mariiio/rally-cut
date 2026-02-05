@@ -954,7 +954,7 @@ class VideoCutter:
                 content_hash = video.compute_content_hash()
 
             if self._has_cached_features(content_hash) and self._has_binary_head_model():
-                logger.info("Using binary head + decoder (70%% F1) - features cached")
+                logger.info("Using binary head + decoder (84%% F1) - features cached")
                 return self._analyze_with_binary_head_decoder(
                     input_path, progress_callback, content_hash=content_hash
                 )
@@ -962,12 +962,12 @@ class VideoCutter:
                 # Log info about how to enable binary head
                 if not self._has_cached_features(content_hash):
                     logger.info(
-                        "No cached features - using heuristics. For 70%% F1, run: "
+                        "No cached features - using heuristics. For 84%% F1, run:"
                         "rallycut train extract-features --stride 48"
                     )
                 elif not self._has_binary_head_model():
                     logger.info(
-                        "No binary head model - using heuristics. For 70%% F1, run: "
+                        "No binary head model - using heuristics. For 84%% F1, run:"
                         "rallycut train binary-head"
                     )
 

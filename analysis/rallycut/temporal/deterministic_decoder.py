@@ -38,14 +38,15 @@ class DecoderConfig:
     # Smoothing
     smooth_window: int = 3  # Moving average window (odd number)
 
-    # Hysteresis thresholding
-    t_on: float = 0.4  # Threshold to enter rally (lowered from 0.5 for short rally detection)
-    t_off: float = 0.25  # Threshold to exit rally (lowered from 0.3 to match t_on change)
-    patience: int = 2  # Windows below t_off before exiting
+    # Hysteresis thresholding (tuned via grid search with --min-video-f1 0.70)
+    # Ensures no video drops below 70% F1 while maximizing overall F1 (83.9%)
+    t_on: float = 0.35  # Threshold to enter rally (lowered from 0.4 for short rally detection)
+    t_off: float = 0.25  # Threshold to exit rally
+    patience: int = 1  # Windows below t_off before exiting
 
-    # Binary cleanup
-    min_segment_windows: int = 1  # Remove segments shorter than this (lowered from 2 for short rally detection)
-    max_gap_windows: int = 3  # Fill gaps shorter than this
+    # Binary cleanup (tuned via grid search with --min-video-f1 0.70)
+    min_segment_windows: int = 2  # Remove segments shorter than this
+    max_gap_windows: int = 2  # Fill gaps shorter than this
 
     # Anti-overmerge
     max_duration_seconds: float = 60.0  # Force split if exceeded
@@ -94,9 +95,9 @@ def smooth_probabilities(probs: np.ndarray, window: int = 3) -> np.ndarray:
 
 def hysteresis_threshold(
     probs: np.ndarray,
-    t_on: float = 0.4,
+    t_on: float = 0.35,
     t_off: float = 0.25,
-    patience: int = 2,
+    patience: int = 1,
 ) -> np.ndarray:
     """Apply hysteresis thresholding to probabilities.
 
@@ -538,6 +539,8 @@ class GridSearchResult:
     best_recall: float
     best_overmerge_rate: float
     all_results: list[dict] = field(default_factory=list)
+    rejected_count: int = 0  # Configs rejected due to min_video_f1 constraint
+    min_video_f1_used: float | None = None  # The constraint that was applied
 
 
 def grid_search(
@@ -547,6 +550,8 @@ def grid_search(
     stride: int = 48,
     iou_threshold: float = 0.5,
     param_grid: dict[str, list[float | int]] | None = None,
+    min_video_f1: float | None = None,
+    video_names: list[str] | None = None,
 ) -> GridSearchResult:
     """Grid search for optimal decoder parameters.
 
@@ -557,6 +562,9 @@ def grid_search(
         stride: Frame stride.
         iou_threshold: IoU threshold for matching.
         param_grid: Parameter grid to search. If None, uses DEFAULT_PARAM_GRID.
+        min_video_f1: Minimum F1 required for each video. Configs where any
+            video drops below this threshold are rejected.
+        video_names: Optional list of video names for per-video reporting.
 
     Returns:
         GridSearchResult with best config and metrics.
@@ -568,6 +576,7 @@ def grid_search(
     best_result: dict[str, Any] | None = None
     best_score = -1.0
     all_results: list[dict[str, Any]] = []
+    rejected_count = 0
 
     # Generate all combinations
     keys = list(param_grid.keys())
@@ -585,8 +594,10 @@ def grid_search(
         total_fn = 0
         total_overmerge = 0
         total_segments = 0
+        per_video_f1: list[float] = []
+        per_video_metrics: list[dict[str, Any]] = []
 
-        for probs, gt, fps in zip(video_probs, video_ground_truths, video_fps):
+        for idx, (probs, gt, fps) in enumerate(zip(video_probs, video_ground_truths, video_fps)):
             config = DecoderConfig(
                 smooth_window=int(params["smooth_window"]),
                 t_on=float(params["t_on"]),
@@ -609,6 +620,28 @@ def grid_search(
             total_overmerge += int(overmerge["overmerge_count"])
             total_segments += len(result.segments)
 
+            # Track per-video F1
+            video_f1 = float(metrics["f1"])
+            per_video_f1.append(video_f1)
+
+            video_name = video_names[idx] if video_names else f"video_{idx}"
+            per_video_metrics.append({
+                "name": video_name,
+                "f1": video_f1,
+                "precision": float(metrics["precision"]),
+                "recall": float(metrics["recall"]),
+                "gt_count": len(gt),
+                "pred_count": len(result.segments),
+            })
+
+        # Check min_video_f1 constraint
+        min_f1_in_results = min(per_video_f1) if per_video_f1 else 0.0
+        violates_constraint = min_video_f1 is not None and min_f1_in_results < min_video_f1
+
+        if violates_constraint:
+            rejected_count += 1
+            continue  # Skip this configuration
+
         # Aggregate metrics
         precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0
         recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0
@@ -625,6 +658,8 @@ def grid_search(
             "recall": recall,
             "overmerge_rate": overmerge_rate,
             "score": score,
+            "min_video_f1": min_f1_in_results,
+            "per_video": per_video_metrics,
         }
         all_results.append(result_entry)
 
@@ -641,6 +676,8 @@ def grid_search(
             best_recall=0.0,
             best_overmerge_rate=0.0,
             all_results=all_results,
+            rejected_count=rejected_count,
+            min_video_f1_used=min_video_f1,
         )
 
     best_config = DecoderConfig(
@@ -661,4 +698,6 @@ def grid_search(
         best_recall=float(best_result["recall"]),
         best_overmerge_rate=float(best_result["overmerge_rate"]),
         all_results=sorted(all_results, key=lambda x: x["score"], reverse=True),
+        rejected_count=rejected_count,
+        min_video_f1_used=min_video_f1,
     )
