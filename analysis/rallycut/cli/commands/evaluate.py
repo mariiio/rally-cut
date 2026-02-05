@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Annotated
@@ -17,6 +18,7 @@ from rallycut.cli.utils import handle_errors
 from rallycut.core.config import MODEL_PRESETS, get_model_path
 from rallycut.evaluation.cached_analysis import (
     AnalysisCache,
+    CachedAnalysis,
     PostProcessingParams,
     analyze_and_cache,
     apply_post_processing_custom,
@@ -36,6 +38,8 @@ from rallycut.evaluation.param_grid import (
     get_grid,
 )
 from rallycut.evaluation.video_resolver import VideoResolver
+
+logger = logging.getLogger(__name__)
 
 app = typer.Typer(help="Evaluate rally detection against ground truth")
 console = Console()
@@ -76,10 +80,22 @@ def _print_summary(results: AggregateMetrics, params_used: PostProcessingParams 
         console.print(f"  Median start error: {bm.median_start_error_ms:.0f} ms")
         console.print(f"  Median end error:   {bm.median_end_error_ms:.0f} ms")
 
+    # Overmerge metrics
+    om = results.overmerge_metrics
+    console.print()
+    console.print("[bold]Overmerge Detection:[/bold]")
+    console.print(f"  Threshold: {om.overmerge_threshold_seconds:.0f}s")
+    console.print(f"  Overmerge count: {om.overmerge_count} / {len(om.segment_durations_seconds)}")
+    console.print(f"  Overmerge rate: {om.overmerge_rate:.1%}")
+    if om.max_segment_duration_seconds is not None:
+        console.print(f"  Max segment duration: {om.max_segment_duration_seconds:.1f}s")
+
     # Processing time
     if results.total_processing_time is not None:
         console.print()
         console.print(f"Total processing time: {results.total_processing_time:.1f}s")
+        if results.inference_time_per_minute is not None:
+            console.print(f"Inference time per minute of video: {results.inference_time_per_minute:.1f}s/min")
 
     # Parameters used
     if params_used:
@@ -160,6 +176,18 @@ def _export_json(
             "median_start_error_ms": results.boundary_metrics.median_start_error_ms,
             "median_end_error_ms": results.boundary_metrics.median_end_error_ms,
         },
+        "overmerge_metrics": {
+            "threshold_seconds": results.overmerge_metrics.overmerge_threshold_seconds,
+            "overmerge_count": results.overmerge_metrics.overmerge_count,
+            "total_segments": len(results.overmerge_metrics.segment_durations_seconds),
+            "overmerge_rate": results.overmerge_metrics.overmerge_rate,
+            "max_segment_duration_seconds": results.overmerge_metrics.max_segment_duration_seconds,
+        },
+        "processing": {
+            "total_time_seconds": results.total_processing_time,
+            "total_video_duration_seconds": results.total_video_duration_seconds,
+            "inference_time_per_minute": results.inference_time_per_minute,
+        },
         "videos": [
             {
                 "video_id": r.video_id,
@@ -173,6 +201,9 @@ def _export_json(
                 "recall": r.rally_metrics.recall,
                 "f1": r.rally_metrics.f1,
                 "processing_time_seconds": r.processing_time_seconds,
+                "video_duration_seconds": r.video_duration_seconds,
+                "inference_time_per_minute": r.inference_time_per_minute,
+                "overmerge_count": r.overmerge_metrics.overmerge_count,
             }
             for r in results.per_video_results
         ],
@@ -218,6 +249,81 @@ def _export_csv(results: list[VideoEvaluationResult], path: Path) -> None:
             )
 
 
+def _apply_temporal_model(
+    cached: CachedAnalysis,
+    model: object,  # torch.nn.Module
+    stride: int,
+    content_hash: str,
+) -> list | None:
+    """Apply temporal model to cached analysis results.
+
+    Uses pre-extracted features from training_data/features/ directory.
+
+    Args:
+        cached: Cached analysis with raw_results
+        model: Loaded temporal model
+        stride: Analysis stride in frames
+        content_hash: Video content hash to look up cached features
+
+    Returns:
+        List of RallySegment-like objects, or None if features not found
+    """
+    from rallycut.temporal.features import FeatureCache
+    from rallycut.temporal.inference import run_inference
+
+    # Load features from training feature cache
+    feature_cache = FeatureCache(cache_dir=Path("training_data/features"))
+    cached_data = feature_cache.get(content_hash, stride)
+
+    if cached_data is None:
+        return None  # Features not cached for this video
+
+    features, _metadata = cached_data
+
+    raw_results = cached.raw_results
+    fps = cached.fps
+
+    # Ensure features and raw_results have same length
+    min_len = min(len(features), len(raw_results))
+    features = features[:min_len]
+    raw_results = raw_results[:min_len]
+
+    # Run temporal model inference
+    predictions, probabilities = run_inference(model, features, device="cpu")  # type: ignore[arg-type]
+
+    # Convert predictions to segments
+    segments = []
+
+    class SimpleSegment:
+        def __init__(self, start_time: float, end_time: float):
+            self.start_time = start_time
+            self.end_time = end_time
+
+    in_rally = False
+    rally_start = 0.0
+
+    for i, (pred, result) in enumerate(zip(predictions, raw_results)):
+        # start_frame/end_frame are guaranteed to exist for temporal analysis
+        window_start = result.start_frame / fps  # type: ignore[operator]
+        window_end = result.end_frame / fps  # type: ignore[operator]
+
+        if pred == 1 and not in_rally:
+            # Start of rally
+            in_rally = True
+            rally_start = window_start
+        elif pred == 0 and in_rally:
+            # End of rally
+            in_rally = False
+            segments.append(SimpleSegment(rally_start, window_end))
+
+    # Handle rally that extends to end of video
+    if in_rally:
+        last_end = raw_results[-1].end_frame / fps  # type: ignore[operator]
+        segments.append(SimpleSegment(rally_start, last_end))
+
+    return segments
+
+
 def _run_evaluation(
     videos: list[EvaluationVideo],
     params: PostProcessingParams,
@@ -228,12 +334,24 @@ def _run_evaluation(
     use_cache: bool,
     model_path: Path | None = None,
     model_id: str = "default",
+    temporal_model_path: Path | None = None,
     progress: Progress | None = None,
     task_id: TaskID | None = None,
 ) -> list[VideoEvaluationResult]:
-    """Run evaluation on a list of videos."""
+    """Run evaluation on a list of videos.
+
+    If temporal_model_path is provided, uses learned post-processing instead of heuristics.
+    """
     results: list[VideoEvaluationResult] = []
     total = len(videos)
+
+    # Load temporal model if specified
+    temporal_model = None
+    if temporal_model_path is not None:
+        from rallycut.temporal.inference import load_temporal_model
+
+        temporal_model = load_temporal_model(temporal_model_path)
+        logger.info("Using temporal model: %s", temporal_model_path)
 
     for i, video in enumerate(videos):
         if progress and task_id is not None:
@@ -247,24 +365,9 @@ def _run_evaluation(
         # Get predictions
         start_time = time.time()
 
-        if use_cache:
-            # Use cached analysis and apply post-processing
-            cached = cache.get(video.content_hash, stride, model_id)
-            if cached is None:
-                # Need to run analysis
-                video_path = resolver.resolve(video.s3_key, video.content_hash)
-                cached = analyze_and_cache(
-                    video_path,
-                    video.id,
-                    video.content_hash,
-                    stride=stride,
-                    cache=cache,
-                    model_path=model_path,
-                    model_id=model_id,
-                )
-            segments = apply_post_processing_custom(cached, params)
-        else:
-            # Run full analysis
+        # Get cached analysis (or run analysis if needed)
+        cached = cache.get(video.content_hash, stride, model_id) if use_cache else None
+        if cached is None:
             video_path = resolver.resolve(video.s3_key, video.content_hash)
             cached = analyze_and_cache(
                 video_path,
@@ -275,6 +378,14 @@ def _run_evaluation(
                 model_path=model_path,
                 model_id=model_id,
             )
+
+        # Apply post-processing (temporal model or heuristics)
+        if temporal_model is not None:
+            segments = _apply_temporal_model(cached, temporal_model, stride, video.content_hash)
+            if segments is None:
+                logger.warning("No cached features for %s, using heuristics", video.filename)
+                segments = apply_post_processing_custom(cached, params)
+        else:
             segments = apply_post_processing_custom(cached, params)
 
         processing_time = time.time() - start_time
@@ -292,6 +403,7 @@ def _run_evaluation(
             video_filename=video.filename,
             iou_threshold=iou_threshold,
             processing_time=processing_time,
+            video_duration_seconds=video.duration_seconds,
         )
         results.append(result)
         m = result.rally_metrics
@@ -408,6 +520,14 @@ def evaluate(
             help="Model variant: 'indoor' (original) or 'beach' (fine-tuned with beach heuristics)",
         ),
     ] = "indoor",
+    temporal_model: Annotated[
+        Path | None,
+        typer.Option(
+            "--temporal-model",
+            "-t",
+            help="Path to temporal model for learned post-processing (replaces heuristics)",
+        ),
+    ] = None,
 ) -> None:
     """
     Evaluate rally detection against ground truth from the database.
@@ -555,6 +675,7 @@ def evaluate(
                 video_id=video.id,
                 video_filename=video.filename,
                 iou_threshold=iou_threshold,
+                video_duration_seconds=video.duration_seconds,
             )
             results.append(result)
 
@@ -594,6 +715,7 @@ def evaluate(
             use_cache=use_cache,
             model_path=model_path,
             model_id=model,
+            temporal_model_path=temporal_model,
             progress=progress,
             task_id=task,
         )

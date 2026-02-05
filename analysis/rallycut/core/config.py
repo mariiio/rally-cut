@@ -142,6 +142,9 @@ class GameStateConfig(BaseModel):
     enable_temporal_smoothing: bool = False
     # Window size for temporal smoothing (must be odd)
     temporal_smoothing_window: int = 3
+    # Temporal model settings (learned temporal smoothing)
+    temporal_model_path: Path | None = None
+    temporal_model_version: str = "v1"  # Auto-detected from checkpoint if None
 
 
 class HWAccelConfig(BaseModel):
@@ -225,6 +228,16 @@ class RallyCutConfig(BaseSettings):
     # Proxy cache directory
     proxy_cache_dir: Path = Field(
         default_factory=lambda: Path(user_cache_dir("rallycut")) / "proxies"
+    )
+
+    # Feature cache directory (for temporal model training/inference)
+    feature_cache_dir: Path = Field(
+        default_factory=lambda: Path(user_cache_dir("rallycut")) / "features"
+    )
+
+    # Weights directory (for model weights)
+    weights_dir: Path = Field(
+        default_factory=lambda: _find_local_weights("weights") or Path.cwd() / "weights"
     )
 
     model_config = SettingsConfigDict(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -176,6 +177,33 @@ class Video:
                 next_yield_frame += step
 
             frame_idx += 1
+
+    def compute_content_hash(self, read_size: int = 1024 * 1024) -> str:
+        """Compute a content hash for caching.
+
+        The hash is based on filename, file size, modification time, and
+        the first `read_size` bytes of the file. This provides a good balance
+        between speed and uniqueness.
+
+        Args:
+            read_size: Number of bytes to read from start of file (default 1MB).
+
+        Returns:
+            Hex digest of the content hash.
+        """
+        stat = self.path.stat()
+        hasher = hashlib.sha256()
+
+        # Include file metadata in hash
+        hasher.update(self.path.name.encode())
+        hasher.update(str(stat.st_size).encode())
+        hasher.update(str(stat.st_mtime_ns).encode())
+
+        # Include first N bytes of file content
+        with open(self.path, "rb") as f:
+            hasher.update(f.read(read_size))
+
+        return hasher.hexdigest()[:16]  # 16 hex chars = 64 bits
 
     def close(self) -> None:
         """Release video capture resources."""

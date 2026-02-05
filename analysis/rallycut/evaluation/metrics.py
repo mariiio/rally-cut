@@ -78,6 +78,33 @@ class BoundaryMetrics:
 
 
 @dataclass
+class OvermergeMetrics:
+    """Metrics for detecting overmerged segments (too long rallies)."""
+
+    overmerge_threshold_seconds: float = 60.0
+    segment_durations_seconds: list[float] = field(default_factory=list)
+
+    @property
+    def overmerge_count(self) -> int:
+        """Number of segments that exceed the threshold."""
+        return sum(1 for d in self.segment_durations_seconds if d > self.overmerge_threshold_seconds)
+
+    @property
+    def overmerge_rate(self) -> float:
+        """Fraction of segments that exceed the threshold."""
+        if not self.segment_durations_seconds:
+            return 0.0
+        return self.overmerge_count / len(self.segment_durations_seconds)
+
+    @property
+    def max_segment_duration_seconds(self) -> float | None:
+        """Maximum segment duration in seconds."""
+        if not self.segment_durations_seconds:
+            return None
+        return max(self.segment_durations_seconds)
+
+
+@dataclass
 class VideoEvaluationResult:
     """Evaluation results for a single video."""
 
@@ -89,6 +116,18 @@ class VideoEvaluationResult:
     boundary_metrics: BoundaryMetrics
     iou_threshold: float
     processing_time_seconds: float | None = None
+    video_duration_seconds: float | None = None
+    overmerge_metrics: OvermergeMetrics = field(default_factory=OvermergeMetrics)
+
+    @property
+    def inference_time_per_minute(self) -> float | None:
+        """Inference time in seconds per minute of video."""
+        if self.processing_time_seconds is None or self.video_duration_seconds is None:
+            return None
+        if self.video_duration_seconds <= 0:
+            return None
+        video_minutes = self.video_duration_seconds / 60.0
+        return self.processing_time_seconds / video_minutes
 
 
 @dataclass
@@ -99,6 +138,7 @@ class AggregateMetrics:
     total_predictions: int
     rally_metrics: RallyMetrics
     boundary_metrics: BoundaryMetrics
+    overmerge_metrics: OvermergeMetrics
     per_video_results: list[VideoEvaluationResult]
 
     @property
@@ -116,6 +156,25 @@ class AggregateMetrics:
         ]
         return sum(times) if times else None
 
+    @property
+    def total_video_duration_seconds(self) -> float | None:
+        """Total video duration across all videos."""
+        durations = [
+            r.video_duration_seconds
+            for r in self.per_video_results
+            if r.video_duration_seconds is not None
+        ]
+        return sum(durations) if durations else None
+
+    @property
+    def inference_time_per_minute(self) -> float | None:
+        """Average inference time per minute of video."""
+        proc_time = self.total_processing_time
+        duration = self.total_video_duration_seconds
+        if proc_time is None or duration is None or duration <= 0:
+            return None
+        return proc_time / (duration / 60.0)
+
 
 def compute_metrics(
     ground_truth: list[tuple[float, float]],
@@ -125,6 +184,8 @@ def compute_metrics(
     video_filename: str,
     iou_threshold: float,
     processing_time: float | None = None,
+    video_duration_seconds: float | None = None,
+    overmerge_threshold_seconds: float = 60.0,
 ) -> VideoEvaluationResult:
     """Compute all metrics for a single video.
 
@@ -136,6 +197,8 @@ def compute_metrics(
         video_filename: Video filename for display.
         iou_threshold: IoU threshold used for matching.
         processing_time: Optional processing time in seconds.
+        video_duration_seconds: Optional video duration in seconds.
+        overmerge_threshold_seconds: Threshold for overmerge detection (default 60s).
 
     Returns:
         VideoEvaluationResult with all computed metrics.
@@ -151,6 +214,13 @@ def compute_metrics(
         end_errors_ms=[m.end_error_ms for m in matching_result.matches],
     )
 
+    # Compute segment durations for overmerge detection
+    segment_durations = [end - start for start, end in predictions]
+    overmerge_metrics = OvermergeMetrics(
+        overmerge_threshold_seconds=overmerge_threshold_seconds,
+        segment_durations_seconds=segment_durations,
+    )
+
     return VideoEvaluationResult(
         video_id=video_id,
         video_filename=video_filename,
@@ -160,6 +230,8 @@ def compute_metrics(
         boundary_metrics=boundary_metrics,
         iou_threshold=iou_threshold,
         processing_time_seconds=processing_time,
+        video_duration_seconds=video_duration_seconds,
+        overmerge_metrics=overmerge_metrics,
     )
 
 
@@ -178,9 +250,14 @@ def aggregate_metrics(results: list[VideoEvaluationResult]) -> AggregateMetrics:
 
     all_start_errors: list[int] = []
     all_end_errors: list[int] = []
+    all_segment_durations: list[float] = []
+    overmerge_threshold = 60.0  # default
+
     for r in results:
         all_start_errors.extend(r.boundary_metrics.start_errors_ms)
         all_end_errors.extend(r.boundary_metrics.end_errors_ms)
+        all_segment_durations.extend(r.overmerge_metrics.segment_durations_seconds)
+        overmerge_threshold = r.overmerge_metrics.overmerge_threshold_seconds
 
     return AggregateMetrics(
         total_ground_truth=sum(r.ground_truth_count for r in results),
@@ -193,6 +270,10 @@ def aggregate_metrics(results: list[VideoEvaluationResult]) -> AggregateMetrics:
         boundary_metrics=BoundaryMetrics(
             start_errors_ms=all_start_errors,
             end_errors_ms=all_end_errors,
+        ),
+        overmerge_metrics=OvermergeMetrics(
+            overmerge_threshold_seconds=overmerge_threshold,
+            segment_durations_seconds=all_segment_durations,
         ),
         per_video_results=results,
     )

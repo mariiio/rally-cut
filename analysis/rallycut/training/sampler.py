@@ -6,6 +6,8 @@ import random
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from rallycut.core.proxy import ProxyGenerator
 from rallycut.training.config import LABEL_TO_ID, TrainingConfig
 
@@ -215,3 +217,145 @@ def get_sample_statistics(samples: list[TrainingSample]) -> dict[str, int]:
         stats[label_name] = count
 
     return stats
+
+
+# --- Sequence Labeling for Temporal Models ---
+
+
+def generate_sequence_labels(
+    rallies: list[GroundTruthRally],
+    video_duration_ms: float,
+    fps: float,
+    stride: int = 48,
+    window_size: int = 16,
+    labeling_mode: str = "center",
+    overlap_threshold: float = 0.5,
+) -> list[int]:
+    """Generate per-window RALLY/NO_RALLY labels for temporal modeling.
+
+    This creates binary labels (0=NO_RALLY, 1=RALLY) for each window position
+    in a video, suitable for training sequence labeling models.
+
+    Args:
+        rallies: List of ground truth rallies.
+        video_duration_ms: Total video duration in milliseconds.
+        fps: Video frames per second.
+        stride: Frame stride between windows.
+        window_size: Frames per window (default 16).
+        labeling_mode: How to determine window label:
+            - "center": Label based on whether window center is in a rally
+            - "overlap": Label as RALLY if overlap ratio exceeds threshold
+        overlap_threshold: Overlap ratio threshold for "overlap" mode.
+
+    Returns:
+        List of labels (0 or 1) for each window position.
+    """
+
+    total_frames = int(video_duration_ms / 1000 * fps)
+    num_windows = max(1, (total_frames - window_size) // stride + 1)
+
+    labels = []
+    half_window = window_size // 2
+    window_duration_ms = (window_size / fps) * 1000
+
+    for i in range(num_windows):
+        start_frame = i * stride
+        end_frame = start_frame + window_size
+        center_frame = start_frame + half_window
+
+        # Convert frames to milliseconds
+        window_start_ms = (start_frame / fps) * 1000
+        window_end_ms = (end_frame / fps) * 1000
+        center_ms = (center_frame / fps) * 1000
+
+        is_rally = 0
+
+        if labeling_mode == "center":
+            # Check if center point is within any rally
+            for rally in rallies:
+                if rally.start_ms <= center_ms <= rally.end_ms:
+                    is_rally = 1
+                    break
+        elif labeling_mode == "overlap":
+            # Check overlap ratio with any rally
+            for rally in rallies:
+                overlap_start = max(window_start_ms, rally.start_ms)
+                overlap_end = min(window_end_ms, rally.end_ms)
+                overlap_duration = max(0, overlap_end - overlap_start)
+                overlap_ratio = overlap_duration / window_duration_ms
+                if overlap_ratio >= overlap_threshold:
+                    is_rally = 1
+                    break
+        else:
+            raise ValueError(f"Unknown labeling_mode: {labeling_mode}")
+
+        labels.append(is_rally)
+
+    return labels
+
+
+def compute_class_weights(labels: list[int]) -> tuple[float, float]:
+    """Compute inverse frequency class weights for balanced training.
+
+    Args:
+        labels: List of binary labels (0 or 1).
+
+    Returns:
+        Tuple of (weight_class_0, weight_class_1).
+    """
+    counts = np.bincount(labels, minlength=2)
+    total = len(labels)
+
+    # Inverse frequency weighting
+    weights = total / (2.0 * counts.clip(min=1))
+
+    return float(weights[0]), float(weights[1])
+
+
+def augment_sequence(
+    features: list[float] | np.ndarray,
+    labels: list[int] | np.ndarray,
+    shift_range: int = 2,
+    keep_ratio_range: tuple[float, float] = (0.8, 1.0),
+    random_state: random.Random | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply temporal data augmentation to a sequence.
+
+    Augmentation operations:
+    1. Random temporal shift (±shift_range windows)
+    2. Random subsequence selection (keep_ratio_range of original)
+
+    Args:
+        features: Feature array of shape (seq_len, feature_dim).
+        labels: Label array of shape (seq_len,).
+        shift_range: Maximum shift in windows (default ±2).
+        keep_ratio_range: Range of sequence length to keep (default 80-100%).
+        random_state: Optional random state for reproducibility.
+
+    Returns:
+        Tuple of (augmented_features, augmented_labels).
+    """
+    rng = random_state or random
+    features_np = np.array(features)
+    labels_np = np.array(labels)
+
+    seq_len = len(features_np)
+    if seq_len < 10:  # Too short to augment meaningfully
+        return features_np, labels_np
+
+    # 1. Random temporal shift (50% probability)
+    if rng.random() < 0.5:
+        shift = rng.randint(-shift_range, shift_range)
+        if shift != 0:
+            features_np = np.roll(features_np, shift, axis=0)
+            labels_np = np.roll(labels_np, shift, axis=0)
+
+    # 2. Random subsequence (50% probability)
+    if rng.random() < 0.5:
+        keep_ratio = rng.uniform(*keep_ratio_range)
+        keep_len = max(10, int(seq_len * keep_ratio))
+        start_idx = rng.randint(0, seq_len - keep_len)
+        features_np = features_np[start_idx : start_idx + keep_len]
+        labels_np = labels_np[start_idx : start_idx + keep_len]
+
+    return features_np, labels_np

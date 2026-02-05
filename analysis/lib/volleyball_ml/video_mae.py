@@ -632,3 +632,108 @@ class GameStateClassifier:
             active_ranges.append((current_start, current_end))
 
         return active_ranges
+
+    def get_encoder_features_batch(
+        self, batch_frames: list[list[np.ndarray]], pooling: str = "cls"
+    ) -> np.ndarray:
+        """
+        Extract encoder features from video segments (before classification head).
+
+        This method returns the 768-dimensional features from the VideoMAE encoder,
+        which can be used for temporal modeling (BiLSTM, 1D Conv, etc.).
+
+        Args:
+            batch_frames: List of frame lists, each containing exactly 16 BGR frames.
+            pooling: How to pool patch features. Options:
+                - "cls": Use the CLS token (position 0) - default
+                - "mean": Mean pooling over all patch tokens
+
+        Returns:
+            NumPy array of shape (batch_size, 768) with encoder features.
+        """
+        import torch
+
+        if not batch_frames:
+            return np.array([])
+
+        self._load_model()
+
+        profiler = get_profiler()
+        batch_size = len(batch_frames)
+
+        with profiler.stage(
+            "feature_extraction", batch_size=batch_size, parent="ml_analysis"
+        ):
+            # Validate and preprocess all segments
+            with profiler.time("videomae", "preprocess", batch_size=batch_size):
+                batch_processed = []
+                for frames in batch_frames:
+                    if len(frames) != self.FRAME_WINDOW:
+                        raise ValueError(
+                            f"Expected {self.FRAME_WINDOW} frames per segment, "
+                            f"got {len(frames)}"
+                        )
+                    batch_processed.append(self.preprocess_frames(frames))
+
+            # Process through processor
+            with profiler.time("videomae", "processor", batch_size=batch_size):
+                inputs = self._processor(
+                    [list(frames) for frames in batch_processed],
+                    return_tensors="pt",
+                )
+
+            # Move to device
+            with profiler.time(
+                "videomae", "to_device", batch_size=batch_size, device=self.device
+            ):
+                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+            # Extract encoder features (not going through classifier head)
+            with profiler.time(
+                "videomae", "encoder_forward", batch_size=batch_size, device=self.device
+            ):
+                ctx = (
+                    torch.inference_mode()
+                    if getattr(self, "_use_inference_mode", False)
+                    else torch.no_grad()
+                )
+                with ctx:
+                    # Access the underlying VideoMAE encoder directly
+                    # VideoMAEForVideoClassification has: videomae (encoder), fc_norm, classifier
+                    encoder = self._model.videomae
+                    outputs = encoder(pixel_values=inputs["pixel_values"])
+
+                    # outputs.last_hidden_state: (batch, num_patches+1, hidden_size)
+                    # Position 0 is the CLS token, rest are patch tokens
+                    hidden_states = outputs.last_hidden_state
+
+                    if pooling == "cls":
+                        # Use CLS token
+                        features = hidden_states[:, 0, :]  # (batch, 768)
+                    elif pooling == "mean":
+                        # Mean pooling over all tokens
+                        features = hidden_states.mean(dim=1)  # (batch, 768)
+                    else:
+                        raise ValueError(f"Unknown pooling method: {pooling}")
+
+                    # Apply the layer norm (fc_norm) for consistency with classification
+                    features = self._model.fc_norm(features)
+                    features_np = features.cpu().numpy()
+
+        return features_np
+
+    def get_encoder_features(
+        self, frames: list[np.ndarray], pooling: str = "cls"
+    ) -> np.ndarray:
+        """
+        Extract encoder features from a single video segment.
+
+        Args:
+            frames: List of exactly 16 BGR frames.
+            pooling: How to pool patch features ("cls" or "mean").
+
+        Returns:
+            NumPy array of shape (768,) with encoder features.
+        """
+        features = self.get_encoder_features_batch([frames], pooling=pooling)
+        return features[0]

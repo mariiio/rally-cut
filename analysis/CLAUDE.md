@@ -41,10 +41,17 @@ uv run rallycut train modal --cleanup                 # Delete from Modal (~$0.7
 # - Pre-extracted frames for 15x faster training (~1.4s/step vs 20s/step)
 # - Use --freeze-layers 0 and --lr 1e-5 for full fine-tuning (not recommended)
 
-# Incremental training (add more labeled videos to existing model)
+# Adding new labeled videos (RECOMMENDED WORKFLOW)
+# Step 1: Export and backup
+uv run rallycut train export-dataset --name beach_v3  # Export all labeled data from DB
+uv run rallycut train push --name beach_v3            # Back up to S3 (deduplicates videos)
+
+# Step 2a: Retrain temporal model (fast, local, recommended first)
+uv run rallycut train extract-features --stride 48    # Extract features for new videos
+uv run rallycut train temporal --model v1 --epochs 50 # Retrain temporal smoother
+
+# Step 2b: Fine-tune VideoMAE (slow, GPU required, only if needed)
 rm -rf training_data/
-uv run rallycut train export-dataset --name beach_v2  # Export all labeled data
-uv run rallycut train push --name beach_v2            # Back up to S3 (deduplicates videos)
 uv run rallycut train prepare                         # Generate samples from all videos
 modal volume rm -r rallycut-training training_data/   # Clean old Modal data
 modal volume put -f rallycut-training training_data/ training_data/  # Upload fresh
@@ -65,6 +72,14 @@ uv run rallycut train list-remote                     # List datasets backed up 
 # - Checkpoints saved every 100 steps (~5 min max loss)
 # - Resumes from latest checkpoint automatically
 
+# Temporal model training (learned post-processing)
+# This trains a lightweight model to smooth VideoMAE predictions
+uv run rallycut train export-dataset --name beach_v3  # Export labeled data
+uv run rallycut train extract-features --stride 48    # Extract VideoMAE features (~cached)
+uv run rallycut train temporal --model v1 --epochs 50 # Train temporal smoother
+# Model saved to weights/temporal/best_temporal_model.pt
+# Model version auto-detected from checkpoint metadata when loading
+
 # Evaluation
 uv run rallycut evaluate --model beach --iou 0.5      # Evaluate beach model
 
@@ -79,10 +94,16 @@ uv run ruff check rallycut/            # Lint
 
 ```
 rallycut/
-├── cli/commands/    # Typer commands (cut, profile)
+├── cli/commands/    # Typer commands (cut, profile, train, evaluate)
 ├── core/            # Config, models, Video wrapper, caching, profiler
 ├── analysis/        # GameStateAnalyzer (VideoMAE ML classifier)
 ├── processing/      # VideoCutter, FFmpegExporter
+├── temporal/        # Temporal models for learned post-processing
+│   ├── models.py    # v1 (LearnedSmoothing), v2 (ConvCRF), v3 (BiLSTMCRF)
+│   ├── training.py  # Training loop with validation
+│   ├── inference.py # Model loading with auto version detection
+│   └── features.py  # VideoMAE feature extraction
+├── evaluation/      # Ground truth loading, metrics, parameter tuning
 ├── service/         # Cloud detection (Modal deployment)
 │   └── platforms/modal_app.py  # Modal GPU function
 lib/volleyball_ml/   # ML model wrappers (VideoMAE)
@@ -97,7 +118,7 @@ Nested Pydantic config with YAML/env var support. Key sections:
 
 | Section | Key Settings |
 |---------|-------------|
-| `game_state` | `stride=48` (frames between samples), `window_size=16`, `batch_size=8` |
+| `game_state` | `stride=48` (frames between samples), `window_size=16`, `batch_size=8`, `temporal_model_path`, `temporal_model_version` |
 | `segment` | `min_play_duration=1.0`, `min_gap=5.0`, `rally_continuation=2.0` |
 | `proxy` | 480p@30fps normalized for faster ML |
 
