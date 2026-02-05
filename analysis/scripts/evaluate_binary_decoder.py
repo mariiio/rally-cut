@@ -56,15 +56,8 @@ def main():
         model.load_state_dict(checkpoint)
     model.eval()
 
-    # Best decoder config from grid search
+    # Use default decoder config (tuned for short rally detection)
     best_config = DecoderConfig(
-        smooth_window=3,
-        t_on=0.4,
-        t_off=0.3,
-        patience=1,
-        min_segment_windows=3,
-        max_gap_windows=1,
-        max_duration_seconds=60.0,
         stride=48,
     )
 

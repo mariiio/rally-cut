@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 # Default grid search parameter ranges
 DEFAULT_PARAM_GRID: dict[str, list[float | int]] = {
     "smooth_window": [1, 3, 5],
-    "t_on": [0.4, 0.5, 0.6],
-    "t_off": [0.2, 0.3, 0.4],
+    "t_on": [0.35, 0.4, 0.45, 0.5],
+    "t_off": [0.2, 0.25, 0.3, 0.35],
     "patience": [1, 2, 3],
     "min_segment_windows": [1, 2, 3],
     "max_gap_windows": [1, 2, 3],
@@ -39,12 +39,12 @@ class DecoderConfig:
     smooth_window: int = 3  # Moving average window (odd number)
 
     # Hysteresis thresholding
-    t_on: float = 0.5  # Threshold to enter rally
-    t_off: float = 0.3  # Threshold to exit rally
+    t_on: float = 0.4  # Threshold to enter rally (lowered from 0.5 for short rally detection)
+    t_off: float = 0.25  # Threshold to exit rally (lowered from 0.3 to match t_on change)
     patience: int = 2  # Windows below t_off before exiting
 
     # Binary cleanup
-    min_segment_windows: int = 2  # Remove segments shorter than this
+    min_segment_windows: int = 1  # Remove segments shorter than this (lowered from 2 for short rally detection)
     max_gap_windows: int = 3  # Fill gaps shorter than this
 
     # Anti-overmerge
@@ -94,8 +94,8 @@ def smooth_probabilities(probs: np.ndarray, window: int = 3) -> np.ndarray:
 
 def hysteresis_threshold(
     probs: np.ndarray,
-    t_on: float = 0.5,
-    t_off: float = 0.3,
+    t_on: float = 0.4,
+    t_off: float = 0.25,
     patience: int = 2,
 ) -> np.ndarray:
     """Apply hysteresis thresholding to probabilities.
