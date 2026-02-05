@@ -1,10 +1,8 @@
 """Integration tests for the analysis pipeline."""
 
-import pytest
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
-import numpy as np
-import tempfile
+
+import pytest
 
 from rallycut.core.models import (
     Action,
@@ -71,8 +69,8 @@ class TestPipelineIntegration:
         mock_actions,
     ):
         """Test statistics generation flow."""
-        from rallycut.statistics.aggregator import StatisticsAggregator
         from rallycut.processing.cutter import VideoCutter
+        from rallycut.statistics.aggregator import StatisticsAggregator
 
         # Get segments from game state results using VideoCutter
         cutter = VideoCutter(min_play_duration=0.1)
@@ -80,7 +78,7 @@ class TestPipelineIntegration:
 
         # Aggregate statistics
         aggregator = StatisticsAggregator(mock_video_info)
-        rallies = aggregator.create_rallies(mock_actions, segments)
+        _rallies = aggregator.create_rallies(mock_actions, segments)
         stats = aggregator.compute_statistics(mock_actions, segments)
 
         # Verify statistics
@@ -186,8 +184,8 @@ class TestCutterIntegration:
 
     def test_segment_merging(self):
         """Test that overlapping segments are merged."""
-        from rallycut.processing.cutter import VideoCutter
         from rallycut.core.models import GameStateResult
+        from rallycut.processing.cutter import VideoCutter
 
         # Two play segments close together (would overlap with padding)
         fps = 30.0

@@ -1504,8 +1504,8 @@ def train_binary_head_cmd(
         BinaryHeadConfig,
         prepare_window_data,
         train_binary_head,
-        video_level_split,
     )
+    from rallycut.temporal.training import video_level_split
 
     rprint("[bold]Binary Head Training (Phase 1)[/bold]")
     rprint(f"  Feature directory: {feature_dir}")
@@ -1672,8 +1672,8 @@ def train_binary_head_smooth_cmd(
     from rallycut.temporal.binary_head import (
         SmoothingConfig,
         train_with_smoothing,
-        video_level_split,
     )
+    from rallycut.temporal.training import video_level_split
 
     rprint("[bold]Binary Head + Smoothing Training (Phase 2)[/bold]")
     rprint(f"  Pretrained head: {pretrained_path}")

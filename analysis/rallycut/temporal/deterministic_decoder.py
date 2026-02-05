@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from itertools import product
+from typing import Any
 
 import numpy as np
 
@@ -364,7 +365,7 @@ def compute_segment_metrics(
     ground_truth: list[tuple[float, float]],
     predictions: list[tuple[float, float]],
     iou_threshold: float = 0.5,
-) -> dict[str, float]:
+) -> dict[str, float | int]:
     """Compute segment-level metrics with IoU matching.
 
     Args:
@@ -423,7 +424,7 @@ def compute_segment_metrics(
 def compute_overmerge_rate(
     segments: list[tuple[float, float]],
     max_duration: float = 60.0,
-) -> dict[str, float]:
+) -> dict[str, float | int]:
     """Compute overmerge statistics.
 
     Args:
@@ -545,7 +546,7 @@ def grid_search(
         GridSearchResult with best config and metrics.
     """
     # Parameter grid (conservative to avoid overmerge)
-    param_grid = {
+    param_grid: dict[str, list[float | int]] = {
         "smooth_window": [1, 3, 5],
         "t_on": [0.4, 0.5, 0.6],
         "t_off": [0.2, 0.3, 0.4],
@@ -554,14 +555,15 @@ def grid_search(
         "max_gap_windows": [1, 2, 3],
     }
 
-    best_result = None
+    best_result: dict[str, Any] | None = None
     best_score = -1.0
-    all_results = []
+    all_results: list[dict[str, Any]] = []
 
     # Generate all combinations
     keys = list(param_grid.keys())
-    for values in product(*[param_grid[k] for k in keys]):
-        params = dict(zip(keys, values))
+    param_values: list[list[float | int]] = [param_grid[k] for k in keys]
+    for values in product(*param_values):
+        params: dict[str, float | int] = dict(zip(keys, values))
 
         # Skip invalid: t_off should be < t_on
         if params["t_off"] >= params["t_on"]:
@@ -576,12 +578,12 @@ def grid_search(
 
         for probs, gt, fps in zip(video_probs, video_ground_truths, video_fps):
             config = DecoderConfig(
-                smooth_window=params["smooth_window"],
-                t_on=params["t_on"],
-                t_off=params["t_off"],
-                patience=params["patience"],
-                min_segment_windows=params["min_segment_windows"],
-                max_gap_windows=params["max_gap_windows"],
+                smooth_window=int(params["smooth_window"]),
+                t_on=float(params["t_on"]),
+                t_off=float(params["t_off"]),
+                patience=int(params["patience"]),
+                min_segment_windows=int(params["min_segment_windows"]),
+                max_gap_windows=int(params["max_gap_windows"]),
                 max_duration_seconds=60.0,
                 fps=fps,
                 stride=stride,
@@ -591,10 +593,10 @@ def grid_search(
             metrics = compute_segment_metrics(gt, result.segments, iou_threshold)
             overmerge = compute_overmerge_rate(result.segments, 60.0)
 
-            total_tp += metrics["tp"]
-            total_fp += metrics["fp"]
-            total_fn += metrics["fn"]
-            total_overmerge += overmerge["overmerge_count"]
+            total_tp += int(metrics["tp"])
+            total_fp += int(metrics["fp"])
+            total_fn += int(metrics["fn"])
+            total_overmerge += int(overmerge["overmerge_count"])
             total_segments += len(result.segments)
 
         # Aggregate metrics
@@ -632,21 +634,21 @@ def grid_search(
         )
 
     best_config = DecoderConfig(
-        smooth_window=best_result["params"]["smooth_window"],
-        t_on=best_result["params"]["t_on"],
-        t_off=best_result["params"]["t_off"],
-        patience=best_result["params"]["patience"],
-        min_segment_windows=best_result["params"]["min_segment_windows"],
-        max_gap_windows=best_result["params"]["max_gap_windows"],
+        smooth_window=int(best_result["params"]["smooth_window"]),
+        t_on=float(best_result["params"]["t_on"]),
+        t_off=float(best_result["params"]["t_off"]),
+        patience=int(best_result["params"]["patience"]),
+        min_segment_windows=int(best_result["params"]["min_segment_windows"]),
+        max_gap_windows=int(best_result["params"]["max_gap_windows"]),
         max_duration_seconds=60.0,
         stride=stride,
     )
 
     return GridSearchResult(
         best_config=best_config,
-        best_f1=best_result["f1"],
-        best_precision=best_result["precision"],
-        best_recall=best_result["recall"],
-        best_overmerge_rate=best_result["overmerge_rate"],
+        best_f1=float(best_result["f1"]),
+        best_precision=float(best_result["precision"]),
+        best_recall=float(best_result["recall"]),
+        best_overmerge_rate=float(best_result["overmerge_rate"]),
         all_results=sorted(all_results, key=lambda x: x["score"], reverse=True),
     )

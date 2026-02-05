@@ -8,8 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from rallycut.analysis.game_state import GameStateAnalyzer
-from rallycut.core.config import get_config, reset_config
-from rallycut.core.models import GameState
+from rallycut.core.config import reset_config
 from rallycut.core.video import Video
 from rallycut.processing.cutter import VideoCutter
 
@@ -140,7 +139,7 @@ def analyze_min_segment_start_impact(video_path: Path, ground_truth_rallies: lis
 def main() -> int:
     project_root = Path(__file__).parent.parent
     fixtures_dir = project_root / "tests/fixtures"
-    ground_truth = load_ground_truth()
+    _ground_truth = load_ground_truth()  # Load to validate but don't use
 
     # Videos to analyze
     videos = [
@@ -185,7 +184,7 @@ def main() -> int:
                       f"service={p['service_prob']:.2f}, no_play={p['no_play_prob']:.2f})")
 
         # 2. Test MIN_SEGMENT_START_SECONDS impact
-        print(f"\n--- MIN_SEGMENT_START_SECONDS IMPACT ---")
+        print("\n--- MIN_SEGMENT_START_SECONDS IMPACT ---")
         start_impact = analyze_min_segment_start_impact(video_path, rallies)
 
         print(f"{'Threshold':<15} | {'Segments':<10} | {'Rallies Detected':<20} | {'Recall':<10}")
@@ -195,7 +194,7 @@ def main() -> int:
             print(f"{threshold:<15.1f} | {data['detected_segments']:<10} | {rallies_str:<20} | {data['recall']:.0%}")
 
         # 3. Test stride impact
-        print(f"\n--- STRIDE IMPACT (with min_segment_start=0) ---")
+        print("\n--- STRIDE IMPACT (with min_segment_start=0) ---")
         stride_impact = test_stride_impact(video_path, rallies)
 
         print(f"{'Stride':<10} | {'Segments':<10} | {'Rallies Detected':<20} | {'Recall':<10}")

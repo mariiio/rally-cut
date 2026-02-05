@@ -8,7 +8,7 @@ Supports ONNX Runtime for faster inference (1.5-2x speedup).
 """
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import cv2
 import numpy as np
@@ -66,6 +66,10 @@ class GameStateClassifier:
     IMAGE_SIZE = 224
     # Trained model uses 3 classes
     LABEL_MAP = {0: GameState.NO_PLAY, 1: GameState.PLAY, 2: GameState.SERVICE}
+
+    _model: Any  # VideoMAEForVideoClassification or compiled variant
+    _processor: Any  # VideoMAEImageProcessor
+    _onnx_session: Any  # ort.InferenceSession or None
 
     def __init__(
         self,
@@ -328,7 +332,8 @@ class GameStateClassifier:
             {"pixel_values": pixel_values},
         )
 
-        return outputs[0]
+        result: np.ndarray = outputs[0]
+        return result
 
     def preprocess_frames(self, frames: list[np.ndarray]) -> np.ndarray:
         """
@@ -370,6 +375,8 @@ class GameStateClassifier:
         import torch
 
         self._load_model()
+        assert self._model is not None
+        assert self._processor is not None
 
         if len(frames) != self.FRAME_WINDOW:
             raise ValueError(
@@ -393,8 +400,8 @@ class GameStateClassifier:
         with ctx:
             outputs = self._model(**inputs)
             probs = torch.softmax(outputs.logits, dim=-1)
-            predicted_class = probs.argmax(-1).item()
-            confidence = probs[0, predicted_class].item()
+            predicted_class = int(probs.argmax(-1).item())
+            confidence = float(probs[0, predicted_class].item())
 
         return self.LABEL_MAP.get(predicted_class, GameState.NO_PLAY), confidence
 
@@ -465,6 +472,7 @@ class GameStateClassifier:
 
         # Load processor for normalization (still need this for consistency)
         self._load_model()
+        assert self._processor is not None
 
         # Process through the processor to get normalized pixel values
         with profiler.time("videomae", "processor", batch_size=batch_size):
@@ -507,6 +515,8 @@ class GameStateClassifier:
         import torch
 
         self._load_model()
+        assert self._model is not None
+        assert self._processor is not None
 
         # Process all segments through the processor
         with profiler.time("videomae", "processor", batch_size=batch_size):
@@ -623,12 +633,14 @@ class GameStateClassifier:
                 current_end = result.end_frame
             else:
                 if current_start is not None:
+                    assert current_end is not None
                     active_ranges.append((current_start, current_end))
                     current_start = None
                     current_end = None
 
         # Don't forget last range
         if current_start is not None:
+            assert current_end is not None
             active_ranges.append((current_start, current_end))
 
         return active_ranges
@@ -657,6 +669,8 @@ class GameStateClassifier:
             return np.array([])
 
         self._load_model()
+        assert self._model is not None
+        assert self._processor is not None
 
         profiler = get_profiler()
         batch_size = len(batch_frames)
@@ -718,7 +732,7 @@ class GameStateClassifier:
 
                     # Apply the layer norm (fc_norm) for consistency with classification
                     features = self._model.fc_norm(features)
-                    features_np = features.cpu().numpy()
+                    features_np: np.ndarray = features.cpu().numpy()
 
         return features_np
 
@@ -736,4 +750,5 @@ class GameStateClassifier:
             NumPy array of shape (768,) with encoder features.
         """
         features = self.get_encoder_features_batch([frames], pooling=pooling)
-        return features[0]
+        result: np.ndarray = features[0]
+        return result
