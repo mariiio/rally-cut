@@ -258,6 +258,21 @@ def cut(  # noqa: C901
         "--refine",
         help="[EXPERIMENTAL] Enable boundary refinement using fine-stride features",
     ),
+    ball_validation: bool = typer.Option(
+        False,
+        "--ball-validation",
+        help="Enable ball-based false positive filtering (validates rally segments)",
+    ),
+    ball_boundary: bool = typer.Option(
+        False,
+        "--ball-boundary",
+        help="Enable ball-based boundary refinement (refines rally start/end)",
+    ),
+    ball_fast: bool = typer.Option(
+        True,
+        "--ball-fast/--ball-no-fast",
+        help="Use aggressive ball tracking optimizations (subsample + early exit)",
+    ),
 ) -> None:
     """
     Automatically remove no-play segments from volleyball recordings.
@@ -374,6 +389,9 @@ def cut(  # noqa: C901
         binary_head_model_path=binary_head_model,
         use_heuristics=heuristics,
         boundary_refinement=refine,
+        ball_validation=ball_validation,
+        ball_boundary_refinement=ball_boundary,
+        ball_fast_mode=ball_fast,
     )
 
     # Show pipeline info
@@ -387,6 +405,18 @@ def cut(  # noqa: C901
         console.print("[dim]Heuristics pipeline (57% F1)[/dim]")
     else:
         console.print("[dim]Auto-selecting pipeline based on cached features...[/dim]")
+
+    # Show ball validation info
+    if ball_validation or ball_boundary:
+        ball_features = []
+        if ball_validation:
+            ball_features.append("FP filtering")
+        if ball_boundary:
+            ball_features.append("boundary refinement")
+        ball_mode = "fast" if ball_fast else "standard"
+        console.print(
+            f"[cyan]Ball tracking enabled:[/cyan] {', '.join(ball_features)} ({ball_mode} mode)"
+        )
 
     # Progress tracking
     with Progress(
