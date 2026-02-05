@@ -312,12 +312,13 @@ The beach model uses optimized post-processing heuristics:
 
 | Parameter | Indoor | Beach |
 |-----------|--------|-------|
-| `min_play_duration` | 1.0s | 0.5s |
-| `rally_continuation_seconds` | 2.0s | 3.0s |
-| `boundary_confidence_threshold` | 0.35 | 0.25 |
-| `min_active_density` | 0.25 | 0.15 |
+| `min_play_duration` | 1.0s | 1.0s |
+| `rally_continuation_seconds` | 2.0s | 1.5s |
+| `boundary_confidence_threshold` | 0.35 | 0.4 |
+| `min_active_density` | 0.25 | 0.3 |
+| `min_gap_seconds` | 5.0s | 3.0s |
 
-These heuristics are automatically applied when using `--model beach`.
+Beach heuristics are tuned to be more discriminative (higher thresholds) to prevent over-merging of rallies. These heuristics are automatically applied when using `--model beach`.
 
 ## Proxy Videos for Efficient Training
 

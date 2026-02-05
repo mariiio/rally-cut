@@ -12,7 +12,7 @@ This is Phase 1 of the emissions-first training approach:
 from __future__ import annotations
 
 import json
-import random
+import logging
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -25,6 +25,8 @@ from torch.utils.data import DataLoader, Dataset
 
 if TYPE_CHECKING:
     from rallycut.evaluation.ground_truth import EvaluationVideo, GroundTruthRally
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -248,7 +250,9 @@ def prepare_window_data(
         # Load cached features
         cached = cache.get(video.content_hash, stride)
         if cached is None:
-            print(f"Warning: No cached features for {video.filename} at stride={stride}, skipping")
+            logger.warning(
+                "No cached features for %s at stride=%d, skipping", video.filename, stride
+            )
             continue
 
         features, metadata = cached
@@ -266,9 +270,11 @@ def prepare_window_data(
         # Align lengths
         min_len = min(len(features), len(labels))
         if abs(len(features) - len(labels)) > 5:
-            print(
-                f"Warning: Length mismatch for {video.filename}: "
-                f"features={len(features)}, labels={len(labels)}"
+            logger.warning(
+                "Length mismatch for %s: features=%d, labels=%d",
+                video.filename,
+                len(features),
+                len(labels),
             )
 
         features = features[:min_len]
@@ -276,7 +282,7 @@ def prepare_window_data(
 
         # Validate features
         if np.any(~np.isfinite(features)):
-            print(f"Warning: NaN/Inf in features for {video.filename}, skipping")
+            logger.warning("NaN/Inf in features for %s, skipping", video.filename)
             continue
 
         all_features.append(features)
@@ -421,7 +427,10 @@ def train_binary_head(
     # Compute pos_weight for class imbalance
     num_pos = float(train_labels.sum())
     num_neg = float(len(train_labels) - num_pos)
-    pos_weight = torch.tensor([num_neg / num_pos], dtype=torch.float32) if num_pos > 0 else torch.tensor([1.0], dtype=torch.float32)
+    if num_pos > 0:
+        pos_weight = torch.tensor([num_neg / num_pos], dtype=torch.float32)
+    else:
+        pos_weight = torch.tensor([1.0], dtype=torch.float32)
     pos_weight = pos_weight.to(device)
 
     # Loss and optimizer
@@ -431,9 +440,7 @@ def train_binary_head(
         lr=config.learning_rate,
         weight_decay=config.weight_decay,
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=config.epochs
-    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs)
 
     # Initialize result
     result = BinaryHeadResult(
@@ -512,17 +519,22 @@ def train_binary_head(
         else:
             patience_counter += 1
 
-        print(
-            f"Epoch {epoch + 1}/{config.epochs}: "
-            f"loss={avg_train_loss:.4f}, "
-            f"ROC-AUC={metrics['roc_auc']:.4f}, "
-            f"PR-AUC={metrics['pr_auc']:.4f}, "
-            f"F1={metrics['f1']:.4f} @ thresh={best_thresh:.2f} "
-            f"(best ROC-AUC={result.best_val_roc_auc:.4f} @ epoch {result.best_epoch + 1})"
+        logger.info(
+            "Epoch %d/%d: loss=%.4f, ROC-AUC=%.4f, PR-AUC=%.4f, F1=%.4f @ thresh=%.2f "
+            "(best ROC-AUC=%.4f @ epoch %d)",
+            epoch + 1,
+            config.epochs,
+            avg_train_loss,
+            metrics["roc_auc"],
+            metrics["pr_auc"],
+            metrics["f1"],
+            best_thresh,
+            result.best_val_roc_auc,
+            result.best_epoch + 1,
         )
 
         if patience_counter >= config.patience:
-            print(f"Early stopping at epoch {epoch + 1}")
+            logger.info("Early stopping at epoch %d", epoch + 1)
             break
 
     # Save best model
@@ -539,29 +551,6 @@ def train_binary_head(
         json.dump(asdict(result), f, indent=2)
 
     return result
-
-
-def video_level_split(
-    videos: list[EvaluationVideo],
-    train_ratio: float = 0.8,
-    seed: int = 42,
-) -> tuple[list[EvaluationVideo], list[EvaluationVideo]]:
-    """Split videos into train and validation sets.
-
-    Args:
-        videos: List of evaluation videos.
-        train_ratio: Fraction of videos for training.
-        seed: Random seed.
-
-    Returns:
-        Tuple of (train_videos, val_videos).
-    """
-    rng = random.Random(seed)
-    shuffled = list(videos)
-    rng.shuffle(shuffled)
-
-    split_idx = int(len(shuffled) * train_ratio)
-    return shuffled[:split_idx], shuffled[split_idx:]
 
 
 # =============================================================================
@@ -820,55 +809,6 @@ def predictions_to_segments(
     return segments
 
 
-def compute_segment_metrics(
-    ground_truth: list[tuple[float, float]],
-    predictions: list[tuple[float, float]],
-    iou_threshold: float = 0.5,
-) -> dict[str, float]:
-    """Compute segment-level metrics.
-
-    Args:
-        ground_truth: List of (start, end) ground truth segments.
-        predictions: List of (start, end) predicted segments.
-        iou_threshold: IoU threshold for matching.
-
-    Returns:
-        Dict with precision, recall, f1.
-    """
-    if not ground_truth or not predictions:
-        return {"precision": 0.0, "recall": 0.0, "f1": 0.0}
-
-    # Simple greedy matching
-    matched_gt = set()
-    matched_pred = set()
-
-    for i, (ps, pe) in enumerate(predictions):
-        best_iou = 0.0
-        best_gt = -1
-        for j, (gs, ge) in enumerate(ground_truth):
-            if j in matched_gt:
-                continue
-            intersection = max(0, min(pe, ge) - max(ps, gs))
-            union = (pe - ps) + (ge - gs) - intersection
-            iou = intersection / union if union > 0 else 0
-            if iou > best_iou:
-                best_iou = iou
-                best_gt = j
-        if best_iou >= iou_threshold:
-            matched_gt.add(best_gt)
-            matched_pred.add(i)
-
-    tp = len(matched_pred)
-    fp = len(predictions) - tp
-    fn = len(ground_truth) - len(matched_gt)
-
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
-
-    return {"precision": precision, "recall": recall, "f1": f1}
-
-
 def train_with_smoothing(
     train_videos: list[EvaluationVideo],
     val_videos: list[EvaluationVideo],
@@ -892,13 +832,16 @@ def train_with_smoothing(
     """
     from sklearn.metrics import f1_score, roc_auc_score
 
+    from rallycut.temporal.deterministic_decoder import compute_segment_metrics
     from rallycut.temporal.features import FeatureCache
 
     start_time = time.time()
     device = torch.device(config.device)
 
     # Load pretrained binary head
-    pretrained_head = BinaryHead(feature_dim=768, hidden_dim=config.hidden_dim, dropout=config.dropout)
+    pretrained_head = BinaryHead(
+        feature_dim=768, hidden_dim=config.hidden_dim, dropout=config.dropout
+    )
     pretrained_head.load_state_dict(torch.load(pretrained_head_path, weights_only=True))
 
     # Create model with smoothing
@@ -919,7 +862,9 @@ def train_with_smoothing(
     # Prepare data (per-video sequences)
     cache = FeatureCache(cache_dir=feature_cache_dir)
 
-    def load_video_data(videos: list[EvaluationVideo]) -> tuple[list[np.ndarray], list[np.ndarray], list[EvaluationVideo]]:
+    def load_video_data(
+        videos: list[EvaluationVideo],
+    ) -> tuple[list[np.ndarray], list[np.ndarray], list[EvaluationVideo]]:
         features_list = []
         labels_list = []
         valid_videos = []
@@ -947,12 +892,16 @@ def train_with_smoothing(
     train_dataset = SequenceDataset(train_features, train_labels)
     val_dataset = SequenceDataset(val_features, val_labels)
 
-    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True, collate_fn=collate_sequences)
+    train_loader = DataLoader(
+        train_dataset, batch_size=config.batch_size, shuffle=True, collate_fn=collate_sequences
+    )
     val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, collate_fn=collate_sequences)
 
     # Optimizer (only trainable params)
     trainable_params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(trainable_params, lr=config.learning_rate, weight_decay=config.weight_decay)
+    optimizer = torch.optim.AdamW(
+        trainable_params, lr=config.learning_rate, weight_decay=config.weight_decay
+    )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs)
 
     result = SmoothingResult()
@@ -1037,7 +986,9 @@ def train_with_smoothing(
         # Check for improvement (use segment F1 as primary metric)
         if avg_seg_f1 > result.best_segment_f1:
             result.best_segment_f1 = avg_seg_f1
-            result.best_segment_precision = total_seg_metrics["precision"] / n_val if n_val > 0 else 0
+            result.best_segment_precision = (
+                total_seg_metrics["precision"] / n_val if n_val > 0 else 0
+            )
             result.best_segment_recall = total_seg_metrics["recall"] / n_val if n_val > 0 else 0
             result.best_val_roc_auc = roc_auc
             result.best_val_f1 = f1
@@ -1047,16 +998,19 @@ def train_with_smoothing(
         else:
             patience_counter += 1
 
-        print(
-            f"Epoch {epoch + 1}/{config.epochs}: "
-            f"loss={avg_train_loss:.4f}, "
-            f"win_F1={f1:.3f}, "
-            f"seg_F1={avg_seg_f1:.3f} "
-            f"(best seg_F1={result.best_segment_f1:.3f} @ epoch {result.best_epoch + 1})"
+        logger.info(
+            "Epoch %d/%d: loss=%.4f, win_F1=%.3f, seg_F1=%.3f (best seg_F1=%.3f @ epoch %d)",
+            epoch + 1,
+            config.epochs,
+            avg_train_loss,
+            f1,
+            avg_seg_f1,
+            result.best_segment_f1,
+            result.best_epoch + 1,
         )
 
         if patience_counter >= config.patience:
-            print(f"Early stopping at epoch {epoch + 1}")
+            logger.info("Early stopping at epoch %d", epoch + 1)
             break
 
     # Save best model

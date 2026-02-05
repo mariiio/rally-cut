@@ -10,8 +10,23 @@ This module provides:
 - Integration with main video processing pipeline
 """
 
-from rallycut.temporal.binary_head import BinaryHead, BinaryHeadConfig
-from rallycut.temporal.deterministic_decoder import DecoderConfig, DecoderResult, decode
+from rallycut.temporal.binary_head import (
+    BinaryHead,
+    BinaryHeadConfig,
+    BinaryHeadWithSmoothing,
+    SmoothingConfig,
+    SmoothingResult,
+)
+from rallycut.temporal.deterministic_decoder import (
+    DecoderConfig,
+    DecoderResult,
+    GridSearchResult,
+    compute_boundary_errors,
+    compute_overmerge_rate,
+    compute_segment_metrics,
+    decode,
+    grid_search,
+)
 from rallycut.temporal.features import (
     FeatureCache,
     extract_features_for_video,
@@ -21,7 +36,7 @@ from rallycut.temporal.inference import (
     RallySegment,
     TemporalInferenceConfig,
     TemporalInferenceResult,
-    apply_anti_overmerge,
+    apply_anti_overmerge_segments,
     load_binary_head_model,
     load_temporal_model,
     refine_boundaries,
@@ -54,10 +69,18 @@ __all__ = [
     # Binary head
     "BinaryHead",
     "BinaryHeadConfig",
+    "BinaryHeadWithSmoothing",
+    "SmoothingConfig",
+    "SmoothingResult",
     # Deterministic decoder
     "DecoderConfig",
     "DecoderResult",
+    "GridSearchResult",
+    "compute_boundary_errors",
+    "compute_overmerge_rate",
+    "compute_segment_metrics",
     "decode",
+    "grid_search",
     # Features
     "FeatureCache",
     "extract_features_for_video",
@@ -84,7 +107,7 @@ __all__ = [
     "run_binary_head_decoder",
     "run_inference",
     "run_temporal_inference",
-    "apply_anti_overmerge",
+    "apply_anti_overmerge_segments",
     "refine_boundaries",
     # Processor (pipeline integration)
     "TemporalProcessor",
