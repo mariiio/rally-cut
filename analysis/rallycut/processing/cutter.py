@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
     from rallycut.analysis.game_state import GameStateAnalyzer
     from rallycut.core.proxy import ProxyGenerator
+    from rallycut.temporal.processor import TemporalProcessor
 
 # Default heuristic values (indoor model defaults)
 # These can be overridden by MODEL_PRESETS when a model_variant is specified
@@ -53,6 +54,11 @@ class VideoCutter:
         auto_stride: bool = True,
         rally_continuation_seconds: float | None = None,
         model_variant: str = "indoor",
+        use_temporal_model: bool = False,
+        temporal_model_path: Path | None = None,
+        temporal_model_version: str = "v2",
+        use_binary_head_decoder: bool = False,
+        binary_head_model_path: Path | None = None,
     ):
         config = get_config()
         self.device = device or config.device
@@ -79,8 +85,19 @@ class VideoCutter:
         # Model path based on variant
         self._model_path: PathType | None = get_model_path(model_variant)
 
+        # Temporal model settings
+        self.use_temporal_model = use_temporal_model
+        self.temporal_model_path = temporal_model_path
+        self.temporal_model_version = temporal_model_version
+
+        # Binary head decoder settings
+        self.use_binary_head_decoder = use_binary_head_decoder
+        self.binary_head_model_path = binary_head_model_path
+
         self._analyzer: GameStateAnalyzer | None = None
         self._proxy_generator: ProxyGenerator | None = None
+        self._temporal_processor: object | None = None
+        self._binary_head_model: object | None = None
         self.exporter = FFmpegExporter()
 
     def _normalize_stride(self, fps: float) -> int:
@@ -122,6 +139,20 @@ class VideoCutter:
                 cache_dir=config.proxy_cache_dir,
             )
         return self._proxy_generator
+
+    def _get_temporal_processor(self) -> TemporalProcessor:
+        """Lazy load temporal processor."""
+        if self._temporal_processor is None:
+            from rallycut.temporal.processor import TemporalProcessor, TemporalProcessorConfig
+
+            config = TemporalProcessorConfig(
+                model_path=self.temporal_model_path,
+                model_version=self.temporal_model_version,
+                coarse_stride=self.base_stride,
+                device=self.device,
+            )
+            self._temporal_processor = TemporalProcessor(config)
+        return self._temporal_processor  # type: ignore[return-value]
 
     def _apply_confidence_extension(
         self, results: list[GameStateResult]
@@ -555,6 +586,229 @@ class VideoCutter:
 
         return merged, suggested_segments
 
+    def _analyze_with_temporal_model(
+        self,
+        input_path: Path,
+        progress_callback: Callable[[float, str], None] | None = None,
+    ) -> tuple[list[TimeSegment], list[SuggestedSegment]]:
+        """Analyze video using temporal model.
+
+        Args:
+            input_path: Path to input video.
+            progress_callback: Progress callback.
+
+        Returns:
+            Tuple of (confirmed_segments, empty suggested_segments).
+        """
+        from rallycut.temporal.processor import rally_segments_to_time_segments
+
+        # Get source video info
+        with Video(input_path) as video:
+            source_fps = video.info.fps
+            source_frame_count = video.info.frame_count
+            content_hash = video.compute_content_hash()
+
+        # Use proxy for temporal model too if enabled
+        if self.use_proxy:
+            proxy_gen = self._get_proxy_generator()
+
+            def proxy_progress(pct: float, msg: str) -> None:
+                if progress_callback:
+                    progress_callback(pct * 0.1, msg)
+
+            proxy_path, mapper = proxy_gen.get_or_create(
+                input_path, source_fps, proxy_progress
+            )
+
+            # Run temporal model on proxy
+            processor = self._get_temporal_processor()
+
+            def temporal_progress(pct: float, msg: str) -> None:
+                if progress_callback:
+                    progress_callback(0.1 + pct * 0.9, msg)
+
+            with Video(proxy_path) as proxy_video:
+                result = processor.process_video(
+                    proxy_video,
+                    content_hash=content_hash,
+                    progress_callback=temporal_progress,
+                )
+
+            # Convert segments and map back to source frame space
+            proxy_segments = rally_segments_to_time_segments(
+                result.segments,
+                fps=mapper.proxy_fps,
+                padding_start=self.padding_seconds,
+                padding_end=self.padding_end_seconds,
+                total_frames=int(mapper.proxy_fps * mapper.source_duration),
+            )
+
+            # Map segment times back to source
+            segments = []
+            for seg in proxy_segments:
+                source_start = mapper.proxy_to_source(seg.start_frame)
+                source_end = mapper.proxy_to_source(seg.end_frame)
+                segments.append(
+                    TimeSegment(
+                        start_frame=source_start,
+                        end_frame=min(source_end, source_frame_count - 1),
+                        start_time=source_start / source_fps,
+                        end_time=min(source_end, source_frame_count - 1) / source_fps,
+                        state=seg.state,
+                    )
+                )
+        else:
+            # Run temporal model on source video
+            processor = self._get_temporal_processor()
+
+            with Video(input_path) as video:
+                result = processor.process_video(
+                    video,
+                    content_hash=content_hash,
+                    progress_callback=progress_callback,
+                )
+
+            segments = rally_segments_to_time_segments(
+                result.segments,
+                fps=source_fps,
+                padding_start=self.padding_seconds,
+                padding_end=self.padding_end_seconds,
+                total_frames=source_frame_count,
+            )
+
+        # Temporal model doesn't produce suggested segments
+        return segments, []
+
+    def _analyze_with_binary_head_decoder(
+        self,
+        input_path: Path,
+        progress_callback: Callable[[float, str], None] | None = None,
+    ) -> tuple[list[TimeSegment], list[SuggestedSegment]]:
+        """Analyze video using binary head + deterministic decoder.
+
+        Args:
+            input_path: Path to input video.
+            progress_callback: Progress callback.
+
+        Returns:
+            Tuple of (confirmed_segments, empty suggested_segments).
+        """
+        from rallycut.core.models import GameState
+        from rallycut.temporal.deterministic_decoder import DecoderConfig
+        from rallycut.temporal.features import FeatureCache
+        from rallycut.temporal.inference import load_binary_head_model, run_binary_head_decoder
+
+        # Get source video info
+        with Video(input_path) as video:
+            source_fps = video.info.fps
+            source_frame_count = video.info.frame_count
+            content_hash = video.compute_content_hash()
+
+        # Determine binary head model path
+        if self.binary_head_model_path is not None:
+            model_path = self.binary_head_model_path
+        else:
+            # Default path
+            from rallycut.core.config import get_config
+            config = get_config()
+            model_path = config.weights_dir / "binary_head" / "best_binary_head.pt"
+
+        if not model_path.exists():
+            raise FileNotFoundError(
+                f"Binary head model not found at {model_path}. "
+                "Train one with 'rallycut train binary-head' first."
+            )
+
+        # Load model if not cached
+        if self._binary_head_model is None:
+            if progress_callback:
+                progress_callback(0.0, "Loading binary head model...")
+            self._binary_head_model = load_binary_head_model(model_path, self.device)
+
+        # Load cached features
+        if progress_callback:
+            progress_callback(0.05, "Loading cached features...")
+
+        cache = FeatureCache(cache_dir=config.feature_cache_dir)
+        stride = self.base_stride
+
+        cached = cache.get(content_hash, stride)
+        if cached is None:
+            raise ValueError(
+                f"No cached features found for video (stride={stride}). "
+                "Run 'rallycut train extract-features' first."
+            )
+
+        features, _ = cached
+
+        # Configure decoder
+        decoder_config = DecoderConfig(
+            fps=source_fps,
+            stride=stride,
+        )
+
+        # Run binary head + decoder
+        if progress_callback:
+            progress_callback(0.1, "Running binary head inference...")
+
+        result = run_binary_head_decoder(
+            features=features,
+            model=self._binary_head_model,
+            config=decoder_config,
+            device=self.device,
+        )
+
+        if progress_callback:
+            progress_callback(0.9, "Converting segments...")
+
+        # Convert decoder segments to TimeSegments with padding
+        padding_start_frames = int(self.padding_seconds * source_fps)
+        padding_end_frames = int(self.padding_end_seconds * source_fps)
+
+        segments = []
+        for start_time, end_time in result.segments:
+            start_frame = int(start_time * source_fps)
+            end_frame = int(end_time * source_fps)
+
+            # Apply padding
+            padded_start = max(0, start_frame - padding_start_frames)
+            padded_end = min(end_frame + padding_end_frames, source_frame_count - 1)
+
+            segments.append(
+                TimeSegment(
+                    start_frame=padded_start,
+                    end_frame=padded_end,
+                    start_time=padded_start / source_fps,
+                    end_time=padded_end / source_fps,
+                    state=GameState.PLAY,
+                )
+            )
+
+        # Merge overlapping segments
+        if segments:
+            sorted_segments = sorted(segments, key=lambda s: s.start_frame)
+            merged = [sorted_segments[0]]
+
+            for segment in sorted_segments[1:]:
+                last = merged[-1]
+                if segment.start_frame <= last.end_frame + 1:
+                    merged[-1] = TimeSegment(
+                        start_frame=last.start_frame,
+                        end_frame=max(last.end_frame, segment.end_frame),
+                        start_time=last.start_time,
+                        end_time=max(last.end_frame, segment.end_frame) / source_fps,
+                        state=last.state,
+                    )
+                else:
+                    merged.append(segment)
+            segments = merged
+
+        if progress_callback:
+            progress_callback(1.0, "Complete")
+
+        # Binary head decoder doesn't produce suggested segments
+        return segments, []
+
     def analyze_only(
         self,
         input_path: Path,
@@ -570,6 +824,14 @@ class VideoCutter:
         Returns:
             Tuple of (confirmed_segments, suggested_segments)
         """
+        # Use binary head decoder if enabled (takes priority)
+        if self.use_binary_head_decoder:
+            return self._analyze_with_binary_head_decoder(input_path, progress_callback)
+
+        # Use temporal model if enabled
+        if self.use_temporal_model:
+            return self._analyze_with_temporal_model(input_path, progress_callback)
+
         from rallycut.core.models import GameStateResult
 
         analyzer = self._get_analyzer()

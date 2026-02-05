@@ -223,6 +223,31 @@ def cut(  # noqa: C901
         "--model", "-m",
         help="Model variant: 'indoor' (original) or 'beach' (fine-tuned with beach heuristics)",
     ),
+    temporal: bool = typer.Option(
+        False,
+        "--temporal",
+        help="Use trained temporal model for post-processing (ConvCRF/BiLSTM instead of heuristics)",
+    ),
+    temporal_model_path: Path | None = typer.Option(
+        None,
+        "--temporal-model",
+        help="Path to temporal model weights (default: weights/temporal/best_temporal_model.pt)",
+    ),
+    temporal_version: str = typer.Option(
+        "v2",
+        "--temporal-version",
+        help="Temporal model version: v1 (smoothing), v2 (ConvCRF), v3 (BiLSTM)",
+    ),
+    binary_head: bool = typer.Option(
+        False,
+        "--binary-head",
+        help="Use binary head + deterministic decoder for beach volleyball",
+    ),
+    binary_head_model: Path | None = typer.Option(
+        None,
+        "--binary-head-model",
+        help="Path to binary head model (default: weights/binary_head/best_binary_head.pt)",
+    ),
 ) -> None:
     """
     Automatically remove no-play segments from volleyball recordings.
@@ -317,7 +342,17 @@ def cut(  # noqa: C901
         auto_stride=auto_stride,
         rally_continuation_seconds=rally_continuation,
         model_variant=model,
+        use_temporal_model=temporal,
+        temporal_model_path=temporal_model_path,
+        temporal_model_version=temporal_version,
+        use_binary_head_decoder=binary_head,
+        binary_head_model_path=binary_head_model,
     )
+
+    if binary_head:
+        console.print("[bold green]Binary head + deterministic decoder enabled[/bold green]")
+    elif temporal:
+        console.print(f"[bold green]Temporal model enabled:[/bold green] {temporal_version}")
 
     # Progress tracking
     with Progress(
