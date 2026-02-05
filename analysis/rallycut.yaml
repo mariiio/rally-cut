@@ -1,0 +1,5 @@
+# RallyCut configuration
+training_backup:
+  s3_bucket: "rallycut-dev"
+  s3_prefix: "training"
+  s3_region: "us-east-1"
