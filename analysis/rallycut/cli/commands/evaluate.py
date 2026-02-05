@@ -379,6 +379,130 @@ def _apply_temporal_model(
     return result.segments
 
 
+def _apply_ball_tracking(
+    video_path: Path,
+    segments: list,  # TimeSegment
+    content_hash: str,
+    ball_validation: bool = False,
+    ball_boundary: bool = False,
+    ball_fast: bool = True,
+) -> list:
+    """Apply ball tracking validation and/or boundary refinement to segments.
+
+    Args:
+        video_path: Path to video file.
+        segments: List of TimeSegment objects.
+        content_hash: Video content hash for caching.
+        ball_validation: Enable false positive filtering.
+        ball_boundary: Enable boundary refinement.
+        ball_fast: Use fast mode (subsampling + early exit).
+
+    Returns:
+        List of TimeSegment objects (potentially filtered/refined).
+    """
+    from rallycut.core.models import GameState, TimeSegment
+    from rallycut.core.video import Video
+    from rallycut.tracking import (
+        BallBoundaryConfig,
+        BallTracker,
+        BallValidationConfig,
+        get_ball_cache,
+        refine_boundaries_parallel,
+        validate_segment_with_ball,
+        validate_segment_with_early_exit,
+    )
+
+    if not segments:
+        return segments
+
+    # Get video FPS for boundary refinement
+    with Video(video_path) as video:
+        fps = video.info.fps
+
+    # Convert segments to (start_time, end_time) tuples
+    segment_tuples = [(s.start_time, s.end_time) for s in segments]
+
+    # Initialize ball tracker and cache
+    ball_tracker = BallTracker()
+    ball_cache = get_ball_cache()
+
+    # Apply validation if enabled - CONSERVATIVE settings
+    if ball_validation:
+        config = BallValidationConfig(
+            min_detection_rate=0.05,  # Very low - only reject obvious non-rallies
+            min_trajectory_variance=0.01,
+            sample_rate=3 if ball_fast else 1,
+            max_frames_to_sample=150,
+            high_confidence_skip=0.7,
+            low_confidence_skip=0.3,
+        )
+
+        validated_tuples = []
+        for start, end in segment_tuples:
+            # Check cache
+            if ball_cache.has(content_hash, start, end):
+                cached_result = ball_cache.get(content_hash, start, end)
+                if cached_result is not None and cached_result.is_valid:
+                    validated_tuples.append((start, end))
+                continue
+
+            # Run validation
+            try:
+                if ball_fast:
+                    result = validate_segment_with_early_exit(
+                        video_path, start, end, ball_tracker, config
+                    )
+                else:
+                    result = validate_segment_with_ball(
+                        video_path, start, end, ball_tracker, config
+                    )
+
+                ball_cache.put(content_hash, start, end, result)
+
+                if result.is_valid:
+                    validated_tuples.append((start, end))
+                else:
+                    logger.debug(
+                        "Ball validation rejected segment %.1f-%.1fs", start, end
+                    )
+            except Exception as e:
+                logger.warning("Ball validation failed for segment %.1f-%.1fs: %s", start, end, e)
+                validated_tuples.append((start, end))  # Keep on failure
+
+        segment_tuples = validated_tuples
+        logger.info("Ball validation: %d/%d segments passed", len(validated_tuples), len(segments))
+
+    # Apply boundary refinement if enabled (uses tuned default config)
+    if ball_boundary and segment_tuples:
+        boundary_config = BallBoundaryConfig()
+
+        refinements = refine_boundaries_parallel(
+            video_path,
+            segment_tuples,
+            ball_tracker,
+            boundary_config,
+        )
+
+        segment_tuples = [(r.refined_start, r.refined_end) for r in refinements]
+
+    # Convert back to TimeSegment objects
+    result_segments = []
+    for start, end in segment_tuples:
+        start_frame = int(start * fps)
+        end_frame = int(end * fps)
+        result_segments.append(
+            TimeSegment(
+                start_frame=start_frame,
+                end_frame=end_frame,
+                start_time=start,
+                end_time=end,
+                state=GameState.PLAY,
+            )
+        )
+
+    return result_segments
+
+
 def _run_evaluation(
     videos: list[EvaluationVideo],
     params: PostProcessingParams,
@@ -393,6 +517,9 @@ def _run_evaluation(
     feature_cache_dir: Path | None = None,
     use_binary_head: bool = False,
     use_heuristics: bool = False,
+    ball_validation: bool = False,
+    ball_boundary: bool = False,
+    ball_fast: bool = True,
     progress: Progress | None = None,
     task_id: TaskID | None = None,
 ) -> list[VideoEvaluationResult]:
@@ -457,6 +584,17 @@ def _run_evaluation(
             segments = _apply_binary_head_decoder(
                 video.content_hash, stride, feature_cache_dir
             )
+            if segments is not None and (ball_validation or ball_boundary):
+                # Apply ball tracking validation/refinement
+                video_path = resolver.resolve(video.s3_key, video.content_hash)
+                segments = _apply_ball_tracking(
+                    video_path,
+                    segments,
+                    video.content_hash,
+                    ball_validation=ball_validation,
+                    ball_boundary=ball_boundary,
+                    ball_fast=ball_fast,
+                )
             if segments is None and not use_heuristics:
                 # Auto-selection: fallback to heuristics if no features/model
                 logger.info("No cached features/model for %s, using heuristics", video.filename)
@@ -626,6 +764,27 @@ def evaluate(
             help="Force heuristics pipeline instead of auto-selecting binary head",
         ),
     ] = False,
+    ball_validation: Annotated[
+        bool,
+        typer.Option(
+            "--ball-validation",
+            help="Enable ball-based false positive filtering (validates rally segments)",
+        ),
+    ] = False,
+    ball_boundary: Annotated[
+        bool,
+        typer.Option(
+            "--ball-boundary",
+            help="Enable ball-based boundary refinement (refines rally start/end)",
+        ),
+    ] = False,
+    ball_fast: Annotated[
+        bool,
+        typer.Option(
+            "--ball-fast/--ball-no-fast",
+            help="Use aggressive ball tracking optimizations (subsample + early exit)",
+        ),
+    ] = True,
 ) -> None:
     """
     Evaluate rally detection against ground truth from the database.
@@ -676,6 +835,18 @@ def evaluate(
         console.print("Pipeline: [dim]Heuristics (57% F1)[/dim]")
     elif temporal_model is None:
         console.print("Pipeline: [dim]Auto-selecting (binary head if features cached)[/dim]")
+
+    # Show ball validation info
+    if ball_validation or ball_boundary:
+        ball_features = []
+        if ball_validation:
+            ball_features.append("FP filtering")
+        if ball_boundary:
+            ball_features.append("boundary refinement")
+        ball_mode = "fast" if ball_fast else "standard"
+        console.print(
+            f"Ball tracking: [cyan]{', '.join(ball_features)} ({ball_mode} mode)[/cyan]"
+        )
 
     # Resolve model weights path
     model_path = get_model_path(model)
@@ -843,6 +1014,9 @@ def evaluate(
             feature_cache_dir=feature_cache_dir,
             use_binary_head=binary_head,
             use_heuristics=use_heuristics,
+            ball_validation=ball_validation,
+            ball_boundary=ball_boundary,
+            ball_fast=ball_fast,
             progress=progress,
             task_id=task,
         )

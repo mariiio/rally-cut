@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from rallycut.core.proxy import ProxyGenerator
     from rallycut.temporal.features import FeatureCache
     from rallycut.temporal.processor import TemporalProcessor
+    from rallycut.tracking import BallFeatureCache, BallTracker
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,10 @@ class VideoCutter:
         binary_head_model_path: Path | None = None,
         use_heuristics: bool = False,
         boundary_refinement: bool = False,  # Disabled by default - experimental
+        # Ball validation options (Phase 1 & 2 of ball tracking integration)
+        ball_validation: bool = False,  # Enable ball-based FP filtering
+        ball_boundary_refinement: bool = False,  # Enable ball-based boundary refinement
+        ball_fast_mode: bool = True,  # Use aggressive optimizations (subsample + early exit)
     ):
         config = get_config()
         self.device = device or config.device
@@ -106,11 +111,18 @@ class VideoCutter:
         self.use_heuristics = use_heuristics
         self.boundary_refinement = boundary_refinement
 
+        # Ball validation settings
+        self.ball_validation = ball_validation
+        self.ball_boundary_refinement = ball_boundary_refinement
+        self.ball_fast_mode = ball_fast_mode
+
         self._analyzer: GameStateAnalyzer | None = None
         self._proxy_generator: ProxyGenerator | None = None
         self._temporal_processor: TemporalProcessor | None = None
         self._binary_head_model: nn.Module | None = None
         self._feature_cache: FeatureCache | None = None
+        self._ball_tracker: BallTracker | None = None
+        self._ball_cache: BallFeatureCache | None = None
         self.exporter = FFmpegExporter()
 
     def _normalize_stride(self, fps: float) -> int:
@@ -178,6 +190,22 @@ class VideoCutter:
             self._feature_cache = FeatureCacheImpl(cache_dir=Path("training_data/features"))
         return self._feature_cache
 
+    def _get_ball_tracker(self) -> BallTracker:
+        """Lazy load ball tracker."""
+        if self._ball_tracker is None:
+            from rallycut.tracking import BallTracker as BallTrackerImpl
+
+            self._ball_tracker = BallTrackerImpl()
+        return self._ball_tracker
+
+    def _get_ball_cache(self) -> BallFeatureCache:
+        """Lazy load ball feature cache."""
+        if self._ball_cache is None:
+            from rallycut.tracking import BallFeatureCache as BallFeatureCacheImpl
+
+            self._ball_cache = BallFeatureCacheImpl()
+        return self._ball_cache
+
     def _has_cached_features(self, content_hash: str) -> bool:
         """Check if coarse-stride features are cached for this video.
 
@@ -226,6 +254,214 @@ class VideoCutter:
         config = get_config()
         default_path = config.weights_dir / "binary_head" / "best_binary_head.pt"
         return default_path.exists()
+
+    def _apply_ball_validation(
+        self,
+        input_path: Path,
+        segments: list[tuple[float, float]],
+        confidences: list[float] | None,
+        content_hash: str,
+        fps: float,
+    ) -> tuple[list[tuple[float, float]], list[float] | None]:
+        """
+        Apply ball-based false positive filtering to segments.
+
+        Uses ball visibility and trajectory to validate detected rally segments,
+        filtering out false positives (dead time incorrectly detected as rallies).
+
+        Performance optimizations:
+        - Uses proxy video (already cached from VideoMAE analysis)
+        - Subsampling (process every 3rd frame)
+        - Early termination (exit early if result is clear)
+        - Conditional execution (skip validation for high/low confidence segments)
+        - Caching (cache results per segment hash)
+
+        Args:
+            input_path: Path to original video.
+            segments: List of (start_time, end_time) tuples.
+            confidences: Decoder confidence for each segment (optional).
+            content_hash: Video content hash for caching.
+            fps: Video frame rate.
+
+        Returns:
+            Tuple of (validated_segments, updated_confidences).
+        """
+        from rallycut.tracking import (
+            BallValidationConfig,
+            should_validate_segment,
+            validate_segment_with_ball,
+            validate_segment_with_early_exit,
+        )
+
+        if not segments:
+            return segments, confidences
+
+        # Get proxy video path (same one used by VideoMAE)
+        proxy_path = input_path
+        if self.use_proxy:
+            proxy_gen = self._get_proxy_generator()
+            with Video(input_path) as video:
+                source_fps = video.info.fps
+            proxy_path, _ = proxy_gen.get_or_create(input_path, source_fps, None)
+
+        ball_tracker = self._get_ball_tracker()
+        ball_cache = self._get_ball_cache()
+
+        # Configure validation - CONSERVATIVE settings to avoid false rejections
+        # Only reject segments with very low ball detection
+        config = BallValidationConfig(
+            # Very low threshold - only reject obvious non-rallies
+            min_detection_rate=0.05 if self.model_variant == "beach" else 0.1,
+            min_trajectory_variance=0.01,
+            # Performance optimizations
+            sample_rate=3 if self.ball_fast_mode else 1,
+            max_frames_to_sample=150,
+            early_check_interval=30,
+            # Conservative confidence thresholds
+            high_confidence_skip=0.7,  # Trust decoder more
+            low_confidence_skip=0.3,   # Only validate uncertain segments
+        )
+
+        validated_segments: list[tuple[float, float]] = []
+        validated_confidences: list[float] = [] if confidences is not None else None  # type: ignore
+
+        # Default confidences if not provided (assume 0.5 - uncertain)
+        if confidences is None:
+            confidences = [0.5] * len(segments)
+
+        for i, ((start, end), conf) in enumerate(zip(segments, confidences)):
+            # Check cache first
+            if ball_cache.has(content_hash, start, end):
+                cached_result = ball_cache.get(content_hash, start, end)
+                if cached_result is not None:
+                    if cached_result.is_valid:
+                        validated_segments.append((start, end))
+                        if validated_confidences is not None:
+                            validated_confidences.append(conf + cached_result.confidence_adjustment)
+                    continue
+
+            # Conditional execution: skip validation for clear cases
+            if not should_validate_segment(conf, config):
+                if conf >= config.high_confidence_skip:
+                    # High confidence - keep segment
+                    validated_segments.append((start, end))
+                    if validated_confidences is not None:
+                        validated_confidences.append(conf)
+                # Low confidence segments are already filtered by decoder
+                continue
+
+            # Run ball validation
+            try:
+                if self.ball_fast_mode:
+                    result = validate_segment_with_early_exit(
+                        proxy_path, start, end, ball_tracker, config
+                    )
+                else:
+                    result = validate_segment_with_ball(
+                        proxy_path, start, end, ball_tracker, config
+                    )
+
+                # Cache result
+                ball_cache.put(content_hash, start, end, result)
+
+                if result.is_valid:
+                    validated_segments.append((start, end))
+                    if validated_confidences is not None:
+                        validated_confidences.append(conf + result.confidence_adjustment)
+                else:
+                    detection_rate_str = (
+                        f"{result.features.detection_rate:.2f}"
+                        if result.features is not None
+                        else "N/A"
+                    )
+                    logger.info(
+                        f"Ball validation rejected segment {start:.1f}-{end:.1f}s "
+                        f"(detection_rate={detection_rate_str})"
+                    )
+
+            except Exception as e:
+                # Fail gracefully - keep segment on ball tracking failure
+                logger.warning(f"Ball validation failed for segment {start:.1f}-{end:.1f}s: {e}")
+                validated_segments.append((start, end))
+                if validated_confidences is not None:
+                    validated_confidences.append(conf)
+
+        logger.info(
+            f"Ball validation: {len(validated_segments)}/{len(segments)} segments passed"
+        )
+
+        return validated_segments, validated_confidences
+
+    def _apply_ball_boundary_refinement(
+        self,
+        input_path: Path,
+        segments: list[tuple[float, float]],
+        content_hash: str,
+    ) -> list[tuple[float, float]]:
+        """
+        Apply ball-based boundary refinement to segments.
+
+        Uses ball trajectory to refine rally start/end boundaries,
+        finding the precise moment of serve toss or ball hitting ground.
+
+        Performance optimizations:
+        - Only tracks 4-second windows around each boundary
+        - Parallel processing with thread pool
+        - Uses proxy video
+
+        Args:
+            input_path: Path to original video.
+            segments: List of (start_time, end_time) tuples.
+            content_hash: Video content hash.
+
+        Returns:
+            List of refined (start_time, end_time) tuples.
+        """
+        from rallycut.tracking import (
+            BallBoundaryConfig,
+            refine_boundaries_parallel,
+        )
+
+        if not segments:
+            return segments
+
+        # Get proxy video path
+        proxy_path = input_path
+        if self.use_proxy:
+            proxy_gen = self._get_proxy_generator()
+            with Video(input_path) as video:
+                source_fps = video.info.fps
+            proxy_path, _ = proxy_gen.get_or_create(input_path, source_fps, None)
+
+        ball_tracker = self._get_ball_tracker()
+
+        # Use default boundary config (tuned for beach volleyball)
+        config = BallBoundaryConfig()
+
+        # Refine boundaries in parallel
+        refinements = refine_boundaries_parallel(
+            proxy_path,
+            segments,
+            ball_tracker,
+            config,
+        )
+
+        # Extract refined segments
+        refined_segments = []
+        total_adjustment = 0.0
+        for refinement in refinements:
+            refined_segments.append((refinement.refined_start, refinement.refined_end))
+            if refinement.start_refinement:
+                total_adjustment += abs(refinement.start_refinement.adjustment)
+            if refinement.end_refinement:
+                total_adjustment += abs(refinement.end_refinement.adjustment)
+
+        avg_adjustment = total_adjustment / (len(segments) * 2) if segments else 0.0
+        logger.info(
+            f"Ball boundary refinement: avg adjustment={avg_adjustment:.2f}s"
+        )
+
+        return refined_segments
 
     def _apply_confidence_extension(
         self, results: list[GameStateResult]
@@ -839,6 +1075,7 @@ class VideoCutter:
 
         # Apply boundary refinement if fine features are available
         raw_segments = result.segments
+        segment_confidences = result.segment_confidences if hasattr(result, "segment_confidences") else None
         if self.boundary_refinement and self._has_fine_features(content_hash):
             if progress_callback:
                 progress_callback(0.85, "Refining boundaries...")
@@ -866,6 +1103,30 @@ class VideoCutter:
                     refinement_config,
                     device=self.device,
                 )
+
+        # Apply ball-based validation if enabled (Phase 1: False Positive Filtering)
+        if self.ball_validation and raw_segments:
+            if progress_callback:
+                progress_callback(0.86, "Validating with ball tracking...")
+
+            raw_segments, segment_confidences = self._apply_ball_validation(
+                input_path,
+                raw_segments,
+                segment_confidences,
+                content_hash,
+                source_fps,
+            )
+
+        # Apply ball-based boundary refinement if enabled (Phase 2)
+        if self.ball_boundary_refinement and raw_segments:
+            if progress_callback:
+                progress_callback(0.88, "Refining boundaries with ball tracking...")
+
+            raw_segments = self._apply_ball_boundary_refinement(
+                input_path,
+                raw_segments,
+                content_hash,
+            )
 
         if progress_callback:
             progress_callback(0.9, "Applying padding...")
