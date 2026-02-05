@@ -285,8 +285,8 @@ def _apply_binary_head_decoder(
     if not model_path.exists():
         return None
 
-    # Load features
-    cache_dir = feature_cache_dir or config.feature_cache_dir
+    # Load features from training feature cache (same default as temporal model)
+    cache_dir = feature_cache_dir or Path("training_data/features")
     feature_cache = FeatureCache(cache_dir=cache_dir)
     cached_data = feature_cache.get(content_hash, stride)
 
@@ -616,7 +616,7 @@ def evaluate(
         bool,
         typer.Option(
             "--binary-head",
-            help="Use binary head + decoder for evaluation (80%% F1, default when features cached)",
+            help="Use binary head + decoder for evaluation (70%% F1, default when features cached)",
         ),
     ] = False,
     use_heuristics: Annotated[
@@ -660,18 +660,18 @@ def evaluate(
         import warnings
 
         warnings.warn(
-            "--temporal-model is deprecated. Use --binary-head instead (80% F1 vs 65% F1).",
+            "--temporal-model is deprecated. Use --binary-head instead (70% F1 vs 65% F1).",
             DeprecationWarning,
             stacklevel=2,
         )
         console.print(
             "[yellow]Warning: --temporal-model is deprecated. "
-            "Use --binary-head for better results (80% F1).[/yellow]"
+            "Use --binary-head for better results (70% F1).[/yellow]"
         )
 
     # Show pipeline info
     if binary_head:
-        console.print("Pipeline: [green]Binary head + decoder (80% F1)[/green]")
+        console.print("Pipeline: [green]Binary head + decoder (70% F1)[/green]")
     elif use_heuristics:
         console.print("Pipeline: [dim]Heuristics (57% F1)[/dim]")
     elif temporal_model is None:

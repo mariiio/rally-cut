@@ -170,10 +170,12 @@ class VideoCutter:
     def _get_feature_cache(self) -> FeatureCache:
         """Lazy load feature cache."""
         if self._feature_cache is None:
+            from pathlib import Path
+
             from rallycut.temporal.features import FeatureCache as FeatureCacheImpl
 
-            config = get_config()
-            self._feature_cache = FeatureCacheImpl(cache_dir=config.feature_cache_dir)
+            # Use training features directory (same as extract-features command)
+            self._feature_cache = FeatureCacheImpl(cache_dir=Path("training_data/features"))
         return self._feature_cache
 
     def _has_cached_features(self, content_hash: str) -> bool:
@@ -769,7 +771,6 @@ class VideoCutter:
         """
         from rallycut.core.models import GameState
         from rallycut.temporal.deterministic_decoder import DecoderConfig
-        from rallycut.temporal.features import FeatureCache
         from rallycut.temporal.inference import load_binary_head_model, run_binary_head_decoder
 
         # Get source video info
@@ -804,7 +805,7 @@ class VideoCutter:
         if progress_callback:
             progress_callback(0.05, "Loading cached features...")
 
-        cache = FeatureCache(cache_dir=config.feature_cache_dir)
+        cache = self._get_feature_cache()
         stride = self.base_stride
 
         cached = cache.get(content_hash, stride)
@@ -953,7 +954,7 @@ class VideoCutter:
                 content_hash = video.compute_content_hash()
 
             if self._has_cached_features(content_hash) and self._has_binary_head_model():
-                logger.info("Using binary head + decoder (80%% F1) - features cached")
+                logger.info("Using binary head + decoder (70%% F1) - features cached")
                 return self._analyze_with_binary_head_decoder(
                     input_path, progress_callback, content_hash=content_hash
                 )
@@ -961,12 +962,12 @@ class VideoCutter:
                 # Log info about how to enable binary head
                 if not self._has_cached_features(content_hash):
                     logger.info(
-                        "No cached features - using heuristics. For 80%% F1, run: "
+                        "No cached features - using heuristics. For 70%% F1, run: "
                         "rallycut train extract-features --stride 48"
                     )
                 elif not self._has_binary_head_model():
                     logger.info(
-                        "No binary head model - using heuristics. For 80%% F1, run: "
+                        "No binary head model - using heuristics. For 70%% F1, run: "
                         "rallycut train binary-head"
                     )
 

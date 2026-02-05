@@ -170,7 +170,7 @@ Three detection pipelines are available, with binary head + decoder as the recom
 
 | Pipeline | F1 | Overmerge | Command |
 |----------|-----|-----------|---------|
-| Binary Head + Decoder (default) | 80% | 0% | `rallycut cut video.mp4` |
+| Binary Head + Decoder (default) | 70% | 0% | `rallycut cut video.mp4` |
 | Heuristics (fallback) | 57% | ~10% | `rallycut cut video.mp4 --heuristics` |
 | Temporal (deprecated) | 65% | ~5% | `rallycut cut video.mp4 --experimental-temporal` |
 
@@ -180,7 +180,7 @@ Three detection pipelines are available, with binary head + decoder as the recom
 3. If `--heuristics` flag: use heuristics
 4. Auto: use binary head if features cached and model exists, else heuristics
 
-**Enabling 80% F1 pipeline:**
+**Enabling 70% F1 pipeline:**
 ```bash
 # One-time feature extraction
 uv run rallycut train extract-features --stride 48
