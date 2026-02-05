@@ -4,13 +4,6 @@
   "created": "2026-01-27T08:50:19.280194",
   "videos": [
     {
-      "filename": "IMG_1821.MOV",
-      "video_id": "4490a905-4e0e-4509-b642-7e621cb80621",
-      "content_hash": "ebbf840d4841702c4fe46c0bd7bf11841905feca35691ddc7d26ae02c9eaa655",
-      "duration_ms": 1185067,
-      "rally_count": 41
-    },
-    {
       "filename": "IMG_1887.MOV",
       "video_id": "708dbc8c-e559-4e20-a58b-e7e2f0888b73",
       "content_hash": "fe7527122e93a954052356471f9ad2386411349ac8dee270f2469ba6bb56a83a",
@@ -110,8 +103,8 @@
     }
   ],
   "stats": {
-    "total_videos": 15,
-    "total_rallies": 271,
-    "total_duration_min": 136.6
+    "total_videos": 14,
+    "total_rallies": 230,
+    "total_duration_min": 116.8
   }
 }
