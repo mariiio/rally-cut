@@ -451,29 +451,32 @@ def _refine_boundary_gradient(
     smoothed = gaussian_filter1d(segment, sigma=config.smoothing_sigma)
     gradient = np.gradient(smoothed)
 
-    # Find best edge in transition zone
+    # Find valid edge candidates in transition zone
+    # Select the one closest to coarse boundary (conservative refinement)
+    coarse_local_idx = boundary_idx - start_idx  # Coarse boundary in local coordinates
+
     if is_start:
-        # Rising edge: max positive gradient in transition zone
+        # Rising edge: positive gradient in transition zone
         candidates = [
-            (i, gradient[i])
+            i
             for i in range(len(gradient))
             if config.transition_zone_low <= smoothed[i] <= config.transition_zone_high
             and gradient[i] > config.gradient_threshold
         ]
         if candidates:
-            best_idx = max(candidates, key=lambda x: x[1])[0]
+            best_idx = min(candidates, key=lambda i: abs(i - coarse_local_idx))
             refined_idx = start_idx + best_idx
             return refined_idx * window_duration, True
     else:
-        # Falling edge: max negative gradient in transition zone
+        # Falling edge: negative gradient in transition zone
         candidates = [
-            (i, gradient[i])
+            i
             for i in range(len(gradient))
             if config.transition_zone_low <= smoothed[i] <= config.transition_zone_high
             and gradient[i] < -config.gradient_threshold
         ]
         if candidates:
-            best_idx = min(candidates, key=lambda x: x[1])[0]
+            best_idx = min(candidates, key=lambda i: abs(i - coarse_local_idx))
             refined_idx = start_idx + best_idx + 1  # +1 for end boundary
             return refined_idx * window_duration, True
 
