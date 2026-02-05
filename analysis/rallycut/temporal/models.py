@@ -1,5 +1,13 @@
 """Temporal models for sequence labeling in rally detection.
 
+.. deprecated::
+    These temporal models (v1/v2/v3) are deprecated in favor of the
+    Binary Head + Deterministic Decoder pipeline, which achieves
+    80% F1 with 0% overmerge rate compared to 65% F1 for temporal models.
+
+    Use ``rallycut.temporal.binary_head.BinaryHead`` and
+    ``rallycut.temporal.deterministic_decoder.decode()`` instead.
+
 Progressive complexity:
 - v1: LearnedSmoothing - Simple 1D Conv with learned threshold
 - v2: ConvCRF - Multi-layer 1D CNN + CRF for transition learning
@@ -20,6 +28,10 @@ if TYPE_CHECKING:
 
 class LearnedSmoothing(nn.Module):
     """Temporal model v1: Linear projection + 1D convolution for temporal smoothing.
+
+    .. deprecated::
+        This model is deprecated. Use BinaryHead + deterministic decoder instead,
+        which achieves 80% F1 with 0% overmerge rate.
 
     This is the simplest temporal model that projects features to logits,
     applies learned smoothing, and outputs binary classifications.
@@ -158,6 +170,10 @@ class LearnedSmoothing(nn.Module):
 class ConvCRF(nn.Module):
     """Temporal model v2: 1D CNN + CRF for sequence labeling.
 
+    .. deprecated::
+        This model is deprecated. Use BinaryHead + deterministic decoder instead,
+        which achieves 80% F1 with 0% overmerge rate.
+
     This model uses multi-layer 1D convolutions for temporal feature extraction
     followed by a CRF layer for learning transition dynamics.
 
@@ -293,6 +309,10 @@ class ConvCRF(nn.Module):
 
 class BiLSTMCRF(nn.Module):
     """Temporal model v3: BiLSTM + CRF for sequence labeling.
+
+    .. deprecated::
+        This model is deprecated. Use BinaryHead + deterministic decoder instead,
+        which achieves 80% F1 with 0% overmerge rate.
 
     This model uses a bidirectional LSTM for temporal feature extraction
     followed by a CRF layer. Use this only if v2 (ConvCRF) doesn't meet

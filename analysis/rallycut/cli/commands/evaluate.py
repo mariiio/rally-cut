@@ -251,6 +251,73 @@ def _export_csv(results: list[VideoEvaluationResult], path: Path) -> None:
             )
 
 
+def _apply_binary_head_decoder(
+    content_hash: str,
+    stride: int,
+    feature_cache_dir: Path | None = None,
+    binary_head_model_path: Path | None = None,
+) -> list | None:
+    """Apply binary head + deterministic decoder to cached features.
+
+    Args:
+        content_hash: Video content hash to look up cached features.
+        stride: Analysis stride in frames.
+        feature_cache_dir: Directory containing cached features.
+        binary_head_model_path: Path to binary head model (optional).
+
+    Returns:
+        List of TimeSegment objects, or None if features/model not found.
+    """
+    from rallycut.core.config import get_config
+    from rallycut.core.models import GameState, TimeSegment
+    from rallycut.temporal.deterministic_decoder import DecoderConfig
+    from rallycut.temporal.features import FeatureCache
+    from rallycut.temporal.inference import load_binary_head_model, run_binary_head_decoder
+
+    config = get_config()
+
+    # Determine model path
+    if binary_head_model_path is not None:
+        model_path = binary_head_model_path
+    else:
+        model_path = config.weights_dir / "binary_head" / "best_binary_head.pt"
+
+    if not model_path.exists():
+        return None
+
+    # Load features
+    cache_dir = feature_cache_dir or config.feature_cache_dir
+    feature_cache = FeatureCache(cache_dir=cache_dir)
+    cached_data = feature_cache.get(content_hash, stride)
+
+    if cached_data is None:
+        return None
+
+    features, metadata = cached_data
+
+    # Load model and run decoder
+    model = load_binary_head_model(model_path, device="cpu")
+    decoder_config = DecoderConfig(fps=metadata.fps, stride=stride)
+    result = run_binary_head_decoder(features, model, decoder_config, device="cpu")
+
+    # Convert to TimeSegments
+    segments = []
+    for start_time, end_time in result.segments:
+        start_frame = int(start_time * metadata.fps)
+        end_frame = int(end_time * metadata.fps)
+        segments.append(
+            TimeSegment(
+                start_frame=start_frame,
+                end_frame=end_frame,
+                start_time=start_time,
+                end_time=end_time,
+                state=GameState.PLAY,
+            )
+        )
+
+    return segments
+
+
 def _apply_temporal_model(
     cached: CachedAnalysis,
     model: object,  # torch.nn.Module
@@ -324,12 +391,18 @@ def _run_evaluation(
     model_id: str = "default",
     temporal_model_path: Path | None = None,
     feature_cache_dir: Path | None = None,
+    use_binary_head: bool = False,
+    use_heuristics: bool = False,
     progress: Progress | None = None,
     task_id: TaskID | None = None,
 ) -> list[VideoEvaluationResult]:
     """Run evaluation on a list of videos.
 
-    If temporal_model_path is provided, uses learned post-processing instead of heuristics.
+    Pipeline priority:
+    1. If temporal_model_path: use temporal model (deprecated)
+    2. If use_binary_head: use binary head + decoder
+    3. If use_heuristics: use heuristics
+    4. Auto: use binary head if features cached, else heuristics
     """
     results: list[VideoEvaluationResult] = []
     total = len(videos)
@@ -368,15 +441,28 @@ def _run_evaluation(
                 model_id=model_id,
             )
 
-        # Apply post-processing (temporal model or heuristics)
+        # Apply post-processing (temporal model, binary head, or heuristics)
+        segments = None
+
         if temporal_model is not None:
+            # Deprecated temporal model path
             segments = _apply_temporal_model(
                 cached, temporal_model, stride, video.content_hash, feature_cache_dir
             )
             if segments is None:
                 logger.warning("No cached features for %s, using heuristics", video.filename)
-                segments = apply_post_processing_custom(cached, params)
-        else:
+
+        elif use_binary_head or (not use_heuristics):
+            # Binary head path (explicit or auto-selected)
+            segments = _apply_binary_head_decoder(
+                video.content_hash, stride, feature_cache_dir
+            )
+            if segments is None and not use_heuristics:
+                # Auto-selection: fallback to heuristics if no features/model
+                logger.info("No cached features/model for %s, using heuristics", video.filename)
+
+        # Fallback to heuristics
+        if segments is None:
             segments = apply_post_processing_custom(cached, params)
 
         processing_time = time.time() - start_time
@@ -523,9 +609,23 @@ def evaluate(
         Path | None,
         typer.Option(
             "--feature-cache",
-            help="Directory for cached features (used with --temporal-model)",
+            help="Directory for cached features (used with --temporal-model or --binary-head)",
         ),
     ] = None,
+    binary_head: Annotated[
+        bool,
+        typer.Option(
+            "--binary-head",
+            help="Use binary head + decoder for evaluation (80%% F1, default when features cached)",
+        ),
+    ] = False,
+    use_heuristics: Annotated[
+        bool,
+        typer.Option(
+            "--heuristics",
+            help="Force heuristics pipeline instead of auto-selecting binary head",
+        ),
+    ] = False,
 ) -> None:
     """
     Evaluate rally detection against ground truth from the database.
@@ -554,6 +654,28 @@ def evaluate(
     console.print()
     console.print("[bold]RallyCut Evaluation Framework[/bold]")
     console.print(f"Model: [yellow]{model}[/yellow]")
+
+    # Show deprecation warning for temporal model
+    if temporal_model is not None:
+        import warnings
+
+        warnings.warn(
+            "--temporal-model is deprecated. Use --binary-head instead (80% F1 vs 65% F1).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        console.print(
+            "[yellow]Warning: --temporal-model is deprecated. "
+            "Use --binary-head for better results (80% F1).[/yellow]"
+        )
+
+    # Show pipeline info
+    if binary_head:
+        console.print("Pipeline: [green]Binary head + decoder (80% F1)[/green]")
+    elif use_heuristics:
+        console.print("Pipeline: [dim]Heuristics (57% F1)[/dim]")
+    elif temporal_model is None:
+        console.print("Pipeline: [dim]Auto-selecting (binary head if features cached)[/dim]")
 
     # Resolve model weights path
     model_path = get_model_path(model)
@@ -719,6 +841,8 @@ def evaluate(
             model_id=model,
             temporal_model_path=temporal_model,
             feature_cache_dir=feature_cache_dir,
+            use_binary_head=binary_head,
+            use_heuristics=use_heuristics,
             progress=progress,
             task_id=task,
         )

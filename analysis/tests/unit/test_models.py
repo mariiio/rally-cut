@@ -1,6 +1,5 @@
 """Tests for core domain models."""
 
-import pytest
 from pathlib import Path
 
 from rallycut.core.models import (

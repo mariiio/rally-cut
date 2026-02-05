@@ -12,22 +12,20 @@ import itertools
 import json
 import sys
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from rallycut.core.config import (
+    GameStateConfig,
     RallyCutConfig,
     SegmentConfig,
-    GameStateConfig,
-    set_config,
     reset_config,
+    set_config,
 )
 from rallycut.processing.cutter import VideoCutter
-
 
 # =============================================================================
 # Data Classes
@@ -301,7 +299,7 @@ class SweepRunner:
     def run_sweep(
         self,
         parameter_sets: list[ParameterSet],
-        resume_from: Optional[Path] = None,
+        resume_from: Path | None = None,
     ) -> list[SweepResult]:
         """Run the full parameter sweep."""
         import hashlib
@@ -445,7 +443,7 @@ class ResultAnalyzer:
         self,
         results: list[SweepResult],
         require_passing: bool = True,
-    ) -> Optional[SweepResult]:
+    ) -> SweepResult | None:
         """Find optimal configuration balancing recall and speed.
 
         Priority:

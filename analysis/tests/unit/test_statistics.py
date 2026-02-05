@@ -1,7 +1,8 @@
 """Tests for statistics aggregator."""
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 from rallycut.core.models import (
     Action,

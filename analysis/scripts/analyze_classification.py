@@ -12,9 +12,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from rallycut.analysis.game_state import GameStateAnalyzer
-from rallycut.core.models import GameState, GameStateResult
+from rallycut.core.models import GameStateResult
 from rallycut.core.video import Video
-from rallycut.processing.cutter import VideoCutter
 
 
 def load_ground_truth(path: Path) -> dict[str, list[dict[str, float | str]]]:
@@ -164,12 +163,12 @@ def analyze_video(video_path: Path, gt_segments: list[dict[str, float | str]]) -
     raw_acc = raw_correct / total * 100
     smooth_acc = smooth_correct / total * 100
 
-    print(f"\nAccuracy (2-class):")
+    print("\nAccuracy (2-class):")
     print(f"  Raw ML:     {raw_acc:5.1f}% ({raw_correct}/{total})")
     print(f"  Smoothed:   {smooth_acc:5.1f}% ({smooth_correct}/{total})")
     print(f"  Delta:      {smooth_acc - raw_acc:+5.1f}%")
 
-    print(f"\nState Distribution (seconds):")
+    print("\nState Distribution (seconds):")
     print(f"  {'':12} {'GT':>6} {'Raw':>6} {'Smooth':>6}")
     for state in ["service", "play", "no_play"]:
         gt = gt_counts.get(state, 0)
@@ -189,7 +188,7 @@ def analyze_video(video_path: Path, gt_segments: list[dict[str, float | str]]) -
     if gt_active > 0:
         raw_detection_ratio = raw_active / gt_active * 100
         smooth_detection_ratio = smooth_active / gt_active * 100
-        print(f"\nActive Detection Ratio (predicted/actual):")
+        print("\nActive Detection Ratio (predicted/actual):")
         print(f"  Raw:        {raw_detection_ratio:5.1f}%")
         print(f"  Smoothed:   {smooth_detection_ratio:5.1f}%")
 
@@ -229,11 +228,11 @@ def main() -> int:
         avg_raw_ratio = sum(m["raw_active_ratio"] for m in all_metrics) / len(all_metrics)
         avg_smooth_ratio = sum(m["smooth_active_ratio"] for m in all_metrics) / len(all_metrics)
 
-        print(f"\nAverage 2-class Accuracy:")
+        print("\nAverage 2-class Accuracy:")
         print(f"  Raw ML:     {avg_raw_acc:5.1f}%")
         print(f"  Smoothed:   {avg_smooth_acc:5.1f}%")
 
-        print(f"\nAverage Active Detection Ratio:")
+        print("\nAverage Active Detection Ratio:")
         print(f"  Raw ML:     {avg_raw_ratio:5.1f}%")
         print(f"  Smoothed:   {avg_smooth_ratio:5.1f}%")
 

@@ -11,10 +11,15 @@ Volleyball video analysis CLI. Uses ML (VideoMAE) to detect game states and remo
 ## Commands
 
 ```bash
-# Core commands
-uv run rallycut cut <video.mp4>                 # Remove dead time (indoor model)
+# Core commands (binary head + decoder is default when features cached)
+uv run rallycut cut <video.mp4>                 # Auto-selects best pipeline
+uv run rallycut cut <video.mp4> --heuristics    # Force heuristics (57% F1)
+uv run rallycut cut <video.mp4> --binary-head   # Force binary head (80% F1)
 uv run rallycut cut <video.mp4> --model beach   # Use beach volleyball model
 uv run rallycut profile <video.mp4>             # Performance profiling
+
+# One-time feature extraction (enables 80% F1 pipeline)
+uv run rallycut train extract-features --stride 48  # Required for binary head
 
 # Useful options for cut
 uv run rallycut cut video.mp4 --debug           # Timeline visualization + diagnostics
@@ -22,6 +27,7 @@ uv run rallycut cut video.mp4 --profile         # Performance breakdown
 uv run rallycut cut video.mp4 --json            # Export segments as JSON
 uv run rallycut cut video.mp4 --segments s.json # Load pre-computed segments
 uv run rallycut cut video.mp4 --limit 60        # Analyze first 60s only
+uv run rallycut cut video.mp4 --refine          # [EXPERIMENTAL] Enable boundary refinement
 
 # Training (beach model fine-tuning) - FULL WORKFLOW
 rm -rf training_data/                                 # Clean old local data
@@ -72,15 +78,20 @@ uv run rallycut train list-remote                     # List datasets backed up 
 # - Checkpoints saved every 100 steps (~5 min max loss)
 # - Resumes from latest checkpoint automatically
 
-# Temporal model training (learned post-processing)
-# This trains a lightweight model to smooth VideoMAE predictions
+# Temporal model training (DEPRECATED - use binary head instead)
+# Binary head achieves 80% F1 vs temporal's 65% F1
+# uv run rallycut train temporal --model v1 --epochs 50
+
+# Binary head training (recommended)
 uv run rallycut train export-dataset --name beach_v3  # Export labeled data
-uv run rallycut train extract-features --stride 48    # Extract VideoMAE features (~cached)
-uv run rallycut train temporal --model v1 --epochs 50 # Train temporal smoother
-# Model saved to weights/temporal/best_temporal_model.pt
-# Model version auto-detected from checkpoint metadata when loading
+uv run rallycut train extract-features --stride 48    # Extract VideoMAE features
+uv run rallycut train binary-head --epochs 50         # Train binary head classifier
+# Model saved to weights/binary_head/best_binary_head.pt
 
 # Evaluation
+uv run rallycut evaluate                              # Evaluate (auto-selects binary head if features cached)
+uv run rallycut evaluate --binary-head                # Force binary head evaluation (80% F1)
+uv run rallycut evaluate --heuristics                 # Force heuristics evaluation (57% F1)
 uv run rallycut evaluate --model beach --iou 0.5      # Evaluate beach model
 
 # Development
@@ -98,11 +109,14 @@ rallycut/
 ├── core/            # Config, models, Video wrapper, caching, profiler
 ├── analysis/        # GameStateAnalyzer (VideoMAE ML classifier)
 ├── processing/      # VideoCutter, FFmpegExporter
-├── temporal/        # Temporal models for learned post-processing
-│   ├── models.py    # v1 (LearnedSmoothing), v2 (ConvCRF), v3 (BiLSTMCRF)
-│   ├── training.py  # Training loop with validation
-│   ├── inference.py # Model loading with auto version detection
-│   └── features.py  # VideoMAE feature extraction
+├── temporal/        # Temporal models and binary head pipeline
+│   ├── binary_head.py        # Binary head classifier (recommended)
+│   ├── deterministic_decoder.py  # Decoder for binary head output
+│   ├── boundary_refinement.py    # Fine-stride boundary refinement
+│   ├── features.py           # VideoMAE feature extraction and caching
+│   ├── inference.py          # Model loading and inference
+│   ├── models.py             # v1/v2/v3 temporal models (deprecated)
+│   └── training.py           # Training loop with validation
 ├── evaluation/      # Ground truth loading, metrics, parameter tuning
 ├── service/         # Cloud detection (Modal deployment)
 │   └── platforms/modal_app.py  # Modal GPU function
@@ -150,9 +164,31 @@ Two model variants available via `--model` flag:
 
 Each model has optimized post-processing heuristics defined in `MODEL_PRESETS` (see `core/config.py`).
 
+## Detection Pipelines
+
+Three detection pipelines are available, with binary head + decoder as the recommended default:
+
+| Pipeline | F1 | Overmerge | Command |
+|----------|-----|-----------|---------|
+| Binary Head + Decoder (default) | 80% | 0% | `rallycut cut video.mp4` |
+| Heuristics (fallback) | 57% | ~10% | `rallycut cut video.mp4 --heuristics` |
+| Temporal (deprecated) | 65% | ~5% | `rallycut cut video.mp4 --experimental-temporal` |
+
+**Pipeline auto-selection:**
+1. If `--binary-head` flag: use binary head + decoder
+2. If `--experimental-temporal` flag: use temporal model (deprecated)
+3. If `--heuristics` flag: use heuristics
+4. Auto: use binary head if features cached and model exists, else heuristics
+
+**Enabling 80% F1 pipeline:**
+```bash
+# One-time feature extraction
+uv run rallycut train extract-features --stride 48
+```
+
 ## Processing Heuristics
 
-The cutter applies three post-processing heuristics to fix ML errors:
+The heuristics pipeline applies three post-processing heuristics to fix ML errors:
 
 1. **Confidence extension**: Extends PLAY segments at boundaries where `play_confidence > threshold`
 2. **Rally continuation**: Bridges NO_PLAY gaps within a rally (fixes mid-rally false negatives)

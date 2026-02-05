@@ -1,5 +1,14 @@
 """Temporal model processor for rally detection.
 
+.. deprecated::
+    The TemporalProcessor class is deprecated. Use the Binary Head +
+    Deterministic Decoder pipeline instead, which achieves 80% F1
+    with 0% overmerge rate compared to 65% F1 for temporal models.
+
+    The new default pipeline auto-selects binary head when features
+    are cached. Use ``--heuristics`` flag to force heuristics, or
+    ``--binary-head`` to force binary head.
+
 Integrates temporal models into the main inference pipeline.
 """
 
@@ -55,6 +64,10 @@ class TemporalProcessorConfig:
 class TemporalProcessor:
     """Processes video using temporal models for rally detection.
 
+    .. deprecated::
+        This class is deprecated. Use Binary Head + Deterministic Decoder instead.
+        The binary head pipeline achieves 80% F1 with 0% overmerge rate.
+
     Provides an alternative to heuristic-based post-processing
     using learned temporal models (ConvCRF, BiLSTMCRF).
     """
@@ -65,6 +78,16 @@ class TemporalProcessor:
         Args:
             config: Processor configuration. Uses defaults if None.
         """
+        import warnings
+
+        warnings.warn(
+            "TemporalProcessor is deprecated. Use Binary Head + Deterministic Decoder "
+            "instead (80% F1 vs 65% F1). The new default pipeline auto-selects binary "
+            "head when features are cached.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
         from rallycut.core.config import get_config
 
         self.config = config or TemporalProcessorConfig()
