@@ -169,7 +169,16 @@ def refine_boundaries(
 
     Returns:
         List of refined (start_time, end_time) tuples.
+
+    Raises:
+        ValueError: If fps or fine_stride is non-positive.
     """
+    # Validate parameters to prevent division by zero
+    if fps <= 0:
+        raise ValueError(f"fps must be positive, got {fps}")
+    if config.fine_stride <= 0:
+        raise ValueError(f"fine_stride must be positive, got {config.fine_stride}")
+
     if not segments or not config.enabled:
         return segments
 

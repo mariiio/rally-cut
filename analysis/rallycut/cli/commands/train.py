@@ -115,6 +115,11 @@ def extract_all_frames(
             if sample.video_id != current_video_id:
                 if cap is not None:
                     cap.release()
+                if sample.video_id not in video_paths:
+                    raise KeyError(
+                        f"Video ID '{sample.video_id}' not found in video_paths. "
+                        f"Available IDs: {list(video_paths.keys())[:5]}..."
+                    )
                 video_path = video_paths[sample.video_id]
                 cap = cv2.VideoCapture(str(video_path))
                 if not cap.isOpened():

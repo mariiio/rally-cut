@@ -8,6 +8,7 @@ false positives and processing time.
 
 import argparse
 import csv
+import hashlib
 import itertools
 import json
 import sys
@@ -302,8 +303,6 @@ class SweepRunner:
         resume_from: Path | None = None,
     ) -> list[SweepResult]:
         """Run the full parameter sweep."""
-        import hashlib
-
         results = []
         completed_hashes = set()
 

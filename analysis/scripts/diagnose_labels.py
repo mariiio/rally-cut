@@ -134,10 +134,8 @@ def main():
 
             # Find window indices around rally start
             start_frame = int(rally.start_ms / 1000 * fps)
-            end_frame = int(rally.end_ms / 1000 * fps)
 
             start_window = start_frame // stride
-            _end_window = end_frame // stride  # Computed but not used
 
             # Show windows around start boundary
             window_range = range(max(0, start_window - 2), min(len(labels), start_window + 3))

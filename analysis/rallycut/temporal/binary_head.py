@@ -28,6 +28,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Threshold search range for finding best classification threshold
+# (start, stop, step) for np.arange
+THRESHOLD_SEARCH_RANGE = (0.1, 0.9, 0.05)
+
 
 @dataclass
 class BinaryHeadConfig:
@@ -356,6 +360,7 @@ def find_best_threshold(
     y_true: np.ndarray,
     y_prob: np.ndarray,
     metric: str = "f1",
+    search_range: tuple[float, float, float] | None = None,
 ) -> tuple[float, float]:
     """Find threshold that maximizes the given metric.
 
@@ -363,14 +368,18 @@ def find_best_threshold(
         y_true: Ground truth labels.
         y_prob: Predicted probabilities.
         metric: Metric to optimize ("f1", "precision", "recall").
+        search_range: (start, stop, step) for threshold search. Uses default if None.
 
     Returns:
         Tuple of (best_threshold, best_metric_value).
     """
+    if search_range is None:
+        search_range = THRESHOLD_SEARCH_RANGE
+
     best_threshold = 0.5
     best_value = 0.0
 
-    for threshold in np.arange(0.1, 0.9, 0.05):
+    for threshold in np.arange(*search_range):
         metrics = compute_metrics(y_true, y_prob, threshold)
         if metrics[metric] > best_value:
             best_value = metrics[metric]
@@ -752,6 +761,14 @@ def collate_sequences(
     Returns:
         Tuple of (padded_features, padded_labels, lengths).
     """
+    if not batch:
+        # Return empty tensors with proper shapes for empty batch
+        return (
+            torch.zeros(0, 0, 768),  # features: (0, 0, feature_dim)
+            torch.zeros(0, 0),  # labels: (0, 0)
+            torch.tensor([], dtype=torch.long),  # lengths: (0,)
+        )
+
     features, labels = zip(*batch)
     lengths = torch.tensor([len(f) for f in features])
 
@@ -945,6 +962,8 @@ def train_with_smoothing(
 
         with torch.no_grad():
             for features, labels, lengths in val_loader:
+                if len(lengths) == 0:
+                    continue
                 features = features.to(device)
                 output = model(features)
                 probs = output["probs"].squeeze(0).cpu().numpy()

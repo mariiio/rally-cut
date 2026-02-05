@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -24,6 +25,8 @@ from rallycut.core.video import Video
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -155,8 +158,11 @@ class AnalysisCache:
         try:
             data = json.loads(cache_path.read_text())
             return CachedAnalysis.from_dict(data)
-        except (json.JSONDecodeError, KeyError, ValueError):
-            # Invalid cache file - remove it
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            # Invalid cache file - log and remove it
+            logger.warning(
+                "Removing corrupted cache file %s: %s", cache_path, type(e).__name__
+            )
             cache_path.unlink(missing_ok=True)
             return None
 

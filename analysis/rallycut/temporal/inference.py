@@ -33,6 +33,10 @@ class TemporalInferenceConfig:
     # Stride
     coarse_stride: int = 48
 
+    # Chunking for long videos
+    chunk_size: int = 500  # Max windows per chunk
+    chunk_overlap: int = 50  # Overlap between chunks
+
     # Anti-overmerge
     max_rally_duration_seconds: float = 60.0
     internal_no_rally_threshold: float = 0.4
@@ -138,8 +142,8 @@ def run_inference(
     model: nn.Module,
     features: np.ndarray,
     device: str = "cpu",
-    chunk_size: int = 500,
-    chunk_overlap: int = 50,
+    chunk_size: int | None = None,
+    chunk_overlap: int | None = None,
 ) -> tuple[list[int], list[float]]:
     """Run inference on features with chunking for long videos.
 
@@ -147,12 +151,18 @@ def run_inference(
         model: Trained temporal model.
         features: Feature array of shape (num_windows, feature_dim).
         device: Device for inference.
-        chunk_size: Max windows per chunk.
-        chunk_overlap: Overlap between chunks.
+        chunk_size: Max windows per chunk. Uses TemporalInferenceConfig default if None.
+        chunk_overlap: Overlap between chunks. Uses TemporalInferenceConfig default if None.
 
     Returns:
         Tuple of (predictions, probabilities).
     """
+    # Use defaults from config if not specified
+    defaults = TemporalInferenceConfig()
+    if chunk_size is None:
+        chunk_size = defaults.chunk_size
+    if chunk_overlap is None:
+        chunk_overlap = defaults.chunk_overlap
     num_windows = len(features)
 
     if num_windows == 0:
@@ -209,7 +219,8 @@ def run_inference(
         all_preds[start:end] += chunk_preds
         all_counts[start:end] += 1
 
-    # Average overlapping regions
+    # Average overlapping regions (protect against division by zero)
+    all_counts = np.maximum(all_counts, 1)
     all_probs = all_probs / all_counts
     avg_preds = all_preds / all_counts
     final_preds = (avg_preds > 0.5).astype(int)

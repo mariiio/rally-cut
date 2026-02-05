@@ -348,8 +348,17 @@ def subsample_features(
 
     Returns:
         Subsampled features array.
+
+    Raises:
+        ValueError: If coarse_stride < fine_stride (cannot upsample).
     """
-    if coarse_stride <= fine_stride:
+    if coarse_stride < fine_stride:
+        raise ValueError(
+            f"Cannot subsample: coarse_stride ({coarse_stride}) < fine_stride ({fine_stride}). "
+            "Subsampling requires coarse_stride >= fine_stride."
+        )
+
+    if coarse_stride == fine_stride:
         return features
 
     ratio = coarse_stride // fine_stride
