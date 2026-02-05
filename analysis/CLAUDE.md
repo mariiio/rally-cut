@@ -14,11 +14,11 @@ Volleyball video analysis CLI. Uses ML (VideoMAE) to detect game states and remo
 # Core commands (binary head + decoder is default when features cached)
 uv run rallycut cut <video.mp4>                 # Auto-selects best pipeline
 uv run rallycut cut <video.mp4> --heuristics    # Force heuristics (57% F1)
-uv run rallycut cut <video.mp4> --binary-head   # Force binary head (74% F1)
+uv run rallycut cut <video.mp4> --binary-head   # Force binary head (79% F1 at IoU=0.4)
 uv run rallycut cut <video.mp4> --model beach   # Use beach volleyball model
 uv run rallycut profile <video.mp4>             # Performance profiling
 
-# One-time feature extraction (enables 74% F1 pipeline)
+# One-time feature extraction (enables 79% F1 pipeline at IoU=0.4)
 uv run rallycut train extract-features --stride 48  # Required for binary head
 
 # Useful options for cut
@@ -79,7 +79,7 @@ uv run rallycut train list-remote                     # List datasets backed up 
 # - Resumes from latest checkpoint automatically
 
 # Temporal model training (DEPRECATED - use binary head instead)
-# Binary head achieves 74% F1 vs temporal's 65% F1
+# Binary head achieves 79% F1 (IoU=0.4) vs temporal's 65% F1
 # uv run rallycut train temporal --model v1 --epochs 50
 
 # Binary head training (recommended)
@@ -90,7 +90,7 @@ uv run rallycut train binary-head --epochs 50         # Train binary head classi
 
 # Evaluation
 uv run rallycut evaluate                              # Evaluate (auto-selects binary head if features cached)
-uv run rallycut evaluate --binary-head                # Force binary head evaluation (74% F1)
+uv run rallycut evaluate --binary-head                # Force binary head evaluation (79% F1 at IoU=0.4)
 uv run rallycut evaluate --heuristics                 # Force heuristics evaluation (57% F1)
 uv run rallycut evaluate --model beach --iou 0.5      # Evaluate beach model
 
@@ -170,7 +170,7 @@ Three detection pipelines are available, with binary head + decoder as the recom
 
 | Pipeline | F1 (IoU=0.5) | F1 (IoU=0.4) | Overmerge | Command |
 |----------|--------------|--------------|-----------|---------|
-| Binary Head + Decoder (default) | 74% | 81% | 0% | `rallycut cut video.mp4` |
+| Binary Head + Decoder (default) | 73% | 79% | 0% | `rallycut cut video.mp4` |
 | Heuristics (fallback) | 57% | - | ~10% | `rallycut cut video.mp4 --heuristics` |
 | Temporal (deprecated) | 65% | - | ~5% | `rallycut cut video.mp4 --experimental-temporal` |
 
@@ -182,7 +182,7 @@ Three detection pipelines are available, with binary head + decoder as the recom
 3. If `--heuristics` flag: use heuristics
 4. Auto: use binary head if features cached and model exists, else heuristics
 
-**Enabling 74% F1 pipeline:**
+**Enabling 79% F1 pipeline (IoU=0.4):**
 ```bash
 # One-time feature extraction
 uv run rallycut train extract-features --stride 48
