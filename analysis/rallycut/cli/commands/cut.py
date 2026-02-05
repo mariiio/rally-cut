@@ -246,7 +246,7 @@ def cut(  # noqa: C901
     binary_head: bool = typer.Option(
         False,
         "--binary-head",
-        help="Force binary head + decoder (70%% F1). Auto-enabled when features cached.",
+        help="Force binary head + decoder (84%% F1). Auto-enabled when features cached.",
     ),
     binary_head_model: Path | None = typer.Option(
         None,
@@ -345,13 +345,13 @@ def cut(  # noqa: C901
 
         warnings.warn(
             "--experimental-temporal is deprecated and will be removed in a future release. "
-            "Use binary head + decoder instead (74% F1 vs 65% F1).",
+            "Use binary head + decoder instead (84% F1 vs 65% F1).",
             DeprecationWarning,
             stacklevel=2,
         )
         console.print(
             "[yellow]Warning: --experimental-temporal is deprecated. "
-            "Binary head + decoder achieves 74% F1 vs temporal model's 65% F1.[/yellow]"
+            "Binary head + decoder achieves 84% F1 vs temporal model's 65% F1.[/yellow]"
         )
 
     # Create cutter
@@ -378,7 +378,7 @@ def cut(  # noqa: C901
 
     # Show pipeline info
     if binary_head:
-        console.print("[bold green]Binary head + decoder enabled (74% F1)[/bold green]")
+        console.print("[bold green]Binary head + decoder enabled (84% F1)[/bold green]")
     elif experimental_temporal:
         console.print(
             f"[yellow]Temporal model enabled (deprecated):[/yellow] {temporal_version}"

@@ -2,7 +2,7 @@
 
 This module provides:
 - Feature extraction from VideoMAE encoder
-- Binary head classifier with deterministic decoder (recommended, 74% F1)
+- Binary head classifier with deterministic decoder (recommended, 84% F1 at IoU=0.4)
 - Boundary refinement using fine-stride features
 - Feature caching for efficient training and inference
 - Training pipeline for temporal models
