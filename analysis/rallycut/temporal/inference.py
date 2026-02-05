@@ -26,14 +26,18 @@ if TYPE_CHECKING:
 
 @dataclass
 class BoundaryRefinementConfig:
-    """Configuration for gradient-based boundary refinement."""
+    """Configuration for boundary refinement.
+
+    Start boundaries use earliest-threshold-crossing for precision.
+    End boundaries use last-threshold-crossing for completeness.
+    Extension is capped to prevent overmerge.
+    """
 
     enabled: bool = True
-    search_window_seconds: float = 2.0  # ±2s search around boundary
-    gradient_threshold: float = 0.02  # Min gradient magnitude for valid edge
+    search_window_seconds: float = 2.0  # Search window around boundary
     smoothing_sigma: float = 1.0  # Gaussian smoothing sigma
-    transition_zone_low: float = 0.2  # Min prob for valid edge
-    transition_zone_high: float = 0.8  # Max prob for valid edge
+    start_threshold: float = 0.5  # Threshold for detecting rally (aligned with decoder)
+    max_extension_seconds: float = 0.5  # Max allowed extension beyond coarse boundary
 
 
 @dataclass
@@ -410,15 +414,17 @@ def apply_anti_overmerge_segments(
     return result
 
 
-def _refine_boundary_gradient(
+def _refine_start_boundary(
     fine_probs: np.ndarray,
     coarse_boundary_time: float,
     fps: float,
     fine_stride: int,
     config: BoundaryRefinementConfig,
-    is_start: bool,
 ) -> tuple[float, bool]:
-    """Refine a single boundary using gradient-based edge detection.
+    """Refine start boundary using earliest-threshold-crossing.
+
+    Searches for the first threshold crossing, allowing limited extension
+    earlier than coarse boundary (capped by max_extension_seconds).
 
     Args:
         fine_probs: Array of fine-stride probabilities.
@@ -426,7 +432,6 @@ def _refine_boundary_gradient(
         fps: Video frames per second.
         fine_stride: Fine stride in frames.
         config: Boundary refinement configuration.
-        is_start: True for start boundary (rising edge), False for end (falling edge).
 
     Returns:
         Tuple of (refined_time, was_refined).
@@ -434,51 +439,77 @@ def _refine_boundary_gradient(
     window_duration = fine_stride / fps
     boundary_idx = int(coarse_boundary_time / window_duration)
     search_radius = int(config.search_window_seconds / window_duration)
+    max_extension_windows = int(config.max_extension_seconds / window_duration)
 
-    # Asymmetric search: more room in direction of rally interior
-    if is_start:
-        start_idx = max(0, boundary_idx - search_radius)
-        end_idx = min(len(fine_probs), boundary_idx + search_radius // 2)
-    else:
-        start_idx = max(0, boundary_idx - search_radius // 2)
-        end_idx = min(len(fine_probs), boundary_idx + search_radius)
+    # Search window: limited extension before, full search after
+    start_idx = max(0, boundary_idx - max_extension_windows)
+    end_idx = min(len(fine_probs), boundary_idx + search_radius)
 
     segment = fine_probs[start_idx:end_idx]
-    if len(segment) < 3:
+    if len(segment) < 2:
         return coarse_boundary_time, False
 
-    # Smooth and compute gradient
+    # Smooth to reduce noise
     smoothed = gaussian_filter1d(segment, sigma=config.smoothing_sigma)
-    gradient = np.gradient(smoothed)
 
-    # Find valid edge candidates in transition zone
-    # Select the one closest to coarse boundary (conservative refinement)
-    coarse_local_idx = boundary_idx - start_idx  # Coarse boundary in local coordinates
+    # Find earliest threshold crossing
+    for i, prob in enumerate(smoothed):
+        if prob >= config.start_threshold:
+            refined_idx = start_idx + i
+            refined_time = refined_idx * window_duration
+            if refined_time != coarse_boundary_time:
+                return refined_time, True
+            return coarse_boundary_time, False
 
-    if is_start:
-        # Rising edge: positive gradient in transition zone
-        candidates = [
-            i
-            for i in range(len(gradient))
-            if config.transition_zone_low <= smoothed[i] <= config.transition_zone_high
-            and gradient[i] > config.gradient_threshold
-        ]
-        if candidates:
-            best_idx = min(candidates, key=lambda i: abs(i - coarse_local_idx))
-            refined_idx = start_idx + best_idx
-            return refined_idx * window_duration, True
-    else:
-        # Falling edge: negative gradient in transition zone
-        candidates = [
-            i
-            for i in range(len(gradient))
-            if config.transition_zone_low <= smoothed[i] <= config.transition_zone_high
-            and gradient[i] < -config.gradient_threshold
-        ]
-        if candidates:
-            best_idx = min(candidates, key=lambda i: abs(i - coarse_local_idx))
-            refined_idx = start_idx + best_idx + 1  # +1 for end boundary
-            return refined_idx * window_duration, True
+    return coarse_boundary_time, False
+
+
+def _refine_end_boundary(
+    fine_probs: np.ndarray,
+    coarse_boundary_time: float,
+    fps: float,
+    fine_stride: int,
+    config: BoundaryRefinementConfig,
+) -> tuple[float, bool]:
+    """Refine end boundary using last-threshold-crossing.
+
+    Searches for the last threshold crossing, allowing limited extension
+    later than coarse boundary (capped by max_extension_seconds).
+
+    Args:
+        fine_probs: Array of fine-stride probabilities.
+        coarse_boundary_time: Coarse boundary time in seconds.
+        fps: Video frames per second.
+        fine_stride: Fine stride in frames.
+        config: Boundary refinement configuration.
+
+    Returns:
+        Tuple of (refined_time, was_refined).
+    """
+    window_duration = fine_stride / fps
+    boundary_idx = int(coarse_boundary_time / window_duration)
+    search_radius = int(config.search_window_seconds / window_duration)
+    max_extension_windows = int(config.max_extension_seconds / window_duration)
+
+    # Search window: full search before, limited extension after
+    start_idx = max(0, boundary_idx - search_radius)
+    end_idx = min(len(fine_probs), boundary_idx + max_extension_windows + 1)
+
+    segment = fine_probs[start_idx:end_idx]
+    if len(segment) < 2:
+        return coarse_boundary_time, False
+
+    # Smooth to reduce noise
+    smoothed = gaussian_filter1d(segment, sigma=config.smoothing_sigma)
+
+    # Find last threshold crossing (search backwards)
+    for i in range(len(smoothed) - 1, -1, -1):
+        if smoothed[i] >= config.start_threshold:
+            refined_idx = start_idx + i + 1  # +1 for end boundary
+            refined_time = refined_idx * window_duration
+            if refined_time != coarse_boundary_time:
+                return refined_time, True
+            return coarse_boundary_time, False
 
     return coarse_boundary_time, False
 
@@ -492,11 +523,11 @@ def refine_boundaries(
     coarse_stride: int,
     config: BoundaryRefinementConfig | None = None,
 ) -> list[RallySegment]:
-    """Refine segment boundaries using gradient-based edge detection.
+    """Refine segment boundaries using fine-stride probabilities.
 
-    Uses Gaussian smoothing and gradient computation to find the steepest
-    rising/falling edges at segment boundaries, improving temporal precision
-    from coarse-stride (~1.5s) to fine-stride (~0.3s) accuracy.
+    Start boundaries use earliest-threshold-crossing for precision.
+    End boundaries use last-threshold-crossing for completeness.
+    Both use Gaussian smoothing to reduce noise.
 
     Args:
         segments: List of segments detected at coarse stride.
@@ -517,24 +548,22 @@ def refine_boundaries(
     refined: list[RallySegment] = []
 
     for segment in segments:
-        # Refine start boundary (rising edge)
-        refined_start, start_was_refined = _refine_boundary_gradient(
+        # Refine start boundary (earliest threshold crossing)
+        refined_start, start_was_refined = _refine_start_boundary(
             fine_probs_arr,
             segment.start_time,
             fps,
             fine_stride,
             config,
-            is_start=True,
         )
 
-        # Refine end boundary (falling edge)
-        refined_end, end_was_refined = _refine_boundary_gradient(
+        # Refine end boundary (last threshold crossing)
+        refined_end, end_was_refined = _refine_end_boundary(
             fine_probs_arr,
             segment.end_time,
             fps,
             fine_stride,
             config,
-            is_start=False,
         )
 
         # Ensure valid segment (min 0.5 second)
