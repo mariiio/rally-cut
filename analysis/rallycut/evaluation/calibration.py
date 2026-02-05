@@ -21,7 +21,7 @@ class CalibrationMetrics:
     brier_score: float
     expected_calibration_error: float  # ECE
     max_calibration_error: float  # MCE
-    reliability_diagram: dict[str, list[float]]
+    reliability_diagram: dict[str, list[float] | list[int]]
 
 
 def compute_brier_score(

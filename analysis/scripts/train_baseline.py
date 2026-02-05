@@ -5,24 +5,25 @@ This tests whether the extracted features are discriminative for rally detection
 without any temporal modeling. If AUC is near 0.5, features/labels are misaligned.
 """
 
-import numpy as np
 from pathlib import Path
+
+import numpy as np
 from sklearn.linear_model import LogisticRegression
-from sklearn.neural_network import MLPClassifier
 from sklearn.metrics import (
-    roc_auc_score,
     average_precision_score,
-    confusion_matrix,
     classification_report,
+    confusion_matrix,
     f1_score,
+    roc_auc_score,
 )
+from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
 
+from rallycut.core.proxy import ProxyGenerator
 from rallycut.evaluation.ground_truth import load_evaluation_videos
 from rallycut.temporal.features import FeatureCache
 from rallycut.temporal.training import video_level_split
 from rallycut.training.sampler import generate_sequence_labels
-from rallycut.core.proxy import ProxyGenerator
 
 
 def main():
@@ -42,8 +43,8 @@ def main():
     print(f"Train: {len(train_videos)} videos, Val: {len(val_videos)} videos")
 
     # Collect features and labels
-    X_train, y_train = [], []
-    X_val, y_val = [], []
+    X_train, y_train = [], []  # noqa: N806
+    X_val, y_val = [], []  # noqa: N806
 
     for video in train_videos:
         cached = cache.get(video.content_hash, stride)
@@ -90,12 +91,12 @@ def main():
         X_val.extend(features)
         y_val.extend(labels)
 
-    X_train = np.array(X_train)
+    X_train = np.array(X_train)  # noqa: N806
     y_train = np.array(y_train)
-    X_val = np.array(X_val)
+    X_val = np.array(X_val)  # noqa: N806
     y_val = np.array(y_val)
 
-    print(f"\nData shapes:")
+    print("\nData shapes:")
     print(f"  Train: {X_train.shape}, labels: {y_train.shape}")
     print(f"  Val: {X_val.shape}, labels: {y_val.shape}")
     print(f"  Train class balance: NO_RALLY={1-y_train.mean():.1%}, RALLY={y_train.mean():.1%}")
@@ -103,8 +104,8 @@ def main():
 
     # Standardize features
     scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_val_scaled = scaler.transform(X_val)
+    X_train_scaled = scaler.fit_transform(X_train)  # noqa: N806
+    X_val_scaled = scaler.transform(X_val)  # noqa: N806
 
     # Train Logistic Regression
     print("\n" + "=" * 70)

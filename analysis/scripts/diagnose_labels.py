@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Diagnostic script to verify label alignment for temporal model training."""
 
-import numpy as np
 from pathlib import Path
-from rallycut.evaluation.ground_truth import load_evaluation_videos
-from rallycut.training.sampler import generate_sequence_labels
-from rallycut.temporal.features import FeatureCache
+
 from rallycut.core.proxy import ProxyGenerator
+from rallycut.evaluation.ground_truth import load_evaluation_videos
+from rallycut.temporal.features import FeatureCache
+from rallycut.training.sampler import generate_sequence_labels
 
 
 def main():
@@ -26,7 +26,7 @@ def main():
     print("1. WINDOW TIMESTAMP COMPUTATION CHECK")
     print("=" * 70)
     print(f"\nParameters: stride={stride}, window_size={window_size}")
-    print(f"At 30fps:")
+    print("At 30fps:")
     print(f"  - Window duration: {window_size/30*1000:.0f}ms ({window_size/30:.2f}s)")
     print(f"  - Stride duration: {stride/30*1000:.0f}ms ({stride/30:.2f}s)")
     print(f"  - Windows per minute: {60*30/stride:.1f}")
@@ -137,7 +137,7 @@ def main():
             end_frame = int(rally.end_ms / 1000 * fps)
 
             start_window = start_frame // stride
-            end_window = end_frame // stride
+            _end_window = end_frame // stride  # Computed but not used
 
             # Show windows around start boundary
             window_range = range(max(0, start_window - 2), min(len(labels), start_window + 3))

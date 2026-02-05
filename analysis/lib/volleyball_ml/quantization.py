@@ -18,6 +18,10 @@ Usage:
 """
 
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import onnxruntime as ort
 
 # Check for quantization support
 try:
@@ -98,7 +102,7 @@ def quantize_onnx_model(
 def load_quantized_model(
     onnx_path: Path | str,
     device: str = "cpu",
-):
+) -> "ort.InferenceSession":
     """
     Load a quantized ONNX model with optimal execution providers.
 
@@ -155,6 +159,9 @@ class QuantizedClassifier:
     FRAME_WINDOW = 16
     IMAGE_SIZE = 224
     LABEL_MAP = {0: "NO_PLAY", 1: "PLAY", 2: "SERVICE"}
+
+    _session: Any  # ort.InferenceSession or None
+    _processor: Any  # VideoMAEImageProcessor or None
 
     def __init__(
         self,

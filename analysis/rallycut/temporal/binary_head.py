@@ -124,7 +124,8 @@ class BinaryHead(nn.Module):
         Returns:
             (batch,) logits (before sigmoid)
         """
-        return self.classifier(features).squeeze(-1)
+        result: torch.Tensor = self.classifier(features).squeeze(-1)
+        return result
 
     def predict_proba(self, features: torch.Tensor) -> torch.Tensor:
         """Get rally probabilities.
@@ -485,8 +486,8 @@ def train_binary_head(
 
         # Validation
         model.eval()
-        all_probs = []
-        all_labels = []
+        all_probs: list[float] = []
+        all_labels: list[int] = []
 
         with torch.no_grad():
             for features, labels in val_loader:
@@ -606,8 +607,10 @@ class BinaryHeadWithSmoothing(nn.Module):
     def _init_smoother(self, kernel_size: int) -> None:
         """Initialize smoother to uniform average."""
         with torch.no_grad():
-            self.smoother.weight.fill_(1.0 / kernel_size)
-            self.smoother.bias.fill_(0.0)
+            if self.smoother.weight is not None:
+                self.smoother.weight.fill_(1.0 / kernel_size)
+            if self.smoother.bias is not None:
+                self.smoother.bias.fill_(0.0)
 
     def forward(
         self,
