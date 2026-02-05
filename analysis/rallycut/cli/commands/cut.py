@@ -223,10 +223,15 @@ def cut(  # noqa: C901
         "--model", "-m",
         help="Model variant: 'indoor' (original) or 'beach' (fine-tuned with beach heuristics)",
     ),
-    temporal: bool = typer.Option(
+    heuristics: bool = typer.Option(
         False,
-        "--temporal",
-        help="Use trained temporal model for post-processing (ConvCRF/BiLSTM instead of heuristics)",
+        "--heuristics",
+        help="Force heuristics pipeline (57%% F1) instead of binary head",
+    ),
+    experimental_temporal: bool = typer.Option(
+        False,
+        "--experimental-temporal",
+        help="[DEPRECATED] Use temporal model for post-processing (use binary head instead)",
     ),
     temporal_model_path: Path | None = typer.Option(
         None,
@@ -241,12 +246,17 @@ def cut(  # noqa: C901
     binary_head: bool = typer.Option(
         False,
         "--binary-head",
-        help="Use binary head + deterministic decoder for beach volleyball",
+        help="Force binary head + decoder (80%% F1). Auto-enabled when features cached.",
     ),
     binary_head_model: Path | None = typer.Option(
         None,
         "--binary-head-model",
         help="Path to binary head model (default: weights/binary_head/best_binary_head.pt)",
+    ),
+    refine: bool = typer.Option(
+        False,
+        "--refine",
+        help="[EXPERIMENTAL] Enable boundary refinement using fine-stride features",
     ),
 ) -> None:
     """
@@ -329,6 +339,21 @@ def cut(  # noqa: C901
         console.print("[dim]Profiling enabled[/dim]")
         console.print()
 
+    # Show deprecation warnings
+    if experimental_temporal:
+        import warnings
+
+        warnings.warn(
+            "--experimental-temporal is deprecated and will be removed in a future release. "
+            "Use binary head + decoder instead (80% F1 vs 65% F1).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        console.print(
+            "[yellow]Warning: --experimental-temporal is deprecated. "
+            "Binary head + decoder achieves 80% F1 vs temporal model's 65% F1.[/yellow]"
+        )
+
     # Create cutter
     cutter = VideoCutter(
         device=device,
@@ -342,17 +367,26 @@ def cut(  # noqa: C901
         auto_stride=auto_stride,
         rally_continuation_seconds=rally_continuation,
         model_variant=model,
-        use_temporal_model=temporal,
+        use_temporal_model=experimental_temporal,
         temporal_model_path=temporal_model_path,
         temporal_model_version=temporal_version,
         use_binary_head_decoder=binary_head,
         binary_head_model_path=binary_head_model,
+        use_heuristics=heuristics,
+        boundary_refinement=refine,
     )
 
+    # Show pipeline info
     if binary_head:
-        console.print("[bold green]Binary head + deterministic decoder enabled[/bold green]")
-    elif temporal:
-        console.print(f"[bold green]Temporal model enabled:[/bold green] {temporal_version}")
+        console.print("[bold green]Binary head + decoder enabled (80% F1)[/bold green]")
+    elif experimental_temporal:
+        console.print(
+            f"[yellow]Temporal model enabled (deprecated):[/yellow] {temporal_version}"
+        )
+    elif heuristics:
+        console.print("[dim]Heuristics pipeline (57% F1)[/dim]")
+    else:
+        console.print("[dim]Auto-selecting pipeline based on cached features...[/dim]")
 
     # Progress tracking
     with Progress(

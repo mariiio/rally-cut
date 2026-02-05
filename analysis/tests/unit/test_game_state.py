@@ -1,8 +1,9 @@
 """Tests for game state classifier and segment merging."""
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
+
 import numpy as np
+import pytest
 
 from rallycut.core.models import GameState, GameStateResult, TimeSegment
 
@@ -37,9 +38,10 @@ class TestGameStateClassifierMocked:
     @patch("rallycut.analysis.game_state.GameStateAnalyzer._get_classifier")
     def test_analyze_video_progress(self, mock_get_classifier):
         """Test progress callback during analysis."""
+        from pathlib import Path
+
         from rallycut.analysis.game_state import GameStateAnalyzer
         from rallycut.core.models import VideoInfo
-        from pathlib import Path
 
         # Mock classifier with batch method
         # Returns: (state, confidence, no_play_prob, play_prob, service_prob)

@@ -2,12 +2,16 @@
 
 This module provides:
 - Feature extraction from VideoMAE encoder
-- Temporal models (v1: learned smoothing, v2: 1D Conv + CRF, v3: BiLSTM + CRF)
-- Binary head classifier with deterministic decoder
+- Binary head classifier with deterministic decoder (recommended, 80% F1)
+- Boundary refinement using fine-stride features
 - Feature caching for efficient training and inference
 - Training pipeline for temporal models
 - Inference with anti-overmerge constraints
 - Integration with main video processing pipeline
+
+**Deprecated**: Temporal models (v1/v2/v3) are deprecated in favor of
+Binary Head + Deterministic Decoder. They remain available via
+``--experimental-temporal`` flag but are no longer recommended.
 """
 
 from rallycut.temporal.binary_head import (
@@ -16,6 +20,10 @@ from rallycut.temporal.binary_head import (
     BinaryHeadWithSmoothing,
     SmoothingConfig,
     SmoothingResult,
+)
+from rallycut.temporal.boundary_refinement import (
+    BoundaryRefinementConfig,
+    refine_boundaries,
 )
 from rallycut.temporal.deterministic_decoder import (
     DecoderConfig,
@@ -65,6 +73,9 @@ from rallycut.temporal.training import (
 )
 
 __all__ = [
+    # Boundary refinement
+    "BoundaryRefinementConfig",
+    "refine_boundaries",
     # Binary head
     "BinaryHead",
     "BinaryHeadConfig",

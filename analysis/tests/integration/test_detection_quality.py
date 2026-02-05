@@ -5,11 +5,11 @@ and validates that detected rallies match expected rally times.
 """
 
 import json
-import pytest
 from pathlib import Path
 
-from rallycut.processing.cutter import VideoCutter
+import pytest
 
+from rallycut.processing.cutter import VideoCutter
 
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 GROUND_TRUTH_PATH = FIXTURES_DIR / "ground_truth.json"
@@ -161,7 +161,7 @@ class TestDetectionQuality:
                 })
 
         # Report results
-        print(f"\n=== Detection Quality Report ===")
+        print("\n=== Detection Quality Report ===")
         print(f"Expected rallies: {len(expected_rallies)}")
         print(f"Detected segments: {len(detected_segments)}")
         print(f"Matches: {len(matches)}")
@@ -208,7 +208,7 @@ class TestDetectionQuality:
 
         unmatched_count = len(detected_segments) - len(matched_indices)
 
-        print(f"\n=== Precision Report ===")
+        print("\n=== Precision Report ===")
         print(f"Detected segments: {len(detected_segments)}")
         print(f"Matched to expected: {len(matched_indices)}")
         print(f"Extra (false positives): {unmatched_count}")
@@ -278,7 +278,7 @@ class TestDetectionQualityMatch2:
                     "reason": "No overlapping segment found",
                 })
 
-        print(f"\n=== Detection Quality Report (Match 2) ===")
+        print("\n=== Detection Quality Report (Match 2) ===")
         print(f"Expected rallies: {len(expected_rallies)}")
         print(f"Detected segments: {len(detected_segments)}")
         print(f"Matches: {len(matches)}")
@@ -323,7 +323,7 @@ class TestDetectionQualityMatch2:
 
         unmatched_count = len(detected_segments) - len(matched_indices)
 
-        print(f"\n=== Precision Report (Match 2) ===")
+        print("\n=== Precision Report (Match 2) ===")
         print(f"Detected segments: {len(detected_segments)}")
         print(f"Matched to expected: {len(matched_indices)}")
         print(f"Extra (false positives): {unmatched_count}")
@@ -391,7 +391,7 @@ class TestDetectionQualityMatch3:
                     "reason": "No overlapping segment found",
                 })
 
-        print(f"\n=== Detection Quality Report (Match 3) ===")
+        print("\n=== Detection Quality Report (Match 3) ===")
         print(f"Expected rallies: {len(expected_rallies)}")
         print(f"Detected segments: {len(detected_segments)}")
         print(f"Matches: {len(matches)}")
@@ -436,7 +436,7 @@ class TestDetectionQualityMatch3:
 
         unmatched_count = len(detected_segments) - len(matched_indices)
 
-        print(f"\n=== Precision Report (Match 3) ===")
+        print("\n=== Precision Report (Match 3) ===")
         print(f"Detected segments: {len(detected_segments)}")
         print(f"Matched to expected: {len(matched_indices)}")
         print(f"Extra (false positives): {unmatched_count}")
