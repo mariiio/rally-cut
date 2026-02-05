@@ -261,7 +261,6 @@ def _apply_temporal_model(
     """Apply temporal model to cached analysis results.
 
     Uses pre-extracted features from the specified feature cache directory.
-    Includes gradient-based boundary refinement using fine-stride features.
 
     Args:
         cached: Cached analysis with raw_results
@@ -291,11 +290,6 @@ def _apply_temporal_model(
 
     features, metadata = cached_data
 
-    # Load fine features for boundary refinement (stride 16)
-    fine_stride = 16
-    fine_cached = feature_cache.get(content_hash, fine_stride)
-    fine_features = fine_cached[0] if fine_cached is not None else None
-
     # Ensure features match raw_results length
     raw_results = cached.raw_results
     min_len = min(len(features), len(raw_results))
@@ -304,17 +298,15 @@ def _apply_temporal_model(
     # Create inference config
     config = TemporalInferenceConfig(
         coarse_stride=stride,
-        fine_stride=fine_stride,
         device="cpu",
     )
 
-    # Run full temporal inference with boundary refinement
+    # Run temporal inference
     result = run_temporal_inference(
         features=features,
         metadata=metadata,
         model=model,  # type: ignore[arg-type]
         config=config,
-        fine_features=fine_features,
     )
 
     return result.segments

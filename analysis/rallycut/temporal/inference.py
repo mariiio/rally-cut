@@ -2,7 +2,6 @@
 
 Provides functions for:
 - Running temporal models on cached features
-- Boundary refinement using fine-stride features
 - Anti-overmerge constraints
 - Integration with the existing rally detection pipeline
 """
@@ -15,32 +14,12 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
-from scipy.ndimage import gaussian_filter1d
 
 if TYPE_CHECKING:
     import torch.nn as nn
 
     from rallycut.temporal.deterministic_decoder import DecoderConfig, DecoderResult
     from rallycut.temporal.features import FeatureMetadata
-
-
-@dataclass
-class BoundaryRefinementConfig:
-    """Configuration for boundary refinement.
-
-    Start boundaries use earliest-threshold-crossing for precision.
-    End boundaries use last-threshold-crossing for completeness.
-    Extension is capped to prevent overmerge.
-
-    Disabled by default as evaluation shows minimal improvement over
-    coarse boundaries from the deterministic decoder.
-    """
-
-    enabled: bool = False
-    search_window_seconds: float = 2.0  # Search window around boundary
-    smoothing_sigma: float = 1.0  # Gaussian smoothing sigma
-    start_threshold: float = 0.5  # Threshold for detecting rally (aligned with decoder)
-    max_extension_seconds: float = 0.5  # Max allowed extension beyond coarse boundary
 
 
 @dataclass
@@ -51,12 +30,8 @@ class TemporalInferenceConfig:
     model_version: str = "v2"
     model_path: Path | None = None
 
-    # Stride/Refinement
-    fine_stride: int = 16  # Must match cached fine features
+    # Stride
     coarse_stride: int = 48
-    boundary_refinement: BoundaryRefinementConfig = field(
-        default_factory=BoundaryRefinementConfig
-    )
 
     # Anti-overmerge
     max_rally_duration_seconds: float = 60.0
@@ -75,8 +50,6 @@ class RallySegment:
     start_time: float
     end_time: float
     confidence: float
-    start_refined: bool = False
-    end_refined: bool = False
 
     @property
     def duration(self) -> float:
@@ -417,176 +390,6 @@ def apply_anti_overmerge_segments(
     return result
 
 
-def _refine_start_boundary(
-    fine_probs: np.ndarray,
-    coarse_boundary_time: float,
-    fps: float,
-    fine_stride: int,
-    config: BoundaryRefinementConfig,
-) -> tuple[float, bool]:
-    """Refine start boundary using earliest-threshold-crossing.
-
-    Searches for the first threshold crossing, allowing limited extension
-    earlier than coarse boundary (capped by max_extension_seconds).
-
-    Args:
-        fine_probs: Array of fine-stride probabilities.
-        coarse_boundary_time: Coarse boundary time in seconds.
-        fps: Video frames per second.
-        fine_stride: Fine stride in frames.
-        config: Boundary refinement configuration.
-
-    Returns:
-        Tuple of (refined_time, was_refined).
-    """
-    window_duration = fine_stride / fps
-    boundary_idx = int(coarse_boundary_time / window_duration)
-    search_radius = int(config.search_window_seconds / window_duration)
-    max_extension_windows = int(config.max_extension_seconds / window_duration)
-
-    # Search window: limited extension before, full search after
-    start_idx = max(0, boundary_idx - max_extension_windows)
-    end_idx = min(len(fine_probs), boundary_idx + search_radius)
-
-    segment = fine_probs[start_idx:end_idx]
-    if len(segment) < 2:
-        return coarse_boundary_time, False
-
-    # Smooth to reduce noise
-    smoothed = gaussian_filter1d(segment, sigma=config.smoothing_sigma)
-
-    # Find earliest threshold crossing
-    for i, prob in enumerate(smoothed):
-        if prob >= config.start_threshold:
-            refined_idx = start_idx + i
-            refined_time = refined_idx * window_duration
-            if refined_time != coarse_boundary_time:
-                return refined_time, True
-            return coarse_boundary_time, False
-
-    return coarse_boundary_time, False
-
-
-def _refine_end_boundary(
-    fine_probs: np.ndarray,
-    coarse_boundary_time: float,
-    fps: float,
-    fine_stride: int,
-    config: BoundaryRefinementConfig,
-) -> tuple[float, bool]:
-    """Refine end boundary using last-threshold-crossing.
-
-    Searches for the last threshold crossing, allowing limited extension
-    later than coarse boundary (capped by max_extension_seconds).
-
-    Args:
-        fine_probs: Array of fine-stride probabilities.
-        coarse_boundary_time: Coarse boundary time in seconds.
-        fps: Video frames per second.
-        fine_stride: Fine stride in frames.
-        config: Boundary refinement configuration.
-
-    Returns:
-        Tuple of (refined_time, was_refined).
-    """
-    window_duration = fine_stride / fps
-    boundary_idx = int(coarse_boundary_time / window_duration)
-    search_radius = int(config.search_window_seconds / window_duration)
-    max_extension_windows = int(config.max_extension_seconds / window_duration)
-
-    # Search window: full search before, limited extension after
-    start_idx = max(0, boundary_idx - search_radius)
-    end_idx = min(len(fine_probs), boundary_idx + max_extension_windows + 1)
-
-    segment = fine_probs[start_idx:end_idx]
-    if len(segment) < 2:
-        return coarse_boundary_time, False
-
-    # Smooth to reduce noise
-    smoothed = gaussian_filter1d(segment, sigma=config.smoothing_sigma)
-
-    # Find last threshold crossing (search backwards)
-    for i in range(len(smoothed) - 1, -1, -1):
-        if smoothed[i] >= config.start_threshold:
-            refined_idx = start_idx + i + 1  # +1 for end boundary
-            refined_time = refined_idx * window_duration
-            if refined_time != coarse_boundary_time:
-                return refined_time, True
-            return coarse_boundary_time, False
-
-    return coarse_boundary_time, False
-
-
-def refine_boundaries(
-    segments: list[RallySegment],
-    fine_probs: list[float],
-    coarse_probs: list[float],
-    fps: float,
-    fine_stride: int,
-    coarse_stride: int,
-    config: BoundaryRefinementConfig | None = None,
-) -> list[RallySegment]:
-    """Refine segment boundaries using fine-stride probabilities.
-
-    Start boundaries use earliest-threshold-crossing for precision.
-    End boundaries use last-threshold-crossing for completeness.
-    Both use Gaussian smoothing to reduce noise.
-
-    Args:
-        segments: List of segments detected at coarse stride.
-        fine_probs: Probabilities at fine stride.
-        coarse_probs: Probabilities at coarse stride (unused, kept for API compat).
-        fps: Video frames per second.
-        fine_stride: Fine stride in frames.
-        coarse_stride: Coarse stride in frames (unused, kept for API compat).
-        config: Boundary refinement configuration. Uses defaults if None.
-
-    Returns:
-        List of segments with refined boundaries.
-    """
-    if config is None:
-        config = BoundaryRefinementConfig()
-
-    fine_probs_arr = np.array(fine_probs)
-    refined: list[RallySegment] = []
-
-    for segment in segments:
-        # Refine start boundary (earliest threshold crossing)
-        refined_start, start_was_refined = _refine_start_boundary(
-            fine_probs_arr,
-            segment.start_time,
-            fps,
-            fine_stride,
-            config,
-        )
-
-        # Refine end boundary (last threshold crossing)
-        refined_end, end_was_refined = _refine_end_boundary(
-            fine_probs_arr,
-            segment.end_time,
-            fps,
-            fine_stride,
-            config,
-        )
-
-        # Ensure valid segment (min 0.5 second)
-        if refined_end > refined_start + 0.5:
-            refined.append(
-                RallySegment(
-                    start_time=refined_start,
-                    end_time=refined_end,
-                    confidence=segment.confidence,
-                    start_refined=start_was_refined,
-                    end_refined=end_was_refined,
-                )
-            )
-        else:
-            # Keep original if refinement failed
-            refined.append(segment)
-
-    return refined
-
-
 def load_binary_head_model(model_path: Path, device: str = "cpu") -> nn.Module:
     """Load trained binary head model.
 
@@ -639,7 +442,6 @@ def run_temporal_inference(
     metadata: FeatureMetadata,
     model: nn.Module,
     config: TemporalInferenceConfig,
-    fine_features: np.ndarray | None = None,
 ) -> TemporalInferenceResult:
     """Run full temporal inference pipeline.
 
@@ -648,12 +450,10 @@ def run_temporal_inference(
         metadata: Feature metadata.
         model: Trained temporal model.
         config: Inference configuration.
-        fine_features: Optional fine-stride features for boundary refinement.
 
     Returns:
         Inference result with segments and probabilities.
     """
-
     fps = metadata.fps
 
     # Run coarse inference
@@ -679,25 +479,6 @@ def run_temporal_inference(
         config.coarse_stride,
         config,
     )
-
-    # Boundary refinement (if enabled and fine features available)
-    if config.boundary_refinement.enabled and fine_features is not None:
-        # Run inference on fine features
-        fine_preds, fine_probs = run_inference(
-            model,
-            fine_features,
-            device=config.device,
-        )
-
-        segments = refine_boundaries(
-            segments,
-            fine_probs,
-            probs,
-            fps,
-            config.fine_stride,
-            config.coarse_stride,
-            config.boundary_refinement,
-        )
 
     return TemporalInferenceResult(
         segments=segments,

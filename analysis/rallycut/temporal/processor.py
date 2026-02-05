@@ -6,7 +6,7 @@ Integrates temporal models into the main inference pipeline.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,7 +19,6 @@ from rallycut.temporal.features import (
     extract_features_for_video,
 )
 from rallycut.temporal.inference import (
-    BoundaryRefinementConfig,
     RallySegment,
     TemporalInferenceConfig,
     TemporalInferenceResult,
@@ -44,13 +43,9 @@ class TemporalProcessorConfig:
 
     # Feature extraction
     feature_cache_dir: Path | None = None
-    fine_stride: int = 16  # Must match cached fine features
     coarse_stride: int = 48
 
     # Inference
-    boundary_refinement: BoundaryRefinementConfig = field(
-        default_factory=BoundaryRefinementConfig
-    )
     max_rally_duration_seconds: float = 60.0
 
     # Device
@@ -136,9 +131,7 @@ class TemporalProcessor:
         return TemporalInferenceConfig(
             model_version=self.config.model_version,
             model_path=self.config.model_path,
-            fine_stride=self.config.fine_stride,
             coarse_stride=self.config.coarse_stride,
-            boundary_refinement=self.config.boundary_refinement,
             max_rally_duration_seconds=self.config.max_rally_duration_seconds,
             device=self.config.device,
         )
@@ -147,7 +140,6 @@ class TemporalProcessor:
         self,
         coarse_features: np.ndarray,
         metadata: FeatureMetadata,
-        fine_features: np.ndarray | None,
     ) -> TemporalInferenceResult:
         """Run temporal model inference on features."""
         model = self._get_model()
@@ -158,17 +150,7 @@ class TemporalProcessor:
             metadata=metadata,
             model=model,
             config=inference_config,
-            fine_features=fine_features,
         )
-
-    def _load_fine_features(self, cache: FeatureCache, content_hash: str) -> np.ndarray | None:
-        """Load fine-stride features for boundary refinement if enabled."""
-        if not self.config.boundary_refinement.enabled:
-            return None
-        cached_fine = cache.get(content_hash, self.config.fine_stride)
-        if cached_fine is not None:
-            return cached_fine[0]
-        return None
 
     def process_video(
         self,
@@ -215,14 +197,11 @@ class TemporalProcessor:
             if progress_callback:
                 progress_callback(0.5, "Features extracted")
 
-        # Load fine features for boundary refinement
-        fine_features = self._load_fine_features(cache, content_hash)
-
         # Run temporal model inference
         if progress_callback:
             progress_callback(0.6, "Running temporal model...")
 
-        result = self._run_inference(coarse_features, metadata, fine_features)
+        result = self._run_inference(coarse_features, metadata)
 
         if progress_callback:
             progress_callback(1.0, "Temporal inference complete")
@@ -257,14 +236,11 @@ class TemporalProcessor:
 
         coarse_features, metadata = cached_coarse
 
-        # Load fine features for boundary refinement
-        fine_features = self._load_fine_features(cache, content_hash)
-
         # Run temporal model inference
         if progress_callback:
             progress_callback(0.0, "Running temporal model...")
 
-        result = self._run_inference(coarse_features, metadata, fine_features)
+        result = self._run_inference(coarse_features, metadata)
 
         if progress_callback:
             progress_callback(1.0, "Temporal inference complete")

@@ -6,7 +6,7 @@ This module provides:
 - Binary head classifier with deterministic decoder
 - Feature caching for efficient training and inference
 - Training pipeline for temporal models
-- Inference with anti-overmerge and boundary refinement
+- Inference with anti-overmerge constraints
 - Integration with main video processing pipeline
 """
 
@@ -33,14 +33,12 @@ from rallycut.temporal.features import (
     load_cached_features,
 )
 from rallycut.temporal.inference import (
-    BoundaryRefinementConfig,
     RallySegment,
     TemporalInferenceConfig,
     TemporalInferenceResult,
     apply_anti_overmerge_segments,
     load_binary_head_model,
     load_temporal_model,
-    refine_boundaries,
     run_binary_head_decoder,
     run_inference,
     run_temporal_inference,
@@ -100,7 +98,6 @@ __all__ = [
     "train_temporal_model",
     "video_level_split",
     # Inference
-    "BoundaryRefinementConfig",
     "RallySegment",
     "TemporalInferenceConfig",
     "TemporalInferenceResult",
@@ -110,7 +107,6 @@ __all__ = [
     "run_inference",
     "run_temporal_inference",
     "apply_anti_overmerge_segments",
-    "refine_boundaries",
     # Processor (pipeline integration)
     "TemporalProcessor",
     "TemporalProcessorConfig",
