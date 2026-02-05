@@ -15,12 +15,25 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
+from scipy.ndimage import gaussian_filter1d
 
 if TYPE_CHECKING:
     import torch.nn as nn
 
     from rallycut.temporal.deterministic_decoder import DecoderConfig, DecoderResult
     from rallycut.temporal.features import FeatureMetadata
+
+
+@dataclass
+class BoundaryRefinementConfig:
+    """Configuration for gradient-based boundary refinement."""
+
+    enabled: bool = True
+    search_window_seconds: float = 2.0  # ±2s search around boundary
+    gradient_threshold: float = 0.02  # Min gradient magnitude for valid edge
+    smoothing_sigma: float = 1.0  # Gaussian smoothing sigma
+    transition_zone_low: float = 0.2  # Min prob for valid edge
+    transition_zone_high: float = 0.8  # Max prob for valid edge
 
 
 @dataclass
@@ -32,10 +45,11 @@ class TemporalInferenceConfig:
     model_path: Path | None = None
 
     # Stride/Refinement
-    fine_stride: int = 8
+    fine_stride: int = 16  # Must match cached fine features
     coarse_stride: int = 48
-    enable_boundary_refinement: bool = True
-    refinement_window_seconds: float = 2.0
+    boundary_refinement: BoundaryRefinementConfig = field(
+        default_factory=BoundaryRefinementConfig
+    )
 
     # Anti-overmerge
     max_rally_duration_seconds: float = 60.0
@@ -396,6 +410,76 @@ def apply_anti_overmerge_segments(
     return result
 
 
+def _refine_boundary_gradient(
+    fine_probs: np.ndarray,
+    coarse_boundary_time: float,
+    fps: float,
+    fine_stride: int,
+    config: BoundaryRefinementConfig,
+    is_start: bool,
+) -> tuple[float, bool]:
+    """Refine a single boundary using gradient-based edge detection.
+
+    Args:
+        fine_probs: Array of fine-stride probabilities.
+        coarse_boundary_time: Coarse boundary time in seconds.
+        fps: Video frames per second.
+        fine_stride: Fine stride in frames.
+        config: Boundary refinement configuration.
+        is_start: True for start boundary (rising edge), False for end (falling edge).
+
+    Returns:
+        Tuple of (refined_time, was_refined).
+    """
+    window_duration = fine_stride / fps
+    boundary_idx = int(coarse_boundary_time / window_duration)
+    search_radius = int(config.search_window_seconds / window_duration)
+
+    # Asymmetric search: more room in direction of rally interior
+    if is_start:
+        start_idx = max(0, boundary_idx - search_radius)
+        end_idx = min(len(fine_probs), boundary_idx + search_radius // 2)
+    else:
+        start_idx = max(0, boundary_idx - search_radius // 2)
+        end_idx = min(len(fine_probs), boundary_idx + search_radius)
+
+    segment = fine_probs[start_idx:end_idx]
+    if len(segment) < 3:
+        return coarse_boundary_time, False
+
+    # Smooth and compute gradient
+    smoothed = gaussian_filter1d(segment, sigma=config.smoothing_sigma)
+    gradient = np.gradient(smoothed)
+
+    # Find best edge in transition zone
+    if is_start:
+        # Rising edge: max positive gradient in transition zone
+        candidates = [
+            (i, gradient[i])
+            for i in range(len(gradient))
+            if config.transition_zone_low <= smoothed[i] <= config.transition_zone_high
+            and gradient[i] > config.gradient_threshold
+        ]
+        if candidates:
+            best_idx = max(candidates, key=lambda x: x[1])[0]
+            refined_idx = start_idx + best_idx
+            return refined_idx * window_duration, True
+    else:
+        # Falling edge: max negative gradient in transition zone
+        candidates = [
+            (i, gradient[i])
+            for i in range(len(gradient))
+            if config.transition_zone_low <= smoothed[i] <= config.transition_zone_high
+            and gradient[i] < -config.gradient_threshold
+        ]
+        if candidates:
+            best_idx = min(candidates, key=lambda x: x[1])[0]
+            refined_idx = start_idx + best_idx + 1  # +1 for end boundary
+            return refined_idx * window_duration, True
+
+    return coarse_boundary_time, False
+
+
 def refine_boundaries(
     segments: list[RallySegment],
     fine_probs: list[float],
@@ -403,66 +487,62 @@ def refine_boundaries(
     fps: float,
     fine_stride: int,
     coarse_stride: int,
-    refinement_window_seconds: float = 2.0,
+    config: BoundaryRefinementConfig | None = None,
 ) -> list[RallySegment]:
-    """Refine segment boundaries using fine-stride features.
+    """Refine segment boundaries using gradient-based edge detection.
+
+    Uses Gaussian smoothing and gradient computation to find the steepest
+    rising/falling edges at segment boundaries, improving temporal precision
+    from coarse-stride (~1.5s) to fine-stride (~0.3s) accuracy.
 
     Args:
         segments: List of segments detected at coarse stride.
         fine_probs: Probabilities at fine stride.
-        coarse_probs: Probabilities at coarse stride (for reference).
+        coarse_probs: Probabilities at coarse stride (unused, kept for API compat).
         fps: Video frames per second.
         fine_stride: Fine stride in frames.
-        coarse_stride: Coarse stride in frames.
-        refinement_window_seconds: Window around boundaries to search.
+        coarse_stride: Coarse stride in frames (unused, kept for API compat).
+        config: Boundary refinement configuration. Uses defaults if None.
 
     Returns:
         List of segments with refined boundaries.
     """
-    fine_window_duration = fine_stride / fps
-    refinement_windows = int(refinement_window_seconds / fine_window_duration)
+    if config is None:
+        config = BoundaryRefinementConfig()
 
+    fine_probs_arr = np.array(fine_probs)
     refined: list[RallySegment] = []
 
     for segment in segments:
-        # Find fine-stride indices for boundaries
-        start_idx = int(segment.start_time / fine_window_duration)
-        end_idx = int(segment.end_time / fine_window_duration)
+        # Refine start boundary (rising edge)
+        refined_start, start_was_refined = _refine_boundary_gradient(
+            fine_probs_arr,
+            segment.start_time,
+            fps,
+            fine_stride,
+            config,
+            is_start=True,
+        )
 
-        # Refine start boundary (find rising edge)
-        search_start = max(0, start_idx - refinement_windows)
-        search_end = min(len(fine_probs), start_idx + refinement_windows // 2)
-        refined_start_idx = start_idx
+        # Refine end boundary (falling edge)
+        refined_end, end_was_refined = _refine_boundary_gradient(
+            fine_probs_arr,
+            segment.end_time,
+            fps,
+            fine_stride,
+            config,
+            is_start=False,
+        )
 
-        for i in range(search_start, search_end):
-            if i < len(fine_probs) and fine_probs[i] >= 0.5:
-                # Found first positive prediction
-                refined_start_idx = i
-                break
-
-        # Refine end boundary (find falling edge)
-        search_start = max(0, end_idx - refinement_windows // 2)
-        search_end = min(len(fine_probs), end_idx + refinement_windows)
-        refined_end_idx = end_idx
-
-        for i in range(search_end - 1, search_start - 1, -1):
-            if i < len(fine_probs) and fine_probs[i] >= 0.5:
-                # Found last positive prediction
-                refined_end_idx = i + 1
-                break
-
-        refined_start = refined_start_idx * fine_window_duration
-        refined_end = refined_end_idx * fine_window_duration
-
-        # Ensure valid segment
-        if refined_end > refined_start + 0.5:  # Min 0.5 second
+        # Ensure valid segment (min 0.5 second)
+        if refined_end > refined_start + 0.5:
             refined.append(
                 RallySegment(
                     start_time=refined_start,
                     end_time=refined_end,
                     confidence=segment.confidence,
-                    start_refined=refined_start_idx != start_idx,
-                    end_refined=refined_end_idx != end_idx,
+                    start_refined=start_was_refined,
+                    end_refined=end_was_refined,
                 )
             )
         else:
@@ -566,7 +646,7 @@ def run_temporal_inference(
     )
 
     # Boundary refinement (if enabled and fine features available)
-    if config.enable_boundary_refinement and fine_features is not None:
+    if config.boundary_refinement.enabled and fine_features is not None:
         # Run inference on fine features
         fine_preds, fine_probs = run_inference(
             model,
@@ -581,7 +661,7 @@ def run_temporal_inference(
             fps,
             config.fine_stride,
             config.coarse_stride,
-            config.refinement_window_seconds,
+            config.boundary_refinement,
         )
 
     return TemporalInferenceResult(

@@ -6,7 +6,7 @@ Integrates temporal models into the main inference pipeline.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,6 +19,7 @@ from rallycut.temporal.features import (
     extract_features_for_video,
 )
 from rallycut.temporal.inference import (
+    BoundaryRefinementConfig,
     RallySegment,
     TemporalInferenceConfig,
     TemporalInferenceResult,
@@ -43,12 +44,13 @@ class TemporalProcessorConfig:
 
     # Feature extraction
     feature_cache_dir: Path | None = None
-    fine_stride: int = 8
+    fine_stride: int = 16  # Must match cached fine features
     coarse_stride: int = 48
 
     # Inference
-    enable_boundary_refinement: bool = True
-    refinement_window_seconds: float = 2.0
+    boundary_refinement: BoundaryRefinementConfig = field(
+        default_factory=BoundaryRefinementConfig
+    )
     max_rally_duration_seconds: float = 60.0
 
     # Device
@@ -136,8 +138,7 @@ class TemporalProcessor:
             model_path=self.config.model_path,
             fine_stride=self.config.fine_stride,
             coarse_stride=self.config.coarse_stride,
-            enable_boundary_refinement=self.config.enable_boundary_refinement,
-            refinement_window_seconds=self.config.refinement_window_seconds,
+            boundary_refinement=self.config.boundary_refinement,
             max_rally_duration_seconds=self.config.max_rally_duration_seconds,
             device=self.config.device,
         )
@@ -162,7 +163,7 @@ class TemporalProcessor:
 
     def _load_fine_features(self, cache: FeatureCache, content_hash: str) -> np.ndarray | None:
         """Load fine-stride features for boundary refinement if enabled."""
-        if not self.config.enable_boundary_refinement:
+        if not self.config.boundary_refinement.enabled:
             return None
         cached_fine = cache.get(content_hash, self.config.fine_stride)
         if cached_fine is not None:

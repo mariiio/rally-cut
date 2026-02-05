@@ -261,6 +261,7 @@ def _apply_temporal_model(
     """Apply temporal model to cached analysis results.
 
     Uses pre-extracted features from the specified feature cache directory.
+    Includes gradient-based boundary refinement using fine-stride features.
 
     Args:
         cached: Cached analysis with raw_results
@@ -271,63 +272,52 @@ def _apply_temporal_model(
             Defaults to training_data/features/ if not specified.
 
     Returns:
-        List of RallySegment-like objects, or None if features not found
+        List of RallySegment objects, or None if features not found
     """
     from rallycut.temporal.features import FeatureCache
-    from rallycut.temporal.inference import run_inference
+    from rallycut.temporal.inference import (
+        TemporalInferenceConfig,
+        run_temporal_inference,
+    )
 
     # Load features from training feature cache
     cache_dir = feature_cache_dir or Path("training_data/features")
     feature_cache = FeatureCache(cache_dir=cache_dir)
-    cached_data = feature_cache.get(content_hash, stride)
 
+    # Load coarse features
+    cached_data = feature_cache.get(content_hash, stride)
     if cached_data is None:
         return None  # Features not cached for this video
 
-    features, _metadata = cached_data
+    features, metadata = cached_data
 
+    # Load fine features for boundary refinement (stride 16)
+    fine_stride = 16
+    fine_cached = feature_cache.get(content_hash, fine_stride)
+    fine_features = fine_cached[0] if fine_cached is not None else None
+
+    # Ensure features match raw_results length
     raw_results = cached.raw_results
-    fps = cached.fps
-
-    # Ensure features and raw_results have same length
     min_len = min(len(features), len(raw_results))
     features = features[:min_len]
-    raw_results = raw_results[:min_len]
 
-    # Run temporal model inference
-    predictions, probabilities = run_inference(model, features, device="cpu")  # type: ignore[arg-type]
+    # Create inference config
+    config = TemporalInferenceConfig(
+        coarse_stride=stride,
+        fine_stride=fine_stride,
+        device="cpu",
+    )
 
-    # Convert predictions to segments
-    segments = []
+    # Run full temporal inference with boundary refinement
+    result = run_temporal_inference(
+        features=features,
+        metadata=metadata,
+        model=model,  # type: ignore[arg-type]
+        config=config,
+        fine_features=fine_features,
+    )
 
-    class SimpleSegment:
-        def __init__(self, start_time: float, end_time: float):
-            self.start_time = start_time
-            self.end_time = end_time
-
-    in_rally = False
-    rally_start = 0.0
-
-    for i, (pred, result) in enumerate(zip(predictions, raw_results)):
-        # start_frame/end_frame are guaranteed to exist for temporal analysis
-        window_start = result.start_frame / fps  # type: ignore[operator]
-        window_end = result.end_frame / fps  # type: ignore[operator]
-
-        if pred == 1 and not in_rally:
-            # Start of rally
-            in_rally = True
-            rally_start = window_start
-        elif pred == 0 and in_rally:
-            # End of rally
-            in_rally = False
-            segments.append(SimpleSegment(rally_start, window_end))
-
-    # Handle rally that extends to end of video
-    if in_rally:
-        last_end = raw_results[-1].end_frame / fps  # type: ignore[operator]
-        segments.append(SimpleSegment(rally_start, last_end))
-
-    return segments
+    return result.segments
 
 
 def _run_evaluation(
