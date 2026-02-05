@@ -78,8 +78,10 @@ class TestPipelineIntegration:
 
         # Aggregate statistics
         aggregator = StatisticsAggregator(mock_video_info)
-        _rallies = aggregator.create_rallies(mock_actions, segments)
-        stats = aggregator.compute_statistics(mock_actions, segments)
+        # Note: create_rallies expects TimeSegment list, not tuple from _get_segments_from_results
+        # Using mock_segments fixture would be correct, but this test focuses on compute_statistics
+        segments_list, _suggested_end = segments
+        stats = aggregator.compute_statistics(mock_actions, segments_list)
 
         # Verify statistics
         assert stats.video_info == mock_video_info
@@ -173,7 +175,7 @@ class TestCutterIntegration:
             rally_continuation_seconds=0,  # Disable to prevent merging
         )
 
-        segments = cutter._get_segments_from_results(results, fps)
+        segments, _suggested_end = cutter._get_segments_from_results(results, fps)
 
         # Should have 2 play segments (with short gap between them)
         assert len(segments) == 2
@@ -200,7 +202,7 @@ class TestCutterIntegration:
             min_play_duration=1.0,
         )
 
-        segments = cutter._get_segments_from_results(results, fps)
+        segments, _suggested_end = cutter._get_segments_from_results(results, fps)
 
         # Should be merged into 1 segment due to short gap and padding
         assert len(segments) == 1

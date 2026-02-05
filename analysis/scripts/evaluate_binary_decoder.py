@@ -28,6 +28,9 @@ from rallycut.temporal.deterministic_decoder import (
 )
 from rallycut.temporal.features import FeatureCache
 
+# Baseline F1 score from heuristics-only pipeline (for comparison)
+HEURISTICS_BASELINE_F1 = 0.568
+
 
 def main():
     """Run comprehensive evaluation."""
@@ -248,12 +251,11 @@ def main():
     rprint("\n" + "=" * 60)
     rprint("[bold cyan]COMPARISON WITH HEURISTICS BASELINE[/bold cyan]")
     rprint("=" * 60)
-    baseline_f1 = 0.568
-    relative_improvement = (f1 - baseline_f1) / baseline_f1
+    relative_improvement = (f1 - HEURISTICS_BASELINE_F1) / HEURISTICS_BASELINE_F1
     rprint(f"""
     Metric              Heuristics    Binary+Decoder    Change
     ─────────────────────────────────────────────────────────────
-    F1 Score            56.8%         {f1:.1%}             {f1 - baseline_f1:+.1%}
+    F1 Score            {HEURISTICS_BASELINE_F1:.1%}         {f1:.1%}             {f1 - HEURISTICS_BASELINE_F1:+.1%}
     Relative Improvement                                 {relative_improvement:.1%}
     """)
 

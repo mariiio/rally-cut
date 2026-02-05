@@ -11,11 +11,24 @@ No learned parameters - all hyperparameters tuned via grid search.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from itertools import product
 from typing import Any
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
+# Default grid search parameter ranges
+DEFAULT_PARAM_GRID: dict[str, list[float | int]] = {
+    "smooth_window": [1, 3, 5],
+    "t_on": [0.4, 0.5, 0.6],
+    "t_off": [0.2, 0.3, 0.4],
+    "patience": [1, 2, 3],
+    "min_segment_windows": [1, 2, 3],
+    "max_gap_windows": [1, 2, 3],
+}
 
 
 @dataclass
@@ -57,7 +70,7 @@ def smooth_probabilities(probs: np.ndarray, window: int = 3) -> np.ndarray:
 
     Args:
         probs: (N,) array of probabilities.
-        window: Smoothing window size (odd).
+        window: Smoothing window size (odd). Even values will be incremented.
 
     Returns:
         Smoothed probabilities.
@@ -65,8 +78,9 @@ def smooth_probabilities(probs: np.ndarray, window: int = 3) -> np.ndarray:
     if window <= 1:
         return probs.copy()
 
-    # Ensure odd window
+    # Ensure odd window (log if adjusted)
     if window % 2 == 0:
+        logger.debug("Adjusting smooth_window from %d to %d (must be odd)", window, window + 1)
         window += 1
 
     # Pad and convolve
@@ -532,6 +546,7 @@ def grid_search(
     video_fps: list[float],
     stride: int = 48,
     iou_threshold: float = 0.5,
+    param_grid: dict[str, list[float | int]] | None = None,
 ) -> GridSearchResult:
     """Grid search for optimal decoder parameters.
 
@@ -541,19 +556,14 @@ def grid_search(
         video_fps: List of FPS values.
         stride: Frame stride.
         iou_threshold: IoU threshold for matching.
+        param_grid: Parameter grid to search. If None, uses DEFAULT_PARAM_GRID.
 
     Returns:
         GridSearchResult with best config and metrics.
     """
-    # Parameter grid (conservative to avoid overmerge)
-    param_grid: dict[str, list[float | int]] = {
-        "smooth_window": [1, 3, 5],
-        "t_on": [0.4, 0.5, 0.6],
-        "t_off": [0.2, 0.3, 0.4],
-        "patience": [1, 2, 3],
-        "min_segment_windows": [1, 2, 3],
-        "max_gap_windows": [1, 2, 3],
-    }
+    # Use provided grid or default
+    if param_grid is None:
+        param_grid = DEFAULT_PARAM_GRID
 
     best_result: dict[str, Any] | None = None
     best_score = -1.0
