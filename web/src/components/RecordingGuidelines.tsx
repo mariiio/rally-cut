@@ -1,14 +1,37 @@
 'use client';
 
 import { useState } from 'react';
-import { Box, Typography, Collapse, ButtonBase } from '@mui/material';
+import { Box, Typography, Collapse, ButtonBase, Divider } from '@mui/material';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import VideocamOutlinedIcon from '@mui/icons-material/VideocamOutlined';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { designTokens } from '@/app/theme';
 
-const recommendations = [
-  { label: 'Height', value: '2.5–3m (8–10 ft)' },
-  { label: 'Quality', value: '1080p at 30fps' },
+const cameraSettings = [
+  {
+    label: 'Height',
+    value: 'Eye-level or slightly above (5–6 ft / 1.5–2m)',
+  },
+  {
+    label: 'Position',
+    value: 'Behind baseline, centered',
+    note: 'Standard volleyball broadcast angle',
+  },
+  {
+    label: 'Distance',
+    value: 'Full court visible',
+    note: 'Players and net should be clearly visible',
+  },
+] as const;
+
+const checklist = [
+  'Camera at eye-level (~5 ft / 1.5m)',
+  'Positioned behind baseline',
+  'Full court and net visible',
+  'Landscape orientation',
+  '1080p @ 30fps',
+  'Stable mount (tripod recommended)',
 ] as const;
 
 export function RecordingGuidelines() {
@@ -54,58 +77,128 @@ export function RecordingGuidelines() {
           }}
         />
       </ButtonBase>
+
       <Collapse in={expanded}>
-        <Box sx={{ px: 1.5, pt: 0.5, pb: 1.5 }}>
+        <Box sx={{ px: 2, pb: 2 }}>
+          {/* Camera Position Section */}
           <Box
             sx={{
-              display: 'grid',
-              gridTemplateColumns: '72px 1fr',
-              rowGap: 0.5,
+              bgcolor: 'action.hover',
+              borderRadius: 1.5,
+              p: 1.5,
+              mb: 1.5,
             }}
           >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+              <VideocamOutlinedIcon sx={{ fontSize: 16, color: 'primary.main' }} />
+              <Typography
+                variant="caption"
+                sx={{
+                  fontWeight: 700,
+                  color: 'text.primary',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
+                  fontSize: '0.65rem',
+                }}
+              >
+                Camera Position
+              </Typography>
+            </Box>
+
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {cameraSettings.map(({ label, value, note }) => (
+                <Box
+                  key={label}
+                  sx={{
+                    display: 'grid',
+                    gridTemplateColumns: '64px 1fr',
+                    alignItems: 'baseline',
+                  }}
+                >
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: 'text.disabled',
+                      fontWeight: 600,
+                      fontSize: '0.7rem',
+                    }}
+                  >
+                    {label}
+                  </Typography>
+                  <Box>
+                    <Typography
+                      variant="caption"
+                      sx={{ color: 'text.secondary', fontWeight: 500 }}
+                    >
+                      {value}
+                    </Typography>
+                    {note && (
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          color: 'text.disabled',
+                          display: 'block',
+                          fontSize: '0.65rem',
+                          fontStyle: 'italic',
+                          mt: 0.25,
+                        }}
+                      >
+                        {note}
+                      </Typography>
+                    )}
+                  </Box>
+                </Box>
+              ))}
+            </Box>
+          </Box>
+
+          <Divider sx={{ my: 1.5 }} />
+
+          {/* Quick Checklist Section */}
+          <Box>
             <Typography
               variant="caption"
-              sx={{ color: 'text.disabled', fontWeight: 600 }}
+              sx={{
+                fontWeight: 700,
+                color: 'text.primary',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+                fontSize: '0.65rem',
+                display: 'block',
+                mb: 1,
+              }}
             >
-              Position
+              Quick Checklist
             </Typography>
-            <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 500 }}>
-              Center of back baseline{' '}
-              <Typography
-                component="span"
-                variant="caption"
-                sx={{ color: 'warning.main', fontWeight: 600 }}
-              >
-                (required)
-              </Typography>
-            </Typography>
-          </Box>
-          <Typography
-            variant="caption"
-            sx={{ color: 'text.disabled', mt: 1, mb: 0.25, display: 'block' }}
-          >
-            For best AI detection results:
-          </Typography>
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: '72px 1fr',
-              rowGap: 0.5,
-            }}
-          >
-            {recommendations.map(({ label, value }) => (
-              <Box key={label} sx={{ display: 'contents' }}>
-                <Typography
-                  variant="caption"
-                  sx={{ color: 'text.disabled', fontWeight: 500 }}
+
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' },
+                gap: 0.75,
+              }}
+            >
+              {checklist.map((item) => (
+                <Box
+                  key={item}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 0.75,
+                  }}
                 >
-                  {label}
-                </Typography>
-                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                  {value}
-                </Typography>
-              </Box>
-            ))}
+                  <CheckCircleOutlineIcon
+                    sx={{ fontSize: 14, color: 'success.main', opacity: 0.8 }}
+                  />
+                  <Typography
+                    variant="caption"
+                    sx={{ color: 'text.secondary', fontSize: '0.75rem' }}
+                  >
+                    {item}
+                  </Typography>
+                </Box>
+              ))}
+            </Box>
           </Box>
         </Box>
       </Collapse>
