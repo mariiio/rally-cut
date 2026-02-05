@@ -131,9 +131,11 @@ Videos use `StorageClass=STANDARD_IA` (~$0.0125/GB/month). For ~7GB of originals
 | `rallycut train restore --name beach_v2` | Re-import ground truth into DB |
 | `rallycut train list-remote` | List datasets backed up in S3 |
 
-## Adding New Videos (Incremental Training)
+## Adding New Videos (Recommended Workflow)
 
-When you have new labeled videos to add to an existing trained model:
+When you have new labeled videos to add:
+
+### Step 1: Export and Back Up
 
 1. **Upload and label in web app**
    - Upload new beach volleyball video
@@ -142,49 +144,72 @@ When you have new labeled videos to add to an existing trained model:
 
 2. **Re-export dataset** (includes all videos, old + new)
    ```bash
-   rallycut train export-dataset --name beach_v2
+   rallycut train export-dataset --name beach_v3
    ```
 
 3. **Back up to S3** (only new videos are uploaded -- existing ones deduplicated by content_hash)
    ```bash
-   rallycut train push --name beach_v2
+   rallycut train push --name beach_v3
    ```
 
 4. **Commit manifests to git**
    ```bash
-   cd training_datasets/beach_v2
+   cd training_datasets/beach_v3
    git add manifest.json ground_truth.json
-   git commit -m "Add beach_v2 dataset (N videos, M rallies)"
+   git commit -m "Add beach_v3 dataset (N videos, M rallies)"
    ```
 
-5. **Prepare training data**
-   ```bash
-   rallycut train prepare --output training_data/
-   ```
+### Step 2a: Retrain Temporal Model (Fast, Local, Recommended)
 
-6. **Upload to Modal**
-   ```bash
-   rallycut train modal --upload         # Upload training JSON
-   rallycut train modal --upload-videos  # Upload proxy videos (only new ones)
-   rallycut train modal --upload-model   # Upload existing model weights
-   ```
+The temporal model is a lightweight learned post-processor that smooths VideoMAE predictions. This is the **recommended first step** when adding new data.
 
-7. **Run incremental training** (lower learning rate to preserve existing knowledge)
-   ```bash
-   rallycut train modal --resume-from-model --lr 1e-5 --epochs 5
-   ```
+```bash
+# Extract VideoMAE features (cached, only processes new videos)
+rallycut train extract-features --stride 48
 
-8. **Download and clean up**
-   ```bash
-   rallycut train modal --download
-   rallycut train modal --cleanup
-   ```
+# Train temporal smoother (~5 min on CPU)
+rallycut train temporal --model v1 --epochs 50
 
-**Why incremental training?**
-- Starts from your existing trained model, not from scratch
-- Lower learning rate (1e-5 vs 5e-5) prevents "catastrophic forgetting"
-- Fewer epochs needed (5 vs 10+) since model already knows most patterns
-- Faster and cheaper than full retraining
+# Model saved to: weights/temporal/best_temporal_model.pt
+```
+
+**Why temporal model first?**
+- Fast: trains in minutes on CPU (no GPU needed)
+- Cheap: no cloud costs
+- Effective: learns video-specific patterns from your labeled data
+- Non-destructive: doesn't modify the base VideoMAE model
+
+### Step 2b: Fine-tune VideoMAE (Slow, GPU Required, Only If Needed)
+
+Only do this if the temporal model doesn't achieve good enough results, or if you need the model to recognize entirely new visual settings.
+
+```bash
+# Prepare training samples
+rallycut train prepare --output training_data/
+
+# Upload to Modal
+rallycut train modal --upload         # Upload training JSON
+rallycut train modal --upload-videos  # Upload proxy videos (only new ones)
+rallycut train modal --upload-model   # Upload existing model weights
+
+# Run incremental training (lower LR to preserve knowledge)
+rallycut train modal --resume-from-model --lr 1e-6 --epochs 10
+
+# Download and clean up
+rallycut train modal --download
+rallycut train modal --cleanup
+```
+
+**When to fine-tune VideoMAE?**
+- Temporal model alone doesn't help (e.g., model doesn't recognize the visual setting at all)
+- You have videos with very different visual characteristics (different camera angles, lighting, venues)
+- You have 20+ labeled videos (need enough data to avoid overfitting)
+
+**Why be cautious with VideoMAE fine-tuning?**
+- Slow: hours on GPU (~$0.59/hr)
+- Risk of overfitting with limited data
+- Risk of "catastrophic forgetting" (model forgets old patterns)
+- Previous beach fine-tuning made model less discriminative
 
 ## Disaster Recovery
 
@@ -255,6 +280,31 @@ Contains rally annotations per video:
   }
 ]
 ```
+
+## Temporal Models
+
+The temporal model provides learned post-processing to smooth VideoMAE predictions. Three architectures are available:
+
+| Model | Description | Parameters | Training |
+|-------|-------------|------------|----------|
+| `v1` (LearnedSmoothing) | 1D convolution + classifier | ~1.5K | Fast, stable |
+| `v2` (ConvCRF) | CNN + Conditional Random Field | ~50K | Medium |
+| `v3` (BiLSTMCRF) | Bidirectional LSTM + CRF | ~100K | Slow, needs more data |
+
+**Recommendation:** Start with v1. It's the simplest and most stable for small datasets.
+
+```bash
+# Train v1 (recommended)
+rallycut train temporal --model v1 --epochs 50
+
+# Train v2 (if v1 underfits)
+rallycut train temporal --model v2 --epochs 100
+
+# Model version is saved in checkpoint metadata
+# Auto-detected when loading - no need to specify version
+```
+
+**Model version auto-detection:** When a temporal model is saved, its version (v1/v2/v3) is stored in the checkpoint metadata. When loading, the correct model architecture is automatically instantiated.
 
 ## Model-Specific Heuristics
 

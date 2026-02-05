@@ -1174,3 +1174,594 @@ def _human_size(size_bytes: int) -> str:
             return f"{size_f:.1f} {unit}"
         size_f /= 1024
     return f"{size_f:.1f} TB"
+
+
+@app.command("extract-features")
+def extract_features(
+    stride: int = typer.Option(8, "--stride", "-s", help="Frame stride between windows"),
+    batch_size: int = typer.Option(8, "--batch", "-b", help="Batch size for feature extraction"),
+    output_dir: Path = typer.Option(
+        Path("training_data/features"),
+        "--output",
+        "-o",
+        help="Output directory for cached features",
+    ),
+    model: str = typer.Option(
+        "indoor", "--model", "-m", help="Model variant: 'indoor' or 'beach'"
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Force re-extraction even if cached"
+    ),
+) -> None:
+    """Extract VideoMAE encoder features for temporal model training.
+
+    Extracts 768-dimensional features from VideoMAE encoder for each video
+    in the ground truth dataset. Features are cached as .npy files for
+    efficient training of temporal models.
+
+    Examples:
+        # Extract features at fine stride (for boundary refinement)
+        rallycut train extract-features --stride 8
+
+        # Extract features at coarse stride (for fast inference)
+        rallycut train extract-features --stride 48
+
+        # Force re-extraction
+        rallycut train extract-features --force
+    """
+    from rallycut.core.config import get_model_path
+    from rallycut.temporal.features import (
+        FeatureCache,
+        extract_features_for_video,
+    )
+
+    rprint("[bold]Feature Extraction for Temporal Model[/bold]")
+    rprint(f"  Stride: {stride}")
+    rprint(f"  Model: {model}")
+    rprint()
+
+    # Initialize model
+    model_path = get_model_path(model)
+    if model_path:
+        rprint(f"  Weights: [dim]{model_path}[/dim]")
+    else:
+        rprint(f"[yellow]Warning: No local weights found for '{model}', using default[/yellow]")
+
+    # Load ground truth videos
+    rprint("Loading ground truth from database...")
+    videos = load_evaluation_videos()
+    if not videos:
+        rprint("[red]No videos with ground truth found![/red]")
+        raise typer.Exit(1)
+
+    rprint(f"Found [green]{len(videos)}[/green] videos with ground truth")
+
+    # Initialize components
+    output_dir.mkdir(parents=True, exist_ok=True)
+    cache = FeatureCache(cache_dir=output_dir)
+    resolver = VideoResolver()
+
+    # Initialize classifier lazily
+    from lib.volleyball_ml.video_mae import GameStateClassifier
+
+    classifier: GameStateClassifier | None = None
+
+    def get_classifier() -> GameStateClassifier:
+        nonlocal classifier
+        if classifier is None:
+            from rallycut.core.config import get_config
+
+            config = get_config()
+            classifier = GameStateClassifier(
+                model_path=model_path,
+                device=config.device,
+            )
+        return classifier
+
+    # Process videos
+    extracted = 0
+    skipped = 0
+    total_windows = 0
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Extracting features...", total=len(videos))
+
+        for video in videos:
+            video_name = video.filename[:30]
+            progress.update(task, description=f"Processing {video_name}...")
+
+            # Check cache
+            if not force and cache.has(video.content_hash, stride):
+                skipped += 1
+                progress.update(task, advance=1)
+                continue
+
+            # Resolve video path
+            video_path = resolver.resolve(video.s3_key, video.content_hash)
+
+            # Extract features
+            features, metadata = extract_features_for_video(
+                video_path,
+                get_classifier(),
+                stride=stride,
+                batch_size=batch_size,
+            )
+            metadata.video_id = video.id
+            metadata.content_hash = video.content_hash
+
+            # Cache features
+            cache.put(video.content_hash, stride, features, metadata)
+
+            extracted += 1
+            total_windows += len(features)
+            progress.update(task, advance=1)
+
+    rprint()
+    rprint("[green]Feature extraction complete![/green]")
+    rprint(f"  Extracted: [green]{extracted}[/green] videos")
+    rprint(f"  Skipped (cached): [yellow]{skipped}[/yellow] videos")
+    rprint(f"  Total windows: [cyan]{total_windows}[/cyan]")
+    rprint("  Feature dimension: [cyan]768[/cyan]")
+    rprint(f"  Cache directory: [dim]{output_dir}[/dim]")
+
+
+@app.command("temporal")
+def train_temporal(
+    model_version: str = typer.Option(
+        "v2", "--model", "-m", help="Model version: v1 (smoothing), v2 (conv+crf), v3 (lstm+crf)"
+    ),
+    feature_dir: Path = typer.Option(
+        Path("training_data/features"),
+        "--features",
+        "-f",
+        help="Directory with cached features",
+    ),
+    output_dir: Path = typer.Option(
+        Path("weights/temporal"),
+        "--output",
+        "-o",
+        help="Output directory for trained model",
+    ),
+    stride: int = typer.Option(48, "--stride", "-s", help="Feature stride used for extraction"),
+    epochs: int = typer.Option(50, "--epochs", "-e", help="Maximum training epochs"),
+    lr: float = typer.Option(1e-4, "--lr", help="Learning rate"),
+    patience: int = typer.Option(10, "--patience", "-p", help="Early stopping patience"),
+    hidden_dim: int = typer.Option(128, "--hidden-dim", help="Hidden dimension for v2/v3"),
+    dropout: float = typer.Option(0.4, "--dropout", help="Dropout rate"),
+    train_ratio: float = typer.Option(0.8, "--train-ratio", help="Train/val split ratio"),
+    seed: int = typer.Option(42, "--seed", help="Random seed"),
+    device: str = typer.Option("", "--device", help="Device (cpu/cuda/mps). Auto-detect if empty."),
+) -> None:
+    """Train a temporal model for rally sequence labeling.
+
+    Trains on pre-extracted VideoMAE features using sequence labels
+    generated from ground truth rallies.
+
+    Examples:
+        # Train v2 model (recommended starting point)
+        rallycut train temporal --model v2 --epochs 50
+
+        # Train v1 (simpler, faster)
+        rallycut train temporal --model v1 --epochs 30
+
+        # Train with custom hyperparameters
+        rallycut train temporal --model v2 --lr 5e-5 --hidden-dim 256 --dropout 0.5
+    """
+    from rallycut.temporal.models import get_temporal_model
+    from rallycut.temporal.training import (
+        TemporalTrainingConfig,
+        compute_pos_weight,
+        prepare_training_data,
+        train_temporal_model,
+        video_level_split,
+    )
+    rprint("[bold]Temporal Model Training[/bold]")
+    rprint(f"  Model version: [cyan]{model_version}[/cyan]")
+    rprint(f"  Feature directory: {feature_dir}")
+    rprint()
+
+    # Auto-detect device
+    if not device:
+        import torch
+
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+    rprint(f"  Device: [yellow]{device}[/yellow]")
+
+    # Load videos with ground truth
+    rprint("Loading ground truth from database...")
+    videos = load_evaluation_videos()
+    if not videos:
+        rprint("[red]No videos with ground truth found![/red]")
+        raise typer.Exit(1)
+
+    rprint(f"Found [green]{len(videos)}[/green] videos with ground truth")
+
+    # Split into train/val
+    train_videos, val_videos = video_level_split(videos, train_ratio, seed)
+    rprint(f"  Train: {len(train_videos)} videos")
+    rprint(f"  Val: {len(val_videos)} videos")
+
+    # Prepare training data
+    rprint()
+    rprint("Loading features and generating labels...")
+    train_features, train_labels = prepare_training_data(
+        train_videos, feature_dir, stride=stride
+    )
+    val_features, val_labels = prepare_training_data(
+        val_videos, feature_dir, stride=stride
+    )
+
+    if not train_features:
+        rprint("[red]No training features found! Run 'extract-features' first.[/red]")
+        raise typer.Exit(1)
+
+    # Create training config
+    config = TemporalTrainingConfig(
+        model_version=model_version,
+        hidden_dim=hidden_dim,
+        dropout=dropout,
+        learning_rate=lr,
+        epochs=epochs,
+        patience=patience,
+        stride=stride,
+        device=device,
+    )
+
+    # Create model
+    rprint()
+    rprint("Initializing model...")
+    if model_version == "v1":
+        # Compute pos_weight for balanced BCE loss
+        pos_weight = compute_pos_weight(train_labels)
+        rprint(f"  pos_weight: [cyan]{pos_weight:.2f}[/cyan] (class balancing)")
+        model = get_temporal_model("v1", feature_dim=768, dropout=dropout, pos_weight=pos_weight)
+    else:
+        model = get_temporal_model(
+            model_version,
+            feature_dim=768,
+            hidden_dim=hidden_dim,
+            dropout=dropout,
+        )
+
+    param_count = sum(p.numel() for p in model.parameters())
+    rprint(f"  Parameters: [cyan]{param_count:,}[/cyan]")
+
+    # Train model
+    rprint()
+    rprint("[bold]Training...[/bold]")
+    result = train_temporal_model(
+        model=model,
+        train_features=train_features,
+        train_labels=train_labels,
+        val_features=val_features,
+        val_labels=val_labels,
+        config=config,
+        output_dir=output_dir,
+    )
+
+    # Report results
+    rprint()
+    rprint("[green]Training complete![/green]")
+    rprint(f"  Best F1: [bold green]{result.best_val_f1:.4f}[/bold green]")
+    rprint(f"  Best epoch: {result.best_epoch + 1}")
+    rprint(f"  Training time: {result.training_time_seconds:.1f}s")
+    rprint(f"  Model saved to: [dim]{output_dir}[/dim]")
+
+
+@app.command("binary-head")
+def train_binary_head_cmd(
+    feature_dir: Path = typer.Option(
+        Path("training_data/features"),
+        "--features",
+        "-f",
+        help="Directory with cached features",
+    ),
+    output_dir: Path = typer.Option(
+        Path("weights/binary_head"),
+        "--output",
+        "-o",
+        help="Output directory for trained model",
+    ),
+    stride: int = typer.Option(16, "--stride", "-s", help="Feature stride (16 recommended for training)"),
+    epochs: int = typer.Option(50, "--epochs", "-e", help="Maximum training epochs"),
+    lr: float = typer.Option(1e-3, "--lr", help="Learning rate"),
+    batch_size: int = typer.Option(64, "--batch-size", "-b", help="Batch size"),
+    hidden_dim: int = typer.Option(128, "--hidden-dim", help="Hidden dimension"),
+    dropout: float = typer.Option(0.3, "--dropout", help="Dropout rate"),
+    overlap_threshold: float = typer.Option(0.5, "--overlap", help="Overlap threshold for labeling"),
+    patience: int = typer.Option(10, "--patience", "-p", help="Early stopping patience"),
+    train_ratio: float = typer.Option(0.8, "--train-ratio", help="Train/val split ratio"),
+    seed: int = typer.Option(42, "--seed", help="Random seed"),
+    device: str = typer.Option("", "--device", help="Device (cpu/cuda/mps). Auto-detect if empty."),
+) -> None:
+    """Train a binary classification head on frozen encoder features.
+
+    This tests if VideoMAE encoder features contain discriminative signal
+    for rally detection. Phase 1 of emissions-first training approach.
+
+    Reports window-level metrics: ROC-AUC, PR-AUC, F1.
+
+    Examples:
+        # Extract features at stride=16 first (if not already done)
+        rallycut train extract-features --stride 16
+
+        # Train binary head
+        rallycut train binary-head --stride 16 --epochs 50
+
+        # Train with custom settings
+        rallycut train binary-head --stride 16 --lr 5e-4 --hidden-dim 256
+    """
+    from rallycut.temporal.binary_head import (
+        BinaryHeadConfig,
+        prepare_window_data,
+        train_binary_head,
+        video_level_split,
+    )
+
+    rprint("[bold]Binary Head Training (Phase 1)[/bold]")
+    rprint(f"  Feature directory: {feature_dir}")
+    rprint(f"  Stride: {stride}")
+    rprint(f"  Overlap threshold: {overlap_threshold}")
+    rprint()
+
+    # Auto-detect device
+    if not device:
+        import torch
+
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+    rprint(f"  Device: [yellow]{device}[/yellow]")
+
+    # Load videos with ground truth
+    rprint("Loading ground truth from database...")
+    videos = load_evaluation_videos()
+    if not videos:
+        rprint("[red]No videos with ground truth found![/red]")
+        raise typer.Exit(1)
+
+    rprint(f"Found [green]{len(videos)}[/green] videos with ground truth")
+
+    # Check if features exist at this stride
+    from rallycut.temporal.features import FeatureCache
+
+    cache = FeatureCache(cache_dir=feature_dir)
+    videos_with_features = [v for v in videos if cache.has(v.content_hash, stride)]
+
+    if not videos_with_features:
+        rprint(f"[red]No features found at stride={stride}![/red]")
+        rprint(f"Run: [cyan]rallycut train extract-features --stride {stride}[/cyan]")
+        raise typer.Exit(1)
+
+    if len(videos_with_features) < len(videos):
+        rprint(
+            f"[yellow]Warning: Only {len(videos_with_features)}/{len(videos)} videos "
+            f"have features at stride={stride}[/yellow]"
+        )
+        videos = videos_with_features
+
+    # Split into train/val
+    train_videos, val_videos = video_level_split(videos, train_ratio, seed)
+    rprint(f"  Train: {len(train_videos)} videos")
+    rprint(f"  Val: {len(val_videos)} videos")
+
+    # Prepare data
+    rprint()
+    rprint("Loading features and generating labels...")
+    train_features, train_labels, _ = prepare_window_data(
+        train_videos, feature_dir, stride=stride, overlap_threshold=overlap_threshold
+    )
+    val_features, val_labels, _ = prepare_window_data(
+        val_videos, feature_dir, stride=stride, overlap_threshold=overlap_threshold
+    )
+
+    if len(train_features) == 0:
+        rprint("[red]No training data found![/red]")
+        raise typer.Exit(1)
+
+    rprint(f"  Train samples: [cyan]{len(train_labels)}[/cyan] ({100*train_labels.mean():.1f}% positive)")
+    rprint(f"  Val samples: [cyan]{len(val_labels)}[/cyan] ({100*val_labels.mean():.1f}% positive)")
+
+    # Create config
+    config = BinaryHeadConfig(
+        hidden_dim=hidden_dim,
+        dropout=dropout,
+        learning_rate=lr,
+        epochs=epochs,
+        batch_size=batch_size,
+        patience=patience,
+        overlap_threshold=overlap_threshold,
+        stride=stride,
+        device=device,
+    )
+
+    # Train
+    rprint()
+    rprint("[bold]Training...[/bold]")
+    result = train_binary_head(
+        train_features=train_features,
+        train_labels=train_labels,
+        val_features=val_features,
+        val_labels=val_labels,
+        config=config,
+        output_dir=output_dir,
+    )
+
+    # Report results
+    rprint()
+    rprint("[bold green]Training complete![/bold green]")
+    rprint()
+    rprint("[bold]Window-level Metrics (Validation):[/bold]")
+    rprint(f"  ROC-AUC:   [bold cyan]{result.best_val_roc_auc:.4f}[/bold cyan]")
+    rprint(f"  PR-AUC:    [bold cyan]{result.best_val_pr_auc:.4f}[/bold cyan]")
+    rprint(f"  F1:        [bold cyan]{result.best_val_f1:.4f}[/bold cyan] @ threshold={result.best_threshold:.2f}")
+    rprint(f"  Precision: {result.best_val_precision:.4f}")
+    rprint(f"  Recall:    {result.best_val_recall:.4f}")
+    rprint()
+    rprint(f"  Best epoch: {result.best_epoch + 1}")
+    rprint(f"  Training time: {result.training_time_seconds:.1f}s")
+    rprint(f"  Model saved to: [dim]{output_dir}[/dim]")
+
+    # Interpretation
+    rprint()
+    if result.best_val_roc_auc >= 0.80:
+        rprint("[bold green]SUCCESS:[/bold green] Encoder features are discriminative (ROC-AUC >= 0.80)")
+        rprint("  → Proceed to Phase 2: Add temporal smoothing")
+    elif result.best_val_roc_auc >= 0.65:
+        rprint("[bold yellow]PARTIAL:[/bold yellow] Features have some signal (ROC-AUC 0.65-0.80)")
+        rprint("  → Consider: more data, different stride, or fine-tuning encoder")
+    else:
+        rprint("[bold red]INSUFFICIENT:[/bold red] Features lack discriminative signal (ROC-AUC < 0.65)")
+        rprint("  → Encoder fine-tuning likely needed for beach volleyball")
+
+
+@app.command("binary-head-smooth")
+def train_binary_head_smooth_cmd(
+    feature_dir: Path = typer.Option(
+        Path("training_data/features"),
+        "--features",
+        "-f",
+        help="Directory with cached features",
+    ),
+    pretrained_path: Path = typer.Option(
+        Path("weights/binary_head/best_binary_head.pt"),
+        "--pretrained",
+        "-p",
+        help="Path to pretrained binary head",
+    ),
+    output_dir: Path = typer.Option(
+        Path("weights/binary_head"),
+        "--output",
+        "-o",
+        help="Output directory for trained model",
+    ),
+    stride: int = typer.Option(16, "--stride", "-s", help="Feature stride"),
+    epochs: int = typer.Option(30, "--epochs", "-e", help="Maximum training epochs"),
+    lr: float = typer.Option(1e-4, "--lr", help="Learning rate"),
+    kernel_size: int = typer.Option(7, "--kernel-size", "-k", help="Smoothing kernel size"),
+    freeze_head: bool = typer.Option(True, "--freeze-head/--train-head", help="Freeze binary head weights"),
+    patience: int = typer.Option(10, "--patience", help="Early stopping patience"),
+    train_ratio: float = typer.Option(0.8, "--train-ratio", help="Train/val split ratio"),
+    seed: int = typer.Option(42, "--seed", help="Random seed"),
+    device: str = typer.Option("", "--device", help="Device (cpu/cuda/mps)"),
+) -> None:
+    """Phase 2: Train temporal smoothing on top of binary head.
+
+    This adds a learned 1D convolution smoother on top of the binary head
+    to produce coherent rally segments (reduce fragmentation).
+
+    Examples:
+        # After training binary head (Phase 1)
+        rallycut train binary-head-smooth --stride 16
+
+        # Train with unfrozen head (joint fine-tuning)
+        rallycut train binary-head-smooth --stride 16 --train-head
+    """
+    from rallycut.temporal.binary_head import (
+        SmoothingConfig,
+        train_with_smoothing,
+        video_level_split,
+    )
+
+    rprint("[bold]Binary Head + Smoothing Training (Phase 2)[/bold]")
+    rprint(f"  Pretrained head: {pretrained_path}")
+    rprint(f"  Kernel size: {kernel_size}")
+    rprint(f"  Freeze head: {freeze_head}")
+    rprint()
+
+    if not pretrained_path.exists():
+        rprint(f"[red]Pretrained head not found: {pretrained_path}[/red]")
+        rprint("Run Phase 1 first: [cyan]rallycut train binary-head[/cyan]")
+        raise typer.Exit(1)
+
+    # Auto-detect device
+    if not device:
+        import torch
+
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+    rprint(f"  Device: [yellow]{device}[/yellow]")
+
+    # Load videos
+    rprint("Loading ground truth from database...")
+    videos = load_evaluation_videos()
+    if not videos:
+        rprint("[red]No videos with ground truth found![/red]")
+        raise typer.Exit(1)
+
+    rprint(f"Found [green]{len(videos)}[/green] videos with ground truth")
+
+    # Check features
+    from rallycut.temporal.features import FeatureCache
+
+    cache = FeatureCache(cache_dir=feature_dir)
+    videos_with_features = [v for v in videos if cache.has(v.content_hash, stride)]
+
+    if not videos_with_features:
+        rprint(f"[red]No features found at stride={stride}![/red]")
+        raise typer.Exit(1)
+
+    videos = videos_with_features
+
+    # Split
+    train_videos, val_videos = video_level_split(videos, train_ratio, seed)
+    rprint(f"  Train: {len(train_videos)} videos")
+    rprint(f"  Val: {len(val_videos)} videos")
+
+    # Config
+    config = SmoothingConfig(
+        hidden_dim=128,
+        dropout=0.3,
+        kernel_size=kernel_size,
+        learning_rate=lr,
+        epochs=epochs,
+        patience=patience,
+        freeze_head=freeze_head,
+        stride=stride,
+        device=device,
+    )
+
+    # Train
+    rprint()
+    rprint("[bold]Training...[/bold]")
+    result = train_with_smoothing(
+        train_videos=train_videos,
+        val_videos=val_videos,
+        feature_cache_dir=feature_dir,
+        pretrained_head_path=pretrained_path,
+        config=config,
+        output_dir=output_dir,
+    )
+
+    # Report
+    rprint()
+    rprint("[bold green]Training complete![/bold green]")
+    rprint()
+    rprint("[bold]Segment-level Metrics (Validation):[/bold]")
+    rprint(f"  F1:        [bold cyan]{result.best_segment_f1:.4f}[/bold cyan]")
+    rprint(f"  Precision: {result.best_segment_precision:.4f}")
+    rprint(f"  Recall:    {result.best_segment_recall:.4f}")
+    rprint()
+    rprint("[bold]Window-level Metrics:[/bold]")
+    rprint(f"  F1:      {result.best_val_f1:.4f}")
+    rprint(f"  ROC-AUC: {result.best_val_roc_auc:.4f}")
+    rprint()
+    rprint(f"  Best epoch: {result.best_epoch + 1}")
+    rprint(f"  Training time: {result.training_time_seconds:.1f}s")
+    rprint(f"  Model saved to: [dim]{output_dir}/best_binary_head_smoothed.pt[/dim]")
