@@ -584,6 +584,18 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
     end_ms: Math.max(0, Math.min(r.end_ms, durationMs)),
   }));
 
+  const expectedRallies = clampedMlRallies.length + userRallies.length;
+  const suggestedRallies = payload.suggested_rallies ?? [];
+  const confirmedRanges = [
+    ...userRallies.map((r) => ({ startMs: r.startMs, endMs: r.endMs })),
+    ...clampedMlRallies.map((r) => ({ startMs: r.start_ms, endMs: r.end_ms })),
+  ];
+  const newSuggestions = suggestedRallies.filter((s) => {
+    const range = { startMs: s.start_ms, endMs: s.end_ms };
+    return !confirmedRanges.some((existing) => ralliesOverlap(range, existing, 0.3));
+  });
+  const expectedSuggested = newSuggestions.length;
+
   await prisma.$transaction(async (tx) => {
     // Delete old ML-only rallies (they'll be replaced with new ML results)
     if (mlOnlyRallies.length > 0) {
@@ -607,20 +619,6 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
         })),
       });
     }
-
-    // Process suggested rallies (segments that almost passed detection)
-    const suggestedRallies = payload.suggested_rallies ?? [];
-
-    // Filter suggestions that overlap with existing/new confirmed rallies
-    const confirmedRanges = [
-      ...userRallies.map((r) => ({ startMs: r.startMs, endMs: r.endMs })),
-      ...clampedMlRallies.map((r) => ({ startMs: r.start_ms, endMs: r.end_ms })),
-    ];
-
-    const newSuggestions = suggestedRallies.filter((s) => {
-      const range = { startMs: s.start_ms, endMs: s.end_ms };
-      return !confirmedRanges.some((existing) => ralliesOverlap(range, existing, 0.3));
-    });
 
     // Clamp suggested rally timestamps to video duration
     const clampedSuggestions = newSuggestions.map((r) => ({
@@ -678,20 +676,19 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
     });
   });
 
-  const suggestedRallies = payload.suggested_rallies ?? [];
-  const confirmedRanges = [
-    ...userRallies.map((r) => ({ startMs: r.startMs, endMs: r.endMs })),
-    ...newMlRallies.map((r) => ({ startMs: r.start_ms, endMs: r.end_ms })),
-  ];
-  const createdSuggestions = suggestedRallies.filter((s) => {
-    const range = { startMs: s.start_ms, endMs: s.end_ms };
-    return !confirmedRanges.some((existing) => ralliesOverlap(range, existing, 0.3));
+  // Verify rallies were actually saved (debugging intermittent bug)
+  const actualRallies = await prisma.rally.count({
+    where: { videoId: job.videoId },
   });
+  if (actualRallies < expectedRallies + expectedSuggested) {
+    console.error(`[WEBHOOK] BUG DETECTED: Expected ${expectedRallies + expectedSuggested} rallies, but only ${actualRallies} found for video ${job.videoId}`);
+    console.error(`[WEBHOOK] Payload had ${mlRallies.length} rallies, ${suggestedRallies.length} suggested`);
+  }
 
   return {
     success: true,
     ralliesCreated: newMlRallies.length,
-    suggestedRalliesCreated: createdSuggestions.length,
+    suggestedRalliesCreated: newSuggestions.length,
     userRalliesPreserved: userRallies.length,
     mlRalliesReplaced: mlOnlyRallies.length,
   };
