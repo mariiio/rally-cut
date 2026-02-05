@@ -31,9 +31,12 @@ class BoundaryRefinementConfig:
     Start boundaries use earliest-threshold-crossing for precision.
     End boundaries use last-threshold-crossing for completeness.
     Extension is capped to prevent overmerge.
+
+    Disabled by default as evaluation shows minimal improvement over
+    coarse boundaries from the deterministic decoder.
     """
 
-    enabled: bool = True
+    enabled: bool = False
     search_window_seconds: float = 2.0  # Search window around boundary
     smoothing_sigma: float = 1.0  # Gaussian smoothing sigma
     start_threshold: float = 0.5  # Threshold for detecting rally (aligned with decoder)
