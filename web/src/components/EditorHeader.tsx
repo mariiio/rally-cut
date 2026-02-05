@@ -33,6 +33,7 @@ import MoreVertIcon from '@mui/icons-material/MoreVert';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import { useEditorStore } from '@/stores/editorStore';
 import { useUploadStore } from '@/stores/uploadStore';
 import { useTierStore } from '@/stores/tierStore';
@@ -347,6 +348,28 @@ export function EditorHeader() {
             <ChatBubbleOutlineIcon fontSize="small" />
           </IconButton>
         </Tooltip>
+
+        {/* Upgrade Button (FREE tier only) */}
+        {userTier === 'FREE' && (
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<AutoAwesomeIcon sx={{ fontSize: 16 }} />}
+            onClick={() => router.push('/upgrade')}
+            sx={{
+              color: designTokens.colors.tertiary.main,
+              borderColor: designTokens.alpha.tertiary[40],
+              textTransform: 'none',
+              fontWeight: 600,
+              '&:hover': {
+                borderColor: designTokens.colors.tertiary.main,
+                bgcolor: designTokens.alpha.tertiary[8],
+              },
+            }}
+          >
+            Upgrade
+          </Button>
+        )}
 
         <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
 
