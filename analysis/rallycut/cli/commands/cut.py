@@ -264,9 +264,9 @@ def cut(  # noqa: C901
         help="Enable ball-based false positive filtering (validates rally segments)",
     ),
     ball_boundary: bool = typer.Option(
-        False,
-        "--ball-boundary",
-        help="Enable ball-based boundary refinement (refines rally start/end)",
+        True,
+        "--ball-boundary/--no-ball-boundary",
+        help="Ball-based boundary refinement (improves start/end accuracy)",
     ),
     ball_fast: bool = typer.Option(
         True,

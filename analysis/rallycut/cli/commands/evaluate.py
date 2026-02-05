@@ -774,10 +774,10 @@ def evaluate(
     ball_boundary: Annotated[
         bool,
         typer.Option(
-            "--ball-boundary",
-            help="Enable ball-based boundary refinement (refines rally start/end)",
+            "--ball-boundary/--no-ball-boundary",
+            help="Ball-based boundary refinement (improves start/end accuracy)",
         ),
-    ] = False,
+    ] = True,
     ball_fast: Annotated[
         bool,
         typer.Option(

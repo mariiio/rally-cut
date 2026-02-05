@@ -27,7 +27,7 @@ uv run rallycut cut video.mp4 --profile         # Performance breakdown
 uv run rallycut cut video.mp4 --json            # Export segments as JSON
 uv run rallycut cut video.mp4 --segments s.json # Load pre-computed segments
 uv run rallycut cut video.mp4 --limit 60        # Analyze first 60s only
-uv run rallycut cut video.mp4 --refine          # [EXPERIMENTAL] Enable boundary refinement
+uv run rallycut cut video.mp4 --no-ball-boundary  # Disable ball-based boundary refinement (on by default)
 
 # Training (beach model fine-tuning) - FULL WORKFLOW
 rm -rf training_data/                                 # Clean old local data
