@@ -1,0 +1,734 @@
+[
+  {
+    "video_id": "07fedbd4-693e-4651-9fee-c616a1f4b413",
+    "filename": "mochi.mp4",
+    "rallies": [
+      {
+        "start_ms": 16667,
+        "end_ms": 22167
+      },
+      {
+        "start_ms": 36470,
+        "end_ms": 59060
+      },
+      {
+        "start_ms": 87289,
+        "end_ms": 99066
+      },
+      {
+        "start_ms": 116550,
+        "end_ms": 129530
+      },
+      {
+        "start_ms": 181114,
+        "end_ms": 190458
+      }
+    ]
+  },
+  {
+    "video_id": "1efa35cf-4edd-4504-b4a4-834eee9e5218",
+    "filename": "matahtach.mp4",
+    "rallies": [
+      {
+        "start_ms": 26027,
+        "end_ms": 34840
+      },
+      {
+        "start_ms": 59036,
+        "end_ms": 63536
+      },
+      {
+        "start_ms": 75525,
+        "end_ms": 80801
+      },
+      {
+        "start_ms": 103378,
+        "end_ms": 108120
+      },
+      {
+        "start_ms": 133571,
+        "end_ms": 139144
+      },
+      {
+        "start_ms": 149427,
+        "end_ms": 160366
+      },
+      {
+        "start_ms": 194915,
+        "end_ms": 203463
+      },
+      {
+        "start_ms": 213393,
+        "end_ms": 228058
+      },
+      {
+        "start_ms": 245193,
+        "end_ms": 249985
+      },
+      {
+        "start_ms": 264571,
+        "end_ms": 269092
+      },
+      {
+        "start_ms": 301585,
+        "end_ms": 311423
+      },
+      {
+        "start_ms": 328997,
+        "end_ms": 333506
+      },
+      {
+        "start_ms": 347467,
+        "end_ms": 356231
+      },
+      {
+        "start_ms": 389597,
+        "end_ms": 393840
+      },
+      {
+        "start_ms": 416121,
+        "end_ms": 423820
+      }
+    ]
+  },
+  {
+    "video_id": "23a5f798-78a0-4b3a-8647-b4a2166274b1",
+    "filename": "machi.mp4",
+    "rallies": [
+      {
+        "start_ms": 6640,
+        "end_ms": 17800
+      },
+      {
+        "start_ms": 55740,
+        "end_ms": 71220
+      },
+      {
+        "start_ms": 178360,
+        "end_ms": 190100
+      }
+    ]
+  },
+  {
+    "video_id": "23b662ba-99e0-47d6-a9ac-90bb6fa9bdd1",
+    "filename": "matttch.mp4",
+    "rallies": [
+      {
+        "start_ms": 14683,
+        "end_ms": 25095
+      },
+      {
+        "start_ms": 38538,
+        "end_ms": 44111
+      },
+      {
+        "start_ms": 55189,
+        "end_ms": 66169
+      },
+      {
+        "start_ms": 94060,
+        "end_ms": 110946
+      },
+      {
+        "start_ms": 151718,
+        "end_ms": 158791
+      },
+      {
+        "start_ms": 172005,
+        "end_ms": 180417
+      },
+      {
+        "start_ms": 194979,
+        "end_ms": 199979
+      },
+      {
+        "start_ms": 210172,
+        "end_ms": 232736
+      }
+    ]
+  },
+  {
+    "video_id": "2b2d7786-1f78-4856-95d5-d3003b15f2a3",
+    "filename": "match-2.MOV",
+    "rallies": [
+      {
+        "start_ms": 9382,
+        "end_ms": 22928
+      },
+      {
+        "start_ms": 39686,
+        "end_ms": 48449
+      },
+      {
+        "start_ms": 71506,
+        "end_ms": 80270
+      },
+      {
+        "start_ms": 96433,
+        "end_ms": 107055
+      },
+      {
+        "start_ms": 121176,
+        "end_ms": 129109
+      },
+      {
+        "start_ms": 151957,
+        "end_ms": 166294
+      },
+      {
+        "start_ms": 214923,
+        "end_ms": 227414
+      },
+      {
+        "start_ms": 239098,
+        "end_ms": 247860
+      },
+      {
+        "start_ms": 260200,
+        "end_ms": 264442
+      },
+      {
+        "start_ms": 277802,
+        "end_ms": 285500
+      }
+    ]
+  },
+  {
+    "video_id": "35ff869f-5698-4982-bcdb-267e11d70e0d",
+    "filename": "IMG_1820.MOV",
+    "rallies": [
+      {
+        "start_ms": 15500,
+        "end_ms": 26995
+      },
+      {
+        "start_ms": 41825,
+        "end_ms": 45825
+      },
+      {
+        "start_ms": 55452,
+        "end_ms": 60531
+      },
+      {
+        "start_ms": 80036,
+        "end_ms": 88366
+      },
+      {
+        "start_ms": 107772,
+        "end_ms": 124746
+      },
+      {
+        "start_ms": 148231,
+        "end_ms": 164827
+      },
+      {
+        "start_ms": 200440,
+        "end_ms": 204440
+      },
+      {
+        "start_ms": 219197,
+        "end_ms": 225618
+      },
+      {
+        "start_ms": 236037,
+        "end_ms": 244299
+      },
+      {
+        "start_ms": 250590,
+        "end_ms": 262934
+      },
+      {
+        "start_ms": 286449,
+        "end_ms": 294215
+      }
+    ]
+  },
+  {
+    "video_id": "4cd680c7-2333-4dab-9fed-159f064a9e8c",
+    "filename": "dark.mp4",
+    "rallies": [
+      {
+        "start_ms": 6889,
+        "end_ms": 14866
+      },
+      {
+        "start_ms": 44836,
+        "end_ms": 52803
+      },
+      {
+        "start_ms": 76918,
+        "end_ms": 85415
+      },
+      {
+        "start_ms": 108888,
+        "end_ms": 116554
+      },
+      {
+        "start_ms": 140368,
+        "end_ms": 148875
+      },
+      {
+        "start_ms": 173018,
+        "end_ms": 177271
+      },
+      {
+        "start_ms": 196160,
+        "end_ms": 204431
+      },
+      {
+        "start_ms": 230281,
+        "end_ms": 243881
+      },
+      {
+        "start_ms": 273616,
+        "end_ms": 278655
+      },
+      {
+        "start_ms": 298876,
+        "end_ms": 306309
+      },
+      {
+        "start_ms": 341527,
+        "end_ms": 351354
+      }
+    ]
+  },
+  {
+    "video_id": "56f2739d-ff3c-4cac-8ada-4f275e57ab63",
+    "filename": "michu.mp4",
+    "rallies": [
+      {
+        "start_ms": 1735,
+        "end_ms": 10079
+      },
+      {
+        "start_ms": 41385,
+        "end_ms": 50385
+      },
+      {
+        "start_ms": 70205,
+        "end_ms": 78982
+      },
+      {
+        "start_ms": 94128,
+        "end_ms": 102472
+      },
+      {
+        "start_ms": 121660,
+        "end_ms": 131233
+      },
+      {
+        "start_ms": 143176,
+        "end_ms": 155791
+      },
+      {
+        "start_ms": 173776,
+        "end_ms": 188891
+      }
+    ]
+  },
+  {
+    "video_id": "70ab9d7f-8cc4-48cb-892a-1c36793cac72",
+    "filename": "IMG_1887.MOV",
+    "rallies": [
+      {
+        "start_ms": 16999,
+        "end_ms": 26999
+      },
+      {
+        "start_ms": 40999,
+        "end_ms": 46499
+      },
+      {
+        "start_ms": 57871,
+        "end_ms": 70915
+      },
+      {
+        "start_ms": 83534,
+        "end_ms": 96534
+      },
+      {
+        "start_ms": 111465,
+        "end_ms": 124972
+      },
+      {
+        "start_ms": 145896,
+        "end_ms": 159896
+      },
+      {
+        "start_ms": 172231,
+        "end_ms": 183170
+      },
+      {
+        "start_ms": 194072,
+        "end_ms": 202572
+      },
+      {
+        "start_ms": 214431,
+        "end_ms": 221273
+      },
+      {
+        "start_ms": 238273,
+        "end_ms": 252273
+      },
+      {
+        "start_ms": 267548,
+        "end_ms": 276548
+      },
+      {
+        "start_ms": 289012,
+        "end_ms": 297512
+      }
+    ]
+  },
+  {
+    "video_id": "7c61e308-64b2-4e3d-a3e4-10815645bda2",
+    "filename": "matchc.mp4",
+    "rallies": [
+      {
+        "start_ms": 9692,
+        "end_ms": 17924
+      },
+      {
+        "start_ms": 30230,
+        "end_ms": 45128
+      },
+      {
+        "start_ms": 130705,
+        "end_ms": 136808
+      },
+      {
+        "start_ms": 147609,
+        "end_ms": 157138
+      },
+      {
+        "start_ms": 175392,
+        "end_ms": 183927
+      },
+      {
+        "start_ms": 200383,
+        "end_ms": 230412
+      },
+      {
+        "start_ms": 246606,
+        "end_ms": 250652
+      },
+      {
+        "start_ms": 262555,
+        "end_ms": 274743
+      },
+      {
+        "start_ms": 285346,
+        "end_ms": 290354
+      }
+    ]
+  },
+  {
+    "video_id": "840e8b6b-8428-48d6-8af8-d239d7c64f5c",
+    "filename": "match.mp4",
+    "rallies": [
+      {
+        "start_ms": 19552,
+        "end_ms": 29083
+      },
+      {
+        "start_ms": 44313,
+        "end_ms": 69852
+      },
+      {
+        "start_ms": 96085,
+        "end_ms": 99585
+      },
+      {
+        "start_ms": 110513,
+        "end_ms": 118180
+      },
+      {
+        "start_ms": 133261,
+        "end_ms": 141976
+      },
+      {
+        "start_ms": 156289,
+        "end_ms": 165596
+      },
+      {
+        "start_ms": 180377,
+        "end_ms": 192534
+      },
+      {
+        "start_ms": 206884,
+        "end_ms": 214817
+      },
+      {
+        "start_ms": 229610,
+        "end_ms": 238409
+      },
+      {
+        "start_ms": 251802,
+        "end_ms": 268547
+      },
+      {
+        "start_ms": 285220,
+        "end_ms": 301609
+      }
+    ]
+  },
+  {
+    "video_id": "85108567-a028-4303-87a7-5004a87603a5",
+    "filename": "mechi.mp4",
+    "rallies": [
+      {
+        "start_ms": 10560,
+        "end_ms": 19380
+      },
+      {
+        "start_ms": 57840,
+        "end_ms": 65640
+      },
+      {
+        "start_ms": 82580,
+        "end_ms": 92560
+      },
+      {
+        "start_ms": 108240,
+        "end_ms": 124640
+      },
+      {
+        "start_ms": 158540,
+        "end_ms": 168240
+      }
+    ]
+  },
+  {
+    "video_id": "9170269b-8259-462e-8a23-28da51026410",
+    "filename": "muchi.mp4",
+    "rallies": [
+      {
+        "start_ms": 4006,
+        "end_ms": 19053
+      },
+      {
+        "start_ms": 40673,
+        "end_ms": 54221
+      },
+      {
+        "start_ms": 78612,
+        "end_ms": 87321
+      },
+      {
+        "start_ms": 102737,
+        "end_ms": 108175
+      },
+      {
+        "start_ms": 145947,
+        "end_ms": 156291
+      },
+      {
+        "start_ms": 174776,
+        "end_ms": 178611
+      }
+    ]
+  },
+  {
+    "video_id": "920ba69d-2526-4e6c-a357-c44af3bf5c99",
+    "filename": "matchop.mp4",
+    "rallies": [
+      {
+        "start_ms": 7574,
+        "end_ms": 16486
+      },
+      {
+        "start_ms": 64304,
+        "end_ms": 71804
+      },
+      {
+        "start_ms": 83518,
+        "end_ms": 95566
+      },
+      {
+        "start_ms": 110871,
+        "end_ms": 115371
+      },
+      {
+        "start_ms": 125092,
+        "end_ms": 133166
+      },
+      {
+        "start_ms": 154557,
+        "end_ms": 160130
+      },
+      {
+        "start_ms": 170640,
+        "end_ms": 178714
+      },
+      {
+        "start_ms": 205808,
+        "end_ms": 218381
+      },
+      {
+        "start_ms": 248220,
+        "end_ms": 263497
+      },
+      {
+        "start_ms": 277511,
+        "end_ms": 286011
+      }
+    ]
+  },
+  {
+    "video_id": "a5866029-7cf4-42d6-adc2-8e28111ffd81",
+    "filename": "matchope.mp4",
+    "rallies": [
+      {
+        "start_ms": 12574,
+        "end_ms": 21324
+      },
+      {
+        "start_ms": 54054,
+        "end_ms": 61330
+      },
+      {
+        "start_ms": 107941,
+        "end_ms": 115785
+      },
+      {
+        "start_ms": 127295,
+        "end_ms": 136072
+      },
+      {
+        "start_ms": 150150,
+        "end_ms": 157994
+      },
+      {
+        "start_ms": 170212,
+        "end_ms": 176712
+      }
+    ]
+  },
+  {
+    "video_id": "a7ee3d38-a3a9-4dcd-a2af-e0617997e708",
+    "filename": "natch.mp4",
+    "rallies": [
+      {
+        "start_ms": 47045,
+        "end_ms": 55869
+      },
+      {
+        "start_ms": 76760,
+        "end_ms": 85260
+      },
+      {
+        "start_ms": 120033,
+        "end_ms": 131986
+      },
+      {
+        "start_ms": 154278,
+        "end_ms": 158278
+      },
+      {
+        "start_ms": 188968,
+        "end_ms": 198827
+      },
+      {
+        "start_ms": 320620,
+        "end_ms": 332079
+      },
+      {
+        "start_ms": 352731,
+        "end_ms": 357231
+      },
+      {
+        "start_ms": 365329,
+        "end_ms": 377815
+      },
+      {
+        "start_ms": 392119,
+        "end_ms": 403807
+      },
+      {
+        "start_ms": 430823,
+        "end_ms": 440118
+      },
+      {
+        "start_ms": 450325,
+        "end_ms": 458556
+      }
+    ]
+  },
+  {
+    "video_id": "c6e4c876-beca-4cb8-9cce-4a4fc70553f1",
+    "filename": "mech.mp4",
+    "rallies": [
+      {
+        "start_ms": 14116,
+        "end_ms": 30366
+      },
+      {
+        "start_ms": 41741,
+        "end_ms": 50153
+      },
+      {
+        "start_ms": 63164,
+        "end_ms": 74143
+      },
+      {
+        "start_ms": 111779,
+        "end_ms": 116853
+      },
+      {
+        "start_ms": 135702,
+        "end_ms": 143046
+      },
+      {
+        "start_ms": 160531,
+        "end_ms": 177281
+      },
+      {
+        "start_ms": 191359,
+        "end_ms": 199136
+      },
+      {
+        "start_ms": 209375,
+        "end_ms": 215652
+      },
+      {
+        "start_ms": 231365,
+        "end_ms": 235034
+      }
+    ]
+  },
+  {
+    "video_id": "edc81438-10bc-431d-ae88-5c609f3fae93",
+    "filename": "macho.mp4",
+    "rallies": [
+      {
+        "start_ms": 16116,
+        "end_ms": 24528
+      },
+      {
+        "start_ms": 35470,
+        "end_ms": 43247
+      },
+      {
+        "start_ms": 62028,
+        "end_ms": 69940
+      },
+      {
+        "start_ms": 84018,
+        "end_ms": 88092
+      },
+      {
+        "start_ms": 106441,
+        "end_ms": 114217
+      },
+      {
+        "start_ms": 128294,
+        "end_ms": 139843
+      },
+      {
+        "start_ms": 155164,
+        "end_ms": 174917
+      }
+    ]
+  }
+]

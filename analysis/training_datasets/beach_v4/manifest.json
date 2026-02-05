@@ -1,0 +1,138 @@
+{
+  "name": "beach_v4",
+  "description": "Training dataset: beach_v4",
+  "created": "2026-02-05T20:37:35.810431",
+  "videos": [
+    {
+      "filename": "mochi.mp4",
+      "video_id": "07fedbd4-693e-4651-9fee-c616a1f4b413",
+      "content_hash": "d84522b493caae7d5c2f593fb59abb7f858acc92deda69bcb8b158d1340cf110",
+      "duration_ms": 196429,
+      "rally_count": 5
+    },
+    {
+      "filename": "matahtach.mp4",
+      "video_id": "1efa35cf-4edd-4504-b4a4-834eee9e5218",
+      "content_hash": "a95f6b77a01f7fb886e319f50115b7381e34dc5d4cb0c0265a3e1466c18579c9",
+      "duration_ms": 433766,
+      "rally_count": 15
+    },
+    {
+      "filename": "machi.mp4",
+      "video_id": "23a5f798-78a0-4b3a-8647-b4a2166274b1",
+      "content_hash": "ab8ce1aca545fc80c63fd9f5f4327d2d18ad5764a8ae6d1f9f09d63b90d9667f",
+      "duration_ms": 199600,
+      "rally_count": 3
+    },
+    {
+      "filename": "matttch.mp4",
+      "video_id": "23b662ba-99e0-47d6-a9ac-90bb6fa9bdd1",
+      "content_hash": "178047d8abd84ade8bbd07bf78eb5f3fed334959687386170b891ab68b2c3080",
+      "duration_ms": 238438,
+      "rally_count": 8
+    },
+    {
+      "filename": "match-2.MOV",
+      "video_id": "2b2d7786-1f78-4856-95d5-d3003b15f2a3",
+      "content_hash": "f201e92eab9e74b418c23d4f0c5bd7b30107422a012277dcad93a57c79787e17",
+      "duration_ms": 300049,
+      "rally_count": 10
+    },
+    {
+      "filename": "IMG_1820.MOV",
+      "video_id": "35ff869f-5698-4982-bcdb-267e11d70e0d",
+      "content_hash": "40e92a6bdd9bd29f028d4a84d1218f946b5d56e97cd2fd35bef15d4795b2e0bf",
+      "duration_ms": 300050,
+      "rally_count": 11
+    },
+    {
+      "filename": "dark.mp4",
+      "video_id": "4cd680c7-2333-4dab-9fed-159f064a9e8c",
+      "content_hash": "67b57630574fa0381b09c2ab9fca5fce3ae801fd11aaa7510f86dd359fadcdc4",
+      "duration_ms": 357033,
+      "rally_count": 11
+    },
+    {
+      "filename": "michu.mp4",
+      "video_id": "56f2739d-ff3c-4cac-8ada-4f275e57ab63",
+      "content_hash": "719e3318c988415f8f90de67e01a11491782c7b27995523de425d8d019e2fb5e",
+      "duration_ms": 199899,
+      "rally_count": 7
+    },
+    {
+      "filename": "IMG_1887.MOV",
+      "video_id": "70ab9d7f-8cc4-48cb-892a-1c36793cac72",
+      "content_hash": "b014b0df902ab97420db1560c8291adf5b4999d6112b436f84ad8c603cd6e257",
+      "duration_ms": 300891,
+      "rally_count": 12
+    },
+    {
+      "filename": "matchc.mp4",
+      "video_id": "7c61e308-64b2-4e3d-a3e4-10815645bda2",
+      "content_hash": "46eb0ed3eca0dbcf71ff99abe48566671989fbf8fb3bd08ebf14b62d0c10c33d",
+      "duration_ms": 291724,
+      "rally_count": 9
+    },
+    {
+      "filename": "match.mp4",
+      "video_id": "840e8b6b-8428-48d6-8af8-d239d7c64f5c",
+      "content_hash": "d5b1ec6c0856e6b502e3f966e44f316d3abb83576ffbbc2d6df0bb207e1400a1",
+      "duration_ms": 304170,
+      "rally_count": 11
+    },
+    {
+      "filename": "mechi.mp4",
+      "video_id": "85108567-a028-4303-87a7-5004a87603a5",
+      "content_hash": "d0734564e893bfffde90bd56b406e967243af4b65ba18c5085d9ee7cb8932ca2",
+      "duration_ms": 206840,
+      "rally_count": 5
+    },
+    {
+      "filename": "muchi.mp4",
+      "video_id": "9170269b-8259-462e-8a23-28da51026410",
+      "content_hash": "24e5b6de64016eef989293d643a425936b81db946b7e43449741f369b5b594c9",
+      "duration_ms": 178645,
+      "rally_count": 6
+    },
+    {
+      "filename": "matchop.mp4",
+      "video_id": "920ba69d-2526-4e6c-a357-c44af3bf5c99",
+      "content_hash": "7eb97a209ad3995655688419f47680ff0db8f405325288647f98f97ae1a5754d",
+      "duration_ms": 290156,
+      "rally_count": 10
+    },
+    {
+      "filename": "matchope.mp4",
+      "video_id": "a5866029-7cf4-42d6-adc2-8e28111ffd81",
+      "content_hash": "4b611e2a08d9d37a8f81d0863325a7916e1feec228f5b68192a7e4aff21311b5",
+      "duration_ms": 180346,
+      "rally_count": 6
+    },
+    {
+      "filename": "natch.mp4",
+      "video_id": "a7ee3d38-a3a9-4dcd-a2af-e0617997e708",
+      "content_hash": "28b6d76171fd9a2a48dcbed74fadc6120f062eb17da85a6b12c11e9f862544bb",
+      "duration_ms": 464700,
+      "rally_count": 11
+    },
+    {
+      "filename": "mech.mp4",
+      "video_id": "c6e4c876-beca-4cb8-9cce-4a4fc70553f1",
+      "content_hash": "efe6e2e4c38b8061c66babbeaad9364f0d5297e4849008e68b8fc554d21213f0",
+      "duration_ms": 235068,
+      "rally_count": 9
+    },
+    {
+      "filename": "macho.mp4",
+      "video_id": "edc81438-10bc-431d-ae88-5c609f3fae93",
+      "content_hash": "fa9580db96b28820d69cf44d66a492de077c3e2e7ba17c62dad2cb3019b9ebc1",
+      "duration_ms": 190690,
+      "rally_count": 7
+    }
+  ],
+  "stats": {
+    "total_videos": 18,
+    "total_rallies": 156,
+    "total_duration_min": 81.1
+  }
+}

@@ -660,18 +660,18 @@ def evaluate(
         import warnings
 
         warnings.warn(
-            "--temporal-model is deprecated. Use --binary-head instead (70% F1 vs 65% F1).",
+            "--temporal-model is deprecated. Use --binary-head instead (74% F1 vs 65% F1).",
             DeprecationWarning,
             stacklevel=2,
         )
         console.print(
             "[yellow]Warning: --temporal-model is deprecated. "
-            "Use --binary-head for better results (70% F1).[/yellow]"
+            "Use --binary-head for better results (74% F1).[/yellow]"
         )
 
     # Show pipeline info
     if binary_head:
-        console.print("Pipeline: [green]Binary head + decoder (70% F1)[/green]")
+        console.print("Pipeline: [green]Binary head + decoder (74% F1)[/green]")
     elif use_heuristics:
         console.print("Pipeline: [dim]Heuristics (57% F1)[/dim]")
     elif temporal_model is None:
