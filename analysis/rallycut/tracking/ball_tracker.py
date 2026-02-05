@@ -9,6 +9,7 @@ Uses lightweight ONNX models optimized for CPU (~100 FPS).
 
 import json
 import logging
+import os
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -175,7 +176,7 @@ class BallTracker:
         return cached_path
 
     def _load_session(self) -> Any:
-        """Load ONNX Runtime session."""
+        """Load ONNX Runtime session with GPU fallback to CPU."""
         if self._session is not None:
             return self._session
 
@@ -183,18 +184,34 @@ class BallTracker:
 
         model_path = self._ensure_model()
 
-        # Configure session options for CPU performance
+        # Configure session options for performance
         sess_options = ort.SessionOptions()
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        sess_options.intra_op_num_threads = 4  # Parallel ops within single inference
+        # Use available CPUs or environment override
+        num_threads = int(os.environ.get("ONNX_NUM_THREADS", os.cpu_count() or 4))
+        sess_options.intra_op_num_threads = num_threads
+
+        # Try GPU providers first, fall back to CPU
+        available_providers = ort.get_available_providers()
+        preferred_providers = []
+
+        # CUDA is typically 2-5x faster for this model
+        if "CUDAExecutionProvider" in available_providers:
+            preferred_providers.append("CUDAExecutionProvider")
+        if "CoreMLExecutionProvider" in available_providers:
+            preferred_providers.append("CoreMLExecutionProvider")
+        # Always include CPU as fallback
+        preferred_providers.append("CPUExecutionProvider")
 
         self._session = ort.InferenceSession(
             str(model_path),
             sess_options=sess_options,
-            providers=["CPUExecutionProvider"],
+            providers=preferred_providers,
         )
 
-        logger.info(f"Loaded ball tracking model: {model_path.name}")
+        # Log which provider was actually used
+        active_provider = self._session.get_providers()[0] if self._session.get_providers() else "unknown"
+        logger.info(f"Loaded ball tracking model: {model_path.name} (provider: {active_provider}, threads: {num_threads})")
         return self._session
 
     def _preprocess_frame(self, frame: np.ndarray) -> np.ndarray:
@@ -225,16 +242,11 @@ class BallTracker:
         Returns:
             Input tensor of shape (1, 9, 288, 512) normalized to 0-1
         """
-        # Stack frames: (9, 288, 512)
-        sequence = np.stack(frames, axis=0)
-
-        # Normalize to 0-1
-        sequence = sequence.astype(np.float32) / 255.0
-
-        # Add batch dimension: (1, 9, 288, 512)
-        sequence = np.expand_dims(sequence, axis=0)
-
-        return sequence
+        # Stack frames directly as float32 and normalize in one operation
+        # Shape: (1, 9, 288, 512) - add batch dimension during stack
+        sequence = np.stack(frames, axis=0).astype(np.float32, copy=False)
+        sequence *= (1.0 / 255.0)  # In-place multiply is faster than divide
+        return sequence[np.newaxis, ...]  # Add batch dimension: (1, 9, 288, 512)
 
     def _decode_heatmap(
         self,
@@ -251,14 +263,23 @@ class BallTracker:
         Returns:
             Tuple of (x_norm, y_norm, confidence) where coordinates are 0-1 normalized
         """
-        # Normalize heatmap to 0-1 if needed
-        heatmap_norm = heatmap.astype(np.float32)
-        if heatmap_norm.max() > 1.0:
-            heatmap_norm = heatmap_norm / 255.0
-
-        # Binary threshold
-        _, binary = cv2.threshold(heatmap_norm, threshold, 1.0, cv2.THRESH_BINARY)
-        binary_uint8 = (binary * 255).astype(np.uint8)
+        # Normalize heatmap to 0-1 in-place if needed, avoiding extra allocations
+        max_val = float(heatmap.max())
+        if max_val > 1.0:
+            # Scale threshold to match unnormalized range, avoiding division
+            scaled_threshold = threshold * 255.0
+            # Direct uint8 thresholding - single operation instead of three
+            if heatmap.dtype != np.uint8:
+                heatmap_uint8 = heatmap.astype(np.uint8, copy=False)
+            else:
+                heatmap_uint8 = heatmap
+            _, binary_uint8 = cv2.threshold(heatmap_uint8, int(scaled_threshold), 255, cv2.THRESH_BINARY)
+            # Normalize max_val for confidence calculation
+            max_val = max_val / 255.0
+        else:
+            # Already normalized - convert to uint8 for contour detection
+            _, binary = cv2.threshold(heatmap.astype(np.float32, copy=False), threshold, 1.0, cv2.THRESH_BINARY)
+            binary_uint8 = (binary * 255).astype(np.uint8)
 
         # Find contours
         contours, _ = cv2.findContours(binary_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -266,8 +287,11 @@ class BallTracker:
         if not contours:
             return 0.5, 0.5, 0.0
 
-        # Find largest contour
-        largest_contour = max(contours, key=cv2.contourArea)
+        # Find largest contour - for single contour, skip max() overhead
+        if len(contours) == 1:
+            largest_contour = contours[0]
+        else:
+            largest_contour = max(contours, key=cv2.contourArea)
 
         # Get centroid using moments
         moments = cv2.moments(largest_contour)
@@ -285,8 +309,7 @@ class BallTracker:
         x_norm = max(0.0, min(1.0, x_norm))
         y_norm = max(0.0, min(1.0, y_norm))
 
-        # Confidence based on contour area and max heatmap value
-        max_val = float(np.max(heatmap_norm))
+        # Confidence based on max heatmap value (already normalized above)
         confidence = min(1.0, max_val)
 
         return x_norm, y_norm, confidence
@@ -295,8 +318,6 @@ class BallTracker:
         self,
         output: np.ndarray,
         frame_number: int,
-        video_width: int,
-        video_height: int,
     ) -> list[BallPosition]:
         """
         Decode model output to ball positions.
@@ -307,8 +328,6 @@ class BallTracker:
         Args:
             output: Model output tensor
             frame_number: Frame index of the first output frame
-            video_width: Original video width
-            video_height: Original video height
 
         Returns:
             List of BallPosition for each output frame
@@ -426,6 +445,10 @@ class BallTracker:
             while frame_idx < end_frame:
                 ret, frame = cap.read()
                 if not ret:
+                    logger.warning(
+                        f"Frame read failed at index {frame_idx} "
+                        f"(expected {end_frame - start_frame} frames, got {frame_idx - start_frame})"
+                    )
                     break
 
                 # Preprocess and add to buffer
@@ -451,9 +474,7 @@ class BallTracker:
                     # Decode output (prediction is for middle frames of sequence)
                     # Model outputs 3 heatmaps for the middle 3 frames
                     middle_frame = frame_idx - SEQUENCE_LENGTH + SEQUENCE_LENGTH // 2 - 1
-                    decoded_positions = self._decode_output(
-                        output, middle_frame, video_width, video_height
-                    )
+                    decoded_positions = self._decode_output(output, middle_frame)
                     positions.extend(decoded_positions)
 
                     # Clear buffer and keep last (SEQUENCE_LENGTH - output_frames) frames
@@ -523,7 +544,7 @@ class BallTracker:
                 output = outputs[0]
 
                 middle_frame = frame_idx - SEQUENCE_LENGTH + SEQUENCE_LENGTH // 2 - 1
-                yield from self._decode_output(output, middle_frame, video_width, video_height)
+                yield from self._decode_output(output, middle_frame)
 
                 # Stride optimization: keep last (SEQUENCE_LENGTH - output_frames) frames
                 frame_buffer = frame_buffer[output_frames:]
