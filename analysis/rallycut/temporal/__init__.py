@@ -33,6 +33,7 @@ from rallycut.temporal.features import (
     load_cached_features,
 )
 from rallycut.temporal.inference import (
+    BoundaryRefinementConfig,
     RallySegment,
     TemporalInferenceConfig,
     TemporalInferenceResult,
@@ -99,6 +100,7 @@ __all__ = [
     "train_temporal_model",
     "video_level_split",
     # Inference
+    "BoundaryRefinementConfig",
     "RallySegment",
     "TemporalInferenceConfig",
     "TemporalInferenceResult",
