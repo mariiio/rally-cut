@@ -39,7 +39,6 @@ class TemporalInferenceConfig:
 
     # Anti-overmerge
     max_rally_duration_seconds: float = 60.0
-    low_confidence_threshold: float = 0.7
     internal_no_rally_threshold: float = 0.4
     consecutive_no_rally_windows: int = 2
     forced_split_multiplier: float = 1.5
@@ -268,11 +267,13 @@ def extract_segments_from_predictions(
             start_time = rally_start_idx * window_duration
             end_time = i * window_duration + (window_size / fps)
             avg_confidence = sum(rally_probs) / len(rally_probs) if rally_probs else 0.0
-            segments.append(RallySegment(
-                start_time=start_time,
-                end_time=end_time,
-                confidence=avg_confidence,
-            ))
+            segments.append(
+                RallySegment(
+                    start_time=start_time,
+                    end_time=end_time,
+                    confidence=avg_confidence,
+                )
+            )
             rally_probs = []
 
     # Handle rally at end of video
@@ -280,16 +281,18 @@ def extract_segments_from_predictions(
         start_time = rally_start_idx * window_duration
         end_time = len(predictions) * window_duration
         avg_confidence = sum(rally_probs) / len(rally_probs) if rally_probs else 0.0
-        segments.append(RallySegment(
-            start_time=start_time,
-            end_time=end_time,
-            confidence=avg_confidence,
-        ))
+        segments.append(
+            RallySegment(
+                start_time=start_time,
+                end_time=end_time,
+                confidence=avg_confidence,
+            )
+        )
 
     return segments
 
 
-def apply_anti_overmerge(
+def apply_anti_overmerge_segments(
     segments: list[RallySegment],
     probs: list[float],
     fps: float,
@@ -341,7 +344,11 @@ def apply_anti_overmerge(
                 consecutive_low = 0
 
         # If no natural split points found, force split at regular intervals
-        if not split_points and segment.duration > config.max_rally_duration_seconds * config.forced_split_multiplier:
+        if (
+            not split_points
+            and segment.duration
+            > config.max_rally_duration_seconds * config.forced_split_multiplier
+        ):
             # Force split at max_duration intervals
             interval_windows = int(config.max_rally_duration_seconds / window_duration)
             for i in range(start_idx + interval_windows, end_idx, interval_windows):
@@ -356,14 +363,18 @@ def apply_anti_overmerge(
                     # Compute confidence for this sub-segment
                     sub_start_idx = int(prev_start / window_duration)
                     sub_end_idx = split_idx
-                    sub_probs = [probs[i] for i in range(sub_start_idx, sub_end_idx) if i < len(probs)]
+                    sub_probs = [
+                        probs[i] for i in range(sub_start_idx, sub_end_idx) if i < len(probs)
+                    ]
                     sub_conf = sum(sub_probs) / len(sub_probs) if sub_probs else segment.confidence
 
-                    result.append(RallySegment(
-                        start_time=prev_start,
-                        end_time=split_time,
-                        confidence=sub_conf,
-                    ))
+                    result.append(
+                        RallySegment(
+                            start_time=prev_start,
+                            end_time=split_time,
+                            confidence=sub_conf,
+                        )
+                    )
                     prev_start = split_time
 
             # Add final sub-segment
@@ -372,11 +383,13 @@ def apply_anti_overmerge(
                 sub_probs = [probs[i] for i in range(sub_start_idx, end_idx) if i < len(probs)]
                 sub_conf = sum(sub_probs) / len(sub_probs) if sub_probs else segment.confidence
 
-                result.append(RallySegment(
-                    start_time=prev_start,
-                    end_time=segment.end_time,
-                    confidence=sub_conf,
-                ))
+                result.append(
+                    RallySegment(
+                        start_time=prev_start,
+                        end_time=segment.end_time,
+                        confidence=sub_conf,
+                    )
+                )
         else:
             result.append(segment)
 
@@ -443,13 +456,15 @@ def refine_boundaries(
 
         # Ensure valid segment
         if refined_end > refined_start + 0.5:  # Min 0.5 second
-            refined.append(RallySegment(
-                start_time=refined_start,
-                end_time=refined_end,
-                confidence=segment.confidence,
-                start_refined=refined_start_idx != start_idx,
-                end_refined=refined_end_idx != end_idx,
-            ))
+            refined.append(
+                RallySegment(
+                    start_time=refined_start,
+                    end_time=refined_end,
+                    confidence=segment.confidence,
+                    start_refined=refined_start_idx != start_idx,
+                    end_refined=refined_end_idx != end_idx,
+                )
+            )
         else:
             # Keep original if refinement failed
             refined.append(segment)
@@ -542,7 +557,7 @@ def run_temporal_inference(
     )
 
     # Apply anti-overmerge
-    segments = apply_anti_overmerge(
+    segments = apply_anti_overmerge_segments(
         segments,
         probs,
         fps,

@@ -13,7 +13,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from rallycut.core.models import TimeSegment
-from rallycut.temporal.features import FeatureCache, extract_features_for_video
+from rallycut.temporal.features import (
+    FeatureCache,
+    FeatureMetadata,
+    extract_features_for_video,
+)
 from rallycut.temporal.inference import (
     RallySegment,
     TemporalInferenceConfig,
@@ -25,6 +29,7 @@ from rallycut.temporal.inference import (
 if TYPE_CHECKING:
     import torch.nn as nn
 
+    from lib.volleyball_ml.video_mae import GameStateClassifier
     from rallycut.core.video import Video
 
 
@@ -79,7 +84,7 @@ class TemporalProcessor:
 
         self._model: nn.Module | None = None
         self._feature_cache: FeatureCache | None = None
-        self._classifier: object | None = None
+        self._classifier: GameStateClassifier | None = None
 
     def _get_model(self) -> nn.Module:
         """Lazy load temporal model."""
@@ -106,7 +111,7 @@ class TemporalProcessor:
             self._feature_cache = FeatureCache(cache_dir=self.config.feature_cache_dir)
         return self._feature_cache
 
-    def _get_classifier(self) -> object:
+    def _get_classifier(self) -> GameStateClassifier:
         """Lazy load VideoMAE classifier for feature extraction.
 
         Returns:
@@ -140,7 +145,7 @@ class TemporalProcessor:
     def _run_inference(
         self,
         coarse_features: np.ndarray,
-        metadata: object,
+        metadata: FeatureMetadata,
         fine_features: np.ndarray | None,
     ) -> TemporalInferenceResult:
         """Run temporal model inference on features."""
@@ -149,7 +154,7 @@ class TemporalProcessor:
 
         return run_temporal_inference(
             features=coarse_features,
-            metadata=metadata,  # type: ignore[arg-type]
+            metadata=metadata,
             model=model,
             config=inference_config,
             fine_features=fine_features,
@@ -199,7 +204,7 @@ class TemporalProcessor:
             classifier = self._get_classifier()
             coarse_features, metadata = extract_features_for_video(
                 video_path=video.path,
-                classifier=classifier,  # type: ignore[arg-type]
+                classifier=classifier,
                 stride=coarse_stride,
             )
 

@@ -7,8 +7,9 @@ for efficient training and inference of temporal models.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -107,9 +108,7 @@ class FeatureCache:
         feature_path, metadata_path = self._get_paths(content_hash, stride)
         return feature_path.exists() and metadata_path.exists()
 
-    def get(
-        self, content_hash: str, stride: int
-    ) -> tuple[np.ndarray, FeatureMetadata] | None:
+    def get(self, content_hash: str, stride: int) -> tuple[np.ndarray, FeatureMetadata] | None:
         """Get cached features for a video.
 
         Args:
@@ -119,8 +118,6 @@ class FeatureCache:
         Returns:
             Tuple of (features array, metadata) or None if not cached.
         """
-        import json
-
         feature_path, metadata_path = self._get_paths(content_hash, stride)
 
         if not feature_path.exists() or not metadata_path.exists():
@@ -153,9 +150,6 @@ class FeatureCache:
             features: Feature array of shape (num_windows, feature_dim).
             metadata: Feature metadata.
         """
-        import json
-        from dataclasses import asdict
-
         feature_path, metadata_path = self._get_paths(content_hash, stride)
 
         # Save features
@@ -273,17 +267,13 @@ def extract_features_for_video(
 
         if len(window_batch) >= batch_size:
             # Process batch
-            batch_features = classifier.get_encoder_features_batch(
-                window_batch, pooling=pooling
-            )
+            batch_features = classifier.get_encoder_features_batch(window_batch, pooling=pooling)
             all_features.append(batch_features)
             window_batch = []
 
     # Process remaining windows
     if window_batch:
-        batch_features = classifier.get_encoder_features_batch(
-            window_batch, pooling=pooling
-        )
+        batch_features = classifier.get_encoder_features_batch(window_batch, pooling=pooling)
         all_features.append(batch_features)
 
     # Combine all features
@@ -333,9 +323,7 @@ def load_cached_features(
         return cached
 
     # Extract features
-    features, metadata = extract_features_for_video(
-        video_path, classifier, stride=stride
-    )
+    features, metadata = extract_features_for_video(video_path, classifier, stride=stride)
     metadata.content_hash = content_hash
 
     # Cache for future use

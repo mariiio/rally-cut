@@ -95,7 +95,9 @@ def _print_summary(results: AggregateMetrics, params_used: PostProcessingParams 
         console.print()
         console.print(f"Total processing time: {results.total_processing_time:.1f}s")
         if results.inference_time_per_minute is not None:
-            console.print(f"Inference time per minute of video: {results.inference_time_per_minute:.1f}s/min")
+            console.print(
+                f"Inference time per minute of video: {results.inference_time_per_minute:.1f}s/min"
+            )
 
     # Parameters used
     if params_used:
@@ -254,16 +256,19 @@ def _apply_temporal_model(
     model: object,  # torch.nn.Module
     stride: int,
     content_hash: str,
+    feature_cache_dir: Path | None = None,
 ) -> list | None:
     """Apply temporal model to cached analysis results.
 
-    Uses pre-extracted features from training_data/features/ directory.
+    Uses pre-extracted features from the specified feature cache directory.
 
     Args:
         cached: Cached analysis with raw_results
         model: Loaded temporal model
         stride: Analysis stride in frames
         content_hash: Video content hash to look up cached features
+        feature_cache_dir: Directory containing cached features.
+            Defaults to training_data/features/ if not specified.
 
     Returns:
         List of RallySegment-like objects, or None if features not found
@@ -272,7 +277,8 @@ def _apply_temporal_model(
     from rallycut.temporal.inference import run_inference
 
     # Load features from training feature cache
-    feature_cache = FeatureCache(cache_dir=Path("training_data/features"))
+    cache_dir = feature_cache_dir or Path("training_data/features")
+    feature_cache = FeatureCache(cache_dir=cache_dir)
     cached_data = feature_cache.get(content_hash, stride)
 
     if cached_data is None:
@@ -335,6 +341,7 @@ def _run_evaluation(
     model_path: Path | None = None,
     model_id: str = "default",
     temporal_model_path: Path | None = None,
+    feature_cache_dir: Path | None = None,
     progress: Progress | None = None,
     task_id: TaskID | None = None,
 ) -> list[VideoEvaluationResult]:
@@ -381,7 +388,9 @@ def _run_evaluation(
 
         # Apply post-processing (temporal model or heuristics)
         if temporal_model is not None:
-            segments = _apply_temporal_model(cached, temporal_model, stride, video.content_hash)
+            segments = _apply_temporal_model(
+                cached, temporal_model, stride, video.content_hash, feature_cache_dir
+            )
             if segments is None:
                 logger.warning("No cached features for %s, using heuristics", video.filename)
                 segments = apply_post_processing_custom(cached, params)
@@ -528,6 +537,13 @@ def evaluate(
             help="Path to temporal model for learned post-processing (replaces heuristics)",
         ),
     ] = None,
+    feature_cache_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--feature-cache",
+            help="Directory for cached features (used with --temporal-model)",
+        ),
+    ] = None,
 ) -> None:
     """
     Evaluate rally detection against ground truth from the database.
@@ -562,7 +578,9 @@ def evaluate(
     if model_path:
         console.print(f"Weights: [dim]{model_path}[/dim]")
     else:
-        console.print(f"[yellow]Warning: No local weights found for '{model}', using default[/yellow]")
+        console.print(
+            f"[yellow]Warning: No local weights found for '{model}', using default[/yellow]"
+        )
 
     # Get model-specific preset
     preset = MODEL_PRESETS.get(model, MODEL_PRESETS["indoor"])
@@ -585,7 +603,9 @@ def evaluate(
         boundary_confidence_threshold=(
             boundary_threshold
             if boundary_threshold is not None
-            else preset.get("boundary_confidence_threshold", DEFAULT_PARAMS.boundary_confidence_threshold)
+            else preset.get(
+                "boundary_confidence_threshold", DEFAULT_PARAMS.boundary_confidence_threshold
+            )
         ),
         min_active_density=preset.get("min_active_density", DEFAULT_PARAMS.min_active_density),
         min_active_windows=DEFAULT_PARAMS.min_active_windows,
@@ -716,6 +736,7 @@ def evaluate(
             model_path=model_path,
             model_id=model,
             temporal_model_path=temporal_model,
+            feature_cache_dir=feature_cache_dir,
             progress=progress,
             task_id=task,
         )
@@ -818,7 +839,9 @@ def tune(
     if model_path:
         console.print(f"Weights: [dim]{model_path}[/dim]")
     else:
-        console.print(f"[yellow]Warning: No local weights found for '{model}', using default[/yellow]")
+        console.print(
+            f"[yellow]Warning: No local weights found for '{model}', using default[/yellow]"
+        )
 
     # Get grid
     try:
