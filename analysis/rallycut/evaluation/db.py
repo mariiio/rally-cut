@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import psycopg
+from dotenv import dotenv_values
 
 if TYPE_CHECKING:
     from psycopg import Connection
@@ -21,19 +22,23 @@ class DbConfig:
 
     @classmethod
     def from_env(cls) -> DbConfig:
-        """Load from environment, falling back to api/.env."""
+        """Load from environment, falling back to api/.env.
+
+        Uses python-dotenv for robust .env parsing that handles:
+        - Comments (lines starting with #)
+        - export prefix
+        - Quoted values with escaped characters
+        - Multiline values
+        """
         url = os.getenv("DATABASE_URL")
         if not url:
-            # Try loading from api/.env
+            # Try loading from api/.env using python-dotenv
             # __file__ = .../analysis/rallycut/evaluation/db.py
             # parents[3] = .../RallyCut (project root)
             api_env = Path(__file__).parents[3] / "api" / ".env"
             if api_env.exists():
-                for line in api_env.read_text().splitlines():
-                    line = line.strip()
-                    if line.startswith("DATABASE_URL="):
-                        url = line.split("=", 1)[1].strip().strip('"').strip("'")
-                        break
+                env_values = dotenv_values(api_env)
+                url = env_values.get("DATABASE_URL")
         if not url:
             raise ValueError(
                 "DATABASE_URL not set. Either set the environment variable or "

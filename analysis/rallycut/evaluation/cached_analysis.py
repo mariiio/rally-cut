@@ -28,6 +28,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Constants for post-processing heuristics
+# When both neighbors are PLAY, use this lower threshold for boundary extension
+NEIGHBOR_PLAY_CONFIDENCE_THRESHOLD = 0.25
+# Base stride used for density calculation (windows per this many frames)
+DENSITY_CALCULATION_STRIDE = 48
+
 
 @dataclass
 class CachedAnalysis:
@@ -446,7 +452,8 @@ def _apply_confidence_extension(
 
             should_extend = False
             if prev_is_play and next_is_play:
-                should_extend = active_confidence > 0.25
+                # Lower threshold when sandwiched between PLAY segments
+                should_extend = active_confidence > NEIGHBOR_PLAY_CONFIDENCE_THRESHOLD
             elif prev_is_play or next_is_play:
                 should_extend = active_confidence > threshold
 
@@ -474,50 +481,69 @@ def _apply_rally_continuation(
     fps: float,
     continuation_seconds: float,
 ) -> list[GameStateResult]:
-    """Apply rally continuation heuristic."""
+    """Apply rally continuation heuristic.
+
+    Bridges short NO_PLAY gaps within a rally by converting them to PLAY.
+    This prevents mid-rally false negatives from breaking rally detection.
+
+    Uses O(n log n) interval-based algorithm instead of O(frame_count) iteration.
+    For a 60-minute video at 30fps with stride 48, this is ~48x faster.
+    """
     if continuation_seconds <= 0 or not results:
         return results
 
     min_no_play_frames = int(continuation_seconds * fps)
 
-    # Build frame -> result mapping
-    frame_to_result: dict[int, int] = {}
+    # Create (start, end, idx, is_active) tuples and sort by start frame
+    intervals: list[tuple[int, int, int, bool]] = []
     for idx, r in enumerate(results):
         if r.start_frame is not None and r.end_frame is not None:
-            for f in range(r.start_frame, r.end_frame + 1):
-                frame_to_result[f] = idx
+            is_active = r.state in (GameState.PLAY, GameState.SERVICE)
+            intervals.append((r.start_frame, r.end_frame, idx, is_active))
 
-    if not frame_to_result:
+    if not intervals:
         return results
 
-    max_frame = max(frame_to_result.keys())
+    intervals.sort(key=lambda x: x[0])
+
+    results_to_extend: set[int] = set()
     in_rally = False
     consecutive_no_play = 0
-    results_to_extend: set[int] = set()
+    last_end_frame = -1
+    no_play_intervals_in_gap: list[int] = []  # Track NO_PLAY intervals during current gap
 
-    for frame in range(max_frame + 1):
-        result_idx = frame_to_result.get(frame)
-        if result_idx is None:
+    for start, end, idx, is_active in intervals:
+        # Count gap between intervals as NO_PLAY frames
+        if last_end_frame >= 0 and start > last_end_frame + 1:
+            gap_frames = start - last_end_frame - 1
             if in_rally:
-                consecutive_no_play += 1
+                consecutive_no_play += gap_frames
                 if consecutive_no_play >= min_no_play_frames:
                     in_rally = False
-            continue
-
-        result = results[result_idx]
-        is_active = result.state in (GameState.PLAY, GameState.SERVICE)
+                    no_play_intervals_in_gap.clear()
 
         if is_active:
+            # Active interval ends any gap and starts/continues rally
+            if in_rally and consecutive_no_play < min_no_play_frames:
+                # All NO_PLAY intervals in this gap should be extended
+                results_to_extend.update(no_play_intervals_in_gap)
             in_rally = True
             consecutive_no_play = 0
+            no_play_intervals_in_gap.clear()
         else:
+            # NO_PLAY interval
+            interval_frames = end - start + 1
             if in_rally:
-                consecutive_no_play += 1
+                consecutive_no_play += interval_frames
                 if consecutive_no_play >= min_no_play_frames:
                     in_rally = False
+                    no_play_intervals_in_gap.clear()
                 else:
-                    results_to_extend.add(result_idx)
+                    no_play_intervals_in_gap.append(idx)
 
+        last_end_frame = end
+
+    # Build extended results
     extended = []
     for idx, result in enumerate(results):
         if idx in results_to_extend:
@@ -657,7 +683,7 @@ def _build_segments(
 
         # Density filter
         if active_count > 1:
-            segment_stride_intervals = max(1, segment.frame_count / 48)  # Use base stride
+            segment_stride_intervals = max(1, segment.frame_count / DENSITY_CALCULATION_STRIDE)
             active_density = active_count / segment_stride_intervals
             if active_density < params.min_active_density:
                 continue

@@ -75,9 +75,20 @@ def match_rallies(
 ) -> MatchingResult:
     """Match predicted rallies to ground truth using IoU-based greedy matching.
 
-    Uses greedy matching: for each ground truth rally, find the best matching
-    prediction with IoU >= threshold. Each prediction can only match one
-    ground truth.
+    Uses greedy matching: for each ground truth rally in order, find the best
+    matching prediction with IoU >= threshold. Each prediction can only match
+    one ground truth.
+
+    LIMITATION: This greedy algorithm is order-dependent and may produce suboptimal
+    matches in edge cases. For example, if GT[0] has IoU 0.51 with Pred[0] and 0.9
+    with Pred[1], but GT[1] has IoU 0.95 with Pred[0], the greedy approach matches
+    GT[0] to Pred[1] (0.9) and GT[1] to Pred[0] (0.95), which is fine. But if the
+    order were different, GT[1] might claim Pred[0] first, leaving GT[0] with a
+    lower match.
+
+    For truly optimal matching (maximizing total IoU or TP count), the Hungarian
+    algorithm (scipy.optimize.linear_sum_assignment) would be needed. In practice,
+    this greedy approach works well when rallies are well-separated temporally.
 
     Args:
         ground_truth: List of (start_seconds, end_seconds) tuples for ground truth.

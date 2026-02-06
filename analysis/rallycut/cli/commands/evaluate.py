@@ -45,28 +45,34 @@ app = typer.Typer(help="Evaluate rally detection against ground truth")
 console = Console()
 
 
-def _print_summary(results: AggregateMetrics, params_used: PostProcessingParams | None) -> None:
+def _print_summary(
+    results: AggregateMetrics,
+    params_used: PostProcessingParams | None,
+    iou_threshold: float = 0.4,
+) -> None:
     """Print evaluation summary to console."""
     console.print()
     console.print("=" * 60)
-    console.print("[bold]RALLY DETECTION EVALUATION SUMMARY[/bold]")
+    console.print(f"[bold]EVALUATION SUMMARY[/bold] (IoU ≥ {iou_threshold})")
     console.print("=" * 60)
 
     # Overall metrics table
-    table = Table()
-    table.add_column("Metric", style="cyan")
-    table.add_column("Value", style="green")
-
     rm = results.rally_metrics
-    table.add_row("Videos Evaluated", str(results.video_count))
-    table.add_row("Ground Truth Rallies", str(results.total_ground_truth))
-    table.add_row("Detected Rallies", str(results.total_predictions))
-    table.add_row("True Positives", str(rm.true_positives))
-    table.add_row("False Positives", str(rm.false_positives))
-    table.add_row("False Negatives (Missed)", str(rm.false_negatives))
+    table = Table(show_header=False, box=None, padding=(0, 2))
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="white", justify="right")
+
+    table.add_row("Videos", str(results.video_count))
+    table.add_row("Ground Truth", str(results.total_ground_truth))
+    table.add_row("Detected", str(results.total_predictions))
+    table.add_row("", "")
+    table.add_row("True Positives", f"[green]{rm.true_positives}[/green]")
+    table.add_row("False Positives", f"[red]{rm.false_positives}[/red]")
+    table.add_row("False Negatives", f"[yellow]{rm.false_negatives}[/yellow]")
+    table.add_row("", "")
     table.add_row("Precision", f"{rm.precision:.1%}")
     table.add_row("Recall", f"{rm.recall:.1%}")
-    table.add_row("[bold]F1 Score[/bold]", f"[bold]{rm.f1:.1%}[/bold]")
+    table.add_row("[bold]F1 Score[/bold]", f"[bold green]{rm.f1:.1%}[/bold green]")
 
     console.print(table)
 
@@ -118,27 +124,29 @@ def _print_per_video_results(results: list[VideoEvaluationResult]) -> None:
     console.print()
     console.print("[bold]Per-Video Results:[/bold]")
 
-    table = Table()
-    table.add_column("Video", style="cyan")
+    table = Table(box=None, padding=(0, 1))
+    table.add_column("Video", style="cyan", no_wrap=True)
     table.add_column("GT", style="dim", justify="right")
-    table.add_column("Det", style="dim", justify="right")
-    table.add_column("Prec", style="green", justify="right")
-    table.add_column("Recall", style="green", justify="right")
-    table.add_column("F1", style="bold green", justify="right")
+    table.add_column("TP", style="green", justify="right")
+    table.add_column("FP", style="red", justify="right")
+    table.add_column("FN", style="yellow", justify="right")
+    table.add_column("F1", style="bold", justify="right")
     table.add_column("Time", style="dim", justify="right")
 
     for r in results:
         rm = r.rally_metrics
         time_str = f"{r.processing_time_seconds:.1f}s" if r.processing_time_seconds else "-"
         # Truncate filename for display
-        filename = r.video_filename[:35] + "..." if len(r.video_filename) > 38 else r.video_filename
+        filename = r.video_filename[:30] + "..." if len(r.video_filename) > 33 else r.video_filename
+        # Color F1 based on value
+        f1_color = "green" if rm.f1 >= 0.8 else ("yellow" if rm.f1 >= 0.6 else "red")
         table.add_row(
             filename,
             str(r.ground_truth_count),
-            str(r.prediction_count),
-            f"{rm.precision:.0%}",
-            f"{rm.recall:.0%}",
-            f"{rm.f1:.0%}",
+            str(rm.true_positives),
+            str(rm.false_positives),
+            str(rm.false_negatives),
+            f"[{f1_color}]{rm.f1:.0%}[/{f1_color}]",
             time_str,
         )
 
@@ -438,6 +446,7 @@ def _apply_ball_tracking(
         )
 
         validated_tuples = []
+        validation_errors = 0  # Track failures for reporting
         for start, end in segment_tuples:
             # Check cache
             if ball_cache.has(content_hash, start, end):
@@ -466,11 +475,17 @@ def _apply_ball_tracking(
                         "Ball validation rejected segment %.1f-%.1fs", start, end
                     )
             except Exception as e:
+                validation_errors += 1
                 logger.warning("Ball validation failed for segment %.1f-%.1fs: %s", start, end, e)
                 validated_tuples.append((start, end))  # Keep on failure
 
         segment_tuples = validated_tuples
-        logger.info("Ball validation: %d/%d segments passed", len(validated_tuples), len(segments))
+        log_msg = f"Ball validation: {len(validated_tuples)}/{len(segments)} segments passed"
+        if validation_errors > 0:
+            log_msg += f" ({validation_errors} errors, segments kept)"
+            logger.warning(log_msg)
+        else:
+            logger.info(log_msg)
 
     # Apply boundary refinement if enabled (uses tuned default config)
     if ball_boundary and segment_tuples:
@@ -543,10 +558,9 @@ def _run_evaluation(
         logger.info("Using temporal model: %s", temporal_model_path)
 
     for i, video in enumerate(videos):
+        # Update progress bar description
         if progress and task_id is not None:
-            progress.update(task_id, description=f"Processing {video.filename[:30]}...")
-        # Plain text log visible in non-interactive/captured output
-        print(f"[{i + 1}/{total}] Processing {video.filename}...", flush=True)
+            progress.update(task_id, description=f"[{i + 1}/{total}] {video.filename[:25]}...")
 
         # Get ground truth as (start, end) tuples
         ground_truth = [(r.start_seconds, r.end_seconds) for r in video.ground_truth_rallies]
@@ -621,13 +635,6 @@ def _run_evaluation(
             video_duration_seconds=video.duration_seconds,
         )
         results.append(result)
-        m = result.rally_metrics
-        print(
-            f"[{i + 1}/{total}] {video.filename}: "
-            f"P={m.precision:.0%} R={m.recall:.0%} F1={m.f1:.0%} "
-            f"({processing_time:.1f}s)",
-            flush=True,
-        )
 
         if progress and task_id is not None:
             progress.update(task_id, advance=1)
@@ -652,9 +659,9 @@ def evaluate(
         typer.Option(
             "--iou",
             "-i",
-            help="IoU threshold for matching rallies (0.0-1.0)",
+            help="IoU threshold for matching (0.4 recommended - accounts for labeling offset)",
         ),
-    ] = 0.5,
+    ] = 0.4,
     stride: Annotated[
         int,
         typer.Option(
@@ -689,6 +696,13 @@ def evaluate(
         typer.Option(
             "--boundary-threshold",
             help="Override boundary_confidence_threshold (0.0-1.0)",
+        ),
+    ] = None,
+    min_active_density: Annotated[
+        float | None,
+        typer.Option(
+            "--min-active-density",
+            help="Override min_active_density for segment filtering (0.0-1.0)",
         ),
     ] = None,
     output_json: Annotated[
@@ -734,7 +748,7 @@ def evaluate(
             "-m",
             help="Model variant: 'indoor' (original) or 'beach' (fine-tuned with beach heuristics)",
         ),
-    ] = "indoor",
+    ] = "beach",
     temporal_model: Annotated[
         Path | None,
         typer.Option(
@@ -882,7 +896,11 @@ def evaluate(
                 "boundary_confidence_threshold", DEFAULT_PARAMS.boundary_confidence_threshold
             )
         ),
-        min_active_density=preset.get("min_active_density", DEFAULT_PARAMS.min_active_density),
+        min_active_density=(
+            min_active_density
+            if min_active_density is not None
+            else preset.get("min_active_density", DEFAULT_PARAMS.min_active_density)
+        ),
         min_active_windows=DEFAULT_PARAMS.min_active_windows,
     )
 
@@ -896,6 +914,8 @@ def evaluate(
         overrides.append(f"min_play_duration={min_play}")
     if boundary_threshold is not None:
         overrides.append(f"boundary_confidence_threshold={boundary_threshold}")
+    if min_active_density is not None:
+        overrides.append(f"min_active_density={min_active_density}")
 
     if overrides:
         console.print(f"Parameter overrides: {', '.join(overrides)}")
@@ -909,9 +929,11 @@ def evaluate(
         console.print("[red]No videos with ground truth found![/red]")
         raise typer.Exit(1)
 
-    console.print(f"Found {len(videos)} videos with ground truth:")
-    for v in videos:
-        console.print(f"  - {v.filename}: {len(v.ground_truth_rallies)} ground truth rallies")
+    total_gt_rallies = sum(len(v.ground_truth_rallies) for v in videos)
+    console.print(
+        f"Found [cyan]{len(videos)}[/cyan] videos with "
+        f"[cyan]{total_gt_rallies}[/cyan] ground truth rallies"
+    )
 
     # Initialize cache and resolver
     cache = AnalysisCache()
@@ -975,7 +997,7 @@ def evaluate(
             results.append(result)
 
         aggregated = aggregate_metrics(results)
-        _print_summary(aggregated, None)
+        _print_summary(aggregated, None, iou_threshold)
         _print_per_video_results(results)
 
         if output_json:
@@ -1023,7 +1045,7 @@ def evaluate(
 
     # Aggregate and report
     aggregated = aggregate_metrics(results)
-    _print_summary(aggregated, params)
+    _print_summary(aggregated, params, iou_threshold)
     _print_per_video_results(results)
 
     # Export if requested
@@ -1060,9 +1082,9 @@ def tune(
         typer.Option(
             "--iou",
             "-i",
-            help="IoU threshold for matching",
+            help="IoU threshold for matching (0.4 recommended)",
         ),
-    ] = 0.5,
+    ] = 0.4,
     stride: Annotated[
         int,
         typer.Option(
@@ -1094,7 +1116,7 @@ def tune(
             "-m",
             help="Model variant: 'indoor' or 'beach'",
         ),
-    ] = "indoor",
+    ] = "beach",
 ) -> None:
     """
     Run parameter sweep to find optimal settings.
