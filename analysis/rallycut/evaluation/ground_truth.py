@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 from rallycut.evaluation.db import get_connection
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -147,11 +150,83 @@ def load_evaluation_videos(
             # ML-detected rally
             videos_map[vid].ml_detected_rallies.append(rally)
 
+    # Validate rallies for each video
+    for video in videos_map.values():
+        video.ground_truth_rallies = _validate_rallies(
+            video.ground_truth_rallies, video.id, "ground truth"
+        )
+        video.ml_detected_rallies = _validate_rallies(
+            video.ml_detected_rallies, video.id, "ML detected"
+        )
+
     # Filter to videos that have ground truth if required
     if require_ground_truth:
         return [v for v in videos_map.values() if v.ground_truth_rallies]
 
     return list(videos_map.values())
+
+
+def _validate_rallies(
+    rallies: list[GroundTruthRally], video_id: str, label: str
+) -> list[GroundTruthRally]:
+    """Validate rallies and log warnings for suspicious data.
+
+    Filters out:
+    - Duplicate rally IDs (keeps first occurrence)
+    - Rallies with invalid duration (start >= end)
+
+    Warns but keeps:
+    - Overlapping rally intervals (may be intentional)
+
+    Args:
+        rallies: List of rallies to validate.
+        video_id: Video ID for logging context.
+        label: Label for rally type (e.g. "ground truth", "ML detected").
+
+    Returns:
+        List of valid rallies.
+    """
+    if not rallies:
+        return rallies
+
+    valid_rallies: list[GroundTruthRally] = []
+    seen_ids: set[str] = set()
+
+    for rally in rallies:
+        # Check for duplicate IDs
+        if rally.id in seen_ids:
+            logger.warning(
+                "Video %s: Duplicate %s rally ID %s, skipping",
+                video_id, label, rally.id
+            )
+            continue
+        seen_ids.add(rally.id)
+
+        # Check for negative duration (start >= end)
+        if rally.start_ms >= rally.end_ms:
+            logger.warning(
+                "Video %s: %s rally %s has invalid duration (start=%d >= end=%d), skipping",
+                video_id, label, rally.id, rally.start_ms, rally.end_ms
+            )
+            continue
+
+        valid_rallies.append(rally)
+
+    # Check for overlapping intervals (after sorting by start time)
+    sorted_rallies = sorted(valid_rallies, key=lambda r: r.start_ms)
+    for i in range(1, len(sorted_rallies)):
+        prev = sorted_rallies[i - 1]
+        curr = sorted_rallies[i]
+        if curr.start_ms < prev.end_ms:
+            logger.warning(
+                "Video %s: Overlapping %s rallies detected: %s (%.1f-%.1fs) "
+                "overlaps with %s (%.1f-%.1fs)",
+                video_id, label,
+                prev.id, prev.start_seconds, prev.end_seconds,
+                curr.id, curr.start_seconds, curr.end_seconds
+            )
+
+    return valid_rallies
 
 
 def get_evaluation_video_ids() -> list[str]:

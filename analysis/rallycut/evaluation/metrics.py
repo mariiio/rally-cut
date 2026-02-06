@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from statistics import mean, median
 
 from rallycut.evaluation.matching import MatchingResult
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -235,11 +238,17 @@ def compute_metrics(
     )
 
 
-def aggregate_metrics(results: list[VideoEvaluationResult]) -> AggregateMetrics:
+def aggregate_metrics(
+    results: list[VideoEvaluationResult],
+    overmerge_threshold_seconds: float | None = None,
+) -> AggregateMetrics:
     """Aggregate metrics across multiple videos.
 
     Args:
         results: List of per-video evaluation results.
+        overmerge_threshold_seconds: Explicit overmerge threshold. If None, uses
+            the threshold from the first video (with validation that all videos
+            use the same threshold).
 
     Returns:
         AggregateMetrics with combined statistics.
@@ -251,13 +260,32 @@ def aggregate_metrics(results: list[VideoEvaluationResult]) -> AggregateMetrics:
     all_start_errors: list[int] = []
     all_end_errors: list[int] = []
     all_segment_durations: list[float] = []
-    overmerge_threshold = 60.0  # default
+
+    # Determine overmerge threshold
+    if overmerge_threshold_seconds is not None:
+        overmerge_threshold = overmerge_threshold_seconds
+    elif results:
+        overmerge_threshold = results[0].overmerge_metrics.overmerge_threshold_seconds
+        # Validate consistency across all videos
+        inconsistent = [
+            r.video_filename
+            for r in results
+            if r.overmerge_metrics.overmerge_threshold_seconds != overmerge_threshold
+        ]
+        if inconsistent:
+            logger.warning(
+                "Inconsistent overmerge thresholds across videos. Using %.0fs from first video. "
+                "Videos with different thresholds: %s",
+                overmerge_threshold,
+                ", ".join(inconsistent[:3]) + ("..." if len(inconsistent) > 3 else "")
+            )
+    else:
+        overmerge_threshold = 60.0  # default
 
     for r in results:
         all_start_errors.extend(r.boundary_metrics.start_errors_ms)
         all_end_errors.extend(r.boundary_metrics.end_errors_ms)
         all_segment_durations.extend(r.overmerge_metrics.segment_durations_seconds)
-        overmerge_threshold = r.overmerge_metrics.overmerge_threshold_seconds
 
     return AggregateMetrics(
         total_ground_truth=sum(r.ground_truth_count for r in results),
