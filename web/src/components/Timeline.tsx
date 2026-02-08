@@ -34,7 +34,6 @@ import { useCameraStore } from '@/stores/cameraStore';
 import { useAuthStore } from '@/stores/authStore';
 import { formatTimeShort, formatTime } from '@/utils/timeFormat';
 import { triggerRallyDetection, getDetectionStatus } from '@/services/api';
-import { ModelSelectDialog, ModelVariant } from './ModelSelectDialog';
 
 // Custom effect for rally segments
 const effects: Record<string, TimelineEffect> = {
@@ -155,7 +154,6 @@ export function Timeline() {
     activeMatch?.status ?? null
   );
   const [detectionResult, setDetectionResult] = useState<{ ralliesCount: number } | null>(null);
-  const [showModelSelect, setShowModelSelect] = useState(false);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const {
     currentTime,
@@ -1232,31 +1230,23 @@ export function Timeline() {
     return () => stopPolling();
   }, [activeMatchId, activeMatch?.status, startPolling, stopPolling, reloadCurrentMatch]);
 
-  // Handle clicking the detect button - opens model selection dialog
-  const handleStartDetection = () => {
-    if (!activeMatchId) return;
-    setShowModelSelect(true);
-  };
-
-  // Handle model selection and start detection
-  const handleModelSelect = async (model: ModelVariant) => {
+  // Handle clicking the detect button - auto-selects beach model
+  const handleStartDetection = async () => {
     if (!activeMatchId) return;
 
     // Require authentication for rally detection
     if (!isAuthenticated) {
-      setShowModelSelect(false);
       promptSignIn('Create an account to use AI rally detection');
       return;
     }
 
-    setShowModelSelect(false);
     setIsDetecting(true);
     setDetectionStatus('Starting analysis...');
     setDetectionProgress(0);
     setDetectionError(null);
 
     try {
-      await triggerRallyDetection(activeMatchId, model);
+      await triggerRallyDetection(activeMatchId, 'beach');
       // Detection started successfully - update match status in store so it persists across navigation
       setMatchStatus(activeMatchId, 'DETECTING');
       setDetectionStatus('Analyzing rallies...');
@@ -2379,12 +2369,6 @@ export function Timeline() {
         </Stack>
       </Box>
 
-      {/* Model selection dialog */}
-      <ModelSelectDialog
-        open={showModelSelect}
-        onClose={() => setShowModelSelect(false)}
-        onSelect={handleModelSelect}
-      />
     </Box>
   );
 }

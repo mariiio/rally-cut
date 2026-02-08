@@ -167,7 +167,7 @@ export function Hero() {
               >
                 <TrustBadge text="No editing skills needed" />
                 <TrustBadge text="Works in your browser" />
-                <TrustBadge text="Indoor & beach volleyball" />
+                <TrustBadge text="Beach volleyball" />
               </Stack>
             </MotionBox>
           </Box>

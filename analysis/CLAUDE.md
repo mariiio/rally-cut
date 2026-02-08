@@ -158,10 +158,10 @@ Two model variants available via `--model` flag:
 
 | Model | Weights | Use Case |
 |-------|---------|----------|
-| `indoor` (default) | `weights/videomae/game_state_classifier/` | Indoor volleyball courts |
-| `beach` | Same as indoor (tuned heuristics) | Beach volleyball |
+| `beach` (default) | `weights/videomae/game_state_classifier/` | Beach volleyball |
+| `indoor` | Same as beach (tuned heuristics) | Indoor volleyball courts |
 
-**Note:** Beach uses indoor model weights with tuned post-processing heuristics. Fine-tuning made the model less discriminative (48% PLAY predictions vs indoor's 24%), causing merged 130-second "rallies". Indoor model's visual understanding transfers well to beach; we just need different post-processing thresholds.
+**Note:** Both variants use the same model weights with different post-processing heuristics. Beach has stricter thresholds to prevent over-merging rallies.
 
 Each model has optimized post-processing heuristics defined in `MODEL_PRESETS` (see `core/config.py`).
 

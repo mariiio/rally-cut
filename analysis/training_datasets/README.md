@@ -24,26 +24,24 @@ RallyCut supports two model variants:
 
 | Model | Path | Purpose | Heuristics |
 |-------|------|---------|------------|
-| `indoor` | `weights/videomae/game_state_classifier/` | Original model for indoor volleyball | Default values |
-| `beach` | `weights/videomae/beach_volleyball/` | Fine-tuned for beach volleyball | Optimized for beach |
+| `beach` (default) | `weights/videomae/game_state_classifier/` | Beach volleyball | Optimized for beach |
+| `indoor` | `weights/videomae/game_state_classifier/` | Indoor volleyball | Default values |
 
-**Key differences:**
-- Indoor model: original from volleyball_analytics, never modified
-- Beach model: fine-tuned on labeled beach volleyball data
+**Note:** Both variants use the same base weights with different post-processing heuristics.
 
 ## Quick Start
 
 ### Using Models
 
 ```bash
-# Use indoor model (default)
+# Use beach model (default)
+rallycut cut video.mp4
+
+# Use indoor model
 rallycut cut video.mp4 --model indoor
 
-# Use beach model (with optimized heuristics)
-rallycut cut video.mp4 --model beach
-
 # Evaluate with beach model
-rallycut evaluate --model beach --iou 0.5
+rallycut evaluate --iou 0.5
 ```
 
 ### Training Workflow

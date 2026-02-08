@@ -101,10 +101,10 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
 
 ### Detection
 - `POST /v1/videos/:id/detect-rallies` → triggers Modal ML
-  - Body: `{ model?: "indoor" | "beach" }` - model variant (default: indoor)
+  - Body: `{ model?: "indoor" | "beach" }` - model variant (default: beach)
 - Progress via `POST /v1/webhooks/detection-progress`
 - Completion via `POST /v1/webhooks/detection-complete`
-- **Model variants**: `indoor` (original) or `beach` (fine-tuned with optimized heuristics)
+- **Model variants**: `beach` (default) or `indoor` (original)
 - **Deduplication**: Same `contentHash` reuses existing detection results
 
 ### State Sync

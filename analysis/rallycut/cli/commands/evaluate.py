@@ -746,7 +746,7 @@ def evaluate(
         typer.Option(
             "--model",
             "-m",
-            help="Model variant: 'indoor' (original) or 'beach' (fine-tuned with beach heuristics)",
+            help="Model variant: 'beach' (default) or 'indoor' (original)",
         ),
     ] = "beach",
     temporal_model: Annotated[
@@ -1114,7 +1114,7 @@ def tune(
         typer.Option(
             "--model",
             "-m",
-            help="Model variant: 'indoor' or 'beach'",
+            help="Model variant: 'beach' (default) or 'indoor'",
         ),
     ] = "beach",
 ) -> None:
