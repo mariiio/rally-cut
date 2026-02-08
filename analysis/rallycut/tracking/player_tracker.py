@@ -31,9 +31,7 @@ PROGRESS_INTERVAL_SECONDS = 3.0  # Report progress every 3 seconds
 
 # Player filtering thresholds
 COURT_MARGIN = 4.0  # Meters outside court boundary to allow (servers, boundary plays)
-MIN_COURT_PRESENCE = 0.5  # Minimum ratio of positions with valid court coordinates
 BALL_PROXIMITY_THRESHOLD = 0.15  # Normalized distance (fraction of frame diagonal)
-MIN_BALL_PROXIMITY = 0.05  # Minimum ratio of frames near ball
 BALL_CONFIDENCE_MIN = 0.5  # Only use high-confidence ball detections
 BALL_COVERAGE_MIN = 0.3  # Minimum ball detection coverage to use ball filtering
 
@@ -46,6 +44,11 @@ MERGE_SIZE_TOLERANCE = 0.50  # Bbox dimensions within 50% (far players have more
 MERGE_MIN_FRAGMENT_FRAMES = 5  # Ignore fragments shorter than this
 MERGE_VELOCITY_WINDOW = 5  # Frames to average for velocity estimation
 MERGE_MAX_ITERATIONS = 20  # Prevent runaway merging
+
+# Smart player identification thresholds (volleyball-context-aware)
+MIN_COURT_ENGAGEMENT = 0.15  # Must engage with court at least 15% of time
+MIN_POSITION_SPREAD = 1.0  # Minimum spread in meters (tracking noise ~0.5m)
+MAX_POSITION_SPREAD = 4.0  # Spread of active player covering court area
 
 
 @dataclass
@@ -333,6 +336,159 @@ class PlayerTracker:
 
         # Return 0.5 (neutral) if no matched frames
         return near_count / matched if matched > 0 else 0.5
+
+    def _compute_court_engagement_score(self, track: PlayerTrack) -> float:
+        """
+        Score based on engagement with actual playing area.
+
+        Players enter the court interior. Non-players stay in margins or outside.
+        Interior positions count full, marginal positions count half.
+
+        Args:
+            track: Player track to analyze
+
+        Returns:
+            Score from 0.0 to 1.0 where 1.0 = always inside court
+        """
+        if not track.positions or self.calibration is None:
+            return 0.5
+
+        interior = 0
+        marginal = 0
+        outside = 0
+
+        for p in track.positions:
+            if p.court_x is None or p.court_y is None:
+                outside += 1
+                continue
+
+            # Check court interior (strict bounds: 0 to 16m X, 0 to 8m Y)
+            in_interior = 0 <= p.court_x <= 16 and 0 <= p.court_y <= 8
+
+            if in_interior:
+                interior += 1
+            elif self.calibration.is_point_in_court(
+                (p.court_x, p.court_y), margin=COURT_MARGIN
+            ):
+                # In margins (within COURT_MARGIN of court)
+                marginal += 1
+            else:
+                outside += 1
+
+        total = len(track.positions)
+        if total == 0:
+            return 0.0
+
+        # Interior counts full, marginal counts half
+        engagement = (interior + 0.5 * marginal) / total
+        return min(1.0, engagement)
+
+    def _compute_movement_spread_score(self, track: PlayerTrack) -> float:
+        """
+        Score based on how spread out positions are on court.
+
+        Active players cover their court half (~4m x 4m area).
+        Non-players (referees, spectators) stay in one spot with minimal spread.
+
+        Args:
+            track: Player track to analyze
+
+        Returns:
+            Score from 0.0 to 1.0 where 1.0 = high spread (active player)
+        """
+        court_positions = [
+            (p.court_x, p.court_y)
+            for p in track.positions
+            if p.court_x is not None and p.court_y is not None
+        ]
+
+        if len(court_positions) < 10:
+            return 0.5  # Insufficient data
+
+        xs = [p[0] for p in court_positions]
+        ys = [p[1] for p in court_positions]
+
+        # Standard deviation in each dimension
+        std_x = float(np.std(xs))
+        std_y = float(np.std(ys))
+
+        # Geometric mean captures spread in both dimensions
+        spread = math.sqrt(std_x * std_y)
+
+        # Normalize to 0-1 range
+        score = (spread - MIN_POSITION_SPREAD) / (
+            MAX_POSITION_SPREAD - MIN_POSITION_SPREAD
+        )
+        return max(0.0, min(1.0, score))
+
+    def _compute_ball_reactivity_score(
+        self,
+        track: PlayerTrack,
+        ball_by_frame: dict[int, tuple[float, float]],
+    ) -> float:
+        """
+        Score based on movement correlation with ball position.
+
+        Players react to ball (move toward it or away after hitting).
+        Non-players don't correlate with ball movement.
+
+        Uses cosine similarity between player velocity and direction to ball.
+        Takes absolute value since moving toward OR away indicates reactivity.
+
+        Args:
+            track: Player track to analyze
+            ball_by_frame: Pre-computed frame -> (x, y) ball position lookup
+
+        Returns:
+            Score from 0.0 to 1.0 where 1.0 = high ball reactivity
+        """
+        if len(ball_by_frame) < 10 or len(track.positions) < 10:
+            return 0.5  # Insufficient data
+
+        # Build frame-aligned reactivity measurements
+        reactions: list[float] = []
+        prev_pos: PlayerPosition | None = None
+
+        for p in track.positions:
+            if p.frame_number not in ball_by_frame:
+                prev_pos = p
+                continue
+
+            if prev_pos is None:
+                prev_pos = p
+                continue
+
+            ball_x, ball_y = ball_by_frame[p.frame_number]
+
+            # Player movement vector
+            player_dx = p.x - prev_pos.x
+            player_dy = p.y - prev_pos.y
+            player_mag = math.sqrt(player_dx**2 + player_dy**2)
+
+            # Direction to ball
+            ball_dx = ball_x - p.x
+            ball_dy = ball_y - p.y
+            ball_mag = math.sqrt(ball_dx**2 + ball_dy**2)
+
+            if player_mag > 0.001 and ball_mag > 0.001:
+                # Cosine similarity: positive = moving toward ball
+                dot = player_dx * ball_dx + player_dy * ball_dy
+                cos_sim = dot / (player_mag * ball_mag)
+                # abs: moving toward OR away is reactive
+                reactions.append(abs(cos_sim))
+
+            prev_pos = p
+
+        if not reactions:
+            return 0.5
+
+        # Average reactivity
+        avg_reactivity = sum(reactions) / len(reactions)
+
+        # Normalize: random movement = ~0.5 avg, reactive = ~0.7+
+        # 0.4 baseline (random), 0.7 = score 1.0
+        score = (avg_reactivity - 0.4) / 0.3
+        return max(0.0, min(1.0, score))
 
     def _estimate_track_velocity(
         self,
@@ -894,11 +1050,14 @@ class PlayerTracker:
         """
         Filter and sort tracks to keep most prominent players.
 
+        Uses volleyball-context-aware scoring to positively identify active players
+        based on court engagement, movement spread, and ball reactivity.
+
         Multi-stage filtering:
         1. Hard filter: minimum track length (10% of video)
-        2. Hard filter: court presence >= 50% (if calibrated)
-        3. Soft filter: ball proximity >= 5% (if ball data with >30% coverage)
-        4. Score remaining candidates
+        2. Compute all scores (length, court, ball, engagement, spread, reactivity)
+        3. Hard filter: court engagement >= 15% (must enter playing area)
+        4. Combined volleyball-weighted scoring
         5. Keep top max_players by score
 
         Args:
@@ -929,84 +1088,102 @@ class PlayerTracker:
         candidates = [t for t in tracks if len(t.positions) >= min_track_length]
         logger.debug(f"After length filter: {len(candidates)} tracks")
 
-        # Compute scores for all candidates
-        scored_tracks: list[tuple[PlayerTrack, float, float, float]] = []
+        # Stage 2: Compute all scores for candidates
+        scored_tracks: list[tuple[PlayerTrack, dict[str, float]]] = []
 
         for track in candidates:
-            # Length score (normalized 0-1)
-            length_score = min(1.0, len(track.positions) / total_frames)
+            scores: dict[str, float] = {
+                # Core scores
+                "length": min(1.0, len(track.positions) / total_frames),
+                "court_presence": (
+                    self._compute_court_presence_ratio(track)
+                    if has_calibration
+                    else 0.5
+                ),
+                "ball_proximity": (
+                    self._compute_ball_proximity_score(track, ball_by_frame)
+                    if has_ball_data
+                    else 0.5
+                ),
+                # Volleyball-context scores
+                "engagement": (
+                    self._compute_court_engagement_score(track)
+                    if has_calibration
+                    else 0.5
+                ),
+                "spread": (
+                    self._compute_movement_spread_score(track)
+                    if has_calibration
+                    else 0.5
+                ),
+                "reactivity": (
+                    self._compute_ball_reactivity_score(track, ball_by_frame)
+                    if has_ball_data
+                    else 0.5
+                ),
+            }
+            scored_tracks.append((track, scores))
 
-            # Court presence score
-            court_score = self._compute_court_presence_ratio(track) if has_calibration else 0.5
-
-            # Ball proximity score (reuse pre-built lookup)
-            ball_score = (
-                self._compute_ball_proximity_score(track, ball_by_frame)
-                if has_ball_data
-                else 0.5
-            )
-
-            scored_tracks.append((track, length_score, court_score, ball_score))
-
-        # Stage 2: Hard filter by court presence (if calibrated)
+        # Stage 3: Hard filter by court engagement (must enter playing area)
         if has_calibration:
             before_count = len(scored_tracks)
             scored_tracks = [
-                (t, ls, cs, bs)
-                for t, ls, cs, bs in scored_tracks
-                if cs >= MIN_COURT_PRESENCE
+                (t, s) for t, s in scored_tracks if s["engagement"] >= MIN_COURT_ENGAGEMENT
             ]
             filtered_count = before_count - len(scored_tracks)
             if filtered_count > 0:
-                logger.info(f"Filtered {filtered_count} tracks with low court presence")
+                logger.info(
+                    f"Filtered {filtered_count} tracks with no court engagement"
+                )
 
-        # Stage 3: Soft filter by ball proximity (if ball data available)
-        # Only apply if we have enough candidates after court filtering
-        if has_ball_data and len(scored_tracks) > self.max_players:
-            before_count = len(scored_tracks)
-            scored_tracks = [
-                (t, ls, cs, bs)
-                for t, ls, cs, bs in scored_tracks
-                if bs >= MIN_BALL_PROXIMITY
-            ]
-            filtered_count = before_count - len(scored_tracks)
-            if filtered_count > 0:
-                logger.info(f"Filtered {filtered_count} tracks with low ball proximity")
+        # Stage 4: Compute combined scores with volleyball-aware weights
+        # Note: Spread is used in scoring but not as a hard filter, since short
+        # rallies may have limited player movement
+        final_scored: list[tuple[PlayerTrack, float, dict[str, float]]] = []
 
-        # Stage 4: Compute combined scores
-        # Weights: 0.3 length + 0.4 court + 0.3 ball
-        # Adjust weights when data unavailable
-        # Also build lookup for O(1) access during logging
-        track_scores: dict[int, tuple[float, float, float, float]] = {}
-        final_scored: list[tuple[PlayerTrack, float]] = []
-
-        for track, length_score, court_score, ball_score in scored_tracks:
+        for track, scores in scored_tracks:
             if has_calibration and has_ball_data:
-                score = 0.3 * length_score + 0.4 * court_score + 0.3 * ball_score
+                # Full data: volleyball-context weighted
+                combined = (
+                    0.10 * scores["length"]
+                    + 0.15 * scores["court_presence"]
+                    + 0.20 * scores["engagement"]
+                    + 0.20 * scores["spread"]
+                    + 0.20 * scores["ball_proximity"]
+                    + 0.15 * scores["reactivity"]
+                )
             elif has_calibration:
-                # No ball data: 0.4 length + 0.6 court
-                score = 0.4 * length_score + 0.6 * court_score
+                # No ball data: emphasize court metrics
+                combined = (
+                    0.15 * scores["length"]
+                    + 0.25 * scores["court_presence"]
+                    + 0.30 * scores["engagement"]
+                    + 0.30 * scores["spread"]
+                )
             elif has_ball_data:
-                # No court data: 0.5 length + 0.5 ball
-                score = 0.5 * length_score + 0.5 * ball_score
+                # No calibration: use ball metrics
+                combined = (
+                    0.30 * scores["length"]
+                    + 0.40 * scores["ball_proximity"]
+                    + 0.30 * scores["reactivity"]
+                )
             else:
                 # No court or ball data: just use length
-                score = length_score
+                combined = scores["length"]
 
-            track_scores[track.track_id] = (length_score, court_score, ball_score, score)
-            final_scored.append((track, score))
+            final_scored.append((track, combined, scores))
 
         # Stage 5: Sort by score and keep top players
         final_scored.sort(key=lambda x: x[1], reverse=True)
-        result = [track for track, _ in final_scored[: self.max_players]]
+        result = [track for track, _, _ in final_scored[: self.max_players]]
 
-        # Log kept vs rejected (O(n) using dict lookup)
-        for i, (track, score) in enumerate(final_scored):
+        # Log kept vs rejected with detailed score breakdown
+        for i, (track, combined, scores) in enumerate(final_scored):
             status = "KEPT" if i < self.max_players else "REJECTED"
-            _, court_score, ball_score, _ = track_scores[track.track_id]
             logger.info(
-                f"Track {track.track_id}: court={court_score:.2f}, "
-                f"ball={ball_score:.2f}, score={score:.2f} -> {status}"
+                f"Track {track.track_id}: engage={scores['engagement']:.2f}, "
+                f"spread={scores['spread']:.2f}, react={scores['reactivity']:.2f}, "
+                f"score={combined:.2f} -> {status}"
             )
 
         # Re-assign track IDs to be 1-indexed and sequential

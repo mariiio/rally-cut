@@ -236,36 +236,69 @@ API triggers Modal via webhook. Results posted back on completion.
 
 ## Player Tracking Filtering
 
-Player tracking uses multi-stage filtering to exclude non-players (referees, spectators, passersby):
+Player tracking uses multi-stage filtering with volleyball-context-aware scoring to positively identify active players and exclude non-players (referees, spectators, passersby).
+
+### Design Principles
+
+Instead of detecting "non-players", we **positively identify players** based on beach volleyball behaviors:
+1. **Players engage with the ball** - they move toward it, position relative to its trajectory
+2. **Players cover their court half** - movement spreads across their defensive zone
+3. **Players must enter the playing area** - can't play without being on court
+4. **Players are active** - constantly repositioning, not stationary
+
+### Filtering Stages
 
 **Stage 1: Track Length Filter (Hard)**
 - Tracks shorter than 10% of video frames are discarded
 
-**Stage 2: Court Presence Filter (Hard, requires calibration)**
-- Tracks with <50% positions inside court bounds are discarded
-- Uses 4m margin around court for serves and boundary plays
+**Stage 2: Score Computation**
+Computes six scores for each track:
+- `length`: Fraction of video where track was detected
+- `court_presence`: Fraction of positions inside court bounds (4m margin)
+- `ball_proximity`: Fraction of frames where player was near ball
+- `engagement`: Court engagement score (interior vs margins vs outside)
+- `spread`: Movement spread score (geometric mean of position std dev)
+- `reactivity`: Ball reactivity score (movement correlation with ball position)
 
-**Stage 3: Ball Proximity Filter (Soft, requires ball tracking)**
-- Only applied if >4 candidates remain after court filtering
-- Tracks with <5% frames near ball (<15% of frame diagonal) are discarded
-- Requires ball tracking with >30% high-confidence detections
+**Stage 3: Court Engagement Filter (Hard, requires calibration)**
+- Tracks with engagement < 15% are discarded
+- Engagement = (interior_positions + 0.5 * marginal_positions) / total
+- Players must enter the court interior; non-players stay in margins
 
 **Stage 4: Combined Scoring**
+Movement spread is used in scoring but NOT as a hard filter, since short rallies
+may have limited player movement.
+
+With full data (calibration + ball tracking):
 ```
-score = 0.3 * length_score + 0.4 * court_score + 0.3 * ball_score
+score = 0.10 * length + 0.15 * court_presence + 0.20 * engagement
+      + 0.20 * spread + 0.20 * ball_proximity + 0.15 * reactivity
 ```
-Weights adjust when data unavailable (e.g., no calibration → 0.5 length + 0.5 ball).
+Weights adjust when data unavailable:
+- No ball data: `0.15 length + 0.25 court + 0.30 engagement + 0.30 spread`
+- No calibration: `0.30 length + 0.40 ball_proximity + 0.30 reactivity`
+- Neither: length only
 
 **Stage 5: Top-K Selection**
 - Keep top 4 tracks by combined score (beach volleyball)
 
-**Thresholds** (defined in `tracking/player_tracker.py`):
+### Volleyball-Context Scores
+
+| Score | Description | Player Behavior | Non-Player Behavior |
+|-------|-------------|-----------------|---------------------|
+| Engagement | Time in court interior vs margins | High (enters court) | Low (stays in margins) |
+| Spread | Position variance (geometric mean of std dev) | High (~4-5m) | Low (~0.5m, noise only) |
+| Reactivity | Movement correlation with ball direction | High (reacts to ball) | Low (random/none) |
+
+### Thresholds
+
 | Parameter | Value | Purpose |
 |-----------|-------|---------|
 | `COURT_MARGIN` | 4.0m | Allow boundary plays, serves |
-| `MIN_COURT_PRESENCE` | 0.5 | 50% positions must be in-court |
+| `MIN_COURT_ENGAGEMENT` | 0.15 | 15% engagement required (servers behind baseline) |
+| `MIN_POSITION_SPREAD` | 1.0m | Minimum spread for normalization (tracking noise ~0.5m) |
+| `MAX_POSITION_SPREAD` | 4.0m | Spread of active player covering court area |
 | `BALL_PROXIMITY_THRESHOLD` | 0.15 | ~15% of frame diagonal |
-| `MIN_BALL_PROXIMITY` | 0.05 | 5% frames must be near ball |
 | `BALL_COVERAGE_MIN` | 0.3 | 30% ball detection coverage required |
 
 ## Track Merging (Pre-Filtering)
