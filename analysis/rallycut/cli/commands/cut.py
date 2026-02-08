@@ -219,9 +219,9 @@ def cut(  # noqa: C901
         help="Show detailed ML classification diagnostics",
     ),
     model: str = typer.Option(
-        "indoor",
+        "beach",
         "--model", "-m",
-        help="Model variant: 'indoor' (original) or 'beach' (fine-tuned with beach heuristics)",
+        help="Model variant: 'beach' (default) or 'indoor' (original)",
     ),
     heuristics: bool = typer.Option(
         False,

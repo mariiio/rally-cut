@@ -1192,7 +1192,7 @@ def extract_features(
         help="Output directory for cached features",
     ),
     model: str = typer.Option(
-        "indoor", "--model", "-m", help="Model variant: 'indoor' or 'beach'"
+        "beach", "--model", "-m", help="Model variant: 'beach' or 'indoor'"
     ),
     force: bool = typer.Option(
         False, "--force", "-f", help="Force re-extraction even if cached"

@@ -42,7 +42,7 @@ const faqs = [
   {
     question: 'What about other sports?',
     answer:
-      'RallyCut is optimized for beach and indoor volleyball. Support for other racket sports is on our roadmap. Let us know what sports you\'d like to see!',
+      'RallyCut is optimized for beach volleyball. Support for other sports is on our roadmap. Let us know what you\'d like to see!',
   },
   {
     question: 'Can I cancel my subscription anytime?',

@@ -60,7 +60,7 @@ class VideoCutter:
         min_gap_seconds: float | None = None,
         auto_stride: bool = True,
         rally_continuation_seconds: float | None = None,
-        model_variant: str = "indoor",
+        model_variant: str = "beach",
         use_temporal_model: bool = False,
         temporal_model_path: Path | None = None,
         temporal_model_version: str = "v2",

@@ -292,8 +292,8 @@ def main() -> None:
     parser.add_argument(
         "--model",
         choices=["indoor", "beach"],
-        default="indoor",
-        help="Model variant: 'indoor' (original) or 'beach' (fine-tuned)",
+        default="beach",
+        help="Model variant: 'beach' (default) or 'indoor' (original)",
     )
 
     args = parser.parse_args()

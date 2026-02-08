@@ -50,7 +50,7 @@ async function triggerLocalDetection(params: {
 
   console.log(`[LOCAL] Starting detection for job ${params.jobId}`);
   console.log(`[LOCAL] Video: ${params.videoS3Key}`);
-  console.log(`[LOCAL] Model: ${params.modelVariant || "indoor"}`);
+  console.log(`[LOCAL] Model: ${params.modelVariant || "beach"}`);
   console.log(`[LOCAL] Callback: ${params.callbackUrl}`);
 
   // Build arguments
@@ -372,7 +372,7 @@ export async function triggerRallyDetection(
     `[DETECTION] Using ${useLocal ? "LOCAL" : "MODAL"} detection for job ${createdJob.id}`
   );
   console.log(`[DETECTION] Video key: ${videoKey}`);
-  console.log(`[DETECTION] Model variant: ${modelVariant || "indoor"}`);
+  console.log(`[DETECTION] Model variant: ${modelVariant || "beach"}`);
 
   await triggerFn({
     jobId: createdJob.id,

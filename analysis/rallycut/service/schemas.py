@@ -85,8 +85,8 @@ class DetectionConfig(BaseModel):
     """Optional configuration overrides for detection."""
 
     model_variant: ModelVariant = Field(
-        default=ModelVariant.INDOOR,
-        description="Model variant: 'indoor' (original) or 'beach' (fine-tuned)",
+        default=ModelVariant.BEACH,
+        description="Model variant: 'beach' (default) or 'indoor' (original)",
     )
     min_play_duration: float = Field(
         default=5.0, ge=0.0, description="Minimum rally duration to include (seconds)"
