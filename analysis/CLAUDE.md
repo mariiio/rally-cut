@@ -118,9 +118,18 @@ rallycut/
 │   ├── inference.py          # Model loading and inference
 │   ├── models.py             # v1/v2/v3 temporal models (deprecated)
 │   └── training.py           # Training loop with validation
+├── tracking/        # Ball and player tracking
+│   ├── ball_tracker.py       # YOLO-based ball detection
+│   ├── player_tracker.py     # YOLO + ByteTrack player tracking + filtering
+│   └── ball_*.py             # Ball validation, features, boundary refinement
+├── court/           # Court calibration
+│   └── calibration.py        # Homography for image→court projection
+├── analytics/       # Player statistics
+│   └── player_stats.py       # Distance, velocity, heatmaps
 ├── evaluation/      # Ground truth loading, metrics, parameter tuning
 ├── service/         # Cloud detection (Modal deployment)
-│   └── platforms/modal_app.py  # Modal GPU function
+│   ├── platforms/modal_app.py       # Modal GPU function
+│   └── player_tracking_runner.py    # Local player tracking subprocess
 lib/volleyball_ml/   # ML model wrappers (VideoMAE)
 tests/
 ├── unit/            # Fast tests with mocked ML
@@ -224,6 +233,65 @@ uv run python -m rallycut.service.local_runner
 ```
 
 API triggers Modal via webhook. Results posted back on completion.
+
+## Player Tracking Filtering
+
+Player tracking uses multi-stage filtering to exclude non-players (referees, spectators, passersby):
+
+**Stage 1: Track Length Filter (Hard)**
+- Tracks shorter than 10% of video frames are discarded
+
+**Stage 2: Court Presence Filter (Hard, requires calibration)**
+- Tracks with <50% positions inside court bounds are discarded
+- Uses 4m margin around court for serves and boundary plays
+
+**Stage 3: Ball Proximity Filter (Soft, requires ball tracking)**
+- Only applied if >4 candidates remain after court filtering
+- Tracks with <5% frames near ball (<15% of frame diagonal) are discarded
+- Requires ball tracking with >30% high-confidence detections
+
+**Stage 4: Combined Scoring**
+```
+score = 0.3 * length_score + 0.4 * court_score + 0.3 * ball_score
+```
+Weights adjust when data unavailable (e.g., no calibration → 0.5 length + 0.5 ball).
+
+**Stage 5: Top-K Selection**
+- Keep top 4 tracks by combined score (beach volleyball)
+
+**Thresholds** (defined in `tracking/player_tracker.py`):
+| Parameter | Value | Purpose |
+|-----------|-------|---------|
+| `COURT_MARGIN` | 4.0m | Allow boundary plays, serves |
+| `MIN_COURT_PRESENCE` | 0.5 | 50% positions must be in-court |
+| `BALL_PROXIMITY_THRESHOLD` | 0.15 | ~15% of frame diagonal |
+| `MIN_BALL_PROXIMITY` | 0.05 | 5% frames must be near ball |
+| `BALL_COVERAGE_MIN` | 0.3 | 30% ball detection coverage required |
+
+## Track Merging (Pre-Filtering)
+
+Before filtering, fragmented tracks are merged to handle ByteTrack ID breaks:
+
+**Algorithm:**
+1. Filter out noise (tracks < 5 frames)
+2. For each pair of non-overlapping tracks:
+   - Predict where earlier track would be based on velocity
+   - Score based on prediction accuracy, size similarity, velocity consistency
+3. Greedily merge best candidates until no valid merges
+
+**Video-Agnostic Design:**
+- Time thresholds in seconds (converted to frames using actual fps)
+- Spatial thresholds normalized (0-1 range, works at any resolution)
+- Velocity estimation adapts to video framerate
+
+**Thresholds:**
+| Parameter | Value | Purpose |
+|-----------|-------|---------|
+| `MERGE_MAX_GAP_SECONDS` | 2.0s | Max gap to consider merging |
+| `MERGE_MAX_SPATIAL_DIST` | 0.20 | 20% of frame (includes prediction tolerance) |
+| `MERGE_SIZE_TOLERANCE` | 0.50 | 50% bbox size variation (far players vary more) |
+| `MERGE_MIN_SCORE` | 0.45 | Confidence threshold |
+| `MERGE_MIN_FRAGMENT_FRAMES` | 5 | Ignore noise |
 
 ## Code Style
 

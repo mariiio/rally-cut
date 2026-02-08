@@ -1,4 +1,4 @@
-"""Ball tracking module for automatic camera keyframe generation."""
+"""Ball and player tracking module for volleyball video analysis."""
 
 from rallycut.tracking.ball_boundary import (
     BallBoundaryConfig,
@@ -19,6 +19,12 @@ from rallycut.tracking.ball_validation import (
     validate_segment_with_ball,
     validate_segment_with_early_exit,
     validate_segments_batch,
+)
+from rallycut.tracking.player_tracker import (
+    PlayerPosition,
+    PlayerTrack,
+    PlayerTracker,
+    PlayerTrackingResult,
 )
 
 __all__ = [
@@ -47,4 +53,9 @@ __all__ = [
     # Ball cache
     "BallFeatureCache",
     "get_ball_cache",
+    # Player tracker
+    "PlayerTracker",
+    "PlayerTrack",
+    "PlayerPosition",
+    "PlayerTrackingResult",
 ]
