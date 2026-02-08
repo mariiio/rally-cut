@@ -1,0 +1,257 @@
+"""Local player tracking runner for development.
+
+This script runs player tracking locally and calls the webhook when complete,
+just like Modal would in production. Used for local development where
+Modal can't callback to localhost.
+
+Usage:
+    python -m rallycut.service.player_tracking_runner \
+        --job-id <uuid> \
+        --video-path <local_path_or_s3_key> \
+        --rally-id <uuid> \
+        --start-ms 1000 \
+        --end-ms 15000 \
+        --callback-url http://localhost:3001/v1/webhooks/player-tracking-complete \
+        --webhook-secret <secret>
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import tempfile
+import time
+from pathlib import Path
+
+import boto3
+import httpx
+
+
+def download_from_s3(s3_key: str, bucket: str, temp_dir: Path) -> Path:
+    """Download video from S3 to temp directory."""
+    s3_config = {
+        "aws_access_key_id": os.environ.get("AWS_ACCESS_KEY_ID"),
+        "aws_secret_access_key": os.environ.get("AWS_SECRET_ACCESS_KEY"),
+        "region_name": os.environ.get("AWS_REGION", "us-east-1"),
+    }
+    if os.environ.get("S3_ENDPOINT"):
+        s3_config["endpoint_url"] = os.environ["S3_ENDPOINT"]
+    s3 = boto3.client("s3", **s3_config)
+
+    filename = Path(s3_key).name
+    local_path = temp_dir / filename
+
+    print(f"[LOCAL] Downloading s3://{bucket}/{s3_key} to {local_path}")
+    s3.download_file(bucket, s3_key, str(local_path))
+    return local_path
+
+
+def send_webhook(
+    callback_url: str,
+    webhook_secret: str | None,
+    payload: dict,
+) -> bool:
+    """Send webhook with results."""
+    headers = {"Content-Type": "application/json"}
+    if webhook_secret:
+        headers["X-Webhook-Secret"] = webhook_secret
+
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(callback_url, json=payload, headers=headers)
+            response.raise_for_status()
+            print(f"[LOCAL] Webhook sent successfully to {callback_url}")
+            return True
+    except Exception as e:
+        print(f"[LOCAL] Webhook failed: {e}")
+        return False
+
+
+def send_progress_webhook(
+    base_callback_url: str,
+    webhook_secret: str | None,
+    job_id: str,
+    progress: float,
+    message: str,
+) -> bool:
+    """Send progress update webhook."""
+    # Convert complete URL to progress URL
+    progress_url = base_callback_url.replace(
+        "player-tracking-complete", "player-tracking-progress"
+    )
+
+    headers = {"Content-Type": "application/json"}
+    if webhook_secret:
+        headers["X-Webhook-Secret"] = webhook_secret
+
+    payload = {
+        "job_id": job_id,
+        "progress": progress,
+        "message": message,
+    }
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            response = client.post(progress_url, json=payload, headers=headers)
+            response.raise_for_status()
+            return True
+    except Exception as e:
+        # Don't fail tracking on progress webhook error
+        print(f"[LOCAL] Progress webhook failed: {e}")
+        return False
+
+
+def run_tracking(
+    job_id: str,
+    video_path: str,
+    rally_id: str,
+    start_ms: int,
+    end_ms: int,
+    callback_url: str,
+    webhook_secret: str | None,
+    s3_bucket: str | None = None,
+    calibration_json: str | None = None,
+    ball_positions_json: str | None = None,
+) -> None:
+    """Run player tracking and send results via webhook."""
+    start_time = time.time()
+    temp_dir = None
+    local_video_path = None
+
+    try:
+        # Import tracking modules
+        from rallycut.tracking.player_tracker import PlayerTracker
+
+        # Parse calibration if provided
+        calibration_data = None
+        if calibration_json:
+            calibration_data = json.loads(calibration_json)
+            print(f"[LOCAL] Using calibration: courtType={calibration_data.get('courtType')}")
+        else:
+            print("[LOCAL] No calibration data provided")
+
+        # Parse ball positions if provided
+        ball_positions = None
+        if ball_positions_json:
+            ball_positions = json.loads(ball_positions_json)
+            print(f"[LOCAL] Using ball positions: {len(ball_positions)} detections")
+
+        # Determine if we need to download from S3
+        if video_path.startswith("s3://") or (s3_bucket and not Path(video_path).exists()):
+            if video_path.startswith("s3://"):
+                parts = video_path[5:].split("/", 1)
+                s3_bucket = parts[0]
+                video_s3_key = parts[1] if len(parts) > 1 else ""
+            else:
+                video_s3_key = video_path
+
+            temp_dir = Path(tempfile.mkdtemp(prefix="rallycut_tracking_"))
+            local_video_path = download_from_s3(video_s3_key, s3_bucket or "", temp_dir)
+        else:
+            local_video_path = Path(video_path)
+
+        if not local_video_path.exists():
+            raise FileNotFoundError(f"Video not found: {local_video_path}")
+
+        print(f"[LOCAL] Starting player tracking for {local_video_path}")
+        print(f"[LOCAL] Rally: {rally_id}")
+        print(f"[LOCAL] Time range: {start_ms}ms - {end_ms}ms")
+
+        # Create tracker
+        tracker = PlayerTracker(
+            model="yolov8n.pt",
+            confidence_threshold=0.42,  # Lower threshold to catch darker-skinned players
+            max_players=4,  # Beach volleyball
+        )
+
+        # Run tracking with progress webhook
+        def progress_callback(progress: float, message: str) -> None:
+            print(f"[LOCAL] Tracking progress: {progress * 100:.0f}% - {message}")
+            send_progress_webhook(
+                callback_url,
+                webhook_secret,
+                job_id,
+                progress,
+                message,
+            )
+
+        result = tracker.track_rally(
+            video_path=local_video_path,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            calibration_data=calibration_data,
+            progress_callback=progress_callback,
+            ball_positions=ball_positions,
+        )
+
+        processing_time_ms = (time.time() - start_time) * 1000
+
+        # Build webhook payload
+        webhook_payload = {
+            "job_id": job_id,
+            "status": "completed",
+            "tracks_json": result.to_dict(),
+            "player_count": result.player_count,
+            "frame_count": result.frame_count,
+            "processing_time_ms": round(processing_time_ms),
+            "model_version": result.model_version,
+        }
+
+        print(f"[LOCAL] Tracking complete: {result.player_count} players, {result.frame_count} frames")
+        print(f"[LOCAL] Processing time: {processing_time_ms/1000:.1f}s")
+
+        # Send webhook
+        send_webhook(callback_url, webhook_secret, webhook_payload)
+
+    except Exception as e:
+        print(f"[LOCAL] Tracking failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+        # Send error webhook
+        error_payload = {
+            "job_id": job_id,
+            "status": "failed",
+            "error_message": str(e),
+        }
+        send_webhook(callback_url, webhook_secret, error_payload)
+
+    finally:
+        # Cleanup temp directory
+        if temp_dir and temp_dir.exists():
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run player tracking locally")
+    parser.add_argument("--job-id", required=True, help="Job ID")
+    parser.add_argument("--video-path", required=True, help="Local path or S3 key")
+    parser.add_argument("--rally-id", required=True, help="Rally ID")
+    parser.add_argument("--start-ms", type=int, required=True, help="Start time in milliseconds")
+    parser.add_argument("--end-ms", type=int, required=True, help="End time in milliseconds")
+    parser.add_argument("--callback-url", required=True, help="Webhook callback URL")
+    parser.add_argument("--webhook-secret", help="Webhook secret for auth")
+    parser.add_argument("--s3-bucket", help="S3 bucket name (for S3 downloads)")
+    parser.add_argument("--calibration", help="Calibration data as JSON string")
+    parser.add_argument("--ball-positions-json", help="Ball positions as JSON string")
+
+    args = parser.parse_args()
+
+    run_tracking(
+        job_id=args.job_id,
+        video_path=args.video_path,
+        rally_id=args.rally_id,
+        start_ms=args.start_ms,
+        end_ms=args.end_ms,
+        callback_url=args.callback_url,
+        webhook_secret=args.webhook_secret,
+        s3_bucket=args.s3_bucket,
+        calibration_json=args.calibration,
+        ball_positions_json=args.ball_positions_json,
+    )
+
+
+if __name__ == "__main__":
+    main()

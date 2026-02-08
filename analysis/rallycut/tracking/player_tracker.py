@@ -189,7 +189,7 @@ class PlayerTracker:
         self,
         model: str = DEFAULT_MODEL,
         calibration: CourtCalibrator | None = None,
-        confidence_threshold: float = 0.5,
+        confidence_threshold: float = 0.42,
         max_players: int = 4,  # Beach volleyball = 4 players
     ):
         """
@@ -595,6 +595,37 @@ class PlayerTracker:
         a_first = track_a.positions[0].frame_number
         return not (a_last < b_first or b_last < a_first)
 
+    def _tracks_coexist_spatially(
+        self,
+        track_a: PlayerTrack,
+        track_b: PlayerTrack,
+    ) -> bool:
+        """
+        Check if tracks have overlapping frames at different positions.
+
+        If track A and B both have detections at the same frame but different
+        positions, they're definitely different players - don't merge.
+
+        Returns:
+            True if tracks coexist at different positions (don't merge)
+        """
+        frames_a = {p.frame_number: (p.x, p.y) for p in track_a.positions}
+        frames_b = {p.frame_number: (p.x, p.y) for p in track_b.positions}
+
+        common_frames = set(frames_a.keys()) & set(frames_b.keys())
+        if not common_frames:
+            return False  # No overlap, can't determine
+
+        # Check if positions are far apart in any common frame
+        for frame in common_frames:
+            pos_a = frames_a[frame]
+            pos_b = frames_b[frame]
+            dist = math.sqrt((pos_a[0] - pos_b[0]) ** 2 + (pos_a[1] - pos_b[1]) ** 2)
+            if dist > 0.05:  # 5% of frame = definitely different people
+                return True
+
+        return False
+
     def _compute_merge_score(
         self,
         earlier: PlayerTrack,
@@ -610,6 +641,14 @@ class PlayerTracker:
             Merge score (0-1) or None if not mergeable
         """
         if not earlier.positions or not later.positions:
+            return None
+
+        # Reject if tracks coexist at different positions (different players)
+        if self._tracks_coexist_spatially(earlier, later):
+            logger.debug(
+                f"  Reject {earlier.track_id}->{later.track_id}: "
+                "coexist at different positions"
+            )
             return None
 
         end_pos = earlier.positions[-1]
@@ -733,13 +772,26 @@ class PlayerTracker:
         if len(tracks) <= 4:
             return tracks
 
-        # Filter out very short fragments (likely noise)
-        valid_tracks = [
-            t for t in tracks if len(t.positions) >= MERGE_MIN_FRAGMENT_FRAMES
-        ]
-        noise_tracks = [
-            t for t in tracks if len(t.positions) < MERGE_MIN_FRAGMENT_FRAMES
-        ]
+        # Conditionally filter short fragments:
+        # - If we have few tracks (<=max_players*2), keep ALL fragments
+        #   to avoid losing detections of poorly-detected players
+        # - If we have many tracks, filter noise to reduce merge complexity
+        if len(tracks) <= self.max_players * 2:
+            # Few tracks - keep all, including short fragments
+            valid_tracks = tracks
+            noise_tracks: list[PlayerTrack] = []
+            logger.debug(
+                f"Track merging: keeping all {len(tracks)} tracks "
+                "(few tracks, preserving short fragments)"
+            )
+        else:
+            # Many tracks - filter noise
+            valid_tracks = [
+                t for t in tracks if len(t.positions) >= MERGE_MIN_FRAGMENT_FRAMES
+            ]
+            noise_tracks = [
+                t for t in tracks if len(t.positions) < MERGE_MIN_FRAGMENT_FRAMES
+            ]
 
         if len(valid_tracks) <= 4:
             # Not enough valid tracks, return originals
