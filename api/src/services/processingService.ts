@@ -2,8 +2,11 @@ import { ProcessingStatus } from "@prisma/client";
 import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 import { spawn } from "child_process";
 import fs from "fs/promises";
+import { createWriteStream } from "fs";
 import os from "os";
 import path from "path";
+import { Readable } from "stream";
+import { pipeline } from "stream/promises";
 
 import { env } from "../config/env.js";
 import {
@@ -38,8 +41,8 @@ function shouldUseLocalProcessing(): boolean {
 
 /**
  * Generate poster image immediately after upload.
- * This is called synchronously from confirmVideoUpload for fast UX.
- * ~2-3 seconds even for large videos (only reads 1 frame).
+ * Downloads video from S3 and extracts a single frame as JPEG.
+ * Note: For large videos, download time dominates (streaming to disk).
  */
 export async function generatePosterImmediate(
   videoId: string,
@@ -54,14 +57,8 @@ export async function generatePosterImmediate(
     const inputPath = path.join(tmpDir, "input.mp4");
     const posterPath = path.join(tmpDir, "poster.jpg");
 
-    // Download video from S3
-    const downloadUrl = await generateDownloadUrl(s3Key);
-    const response = await fetch(downloadUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to download video: ${response.status}`);
-    }
-    const buffer = await response.arrayBuffer();
-    await fs.writeFile(inputPath, Buffer.from(buffer));
+    // Download video from S3 (streaming to handle large files)
+    await downloadFromS3(s3Key, inputPath);
 
     // Extract video metadata (FPS, width, height) using ffprobe
     let fps: number | null = null;
@@ -540,15 +537,9 @@ async function triggerLocalProcessing(
     const posterPath = path.join(tmpDir, "poster.jpg");
     const proxyPath = path.join(tmpDir, "proxy.mp4");
 
-    // Download video from S3
+    // Download video from S3 (streaming to handle large files)
     console.log(`[LOCAL PROCESSING] Downloading ${s3Key}...`);
-    const downloadUrl = await generateDownloadUrl(s3Key);
-    const response = await fetch(downloadUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to download video: ${response.status}`);
-    }
-    const buffer = await response.arrayBuffer();
-    await fs.writeFile(inputPath, Buffer.from(buffer));
+    await downloadFromS3(s3Key, inputPath);
 
     const originalSize = (await fs.stat(inputPath)).size;
 
@@ -781,4 +772,21 @@ function runFFprobe(args: string[]): Promise<string> {
       }
     });
   });
+}
+
+/**
+ * Download a file from S3 to local disk using streaming.
+ * Avoids loading large files into memory which would crash the process.
+ */
+async function downloadFromS3(s3Key: string, destPath: string): Promise<void> {
+  const downloadUrl = await generateDownloadUrl(s3Key);
+  const response = await fetch(downloadUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to download from S3: ${response.status}`);
+  }
+  if (!response.body) {
+    throw new Error("No response body from S3");
+  }
+  const writeStream = createWriteStream(destPath);
+  await pipeline(Readable.fromWeb(response.body as never), writeStream);
 }
