@@ -22,7 +22,6 @@ from rallycut.tracking.ball_validation import (
 )
 from rallycut.tracking.player_tracker import (
     PlayerPosition,
-    PlayerTrack,
     PlayerTracker,
     PlayerTrackingResult,
 )
@@ -55,7 +54,6 @@ __all__ = [
     "get_ball_cache",
     # Player tracker
     "PlayerTracker",
-    "PlayerTrack",
     "PlayerPosition",
     "PlayerTrackingResult",
 ]

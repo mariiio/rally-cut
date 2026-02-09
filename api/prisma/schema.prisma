@@ -352,6 +352,7 @@ model Rally {
   highlightRallies HighlightRally[]
   cameraEdits      RallyCameraEdit[]
   ballTrack        BallTrack?
+  playerTrack      PlayerTrack?
 
   @@index([videoId])
   @@index([videoId, startMs])
@@ -391,6 +392,48 @@ model BallTrack {
   @@index([rallyId])
   @@index([status])
   @@map("ball_tracks")
+}
+
+// ============================================================================
+// Player Tracking (debug visualization)
+// ============================================================================
+
+enum PlayerTrackStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model PlayerTrack {
+  id               String            @id @default(uuid())
+  rallyId          String            @unique @map("rally_id")
+  status           PlayerTrackStatus @default(PENDING)
+
+  frameCount       Int?              @map("frame_count")
+  fps              Float?            @map("fps") // Video fps at time of tracking
+  detectionRate    Float?            @map("detection_rate")
+  avgConfidence    Float?            @map("avg_confidence")
+  avgPlayerCount   Float?            @map("avg_player_count")
+  uniqueTrackCount Int?              @map("unique_track_count")
+  positionsJson    Json?             @map("positions_json") // Flat array of {frameNumber, trackId, x, y, width, height, confidence}
+
+  // Court split info for debug overlay
+  courtSplitY      Float?            @map("court_split_y")
+  primaryTrackIds  Json?             @map("primary_track_ids") // Array of track IDs
+
+  processingTimeMs Int?              @map("processing_time_ms")
+  modelVersion     String?           @map("model_version")
+  error            String?
+
+  createdAt        DateTime          @default(now()) @map("created_at")
+  completedAt      DateTime?         @map("completed_at")
+
+  rally            Rally             @relation(fields: [rallyId], references: [id], onDelete: Cascade)
+
+  @@index([rallyId])
+  @@index([status])
+  @@map("player_tracks")
 }
 
 // ============================================================================
