@@ -74,25 +74,7 @@ In local development mode:
 
 ## Tier System
 
-Three subscription tiers with increasing limits:
-
-| Feature | Basic (Free) | Pro ($9.99/mo) | Elite ($24.99/mo) |
-|---------|--------------|----------------|-------------------|
-| AI Detections/month | 2 | 15 | 40 |
-| Monthly uploads | 5 | 20 | 50 |
-| Max video duration | 30 min | 60 min | 90 min |
-| Max file size | 500 MB | 3 GB | 5 GB |
-| Storage cap | 2 GB | 20 GB | 75 GB |
-| Export quality | 720p + watermark | Original | Original |
-| Watermark | Yes | No | No |
-| Server export | No | Yes | Yes |
-| Original quality retention | 7 days | 14 days | 60 days |
-| Video retention | 60 days inactive | Unlimited | Unlimited |
-| Cloud sync | No | Yes | Yes |
-
-Pay-per-match credits: $0.99 per match. No subscription needed.
-
-Tier configuration defined in `api/src/config/tiers.ts`. See `api/CLAUDE.md` for enforcement details.
+See `api/CLAUDE.md` for tier limits and enforcement. Config in `api/src/config/tiers.ts`.
 
 ## Cross-Project Flow
 
