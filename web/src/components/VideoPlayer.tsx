@@ -12,6 +12,7 @@ import { DEFAULT_CAMERA_STATE, DEFAULT_GLOBAL_CAMERA, GlobalCameraSettings, Came
 import { designTokens } from '@/app/theme';
 import { CameraOverlay } from './CameraOverlay';
 import { BallTrackingDebugOverlay } from './BallTrackingDebugOverlay';
+import { BallTrackOverlay } from './BallTrackOverlay';
 import { RotationGridOverlay } from './RotationGridOverlay';
 import { CropMaskOverlay } from './CropMaskOverlay';
 import { CourtCalibrationPanel } from './CourtCalibrationPanel';
@@ -123,6 +124,7 @@ export function VideoPlayer() {
   // Player tracking / court calibration
   const isCalibrating = usePlayerTrackingStore((state) => state.isCalibrating);
   const showPlayerOverlay = usePlayerTrackingStore((state) => state.showPlayerOverlay);
+  const showBallOverlay = usePlayerTrackingStore((state) => state.showBallOverlay);
   const playerTracks = usePlayerTrackingStore((state) => state.playerTracks);
 
   // Get active match for fps
@@ -880,6 +882,16 @@ export function VideoPlayer() {
               videoRef={videoRef}
               containerRef={videoContainerRef}
               fps={activeMatch?.video?.fps || 30}
+            />
+          )}
+          {/* Ball track overlay */}
+          {showBallOverlay && currentRally && currentRally._backendId && playerTracks[currentRally._backendId]?.tracksJson?.ballPositions && (
+            <BallTrackOverlay
+              positions={playerTracks[currentRally._backendId]!.tracksJson!.ballPositions!}
+              frameCount={playerTracks[currentRally._backendId]!.tracksJson!.frameCount}
+              rallyStartTime={currentRally.start_time}
+              rallyEndTime={currentRally.end_time}
+              videoRef={videoRef}
             />
           )}
           {/* Transform wrapper - video frame callback updates, CSS transition smooths between frames */}
