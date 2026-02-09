@@ -1,7 +1,6 @@
 'use client';
 
-import { useMemo, useState, useEffect, useRef } from 'react';
-import { Box } from '@mui/material';
+import { useMemo, useEffect, useRef, useCallback } from 'react';
 import { usePlayerTrackingStore, PlayerPosition } from '@/stores/playerTrackingStore';
 
 interface PlayerOverlayProps {
@@ -20,21 +19,13 @@ const TRACK_COLORS = [
   '#96CEB4', // Green
 ];
 
-// Interpolated position for smooth rendering
-interface InterpolatedPosition {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  courtX?: number;
-  courtY?: number;
-  confidence: number;
-}
-
 // Linear interpolation helper
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
+
+// Maximum tracks we'll render
+const MAX_TRACKS = 8;
 
 export function PlayerOverlay({
   rallyId,
@@ -43,30 +34,184 @@ export function PlayerOverlay({
   containerRef,
   fps: propFps = 30,
 }: PlayerOverlayProps) {
-  const [dimensions, setDimensions] = useState({ width: 0, height: 0, offsetX: 0, offsetY: 0 });
-  // Use floating-point frame for sub-frame interpolation smoothness
-  const [currentFrame, setCurrentFrame] = useState(0);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const trackElementsRef = useRef<Map<number, HTMLDivElement>>(new Map());
   const rafIdRef = useRef<number | null>(null);
-  const lastTimeRef = useRef(-1);
+  const dimensionsRef = useRef({ width: 0, height: 0, offsetX: 0, offsetY: 0 });
 
-  // Get fps from track data if available, otherwise use prop
-  const { playerTracks } = usePlayerTrackingStore();
+  // Get track data from store
+  const { playerTracks, showPlayerOverlay, selectedTrackId } = usePlayerTrackingStore();
   const track = playerTracks[rallyId];
   const fps = track?.tracksJson?.fps ?? propFps;
 
-  // Measure video dimensions and position within container
-  // The video maintains aspect ratio, so it may be letterboxed/pillarboxed
+  // Build per-track sorted positions for interpolation
+  const trackPositions = useMemo(() => {
+    if (!track?.tracksJson?.tracks) {
+      return new Map<number, PlayerPosition[]>();
+    }
+
+    const positions = new Map<number, PlayerPosition[]>();
+    for (const playerTrack of track.tracksJson.tracks) {
+      const sortedPositions = [...playerTrack.positions].sort((a, b) => a.frame - b.frame);
+      positions.set(playerTrack.trackId, sortedPositions);
+    }
+    return positions;
+  }, [track]);
+
+  // Get interpolated position for a track at a given frame
+  const getInterpolatedPosition = useCallback((positions: PlayerPosition[], currentFrame: number) => {
+    if (positions.length === 0) return null;
+
+    const maxDistanceFromDetection = 10;
+    const firstFrame = positions[0].frame;
+    const lastFrame = positions[positions.length - 1].frame;
+
+    if (currentFrame < firstFrame - maxDistanceFromDetection) return null;
+    if (currentFrame > lastFrame + maxDistanceFromDetection) return null;
+
+    // Before first frame
+    if (currentFrame <= firstFrame) {
+      const pos = positions[0];
+      return { x: pos.x, y: pos.y, w: pos.w, h: pos.h, courtX: pos.courtX, courtY: pos.courtY };
+    }
+
+    // After last frame
+    if (currentFrame >= lastFrame) {
+      const pos = positions[positions.length - 1];
+      return { x: pos.x, y: pos.y, w: pos.w, h: pos.h, courtX: pos.courtX, courtY: pos.courtY };
+    }
+
+    // Binary search for position before current frame
+    let lo = 0;
+    let hi = positions.length - 1;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi + 1) / 2);
+      if (positions[mid].frame <= currentFrame) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+
+    const before = positions[lo];
+    const after = positions[lo + 1];
+    const gap = after.frame - before.frame;
+
+    // Handle large gaps
+    const maxGap = 15;
+    if (gap > maxGap) {
+      const distToBefore = currentFrame - before.frame;
+      const distToAfter = after.frame - currentFrame;
+      if (distToBefore <= maxDistanceFromDetection) {
+        return { x: before.x, y: before.y, w: before.w, h: before.h, courtX: before.courtX, courtY: before.courtY };
+      } else if (distToAfter <= maxDistanceFromDetection) {
+        return { x: after.x, y: after.y, w: after.w, h: after.h, courtX: after.courtX, courtY: after.courtY };
+      }
+      return null;
+    }
+
+    // Interpolate
+    const t = (currentFrame - before.frame) / gap;
+    return {
+      x: lerp(before.x, after.x, t),
+      y: lerp(before.y, after.y, t),
+      w: lerp(before.w, after.w, t),
+      h: lerp(before.h, after.h, t),
+      courtX: before.courtX !== undefined && after.courtX !== undefined
+        ? lerp(before.courtX, after.courtX, t) : before.courtX ?? after.courtX,
+      courtY: before.courtY !== undefined && after.courtY !== undefined
+        ? lerp(before.courtY, after.courtY, t) : before.courtY ?? after.courtY,
+    };
+  }, []);
+
+  // Create/update track elements when tracks change
+  useEffect(() => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+
+    const currentTrackIds = new Set(trackPositions.keys());
+    const existingElements = trackElementsRef.current;
+
+    // Remove elements for tracks that no longer exist
+    for (const [trackId, element] of existingElements) {
+      if (!currentTrackIds.has(trackId)) {
+        element.remove();
+        existingElements.delete(trackId);
+      }
+    }
+
+    // Create elements for new tracks
+    let trackIndex = 0;
+    for (const trackId of currentTrackIds) {
+      if (trackIndex >= MAX_TRACKS) break;
+
+      if (!existingElements.has(trackId)) {
+        const color = TRACK_COLORS[(trackId - 1) % TRACK_COLORS.length];
+
+        const trackEl = document.createElement('div');
+        trackEl.className = 'player-track';
+        trackEl.dataset.trackId = String(trackId);
+        trackEl.style.cssText = `
+          position: absolute;
+          left: 0;
+          top: 0;
+          border: 2px solid ${color};
+          border-radius: 4px;
+          pointer-events: none;
+          will-change: transform, width, height;
+          display: none;
+        `;
+
+        // Track label
+        const label = document.createElement('div');
+        label.className = 'track-label';
+        label.textContent = `Track ${trackId}`;
+        label.style.cssText = `
+          position: absolute;
+          top: -24px;
+          left: 0;
+          background-color: ${color};
+          color: white;
+          padding: 2px 6px;
+          border-radius: 4px;
+          font-size: 11px;
+          font-weight: 600;
+          white-space: nowrap;
+        `;
+        trackEl.appendChild(label);
+
+        // Court position label
+        const courtLabel = document.createElement('div');
+        courtLabel.className = 'court-label';
+        courtLabel.style.cssText = `
+          position: absolute;
+          bottom: -18px;
+          left: 0;
+          background-color: rgba(0,0,0,0.7);
+          color: white;
+          padding: 1px 4px;
+          border-radius: 2px;
+          font-size: 9px;
+          font-family: monospace;
+          display: none;
+        `;
+        trackEl.appendChild(courtLabel);
+
+        overlay.appendChild(trackEl);
+        existingElements.set(trackId, trackEl);
+      }
+      trackIndex++;
+    }
+  }, [trackPositions]);
+
+  // Update dimensions on resize
   useEffect(() => {
     const video = videoRef.current;
     const container = containerRef.current;
     if (!video || !container) return;
 
     const updateDimensions = () => {
-      // Get the actual rendered size of the video (accounts for object-fit)
-      const videoRect = video.getBoundingClientRect();
       const containerRect = container.getBoundingClientRect();
-
-      // Calculate video's actual display size based on object-fit: contain
       const videoAspect = video.videoWidth / video.videoHeight || 16/9;
       const containerAspect = containerRect.width / containerRect.height;
 
@@ -74,30 +219,23 @@ export function PlayerOverlay({
       let displayHeight: number;
 
       if (containerAspect > videoAspect) {
-        // Container is wider than video - pillarboxing (black bars on sides)
         displayHeight = containerRect.height;
         displayWidth = displayHeight * videoAspect;
       } else {
-        // Container is taller than video - letterboxing (black bars on top/bottom)
         displayWidth = containerRect.width;
         displayHeight = displayWidth / videoAspect;
       }
 
-      // Calculate offset (centering)
-      const offsetX = (containerRect.width - displayWidth) / 2;
-      const offsetY = (containerRect.height - displayHeight) / 2;
-
-      setDimensions({
+      dimensionsRef.current = {
         width: displayWidth,
         height: displayHeight,
-        offsetX,
-        offsetY,
-      });
+        offsetX: (containerRect.width - displayWidth) / 2,
+        offsetY: (containerRect.height - displayHeight) / 2,
+      };
     };
 
     updateDimensions();
 
-    // Re-measure on resize and video metadata load
     const resizeObserver = new ResizeObserver(updateDimensions);
     resizeObserver.observe(container);
     video.addEventListener('loadedmetadata', updateDimensions);
@@ -108,206 +246,89 @@ export function PlayerOverlay({
     };
   }, [videoRef, containerRef]);
 
-  // Animation loop for smooth frame updates (~60fps via RAF)
+  // Animation loop - direct DOM manipulation
   useEffect(() => {
+    if (!showPlayerOverlay) {
+      // Hide all elements when overlay is disabled
+      for (const element of trackElementsRef.current.values()) {
+        element.style.display = 'none';
+      }
+      return;
+    }
+
     const video = videoRef.current;
     if (!video) return;
 
-    const updateFrame = () => {
-      const videoTime = video.currentTime;
-
-      // Only update if time changed significantly (>1ms to avoid float noise)
-      if (Math.abs(videoTime - lastTimeRef.current) > 0.001) {
-        lastTimeRef.current = videoTime;
-        // Use floating-point frame for smooth sub-frame interpolation
-        const frame = (videoTime - rallyStartTime) * fps;
-        setCurrentFrame(frame);
+    const updatePositions = () => {
+      const { width, height, offsetX, offsetY } = dimensionsRef.current;
+      if (width === 0) {
+        rafIdRef.current = requestAnimationFrame(updatePositions);
+        return;
       }
 
-      rafIdRef.current = requestAnimationFrame(updateFrame);
+      const videoTime = video.currentTime;
+      const currentFrame = (videoTime - rallyStartTime) * fps;
+
+      for (const [trackId, positions] of trackPositions) {
+        const element = trackElementsRef.current.get(trackId);
+        if (!element) continue;
+
+        const pos = getInterpolatedPosition(positions, currentFrame);
+
+        if (!pos) {
+          element.style.display = 'none';
+          continue;
+        }
+
+        const x = offsetX + (pos.x - pos.w / 2) * width;
+        const y = offsetY + (pos.y - pos.h / 2) * height;
+        const boxWidth = pos.w * width;
+        const boxHeight = pos.h * height;
+
+        element.style.display = 'block';
+        element.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+        element.style.width = `${boxWidth}px`;
+        element.style.height = `${boxHeight}px`;
+
+        // Update selection styling
+        const isSelected = selectedTrackId === trackId;
+        const color = TRACK_COLORS[(trackId - 1) % TRACK_COLORS.length];
+        element.style.boxShadow = isSelected
+          ? `0 0 0 2px white, 0 0 10px ${color}`
+          : '0 2px 4px rgba(0,0,0,0.3)';
+
+        // Update court label
+        const courtLabel = element.querySelector('.court-label') as HTMLDivElement;
+        if (courtLabel) {
+          if (pos.courtX !== undefined && pos.courtY !== undefined) {
+            courtLabel.style.display = 'block';
+            courtLabel.textContent = `${pos.courtX.toFixed(1)}m, ${pos.courtY.toFixed(1)}m`;
+          } else {
+            courtLabel.style.display = 'none';
+          }
+        }
+      }
+
+      rafIdRef.current = requestAnimationFrame(updatePositions);
     };
 
-    // Start animation loop
-    rafIdRef.current = requestAnimationFrame(updateFrame);
+    rafIdRef.current = requestAnimationFrame(updatePositions);
 
     return () => {
       if (rafIdRef.current !== null) {
         cancelAnimationFrame(rafIdRef.current);
       }
     };
-  }, [videoRef, rallyStartTime, fps]);
+  }, [videoRef, rallyStartTime, fps, trackPositions, showPlayerOverlay, selectedTrackId, getInterpolatedPosition]);
 
-  const { width: videoDisplayWidth, height: videoDisplayHeight, offsetX, offsetY } = dimensions;
-  const { showPlayerOverlay, selectedTrackId } = usePlayerTrackingStore();
-
-  // Build per-track sorted positions for interpolation - only recomputes when track changes
-  const trackPositions = useMemo(() => {
-    if (!track?.tracksJson?.tracks) {
-      return new Map<number, PlayerPosition[]>();
-    }
-
-    // TrackId -> sorted positions for binary search interpolation
-    const positions = new Map<number, PlayerPosition[]>();
-
-    for (const playerTrack of track.tracksJson.tracks) {
-      // Sort positions by frame for binary search during interpolation
-      const sortedPositions = [...playerTrack.positions].sort((a, b) => a.frame - b.frame);
-      positions.set(playerTrack.trackId, sortedPositions);
-    }
-
-    return positions;
-  }, [track]);
-
-  // Interpolate positions for smooth rendering
-  const currentPositions = useMemo(() => {
-    const result: { trackId: number; position: InterpolatedPosition }[] = [];
-
-    // Maximum distance from a detection to show overlay (~0.3s at 30fps)
-    const maxDistanceFromDetection = 10;
-
-    // For each track, find positions before/after current frame and interpolate
-    for (const [trackId, positions] of trackPositions) {
-      if (positions.length === 0) continue;
-
-      const firstFrame = positions[0].frame;
-      const lastFrame = positions[positions.length - 1].frame;
-
-      // Hide if current frame is too far before first detection
-      if (currentFrame < firstFrame - maxDistanceFromDetection) {
-        continue; // Skip - player not yet visible
-      }
-
-      // Hide if current frame is too far after last detection
-      if (currentFrame > lastFrame + maxDistanceFromDetection) {
-        continue; // Skip - player no longer visible
-      }
-
-      // Binary search for the position just before or at currentFrame
-      let lo = 0;
-      let hi = positions.length - 1;
-
-      // Handle edge case: before first frame (but within tolerance)
-      if (currentFrame <= firstFrame) {
-        const pos = positions[0];
-        result.push({
-          trackId,
-          position: {
-            x: pos.x,
-            y: pos.y,
-            w: pos.w,
-            h: pos.h,
-            courtX: pos.courtX,
-            courtY: pos.courtY,
-            confidence: pos.confidence,
-          },
-        });
-        continue;
-      }
-
-      // Handle edge case: after last frame (but within tolerance)
-      if (currentFrame >= lastFrame) {
-        const pos = positions[positions.length - 1];
-        result.push({
-          trackId,
-          position: {
-            x: pos.x,
-            y: pos.y,
-            w: pos.w,
-            h: pos.h,
-            courtX: pos.courtX,
-            courtY: pos.courtY,
-            confidence: pos.confidence,
-          },
-        });
-        continue;
-      }
-
-      // Binary search for the largest frame <= currentFrame
-      while (lo < hi) {
-        const mid = Math.ceil((lo + hi + 1) / 2);
-        if (positions[mid].frame <= currentFrame) {
-          lo = mid;
-        } else {
-          hi = mid - 1;
-        }
-      }
-
-      const before = positions[lo];
-      const after = positions[lo + 1];
-      const gap = after.frame - before.frame;
-
-      // Check for gap too large (player not detected for a while)
-      // Hide overlay entirely if we're in the middle of a large gap
-      const maxGap = 15; // ~0.5s at 30fps
-      if (gap > maxGap) {
-        const distToBefore = currentFrame - before.frame;
-        const distToAfter = after.frame - currentFrame;
-
-        // Only show if very close to one of the detections
-        if (distToBefore <= maxDistanceFromDetection) {
-          result.push({
-            trackId,
-            position: {
-              x: before.x,
-              y: before.y,
-              w: before.w,
-              h: before.h,
-              courtX: before.courtX,
-              courtY: before.courtY,
-              confidence: before.confidence,
-            },
-          });
-        } else if (distToAfter <= maxDistanceFromDetection) {
-          result.push({
-            trackId,
-            position: {
-              x: after.x,
-              y: after.y,
-              w: after.w,
-              h: after.h,
-              courtX: after.courtX,
-              courtY: after.courtY,
-              confidence: after.confidence,
-            },
-          });
-        }
-        // Otherwise skip - player not visible in this gap
-        continue;
-      }
-
-      // Interpolate between before and after
-      const t = (currentFrame - before.frame) / gap;
-
-      result.push({
-        trackId,
-        position: {
-          x: lerp(before.x, after.x, t),
-          y: lerp(before.y, after.y, t),
-          w: lerp(before.w, after.w, t),
-          h: lerp(before.h, after.h, t),
-          courtX:
-            before.courtX !== undefined && after.courtX !== undefined
-              ? lerp(before.courtX, after.courtX, t)
-              : before.courtX ?? after.courtX,
-          courtY:
-            before.courtY !== undefined && after.courtY !== undefined
-              ? lerp(before.courtY, after.courtY, t)
-              : before.courtY ?? after.courtY,
-          confidence: lerp(before.confidence, after.confidence, t),
-        },
-      });
-    }
-
-    return result;
-  }, [trackPositions, currentFrame]);
-
-  if (!showPlayerOverlay || !track?.tracksJson || currentPositions.length === 0 || videoDisplayWidth === 0) {
+  if (!track?.tracksJson) {
     return null;
   }
 
   return (
-    <Box
-      sx={{
+    <div
+      ref={overlayRef}
+      style={{
         position: 'absolute',
         top: 0,
         left: 0,
@@ -316,78 +337,6 @@ export function PlayerOverlay({
         pointerEvents: 'none',
         zIndex: 5,
       }}
-    >
-      {currentPositions.map(({ trackId, position }) => {
-        const color = TRACK_COLORS[(trackId - 1) % TRACK_COLORS.length];
-        const isSelected = selectedTrackId === trackId;
-
-        // Convert normalized coords to pixels (relative to video display area)
-        // Add offset to account for letterboxing/pillarboxing
-        const x = offsetX + (position.x - position.w / 2) * videoDisplayWidth;
-        const y = offsetY + (position.y - position.h / 2) * videoDisplayHeight;
-        const width = position.w * videoDisplayWidth;
-        const height = position.h * videoDisplayHeight;
-
-        return (
-          <Box
-            key={trackId}
-            sx={{
-              position: 'absolute',
-              left: 0,
-              top: 0,
-              width,
-              height,
-              // Use transform for GPU-accelerated positioning (no layout thrashing)
-              transform: `translate3d(${x}px, ${y}px, 0)`,
-              willChange: 'transform, width, height',
-              border: `2px solid ${color}`,
-              borderRadius: 1,
-              boxShadow: isSelected
-                ? `0 0 0 2px white, 0 0 10px ${color}`
-                : `0 2px 4px rgba(0,0,0,0.3)`,
-            }}
-          >
-            {/* Track label */}
-            <Box
-              sx={{
-                position: 'absolute',
-                top: -24,
-                left: 0,
-                backgroundColor: color,
-                color: 'white',
-                px: 0.75,
-                py: 0.25,
-                borderRadius: 0.5,
-                fontSize: '11px',
-                fontWeight: 600,
-                whiteSpace: 'nowrap',
-              }}
-            >
-              Track {trackId}
-            </Box>
-
-            {/* Court position (if calibrated) */}
-            {position.courtX !== undefined && position.courtY !== undefined && (
-              <Box
-                sx={{
-                  position: 'absolute',
-                  bottom: -18,
-                  left: 0,
-                  backgroundColor: 'rgba(0,0,0,0.7)',
-                  color: 'white',
-                  px: 0.5,
-                  py: 0.125,
-                  borderRadius: 0.25,
-                  fontSize: '9px',
-                  fontFamily: 'monospace',
-                }}
-              >
-                {position.courtX.toFixed(1)}m, {position.courtY.toFixed(1)}m
-              </Box>
-            )}
-          </Box>
-        );
-      })}
-    </Box>
+    />
   );
 }
