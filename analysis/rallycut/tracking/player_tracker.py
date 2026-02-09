@@ -67,6 +67,48 @@ class PlayerPosition:
 
 
 @dataclass
+class BallPhaseInfo:
+    """Serializable ball phase event for API output."""
+
+    phase: str  # "serve", "attack", "defense", "transition", "unknown"
+    frame_start: int
+    frame_end: int
+    velocity: float
+    ball_x: float
+    ball_y: float
+
+    def to_dict(self) -> dict:
+        return {
+            "phase": self.phase,
+            "frameStart": self.frame_start,
+            "frameEnd": self.frame_end,
+            "velocity": self.velocity,
+            "ballX": self.ball_x,
+            "ballY": self.ball_y,
+        }
+
+
+@dataclass
+class ServerInfo:
+    """Detected server information."""
+
+    track_id: int  # -1 if not detected
+    confidence: float
+    serve_frame: int
+    serve_velocity: float
+    is_near_court: bool
+
+    def to_dict(self) -> dict:
+        return {
+            "trackId": self.track_id,
+            "confidence": self.confidence,
+            "serveFrame": self.serve_frame,
+            "serveVelocity": self.serve_velocity,
+            "isNearCourt": self.is_near_court,
+        }
+
+
+@dataclass
 class PlayerTrackingResult:
     """Complete player tracking result for a video segment."""
 
@@ -83,6 +125,13 @@ class PlayerTrackingResult:
     court_split_y: float | None = None  # 0-1 normalized Y coordinate
     primary_track_ids: list[int] = field(default_factory=list)  # Stable track IDs
     filter_method: str | None = None  # Filter method used (e.g., "bbox_size+track_stability+two_team")
+
+    # Ball phase detection
+    ball_phases: list[BallPhaseInfo] = field(default_factory=list)
+    server_info: ServerInfo | None = None
+
+    # Ball positions for trajectory overlay
+    ball_positions: list[BallPosition] = field(default_factory=list)
 
     @property
     def avg_players_per_frame(self) -> float:
@@ -130,6 +179,25 @@ class PlayerTrackingResult:
             result["primaryTrackIds"] = self.primary_track_ids
         if self.filter_method:
             result["filterMethod"] = self.filter_method
+
+        # Ball phase detection results
+        if self.ball_phases:
+            result["ballPhases"] = [bp.to_dict() for bp in self.ball_phases]
+        if self.server_info is not None:
+            result["serverInfo"] = self.server_info.to_dict()
+
+        # Ball positions for trajectory overlay
+        if self.ball_positions:
+            result["ballPositions"] = [
+                {
+                    "frameNumber": bp.frame_number,
+                    "x": bp.x,
+                    "y": bp.y,
+                    "confidence": bp.confidence,
+                }
+                for bp in self.ball_positions
+            ]
+
         return result
 
     def to_json(self, path: Path) -> None:
@@ -156,6 +224,31 @@ class PlayerTrackingResult:
             for p in data.get("positions", [])
         ]
 
+        # Parse ball phases
+        ball_phases = [
+            BallPhaseInfo(
+                phase=bp["phase"],
+                frame_start=bp["frameStart"],
+                frame_end=bp["frameEnd"],
+                velocity=bp["velocity"],
+                ball_x=bp["ballX"],
+                ball_y=bp["ballY"],
+            )
+            for bp in data.get("ballPhases", [])
+        ]
+
+        # Parse server info
+        server_data = data.get("serverInfo")
+        server_info = None
+        if server_data:
+            server_info = ServerInfo(
+                track_id=server_data["trackId"],
+                confidence=server_data["confidence"],
+                serve_frame=server_data["serveFrame"],
+                serve_velocity=server_data["serveVelocity"],
+                is_near_court=server_data["isNearCourt"],
+            )
+
         return cls(
             positions=positions,
             frame_count=data.get("frameCount", 0),
@@ -166,6 +259,8 @@ class PlayerTrackingResult:
             model_version=data.get("modelVersion", MODEL_NAME),
             court_split_y=data.get("courtSplitY"),
             primary_track_ids=data.get("primaryTrackIds", []),
+            ball_phases=ball_phases,
+            server_info=server_info,
         )
 
     def to_api_format(self) -> dict:

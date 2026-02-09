@@ -230,3 +230,51 @@ class CourtCalibrator:
             -margin <= x <= COURT_WIDTH + margin
             and -margin <= y <= COURT_LENGTH + margin
         )
+
+    def is_point_in_court_with_margin(
+        self,
+        court_point: tuple[float, float],
+        sideline_margin: float = 2.0,
+        baseline_margin: float = 4.0,
+    ) -> bool:
+        """
+        Check if a court point is within court bounds with asymmetric margins.
+
+        Beach volleyball has asymmetric out-of-bounds play:
+        - Sidelines (X): 2m margin for ball chases
+        - Baselines (Y): 4m margin for jump serves and defensive positioning
+
+        Args:
+            court_point: Point in court coordinates (meters).
+            sideline_margin: Extra margin on sidelines (X direction).
+            baseline_margin: Extra margin on baselines (Y direction).
+
+        Returns:
+            True if point is within court bounds (with margins).
+        """
+        x, y = court_point
+        return (
+            -sideline_margin <= x <= COURT_WIDTH + sideline_margin
+            and -baseline_margin <= y <= COURT_LENGTH + baseline_margin
+        )
+
+    def is_point_in_court_interior(
+        self,
+        court_point: tuple[float, float],
+        interior_margin: float = 1.0,
+    ) -> bool:
+        """
+        Check if a court point is in the court interior (not in margins).
+
+        Args:
+            court_point: Point in court coordinates (meters).
+            interior_margin: Interior shrink margin (points must be this far from edges).
+
+        Returns:
+            True if point is in court interior.
+        """
+        x, y = court_point
+        return (
+            interior_margin <= x <= COURT_WIDTH - interior_margin
+            and interior_margin <= y <= COURT_LENGTH - interior_margin
+        )
