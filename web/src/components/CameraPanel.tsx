@@ -17,8 +17,6 @@ import {
   DialogContent,
   DialogContentText,
   DialogActions,
-  CircularProgress,
-  Alert,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CheckIcon from '@mui/icons-material/Check';
@@ -29,15 +27,12 @@ import VideocamIcon from '@mui/icons-material/Videocam';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
-import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
-import BugReportIcon from '@mui/icons-material/BugReport';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useCameraStore, createDefaultKeyframe, selectCameraEdit, selectSelectedKeyframeId } from '@/stores/cameraStore';
 import { designTokens } from '@/app/theme';
 import type { AspectRatio, CameraKeyframe } from '@/types/camera';
 import { ZOOM_MAX, ZOOM_STEP, KEYFRAME_TIME_THRESHOLD, ROTATION_MIN, ROTATION_MAX, ROTATION_STEP, DEFAULT_GLOBAL_CAMERA } from '@/types/camera';
-import { trackBall, getBallTrackStatus } from '@/services/api';
 
 // Format time as MM:SS.ms
 function formatTime(seconds: number): string {
@@ -159,12 +154,6 @@ export function CameraPanel() {
   const [showGlobalResetConfirm, setShowGlobalResetConfirm] = useState(false);
   // Local state for keyframe delete confirmation
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-  // Ball tracking state
-  const [isTracking, setIsTracking] = useState(false);
-  const [trackingStep, setTrackingStep] = useState<'extracting' | 'analyzing' | 'generating' | null>(null);
-  const [trackingStatus, setTrackingStatus] = useState<string | null>(null);
-  const [trackingError, setTrackingError] = useState<string | null>(null);
-  const [isLoadingDebug, setIsLoadingDebug] = useState(false);
 
   // Editor store - get selected rally and camera tab state
   const selectedRallyId = useEditorStore((state) => state.selectedRallyId);
@@ -186,10 +175,6 @@ export function CameraPanel() {
   // Camera store - use optimized selectors
   const cameraEdit = useCameraStore(selectCameraEdit(selectedRallyId));
   const selectedKeyframeId = useCameraStore(selectSelectedKeyframeId);
-  const debugRallyId = useCameraStore((state) => state.debugRallyId);
-  const setDebugBallTracking = useCameraStore((state) => state.setDebugBallTracking);
-  const clearDebugBallTracking = useCameraStore((state) => state.clearDebugBallTracking);
-  const isDebugActive = debugRallyId === selectedRallyId && debugRallyId !== null;
 
   // Get stable action references
   const setAspectRatio = useCameraStore((state) => state.setAspectRatio);
@@ -274,97 +259,6 @@ export function CameraPanel() {
       selectKeyframe(null);
     }
   }, [currentTimeOffset, selectedKeyframeId, cameraEdit, selectedRally, activeKeyframes, dragPosition, selectKeyframe]);
-
-  // Check for in-progress ball tracking on mount/rally change
-  // Note: Only runs when rally changes, NOT when aspectRatio changes (to avoid loops)
-  useEffect(() => {
-    const backendId = selectedRally?._backendId;
-    if (!backendId || !selectedRallyId) return;
-
-    let cancelled = false;
-    let pollInterval: NodeJS.Timeout | null = null;
-
-    const applyKeyframes = async () => {
-      // Get current aspect ratio at call time (not from closure)
-      const currentAspectRatio = useCameraStore.getState().cameraEdits[selectedRallyId]?.aspectRatio ?? 'VERTICAL';
-      const result = await trackBall(backendId, {
-        aspectRatio: currentAspectRatio,
-        generateKeyframes: true,
-      });
-
-      if (cancelled) return;
-
-      if (result.status === 'completed' && result.keyframes && result.keyframes.length > 0) {
-        // Use batch operation - single history entry + single sync
-        useCameraStore.getState().applyBallTrackingKeyframes(
-          selectedRallyId,
-          currentAspectRatio,
-          result.keyframes.map((kf) => ({
-            timeOffset: kf.timeOffset,
-            positionX: kf.positionX,
-            positionY: kf.positionY,
-            zoom: kf.zoom,
-            rotation: kf.rotation ?? 0,
-            easing: kf.easing,
-          }))
-        );
-        setIsCameraTabActive(true);
-        const qualityLabel = result.quality && result.quality.coverage > 0.5 ? 'Good' : 'Partial';
-        setTrackingStatus(`${qualityLabel} tracking · ${result.keyframes.length} keyframes`);
-        setTimeout(() => setTrackingStatus(null), 4000);
-      }
-    };
-
-    const checkStatus = async () => {
-      try {
-        const status = await getBallTrackStatus(backendId);
-        if (cancelled) return;
-
-        if (status.ballTrack?.status === 'PROCESSING') {
-          // Show in-progress state
-          setIsTracking(true);
-          setTrackingStep('analyzing');
-          setTrackingError(null);
-
-          // Poll for completion
-          pollInterval = setInterval(async () => {
-            try {
-              const updated = await getBallTrackStatus(backendId);
-              if (cancelled) return;
-
-              if (updated.ballTrack?.status === 'COMPLETED') {
-                clearInterval(pollInterval!);
-                pollInterval = null;
-                setTrackingStep('generating');
-
-                await applyKeyframes();
-
-                setIsTracking(false);
-                setTrackingStep(null);
-              } else if (updated.ballTrack?.status === 'FAILED') {
-                clearInterval(pollInterval!);
-                pollInterval = null;
-                setIsTracking(false);
-                setTrackingStep(null);
-                setTrackingError(updated.ballTrack.error ?? 'Ball tracking failed');
-              }
-            } catch {
-              // Ignore polling errors
-            }
-          }, 2000);
-        }
-      } catch {
-        // Ignore initial status check errors
-      }
-    };
-
-    checkStatus();
-
-    return () => {
-      cancelled = true;
-      if (pollInterval) clearInterval(pollInterval);
-    };
-  }, [selectedRally?._backendId, selectedRallyId, setIsCameraTabActive]);
 
   // Handlers
   const handleAspectRatioChange = useCallback(
@@ -512,128 +406,6 @@ export function CameraPanel() {
       setShowResetConfirm(false);
     }
   }, [selectedRallyId, resetCamera]);
-
-  // Handle auto ball tracking
-  const handleAutoTrack = useCallback(async () => {
-    if (!selectedRally || !selectedRallyId) return;
-
-    // Need backend ID for API call
-    const backendId = selectedRally._backendId;
-    if (!backendId) {
-      setTrackingError('Rally must be synced to server before tracking');
-      return;
-    }
-
-    // Limit to 30 seconds max
-    const rallyDurationSec = selectedRally.end_time - selectedRally.start_time;
-    if (rallyDurationSec > 30) {
-      setTrackingError('Rally too long for auto-tracking (max 30 seconds)');
-      return;
-    }
-
-    setIsTracking(true);
-    setTrackingStep('extracting');
-    setTrackingStatus(null);
-    setTrackingError(null);
-
-    // Use current aspect ratio from camera edit, or ORIGINAL if not set
-    const currentAspectRatio = cameraEdit?.aspectRatio ?? 'ORIGINAL';
-
-    // Simulate progress steps (actual processing is server-side)
-    const progressTimer = setTimeout(() => {
-      setTrackingStep('analyzing');
-    }, 800);
-
-    try {
-      const result = await trackBall(backendId, {
-        aspectRatio: currentAspectRatio,
-        generateKeyframes: true,
-      });
-
-      clearTimeout(progressTimer);
-      setTrackingStep('generating');
-
-      if (result.status === 'completed' && result.keyframes && result.keyframes.length > 0) {
-        // Small delay to show generating step
-        await new Promise(resolve => setTimeout(resolve, 300));
-
-        // Clear existing keyframes for this rally
-        resetCamera(selectedRallyId);
-
-        // Restore aspect ratio after reset (resetCamera deletes the entire edit)
-        setAspectRatio(selectedRallyId, currentAspectRatio);
-
-        // Add each generated keyframe
-        for (const kf of result.keyframes) {
-          addKeyframe(selectedRallyId, {
-            timeOffset: kf.timeOffset,
-            positionX: kf.positionX,
-            positionY: kf.positionY,
-            zoom: kf.zoom,
-            rotation: kf.rotation ?? 0,
-            easing: kf.easing,
-          });
-        }
-
-        // Enter camera edit mode
-        setIsCameraTabActive(true);
-
-        // Show quality info if detection was poor
-        if (result.quality && !result.quality.isUsable) {
-          setTrackingError(result.quality.recommendation);
-        } else {
-          const qualityLabel = result.quality && result.quality.coverage > 0.5 ? 'Good' : 'Partial';
-          setTrackingStatus(`${qualityLabel} tracking · ${result.keyframes.length} keyframes`);
-          // Clear status after delay
-          setTimeout(() => setTrackingStatus(null), 4000);
-        }
-      } else if (result.status === 'failed') {
-        setTrackingError(result.error ?? 'Ball tracking failed');
-      } else if (result.status === 'processing') {
-        // This shouldn't happen with sync processing, retry after delay
-        setTrackingStep('analyzing');
-        setTimeout(() => handleAutoTrack(), 2000);
-        return; // Don't set isTracking to false yet
-      } else if (result.status === 'completed' && result.quality) {
-        // Completed but no keyframes generated due to quality
-        setTrackingError(result.quality.recommendation || 'Detection quality too low for auto-tracking');
-      } else {
-        setTrackingError('No ball detected in video');
-      }
-    } catch (err) {
-      clearTimeout(progressTimer);
-      setTrackingError(err instanceof Error ? err.message : 'Tracking failed');
-    } finally {
-      setIsTracking(false);
-      setTrackingStep(null);
-    }
-  }, [selectedRally, selectedRallyId, cameraEdit?.aspectRatio, resetCamera, setAspectRatio, addKeyframe, setIsCameraTabActive]);
-
-  // Handle debug overlay toggle
-  const handleToggleDebug = useCallback(async () => {
-    if (!selectedRally?._backendId || !selectedRallyId) return;
-
-    if (isDebugActive) {
-      // Turn off debug mode
-      clearDebugBallTracking();
-      return;
-    }
-
-    // Load ball positions for debug visualization
-    setIsLoadingDebug(true);
-    try {
-      const status = await getBallTrackStatus(selectedRally._backendId, true);
-      if (status.ballTrack?.positions && status.ballTrack.frameCount) {
-        setDebugBallTracking(selectedRallyId, status.ballTrack.positions, status.ballTrack.frameCount);
-      } else {
-        setTrackingError('No ball tracking data available. Run Auto Track Ball first.');
-      }
-    } catch (err) {
-      setTrackingError(err instanceof Error ? err.message : 'Failed to load debug data');
-    } finally {
-      setIsLoadingDebug(false);
-    }
-  }, [selectedRally?._backendId, selectedRallyId, isDebugActive, clearDebugBallTracking, setDebugBallTracking]);
 
   // Check if rally has camera keyframes for the active aspect ratio
   const hasCameraKeyframes = activeKeyframes.length > 0;
@@ -855,110 +627,6 @@ export function CameraPanel() {
                 )}
               </Box>
 
-              {/* Auto Track Ball button */}
-              <Stack direction="row" spacing={1} sx={{ mb: 1.5 }}>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  onClick={handleAutoTrack}
-                  disabled={!applyCameraEdits || isTracking || !selectedRally?._backendId}
-                  startIcon={isTracking ? <CircularProgress size={16} color="inherit" /> : <AutoFixHighIcon />}
-                  sx={{ flex: 1 }}
-                >
-                  {isTracking ? 'Tracking...' : 'Auto Track Ball'}
-                </Button>
-                <Tooltip title={isDebugActive ? 'Hide ball tracking overlay' : 'Show ball tracking overlay'}>
-                  <span>
-                    <Button
-                      variant={isDebugActive ? 'contained' : 'outlined'}
-                      size="small"
-                      onClick={handleToggleDebug}
-                      disabled={!applyCameraEdits || isLoadingDebug || !selectedRally?._backendId}
-                      sx={{ minWidth: 40, px: 1 }}
-                    >
-                      {isLoadingDebug ? <CircularProgress size={16} color="inherit" /> : <BugReportIcon fontSize="small" />}
-                    </Button>
-                  </span>
-                </Tooltip>
-              </Stack>
-
-              {/* Progress steps during tracking */}
-              {isTracking && trackingStep && (
-                <Box sx={{ mb: 1.5, px: 0.5 }}>
-                  <Stack spacing={0.75}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      {trackingStep === 'extracting' ? (
-                        <CircularProgress size={12} thickness={5} />
-                      ) : (
-                        <CheckIcon sx={{ fontSize: 12, color: 'success.main' }} />
-                      )}
-                      <Typography
-                        variant="caption"
-                        sx={{
-                          color: trackingStep === 'extracting' ? 'text.primary' : 'text.secondary',
-                          fontWeight: trackingStep === 'extracting' ? 500 : 400,
-                        }}
-                      >
-                        Extracting rally clip
-                      </Typography>
-                    </Box>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      {trackingStep === 'analyzing' ? (
-                        <CircularProgress size={12} thickness={5} />
-                      ) : trackingStep === 'generating' ? (
-                        <CheckIcon sx={{ fontSize: 12, color: 'success.main' }} />
-                      ) : (
-                        <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: 'action.disabled' }} />
-                      )}
-                      <Typography
-                        variant="caption"
-                        sx={{
-                          color: trackingStep === 'analyzing' ? 'text.primary' : trackingStep === 'generating' ? 'text.secondary' : 'text.disabled',
-                          fontWeight: trackingStep === 'analyzing' ? 500 : 400,
-                        }}
-                      >
-                        Analyzing ball positions
-                      </Typography>
-                    </Box>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      {trackingStep === 'generating' ? (
-                        <CircularProgress size={12} thickness={5} />
-                      ) : (
-                        <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: 'action.disabled' }} />
-                      )}
-                      <Typography
-                        variant="caption"
-                        sx={{
-                          color: trackingStep === 'generating' ? 'text.primary' : 'text.disabled',
-                          fontWeight: trackingStep === 'generating' ? 500 : 400,
-                        }}
-                      >
-                        Generating camera path
-                      </Typography>
-                    </Box>
-                  </Stack>
-                </Box>
-              )}
-
-              {!selectedRally?._backendId && !isTracking && (
-                <Typography variant="caption" sx={{ color: 'text.disabled', mb: 1.5, display: 'block' }}>
-                  Sync to server first
-                </Typography>
-              )}
-              {trackingStatus && !trackingError && !isTracking && (
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1.5 }}>
-                  <CheckIcon sx={{ fontSize: 14, color: 'success.main' }} />
-                  <Typography variant="caption" sx={{ color: 'success.main' }}>
-                    {trackingStatus}
-                  </Typography>
-                </Box>
-              )}
-              {trackingError && (
-                <Alert severity="warning" sx={{ mb: 1.5, py: 0, '& .MuiAlert-message': { py: 0.5 } }}>
-                  <Typography variant="caption">{trackingError}</Typography>
-                </Alert>
-              )}
-
               {/* Keyframe list */}
               <Stack spacing={0.5}>
                 {activeKeyframes.map((kf) => (
@@ -976,10 +644,10 @@ export function CameraPanel() {
                 ))}
               </Stack>
 
-              {activeKeyframes.length === 0 && !isTracking && !trackingStatus && !trackingError && (
+              {activeKeyframes.length === 0 && (
                 <Box sx={{ textAlign: 'center', py: 2 }}>
                   <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block' }}>
-                    Drag on video or use Auto Track Ball
+                    Drag on video to create keyframes
                   </Typography>
                 </Box>
               )}
