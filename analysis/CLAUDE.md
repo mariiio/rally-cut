@@ -127,8 +127,11 @@ rallycut/
 │   └── match_tracker.py      # Cross-rally player ID consistency
 ├── court/           # Court calibration
 │   └── calibration.py        # Homography for image→court projection
-├── analytics/       # Player statistics
-│   └── player_stats.py       # Distance, velocity, heatmaps
+├── statistics/      # Match statistics aggregation
+│   └── aggregator.py         # Rally grouping, action counts
+├── labeling/        # Ground truth labeling with Label Studio
+│   ├── ground_truth.py      # GroundTruthPosition/Result data structures
+│   └── studio_client.py     # Label Studio API client
 ├── evaluation/      # Ground truth loading, metrics, parameter tuning
 ├── service/         # Cloud detection (Modal deployment)
 │   ├── platforms/modal_app.py       # Modal GPU function
@@ -239,178 +242,53 @@ API triggers Modal via webhook. Results posted back on completion.
 
 ## Player Tracking Filtering
 
-Player tracking uses multi-stage filtering with volleyball-context-aware scoring to positively identify active players and exclude non-players (referees, spectators, passersby).
+Multi-stage filtering to identify active players and exclude non-players. See `tracking/player_filter.py`.
 
-### Design Principles
+**Stages:**
+1. Track length filter (>10% of video)
+2. Hard filters: sideline position (<0.20 or >0.80), court presence (>50%), stationary objects
+3. Score computation: length, court_presence, ball_proximity, engagement, spread, reactivity
+4. Top-4 selection by combined score
 
-Instead of detecting "non-players", we **positively identify players** based on beach volleyball behaviors:
-1. **Players engage with the ball** - they move toward it, position relative to its trajectory
-2. **Players cover their court half** - movement spreads across their defensive zone
-3. **Players must enter the playing area** - can't play without being on court
-4. **Players are active** - constantly repositioning, not stationary
+**Key insight:** Positively identify players by volleyball behaviors (ball engagement, court coverage, movement) rather than detecting "non-players".
 
-### Filtering Stages
+## Track Merging
 
-**Stage 1: Track Length Filter (Hard)**
-- Tracks shorter than 10% of video frames are discarded
-
-**Stage 2: Score Computation**
-Computes six scores for each track:
-- `length`: Fraction of video where track was detected
-- `court_presence`: Fraction of positions inside court bounds (4m margin)
-- `ball_proximity`: Fraction of frames where player was near ball
-- `engagement`: Court engagement score (interior vs margins vs outside)
-- `spread`: Movement spread score (geometric mean of position std dev)
-- `reactivity`: Ball reactivity score (movement correlation with ball position)
-
-**Stage 3: Court Engagement Filter (Hard, requires calibration)**
-- Tracks with engagement < 15% are discarded
-- Engagement = (interior_positions + 0.5 * marginal_positions) / total
-- Players must enter the court interior; non-players stay in margins
-
-**Stage 4: Combined Scoring**
-Movement spread is used in scoring but NOT as a hard filter, since short rallies
-may have limited player movement.
-
-With full data (calibration + ball tracking):
-```
-score = 0.10 * length + 0.20 * court_presence + 0.15 * interior_ratio
-      + 0.20 * ball_proximity + 0.15 * ball_reactivity + 0.10 * ball_zone
-      + 0.10 * position_spread
-```
-Weights adjust when data unavailable:
-- No ball data: `0.20 length + 0.30 court + 0.25 interior + 0.25 spread`
-- No calibration: `0.20 length + 0.30 ball_proximity + 0.25 reactivity + 0.15 zone + 0.10 spread`
-- Neither: `1.0 * length`
-
-**Stage 5: Top-K Selection**
-- Keep top 4 tracks by combined score (beach volleyball)
-
-### Volleyball-Context Scores
-
-| Score | Description | Player Behavior | Non-Player Behavior |
-|-------|-------------|-----------------|---------------------|
-| Engagement | Time in court interior vs margins | High (enters court) | Low (stays in margins) |
-| Spread | Position variance (geometric mean of std dev) | High (~4-5m) | Low (~0.5m, noise only) |
-| Reactivity | Movement correlation with ball direction | High (reacts to ball) | Low (random/none) |
-
-### Hard Filters
-
-Before scoring, tracks must pass these hard filters:
-
-1. **Sideline Position Filter**: Tracks with `avg_x < 0.20` or `avg_x > 0.80` are excluded (referees stand on sidelines)
-2. **Court Presence Filter**: Tracks with < 50% positions inside court bounds are excluded (requires calibration)
-3. **Stationary Object Filter**: Tracks with low movement AND low ball engagement are excluded
-
-### Thresholds
-
-| Parameter | Value | Purpose |
-|-----------|-------|---------|
-| `SIDELINE_THRESHOLD` | 0.20 | Exclude tracks at frame edges (referees) |
-| `COURT_MARGIN_SIDELINE` | 0.5m | Tight sideline margin to exclude refs |
-| `COURT_MARGIN_BASELINE` | 3.0m | Larger baseline margin for jump serves |
-| `MIN_COURT_PRESENCE` | 0.50 | 50% court presence required |
-| `MIN_POSITION_SPREAD` | 0.015 | Movement threshold (normalized) |
-| `BALL_PROXIMITY_RADIUS` | 0.20 | 20% of frame diagonal |
-
-### Top-4 Selection Score
-
-When more than 4 tracks pass filters, select top 4 by player score:
-```
-score = 0.5 * ball_proximity   # Players interact with ball
-      + 0.3 * position_spread  # Players move around
-      + 0.2 * presence_rate    # Track visibility
-```
-
-## Track Merging (Pre-Filtering)
-
-Before filtering, fragmented tracks are merged to handle ByteTrack ID breaks:
-
-**Algorithm:**
-1. Filter out noise (tracks < 5 frames)
-2. For each pair of non-overlapping tracks:
-   - Predict where earlier track would be based on velocity
-   - Score based on prediction accuracy, size similarity, velocity consistency
-3. Greedily merge best candidates until no valid merges
-
-**Video-Agnostic Design:**
-- Time thresholds in seconds (converted to frames using actual fps)
-- Spatial thresholds normalized (0-1 range, works at any resolution)
-- Velocity estimation adapts to video framerate
-
-**Thresholds:**
-| Parameter | Value | Purpose |
-|-----------|-------|---------|
-| `max_gap_frames` | 90 | ~3s at 30fps max gap |
-| `max_merge_distance` | 0.40 | 40% of frame base distance |
-| `merge_distance_per_frame` | 0.008 | Additional distance per frame of gap |
+Merges fragmented ByteTrack IDs using velocity prediction and position/size similarity. Thresholds are video-agnostic (seconds, normalized coordinates). See `tracking/player_filter.py`.
 
 ## Ball Phase Detection
 
-Ball trajectory analysis detects game phases for enhanced player scoring.
+Detects game phases (SERVE, ATTACK, DEFENSE, TRANSITION) from ball velocity patterns. Identifies server by finding player closest to ball during velocity spike in first 3 seconds. See `tracking/ball_features.py`.
 
-### Phases
-| Phase | Trigger | Signal Strength |
-|-------|---------|-----------------|
-| SERVE | Velocity spike from baseline | 0.30 (strong server ID) |
-| ATTACK | Velocity spike near net | 0.25 (attacker ID) |
-| DEFENSE | Moderate velocity, horizontal | 0.20 (multiple defenders) |
-| TRANSITION | Low velocity (sets, passes) | 0.15 (less discriminative) |
-
-### Server Detection
-Identifies serving player in first 3 seconds of rally:
-1. Find ball velocity spike (>0.04 normalized)
-2. Find player closest to ball at spike time (only considers primary tracks)
-3. Verify player is near baseline (if calibration available)
-
-**Note:** Server detection only considers primary tracks (the 4 identified players), excluding referees and other non-players.
-
-### Output
-Player tracking output includes:
-- `ballPhases`: Array of detected phases with frame ranges, velocity, and ball position
-- `serverInfo`: Detected server track ID, confidence, and serve frame
-- `ballPositions`: Full ball trajectory for overlay visualization (frameNumber, x, y, confidence)
-
-See `ball_features.py` for implementation.
+**Output:** `ballPhases`, `serverInfo`, `ballPositions` for overlay visualization.
 
 ## Cross-Rally Player Consistency
 
-Maintains consistent player IDs (1-4) across entire match using appearance features.
+Maintains consistent player IDs (1-4) across match using appearance features (skin tone, jersey color, body proportions). Detects side switches by comparing assignment costs. See `tracking/player_features.py` and `tracking/match_tracker.py`.
 
-### Architecture
-```
-MatchPlayerTracker (orchestrates entire match)
-    │
-    ├── Rally 1 → PlayerTracker → RawTracks → FeatureExtractor → AppearanceFeatures
-    │                                              ↓
-    │                                    CrossRallyAssigner ←── MatchPlayerState
-    │                                              ↓
-    ├── Rally 2 → PlayerTracker → RawTracks → FeatureExtractor → AppearanceFeatures
-    │                                              ↓
-    │                                    CrossRallyAssigner (uses accumulated profiles)
-    └── ...
-```
+## Ground Truth Labeling
 
-### Appearance Features
-Extracted from each player detection:
-- **Skin tone** (HSV) - most reliable for beach volleyball
-- **Jersey color** (HSV) - when visible
-- **Body proportions** - bbox height, aspect ratio
+Label Studio integration for tracking accuracy evaluation. See `labeling/studio_client.py`.
 
-Skin detection: HSV range (H: 0-50, S: 20-255, V: 50-255)
+```bash
+# Setup (one-time)
+pip3 install label-studio
+python3 -m label_studio start  # Opens at http://localhost:8080
+export LABEL_STUDIO_API_KEY=your_token_here  # From Profile → Account & Settings
 
-### Matching Cost
-```
-cost = 1.0 - (0.50 * skin_score + 0.30 * height_score + 0.20 * jersey_score)
+# Workflow
+uv run rallycut track-players video.mp4 -o tracking.json
+uv run rallycut label open video.mp4 -p tracking.json  # Opens browser, shows task ID
+# Correct annotations in Label Studio, click Submit
+uv run rallycut label save 123 -o ground_truth.json
+uv run rallycut compare-tracking tracking.json ground_truth.json
 ```
 
-### Side Switch Detection
-Appearance-based detection (not tied to fixed point counts):
-- Compare current assignment cost vs swapped assignment cost
-- If swapped cost < current cost * 0.7, switch detected
-- Works for any switching schedule (5 pts, 7 pts, etc.)
-
-See `player_features.py` and `match_tracker.py` for implementation.
+| Command | Purpose |
+|---------|---------|
+| `rallycut label open` | Open video with pre-filled predictions |
+| `rallycut label save` | Export annotations as ground truth JSON |
+| `rallycut compare-tracking` | Compute MOT metrics (MOTA, precision, recall, ID switches) |
 
 ## Code Style
 
