@@ -1690,116 +1690,16 @@ export async function submitFeedback(feedback: SubmitFeedbackRequest): Promise<F
 }
 
 // ============================================================================
-// Ball Tracking API (Auto-Camera Generation)
+// Player Tracking
 // ============================================================================
 
-export interface TrackBallOptions {
-  aspectRatio?: 'ORIGINAL' | 'VERTICAL';
-  generateKeyframes?: boolean;
-}
-
-export interface TrackBallKeyframe {
-  timeOffset: number;
-  positionX: number;
-  positionY: number;
-  zoom: number;
-  rotation?: number;  // degrees, defaults to 0
-  easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT';
-}
-
-export interface TrackBallQuality {
-  coverage: number;
-  averageConfidence: number;
-  isUsable: boolean;
-  recommendation: string;
-}
-
-export interface TrackBallResponse {
-  status: 'completed' | 'processing' | 'failed';
-  ballTrack?: {
-    id: string;
-    detectionRate: number;
-    frameCount: number;
-  };
-  keyframes?: TrackBallKeyframe[];
-  quality?: TrackBallQuality;
-  error?: string;
-}
-
+// Ball position from player tracking
 export interface BallPosition {
   frameNumber: number;
   x: number;
   y: number;
   confidence: number;
 }
-
-export interface BallTrackStatusResponse {
-  rallyId: string;
-  ballTrack: {
-    id: string;
-    status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
-    detectionRate: number | null;
-    frameCount: number | null;
-    processingTimeMs: number | null;
-    error: string | null;
-    positions?: BallPosition[];
-  } | null;
-}
-
-/**
- * Trigger ball tracking for a rally and generate camera keyframes.
- * Uses AI-powered ball detection to automatically create smooth camera movements.
- *
- * @param rallyId - Backend rally ID (UUID)
- * @param options - Tracking options
- * @returns Tracking result with generated keyframes
- */
-export async function trackBall(
-  rallyId: string,
-  options?: TrackBallOptions
-): Promise<TrackBallResponse> {
-  const response = await fetch(`${API_BASE_URL}/v1/rallies/${rallyId}/track-ball`, {
-    method: 'POST',
-    headers: getHeaders('application/json'),
-    body: JSON.stringify(options || {}),
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error?.message || `Ball tracking failed: ${response.status}`);
-  }
-
-  return response.json();
-}
-
-/**
- * Get ball tracking status for a rally.
- *
- * @param rallyId - Backend rally ID (UUID)
- * @param includePositions - Whether to include raw ball positions (for debug visualization)
- * @returns Current tracking status
- */
-export async function getBallTrackStatus(rallyId: string, includePositions = false): Promise<BallTrackStatusResponse> {
-  const url = new URL(`${API_BASE_URL}/v1/rallies/${rallyId}/ball-track`);
-  if (includePositions) {
-    url.searchParams.set('includePositions', 'true');
-  }
-
-  const response = await fetch(url.toString(), {
-    headers: getHeaders(),
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error?.message || `Failed to get ball track status: ${response.status}`);
-  }
-
-  return response.json();
-}
-
-// ============================================================================
-// Player Tracking
-// ============================================================================
 
 export interface PlayerDetection {
   trackId: number;
@@ -1826,6 +1726,25 @@ export interface PlayerPosition {
   confidence: number;
 }
 
+// Ball phase detection
+export interface BallPhase {
+  phase: 'serve' | 'attack' | 'defense' | 'transition' | 'unknown';
+  frameStart: number;
+  frameEnd: number;
+  velocity: number;
+  ballX: number;
+  ballY: number;
+}
+
+// Server detection info
+export interface ServerInfo {
+  trackId: number;
+  confidence: number;
+  serveFrame: number;
+  serveVelocity: number;
+  isNearCourt: boolean;
+}
+
 export interface TrackPlayersResponse {
   status: 'completed' | 'failed';
   frameCount?: number;
@@ -1840,6 +1759,11 @@ export interface TrackPlayersResponse {
   primaryTrackIds?: number[];
   // Positions included for immediate display
   positions?: PlayerPosition[];
+  // Ball phase detection
+  ballPhases?: BallPhase[];
+  serverInfo?: ServerInfo;
+  // Ball positions for trajectory overlay
+  ballPositions?: BallPosition[];
 }
 
 export interface GetPlayerTrackResponse {
@@ -1853,6 +1777,9 @@ export interface GetPlayerTrackResponse {
   courtSplitY?: number;
   primaryTrackIds?: number[];
   positions?: PlayerPosition[];
+  ballPhases?: BallPhase[];
+  serverInfo?: ServerInfo;
+  ballPositions?: BallPosition[];
   error?: string;
 }
 

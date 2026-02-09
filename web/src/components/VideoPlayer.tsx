@@ -11,7 +11,6 @@ import { calculateVideoTransform, getCameraStateWithHandheld, interpolateCameraS
 import { DEFAULT_CAMERA_STATE, DEFAULT_GLOBAL_CAMERA, GlobalCameraSettings, CameraState, CameraKeyframe } from '@/types/camera';
 import { designTokens } from '@/app/theme';
 import { CameraOverlay } from './CameraOverlay';
-import { BallTrackingDebugOverlay } from './BallTrackingDebugOverlay';
 import { BallTrackOverlay } from './BallTrackOverlay';
 import { RotationGridOverlay } from './RotationGridOverlay';
 import { CropMaskOverlay } from './CropMaskOverlay';
@@ -116,9 +115,6 @@ export function VideoPlayer() {
   const cameraEdits = useCameraStore((state) => state.cameraEdits);
   const globalCameraSettings = useCameraStore((state) => state.globalCameraSettings);
   const dragPosition = useCameraStore((state) => state.dragPosition);
-  const debugBallPositions = useCameraStore((state) => state.debugBallPositions);
-  const debugFrameCount = useCameraStore((state) => state.debugFrameCount);
-  const debugRallyId = useCameraStore((state) => state.debugRallyId);
   const isAdjustingRotation = useCameraStore((state) => state.isAdjustingRotation);
 
   // Player tracking / court calibration
@@ -858,20 +854,6 @@ export function VideoPlayer() {
               videoWidth={videoRef.current?.videoWidth ?? 1920}
               videoHeight={videoRef.current?.videoHeight ?? 1080}
               containerRef={videoContainerRef}
-            />
-          )}
-          {/* Ball tracking debug overlay */}
-          {debugBallPositions && debugFrameCount && debugRallyId === selectedRallyId && currentRally && (
-            <BallTrackingDebugOverlay
-              positions={debugBallPositions}
-              frameCount={debugFrameCount}
-              rallyStartTime={currentRally.start_time}
-              rallyEndTime={currentRally.end_time}
-              videoRef={videoRef}
-              aspectRatio={currentCameraEdit?.aspectRatio}
-              cameraX={currentCameraState.positionX}
-              cameraY={currentCameraState.positionY}
-              zoom={currentCameraState.zoom}
             />
           )}
           {/* Player tracking overlay */}
