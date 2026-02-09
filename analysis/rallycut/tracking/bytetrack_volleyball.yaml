@@ -1,18 +1,21 @@
-# Custom ByteTrack config for volleyball player tracking
+# Custom ByteTrack config for beach volleyball player tracking
 # Optimized for stable tracking with minimal ID switches
+# Beach volleyball-tuned: shorter rallies, fewer players, larger movements
 
 tracker_type: bytetrack
 
-# Detection thresholds - lower to catch more detections
-track_high_thresh: 0.3   # First-stage match threshold
-track_low_thresh: 0.1    # Second-stage recovery threshold
-new_track_thresh: 0.4    # Higher threshold to avoid creating spurious new tracks
+# Detection thresholds - tuned to reduce fragmented tracks
+# Beach volleyball has only 4 players, higher thresholds prevent weak detections from fragmenting
+track_high_thresh: 0.35  # First-stage match threshold (raised to reduce fragmentation)
+track_low_thresh: 0.12   # Second-stage recovery threshold (raised)
+new_track_thresh: 0.45   # Threshold for new tracks (raised to prevent noise)
 
-# Long buffer to maintain tracks through occlusions (3 seconds at 30fps)
-track_buffer: 90
+# Longer buffer for track persistence (~3 seconds at 30fps)
+# Handles temporary occlusions and cross-rally continuity
+track_buffer: 90  # Increased to 3 seconds
 
-# Higher match threshold to avoid incorrect associations that cause ID switches
-match_thresh: 0.85
+# Slightly lower match threshold for more associations
+match_thresh: 0.80
 
 # Fuse detection score with motion for more stable tracking
 fuse_score: True

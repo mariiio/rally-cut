@@ -874,6 +874,8 @@ export function VideoPlayer() {
               rallyStartTime={currentRally.start_time}
               rallyEndTime={currentRally.end_time}
               videoRef={videoRef}
+              ballPhases={playerTracks[currentRally._backendId]!.tracksJson!.ballPhases}
+              showPhaseColors={true}
             />
           )}
           {/* Transform wrapper - video frame callback updates, CSS transition smooths between frames */}

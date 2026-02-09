@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { trackPlayers, getPlayerTrack, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition } from '@/services/api';
+import { trackPlayers, getPlayerTrack, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPhase, type ServerInfo, type BallPosition } from '@/services/api';
 
 // Types for player tracking data (store format)
 export interface PlayerPosition {
@@ -23,6 +23,11 @@ export interface TracksJson {
   fps: number;
   frameCount: number;
   tracks: PlayerTrackData[];
+  // Ball phase detection
+  ballPhases?: BallPhase[];
+  serverInfo?: ServerInfo;
+  // Ball positions for trajectory overlay
+  ballPositions?: BallPosition[];
 }
 
 export interface PlayerTrack {
@@ -56,6 +61,7 @@ interface PlayerTrackingState {
 
   // Overlay visibility
   showPlayerOverlay: boolean;
+  showBallOverlay: boolean;
 
   // Selected track for highlighting
   selectedTrackId: number | null;
@@ -66,6 +72,7 @@ interface PlayerTrackingState {
 
   // Actions
   togglePlayerOverlay: () => void;
+  toggleBallOverlay: () => void;
   setSelectedTrack: (trackId: number | null) => void;
   setIsCalibrating: (value: boolean) => void;
   saveCalibration: (videoId: string, corners: Corner[]) => void;
@@ -128,7 +135,13 @@ function apiResponseToPlayerTrack(
   }
 
   // Convert positions to tracks format
-  const tracks = response.positions ? positionsToTracks(response.positions) : [];
+  let tracks = response.positions ? positionsToTracks(response.positions) : [];
+
+  // Filter to only primary tracks if available (excludes referees, spectators)
+  if (response.primaryTrackIds && response.primaryTrackIds.length > 0) {
+    const primarySet = new Set(response.primaryTrackIds);
+    tracks = tracks.filter(t => primarySet.has(t.trackId));
+  }
 
   // Use fps from response (actual tracked video fps), fallback to parameter
   const fps = response.fps ?? fallbackFps;
@@ -141,6 +154,9 @@ function apiResponseToPlayerTrack(
       fps,
       frameCount: response.frameCount || 0,
       tracks,
+      ballPhases: response.ballPhases,
+      serverInfo: response.serverInfo,
+      ballPositions: response.ballPositions,
     },
     playerCount: response.uniqueTrackCount || 0,
     progress: 100,
@@ -156,12 +172,17 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
       isLoadingTrack: {},
       trackingErrors: {},
       showPlayerOverlay: false,
+      showBallOverlay: false,
       selectedTrackId: null,
       isCalibrating: false,
       calibrations: {},
 
       togglePlayerOverlay: () => {
         set((state) => ({ showPlayerOverlay: !state.showPlayerOverlay }));
+      },
+
+      toggleBallOverlay: () => {
+        set((state) => ({ showBallOverlay: !state.showBallOverlay }));
       },
 
       setSelectedTrack: (trackId: number | null) => {
@@ -255,6 +276,7 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
             playerTracks: { ...state.playerTracks, [rallyId]: playerTrack },
             isTracking: { ...state.isTracking, [rallyId]: false },
             showPlayerOverlay: true, // Auto-show overlay after tracking
+            showBallOverlay: !!playerTrack.tracksJson?.ballPositions?.length, // Auto-show ball overlay if positions available
           }));
         } catch (error) {
           set((state) => ({
