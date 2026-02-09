@@ -1,7 +1,19 @@
 'use client';
 
 import { useEffect, useRef, RefObject, useMemo } from 'react';
-import type { BallPosition } from '@/services/api';
+import type { BallPosition, BallPhase } from '@/services/api';
+
+// Phase colors matching volleyball semantics
+const PHASE_COLORS: Record<string, string> = {
+  serve: '#4CAF50',     // Green - start of play
+  receive: '#2196F3',   // Blue - first touch (pass)
+  set: '#FFC107',       // Amber - setter touch
+  attack: '#f44336',    // Red - spike/hit
+  dig: '#9C27B0',       // Purple - defensive save
+  defense: '#2196F3',   // Blue (legacy alias for receive)
+  transition: '#FFC107', // Amber (legacy alias for set)
+  unknown: '#ed6c02',   // Orange - default
+};
 
 interface BallTrackOverlayProps {
   positions: BallPosition[];
@@ -9,6 +21,8 @@ interface BallTrackOverlayProps {
   rallyStartTime: number;
   rallyEndTime: number;
   videoRef: RefObject<HTMLVideoElement | null>;
+  ballPhases?: BallPhase[];  // Optional ball phases for color coding
+  showPhaseColors?: boolean; // Whether to use phase-based coloring
 }
 
 const TRAIL_DURATION = 0.5; // seconds
@@ -20,21 +34,38 @@ export function BallTrackOverlay({
   rallyStartTime,
   rallyEndTime,
   videoRef,
+  ballPhases = [],
+  showPhaseColors = true,
 }: BallTrackOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const dotsRef = useRef<HTMLDivElement[]>([]);
   const rafIdRef = useRef<number | undefined>(undefined);
 
-  // Pre-calculate the absolute time for each position (only when data changes)
+  // Pre-calculate the absolute time and phase for each position (only when data changes)
   const positionsWithTime = useMemo(() => {
+    // frameNumber is SEGMENT-RELATIVE (0 to frameCount-1) because tracking
+    // runs on an extracted video segment, not the full video.
+    // Map segment frame to absolute video time using rally boundaries.
     const rallyDuration = rallyEndTime - rallyStartTime;
     const maxFrame = Math.max(1, frameCount - 1);
 
+    // Build frame-to-phase lookup
+    const frameToPhase: Record<number, string> = {};
+    if (showPhaseColors && ballPhases.length > 0) {
+      for (const phase of ballPhases) {
+        for (let f = phase.frameStart; f <= phase.frameEnd; f++) {
+          frameToPhase[f] = phase.phase;
+        }
+      }
+    }
+
     return positions.map((p) => ({
       ...p,
+      // Map segment frame (0 to maxFrame) to video time (rallyStart to rallyEnd)
       absoluteTime: rallyStartTime + (p.frameNumber / maxFrame) * rallyDuration,
+      phase: frameToPhase[p.frameNumber] || 'unknown',
     }));
-  }, [positions, frameCount, rallyStartTime, rallyEndTime]);
+  }, [positions, frameCount, rallyStartTime, rallyEndTime, ballPhases, showPhaseColors]);
 
   // Create dot elements once
   useEffect(() => {
@@ -105,9 +136,15 @@ export function BallTrackOverlay({
         }
 
         const age = videoTime - pos.absoluteTime;
-        const opacity = Math.max(0.1, 1 - age / TRAIL_DURATION) * pos.confidence;
-        const size = 8 + (TRAIL_DURATION - age) * 10;
         const isCurrent = pos.frameNumber === currentFrameNumber;
+        // Higher minimum opacity for better visibility
+        const opacity = Math.max(0.4, 1 - age / TRAIL_DURATION) * Math.max(0.6, pos.confidence);
+        // Larger dots for better visibility (current: 20px, trail: 12px min)
+        const size = isCurrent ? 20 : 12 + (TRAIL_DURATION - age) * 12;
+
+        // Get color based on phase (with type assertion for extended position)
+        const posWithPhase = pos as { phase?: string };
+        const phaseColor = PHASE_COLORS[posWithPhase.phase || 'unknown'] || PHASE_COLORS.unknown;
 
         dot.style.display = 'block';
         dot.style.left = `${pos.x * 100}%`;
@@ -115,8 +152,12 @@ export function BallTrackOverlay({
         dot.style.width = `${size}px`;
         dot.style.height = `${size}px`;
         dot.style.opacity = String(opacity);
-        dot.style.backgroundColor = isCurrent ? '#d32f2f' : '#ed6c02'; // error.main : warning.main
-        dot.style.boxShadow = isCurrent ? '0 0 8px rgba(255,0,0,0.8)' : 'none';
+        dot.style.backgroundColor = phaseColor;
+        // Stronger glow effect for visibility
+        dot.style.boxShadow = isCurrent
+          ? `0 0 15px ${phaseColor}, 0 0 30px ${phaseColor}`
+          : `0 0 8px ${phaseColor}`;
+        dot.style.border = isCurrent ? '3px solid white' : '1px solid rgba(255,255,255,0.5)';
       }
 
       rafIdRef.current = requestAnimationFrame(updatePositions);

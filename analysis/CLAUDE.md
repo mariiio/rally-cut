@@ -120,8 +120,11 @@ rallycut/
 │   └── training.py           # Training loop with validation
 ├── tracking/        # Ball and player tracking
 │   ├── ball_tracker.py       # YOLO-based ball detection
-│   ├── player_tracker.py     # YOLO + ByteTrack player tracking + filtering
-│   └── ball_*.py             # Ball validation, features, boundary refinement
+│   ├── ball_features.py      # Ball phase detection, server ID, reactivity scoring
+│   ├── player_tracker.py     # YOLO + ByteTrack player tracking
+│   ├── player_filter.py      # Multi-stage player filtering with court/ball scoring
+│   ├── player_features.py    # Appearance extraction (skin tone, jersey, proportions)
+│   └── match_tracker.py      # Cross-rally player ID consistency
 ├── court/           # Court calibration
 │   └── calibration.py        # Homography for image→court projection
 ├── analytics/       # Player statistics
@@ -271,13 +274,14 @@ may have limited player movement.
 
 With full data (calibration + ball tracking):
 ```
-score = 0.10 * length + 0.15 * court_presence + 0.20 * engagement
-      + 0.20 * spread + 0.20 * ball_proximity + 0.15 * reactivity
+score = 0.10 * length + 0.20 * court_presence + 0.15 * interior_ratio
+      + 0.20 * ball_proximity + 0.15 * ball_reactivity + 0.10 * ball_zone
+      + 0.10 * position_spread
 ```
 Weights adjust when data unavailable:
-- No ball data: `0.15 length + 0.25 court + 0.30 engagement + 0.30 spread`
-- No calibration: `0.30 length + 0.40 ball_proximity + 0.30 reactivity`
-- Neither: length only
+- No ball data: `0.20 length + 0.30 court + 0.25 interior + 0.25 spread`
+- No calibration: `0.20 length + 0.30 ball_proximity + 0.25 reactivity + 0.15 zone + 0.10 spread`
+- Neither: `1.0 * length`
 
 **Stage 5: Top-K Selection**
 - Keep top 4 tracks by combined score (beach volleyball)
@@ -290,16 +294,33 @@ Weights adjust when data unavailable:
 | Spread | Position variance (geometric mean of std dev) | High (~4-5m) | Low (~0.5m, noise only) |
 | Reactivity | Movement correlation with ball direction | High (reacts to ball) | Low (random/none) |
 
+### Hard Filters
+
+Before scoring, tracks must pass these hard filters:
+
+1. **Sideline Position Filter**: Tracks with `avg_x < 0.20` or `avg_x > 0.80` are excluded (referees stand on sidelines)
+2. **Court Presence Filter**: Tracks with < 50% positions inside court bounds are excluded (requires calibration)
+3. **Stationary Object Filter**: Tracks with low movement AND low ball engagement are excluded
+
 ### Thresholds
 
 | Parameter | Value | Purpose |
 |-----------|-------|---------|
-| `COURT_MARGIN` | 4.0m | Allow boundary plays, serves |
-| `MIN_COURT_ENGAGEMENT` | 0.15 | 15% engagement required (servers behind baseline) |
-| `MIN_POSITION_SPREAD` | 1.0m | Minimum spread for normalization (tracking noise ~0.5m) |
-| `MAX_POSITION_SPREAD` | 4.0m | Spread of active player covering court area |
-| `BALL_PROXIMITY_THRESHOLD` | 0.15 | ~15% of frame diagonal |
-| `BALL_COVERAGE_MIN` | 0.3 | 30% ball detection coverage required |
+| `SIDELINE_THRESHOLD` | 0.20 | Exclude tracks at frame edges (referees) |
+| `COURT_MARGIN_SIDELINE` | 0.5m | Tight sideline margin to exclude refs |
+| `COURT_MARGIN_BASELINE` | 3.0m | Larger baseline margin for jump serves |
+| `MIN_COURT_PRESENCE` | 0.50 | 50% court presence required |
+| `MIN_POSITION_SPREAD` | 0.015 | Movement threshold (normalized) |
+| `BALL_PROXIMITY_RADIUS` | 0.20 | 20% of frame diagonal |
+
+### Top-4 Selection Score
+
+When more than 4 tracks pass filters, select top 4 by player score:
+```
+score = 0.5 * ball_proximity   # Players interact with ball
+      + 0.3 * position_spread  # Players move around
+      + 0.2 * presence_rate    # Track visibility
+```
 
 ## Track Merging (Pre-Filtering)
 
@@ -320,11 +341,76 @@ Before filtering, fragmented tracks are merged to handle ByteTrack ID breaks:
 **Thresholds:**
 | Parameter | Value | Purpose |
 |-----------|-------|---------|
-| `MERGE_MAX_GAP_SECONDS` | 2.0s | Max gap to consider merging |
-| `MERGE_MAX_SPATIAL_DIST` | 0.20 | 20% of frame (includes prediction tolerance) |
-| `MERGE_SIZE_TOLERANCE` | 0.50 | 50% bbox size variation (far players vary more) |
-| `MERGE_MIN_SCORE` | 0.45 | Confidence threshold |
-| `MERGE_MIN_FRAGMENT_FRAMES` | 5 | Ignore noise |
+| `max_gap_frames` | 90 | ~3s at 30fps max gap |
+| `max_merge_distance` | 0.40 | 40% of frame base distance |
+| `merge_distance_per_frame` | 0.008 | Additional distance per frame of gap |
+
+## Ball Phase Detection
+
+Ball trajectory analysis detects game phases for enhanced player scoring.
+
+### Phases
+| Phase | Trigger | Signal Strength |
+|-------|---------|-----------------|
+| SERVE | Velocity spike from baseline | 0.30 (strong server ID) |
+| ATTACK | Velocity spike near net | 0.25 (attacker ID) |
+| DEFENSE | Moderate velocity, horizontal | 0.20 (multiple defenders) |
+| TRANSITION | Low velocity (sets, passes) | 0.15 (less discriminative) |
+
+### Server Detection
+Identifies serving player in first 3 seconds of rally:
+1. Find ball velocity spike (>0.04 normalized)
+2. Find player closest to ball at spike time (only considers primary tracks)
+3. Verify player is near baseline (if calibration available)
+
+**Note:** Server detection only considers primary tracks (the 4 identified players), excluding referees and other non-players.
+
+### Output
+Player tracking output includes:
+- `ballPhases`: Array of detected phases with frame ranges, velocity, and ball position
+- `serverInfo`: Detected server track ID, confidence, and serve frame
+- `ballPositions`: Full ball trajectory for overlay visualization (frameNumber, x, y, confidence)
+
+See `ball_features.py` for implementation.
+
+## Cross-Rally Player Consistency
+
+Maintains consistent player IDs (1-4) across entire match using appearance features.
+
+### Architecture
+```
+MatchPlayerTracker (orchestrates entire match)
+    │
+    ├── Rally 1 → PlayerTracker → RawTracks → FeatureExtractor → AppearanceFeatures
+    │                                              ↓
+    │                                    CrossRallyAssigner ←── MatchPlayerState
+    │                                              ↓
+    ├── Rally 2 → PlayerTracker → RawTracks → FeatureExtractor → AppearanceFeatures
+    │                                              ↓
+    │                                    CrossRallyAssigner (uses accumulated profiles)
+    └── ...
+```
+
+### Appearance Features
+Extracted from each player detection:
+- **Skin tone** (HSV) - most reliable for beach volleyball
+- **Jersey color** (HSV) - when visible
+- **Body proportions** - bbox height, aspect ratio
+
+Skin detection: HSV range (H: 0-50, S: 20-255, V: 50-255)
+
+### Matching Cost
+```
+cost = 1.0 - (0.50 * skin_score + 0.30 * height_score + 0.20 * jersey_score)
+```
+
+### Side Switch Detection
+Appearance-based detection (not tied to fixed point counts):
+- Compare current assignment cost vs swapped assignment cost
+- If swapped cost < current cost * 0.7, switch detected
+- Works for any switching schedule (5 pts, 7 pts, etc.)
+
+See `player_features.py` and `match_tracker.py` for implementation.
 
 ## Code Style
 

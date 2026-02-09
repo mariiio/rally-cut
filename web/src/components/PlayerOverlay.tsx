@@ -62,7 +62,9 @@ export function PlayerOverlay({
   const getInterpolatedPosition = useCallback((positions: PlayerPosition[], currentFrame: number) => {
     if (positions.length === 0) return null;
 
-    const maxDistanceFromDetection = 10;
+    // Show last known position for up to 30 frames (1 second at 30fps)
+    // This prevents flickering when a player is temporarily undetected
+    const maxDistanceFromDetection = 30;
     const firstFrame = positions[0].frame;
     const lastFrame = positions[positions.length - 1].frame;
 
@@ -97,8 +99,8 @@ export function PlayerOverlay({
     const after = positions[lo + 1];
     const gap = after.frame - before.frame;
 
-    // Handle large gaps
-    const maxGap = 15;
+    // Handle large gaps - allow up to 45 frames (1.5s) for interpolation
+    const maxGap = 45;
     if (gap > maxGap) {
       const distToBefore = currentFrame - before.frame;
       const distToAfter = after.frame - currentFrame;

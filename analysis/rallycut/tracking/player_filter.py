@@ -6,16 +6,23 @@ Filters out spectators, referees, and other non-playing persons using:
 2. Track stability (court players appear consistently across frames)
 3. Expected player count (4 for beach volleyball 2v2)
 4. Ball trajectory play area (optional refinement)
+5. Court position (requires calibration) - hard filter for court presence
 """
+
+from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 from scipy.spatial import ConvexHull, Delaunay, QhullError
 
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.player_tracker import PlayerPosition
+
+if TYPE_CHECKING:
+    from rallycut.court.calibration import CourtCalibrator
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +41,18 @@ class TrackStats:
     last_frame: int = 0  # Last frame where track appears
     position_spread: float = 0.0  # Movement spread (geometric mean of X/Y std dev, normalized 0-1)
 
+    # Court position stats (requires calibration, set by analyze_tracks)
+    court_presence_ratio: float = 0.0  # Fraction of positions inside court bounds
+    interior_ratio: float = 0.0  # Fraction of positions in court interior
+    has_court_stats: bool = False  # True if court stats were computed
+
+    # Referee detection stats (set by compute_track_stats or detect_referee_tracks)
+    avg_x: float = 0.5  # Average X position (0-1, for sideline detection)
+    avg_y: float = 0.5  # Average Y position (0-1)
+    x_std: float = 0.0  # X position standard deviation
+    y_std: float = 0.0  # Y position standard deviation
+    is_likely_referee: bool = False  # Set by detect_referee_tracks
+
     @property
     def presence_rate(self) -> float:
         """Fraction of frames this track appears in."""
@@ -47,23 +66,43 @@ class TrackStats:
 
         Uses default weights. For configurable weights, use compute_stability_score().
         """
-        # Weighted combination of presence and size
-        # Presence is most important (court players are always visible)
-        # Ball proximity boosts score (players are near the ball)
-        base_score = self.presence_rate * 0.5 + min(self.avg_bbox_area * 10, 1.0) * 0.3
-        # Add ball proximity boost (up to 0.2)
-        proximity_boost = self.ball_proximity_score * 0.2
-        return base_score + proximity_boost
+        # Weighted combination of presence, size, and ball proximity
+        # Weights match PlayerFilterConfig defaults for consistency
+        bbox_area_scalar = 10.0
+        score = (
+            self.presence_rate * 0.40  # presence_weight
+            + min(self.avg_bbox_area * bbox_area_scalar, 1.0) * 0.35  # bbox_area_weight
+            + self.ball_proximity_score * 0.25  # ball_proximity_weight
+        )
+        return score
+
+    @property
+    def movement_ratio(self) -> float:
+        """Ratio of X movement to Y movement.
+
+        Referees tend to move parallel to the net (high X variance, low Y variance).
+        Players move in all directions.
+        """
+        if self.y_std < 0.001:
+            return float("inf") if self.x_std > 0.001 else 1.0
+        return self.x_std / self.y_std
 
 
 @dataclass
 class PlayerFilterConfig:
-    """Configuration for player filtering (beach volleyball 2v2)."""
+    """Configuration for player filtering (beach volleyball 2v2).
+
+    Beach volleyball-optimized thresholds tuned for:
+    - Far players appearing smaller in camera view
+    - Short rallies (3-5 seconds typical)
+    - Defensive positioning requiring larger ball proximity radius
+    """
 
     # Bbox size filtering - minimum size to be considered a court player
     # These thresholds filter out distant spectators while keeping court players
-    min_bbox_area: float = 0.005  # Min 0.5% of frame area
-    min_bbox_height: float = 0.10  # Min 10% of frame height
+    # Lower values to catch far-side players who appear smaller
+    min_bbox_area: float = 0.003  # Min 0.3% of frame area (was 0.5%)
+    min_bbox_height: float = 0.08  # Min 8% of frame height (was 10%)
 
     # Top-K selection - keep only the 4 largest detections per frame
     # Beach volleyball is 2v2 = 4 players on court
@@ -76,39 +115,92 @@ class PlayerFilterConfig:
     use_two_team_filter: bool = True
 
     # Track stability filtering - prefer tracks that appear consistently
-    min_presence_rate: float = 0.3  # Track must appear in 30%+ of frames to be "primary"
-    min_stability_score: float = 0.25  # Minimum combined stability score
+    # Lower thresholds for short rallies (3-5s at 30fps = 90-150 frames)
+    min_presence_rate: float = 0.20  # Track must appear in 20%+ of frames (was 30%)
+    min_stability_score: float = 0.20  # Minimum combined stability score (was 0.25)
 
     # Stability score weights (for compute_stability_score)
-    presence_weight: float = 0.5  # Weight for presence rate in stability score
-    bbox_area_weight: float = 0.3  # Weight for bbox area in stability score
-    ball_proximity_weight: float = 0.2  # Weight for ball proximity in stability score
-    bbox_area_scalar: float = 10.0  # Scalar to normalize bbox area (area * scalar, capped at 1.0)
+    # Rebalanced: more weight on bbox area and ball proximity (more discriminative)
+    presence_weight: float = 0.40  # Weight for presence rate (was 0.5)
+    bbox_area_weight: float = 0.35  # Weight for bbox area (was 0.3)
+    ball_proximity_weight: float = 0.25  # Weight for ball proximity (was 0.2)
 
-    # Ball proximity boost - tracks near ball get stability boost
-    ball_proximity_radius: float = 0.15  # 15% of frame size
-    ball_proximity_boost: float = 0.2  # Boost to stability score
+    # Ball proximity - tracks near ball get stability boost
+    # Larger radius for defensive positioning where players spread out
+    ball_proximity_radius: float = 0.20  # 20% of frame size (was 15%)
 
     # Position spread requirement for primary tracks (filters out stationary objects)
     # Players move around the court; stationary things (referees, net posts) don't
     # Spread is geometric mean of X/Y std dev (normalized 0-1)
-    # Typical player spread: 0.02-0.10, stationary object spread: <0.015 (detection noise)
-    min_position_spread_for_primary: float = 0.018  # Base movement threshold
+    # Lower threshold for short rallies with limited movement
+    min_position_spread_for_primary: float = 0.015  # Base movement threshold (was 0.018)
 
     # Combined filter: tracks with BOTH low spread AND low ball proximity are filtered
     # This catches stationary objects while keeping players who don't move much but engage with ball
-    min_ball_proximity_for_stationary: float = 0.03  # If spread < threshold, need 3%+ ball proximity
+    # Tighter filter: require more ball proximity if stationary
+    min_ball_proximity_for_stationary: float = 0.05  # If spread < threshold, need 5%+ ball proximity (was 3%)
 
     # Ball trajectory thresholds (secondary filter)
-    ball_confidence_threshold: float = 0.35
-    min_ball_points: int = 10  # Need more points for reliable hull
-    hull_padding: float = 0.15  # 15% padding around ball trajectory hull (stricter)
-    min_ball_detection_rate: float = 0.30  # Higher threshold
+    # Higher thresholds to reduce false positives
+    ball_confidence_threshold: float = 0.40  # Higher threshold (was 0.35)
+    min_ball_points: int = 15  # More points for robust hull (was 10)
+    hull_padding: float = 0.20  # 20% padding for edge plays (was 15%)
+    min_ball_detection_rate: float = 0.30  # Unchanged
 
     # Track ID stabilization - merge tracks when one ends and another starts nearby
+    # Slightly longer gap tolerance for track merging
     stabilize_track_ids: bool = True
     max_gap_frames: int = 90  # Max frames between track end and new track start (~3s at 30fps)
-    max_merge_distance: float = 0.25  # Max position distance for merging (25% of frame)
+    max_merge_distance: float = 0.40  # Max position distance for merging (40% of frame, for fast movement)
+    merge_distance_per_frame: float = 0.008  # Additional distance allowed per frame of gap (player velocity)
+
+    # Two-team hysteresis - prevents flickering when players cross midcourt boundary
+    two_team_hysteresis: float = 0.03  # Players must cross boundary + hysteresis to switch teams
+
+    # Referee detection heuristics
+    referee_sideline_threshold: float = 0.20  # Track avg X near sidelines (x <= 0.20 or x >= 0.80)
+    referee_movement_ratio_min: float = 1.5  # X/Y movement ratio (referees move parallel to net)
+    referee_ball_proximity_max: float = 0.12  # Referees occasionally near ball trajectory
+    referee_y_std_max: float = 0.04  # Referees don't move up/down court like players (< 4%)
+
+
+@dataclass
+class CourtFilterConfig:
+    """Configuration for court-based filtering using homography projection.
+
+    Beach volleyball court is 8m x 16m. Players must be on or near the court.
+    Asymmetric margins account for:
+    - Sidelines: 2m for ball chases
+    - Baselines: 4m for jump serves and defensive positioning
+    """
+
+    # Asymmetric court margins (meters)
+    # Sideline margin: small to exclude referees standing on the side
+    # Baseline margin: larger for jump serves
+    court_margin_sideline: float = 0.5  # X-direction - tight to exclude sideline refs
+    court_margin_baseline: float = 3.0  # Y-direction margin for jump serves
+
+    # Hard filter threshold: tracks with less court presence are definitively not players
+    # Set to 50% - players should be on court most of the time
+    min_court_presence_ratio: float = 0.50  # 50% minimum
+
+    # Interior definition: points must be this far from edges to count as "interior"
+    inner_court_margin: float = 1.0  # meters
+
+
+@dataclass
+class CourtPositionStats:
+    """Court position statistics for a track (requires calibration).
+
+    Computed by projecting player positions to court coordinates.
+    """
+
+    track_id: int
+    court_presence_ratio: float  # Fraction of positions inside court bounds
+    interior_ratio: float  # Fraction of positions in court interior (not margins)
+    avg_court_x: float  # Average X position in court coords (meters)
+    avg_court_y: float  # Average Y position in court coords (meters)
+    total_positions: int  # Number of positions projected
 
 
 def compute_stability_score(stats: TrackStats, config: PlayerFilterConfig) -> float:
@@ -121,14 +213,282 @@ def compute_stability_score(stats: TrackStats, config: PlayerFilterConfig) -> fl
     Returns:
         Stability score (0-1, higher = more stable).
     """
-    # Weighted combination of presence and size
-    base_score = (
+    # Bbox area scalar: normalizes bbox area to 0-1 range
+    # 10.0 works well for typical volleyball videos (players occupy ~5-10% of frame)
+    bbox_area_scalar = 10.0
+
+    # Weighted combination of presence, size, and ball proximity
+    score = (
         stats.presence_rate * config.presence_weight
-        + min(stats.avg_bbox_area * config.bbox_area_scalar, 1.0) * config.bbox_area_weight
+        + min(stats.avg_bbox_area * bbox_area_scalar, 1.0) * config.bbox_area_weight
+        + stats.ball_proximity_score * config.ball_proximity_weight
     )
-    # Add ball proximity boost
-    proximity_boost = stats.ball_proximity_score * config.ball_proximity_weight
-    return base_score + proximity_boost
+    return score
+
+
+@dataclass
+class CombinedScoreWeights:
+    """Weights for combined player scoring.
+
+    Different weight configurations for different data availability scenarios.
+    """
+
+    length: float = 0.10
+    court_presence: float = 0.20
+    interior_ratio: float = 0.15
+    ball_proximity: float = 0.20
+    ball_reactivity: float = 0.15
+    ball_zone: float = 0.10
+    position_spread: float = 0.10
+
+
+# Pre-defined weight configurations for different data scenarios
+WEIGHTS_FULL_DATA = CombinedScoreWeights(
+    length=0.10,
+    court_presence=0.20,
+    interior_ratio=0.15,
+    ball_proximity=0.20,
+    ball_reactivity=0.15,
+    ball_zone=0.10,
+    position_spread=0.10,
+)
+
+WEIGHTS_NO_CALIBRATION = CombinedScoreWeights(
+    length=0.20,
+    court_presence=0.0,  # No calibration
+    interior_ratio=0.0,  # No calibration
+    ball_proximity=0.30,
+    ball_reactivity=0.25,
+    ball_zone=0.15,
+    position_spread=0.10,
+)
+
+WEIGHTS_NO_BALL = CombinedScoreWeights(
+    length=0.20,
+    court_presence=0.30,
+    interior_ratio=0.25,
+    ball_proximity=0.0,  # No ball data
+    ball_reactivity=0.0,  # No ball data
+    ball_zone=0.0,  # No ball data
+    position_spread=0.25,
+)
+
+WEIGHTS_MINIMAL = CombinedScoreWeights(
+    length=1.0,  # Only length available
+    court_presence=0.0,
+    interior_ratio=0.0,
+    ball_proximity=0.0,
+    ball_reactivity=0.0,
+    ball_zone=0.0,
+    position_spread=0.0,
+)
+
+
+@dataclass
+class CombinedScoreInputs:
+    """Inputs for combined player scoring.
+
+    All scores should be normalized to 0-1 range.
+    """
+
+    track_id: int
+    length_score: float = 0.0  # Fraction of frames track is present
+    court_presence: float = 0.0  # Fraction of positions inside court bounds
+    interior_ratio: float = 0.0  # Fraction of positions in court interior
+    ball_proximity: float = 0.0  # Fraction of appearances near ball
+    ball_reactivity: float = 0.0  # Correlation with ball movement
+    ball_zone: float = 0.0  # Position relative to ball trajectory zones
+    position_spread: float = 0.0  # Movement spread (normalized)
+
+    # Data availability flags
+    has_calibration: bool = False
+    has_ball_data: bool = False
+
+
+def compute_combined_score(
+    inputs: CombinedScoreInputs,
+    weights: CombinedScoreWeights | None = None,
+) -> float:
+    """
+    Compute combined player identification score.
+
+    Uses different weight configurations based on data availability:
+    - Full data (calibration + ball): All features weighted
+    - No calibration: Ball-focused scoring
+    - No ball data: Court-focused scoring
+    - Neither: Length only
+
+    Args:
+        inputs: Score inputs for a single track.
+        weights: Optional custom weights (auto-selects if None).
+
+    Returns:
+        Combined score (0-1, higher = more likely to be a player).
+    """
+    # Auto-select weights based on data availability
+    if weights is None:
+        if inputs.has_calibration and inputs.has_ball_data:
+            weights = WEIGHTS_FULL_DATA
+        elif inputs.has_ball_data:
+            weights = WEIGHTS_NO_CALIBRATION
+        elif inputs.has_calibration:
+            weights = WEIGHTS_NO_BALL
+        else:
+            weights = WEIGHTS_MINIMAL
+
+    score = (
+        weights.length * inputs.length_score
+        + weights.court_presence * inputs.court_presence
+        + weights.interior_ratio * inputs.interior_ratio
+        + weights.ball_proximity * inputs.ball_proximity
+        + weights.ball_reactivity * inputs.ball_reactivity
+        + weights.ball_zone * inputs.ball_zone
+        + weights.position_spread * inputs.position_spread
+    )
+
+    return min(1.0, max(0.0, score))
+
+
+def build_score_inputs_from_track_stats(
+    stats: TrackStats,
+    has_calibration: bool = False,
+    has_ball_data: bool = False,
+    ball_reactivity: float = 0.0,
+    ball_zone: float = 0.0,
+) -> CombinedScoreInputs:
+    """
+    Build CombinedScoreInputs from TrackStats.
+
+    Args:
+        stats: Track statistics from compute_track_stats().
+        has_calibration: Whether court calibration is available.
+        has_ball_data: Whether ball tracking data is available.
+        ball_reactivity: Ball reactivity score (from ball_features.py).
+        ball_zone: Ball zone score (from ball_features.py).
+
+    Returns:
+        CombinedScoreInputs ready for compute_combined_score().
+    """
+    # Normalize position spread to 0-1 range
+    # Typical player spread: 0.02-0.10, use 0.10 as max
+    spread_normalized = min(stats.position_spread / 0.10, 1.0)
+
+    return CombinedScoreInputs(
+        track_id=stats.track_id,
+        length_score=stats.presence_rate,
+        court_presence=stats.court_presence_ratio if stats.has_court_stats else 0.0,
+        interior_ratio=stats.interior_ratio if stats.has_court_stats else 0.0,
+        ball_proximity=stats.ball_proximity_score,
+        ball_reactivity=ball_reactivity,
+        ball_zone=ball_zone,
+        position_spread=spread_normalized,
+        has_calibration=has_calibration,
+        has_ball_data=has_ball_data,
+    )
+
+
+def compute_court_position_stats(
+    all_positions: list[PlayerPosition],
+    calibrator: CourtCalibrator,
+    court_config: CourtFilterConfig | None = None,
+) -> dict[int, CourtPositionStats]:
+    """
+    Compute court position statistics for each track using homography projection.
+
+    Projects player feet positions (bbox bottom-center) to court coordinates
+    and computes per-track statistics about court presence.
+
+    Args:
+        all_positions: All player positions from all frames.
+        calibrator: Calibrated court calibrator with homography.
+        court_config: Court filter configuration (uses defaults if None).
+
+    Returns:
+        Dictionary mapping track_id to CourtPositionStats.
+    """
+    # Import here to avoid circular import, calibrator type already checked via duck typing
+    from rallycut.court.calibration import CourtCalibrator as CourtCalibratorClass
+
+    if not isinstance(calibrator, CourtCalibratorClass) or not calibrator.is_calibrated:
+        logger.debug("Calibrator not available or not calibrated, skipping court position stats")
+        return {}
+
+    config = court_config or CourtFilterConfig()
+
+    # Group court coordinates by track ID
+    track_court_positions: dict[int, list[tuple[float, float]]] = {}
+
+    for p in all_positions:
+        if p.track_id < 0:
+            continue
+
+        # Use feet position (bbox bottom-center) for court projection
+        # This is more accurate than bbox center for floor position
+        feet_x = p.x  # Normalized image X
+        feet_y = p.y + p.height / 2  # Bottom of bbox
+
+        try:
+            # Project to court coordinates (need dummy width/height, coords are normalized)
+            court_point = calibrator.image_to_court((feet_x, feet_y), 1, 1)
+
+            if p.track_id not in track_court_positions:
+                track_court_positions[p.track_id] = []
+
+            track_court_positions[p.track_id].append(court_point)
+        except (RuntimeError, ValueError) as e:
+            logger.debug(f"Failed to project position for track {p.track_id}: {e}")
+            continue
+
+    # Compute stats for each track
+    stats: dict[int, CourtPositionStats] = {}
+
+    for track_id, court_points in track_court_positions.items():
+        if not court_points:
+            continue
+
+        # Count positions inside court bounds and interior
+        in_court_count = 0
+        in_interior_count = 0
+        court_x_sum = 0.0
+        court_y_sum = 0.0
+
+        for cx, cy in court_points:
+            court_x_sum += cx
+            court_y_sum += cy
+
+            # Check if in court bounds (with asymmetric margins)
+            if calibrator.is_point_in_court_with_margin(
+                (cx, cy),
+                sideline_margin=config.court_margin_sideline,
+                baseline_margin=config.court_margin_baseline,
+            ):
+                in_court_count += 1
+
+            # Check if in court interior
+            if calibrator.is_point_in_court_interior(
+                (cx, cy),
+                interior_margin=config.inner_court_margin,
+            ):
+                in_interior_count += 1
+
+        total = len(court_points)
+        stats[track_id] = CourtPositionStats(
+            track_id=track_id,
+            court_presence_ratio=in_court_count / total,
+            interior_ratio=in_interior_count / total,
+            avg_court_x=court_x_sum / total,
+            avg_court_y=court_y_sum / total,
+            total_positions=total,
+        )
+
+    if stats:
+        avg_presence = sum(s.court_presence_ratio for s in stats.values()) / len(stats)
+        logger.debug(
+            f"Court position stats: {len(stats)} tracks, "
+            f"avg court presence={avg_presence:.2f}"
+        )
+
+    return stats
 
 
 def filter_by_bbox_size(
@@ -231,6 +591,14 @@ def compute_court_split(
             logger.debug(f"Court split from bbox clustering: y={split_y:.3f}")
             return split_y
 
+    # Secondary method: use ball trajectory direction changes
+    # Ball crosses net multiple times during a rally
+    if ball_positions:
+        split_y = _find_net_from_ball_crossings(ball_positions)
+        if split_y is not None:
+            logger.debug(f"Court split from ball crossings: y={split_y:.3f}")
+            return split_y
+
     # Fallback: use ball trajectory center
     confident = [
         p.y for p in ball_positions
@@ -243,9 +611,102 @@ def compute_court_split(
     # Use ball trajectory Y-range center as court center (net position)
     y_center = (max(confident) + min(confident)) / 2
 
-    logger.debug(f"Court split from ball trajectory: y={y_center:.3f}")
+    logger.debug(f"Court split from ball trajectory center: y={y_center:.3f}")
 
     return y_center
+
+
+def _find_net_from_ball_crossings(
+    ball_positions: list[BallPosition],
+    confidence_threshold: float = 0.4,
+) -> float | None:
+    """
+    Find net Y position from ball trajectory direction changes.
+
+    When ball crosses net, Y direction typically changes. The net position
+    is estimated as the median Y of direction change points.
+
+    Args:
+        ball_positions: Ball positions from tracking.
+        confidence_threshold: Minimum confidence for valid positions.
+
+    Returns:
+        Estimated net Y position (0-1), or None if insufficient data.
+    """
+    # Filter and sort
+    confident = [bp for bp in ball_positions if bp.confidence >= confidence_threshold]
+    confident.sort(key=lambda bp: bp.frame_number)
+
+    if len(confident) < 10:
+        return None
+
+    # Find Y direction reversals
+    crossing_ys: list[float] = []
+    prev_dy = 0.0
+
+    for i in range(2, len(confident)):
+        prev = confident[i - 1]
+        curr = confident[i]
+        prev_prev = confident[i - 2]
+
+        frame_gap = curr.frame_number - prev.frame_number
+        if frame_gap <= 0 or frame_gap > 5:
+            continue
+
+        dy = curr.y - prev.y
+        prev_dy = prev.y - prev_prev.y
+
+        # Direction reversal (ball went up, now going down or vice versa)
+        if (dy > 0.005 and prev_dy < -0.005) or (dy < -0.005 and prev_dy > 0.005):
+            crossing_ys.append(prev.y)
+
+    if len(crossing_ys) >= 2:
+        return float(np.median(crossing_ys))
+
+    return None
+
+
+def identify_teams_by_court_side(
+    track_stats: dict[int, TrackStats],
+    net_y: float,
+    min_side_fraction: float = 0.60,
+) -> tuple[set[int], set[int]]:
+    """
+    Identify teams by where players spend most of their time.
+
+    Beach volleyball players stay primarily on one side of the net.
+    A player belongs to a team if they spend 60%+ of their time on that side.
+
+    Args:
+        track_stats: Statistics for each track (must have avg_y).
+        net_y: Y-coordinate of the net (0-1).
+        min_side_fraction: Minimum fraction of time on one side (default 60%).
+
+    Returns:
+        Tuple of (near_team, far_team) sets of track IDs.
+        Near team: y > net_y (closer to camera)
+        Far team: y <= net_y (further from camera)
+    """
+    near_team: set[int] = set()
+    far_team: set[int] = set()
+
+    for track_id, stats in track_stats.items():
+        if stats.is_likely_referee:
+            continue
+
+        # Determine which side the player is primarily on
+        # Since we only have avg_y, use that (could be improved with per-frame analysis)
+        if stats.avg_y > net_y:
+            near_team.add(track_id)
+        else:
+            far_team.add(track_id)
+
+    logger.debug(
+        f"Team identification by court side (net_y={net_y:.2f}): "
+        f"near={len(near_team)}, far={len(far_team)}"
+    )
+
+    return near_team, far_team
 
 
 def _find_net_from_bbox_clustering(
@@ -345,13 +806,18 @@ def select_two_teams(
     players_per_team: int,
     primary_tracks: set[int] | None = None,
     strict_primary: bool = True,
-) -> list[PlayerPosition]:
+    hysteresis: float = 0.0,
+    track_team_history: dict[int, int] | None = None,
+) -> tuple[list[PlayerPosition], dict[int, int]]:
     """
-    Select players using two-team filtering (near/far split).
+    Select players using two-team filtering (near/far split) with hysteresis.
 
     Camera is behind baseline, so teams are split by Y:
     - Near team: y > split_y (closer to camera, larger bboxes)
     - Far team: y <= split_y (further from camera, smaller bboxes)
+
+    Hysteresis prevents flickering when players are near the boundary.
+    Players must cross split_y +/- hysteresis to switch teams.
 
     Args:
         players: List of player detections for a frame.
@@ -360,22 +826,65 @@ def select_two_teams(
         primary_tracks: Optional set of stable track IDs to prioritize.
         strict_primary: If True and primary_tracks is set, ONLY select primary tracks.
             This filters out referees who pass other filters but aren't primary.
+        hysteresis: Distance from boundary required to switch teams.
+        track_team_history: Dictionary mapping track_id -> last team (0=near, 1=far).
+            Updated in-place with new assignments.
 
     Returns:
-        Selected players (up to 2 * players_per_team).
+        Tuple of (selected players, updated track_team_history).
     """
     # If we have primary tracks and strict mode, only consider primary track players
     if primary_tracks and strict_primary:
         players = [p for p in players if p.track_id in primary_tracks]
         if not players:
-            return []
+            return [], track_team_history or {}
+
+    # Initialize history if not provided
+    if track_team_history is None:
+        track_team_history = {}
 
     if len(players) <= players_per_team * 2:
-        return players
+        # Still update history for all players
+        for p in players:
+            if p.y > split_y:
+                track_team_history[p.track_id] = 0  # Near team
+            else:
+                track_team_history[p.track_id] = 1  # Far team
+        return players, track_team_history
 
-    # Split by Y (near/far)
-    near_team = [p for p in players if p.y > split_y]
-    far_team = [p for p in players if p.y <= split_y]
+    # Split by Y (near/far) with hysteresis
+    near_team: list[PlayerPosition] = []
+    far_team: list[PlayerPosition] = []
+
+    for p in players:
+        prev_team = track_team_history.get(p.track_id)
+
+        if prev_team is not None and hysteresis > 0:
+            # Only switch teams if clearly past boundary + hysteresis
+            if prev_team == 0:  # Was near team
+                if p.y <= split_y - hysteresis:
+                    # Crossed to far side
+                    far_team.append(p)
+                    track_team_history[p.track_id] = 1
+                else:
+                    # Stay on near side
+                    near_team.append(p)
+            else:  # Was far team (prev_team == 1)
+                if p.y > split_y + hysteresis:
+                    # Crossed to near side
+                    near_team.append(p)
+                    track_team_history[p.track_id] = 0
+                else:
+                    # Stay on far side
+                    far_team.append(p)
+        else:
+            # No history or no hysteresis, use hard boundary
+            if p.y > split_y:
+                near_team.append(p)
+                track_team_history[p.track_id] = 0
+            else:
+                far_team.append(p)
+                track_team_history[p.track_id] = 1
 
     def select_from_side(
         side_players: list[PlayerPosition],
@@ -399,12 +908,12 @@ def select_two_teams(
     result = selected_near + selected_far
 
     logger.debug(
-        f"Two-team selection (y={split_y:.2f}): "
+        f"Two-team selection (y={split_y:.2f}, hysteresis={hysteresis:.3f}): "
         f"{len(players)} -> {len(result)} "
         f"(near: {len(selected_near)}, far: {len(selected_far)})"
     )
 
-    return result
+    return result, track_team_history
 
 
 def compute_ball_proximity_scores(
@@ -515,6 +1024,8 @@ def compute_track_stats(
         y_positions = np.array([p.y for p in positions])
         x_std = float(np.std(x_positions)) if len(positions) > 1 else 0.0
         y_std = float(np.std(y_positions)) if len(positions) > 1 else 0.0
+        avg_x = float(np.mean(x_positions))
+        avg_y = float(np.mean(y_positions))
         # Geometric mean handles case where movement is mostly in one direction
         position_spread = float(np.sqrt(x_std * y_std)) if x_std > 0 and y_std > 0 else max(x_std, y_std)
 
@@ -527,6 +1038,10 @@ def compute_track_stats(
             first_frame=first_frame,
             last_frame=last_frame,
             position_spread=position_spread,
+            avg_x=avg_x,
+            avg_y=avg_y,
+            x_std=x_std,
+            y_std=y_std,
         )
 
     return stats
@@ -632,7 +1147,14 @@ def stabilize_track_ids(
             dx = new_first_pos[0] - old_last_pos[0]
             dy = new_first_pos[1] - old_last_pos[1]
             distance_sq = dx * dx + dy * dy
-            max_distance_sq = config.max_merge_distance * config.max_merge_distance
+
+            # Allow more distance for larger gaps (players can move during occlusion)
+            # Base distance + additional distance per frame of gap
+            adaptive_max_distance = (
+                config.max_merge_distance
+                + frame_gap * config.merge_distance_per_frame
+            )
+            max_distance_sq = adaptive_max_distance * adaptive_max_distance
 
             if distance_sq <= max_distance_sq and distance_sq < best_distance:
                 best_distance = distance_sq
@@ -664,27 +1186,158 @@ def stabilize_track_ids(
     return positions, id_mapping
 
 
+def detect_referee_tracks(
+    track_stats: dict[int, TrackStats],
+    ball_positions: list[BallPosition] | None,
+    config: PlayerFilterConfig,
+) -> set[int]:
+    """
+    Detect referee tracks by movement patterns.
+
+    Referees have distinctive characteristics:
+    1. Position near sidelines (x < 0.08 or x > 0.92)
+    2. Movement parallel to net (high X variance, low Y variance)
+    3. Outside main ball trajectory Y-range
+    4. Low ball proximity (they don't interact with the ball)
+
+    Args:
+        track_stats: Statistics for each track.
+        ball_positions: Ball positions for trajectory analysis (optional).
+        config: Filter configuration with referee thresholds.
+
+    Returns:
+        Set of track IDs that are likely referees.
+    """
+    referee_tracks: set[int] = set()
+
+    # Compute ball trajectory Y-range if available
+    ball_y_min = 0.0
+    ball_y_max = 1.0
+    if ball_positions:
+        confident_ys = [bp.y for bp in ball_positions if bp.confidence >= 0.4]
+        if len(confident_ys) >= 10:
+            ball_y_min = min(confident_ys)
+            ball_y_max = max(confident_ys)
+            # Add small margin
+            ball_y_min = max(0.0, ball_y_min - 0.05)
+            ball_y_max = min(1.0, ball_y_max + 0.05)
+
+    for track_id, stats in track_stats.items():
+        reasons: list[str] = []
+
+        # Check 1: Near sidelines (use <= for inclusive threshold)
+        is_near_sideline = (
+            stats.avg_x <= config.referee_sideline_threshold
+            or stats.avg_x >= (1.0 - config.referee_sideline_threshold)
+        )
+        if is_near_sideline:
+            reasons.append(f"sideline (x={stats.avg_x:.2f})")
+
+        # Check 2: Movement parallel to net (high X/Y ratio)
+        # Referees pace along the net line but don't move toward/away from it
+        is_parallel_mover = (
+            stats.movement_ratio >= config.referee_movement_ratio_min
+            and stats.x_std > 0.01  # Must have some movement (not stationary)
+        )
+        if is_parallel_mover:
+            reasons.append(f"parallel movement (ratio={stats.movement_ratio:.1f})")
+
+        # Check 3: Outside ball trajectory Y-range
+        # Referees stand to the side, not in the active play area
+        is_outside_ball_range = (
+            stats.avg_y < ball_y_min or stats.avg_y > ball_y_max
+        )
+        if is_outside_ball_range:
+            reasons.append(f"outside ball Y (y={stats.avg_y:.2f})")
+
+        # Check 4: Low ball proximity
+        has_low_ball_proximity = stats.ball_proximity_score <= config.referee_ball_proximity_max
+
+        # Check 5: Low Y variance - referees don't move up/down court like players
+        # Players move 5-15% in Y, referees < 3%
+        has_low_y_variance = stats.y_std < config.referee_y_std_max
+        if has_low_y_variance:
+            reasons.append(f"low Y variance (y_std={stats.y_std:.3f})")
+
+        # A track is likely a referee if:
+        # - Near sideline AND (parallel mover OR low ball proximity OR low Y variance)
+        # - OR outside ball range AND low ball proximity AND low Y variance
+        # - OR low Y variance AND positioned on sideline area (x <= 0.25) - aggressive filter
+        # - OR near sideline AND low Y variance (simple case for line referees)
+        is_likely_referee = (
+            (is_near_sideline and (is_parallel_mover or has_low_ball_proximity or has_low_y_variance))
+            or (is_outside_ball_range and has_low_ball_proximity and has_low_y_variance)
+            or (has_low_y_variance and stats.avg_x <= 0.25)  # Removed ball proximity requirement
+            or (is_near_sideline and has_low_y_variance)  # Simple case: sideline + no vertical movement
+        )
+
+        if is_likely_referee:
+            stats.is_likely_referee = True
+            referee_tracks.add(track_id)
+            logger.info(
+                f"Track {track_id} identified as likely referee: {', '.join(reasons)}, "
+                f"ball_prox={stats.ball_proximity_score:.3f}"
+            )
+
+    if referee_tracks:
+        logger.info(f"Detected {len(referee_tracks)} likely referee tracks: {sorted(referee_tracks)}")
+
+    return referee_tracks
+
+
 def identify_primary_tracks(
     track_stats: dict[int, TrackStats],
     config: PlayerFilterConfig,
+    court_config: CourtFilterConfig | None = None,
+    referee_tracks: set[int] | None = None,
 ) -> set[int]:
     """
     Identify primary tracks that are likely real court players.
 
-    Primary tracks have high presence rate, stability score, AND position spread.
-    The position spread requirement filters out referees who stand in one spot
-    while players move around the court.
+    Primary tracks have:
+    1. Not identified as referee
+    2. High presence rate and stability score
+    3. Position spread (not stationary) OR ball engagement
+    4. Court presence (if calibration available) - HARD FILTER
 
     Args:
         track_stats: Statistics for each track.
         config: Filter configuration.
+        court_config: Court filter configuration (for court presence threshold).
+        referee_tracks: Set of track IDs identified as referees (to exclude).
 
     Returns:
         Set of track IDs that are primary (stable) tracks.
     """
     primary: set[int] = set()
+    court_cfg = court_config or CourtFilterConfig()
+    referees = referee_tracks or set()
 
     for track_id, stats in track_stats.items():
+        # HARD FILTER 0: Exclude tracks on sidelines (image coordinates)
+        # Players are in the middle of the frame; referees stand on sides
+        # Beach volleyball: players typically at x=0.25-0.75
+        if stats.avg_x < 0.20 or stats.avg_x > 0.80:
+            logger.info(
+                f"Track {track_id} excluded: avg_x={stats.avg_x:.2f} (sideline position)"
+            )
+            continue
+
+        # HARD FILTER 1: Exclude tracks identified as referees
+        if track_id in referees or stats.is_likely_referee:
+            logger.debug(f"Track {track_id} excluded: identified as referee")
+            continue
+
+        # HARD FILTER 2: Court presence (if calibration available)
+        # Tracks with less than 50% court presence are definitively not players
+        if stats.has_court_stats:
+            if stats.court_presence_ratio < court_cfg.min_court_presence_ratio:
+                logger.info(
+                    f"Track {track_id} excluded: court_presence={stats.court_presence_ratio:.2f} "
+                    f"< {court_cfg.min_court_presence_ratio:.2f} (not on court)"
+                )
+                continue
+
         # Compute stability score using configurable weights
         stability = compute_stability_score(stats, config)
 
@@ -709,19 +1362,63 @@ def identify_primary_tracks(
 
         primary.add(track_id)
 
+    # IMPORTANT: Limit to top K tracks
+    # Use a score that prioritizes PLAYERS over REFEREES:
+    # - Ball proximity is KEY (players interact with ball, referees don't)
+    # - Position spread matters (players move around, referees stand still)
+    # - Presence rate helps but shouldn't dominate (fragmented player > stable referee)
+    if len(primary) > config.max_players:
+        def player_score(tid: int) -> float:
+            stats = track_stats[tid]
+            # Prioritize ball interaction and movement over stability
+            # Ball proximity: 0.5 weight (most important - players near ball)
+            # Position spread: 0.3 weight (players move, referees don't)
+            # Presence rate: 0.2 weight (helps but not decisive)
+            spread_normalized = min(stats.position_spread / 0.05, 1.0)  # Cap at 5% spread
+            return (
+                0.5 * stats.ball_proximity_score
+                + 0.3 * spread_normalized
+                + 0.2 * stats.presence_rate
+            )
+
+        scored_tracks = [(tid, player_score(tid)) for tid in primary]
+        scored_tracks.sort(key=lambda x: x[1], reverse=True)
+        top_tracks = {tid for tid, _ in scored_tracks[:config.max_players]}
+
+        excluded = primary - top_tracks
+        logger.info(
+            f"Limiting primary tracks: {len(primary)} candidates -> {config.max_players} "
+            f"(excluded tracks {sorted(excluded)} with lower player scores)"
+        )
+        for tid, score in scored_tracks:
+            stats = track_stats[tid]
+            status = "KEPT" if tid in top_tracks else "EXCLUDED"
+            logger.info(
+                f"  Track {tid}: score={score:.3f} (ball={stats.ball_proximity_score:.2f}, "
+                f"spread={stats.position_spread:.4f}, presence={stats.presence_rate:.2f}) [{status}]"
+            )
+        primary = top_tracks
+
     if primary:
+        court_info = ""
+        if any(track_stats[tid].has_court_stats for tid in primary):
+            court_info = f", court >= {court_cfg.min_court_presence_ratio:.0%}"
         logger.info(
             f"Identified {len(primary)} primary tracks: {sorted(primary)} "
             f"(presence >= {config.min_presence_rate:.0%}, "
             f"stability >= {config.min_stability_score:.2f}, "
-            f"spread >= {config.min_position_spread_for_primary:.3f})"
+            f"spread >= {config.min_position_spread_for_primary:.3f}{court_info})"
         )
         # Log stats for primary tracks
         for tid in sorted(primary):
             stats = track_stats[tid]
+            court_str = ""
+            if stats.has_court_stats:
+                court_str = f", court={stats.court_presence_ratio:.2f}, interior={stats.interior_ratio:.2f}"
             logger.info(
                 f"  Track {tid}: spread={stats.position_spread:.4f}, "
-                f"presence={stats.presence_rate:.2f}, bbox={stats.avg_bbox_area:.4f}"
+                f"presence={stats.presence_rate:.2f}, bbox={stats.avg_bbox_area:.4f}, "
+                f"stability={compute_stability_score(stats, config):.3f}{court_str}"
             )
 
     return primary
@@ -731,6 +1428,7 @@ def select_with_track_priority(
     players: list[PlayerPosition],
     k: int,
     primary_tracks: set[int],
+    strict_primary: bool = True,
 ) -> list[PlayerPosition]:
     """
     Select top K players, prioritizing primary (stable) tracks.
@@ -743,16 +1441,23 @@ def select_with_track_priority(
         players: List of player detections for a frame.
         k: Maximum number of players to keep.
         primary_tracks: Set of track IDs that are primary.
+        strict_primary: If True, ONLY return primary tracks (no fillers).
+            This prevents flickering when a player is temporarily undetected.
 
     Returns:
         Up to K players, preferring primary tracks.
     """
-    if len(players) <= k:
-        return players
-
     if not primary_tracks:
         # No primary tracks identified, fall back to size-based selection
         return select_top_k_by_size(players, k)
+
+    # In strict mode, only return primary tracks
+    if strict_primary:
+        primary_players = [p for p in players if p.track_id in primary_tracks]
+        return primary_players[:k]
+
+    if len(players) <= k:
+        return players
 
     # Separate primary and non-primary players
     primary_players = [p for p in players if p.track_id in primary_tracks]
@@ -947,6 +1652,8 @@ class PlayerFilter:
         ball_positions: list[BallPosition] | None = None,
         total_frames: int = 0,
         config: PlayerFilterConfig | None = None,
+        court_calibrator: CourtCalibrator | None = None,
+        court_config: CourtFilterConfig | None = None,
     ):
         """
         Initialize player filter.
@@ -955,20 +1662,31 @@ class PlayerFilter:
             ball_positions: Ball tracking results for play area filtering.
             total_frames: Total frames in video segment.
             config: Filter configuration.
+            court_calibrator: Optional calibrated court calibrator for court-based filtering.
+            court_config: Configuration for court-based filtering.
         """
         self.config = config or PlayerFilterConfig()
+        self.court_config = court_config or CourtFilterConfig()
         self.ball_positions = ball_positions or []
         self.total_frames = total_frames
+        self.court_calibrator = court_calibrator
 
         # Track stability (computed by analyze_tracks)
         self.track_stats: dict[int, TrackStats] = {}
         self.primary_tracks: set[int] = set()
         self._tracks_analyzed = False
 
+        # Court position stats (computed by analyze_tracks if calibrator available)
+        self.court_position_stats: dict[int, CourtPositionStats] = {}
+
         # Court split for two-team filtering (Y coordinate, horizontal line)
         # Camera is always behind baseline: teams split by near/far (Y axis)
         self.court_split_y: float | None = None
         self._use_two_team = False
+
+        # Team history for hysteresis (prevents flickering at boundary)
+        # Maps track_id -> last team assignment (0=near, 1=far)
+        self._track_team_history: dict[int, int] = {}
 
         # Compute play area from ball trajectory (optional)
         self.play_area: np.ndarray | None = None
@@ -1007,8 +1725,9 @@ class PlayerFilter:
         Must be called before filter() for track stability to work.
         If not called, filter() falls back to size-based selection.
 
-        Also recomputes court split using player positions (more reliable than
-        ball trajectory alone).
+        Also computes:
+        - Court position stats (if calibrator available)
+        - Court split using player positions (more reliable than ball trajectory)
 
         Args:
             all_positions: All player positions from all frames.
@@ -1030,8 +1749,32 @@ class PlayerFilter:
         for track_id, stats in self.track_stats.items():
             stats.ball_proximity_score = ball_proximity.get(track_id, 0.0)
 
-        # Identify primary tracks using position spread (filters out stationary referees)
-        self.primary_tracks = identify_primary_tracks(self.track_stats, self.config)
+        # Compute court position stats if calibrator available
+        if self.court_calibrator is not None and self.court_calibrator.is_calibrated:
+            self.court_position_stats = compute_court_position_stats(
+                all_positions, self.court_calibrator, self.court_config
+            )
+
+            # Add court stats to track stats
+            for track_id, court_stats in self.court_position_stats.items():
+                if track_id in self.track_stats:
+                    self.track_stats[track_id].court_presence_ratio = court_stats.court_presence_ratio
+                    self.track_stats[track_id].interior_ratio = court_stats.interior_ratio
+                    self.track_stats[track_id].has_court_stats = True
+
+            logger.info(
+                f"Court position stats computed for {len(self.court_position_stats)} tracks"
+            )
+
+        # Detect referee tracks before identifying primary tracks
+        referee_tracks = detect_referee_tracks(
+            self.track_stats, self.ball_positions, self.config
+        )
+
+        # Identify primary tracks (excluding referees and with court-based hard filter)
+        self.primary_tracks = identify_primary_tracks(
+            self.track_stats, self.config, self.court_config, referee_tracks
+        )
 
         self._tracks_analyzed = True
 
@@ -1054,6 +1797,13 @@ class PlayerFilter:
                     logger.info(f"Two-team filter enabled: y={new_split_y:.3f}")
 
         # Log with ball proximity info
+        court_info = ""
+        if self.court_position_stats:
+            avg_court = sum(
+                s.court_presence_ratio for s in self.court_position_stats.values()
+            ) / len(self.court_position_stats)
+            court_info = f", avg court presence: {avg_court:.2f}"
+
         if ball_proximity:
             avg_proximity = sum(
                 s.ball_proximity_score for s in self.track_stats.values()
@@ -1061,12 +1811,12 @@ class PlayerFilter:
             logger.info(
                 f"Track analysis: {len(self.track_stats)} tracks, "
                 f"{len(self.primary_tracks)} primary, "
-                f"avg ball proximity: {avg_proximity:.2f}"
+                f"avg ball proximity: {avg_proximity:.2f}{court_info}"
             )
         else:
             logger.info(
                 f"Track analysis: {len(self.track_stats)} tracks, "
-                f"{len(self.primary_tracks)} primary"
+                f"{len(self.primary_tracks)} primary{court_info}"
             )
 
     def filter(self, players: list[PlayerPosition]) -> list[PlayerPosition]:
@@ -1124,18 +1874,23 @@ class PlayerFilter:
         if self._use_two_team and self.court_split_y is not None:
             # Two-team filtering: select top-K per court side (near/far)
             # This ensures players from both teams are selected
-            # Use strict_primary=False since we already filtered out referees above
-            filtered = select_two_teams(
+            # Use strict_primary=False - allow filling with other detections when
+            # primary tracks are momentarily lost (better than showing nothing)
+            # The play_area filter above already removed off-court detections
+            filtered, self._track_team_history = select_two_teams(
                 filtered,
                 self.court_split_y,
                 self.config.players_per_team,
                 self.primary_tracks if self._tracks_analyzed else None,
-                strict_primary=False,  # Don't be strict, we already filtered referees
+                strict_primary=False,  # Allow filling when primary tracks lost
+                hysteresis=self.config.two_team_hysteresis,
+                track_team_history=self._track_team_history,
             )
         elif self._tracks_analyzed and self.primary_tracks:
             # Fall back to track priority + top-K
+            # Allow filling with other detections when primary tracks lost
             filtered = select_with_track_priority(
-                filtered, self.config.max_players, self.primary_tracks
+                filtered, self.config.max_players, self.primary_tracks, strict_primary=False
             )
         else:
             # Fall back to simple top-K by size
@@ -1152,6 +1907,8 @@ class PlayerFilter:
     def filter_method(self) -> str:
         """Return description of filtering method being used."""
         methods = ["bbox_size"]
+        if self.court_position_stats:
+            methods.append("court_presence")  # Hard filter by court presence
         if self._tracks_analyzed and self.track_stats:
             methods.append("stationary")  # Filters low-spread tracks (referees)
         if self._tracks_analyzed and self.primary_tracks:
