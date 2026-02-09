@@ -89,11 +89,15 @@ class PlayerFilterConfig:
     ball_proximity_radius: float = 0.15  # 15% of frame size
     ball_proximity_boost: float = 0.2  # Boost to stability score
 
-    # Position spread requirement for primary tracks (filters out referees)
-    # Players move around the court; referees stand in one spot
+    # Position spread requirement for primary tracks (filters out stationary objects)
+    # Players move around the court; stationary things (referees, net posts) don't
     # Spread is geometric mean of X/Y std dev (normalized 0-1)
-    # Typical player spread: 0.02-0.10, typical referee spread: <0.01
-    min_position_spread_for_primary: float = 0.015  # Must move around to be primary
+    # Typical player spread: 0.02-0.10, stationary object spread: <0.015 (detection noise)
+    min_position_spread_for_primary: float = 0.018  # Base movement threshold
+
+    # Combined filter: tracks with BOTH low spread AND low ball proximity are filtered
+    # This catches stationary objects while keeping players who don't move much but engage with ball
+    min_ball_proximity_for_stationary: float = 0.03  # If spread < threshold, need 3%+ ball proximity
 
     # Ball trajectory thresholds (secondary filter)
     ball_confidence_threshold: float = 0.35
@@ -690,12 +694,16 @@ def identify_primary_tracks(
         if stability < config.min_stability_score:
             continue
 
-        # Must have minimum position spread (filters out referees)
-        # Referees stand in one spot; players move around the court
-        if stats.position_spread < config.min_position_spread_for_primary:
+        # Filter stationary objects using combined spread + ball proximity check
+        # Stationary objects (posts, referees) have low spread AND low ball proximity
+        # Players who don't move much still engage with the ball
+        is_stationary = stats.position_spread < config.min_position_spread_for_primary
+        has_ball_engagement = stats.ball_proximity_score >= config.min_ball_proximity_for_stationary
+
+        if is_stationary and not has_ball_engagement:
             logger.info(
-                f"Track {track_id} excluded from primary: spread={stats.position_spread:.4f} "
-                f"< {config.min_position_spread_for_primary:.4f} (likely stationary/referee)"
+                f"Track {track_id} excluded from primary: spread={stats.position_spread:.4f}, "
+                f"ball_prox={stats.ball_proximity_score:.3f} (stationary + no ball engagement)"
             )
             continue
 
@@ -1090,19 +1098,26 @@ class PlayerFilter:
         if self.use_ball_filtering and self.play_area is not None:
             filtered = filter_by_play_area(filtered, self.play_area)
 
-        # Step 3: Filter out stationary tracks (referees)
-        # Tracks with low position spread are likely referees standing in one spot
+        # Step 3: Filter out stationary tracks (posts, referees)
+        # Stationary objects have BOTH low spread AND low ball proximity
+        # Players who don't move much still engage with the ball
         if self._tracks_analyzed and self.track_stats:
             before_stationary = len(filtered)
-            filtered = [
-                p for p in filtered
-                if p.track_id not in self.track_stats  # Unknown track, keep it
-                or self.track_stats[p.track_id].position_spread >= self.config.min_position_spread_for_primary
-            ]
+
+            def is_valid_track(p: PlayerPosition) -> bool:
+                if p.track_id not in self.track_stats:
+                    return True  # Unknown track, keep it
+                stats = self.track_stats[p.track_id]
+                is_stationary = stats.position_spread < self.config.min_position_spread_for_primary
+                has_ball_engagement = stats.ball_proximity_score >= self.config.min_ball_proximity_for_stationary
+                # Keep if: not stationary OR has ball engagement
+                return not is_stationary or has_ball_engagement
+
+            filtered = [p for p in filtered if is_valid_track(p)]
             if len(filtered) < before_stationary:
                 logger.debug(
                     f"Stationary filter: {before_stationary} -> {len(filtered)} "
-                    f"(removed {before_stationary - len(filtered)} low-spread tracks)"
+                    f"(removed {before_stationary - len(filtered)} stationary tracks)"
                 )
 
         # Step 4: Player selection (two-team or top-K)
