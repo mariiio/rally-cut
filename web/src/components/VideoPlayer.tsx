@@ -14,6 +14,9 @@ import { CameraOverlay } from './CameraOverlay';
 import { BallTrackingDebugOverlay } from './BallTrackingDebugOverlay';
 import { RotationGridOverlay } from './RotationGridOverlay';
 import { CropMaskOverlay } from './CropMaskOverlay';
+import { CourtCalibrationPanel } from './CourtCalibrationPanel';
+import { PlayerOverlay } from './PlayerOverlay';
+import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { AspectRatio } from '@/constants/enums';
 
 /** Binary search: find the rally containing the given time (O(log n)).
@@ -85,6 +88,7 @@ export function VideoPlayer() {
   const activeMatchId = useEditorStore((state) => state.activeMatchId);
   const setActiveMatch = useEditorStore((state) => state.setActiveMatch);
   const isLoadingSession = useEditorStore((state) => state.isLoadingSession);
+  const getActiveMatch = useEditorStore((state) => state.getActiveMatch);
 
   // Get local blob URL if available (from recent upload)
   // Subscribe to localVideoUrls directly so component re-renders when it changes
@@ -115,6 +119,14 @@ export function VideoPlayer() {
   const debugFrameCount = useCameraStore((state) => state.debugFrameCount);
   const debugRallyId = useCameraStore((state) => state.debugRallyId);
   const isAdjustingRotation = useCameraStore((state) => state.isAdjustingRotation);
+
+  // Player tracking / court calibration
+  const isCalibrating = usePlayerTrackingStore((state) => state.isCalibrating);
+  const showPlayerOverlay = usePlayerTrackingStore((state) => state.showPlayerOverlay);
+  const playerTracks = usePlayerTrackingStore((state) => state.playerTracks);
+
+  // Get active match for fps
+  const activeMatch = getActiveMatch();
 
   // Get rallies from editor store
   const rallies = useEditorStore((state) => state.rallies);
@@ -837,6 +849,15 @@ export function VideoPlayer() {
         >
           <CameraOverlay containerRef={videoContainerRef} />
           <RotationGridOverlay isVisible={isAdjustingRotation} />
+          {/* Court calibration overlay */}
+          {isCalibrating && activeMatchId && (
+            <CourtCalibrationPanel
+              videoId={activeMatchId}
+              videoWidth={videoRef.current?.videoWidth ?? 1920}
+              videoHeight={videoRef.current?.videoHeight ?? 1080}
+              containerRef={videoContainerRef}
+            />
+          )}
           {/* Ball tracking debug overlay */}
           {debugBallPositions && debugFrameCount && debugRallyId === selectedRallyId && currentRally && (
             <BallTrackingDebugOverlay
@@ -849,6 +870,16 @@ export function VideoPlayer() {
               cameraX={currentCameraState.positionX}
               cameraY={currentCameraState.positionY}
               zoom={currentCameraState.zoom}
+            />
+          )}
+          {/* Player tracking overlay */}
+          {showPlayerOverlay && currentRally && currentRally._backendId && playerTracks[currentRally._backendId]?.tracksJson && (
+            <PlayerOverlay
+              rallyId={currentRally._backendId}
+              rallyStartTime={currentRally.start_time}
+              videoRef={videoRef}
+              containerRef={videoContainerRef}
+              fps={activeMatch?.video?.fps || 30}
             />
           )}
           {/* Transform wrapper - video frame callback updates, CSS transition smooths between frames */}

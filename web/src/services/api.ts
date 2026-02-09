@@ -1796,3 +1796,113 @@ export async function getBallTrackStatus(rallyId: string, includePositions = fal
 
   return response.json();
 }
+
+// ============================================================================
+// Player Tracking
+// ============================================================================
+
+export interface PlayerDetection {
+  trackId: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence: number;
+}
+
+export interface PlayerFrameData {
+  frameNumber: number;
+  players: PlayerDetection[];
+}
+
+// Player position from tracking API
+export interface PlayerPosition {
+  frameNumber: number;
+  trackId: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence: number;
+}
+
+export interface TrackPlayersResponse {
+  status: 'completed' | 'failed';
+  frameCount?: number;
+  fps?: number;  // Actual fps from tracked video
+  detectionRate?: number;
+  avgConfidence?: number;
+  avgPlayerCount?: number;
+  uniqueTrackCount?: number;
+  processingTimeMs?: number;
+  error?: string;
+  courtSplitY?: number;
+  primaryTrackIds?: number[];
+  // Positions included for immediate display
+  positions?: PlayerPosition[];
+}
+
+export interface GetPlayerTrackResponse {
+  status: 'completed' | 'failed' | 'not_found';
+  frameCount?: number;
+  fps?: number;
+  detectionRate?: number;
+  avgConfidence?: number;
+  avgPlayerCount?: number;
+  uniqueTrackCount?: number;
+  courtSplitY?: number;
+  primaryTrackIds?: number[];
+  positions?: PlayerPosition[];
+  error?: string;
+}
+
+// Calibration corners for court projection
+export interface CalibrationCorner {
+  x: number;
+  y: number;
+}
+
+/**
+ * Track players in a rally using YOLOv8 + ByteTrack.
+ *
+ * @param rallyId - Backend rally ID (UUID)
+ * @param calibrationCorners - Optional court calibration corners (4 points)
+ * @returns Player tracking result with per-frame detections
+ */
+export async function trackPlayers(
+  rallyId: string,
+  calibrationCorners?: CalibrationCorner[]
+): Promise<TrackPlayersResponse> {
+  const response = await fetch(`${API_BASE_URL}/v1/rallies/${rallyId}/track-players`, {
+    method: 'POST',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify({ calibrationCorners }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Player tracking failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Get existing player tracking data for a rally.
+ *
+ * @param rallyId - Backend rally ID (UUID)
+ * @returns Player tracking result if exists
+ */
+export async function getPlayerTrack(rallyId: string): Promise<GetPlayerTrackResponse> {
+  const response = await fetch(`${API_BASE_URL}/v1/rallies/${rallyId}/player-track`, {
+    method: 'GET',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get player track: ${response.status}`);
+  }
+
+  return response.json();
+}

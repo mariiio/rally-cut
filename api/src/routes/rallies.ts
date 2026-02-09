@@ -14,6 +14,7 @@ import {
   trackBallForRally,
   getBallTrackStatus,
 } from "../services/ballTrackingService.js";
+import { trackPlayersForRally, getPlayerTrack } from "../services/playerTrackingService.js";
 
 const router = Router();
 
@@ -119,6 +120,52 @@ router.get(
     try {
       const includePositions = req.query.includePositions === "true";
       const result = await getBallTrackStatus(req.params.id, req.userId!, { includePositions });
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================================
+// Player Tracking Routes
+// ============================================================================
+
+// Calibration corner schema (corners can be outside 0-1 if dragged outside video)
+const calibrationCornerSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+});
+
+router.post(
+  "/v1/rallies/:id/track-players",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: z.object({
+      calibrationCorners: z.array(calibrationCornerSchema).length(4).optional(),
+    }).optional(),
+  }),
+  async (req, res, next) => {
+    try {
+      const calibrationCorners = req.body?.calibrationCorners;
+      const result = await trackPlayersForRally(req.params.id, req.userId!, calibrationCorners);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
+  "/v1/rallies/:id/player-track",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      const result = await getPlayerTrack(req.params.id, req.userId!);
       res.json(result);
     } catch (error) {
       next(error);

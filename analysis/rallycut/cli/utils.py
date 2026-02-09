@@ -67,8 +67,11 @@ def handle_errors(func: F) -> F:
     return wrapper  # type: ignore[return-value]
 
 
-def validate_video_file(path: Path) -> None:
-    """Validate that a video file exists and is readable."""
+def validate_video_file(path: Path) -> Path:
+    """Validate that a video file exists and is readable.
+
+    Returns the path if valid (required for typer callback).
+    """
     if not path.exists():
         raise VideoError(
             f"Video file not found: {path}",
@@ -88,6 +91,8 @@ def validate_video_file(path: Path) -> None:
             f"Unsupported video format: {path.suffix}",
             hint=f"Supported formats: {', '.join(video_extensions)}"
         )
+
+    return path
 
 
 def validate_output_path(path: Path, overwrite: bool = True) -> None:

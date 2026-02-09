@@ -21,6 +21,7 @@ import { NamePromptModal } from './NamePromptModal';
 import { MobileEditorLayout } from './mobile';
 import { AccessRequestForm } from './AccessRequestForm';
 import { TutorialProvider, TutorialContext } from './tutorial';
+import { PlayerTrackingToolbar } from './PlayerTrackingToolbar';
 import { useEditorStore } from '@/stores/editorStore';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { designTokens } from '@/app/theme';
@@ -397,6 +398,8 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
             <UploadProgress />
             <ExportProgress />
             <OriginalQualityBanner currentMatch={currentMatch} />
+            {/* Player tracking toolbar */}
+            <PlayerTrackingToolbar />
             <VideoPlayer />
           </Box>
         </Box>
