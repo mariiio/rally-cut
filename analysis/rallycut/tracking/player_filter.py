@@ -1103,6 +1103,10 @@ def stabilize_track_ids(
     # Find tracks to merge: new tracks that start after an old track ends nearby
     id_mapping: dict[int, int] = {}  # new_id -> canonical_id
 
+    # Track effective frame ranges for canonical tracks (updated as we merge)
+    # This prevents merging tracks that would overlap with already-merged tracks
+    canonical_frame_ranges: dict[int, tuple[int, int]] = {}  # canonical_id -> (first, last)
+
     # Sort tracks by first_frame
     tracks_by_start = sorted(
         track_info.items(),
@@ -1114,6 +1118,7 @@ def stabilize_track_ids(
             continue  # Already merged
 
         new_first_frame = new_info["first_frame"]
+        new_last_frame = new_info["last_frame"]
         new_first_pos = new_info["first_pos"]
 
         # Look for tracks that ended shortly before this one started
@@ -1143,6 +1148,19 @@ def stabilize_track_ids(
             if frame_gap < 0 or frame_gap > config.max_gap_frames:
                 continue
 
+            # Check if merging would create overlapping positions with canonical track
+            # This prevents merging two different players into the same track ID
+            if canonical_id in canonical_frame_ranges:
+                canon_first, canon_last = canonical_frame_ranges[canonical_id]
+                # New track overlaps with canonical's effective range
+                if new_first_frame <= canon_last and new_last_frame >= canon_first:
+                    logger.debug(
+                        f"Skipping merge {new_id} -> {canonical_id}: "
+                        f"would overlap (new: {new_first_frame}-{new_last_frame}, "
+                        f"canonical: {canon_first}-{canon_last})"
+                    )
+                    continue
+
             # Check position distance (use squared distance to avoid sqrt)
             dx = new_first_pos[0] - old_last_pos[0]
             dy = new_first_pos[1] - old_last_pos[1]
@@ -1162,6 +1180,20 @@ def stabilize_track_ids(
 
         if best_match is not None and best_match != new_id:
             id_mapping[new_id] = best_match
+            # Update canonical's effective frame range to include merged track
+            if best_match in canonical_frame_ranges:
+                canon_first, canon_last = canonical_frame_ranges[best_match]
+                canonical_frame_ranges[best_match] = (
+                    min(canon_first, new_first_frame),
+                    max(canon_last, new_last_frame),
+                )
+            else:
+                # Initialize canonical range from original track + merged track
+                canon_info = track_info[best_match]
+                canonical_frame_ranges[best_match] = (
+                    min(canon_info["first_frame"], new_first_frame),
+                    max(canon_info["last_frame"], new_last_frame),
+                )
             logger.debug(
                 f"Merging track {new_id} -> {best_match} "
                 f"(gap={new_first_frame - track_info[best_match]['last_frame']} frames, "

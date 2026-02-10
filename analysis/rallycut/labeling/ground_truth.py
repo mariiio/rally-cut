@@ -13,12 +13,22 @@ class GroundTruthPosition:
 
     frame_number: int
     track_id: int
-    label: str  # "player" or "ball"
+    label: str  # "player", "player_1", "player_2", etc., or "ball"
     x: float  # Normalized center x (0-1)
     y: float  # Normalized center y (0-1)
     width: float  # Normalized width (0-1)
     height: float  # Normalized height (0-1)
     confidence: float = 1.0  # Ground truth is always 1.0
+
+    @property
+    def is_player(self) -> bool:
+        """Check if this is a player annotation (player, player_1, etc.)."""
+        return self.label == "player" or self.label.startswith("player_")
+
+    @property
+    def is_ball(self) -> bool:
+        """Check if this is a ball annotation."""
+        return self.label == "ball"
 
     def to_dict(self) -> dict:
         return {
@@ -44,18 +54,18 @@ class GroundTruthResult:
 
     @property
     def player_positions(self) -> list[GroundTruthPosition]:
-        """Get only player positions."""
-        return [p for p in self.positions if p.label == "player"]
+        """Get only player positions (player, player_1, player_2, etc.)."""
+        return [p for p in self.positions if p.is_player]
 
     @property
     def ball_positions(self) -> list[GroundTruthPosition]:
         """Get only ball positions."""
-        return [p for p in self.positions if p.label == "ball"]
+        return [p for p in self.positions if p.is_ball]
 
     @property
     def unique_player_tracks(self) -> set[int]:
         """Get unique player track IDs."""
-        return {p.track_id for p in self.positions if p.label == "player"}
+        return {p.track_id for p in self.positions if p.is_player}
 
     def to_dict(self) -> dict:
         return {

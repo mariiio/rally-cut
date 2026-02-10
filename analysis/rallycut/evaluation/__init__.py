@@ -28,6 +28,22 @@ from rallycut.evaluation.param_grid import (
     generate_param_combinations,
     get_grid,
 )
+from rallycut.evaluation.tracking import (
+    ErrorEvent,
+    ErrorSummary,
+    ErrorType,
+    PerFrameMetrics,
+    PerPlayerMetrics,
+    TrackingEvaluationRally,
+    TrackingEvaluationResult,
+    analyze_errors,
+    evaluate_rally,
+    load_labeled_rallies,
+    summarize_errors,
+)
+from rallycut.evaluation.tracking import (
+    aggregate_results as aggregate_tracking_results,
+)
 from rallycut.evaluation.video_resolver import VideoResolver
 
 __all__ = [
@@ -60,4 +76,17 @@ __all__ = [
     "get_grid",
     # Video resolver
     "VideoResolver",
+    # Tracking evaluation
+    "ErrorEvent",
+    "ErrorSummary",
+    "ErrorType",
+    "PerFrameMetrics",
+    "PerPlayerMetrics",
+    "TrackingEvaluationRally",
+    "TrackingEvaluationResult",
+    "aggregate_tracking_results",
+    "analyze_errors",
+    "evaluate_rally",
+    "load_labeled_rallies",
+    "summarize_errors",
 ]
