@@ -250,10 +250,13 @@ Multi-stage filtering to identify active players and exclude non-players. See `t
    - Not on sidelines (x between 0.20-0.80)
    - Not identified as referee (sideline + low movement + no ball proximity)
    - Minimum presence rate (>20% of frames)
-   - Not stationary (has position spread OR ball engagement)
    - Court presence >50% (if calibration available)
-2. **Stability scoring**: Combines presence rate, bbox area, and ball proximity
-3. **Selection**: Takes tracks passing stability threshold (0.20), but relaxes threshold when fewer than 4 candidates to ensure we track all visible players
+2. **Soft filters** (for ranking):
+   - Stationary tracks (low spread + no ball engagement) are deprioritized but included as fallbacks
+3. **Selection priority**:
+   - Active tracks (moving or ball-engaged) with high stability
+   - Active tracks with lower stability (if needed)
+   - Stationary tracks as fallback (if still need more players)
 
 **Per-Frame Filtering:**
 1. Bbox size filter (removes small background detections, keeps primary tracks)
