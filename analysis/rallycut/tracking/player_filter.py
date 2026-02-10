@@ -1345,11 +1345,16 @@ def identify_primary_tracks(
     """
     Identify primary tracks that are likely real court players.
 
-    Primary tracks have:
-    1. Not identified as referee
-    2. High presence rate and stability score
-    3. Position spread (not stationary) OR ball engagement
-    4. Court presence (if calibration available) - HARD FILTER
+    Primary tracks must pass these hard filters:
+    1. Not on sidelines (x between 0.20-0.80)
+    2. Not identified as referee
+    3. Minimum presence rate (default 20%)
+    4. Not stationary (has position spread OR ball engagement)
+    5. Court presence >= threshold (if calibration available)
+
+    Track selection prioritizes stability score, but will include lower-stability
+    tracks when fewer than max_players pass the threshold. This handles cases
+    where players appear late in the rally or have small bboxes (far court).
 
     Args:
         track_stats: Statistics for each track.
@@ -1358,9 +1363,9 @@ def identify_primary_tracks(
         referee_tracks: Set of track IDs identified as referees (to exclude).
 
     Returns:
-        Set of track IDs that are primary (stable) tracks.
+        Set of track IDs that are primary tracks (up to max_players).
     """
-    primary: set[int] = set()
+    primary: set[tuple[int, float]] = set()  # (track_id, stability_score)
     court_cfg = court_config or CourtFilterConfig()
     referees = referee_tracks or set()
 
@@ -1392,10 +1397,8 @@ def identify_primary_tracks(
         # Compute stability score using configurable weights
         stability = compute_stability_score(stats, config)
 
-        # Must meet presence and stability thresholds
+        # Must meet presence threshold (hard filter)
         if stats.presence_rate < config.min_presence_rate:
-            continue
-        if stability < config.min_stability_score:
             continue
 
         # Filter stationary objects using combined spread + ball proximity check
@@ -1411,57 +1414,81 @@ def identify_primary_tracks(
             )
             continue
 
-        primary.add(track_id)
+        # Track passes hard filters - add with stability score for later ranking
+        primary.add((track_id, stability))
 
-    # IMPORTANT: Limit to top K tracks
-    # Use a score that prioritizes PLAYERS over REFEREES:
-    # - Ball proximity is KEY (players interact with ball, referees don't)
-    # - Position spread matters (players move around, referees stand still)
-    # - Presence rate helps but shouldn't dominate (fragmented player > stable referee)
-    if len(primary) > config.max_players:
-        def player_score(tid: int) -> float:
-            stats = track_stats[tid]
-            # Prioritize ball interaction and movement over stability
-            # Ball proximity: 0.5 weight (most important - players near ball)
-            # Position spread: 0.3 weight (players move, referees don't)
-            # Presence rate: 0.2 weight (helps but not decisive)
-            spread_normalized = min(stats.position_spread / 0.05, 1.0)  # Cap at 5% spread
-            return (
-                0.5 * stats.ball_proximity_score
-                + 0.3 * spread_normalized
-                + 0.2 * stats.presence_rate
-            )
+    # Convert to list and sort by stability (descending)
+    candidates = sorted(primary, key=lambda x: x[1], reverse=True)
 
-        scored_tracks = [(tid, player_score(tid)) for tid in primary]
-        scored_tracks.sort(key=lambda x: x[1], reverse=True)
-        top_tracks = {tid for tid, _ in scored_tracks[:config.max_players]}
+    # Split into stable (pass threshold) and unstable (below threshold)
+    # Candidates are already sorted by stability descending
+    stable_idx = 0
+    for i, (_, stab) in enumerate(candidates):
+        if stab < config.min_stability_score:
+            stable_idx = i
+            break
+    else:
+        stable_idx = len(candidates)
 
-        excluded = primary - top_tracks
-        logger.info(
-            f"Limiting primary tracks: {len(primary)} candidates -> {config.max_players} "
-            f"(excluded tracks {sorted(excluded)} with lower player scores)"
-        )
-        for tid, score in scored_tracks:
-            stats = track_stats[tid]
-            status = "KEPT" if tid in top_tracks else "EXCLUDED"
+    # Select tracks: prioritize stability but ensure we get max_players if available
+    selected: list[tuple[int, float]] = list(candidates[:stable_idx])
+
+    # If we have fewer than max_players, include lower-stability tracks
+    if len(selected) < config.max_players:
+        needed = config.max_players - len(selected)
+        for tid, stab in candidates[stable_idx : stable_idx + needed]:
             logger.info(
-                f"  Track {tid}: score={score:.3f} (ball={stats.ball_proximity_score:.2f}, "
-                f"spread={stats.position_spread:.4f}, presence={stats.presence_rate:.2f}) [{status}]"
+                f"Track {tid} included despite low stability={stab:.3f} "
+                f"(need {config.max_players} players, only {len(selected)} stable)"
             )
-        primary = top_tracks
+            selected.append((tid, stab))
 
-    if primary:
+    # Apply max_players limit if we have too many
+    if len(selected) > config.max_players:
+        # Score by player behavior (ball proximity, movement) rather than just stability
+        def player_score(tid: int) -> float:
+            s = track_stats[tid]
+            spread_normalized = min(s.position_spread / 0.05, 1.0)
+            return (
+                0.5 * s.ball_proximity_score
+                + 0.3 * spread_normalized
+                + 0.2 * s.presence_rate
+            )
+
+        scored = [(tid, player_score(tid)) for tid, _ in selected]
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        kept_ids = {tid for tid, _ in scored[:config.max_players]}
+        excluded_ids = {tid for tid, _ in scored[config.max_players:]}
+
+        logger.info(
+            f"Limiting primary tracks: {len(selected)} candidates -> {config.max_players} "
+            f"(excluded tracks {sorted(excluded_ids)} with lower player scores)"
+        )
+        for tid, score in scored:
+            s = track_stats[tid]
+            status = "KEPT" if tid in kept_ids else "EXCLUDED"
+            logger.info(
+                f"  Track {tid}: score={score:.3f} (ball={s.ball_proximity_score:.2f}, "
+                f"spread={s.position_spread:.4f}, presence={s.presence_rate:.2f}) [{status}]"
+            )
+        selected = [(tid, stab) for tid, stab in selected if tid in kept_ids]
+
+    # Extract just the track IDs
+    result: set[int] = {tid for tid, _ in selected}
+
+    if result:
         court_info = ""
-        if any(track_stats[tid].has_court_stats for tid in primary):
+        if any(track_stats[tid].has_court_stats for tid in result):
             court_info = f", court >= {court_cfg.min_court_presence_ratio:.0%}"
         logger.info(
-            f"Identified {len(primary)} primary tracks: {sorted(primary)} "
+            f"Identified {len(result)} primary tracks: {sorted(result)} "
             f"(presence >= {config.min_presence_rate:.0%}, "
             f"stability >= {config.min_stability_score:.2f}, "
             f"spread >= {config.min_position_spread_for_primary:.3f}{court_info})"
         )
         # Log stats for primary tracks
-        for tid in sorted(primary):
+        for tid in sorted(result):
             stats = track_stats[tid]
             court_str = ""
             if stats.has_court_stats:
@@ -1472,7 +1499,7 @@ def identify_primary_tracks(
                 f"stability={compute_stability_score(stats, config):.3f}{court_str}"
             )
 
-    return primary
+    return result
 
 
 def select_with_track_priority(

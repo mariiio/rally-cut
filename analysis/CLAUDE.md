@@ -245,11 +245,21 @@ API triggers Modal via webhook. Results posted back on completion.
 
 Multi-stage filtering to identify active players and exclude non-players. See `tracking/player_filter.py`.
 
-**Stages:**
-1. Track length filter (>10% of video)
-2. Hard filters: sideline position (<0.20 or >0.80), court presence (>50%), stationary objects
-3. Score computation: length, court_presence, ball_proximity, engagement, spread, reactivity
-4. Top-4 selection by combined score
+**Primary Track Identification:**
+1. **Hard filters** (must pass all):
+   - Not on sidelines (x between 0.20-0.80)
+   - Not identified as referee (sideline + low movement + no ball proximity)
+   - Minimum presence rate (>20% of frames)
+   - Not stationary (has position spread OR ball engagement)
+   - Court presence >50% (if calibration available)
+2. **Stability scoring**: Combines presence rate, bbox area, and ball proximity
+3. **Selection**: Takes tracks passing stability threshold (0.20), but relaxes threshold when fewer than 4 candidates to ensure we track all visible players
+
+**Per-Frame Filtering:**
+1. Bbox size filter (removes small background detections, keeps primary tracks)
+2. Play area filter (convex hull of ball positions, keeps primary tracks)
+3. Referee/stationary filter (excludes non-primary tracks with low movement)
+4. Two-team selection (2 players per court side by Y position)
 
 **Key insight:** Positively identify players by volleyball behaviors (ball engagement, court coverage, movement) rather than detecting "non-players".
 
@@ -274,7 +284,7 @@ Kalman filter reduces lag and flickering in ball tracking. See `tracking/ball_fi
 
 **Key parameters (BallFilterConfig):**
 - `enable_lag_compensation=True`: Extrapolate position forward to reduce apparent lag
-- `lag_frames=6`: Frames to extrapolate forward (tuned for VballNet bias)
+- `lag_frames=3`: Frames to extrapolate forward (conservative to avoid over-extrapolation)
 - `max_velocity=0.3`: Max plausible movement (30% screen/frame) for jump rejection
 - `min_confidence_for_update=0.3`: Below this, use prediction only
 - `max_occlusion_frames=30`: Frames before marking track as lost (~1s at 30fps)
@@ -287,9 +297,9 @@ result = tracker.track_video(video_path)
 # Disable filtering for raw comparison
 result = tracker.track_video(video_path, enable_filtering=False)
 
-# Adjust lag compensation if ball marker is still behind
+# Adjust lag compensation if ball marker appears behind
 from rallycut.tracking import BallFilterConfig
-config = BallFilterConfig(lag_frames=6)  # Try 6 instead of 4
+config = BallFilterConfig(lag_frames=5)  # Increase from default 3 if needed
 result = tracker.track_video(video_path, filter_config=config)
 
 # Keep raw positions for debugging
