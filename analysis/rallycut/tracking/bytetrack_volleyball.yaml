@@ -4,11 +4,11 @@
 
 tracker_type: bytetrack
 
-# Detection thresholds - tuned to reduce fragmented tracks
-# Beach volleyball has only 4 players, higher thresholds prevent weak detections from fragmenting
-track_high_thresh: 0.35  # First-stage match threshold (raised to reduce fragmentation)
-track_low_thresh: 0.12   # Second-stage recovery threshold (raised)
-new_track_thresh: 0.45   # Threshold for new tracks (raised to prevent noise)
+# Detection thresholds - tuned for better recall
+# Lower thresholds recover more detections, filtering handles false positives
+track_high_thresh: 0.25  # First-stage match threshold (lowered for recall)
+track_low_thresh: 0.08   # Second-stage recovery threshold (lowered)
+new_track_thresh: 0.35   # Threshold for new tracks (lowered)
 
 # Longer buffer for track persistence (~3 seconds at 30fps)
 # Handles temporary occlusions and cross-rally continuity
