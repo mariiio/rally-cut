@@ -282,13 +282,22 @@ uv run rallycut label open video.mp4 -p tracking.json  # Opens browser, shows ta
 # Correct annotations in Label Studio, click Submit
 uv run rallycut label save 123 -o ground_truth.json
 uv run rallycut compare-tracking tracking.json ground_truth.json
+
+# Evaluate from database (after ground truth is synced)
+uv run rallycut evaluate-tracking --all              # Evaluate all labeled rallies
+uv run rallycut evaluate-tracking -r <rally-id>      # Evaluate specific rally
+uv run rallycut evaluate-tracking -v <video-id>      # Evaluate all in video
+uv run rallycut evaluate-tracking --all --per-player # Show per-player breakdown
+uv run rallycut evaluate-tracking --all -e           # Show error analysis
+uv run rallycut evaluate-tracking --all -o out.json  # Export metrics to JSON
 ```
 
 | Command | Purpose |
 |---------|---------|
 | `rallycut label open` | Open video with pre-filled predictions |
 | `rallycut label save` | Export annotations as ground truth JSON |
-| `rallycut compare-tracking` | Compute MOT metrics (MOTA, precision, recall, ID switches) |
+| `rallycut compare-tracking` | Compute MOT metrics from JSON files |
+| `rallycut evaluate-tracking` | Evaluate tracking from database with detailed breakdowns |
 
 ## Code Style
 
