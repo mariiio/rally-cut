@@ -531,9 +531,8 @@ class BallTracker:
                     raw_positions = positions.copy()
                 config = filter_config or BallFilterConfig()
                 temporal_filter = BallTemporalFilter(config)
-                logger.info(f"BALL FILTER: Applying with lag_frames={config.lag_frames}, enabled={config.enable_lag_compensation}")
+
                 positions = temporal_filter.filter_batch(positions)
-                logger.info(f"BALL FILTER: Done. First pos: raw=({raw_positions[0].x if raw_positions else 'N/A':.3f}), filtered=({positions[0].x:.3f})" if positions else "No positions")
 
             return BallTrackingResult(
                 positions=positions,

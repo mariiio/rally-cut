@@ -31,8 +31,10 @@ class BallFilterConfig:
     # Lag compensation for VballNet model bias
     # The model tends to output positions slightly behind the actual ball
     # Extrapolate forward using estimated velocity to compensate
+    # Note: Keep this low (2-4 frames) to avoid over-extrapolation when
+    # ball direction changes or velocity estimate becomes stale
     enable_lag_compensation: bool = True
-    lag_frames: int = 12  # Frames to extrapolate forward (TEST: very aggressive)
+    lag_frames: int = 3  # Frames to extrapolate forward (conservative)
 
     # Jump detection (rejects impossible movements)
     max_velocity: float = 0.3  # 30% of screen per frame is max plausible
@@ -276,25 +278,10 @@ class BallTemporalFilter:
 
         # Log filtering summary
         if filtered:
-            raw_confidences = [p.confidence for p in sorted_positions]
-            filtered_confidences = [p.confidence for p in filtered]
-
-            # Calculate position shift from lag compensation
-            if len(filtered) > 10:
-                mid = len(filtered) // 2
-                raw_x = sorted_positions[mid].x
-                filt_x = filtered[mid].x
-                shift_frames = (filt_x - raw_x) / max(0.001, abs(filt_x - filtered[mid-1].x)) if mid > 0 else 0
-                logger.info(
-                    f"Ball filter: {len(filtered)} positions, "
-                    f"lag_comp={'ON' if self.config.enable_lag_compensation else 'OFF'}, "
-                    f"lag_frames={self.config.lag_frames}, "
-                    f"mid_shift={filt_x - raw_x:+.4f}"
-                )
-            else:
-                logger.info(
-                    f"Ball filter: {len(filtered)} positions, "
-                    f"lag_comp={'ON' if self.config.enable_lag_compensation else 'OFF'}"
-                )
+            logger.info(
+                f"Ball filter: {len(filtered)} positions, "
+                f"lag_comp={'ON' if self.config.enable_lag_compensation else 'OFF'}, "
+                f"lag_frames={self.config.lag_frames}"
+            )
 
         return filtered
