@@ -1345,16 +1345,20 @@ def identify_primary_tracks(
     """
     Identify primary tracks that are likely real court players.
 
-    Primary tracks must pass these hard filters:
+    Hard filters (must pass all):
     1. Not on sidelines (x between 0.20-0.80)
     2. Not identified as referee
     3. Minimum presence rate (default 20%)
-    4. Not stationary (has position spread OR ball engagement)
-    5. Court presence >= threshold (if calibration available)
+    4. Court presence >= threshold (if calibration available)
 
-    Track selection prioritizes stability score, but will include lower-stability
-    tracks when fewer than max_players pass the threshold. This handles cases
-    where players appear late in the rally or have small bboxes (far court).
+    Soft filters (used for ranking, relaxed when needed):
+    - Stationary check: tracks with low spread AND no ball engagement are
+      deprioritized but included as fallbacks when fewer than max_players active
+
+    Selection prioritizes:
+    1. Active tracks (moving or ball-engaged) with high stability
+    2. Active tracks with lower stability (if needed)
+    3. Stationary tracks as fallback (if still need more players)
 
     Args:
         track_stats: Statistics for each track.
@@ -1494,11 +1498,16 @@ def identify_primary_tracks(
         court_info = ""
         if any(track_stats[tid].has_court_stats for tid in result):
             court_info = f", court >= {court_cfg.min_court_presence_ratio:.0%}"
+        # Count how many are stationary fallbacks
+        stationary_count = sum(
+            1 for tid in result
+            if track_stats[tid].position_spread < config.min_position_spread_for_primary
+            and track_stats[tid].ball_proximity_score < config.min_ball_proximity_for_stationary
+        )
+        fallback_info = f", {stationary_count} stationary fallback(s)" if stationary_count else ""
         logger.info(
             f"Identified {len(result)} primary tracks: {sorted(result)} "
-            f"(presence >= {config.min_presence_rate:.0%}, "
-            f"stability >= {config.min_stability_score:.2f}, "
-            f"spread >= {config.min_position_spread_for_primary:.3f}{court_info})"
+            f"(presence >= {config.min_presence_rate:.0%}{court_info}{fallback_info})"
         )
         # Log stats for primary tracks
         for tid in sorted(result):
