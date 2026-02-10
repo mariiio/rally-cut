@@ -1,5 +1,11 @@
-"""Player tracking evaluation framework."""
+"""Player and ball tracking evaluation framework."""
 
+from rallycut.evaluation.tracking.ball_metrics import (
+    BallFrameComparison,
+    BallTrackingMetrics,
+    aggregate_ball_metrics,
+    evaluate_ball_tracking,
+)
 from rallycut.evaluation.tracking.db import (
     TrackingEvaluationRally,
     load_labeled_rallies,
@@ -42,7 +48,12 @@ __all__ = [
     # Database loading
     "TrackingEvaluationRally",
     "load_labeled_rallies",
-    # Metrics
+    # Ball metrics
+    "BallFrameComparison",
+    "BallTrackingMetrics",
+    "aggregate_ball_metrics",
+    "evaluate_ball_tracking",
+    # Player metrics
     "PerFrameMetrics",
     "PerPlayerMetrics",
     "TrackingEvaluationResult",

@@ -15,6 +15,7 @@ from rallycut.cli.utils import handle_errors
 
 if TYPE_CHECKING:
     from rallycut.cli.commands.compare_tracking import BallMetrics, MOTMetrics
+    from rallycut.evaluation.tracking.ball_metrics import BallTrackingMetrics
     from rallycut.evaluation.tracking.error_analysis import ErrorEvent
     from rallycut.evaluation.tracking.metrics import PerPlayerMetrics
 
@@ -59,6 +60,11 @@ def evaluate_tracking(
         "--analyze-errors", "-e",
         help="Show detailed error analysis",
     ),
+    ball_only: bool = typer.Option(
+        False,
+        "--ball-only", "-b",
+        help="Evaluate ball tracking only (skip player metrics)",
+    ),
     iou_threshold: float = typer.Option(
         0.5,
         "--iou", "-i",
@@ -70,15 +76,16 @@ def evaluate_tracking(
         help="Output metrics to JSON file",
     ),
 ) -> None:
-    """Evaluate player tracking predictions against ground truth.
+    """Evaluate player and ball tracking predictions against ground truth.
 
     Loads ground truth and predictions from the database and computes
     MOT (Multi-Object Tracking) metrics including MOTA, precision, recall,
-    F1, and ID switches.
+    F1, and ID switches for players. For ball tracking, computes detection
+    rate, position error statistics, and accuracy buckets.
 
     Examples:
 
-        # Evaluate specific rally
+        # Evaluate specific rally (players + ball)
         rallycut evaluate-tracking --rally-id abc123
 
         # Evaluate all labeled rallies in a video
@@ -86,6 +93,9 @@ def evaluate_tracking(
 
         # Evaluate all labeled data
         rallycut evaluate-tracking --all
+
+        # Ball tracking evaluation only
+        rallycut evaluate-tracking --all --ball-only
 
         # Show per-player breakdown
         rallycut evaluate-tracking --rally-id abc123 --per-player
@@ -103,6 +113,10 @@ def evaluate_tracking(
     if ctx.invoked_subcommand is not None:
         return
 
+    from rallycut.evaluation.tracking.ball_metrics import (
+        aggregate_ball_metrics,
+        evaluate_ball_tracking,
+    )
     from rallycut.evaluation.tracking.db import load_labeled_rallies
     from rallycut.evaluation.tracking.error_analysis import analyze_errors as get_errors
     from rallycut.evaluation.tracking.metrics import aggregate_results, evaluate_rally
@@ -132,7 +146,88 @@ def evaluate_tracking(
 
     console.print(f"  Found {len(rallies)} rally(s) with ground truth\n")
 
-    # Evaluate each rally
+    # Ball-only evaluation mode
+    if ball_only:
+        ball_results = []
+        for rally in rallies:
+            if rally.predictions is None or not rally.predictions.ball_positions:
+                console.print(
+                    f"[yellow]Rally {rally.rally_id[:8]}... has no ball predictions, skipping[/yellow]"
+                )
+                continue
+
+            ball_metrics = evaluate_ball_tracking(
+                ground_truth=rally.ground_truth.positions,
+                predictions=rally.predictions.ball_positions,
+                video_width=rally.video_width,
+                video_height=rally.video_height,
+                video_fps=rally.video_fps,
+            )
+            ball_results.append((rally.rally_id, ball_metrics))
+
+        if not ball_results:
+            console.print("[red]No rallies with ball tracking data found[/red]")
+            raise typer.Exit(1)
+
+        # Display ball-only results
+        if len(ball_results) == 1:
+            rally_id_str, ball_metrics = ball_results[0]
+            console.print(f"[bold]Ball Tracking Evaluation - Rally {rally_id_str[:8]}...[/bold]")
+            console.print("=" * 50)
+            _display_enhanced_ball_metrics(ball_metrics)
+        else:
+            console.print(f"[bold]Ball Tracking Evaluation - {len(ball_results)} Rallies[/bold]")
+            console.print("=" * 50)
+
+            # Per-rally table
+            ball_table = Table(show_header=True, header_style="bold")
+            ball_table.add_column("Rally")
+            ball_table.add_column("Detection", justify="right")
+            ball_table.add_column("Match", justify="right")
+            ball_table.add_column("Mean Err", justify="right")
+            ball_table.add_column("Median", justify="right")
+            ball_table.add_column("P90", justify="right")
+            ball_table.add_column("<20px", justify="right")
+
+            for rally_id_str, metrics in ball_results:
+                ball_table.add_row(
+                    rally_id_str[:8] + "...",
+                    f"{metrics.detection_rate:.1%}",
+                    f"{metrics.match_rate:.1%}",
+                    f"{metrics.mean_error_px:.1f}px",
+                    f"{metrics.median_error_px:.1f}px",
+                    f"{metrics.p90_error_px:.1f}px",
+                    f"{metrics.error_under_20px_rate:.1%}",
+                )
+
+            console.print(ball_table)
+
+            # Aggregate metrics
+            console.print("\n[bold]Aggregate Metrics[/bold]")
+            ball_combined = aggregate_ball_metrics([m for _, m in ball_results])
+            _display_enhanced_ball_metrics(ball_combined)
+
+        # Save to file if requested
+        if output:
+            if len(ball_results) == 1:
+                output_data = ball_results[0][1].to_dict()
+            else:
+                ball_combined = aggregate_ball_metrics([m for _, m in ball_results])
+                output_data = {
+                    "rallies": [
+                        {"rallyId": rid, **m.to_dict()}
+                        for rid, m in ball_results
+                    ],
+                    "aggregate": ball_combined.to_dict(),
+                }
+
+            with open(output, "w") as f:
+                json.dump(output_data, f, indent=2)
+            console.print(f"\n[green]Metrics saved to {output}[/green]")
+
+        return
+
+    # Evaluate each rally (player + ball combined)
     results = []
     all_errors_list = []
 
@@ -634,28 +729,111 @@ def _display_aggregate_metrics(metrics: MOTMetrics) -> None:
 
 
 def _display_ball_metrics(ball_metrics: BallMetrics) -> None:
-    """Display ball tracking metrics."""
+    """Display ball tracking metrics (compact version for combined eval)."""
+    from rallycut.evaluation.tracking.ball_metrics import BallTrackingMetrics
+
+    # Handle legacy BallMetrics from compare_tracking
+    if not isinstance(ball_metrics, BallTrackingMetrics):
+        # Legacy format - just show basic metrics
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Metric")
+        table.add_column("Value", justify="right")
+        table.add_column("Target", justify="right")
+        table.add_column("Status")
+
+        table.add_row(
+            "Detection Rate",
+            f"{ball_metrics.detection_rate:.2%}",
+            ">60%",
+            _status_icon(ball_metrics.detection_rate, 0.60),
+        )
+        table.add_row(
+            "Mean Error",
+            f"{ball_metrics.mean_error_px:.1f} px",
+            "<20px",
+            _status_icon(ball_metrics.mean_error_px, 20, higher_better=False),
+        )
+
+        console.print("\n[bold]Ball Tracking Metrics[/bold]")
+        console.print(table)
+        return
+
+    # Enhanced metrics
+    _display_enhanced_ball_metrics(ball_metrics)
+
+
+def _display_enhanced_ball_metrics(metrics: BallTrackingMetrics) -> None:
+    """Display enhanced ball tracking metrics with detailed statistics."""
     table = Table(show_header=True, header_style="bold")
     table.add_column("Metric")
     table.add_column("Value", justify="right")
     table.add_column("Target", justify="right")
     table.add_column("Status")
 
+    # Detection metrics
     table.add_row(
         "Detection Rate",
-        f"{ball_metrics.detection_rate:.2%}",
+        f"{metrics.detection_rate:.1%}",
         ">60%",
-        _status_icon(ball_metrics.detection_rate, 0.60),
+        _status_icon(metrics.detection_rate, 0.60),
     )
     table.add_row(
+        "Match Rate (<50px)",
+        f"{metrics.match_rate:.1%}",
+        ">50%",
+        _status_icon(metrics.match_rate, 0.50),
+    )
+
+    # Error metrics
+    table.add_row(
         "Mean Error",
-        f"{ball_metrics.mean_error_px:.1f} px",
+        f"{metrics.mean_error_px:.1f} px",
         "<20px",
-        _status_icon(ball_metrics.mean_error_px, 20, higher_better=False),
+        _status_icon(metrics.mean_error_px, 20, higher_better=False),
+    )
+    table.add_row(
+        "Median Error",
+        f"{metrics.median_error_px:.1f} px",
+        "<15px",
+        _status_icon(metrics.median_error_px, 15, higher_better=False),
+    )
+    table.add_row(
+        "P90 Error",
+        f"{metrics.p90_error_px:.1f} px",
+        "<50px",
+        _status_icon(metrics.p90_error_px, 50, higher_better=False),
+    )
+    table.add_row(
+        "Max Error",
+        f"{metrics.max_error_px:.1f} px",
+        "-",
+        "",
+    )
+
+    # Accuracy buckets
+    table.add_row(
+        "Accuracy <20px",
+        f"{metrics.error_under_20px_rate:.1%}",
+        ">60%",
+        _status_icon(metrics.error_under_20px_rate, 0.60),
+    )
+    table.add_row(
+        "Accuracy <50px",
+        f"{metrics.error_under_50px_rate:.1%}",
+        ">80%",
+        _status_icon(metrics.error_under_50px_rate, 0.80),
     )
 
     console.print("\n[bold]Ball Tracking Metrics[/bold]")
     console.print(table)
+
+    # Detection breakdown
+    console.print("\n[dim]Detection breakdown:[/dim]")
+    console.print(f"  Ground truth frames: {metrics.num_gt_frames}")
+    console.print(f"  Detected frames: {metrics.num_detected}")
+    console.print(f"  Matched frames (<50px): {metrics.num_matched}")
+    miss_count = metrics.num_gt_frames - metrics.num_detected
+    console.print(f"  Missed frames: {miss_count}")
 
 
 def _display_per_player_metrics(per_player: list[PerPlayerMetrics]) -> None:
