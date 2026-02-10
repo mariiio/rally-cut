@@ -336,6 +336,11 @@ uv run rallycut evaluate-tracking --all --per-player # Show per-player breakdown
 uv run rallycut evaluate-tracking --all -e           # Show error analysis
 uv run rallycut evaluate-tracking --all -o out.json  # Export metrics to JSON
 
+# Ball tracking evaluation
+uv run rallycut evaluate-tracking --all --ball-only      # Ball tracking metrics only
+uv run rallycut evaluate-tracking -r <rally-id> -b       # Ball eval for specific rally
+uv run rallycut evaluate-tracking --all -b -o ball.json  # Export ball metrics to JSON
+
 # Grid search for optimal filter parameters
 uv run rallycut evaluate-tracking tune-filter --all --cache-only  # Cache raw positions (one-time)
 uv run rallycut evaluate-tracking tune-filter --all --grid quick  # Quick grid search
