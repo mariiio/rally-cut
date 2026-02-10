@@ -135,6 +135,26 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
 - **Unified accept**: `GET /v1/share/:token` and `POST /v1/share/:token/accept` detect share type (session vs video)
 - **Permission checks**: `canAccessVideoRallies()` checks both direct video membership and session membership
 
+### Player Tracking
+- `POST /v1/rallies/:id/track-players` → triggers local YOLO + ByteTrack tracking
+  - Body: `{ calibrationCorners?: [{x,y}]x4 }` - optional court calibration
+  - Returns player positions, ball phases, server info
+- `GET /v1/rallies/:id/player-track` → retrieves existing tracking data
+
+### Label Studio Integration (Ground Truth)
+- `GET /v1/rallies/:id/label-studio` → status (hasTrackingData, hasGroundTruth, taskId)
+- `POST /v1/rallies/:id/label-studio/export` → exports tracking to Label Studio
+  - Body: `{ videoUrl, apiKey?, apiUrl? }` - video URL (must use API server URL for CORS)
+  - Returns: `{ taskUrl }` - opens in Label Studio with pre-filled predictions
+  - **Labels**: player_1 (green), player_2 (blue), player_3 (orange), player_4 (purple), ball (red)
+  - **Task reuse**: Returns existing task if already exported (stored in `groundTruthTaskId`)
+  - **Rally bounds**: Labels only appear during rally duration (enabled: false after end)
+- `POST /v1/rallies/:id/label-studio/import` → imports corrected annotations
+  - Body: `{ taskId, apiKey?, apiUrl? }` - Label Studio task ID
+  - Saves to `PlayerTrack.groundTruthJson`
+- **Config**: `LABEL_STUDIO_URL` (default: localhost:8082), `LABEL_STUDIO_API_KEY`
+- **Project**: Auto-created "RallyCut Ground Truth" with framerate=29.97 for correct sync
+
 ## Database Schema
 
 ```
