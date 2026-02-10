@@ -33,6 +33,8 @@ class TrackingEvaluationRally:
     video_fps: float = 30.0
     video_width: int = 1920
     video_height: int = 1080
+    # Raw positions before filtering (for parameter tuning)
+    raw_positions: list[PlayerPosition] | None = None
 
 
 def _parse_ground_truth(
@@ -195,6 +197,7 @@ def load_labeled_rallies(
             v.height as video_height,
             pt.ground_truth_json,
             pt.positions_json,
+            pt.raw_positions_json,
             pt.frame_count,
             pt.fps as pt_fps,
             pt.processing_time_ms,
@@ -229,6 +232,7 @@ def load_labeled_rallies(
                     video_height,
                     ground_truth_json,
                     positions_json,
+                    raw_positions_json,
                     frame_count,
                     pt_fps,
                     processing_time_ms,
@@ -267,6 +271,23 @@ def load_labeled_rallies(
                 }
                 predictions = _parse_predictions(positions_json_typed, pt_data)
 
+                # Parse raw positions for parameter tuning
+                raw_positions: list[PlayerPosition] | None = None
+                raw_json = cast(list[dict[str, Any]] | None, raw_positions_json)
+                if raw_json:
+                    raw_positions = [
+                        PlayerPosition(
+                            frame_number=p["frameNumber"],
+                            track_id=p["trackId"],
+                            x=p["x"],
+                            y=p["y"],
+                            width=p["width"],
+                            height=p["height"],
+                            confidence=p["confidence"],
+                        )
+                        for p in raw_json
+                    ]
+
                 results.append(
                     TrackingEvaluationRally(
                         rally_id=str(rally_id_val),
@@ -278,6 +299,7 @@ def load_labeled_rallies(
                         video_fps=cast(float, video_fps) if video_fps else 30.0,
                         video_width=cast(int, video_width) if video_width else 1920,
                         video_height=cast(int, video_height) if video_height else 1080,
+                        raw_positions=raw_positions,
                     )
                 )
 

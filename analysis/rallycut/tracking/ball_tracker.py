@@ -13,7 +13,10 @@ import os
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from rallycut.tracking.ball_filter import BallFilterConfig
 
 import cv2
 import numpy as np
@@ -89,6 +92,8 @@ class BallTrackingResult:
     video_height: int = 0
     processing_time_ms: float = 0.0
     model_version: str = MODEL_NAME
+    filtering_enabled: bool = False
+    raw_positions: list[BallPosition] | None = None  # Before filtering (debug)
 
     @property
     def detection_rate(self) -> float:
@@ -99,7 +104,7 @@ class BallTrackingResult:
         return detected / self.frame_count
 
     def to_dict(self) -> dict:
-        return {
+        result = {
             "positions": [p.to_dict() for p in self.positions],
             "frameCount": self.frame_count,
             "videoFps": self.video_fps,
@@ -108,7 +113,11 @@ class BallTrackingResult:
             "detectionRate": self.detection_rate,
             "processingTimeMs": self.processing_time_ms,
             "modelVersion": self.model_version,
+            "filteringEnabled": self.filtering_enabled,
         }
+        if self.raw_positions is not None:
+            result["rawPositions"] = [p.to_dict() for p in self.raw_positions]
+        return result
 
     def to_json(self, path: Path) -> None:
         """Write result to JSON file."""
@@ -131,6 +140,18 @@ class BallTrackingResult:
             for p in data.get("positions", [])
         ]
 
+        raw_positions = None
+        if "rawPositions" in data:
+            raw_positions = [
+                BallPosition(
+                    frame_number=p["frameNumber"],
+                    x=p["x"],
+                    y=p["y"],
+                    confidence=p["confidence"],
+                )
+                for p in data["rawPositions"]
+            ]
+
         return cls(
             positions=positions,
             frame_count=data.get("frameCount", 0),
@@ -139,6 +160,8 @@ class BallTrackingResult:
             video_height=data.get("videoHeight", 0),
             processing_time_ms=data.get("processingTimeMs", 0.0),
             model_version=data.get("modelVersion", MODEL_NAME),
+            filtering_enabled=data.get("filteringEnabled", False),
+            raw_positions=raw_positions,
         )
 
 
@@ -376,6 +399,9 @@ class BallTracker:
         start_ms: int | None = None,
         end_ms: int | None = None,
         progress_callback: Callable[[float], None] | None = None,
+        filter_config: "BallFilterConfig | None" = None,
+        enable_filtering: bool = True,
+        preserve_raw: bool = False,
     ) -> BallTrackingResult:
         """
         Track ball positions in a video segment.
@@ -385,11 +411,16 @@ class BallTracker:
             start_ms: Start time in milliseconds (optional)
             end_ms: End time in milliseconds (optional)
             progress_callback: Optional callback(progress: float) for progress updates
+            filter_config: Optional configuration for temporal filtering
+            enable_filtering: Apply Kalman filter smoothing (default True)
+            preserve_raw: Store raw positions in result for debugging
 
         Returns:
             BallTrackingResult with all detected positions
         """
         import time
+
+        from rallycut.tracking.ball_filter import BallFilterConfig, BallTemporalFilter
 
         start_time = time.time()
         video_path = Path(video_path)
@@ -493,6 +524,17 @@ class BallTracker:
             processing_time_ms = (time.time() - start_time) * 1000
             logger.info(f"Completed {inference_count} inferences in {processing_time_ms/1000:.1f}s")
 
+            # Apply temporal filtering if enabled
+            raw_positions = None
+            if enable_filtering:
+                if preserve_raw:
+                    raw_positions = positions.copy()
+                config = filter_config or BallFilterConfig()
+                temporal_filter = BallTemporalFilter(config)
+                logger.info(f"BALL FILTER: Applying with lag_frames={config.lag_frames}, enabled={config.enable_lag_compensation}")
+                positions = temporal_filter.filter_batch(positions)
+                logger.info(f"BALL FILTER: Done. First pos: raw=({raw_positions[0].x if raw_positions else 'N/A':.3f}), filtered=({positions[0].x:.3f})" if positions else "No positions")
+
             return BallTrackingResult(
                 positions=positions,
                 frame_count=frames_to_process,
@@ -501,6 +543,8 @@ class BallTracker:
                 video_height=video_height,
                 processing_time_ms=processing_time_ms,
                 model_version=MODEL_NAME,
+                filtering_enabled=enable_filtering,
+                raw_positions=raw_positions,
             )
 
         finally:
@@ -514,7 +558,10 @@ class BallTracker:
         video_height: int,
     ) -> Iterator[BallPosition]:
         """
-        Track ball positions in a stream of frames.
+        Track ball positions in a stream of frames (raw, unfiltered).
+
+        Note: This streaming API returns raw detections without temporal filtering.
+        Use track_video() for filtered results, or apply BallTemporalFilter manually.
 
         Args:
             frames: Iterator of BGR frames

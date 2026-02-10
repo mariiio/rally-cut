@@ -136,6 +136,7 @@ def evaluate_rally(
     iou_threshold: float = 0.5,
     video_width: int | None = None,
     video_height: int | None = None,
+    interpolate_gt: bool = True,
 ) -> TrackingEvaluationResult:
     """Evaluate tracking predictions against ground truth with detailed breakdowns.
 
@@ -146,10 +147,16 @@ def evaluate_rally(
         iou_threshold: Minimum IoU for matching.
         video_width: Video width for ball metrics (optional).
         video_height: Video height for ball metrics (optional).
+        interpolate_gt: If True, interpolate keyframe annotations to all frames.
+            Label Studio exports only keyframes; this matches the visual display.
 
     Returns:
         TrackingEvaluationResult with aggregate, per-player, and per-frame metrics.
     """
+    # Interpolate ground truth keyframes to match Label Studio's visual interpolation
+    if interpolate_gt and predictions.frame_count > 0:
+        ground_truth = ground_truth.interpolate(predictions.frame_count)
+
     gt_positions = ground_truth.player_positions
     pred_positions = predictions.positions
 

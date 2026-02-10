@@ -119,7 +119,8 @@ rallycut/
 │   ├── models.py             # v1/v2/v3 temporal models (deprecated)
 │   └── training.py           # Training loop with validation
 ├── tracking/        # Ball and player tracking
-│   ├── ball_tracker.py       # YOLO-based ball detection
+│   ├── ball_tracker.py       # VballNet ONNX ball detection (9-frame temporal)
+│   ├── ball_filter.py        # Kalman filter for lag compensation and smoothing
 │   ├── ball_features.py      # Ball phase detection, server ID, reactivity scoring
 │   ├── player_tracker.py     # YOLO + ByteTrack player tracking
 │   ├── player_filter.py      # Multi-stage player filtering with court/ball scoring
@@ -262,6 +263,40 @@ Detects game phases (SERVE, ATTACK, DEFENSE, TRANSITION) from ball velocity patt
 
 **Output:** `ballPhases`, `serverInfo`, `ballPositions` for overlay visualization.
 
+## Ball Tracking Filtering
+
+Kalman filter reduces lag and flickering in ball tracking. See `tracking/ball_filter.py`.
+
+**Problems solved:**
+- **Lag**: VballNet model outputs positions that are slightly behind the actual ball. Filter extrapolates forward using velocity to compensate.
+- **Flickering/Jumps**: When ball is occluded, tracking can jump to false detections. Filter rejects impossible movements (>30% screen/frame).
+- **Noise**: Raw detections have frame-to-frame jitter. Kalman filter smooths trajectory.
+
+**Key parameters (BallFilterConfig):**
+- `enable_lag_compensation=True`: Extrapolate position forward to reduce apparent lag
+- `lag_frames=6`: Frames to extrapolate forward (tuned for VballNet bias)
+- `max_velocity=0.3`: Max plausible movement (30% screen/frame) for jump rejection
+- `min_confidence_for_update=0.3`: Below this, use prediction only
+- `max_occlusion_frames=30`: Frames before marking track as lost (~1s at 30fps)
+
+**Usage:**
+```python
+# Filtering with lag compensation is enabled by default
+result = tracker.track_video(video_path)
+
+# Disable filtering for raw comparison
+result = tracker.track_video(video_path, enable_filtering=False)
+
+# Adjust lag compensation if ball marker is still behind
+from rallycut.tracking import BallFilterConfig
+config = BallFilterConfig(lag_frames=6)  # Try 6 instead of 4
+result = tracker.track_video(video_path, filter_config=config)
+
+# Keep raw positions for debugging
+result = tracker.track_video(video_path, preserve_raw=True)
+print(result.raw_positions)  # Original detections before filtering
+```
+
 ## Cross-Rally Player Consistency
 
 Maintains consistent player IDs (1-4) across match using appearance features (skin tone, jersey color, body proportions). Detects side switches by comparing assignment costs. See `tracking/player_features.py` and `tracking/match_tracker.py`.
@@ -290,6 +325,12 @@ uv run rallycut evaluate-tracking -v <video-id>      # Evaluate all in video
 uv run rallycut evaluate-tracking --all --per-player # Show per-player breakdown
 uv run rallycut evaluate-tracking --all -e           # Show error analysis
 uv run rallycut evaluate-tracking --all -o out.json  # Export metrics to JSON
+
+# Grid search for optimal filter parameters
+uv run rallycut evaluate-tracking tune-filter --all --cache-only  # Cache raw positions (one-time)
+uv run rallycut evaluate-tracking tune-filter --all --grid quick  # Quick grid search
+uv run rallycut evaluate-tracking tune-filter --all --grid full --min-rally-f1 0.70  # Full search with constraint
+uv run rallycut evaluate-tracking tune-filter --all -o results.json  # Export full results
 ```
 
 | Command | Purpose |
@@ -298,6 +339,7 @@ uv run rallycut evaluate-tracking --all -o out.json  # Export metrics to JSON
 | `rallycut label save` | Export annotations as ground truth JSON |
 | `rallycut compare-tracking` | Compute MOT metrics from JSON files |
 | `rallycut evaluate-tracking` | Evaluate tracking from database with detailed breakdowns |
+| `rallycut evaluate-tracking tune-filter` | Grid search for optimal PlayerFilterConfig parameters |
 
 ## Code Style
 

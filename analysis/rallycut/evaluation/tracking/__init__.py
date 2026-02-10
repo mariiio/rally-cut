@@ -11,12 +11,31 @@ from rallycut.evaluation.tracking.error_analysis import (
     analyze_errors,
     summarize_errors,
 )
+from rallycut.evaluation.tracking.grid_search import (
+    FilterConfigResult,
+    FilterGridSearchResult,
+    apply_filter_config,
+    evaluate_config,
+    grid_search,
+)
 from rallycut.evaluation.tracking.metrics import (
     PerFrameMetrics,
     PerPlayerMetrics,
     TrackingEvaluationResult,
     aggregate_results,
     evaluate_rally,
+)
+from rallycut.evaluation.tracking.param_grid import (
+    AVAILABLE_GRIDS,
+    describe_config_diff,
+    generate_filter_configs,
+    get_default_config,
+    get_grid,
+    grid_size,
+)
+from rallycut.evaluation.tracking.raw_cache import (
+    CachedRallyData,
+    RawPositionCache,
 )
 
 __all__ = [
@@ -35,4 +54,20 @@ __all__ = [
     "ErrorType",
     "analyze_errors",
     "summarize_errors",
+    # Parameter grid
+    "AVAILABLE_GRIDS",
+    "describe_config_diff",
+    "generate_filter_configs",
+    "get_default_config",
+    "get_grid",
+    "grid_size",
+    # Raw position cache
+    "CachedRallyData",
+    "RawPositionCache",
+    # Grid search
+    "FilterConfigResult",
+    "FilterGridSearchResult",
+    "apply_filter_config",
+    "evaluate_config",
+    "grid_search",
 ]

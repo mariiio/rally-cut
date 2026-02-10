@@ -149,6 +149,7 @@ async function extractVideoSegment(
 
 interface PlayerTrackerOutput {
   positions: PlayerPosition[];
+  rawPositions?: PlayerPosition[];  // Raw positions before filtering (for param tuning)
   frameCount: number;
   fps: number;
   detectionRate: number;
@@ -303,7 +304,18 @@ async function runPlayerTracker(
           confidence: bp.confidence,
         }));
 
-        console.log(`[PLAYER_TRACK] Output: frameCount=${frameCount}, detectionRate=${detectionRate.toFixed(2)}, avgPlayers=${avgPlayerCount.toFixed(1)}, tracks=${uniqueTrackCount}, positions=${positions.length}, ballPositions=${ballPositions?.length ?? 0}`);
+        // Raw positions before filtering (for parameter tuning)
+        const rawPositions: PlayerPosition[] | undefined = result.rawPositions?.map((p: PlayerPosition) => ({
+          frameNumber: p.frameNumber,
+          trackId: p.trackId,
+          x: p.x,
+          y: p.y,
+          width: p.width,
+          height: p.height,
+          confidence: p.confidence,
+        }));
+
+        console.log(`[PLAYER_TRACK] Output: frameCount=${frameCount}, detectionRate=${detectionRate.toFixed(2)}, avgPlayers=${avgPlayerCount.toFixed(1)}, tracks=${uniqueTrackCount}, positions=${positions.length}, rawPositions=${rawPositions?.length ?? 0}, ballPositions=${ballPositions?.length ?? 0}`);
         console.log(`[PLAYER_TRACK] Filter method: ${filterMethod ?? 'none (filtering may have failed)'}`);
         if (courtSplitY !== undefined) {
           console.log(`[PLAYER_TRACK] Court split enabled: y=${courtSplitY.toFixed(3)}, primary tracks: ${primaryTrackIds?.join(', ') ?? 'none'}`);
@@ -323,6 +335,7 @@ async function runPlayerTracker(
 
         resolve({
           positions,
+          rawPositions,
           frameCount,
           fps,
           detectionRate,
@@ -467,6 +480,7 @@ export async function trackPlayersForRally(
         courtSplitY: trackerResult.courtSplitY,
         primaryTrackIds: trackerResult.primaryTrackIds as unknown as number[],
         positionsJson: trackerResult.positions as unknown as object[],
+        rawPositionsJson: trackerResult.rawPositions as unknown as object[],
         ballPhasesJson: trackerResult.ballPhases as unknown as object[],
         serverInfoJson: trackerResult.serverInfo as unknown as object,
         ballPositionsJson: trackerResult.ballPositions as unknown as object[],
@@ -485,6 +499,7 @@ export async function trackPlayersForRally(
         courtSplitY: trackerResult.courtSplitY,
         primaryTrackIds: trackerResult.primaryTrackIds as unknown as number[],
         positionsJson: trackerResult.positions as unknown as object[],
+        rawPositionsJson: trackerResult.rawPositions as unknown as object[],
         ballPhasesJson: trackerResult.ballPhases as unknown as object[],
         serverInfoJson: trackerResult.serverInfo as unknown as object,
         ballPositionsJson: trackerResult.ballPositions as unknown as object[],

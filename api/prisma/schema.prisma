@@ -298,6 +298,7 @@ model PlayerTrack {
   courtSplitY         Float?            @map("court_split_y")
   detectionRate       Float?            @map("detection_rate")
   positionsJson       Json?             @map("positions_json")
+  rawPositionsJson    Json?             @map("raw_positions_json")
   primaryTrackIds     Json?             @map("primary_track_ids")
   uniqueTrackCount    Int?              @map("unique_track_count")
   fps                 Float?            @map("fps")

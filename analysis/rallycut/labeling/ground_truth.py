@@ -67,6 +67,79 @@ class GroundTruthResult:
         """Get unique player track IDs."""
         return {p.track_id for p in self.positions if p.is_player}
 
+    def interpolate(self, frame_count: int | None = None) -> GroundTruthResult:
+        """Interpolate positions between keyframes for each track.
+
+        Label Studio exports keyframes only. This method fills in positions
+        between keyframes using linear interpolation, matching how Label Studio
+        displays the annotations.
+
+        Args:
+            frame_count: Total frames to interpolate to. If None, uses self.frame_count.
+
+        Returns:
+            New GroundTruthResult with interpolated positions.
+        """
+        total_frames = frame_count if frame_count is not None else self.frame_count
+        if total_frames == 0:
+            return self
+
+        # Group positions by (track_id, label)
+        tracks: dict[tuple[int, str], list[GroundTruthPosition]] = {}
+        for pos in self.positions:
+            key = (pos.track_id, pos.label)
+            if key not in tracks:
+                tracks[key] = []
+            tracks[key].append(pos)
+
+        # Interpolate each track
+        interpolated: list[GroundTruthPosition] = []
+
+        for (track_id, label), keyframes in tracks.items():
+            # Sort by frame number
+            keyframes = sorted(keyframes, key=lambda p: p.frame_number)
+
+            if len(keyframes) == 1:
+                # Single keyframe - just add it
+                interpolated.append(keyframes[0])
+                continue
+
+            # Interpolate between consecutive keyframes
+            for i in range(len(keyframes) - 1):
+                start = keyframes[i]
+                end = keyframes[i + 1]
+
+                # Add all frames from start to end (exclusive of end)
+                for frame in range(start.frame_number, end.frame_number):
+                    if frame == start.frame_number:
+                        # Use exact keyframe
+                        interpolated.append(start)
+                    else:
+                        # Linear interpolation
+                        t = (frame - start.frame_number) / (end.frame_number - start.frame_number)
+                        interpolated.append(
+                            GroundTruthPosition(
+                                frame_number=frame,
+                                track_id=track_id,
+                                label=label,
+                                x=start.x + t * (end.x - start.x),
+                                y=start.y + t * (end.y - start.y),
+                                width=start.width + t * (end.width - start.width),
+                                height=start.height + t * (end.height - start.height),
+                                confidence=1.0,
+                            )
+                        )
+
+            # Add the last keyframe
+            interpolated.append(keyframes[-1])
+
+        return GroundTruthResult(
+            positions=interpolated,
+            frame_count=total_frames,
+            video_width=self.video_width,
+            video_height=self.video_height,
+        )
+
     def to_dict(self) -> dict:
         return {
             "positions": [p.to_dict() for p in self.positions],
