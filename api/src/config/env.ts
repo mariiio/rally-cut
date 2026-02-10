@@ -42,6 +42,10 @@ const envSchema = z.object({
   SES_FROM_EMAIL: z.string().email().default("noreply@rallycut.com"),
   SES_REGION: z.string().default("us-east-1"),
   FRONTEND_URL: z.string().default("http://localhost:3000"),
+
+  // Label Studio (optional - for ground truth labeling)
+  LABEL_STUDIO_URL: z.string().url().optional(),
+  LABEL_STUDIO_API_KEY: z.string().optional(),
 });
 
 function loadEnv(): z.infer<typeof envSchema> {

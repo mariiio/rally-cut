@@ -26,9 +26,22 @@ import webhooksRouter from "./routes/webhooks.js";
 const app = express();
 
 app.use(helmet());
+
+// CORS: Allow configured origin + Label Studio for development
+const allowedOrigins = [env.CORS_ORIGIN];
+if (env.LABEL_STUDIO_URL) {
+  allowedOrigins.push(env.LABEL_STUDIO_URL);
+}
 app.use(
   cors({
-    origin: env.CORS_ORIGIN,
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps or curl)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
   })
 );

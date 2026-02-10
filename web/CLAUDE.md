@@ -75,7 +75,7 @@ Camera edits stored per aspect ratio (switching preserves both).
 
 Debug visualization for player and ball detection:
 
-- **PlayerTrackingToolbar**: Controls for tracking, calibration, and overlay toggles
+- **PlayerTrackingToolbar**: Controls for tracking, calibration, overlay toggles, and Label Studio integration
 - **PlayerOverlay**: Renders player bounding boxes on video with interpolation for smooth display
 - **BallTrackOverlay**: Renders ball trajectory with phase-colored trail effect
 
@@ -85,8 +85,20 @@ Features:
 - **Server identification**: Detects which player served based on ball trajectory
 - **Primary track filtering**: Only shows the 4 identified players (excludes referees/spectators)
 - **Position interpolation**: Fills gaps up to 1.5s and shows last position for 1s after detection ends
+- **Label Studio integration**: "Label" button exports to Label Studio, "Save GT" imports corrections
 
 Ball phases highlighted in real-time during playback with pulsing indicator.
+
+### Ground Truth Labeling (Label Studio)
+
+Workflow for correcting tracking predictions:
+1. Track a rally using "Track Players" button
+2. Click "Label" to open in Label Studio with pre-filled predictions
+3. Correct bounding boxes in Label Studio's interpolation mode
+4. Click "Save GT" to import corrections as ground truth
+
+**Labels**: player_1 (green), player_2 (blue), player_3 (orange), player_4 (purple), ball (red)
+**Note**: Requires Label Studio running locally at `http://localhost:8082` with `LABEL_STUDIO_API_KEY` configured in API.
 
 ## Video Loading Priority
 

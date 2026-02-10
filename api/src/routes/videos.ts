@@ -1,8 +1,21 @@
-import { Router } from "express";
+import { Router, Request } from "express";
 import { Readable } from "stream";
 import { z } from "zod";
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
+
+// Get allowed CORS origin from request (supports Label Studio for dev)
+function getAllowedOrigin(req: Request): string {
+  const origin = req.headers.origin;
+  const allowedOrigins = [env.CORS_ORIGIN];
+  if (env.LABEL_STUDIO_URL) {
+    allowedOrigins.push(env.LABEL_STUDIO_URL);
+  }
+  if (origin && allowedOrigins.includes(origin)) {
+    return origin;
+  }
+  return env.CORS_ORIGIN;
+}
 import { getObject, generateDownloadUrl } from "../lib/s3.js";
 import { requireUser } from "../middleware/resolveUser.js";
 import { validateRequest } from "../middleware/validateRequest.js";
@@ -58,7 +71,7 @@ router.get(
       }
 
       // CORS headers for fetch - use configured origin
-      res.setHeader("Access-Control-Allow-Origin", env.CORS_ORIGIN);
+      res.setHeader("Access-Control-Allow-Origin", getAllowedOrigin(req));
       res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
       res.setHeader("Accept-Ranges", "bytes");
 
@@ -136,7 +149,7 @@ router.get(
       }
 
       // CORS headers for fetch - use configured origin
-      res.setHeader("Access-Control-Allow-Origin", env.CORS_ORIGIN);
+      res.setHeader("Access-Control-Allow-Origin", getAllowedOrigin(req));
       res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
       res.setHeader("Accept-Ranges", "bytes");
 

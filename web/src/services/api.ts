@@ -1833,3 +1833,104 @@ export async function getPlayerTrack(rallyId: string): Promise<GetPlayerTrackRes
 
   return response.json();
 }
+
+// ============================================================================
+// Label Studio Integration (Ground Truth Labeling)
+// ============================================================================
+
+export interface LabelStudioStatus {
+  hasTrackingData: boolean;
+  hasGroundTruth: boolean;
+  taskId?: number;
+  syncedAt?: string;
+}
+
+export interface LabelStudioExportResult {
+  success: boolean;
+  taskId?: number;
+  projectId?: number;
+  taskUrl?: string;
+  error?: string;
+}
+
+export interface LabelStudioImportResult {
+  success: boolean;
+  playerCount?: number;
+  ballCount?: number;
+  frameCount?: number;
+  error?: string;
+}
+
+/**
+ * Get Label Studio integration status for a rally.
+ *
+ * @param rallyId - Backend rally ID (UUID)
+ * @returns Status including whether tracking/ground truth exists
+ */
+export async function getLabelStudioStatus(rallyId: string): Promise<LabelStudioStatus> {
+  const response = await fetch(`${API_BASE_URL}/v1/rallies/${rallyId}/label-studio`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get Label Studio status: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Export tracking predictions to Label Studio for labeling.
+ * Creates a task with pre-filled annotations from current tracking.
+ *
+ * @param rallyId - Backend rally ID (UUID)
+ * @param videoUrl - Public URL of the video for Label Studio to access
+ * @param config - Optional Label Studio API configuration
+ * @returns Export result with task URL
+ */
+export async function exportToLabelStudio(
+  rallyId: string,
+  videoUrl: string,
+  config?: { apiKey?: string; apiUrl?: string }
+): Promise<LabelStudioExportResult> {
+  const response = await fetch(`${API_BASE_URL}/v1/rallies/${rallyId}/label-studio/export`, {
+    method: 'POST',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify({ videoUrl, ...config }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to export to Label Studio: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Import corrected annotations from Label Studio as ground truth.
+ *
+ * @param rallyId - Backend rally ID (UUID)
+ * @param taskId - Label Studio task ID to import from
+ * @param config - Optional Label Studio API configuration
+ * @returns Import result with counts
+ */
+export async function importFromLabelStudio(
+  rallyId: string,
+  taskId: number,
+  config?: { apiKey?: string; apiUrl?: string }
+): Promise<LabelStudioImportResult> {
+  const response = await fetch(`${API_BASE_URL}/v1/rallies/${rallyId}/label-studio/import`, {
+    method: 'POST',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify({ taskId, ...config }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to import from Label Studio: ${response.status}`);
+  }
+
+  return response.json();
+}

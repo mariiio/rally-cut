@@ -11,6 +11,11 @@ import {
   updateRally,
 } from "../services/rallyService.js";
 import { trackPlayersForRally, getPlayerTrack } from "../services/playerTrackingService.js";
+import {
+  exportToLabelStudio,
+  importFromLabelStudio,
+  getLabelStudioStatus,
+} from "../services/labelStudioService.js";
 
 const router = Router();
 
@@ -115,6 +120,81 @@ router.get(
   async (req, res, next) => {
     try {
       const result = await getPlayerTrack(req.params.id, req.userId!);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Label Studio integration
+router.get(
+  "/v1/rallies/:id/label-studio",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      const status = await getLabelStudioStatus(req.params.id, req.userId!);
+      res.json(status);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.post(
+  "/v1/rallies/:id/label-studio/export",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: z.object({
+      videoUrl: z.string().url(),
+      apiKey: z.string().optional(),
+      apiUrl: z.string().url().optional(),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const result = await exportToLabelStudio(
+        req.params.id,
+        req.userId!,
+        req.body.videoUrl,
+        {
+          apiKey: req.body.apiKey,
+          url: req.body.apiUrl,
+        }
+      );
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.post(
+  "/v1/rallies/:id/label-studio/import",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: z.object({
+      taskId: z.number().int().positive(),
+      apiKey: z.string().optional(),
+      apiUrl: z.string().url().optional(),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const result = await importFromLabelStudio(
+        req.params.id,
+        req.userId!,
+        req.body.taskId,
+        {
+          apiKey: req.body.apiKey,
+          url: req.body.apiUrl,
+        }
+      );
       res.json(result);
     } catch (error) {
       next(error);

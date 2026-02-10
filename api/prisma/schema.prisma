@@ -7,42 +7,32 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ============================================================================
-// User & Identity
-// ============================================================================
-
-enum UserTier {
-  FREE
-  PRO
-  ELITE
-}
-
 model User {
-  id            String    @id @default(uuid())
-  email         String?   @unique
-  name          String?
-  avatarUrl     String?   @map("avatar_url")
-  emailVerified DateTime? @map("email_verified")
-  passwordHash  String?   @map("password_hash")
-  tier          UserTier  @default(FREE)
-  tierExpiresAt DateTime? @map("tier_expires_at")
-  createdAt     DateTime  @default(now()) @map("created_at")
-  convertedAt   DateTime? @map("converted_at")
-  lastActiveAt  DateTime? @map("last_active_at") /// Last time user accessed content (for inactivity cleanup)
-
-  videos              Video[]
-  sessions            Session[]
-  anonymousIdentities AnonymousIdentity[]
+  id                  String                @id @default(uuid())
+  email               String?               @unique
+  name                String?
+  avatarUrl           String?               @map("avatar_url")
+  emailVerified       DateTime?             @map("email_verified")
+  passwordHash        String?               @map("password_hash")
+  tier                UserTier              @default(FREE)
+  tierExpiresAt       DateTime?             @map("tier_expires_at")
+  createdAt           DateTime              @default(now()) @map("created_at")
+  convertedAt         DateTime?             @map("converted_at")
+  /// Last time user accessed content (for inactivity cleanup)
+  lastActiveAt        DateTime?             @map("last_active_at")
+  resolvedRequests    AccessRequest[]       @relation("resolvedRequests")
+  accessRequests      AccessRequest[]       @relation("accessRequests")
   accounts            Account[]
-  sessionMemberships  SessionMember[]
-  videoMemberships    VideoMember[]
-  highlights          Highlight[]
-  usageQuota          UserUsageQuota?
+  anonymousIdentities AnonymousIdentity[]
   feedback            Feedback[]
-  accessRequests      AccessRequest[]  @relation("accessRequests")
-  resolvedRequests    AccessRequest[]  @relation("resolvedRequests")
+  highlights          Highlight[]
   cameraEdits         RallyCameraEdit[]
+  sessionMemberships  SessionMember[]
+  sessions            Session[]
+  usageQuota          UserUsageQuota?
   videoCameraSettings VideoCameraSettings[]
+  videoMemberships    VideoMember[]
+  videos              Video[]
 
   @@index([tier])
   @@map("users")
@@ -54,15 +44,14 @@ model Account {
   type              String
   provider          String
   providerAccountId String  @map("provider_account_id")
-  refresh_token     String? @db.Text
-  access_token      String? @db.Text
+  refresh_token     String?
+  access_token      String?
   expires_at        Int?
   token_type        String?
   scope             String?
-  id_token          String? @db.Text
+  id_token          String?
   session_state     String?
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
   @@index([userId])
@@ -85,8 +74,7 @@ model UserUsageQuota {
   detectionsUsed   Int      @default(0) @map("detections_used")
   uploadsThisMonth Int      @default(0) @map("uploads_this_month")
   createdAt        DateTime @default(now()) @map("created_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("user_usage_quotas")
 }
@@ -97,32 +85,20 @@ model AnonymousIdentity {
   userId    String   @map("user_id")
   userAgent String?  @map("user_agent")
   createdAt DateTime @default(now()) @map("created_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("anonymous_identities")
 }
 
-// ============================================================================
-// Session Sharing
-// ============================================================================
-
-enum MemberRole {
-  VIEWER
-  EDITOR
-  ADMIN
-}
-
 model SessionShare {
-  id        String     @id @default(uuid())
-  sessionId String     @map("session_id")
-  token     String     @unique @default(uuid())
-  role      MemberRole @default(VIEWER)
-  createdAt DateTime   @default(now()) @map("created_at")
-
-  session Session         @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  members SessionMember[]
+  id        String          @id @default(uuid())
+  sessionId String          @map("session_id")
+  token     String          @unique @default(uuid())
+  role      MemberRole      @default(VIEWER)
+  createdAt DateTime        @default(now()) @map("created_at")
+  members   SessionMember[]
+  session   Session         @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@unique([sessionId, role])
   @@index([sessionId])
@@ -130,14 +106,13 @@ model SessionShare {
 }
 
 model SessionMember {
-  id             String     @id @default(uuid())
-  sessionShareId String     @map("session_share_id")
-  userId         String     @map("user_id")
-  role           MemberRole @default(VIEWER)
-  joinedAt       DateTime   @default(now()) @map("joined_at")
-
-  sessionShare SessionShare @relation(fields: [sessionShareId], references: [id], onDelete: Cascade)
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id             String       @id @default(uuid())
+  sessionShareId String       @map("session_share_id")
+  userId         String       @map("user_id")
+  role           MemberRole   @default(VIEWER)
+  joinedAt       DateTime     @default(now()) @map("joined_at")
+  sessionShare   SessionShare @relation(fields: [sessionShareId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([sessionShareId, userId])
   @@index([userId])
@@ -145,19 +120,14 @@ model SessionMember {
   @@map("session_members")
 }
 
-// ============================================================================
-// Video Sharing
-// ============================================================================
-
 model VideoShare {
-  id        String     @id @default(uuid())
-  videoId   String     @map("video_id")
-  token     String     @unique @default(uuid())
-  role      MemberRole @default(VIEWER)
-  createdAt DateTime   @default(now()) @map("created_at")
-
-  video   Video         @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  members VideoMember[]
+  id        String        @id @default(uuid())
+  videoId   String        @map("video_id")
+  token     String        @unique @default(uuid())
+  role      MemberRole    @default(VIEWER)
+  createdAt DateTime      @default(now()) @map("created_at")
+  members   VideoMember[]
+  video     Video         @relation(fields: [videoId], references: [id], onDelete: Cascade)
 
   @@unique([videoId, role])
   @@index([videoId])
@@ -170,20 +140,13 @@ model VideoMember {
   userId       String     @map("user_id")
   role         MemberRole @default(VIEWER)
   joinedAt     DateTime   @default(now()) @map("joined_at")
-
-  videoShare VideoShare @relation(fields: [videoShareId], references: [id], onDelete: Cascade)
-  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videoShare   VideoShare @relation(fields: [videoShareId], references: [id], onDelete: Cascade)
 
   @@unique([videoShareId, userId])
   @@index([userId])
   @@index([videoShareId])
   @@map("video_members")
-}
-
-enum AccessRequestStatus {
-  PENDING
-  ACCEPTED
-  REJECTED
 }
 
 model AccessRequest {
@@ -195,10 +158,9 @@ model AccessRequest {
   requestedAt DateTime            @default(now()) @map("requested_at")
   resolvedAt  DateTime?           @map("resolved_at")
   resolvedBy  String?             @map("resolved_by")
-
-  session  Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  user     User    @relation("accessRequests", fields: [userId], references: [id], onDelete: Cascade)
-  resolver User?   @relation("resolvedRequests", fields: [resolvedBy], references: [id], onDelete: SetNull)
+  resolver    User?               @relation("resolvedRequests", fields: [resolvedBy], references: [id])
+  session     Session             @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user        User                @relation("accessRequests", fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([sessionId, userId])
   @@index([sessionId, status])
@@ -206,31 +168,21 @@ model AccessRequest {
   @@map("access_requests")
 }
 
-// ============================================================================
-// Session & Video (Many-to-Many via SessionVideo)
-// ============================================================================
-
-enum SessionType {
-  REGULAR
-  ALL_VIDEOS
-}
-
 model Session {
-  id        String      @id @default(uuid())
-  userId    String?     @map("user_id")
-  name      String
-  type      SessionType @default(REGULAR)
-  expiresAt DateTime?   @map("expires_at")
-  deletedAt DateTime?   @map("deleted_at")
-  createdAt DateTime    @default(now()) @map("created_at")
-  updatedAt DateTime    @updatedAt @map("updated_at")
-
-  user           User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
-  sessionVideos  SessionVideo[]
+  id             String          @id @default(uuid())
+  userId         String?         @map("user_id")
+  name           String
+  type           SessionType     @default(REGULAR)
+  expiresAt      DateTime?       @map("expires_at")
+  deletedAt      DateTime?       @map("deleted_at")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+  accessRequests AccessRequest[]
+  exportJobs     ExportJob[]
   highlights     Highlight[]
   shares         SessionShare[]
-  exportJobs     ExportJob[]
-  accessRequests AccessRequest[]
+  sessionVideos  SessionVideo[]
+  user           User?           @relation(fields: [userId], references: [id])
 
   @@index([userId])
   @@index([userId, deletedAt])
@@ -240,50 +192,45 @@ model Session {
 }
 
 model Video {
-  id            String      @id @default(uuid())
-  userId        String?     @map("user_id")
-  name          String
-  filename      String
-  s3Key         String      @map("s3_key")
+  id                    String                @id @default(uuid())
+  userId                String?               @map("user_id")
+  name                  String
+  filename              String
+  s3Key                 String                @map("s3_key")
   /// SHA-256 hex hash for deduplication. Files >50MB: hash of first/last 10MB + metadata.
-  contentHash   String      @map("content_hash")
-  status        VideoStatus @default(PENDING)
-  durationMs    Int?        @map("duration_ms")
-  width         Int?
-  height        Int?
-  fps           Float?      /// Frames per second of original video
-  fileSizeBytes BigInt?     @map("file_size_bytes")
-  expiresAt     DateTime?   @map("expires_at")
-  deletedAt     DateTime?   @map("deleted_at")
-  createdAt     DateTime    @default(now()) @map("created_at")
-  updatedAt     DateTime    @updatedAt @map("updated_at")
-
-  // Video optimization processing
-  processingStatus      ProcessingStatus @default(PENDING) @map("processing_status")
-  processingAttempts    Int              @default(0) @map("processing_attempts")
-  processedS3Key        String?          @map("processed_s3_key")
-  originalS3Key         String?          @map("original_s3_key") /// Original upload path before optimization overwrites s3Key
-  processedAt           DateTime?        @map("processed_at")
-  processingError       String?          @map("processing_error")
-  originalFileSizeBytes BigInt?          @map("original_file_size_bytes")
-
-  // Poster and proxy for fast loading
-  posterS3Key           String?          @map("poster_s3_key")
-  proxyS3Key            String?          @map("proxy_s3_key")
-  proxyFileSizeBytes    BigInt?          @map("proxy_file_size_bytes")
-  proxyGeneratedAt      DateTime?        @map("proxy_generated_at")
-  proxyLastAccessedAt   DateTime?        @map("proxy_last_accessed_at")
-
-  // Quality downgrade tracking (FREE tier loses original quality after 7 days)
-  qualityDowngradedAt   DateTime?        @map("quality_downgraded_at")
-
-  user           User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
-  sessionVideos  SessionVideo[]
-  rallies        Rally[]
-  detectionJobs  RallyDetectionJob[]
-  confirmation   RallyConfirmation?
-  cameraSettings VideoCameraSettings[]
-  shares         VideoShare[]
+  contentHash           String                @map("content_hash")
+  status                VideoStatus           @default(PENDING)
+  durationMs            Int?                  @map("duration_ms")
+  width                 Int?
+  height                Int?
+  /// Frames per second of original video
+  fps                   Float?
+  fileSizeBytes         BigInt?               @map("file_size_bytes")
+  expiresAt             DateTime?             @map("expires_at")
+  deletedAt             DateTime?             @map("deleted_at")
+  createdAt             DateTime              @default(now()) @map("created_at")
+  updatedAt             DateTime              @updatedAt @map("updated_at")
+  processingStatus      ProcessingStatus      @default(PENDING) @map("processing_status")
+  processingAttempts    Int                   @default(0) @map("processing_attempts")
+  processedS3Key        String?               @map("processed_s3_key")
+  /// Original upload path before optimization overwrites s3Key
+  originalS3Key         String?               @map("original_s3_key")
+  processedAt           DateTime?             @map("processed_at")
+  processingError       String?               @map("processing_error")
+  originalFileSizeBytes BigInt?               @map("original_file_size_bytes")
+  posterS3Key           String?               @map("poster_s3_key")
+  proxyS3Key            String?               @map("proxy_s3_key")
+  proxyFileSizeBytes    BigInt?               @map("proxy_file_size_bytes")
+  proxyGeneratedAt      DateTime?             @map("proxy_generated_at")
+  proxyLastAccessedAt   DateTime?             @map("proxy_last_accessed_at")
+  qualityDowngradedAt   DateTime?             @map("quality_downgraded_at")
+  rallies               Rally[]
+  confirmation          RallyConfirmation?
+  detectionJobs         RallyDetectionJob[]
+  sessionVideos         SessionVideo[]
+  cameraSettings        VideoCameraSettings[]
+  shares                VideoShare[]
+  user                  User?                 @relation(fields: [userId], references: [id])
 
   @@index([userId])
   @@index([userId, deletedAt])
@@ -301,14 +248,253 @@ model SessionVideo {
   videoId   String   @map("video_id")
   order     Int      @default(0)
   addedAt   DateTime @default(now()) @map("added_at")
-
-  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  video   Video   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
 
   @@unique([sessionId, videoId])
   @@index([sessionId])
   @@index([videoId])
   @@map("session_videos")
+}
+
+model Rally {
+  id               String            @id @default(uuid())
+  videoId          String            @map("video_id")
+  startMs          Int               @map("start_ms")
+  endMs            Int               @map("end_ms")
+  confidence       Float?
+  status           RallyStatus       @default(CONFIRMED)
+  rejectionReason  RejectionReason?  @map("rejection_reason")
+  scoreA           Int?              @map("score_a")
+  scoreB           Int?              @map("score_b")
+  servingTeam      ServingTeam?      @map("serving_team")
+  notes            String?
+  order            Int               @default(0)
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  highlightRallies HighlightRally[]
+  playerTrack      PlayerTrack?
+  video            Video             @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  cameraEdits      RallyCameraEdit[]
+
+  @@index([videoId])
+  @@index([videoId, startMs])
+  @@index([videoId, status])
+  @@map("rallies")
+}
+
+model PlayerTrack {
+  id                  String            @id @default(uuid())
+  rallyId             String            @unique @map("rally_id")
+  status              PlayerTrackStatus @default(PENDING)
+  frameCount          Int?              @map("frame_count")
+  processingTimeMs    Int?              @map("processing_time_ms")
+  modelVersion        String?           @map("model_version")
+  error               String?
+  createdAt           DateTime          @default(now()) @map("created_at")
+  completedAt         DateTime?         @map("completed_at")
+  avgConfidence       Float?            @map("avg_confidence")
+  avgPlayerCount      Float?            @map("avg_player_count")
+  courtSplitY         Float?            @map("court_split_y")
+  detectionRate       Float?            @map("detection_rate")
+  positionsJson       Json?             @map("positions_json")
+  primaryTrackIds     Json?             @map("primary_track_ids")
+  uniqueTrackCount    Int?              @map("unique_track_count")
+  fps                 Float?            @map("fps")
+  ballPhasesJson      Json?             @map("ball_phases_json")
+  serverInfoJson      Json?             @map("server_info_json")
+  ballPositionsJson   Json?             @map("ball_positions_json")
+  groundTruthJson     Json?             @map("ground_truth_json")
+  groundTruthTaskId   Int?              @map("ground_truth_task_id")
+  groundTruthSyncedAt DateTime?         @map("ground_truth_synced_at") @db.Timestamptz(6)
+  rally               Rally             @relation(fields: [rallyId], references: [id], onDelete: Cascade)
+
+  @@index([rallyId])
+  @@index([status])
+  @@map("player_tracks")
+}
+
+model RallyCameraEdit {
+  id          String           @id @default(uuid())
+  rallyId     String           @map("rally_id")
+  userId      String?          @map("user_id")
+  aspectRatio AspectRatio      @default(ORIGINAL) @map("aspect_ratio")
+  enabled     Boolean          @default(false)
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+  keyframes   CameraKeyframe[]
+  rally       Rally            @relation(fields: [rallyId], references: [id], onDelete: Cascade)
+  user        User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([rallyId, userId])
+  @@index([userId])
+  @@map("rally_camera_edits")
+}
+
+model CameraKeyframe {
+  id              String          @id @default(uuid())
+  rallyCameraId   String          @map("rally_camera_id")
+  timeOffset      Float           @map("time_offset")
+  positionX       Float           @default(0.5) @map("position_x")
+  positionY       Float           @default(0.5) @map("position_y")
+  zoom            Float           @default(1.0)
+  rotation        Float           @default(0.0)
+  easing          CameraEasing    @default(EASE_IN_OUT)
+  createdAt       DateTime        @default(now()) @map("created_at")
+  rallyCameraEdit RallyCameraEdit @relation(fields: [rallyCameraId], references: [id], onDelete: Cascade)
+
+  @@index([rallyCameraId])
+  @@map("camera_keyframes")
+}
+
+model VideoCameraSettings {
+  id        String   @id @default(uuid())
+  videoId   String   @map("video_id")
+  userId    String?  @map("user_id")
+  zoom      Float    @default(1.0)
+  positionX Float    @default(0.5) @map("position_x")
+  positionY Float    @default(0.5) @map("position_y")
+  rotation  Float    @default(0.0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([videoId, userId])
+  @@index([userId])
+  @@map("video_camera_settings")
+}
+
+model Highlight {
+  id               String           @id @default(uuid())
+  sessionId        String           @map("session_id")
+  createdByUserId  String?          @map("created_by_user_id")
+  name             String
+  color            String           @default("#FF6B6B")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+  highlightRallies HighlightRally[]
+  createdByUser    User?            @relation(fields: [createdByUserId], references: [id])
+  session          Session          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([createdByUserId])
+  @@map("highlights")
+}
+
+model HighlightRally {
+  id          String    @id @default(uuid())
+  highlightId String    @map("highlight_id")
+  rallyId     String    @map("rally_id")
+  order       Int       @default(0)
+  highlight   Highlight @relation(fields: [highlightId], references: [id], onDelete: Cascade)
+  rally       Rally     @relation(fields: [rallyId], references: [id], onDelete: Cascade)
+
+  @@unique([highlightId, rallyId])
+  @@index([rallyId])
+  @@map("highlight_rallies")
+}
+
+model RallyDetectionJob {
+  id              String             @id @default(uuid())
+  videoId         String             @map("video_id")
+  /// SHA-256 hex hash for caching detection results across uploads with same content.
+  contentHash     String             @map("content_hash")
+  status          DetectionJobStatus @default(PENDING)
+  progress        Float?             @default(0)
+  progressMessage String?            @map("progress_message")
+  resultS3Key     String?            @map("result_s3_key")
+  errorMessage    String?            @map("error_message")
+  startedAt       DateTime?          @map("started_at")
+  completedAt     DateTime?          @map("completed_at")
+  createdAt       DateTime           @default(now()) @map("created_at")
+  video           Video              @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId])
+  @@index([status])
+  @@index([contentHash, status])
+  @@map("rally_detection_jobs")
+}
+
+model ExportJob {
+  id        String       @id @default(uuid())
+  sessionId String       @map("session_id")
+  userId    String       @map("user_id")
+  tier      UserTier     @default(FREE)
+  status    ExportStatus @default(PENDING)
+  progress  Int          @default(0)
+  outputKey String?      @map("output_key")
+  error     String?
+  config    Json
+  rallies   Json
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+  session   Session      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([userId])
+  @@index([status])
+  @@map("export_jobs")
+}
+
+model RallyConfirmation {
+  id                 String             @id @default(uuid())
+  videoId            String             @unique @map("video_id")
+  status             ConfirmationStatus @default(PENDING)
+  originalS3Key      String             @map("original_s3_key")
+  originalDurationMs Int                @map("original_duration_ms")
+  trimmedS3Key       String?            @map("trimmed_s3_key")
+  trimmedDurationMs  Int?               @map("trimmed_duration_ms")
+  proxyS3Key         String?            @map("proxy_s3_key")
+  timestampMappings  Json               @map("timestamp_mappings")
+  progress           Int                @default(0)
+  error              String?
+  createdAt          DateTime           @default(now()) @map("created_at")
+  confirmedAt        DateTime?          @map("confirmed_at")
+  video              Video              @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId])
+  @@index([status])
+  @@map("rally_confirmations")
+}
+
+model Feedback {
+  id        String       @id @default(uuid())
+  userId    String?      @map("user_id")
+  type      FeedbackType
+  message   String
+  email     String?
+  userAgent String?      @map("user_agent")
+  pageUrl   String?      @map("page_url")
+  createdAt DateTime     @default(now()) @map("created_at")
+  user      User?        @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([type])
+  @@map("feedback")
+}
+
+enum UserTier {
+  FREE
+  PRO
+  ELITE
+}
+
+enum MemberRole {
+  VIEWER
+  EDITOR
+  ADMIN
+}
+
+enum AccessRequestStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+enum SessionType {
+  REGULAR
+  ALL_VIDEOS
 }
 
 enum VideoStatus {
@@ -328,41 +514,6 @@ enum ProcessingStatus {
   SKIPPED
 }
 
-// ============================================================================
-// Rally & Highlight
-// ============================================================================
-
-model Rally {
-  id              String           @id @default(uuid())
-  videoId         String           @map("video_id")
-  startMs         Int              @map("start_ms")
-  endMs           Int              @map("end_ms")
-  confidence      Float?
-  status          RallyStatus      @default(CONFIRMED)
-  rejectionReason RejectionReason? @map("rejection_reason")
-  scoreA          Int?             @map("score_a")
-  scoreB          Int?             @map("score_b")
-  servingTeam     ServingTeam?     @map("serving_team")
-  notes           String?
-  order           Int              @default(0)
-  createdAt       DateTime         @default(now()) @map("created_at")
-  updatedAt       DateTime         @updatedAt @map("updated_at")
-
-  video            Video             @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  highlightRallies HighlightRally[]
-  cameraEdits      RallyCameraEdit[]
-  playerTrack      PlayerTrack?
-
-  @@index([videoId])
-  @@index([videoId, startMs])
-  @@index([videoId, status])
-  @@map("rallies")
-}
-
-// ============================================================================
-// Player Tracking (debug visualization)
-// ============================================================================
-
 enum PlayerTrackStatus {
   PENDING
   PROCESSING
@@ -370,49 +521,9 @@ enum PlayerTrackStatus {
   FAILED
 }
 
-model PlayerTrack {
-  id               String            @id @default(uuid())
-  rallyId          String            @unique @map("rally_id")
-  status           PlayerTrackStatus @default(PENDING)
-
-  frameCount       Int?              @map("frame_count")
-  fps              Float?            @map("fps") // Video fps at time of tracking
-  detectionRate    Float?            @map("detection_rate")
-  avgConfidence    Float?            @map("avg_confidence")
-  avgPlayerCount   Float?            @map("avg_player_count")
-  uniqueTrackCount Int?              @map("unique_track_count")
-  positionsJson    Json?             @map("positions_json") // Flat array of {frameNumber, trackId, x, y, width, height, confidence}
-
-  // Court split info for debug overlay
-  courtSplitY      Float?            @map("court_split_y")
-  primaryTrackIds  Json?             @map("primary_track_ids") // Array of track IDs
-
-  // Ball phase detection results
-  ballPhasesJson    Json?             @map("ball_phases_json") // Array of {phase, frameStart, frameEnd, velocity, ballX, ballY}
-  serverInfoJson    Json?             @map("server_info_json") // {trackId, confidence, serveFrame, serveVelocity, isNearCourt}
-  ballPositionsJson Json?             @map("ball_positions_json") // Array of {frameNumber, x, y, confidence} for trajectory overlay
-
-  processingTimeMs Int?              @map("processing_time_ms")
-  modelVersion     String?           @map("model_version")
-  error            String?
-
-  createdAt        DateTime          @default(now()) @map("created_at")
-  completedAt      DateTime?         @map("completed_at")
-
-  rally            Rally             @relation(fields: [rallyId], references: [id], onDelete: Cascade)
-
-  @@index([rallyId])
-  @@index([status])
-  @@map("player_tracks")
-}
-
-// ============================================================================
-// Camera Tracking (Instagram-style edits)
-// ============================================================================
-
 enum AspectRatio {
-  ORIGINAL // 16:9
-  VERTICAL // 9:16
+  ORIGINAL
+  VERTICAL
 }
 
 enum CameraEasing {
@@ -420,61 +531,6 @@ enum CameraEasing {
   EASE_IN
   EASE_OUT
   EASE_IN_OUT
-}
-
-model RallyCameraEdit {
-  id          String      @id @default(uuid())
-  rallyId     String      @map("rally_id")
-  userId      String?     @map("user_id")
-  aspectRatio AspectRatio @default(ORIGINAL) @map("aspect_ratio")
-  enabled     Boolean     @default(false)
-  createdAt   DateTime    @default(now()) @map("created_at")
-  updatedAt   DateTime    @updatedAt @map("updated_at")
-
-  rally     Rally            @relation(fields: [rallyId], references: [id], onDelete: Cascade)
-  user      User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  keyframes CameraKeyframe[]
-
-  @@unique([rallyId, userId])
-  @@index([userId])
-  @@map("rally_camera_edits")
-}
-
-model CameraKeyframe {
-  id            String       @id @default(uuid())
-  rallyCameraId String       @map("rally_camera_id")
-  timeOffset    Float        @map("time_offset") // 0.0-1.0 within rally
-  positionX     Float        @default(0.5) @map("position_x") // 0-1, center=0.5
-  positionY     Float        @default(0.5) @map("position_y")
-  zoom          Float        @default(1.0) // 1.0-3.0
-  rotation      Float        @default(0.0) // degrees, clockwise positive
-  easing        CameraEasing @default(EASE_IN_OUT)
-  createdAt     DateTime     @default(now()) @map("created_at")
-
-  rallyCameraEdit RallyCameraEdit @relation(fields: [rallyCameraId], references: [id], onDelete: Cascade)
-
-  @@index([rallyCameraId])
-  @@map("camera_keyframes")
-}
-
-// Global camera settings at video level (applies as base for all rallies)
-model VideoCameraSettings {
-  id        String   @id @default(uuid())
-  videoId   String   @map("video_id")
-  userId    String?  @map("user_id")
-  zoom      Float    @default(1.0)
-  positionX Float    @default(0.5) @map("position_x")
-  positionY Float    @default(0.5) @map("position_y")
-  rotation  Float    @default(0.0) // degrees
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  user  User? @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([videoId, userId])
-  @@index([userId])
-  @@map("video_camera_settings")
 }
 
 enum ServingTeam {
@@ -493,95 +549,11 @@ enum RejectionReason {
   SPARSE_DENSITY
 }
 
-model Highlight {
-  id              String   @id @default(uuid())
-  sessionId       String   @map("session_id")
-  createdByUserId String?  @map("created_by_user_id")
-  name            String
-  color           String   @default("#FF6B6B")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
-
-  session          Session          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  createdByUser    User?            @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
-  highlightRallies HighlightRally[]
-
-  @@index([sessionId])
-  @@index([createdByUserId])
-  @@map("highlights")
-}
-
-model HighlightRally {
-  id          String @id @default(uuid())
-  highlightId String @map("highlight_id")
-  rallyId     String @map("rally_id")
-  order       Int    @default(0)
-
-  highlight Highlight @relation(fields: [highlightId], references: [id], onDelete: Cascade)
-  rally     Rally     @relation(fields: [rallyId], references: [id], onDelete: Cascade)
-
-  @@unique([highlightId, rallyId])
-  @@index([rallyId])
-  @@map("highlight_rallies")
-}
-
-// ============================================================================
-// Detection Jobs
-// ============================================================================
-
-model RallyDetectionJob {
-  id              String             @id @default(uuid())
-  videoId         String             @map("video_id")
-  /// SHA-256 hex hash for caching detection results across uploads with same content.
-  contentHash     String             @map("content_hash")
-  status          DetectionJobStatus @default(PENDING)
-  progress        Float?             @default(0)
-  progressMessage String?            @map("progress_message")
-  resultS3Key     String?            @map("result_s3_key")
-  errorMessage    String?            @map("error_message")
-  startedAt       DateTime?          @map("started_at")
-  completedAt     DateTime?          @map("completed_at")
-  createdAt       DateTime           @default(now()) @map("created_at")
-
-  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
-
-  @@index([videoId])
-  @@index([status])
-  @@index([contentHash, status])
-  @@map("rally_detection_jobs")
-}
-
 enum DetectionJobStatus {
   PENDING
   RUNNING
   COMPLETED
   FAILED
-}
-
-// ============================================================================
-// Export Jobs
-// ============================================================================
-
-model ExportJob {
-  id        String       @id @default(uuid())
-  sessionId String       @map("session_id")
-  userId    String       @map("user_id")
-  tier      UserTier     @default(FREE)
-  status    ExportStatus @default(PENDING)
-  progress  Int          @default(0)
-  outputKey String?      @map("output_key")
-  error     String?
-  config    Json
-  rallies   Json
-  createdAt DateTime     @default(now()) @map("created_at")
-  updatedAt DateTime     @updatedAt @map("updated_at")
-
-  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-
-  @@index([sessionId])
-  @@index([userId])
-  @@index([status])
-  @@map("export_jobs")
 }
 
 enum ExportStatus {
@@ -591,10 +563,6 @@ enum ExportStatus {
   FAILED
 }
 
-// ============================================================================
-// Rally Confirmation (Trimmed Video Generation)
-// ============================================================================
-
 enum ConfirmationStatus {
   PENDING
   PROCESSING
@@ -602,59 +570,8 @@ enum ConfirmationStatus {
   FAILED
 }
 
-model RallyConfirmation {
-  id                 String             @id @default(uuid())
-  videoId            String             @unique @map("video_id")
-  status             ConfirmationStatus @default(PENDING)
-
-  // Original video (preserved)
-  originalS3Key      String             @map("original_s3_key")
-  originalDurationMs Int                @map("original_duration_ms")
-
-  // Trimmed video (generated)
-  trimmedS3Key       String?            @map("trimmed_s3_key")
-  trimmedDurationMs  Int?               @map("trimmed_duration_ms")
-  proxyS3Key         String?            @map("proxy_s3_key")  // 720p proxy for trimmed video
-
-  // Timestamp mapping: [{rallyId, originalStartMs, originalEndMs, trimmedStartMs, trimmedEndMs}]
-  timestampMappings  Json               @map("timestamp_mappings")
-
-  progress           Int                @default(0)
-  error              String?
-
-  createdAt          DateTime           @default(now()) @map("created_at")
-  confirmedAt        DateTime?          @map("confirmed_at")
-
-  video              Video              @relation(fields: [videoId], references: [id], onDelete: Cascade)
-
-  @@index([videoId])
-  @@index([status])
-  @@map("rally_confirmations")
-}
-
-// ============================================================================
-// User Feedback
-// ============================================================================
-
 enum FeedbackType {
   BUG
   FEATURE
   FEEDBACK
-}
-
-model Feedback {
-  id        String       @id @default(uuid())
-  userId    String?      @map("user_id")
-  type      FeedbackType
-  message   String
-  email     String?
-  userAgent String?      @map("user_agent")
-  pageUrl   String?      @map("page_url")
-  createdAt DateTime     @default(now()) @map("created_at")
-
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  @@index([userId])
-  @@index([type])
-  @@map("feedback")
 }
