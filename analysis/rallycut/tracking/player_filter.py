@@ -151,8 +151,8 @@ class PlayerFilterConfig:
     # Slightly longer gap tolerance for track merging
     stabilize_track_ids: bool = True
     max_gap_frames: int = 90  # Max frames between track end and new track start (~3s at 30fps)
-    max_merge_distance: float = 0.40  # Max position distance for merging (40% of frame, for fast movement)
-    merge_distance_per_frame: float = 0.008  # Additional distance allowed per frame of gap (player velocity)
+    max_merge_distance: float = 0.20  # Max position distance for merging (20% of frame)
+    merge_distance_per_frame: float = 0.005  # Additional distance allowed per frame of gap (~0.15m/frame at 16m court)
 
     # Two-team hysteresis - prevents flickering when players cross midcourt boundary
     two_team_hysteresis: float = 0.03  # Players must cross boundary + hysteresis to switch teams
@@ -890,10 +890,26 @@ def select_two_teams(
         side_players: list[PlayerPosition],
         k: int,
     ) -> list[PlayerPosition]:
-        """Select top K from one side by bbox size."""
+        """Select top K from one side, prioritizing primary tracks then bbox size."""
         if len(side_players) <= k:
             return side_players
-        # Sort by size
+
+        # If we have primary tracks, prioritize them
+        if primary_tracks:
+            primary_players = [p for p in side_players if p.track_id in primary_tracks]
+            other_players = [p for p in side_players if p.track_id not in primary_tracks]
+
+            # Sort each group by bbox size
+            primary_players.sort(key=lambda p: p.width * p.height, reverse=True)
+            other_players.sort(key=lambda p: p.width * p.height, reverse=True)
+
+            # Take from primary first, then fill with others if needed
+            result = primary_players[:k]
+            if len(result) < k:
+                result.extend(other_players[: k - len(result)])
+            return result
+
+        # No primary tracks, just sort by size
         sorted_players = sorted(
             side_players,
             key=lambda p: p.width * p.height,
@@ -1243,6 +1259,8 @@ def detect_referee_tracks(
     referee_tracks: set[int] = set()
 
     # Compute ball trajectory Y-range if available
+    # Use large margin (0.25) because ball may stay on one side during parts of rally
+    # but players are on both sides of the court
     ball_y_min = 0.0
     ball_y_max = 1.0
     if ball_positions:
@@ -1250,9 +1268,10 @@ def detect_referee_tracks(
         if len(confident_ys) >= 10:
             ball_y_min = min(confident_ys)
             ball_y_max = max(confident_ys)
-            # Add small margin
-            ball_y_min = max(0.0, ball_y_min - 0.05)
-            ball_y_max = min(1.0, ball_y_max + 0.05)
+            # Add large margin - court players can be far from ball trajectory
+            # Volleyball courts have players on both near and far sides
+            ball_y_min = max(0.0, ball_y_min - 0.30)
+            ball_y_max = min(1.0, ball_y_max + 0.30)
 
     for track_id, stats in track_stats.items():
         reasons: list[str] = []
@@ -1873,16 +1892,37 @@ class PlayerFilter:
         original_count = len(players)
 
         # Step 1: Filter by bbox size (removes small background detections)
+        # Primary tracks are always kept - far-court players appear smaller
         filtered = filter_by_bbox_size(players, self.config)
+        if self._tracks_analyzed and self.primary_tracks:
+            filtered_ids = {p.track_id for p in filtered}
+            # Add back primary tracks that were filtered out
+            for p in players:
+                if p.track_id in self.primary_tracks and p.track_id not in filtered_ids:
+                    filtered.append(p)
+                    filtered_ids.add(p.track_id)
 
         # Step 2: Filter by play area (removes spectators outside court)
         # This runs BEFORE two-team selection to ensure only court players are considered
+        # Primary tracks are always kept - they are identified players, even if momentarily
+        # outside the ball trajectory area (e.g., waiting for serve)
         if self.use_ball_filtering and self.play_area is not None:
-            filtered = filter_by_play_area(filtered, self.play_area)
+            if self._tracks_analyzed and self.primary_tracks:
+                in_play_area = filter_by_play_area(filtered, self.play_area)
+                in_play_area_ids = {p.track_id for p in in_play_area}
+                # Add primary tracks that were filtered out
+                filtered = in_play_area + [
+                    p for p in filtered
+                    if p.track_id in self.primary_tracks
+                    and p.track_id not in in_play_area_ids
+                ]
+            else:
+                filtered = filter_by_play_area(filtered, self.play_area)
 
-        # Step 3: Filter out stationary tracks (posts, referees)
-        # Stationary objects have BOTH low spread AND low ball proximity
-        # Players who don't move much still engage with the ball
+        # Step 3: Filter out stationary tracks and likely referees
+        # - Stationary objects (low spread AND low ball proximity) are filtered
+        # - Tracks marked as likely referees are filtered (unless they're primary)
+        # - Players who don't move much still engage with the ball
         if self._tracks_analyzed and self.track_stats:
             before_stationary = len(filtered)
 
@@ -1890,6 +1930,15 @@ class PlayerFilter:
                 if p.track_id not in self.track_stats:
                     return True  # Unknown track, keep it
                 stats = self.track_stats[p.track_id]
+
+                # Always keep primary tracks
+                if self.primary_tracks and p.track_id in self.primary_tracks:
+                    return True
+
+                # Filter out likely referees (sideline/stationary observers)
+                if stats.is_likely_referee:
+                    return False
+
                 is_stationary = stats.position_spread < self.config.min_position_spread_for_primary
                 has_ball_engagement = stats.ball_proximity_score >= self.config.min_ball_proximity_for_stationary
                 # Keep if: not stationary OR has ball engagement

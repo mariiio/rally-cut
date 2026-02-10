@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 from rich.console import Console
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 from rich.table import Table
 
 from rallycut.cli.utils import handle_errors
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
     from rallycut.evaluation.tracking.error_analysis import ErrorEvent
     from rallycut.evaluation.tracking.metrics import PerPlayerMetrics
 
+app = typer.Typer(help="Evaluate player tracking against ground truth")
 console = Console()
 
 
@@ -28,8 +30,10 @@ def _status_icon(value: float, target: float, higher_better: bool = True) -> str
         return "[green]OK[/green]" if value <= target else "[yellow]Above[/yellow]"
 
 
+@app.callback(invoke_without_command=True)
 @handle_errors
 def evaluate_tracking(
+    ctx: typer.Context,
     rally_id: str = typer.Option(
         None,
         "--rally-id", "-r",
@@ -91,7 +95,14 @@ def evaluate_tracking(
 
         # Export to JSON
         rallycut evaluate-tracking --rally-id abc123 -o metrics.json
+
+        # Grid search for optimal filter parameters
+        rallycut evaluate-tracking tune-filter --all --grid quick
     """
+    # If a subcommand was invoked, don't run the default
+    if ctx.invoked_subcommand is not None:
+        return
+
     from rallycut.evaluation.tracking.db import load_labeled_rallies
     from rallycut.evaluation.tracking.error_analysis import analyze_errors as get_errors
     from rallycut.evaluation.tracking.metrics import aggregate_results, evaluate_rally
@@ -123,7 +134,7 @@ def evaluate_tracking(
 
     # Evaluate each rally
     results = []
-    all_errors = []
+    all_errors_list = []
 
     for rally in rallies:
         if rally.predictions is None:
@@ -148,7 +159,7 @@ def evaluate_tracking(
                 rally.predictions,
                 iou_threshold,
             )
-            all_errors.extend(errors)
+            all_errors_list.extend(errors)
 
     if not results:
         console.print("[red]No rallies with predictions found[/red]")
@@ -158,7 +169,6 @@ def evaluate_tracking(
     if len(results) == 1:
         # Single rally - show detailed output
         result = results[0]
-        rally = rallies[0]
 
         console.print(f"[bold]Player Tracking Evaluation - Rally {result.rally_id[:8]}...[/bold]")
         console.print("=" * 50)
@@ -190,8 +200,8 @@ def evaluate_tracking(
         else:
             console.print("\n[green]No error frames![/green]")
 
-        if analyze_errors and all_errors:
-            _display_error_analysis(all_errors)
+        if analyze_errors and all_errors_list:
+            _display_error_analysis(all_errors_list)
 
     else:
         # Multiple rallies - show summary
@@ -227,8 +237,8 @@ def evaluate_tracking(
         combined = aggregate_results(results)
         _display_aggregate_metrics(combined)
 
-        if analyze_errors and all_errors:
-            _display_error_analysis(all_errors)
+        if analyze_errors and all_errors_list:
+            _display_error_analysis(all_errors_list)
 
     # Save to file if requested
     if output:
@@ -250,6 +260,326 @@ def evaluate_tracking(
         with open(output, "w") as f:
             json.dump(output_data, f, indent=2)
         console.print(f"\n[green]Metrics saved to {output}[/green]")
+
+
+@app.command(name="tune-filter")
+@handle_errors
+def tune_filter(
+    rally_id: Annotated[
+        str | None,
+        typer.Option(
+            "--rally-id", "-r",
+            help="Tune on specific rally by ID",
+        ),
+    ] = None,
+    video_id: Annotated[
+        str | None,
+        typer.Option(
+            "--video-id", "-v",
+            help="Tune on all labeled rallies in a video",
+        ),
+    ] = None,
+    all_rallies: Annotated[
+        bool,
+        typer.Option(
+            "--all", "-a",
+            help="Tune on all labeled rallies in database",
+        ),
+    ] = False,
+    grid: Annotated[
+        str,
+        typer.Option(
+            "--grid", "-g",
+            help="Grid to search: quick, full, referee, stability, merge",
+        ),
+    ] = "quick",
+    iou_threshold: Annotated[
+        float,
+        typer.Option(
+            "--iou", "-i",
+            help="IoU threshold for matching",
+        ),
+    ] = 0.5,
+    min_rally_f1: Annotated[
+        float | None,
+        typer.Option(
+            "--min-rally-f1",
+            help="Reject configs where any rally drops below this F1",
+        ),
+    ] = None,
+    top_n: Annotated[
+        int,
+        typer.Option(
+            "--top", "-n",
+            help="Number of top results to show",
+        ),
+    ] = 10,
+    cache_only: Annotated[
+        bool,
+        typer.Option(
+            "--cache-only",
+            help="Only cache raw positions, don't run grid search",
+        ),
+    ] = False,
+    clear_cache: Annotated[
+        bool,
+        typer.Option(
+            "--clear-cache",
+            help="Clear raw position cache before starting",
+        ),
+    ] = False,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output", "-o",
+            help="Export full results to JSON file",
+        ),
+    ] = None,
+) -> None:
+    """Grid search for optimal PlayerFilterConfig parameters.
+
+    Searches over filter parameters to find the configuration that
+    maximizes F1 score while minimizing ID switches.
+
+    The key insight: YOLO+ByteTrack is slow (~seconds per rally), but
+    the filter pipeline is fast (~milliseconds). By caching raw positions,
+    we can re-run filtering with different configs without re-running detection.
+
+    Examples:
+
+        # Cache raw positions first (slow, one-time)
+        rallycut evaluate-tracking tune-filter --all --cache-only
+
+        # Quick grid search (36 combinations)
+        rallycut evaluate-tracking tune-filter --all --grid quick
+
+        # Full search with constraint
+        rallycut evaluate-tracking tune-filter --all --grid full --min-rally-f1 0.70
+
+        # Export results
+        rallycut evaluate-tracking tune-filter --all -o results.json
+    """
+    from rallycut.evaluation.tracking.db import load_labeled_rallies
+    from rallycut.evaluation.tracking.grid_search import grid_search
+    from rallycut.evaluation.tracking.param_grid import (
+        AVAILABLE_GRIDS,
+        describe_config_diff,
+        get_grid,
+        grid_size,
+    )
+    from rallycut.evaluation.tracking.raw_cache import CachedRallyData, RawPositionCache
+
+    # Validate input
+    if not rally_id and not video_id and not all_rallies:
+        console.print(
+            "[red]Error:[/red] Specify --rally-id, --video-id, or --all"
+        )
+        raise typer.Exit(1)
+
+    if grid not in AVAILABLE_GRIDS:
+        console.print(
+            f"[red]Error:[/red] Unknown grid '{grid}'. "
+            f"Available: {', '.join(AVAILABLE_GRIDS.keys())}"
+        )
+        raise typer.Exit(1)
+
+    # Initialize cache
+    raw_cache = RawPositionCache()
+
+    if clear_cache:
+        count = raw_cache.clear()
+        console.print(f"[yellow]Cleared {count} cached raw position files[/yellow]")
+
+    # Load rallies from database
+    console.print("[bold]Loading labeled rallies from database...[/bold]")
+    rallies = load_labeled_rallies(
+        video_id=video_id,
+        rally_id=rally_id,
+    )
+
+    if not rallies:
+        console.print("[yellow]No rallies with ground truth found[/yellow]")
+        raise typer.Exit(1)
+
+    console.print(f"  Found {len(rallies)} rally(s) with ground truth\n")
+
+    from rallycut.labeling.ground_truth import GroundTruthResult
+
+    # Check for raw positions in database and build cache
+    cached_rallies: list[tuple[CachedRallyData, GroundTruthResult]] = []
+    rallies_without_raw: list = []
+
+    for rally in rallies:
+        if rally.predictions is None:
+            console.print(
+                f"[yellow]Rally {rally.rally_id[:8]}... has no predictions, skipping[/yellow]"
+            )
+            continue
+
+        # First check file cache
+        cached = raw_cache.get(rally.rally_id)
+        if cached:
+            cached_rallies.append((cached, rally.ground_truth))
+            continue
+
+        # Check if raw positions are in database
+        if rally.raw_positions:
+            # Use raw positions from database
+            cached_data = CachedRallyData(
+                rally_id=rally.rally_id,
+                video_id=rally.video_id,
+                raw_positions=rally.raw_positions,
+                ball_positions=rally.predictions.ball_positions or [],
+                video_fps=rally.video_fps,
+                frame_count=rally.predictions.frame_count,
+                video_width=rally.video_width,
+                video_height=rally.video_height,
+                start_ms=rally.start_ms,
+                end_ms=rally.end_ms,
+            )
+            raw_cache.put(cached_data)
+            cached_rallies.append((cached_data, rally.ground_truth))
+        else:
+            # No raw positions - need to re-run tracking
+            rallies_without_raw.append(rally)
+
+    # Report status
+    if rallies_without_raw:
+        console.print(
+            f"\n[yellow]Warning: {len(rallies_without_raw)} rally(s) have no raw positions.[/yellow]"
+        )
+        console.print(
+            "[dim]Re-run player tracking to store raw positions for parameter tuning.[/dim]"
+        )
+        for rally in rallies_without_raw:
+            console.print(f"  - {rally.rally_id[:8]}...")
+
+    console.print(f"\n  Rallies with raw positions: {len(cached_rallies)}")
+
+    if cache_only:
+        stats = raw_cache.stats()
+        console.print("\n[green]Raw positions cached successfully![/green]")
+        console.print(f"  Cache location: {stats['cache_dir']}")
+        console.print(f"  Cached rallies: {stats['count']}")
+        console.print(f"  Total size: {stats['total_size_mb']:.2f} MB")
+        return
+
+    if not cached_rallies:
+        console.print("[red]No rallies available for grid search[/red]")
+        raise typer.Exit(1)
+
+    # Run grid search
+    param_grid = get_grid(grid)
+    num_configs = grid_size(param_grid)
+
+    console.print()
+    console.print(f"[bold]Player Filter Grid Search - {num_configs} configs, {len(cached_rallies)} rallies[/bold]")
+    console.print("=" * 60)
+    console.print(f"Grid: {grid}")
+    console.print(f"IoU threshold: {iou_threshold}")
+    if min_rally_f1 is not None:
+        console.print(f"Min rally F1 constraint: [yellow]{min_rally_f1:.0%}[/yellow]")
+
+    # Show parameters being searched
+    console.print("\n[dim]Parameters being searched:[/dim]")
+    for param, values in param_grid.items():
+        console.print(f"  {param}: {values}")
+
+    console.print()
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Searching...", total=num_configs)
+
+        def update_progress(current: int, total: int) -> None:
+            progress.update(task, completed=current)
+
+        result = grid_search(
+            rallies=cached_rallies,
+            param_grid=param_grid,
+            iou_threshold=iou_threshold,
+            min_rally_f1=min_rally_f1,
+            progress_callback=update_progress,
+        )
+
+    # Display results
+    console.print()
+    console.print("[bold]Best Configuration[/bold]")
+    console.print("=" * 60)
+
+    best = result.best_config
+    for param in param_grid.keys():
+        value = getattr(best, param)
+        default_val = getattr(type(best)(), param)
+        if value != default_val:
+            console.print(f"  [cyan]{param}[/cyan]: {value} [dim](default: {default_val})[/dim]")
+        else:
+            console.print(f"  [dim]{param}: {value}[/dim]")
+
+    console.print()
+    console.print(
+        f"Results: F1=[bold green]{result.best_f1:.1%}[/bold green], "
+        f"MOTA={result.best_mota:.1%}, "
+        f"ID Switches={result.best_id_switches}"
+    )
+
+    if result.improvement_f1 != 0:
+        improvement_color = "green" if result.improvement_f1 > 0 else "red"
+        console.print(
+            f"Improvement over default: [{improvement_color}]{result.improvement_f1:+.1%}[/{improvement_color}] "
+            f"(default F1={result.default_f1:.1%})"
+        )
+
+    if result.rejected_count > 0:
+        console.print(
+            f"\n[yellow]Rejected {result.rejected_count} configs that violated constraints[/yellow]"
+        )
+
+    # Top N configurations
+    console.print()
+    console.print(f"[bold]Top {min(top_n, len(result.all_results))} Configurations[/bold]")
+
+    top_table = Table(show_header=True, header_style="bold")
+    top_table.add_column("Rank", justify="right")
+    top_table.add_column("F1", justify="right")
+    top_table.add_column("MOTA", justify="right")
+    top_table.add_column("ID Sw", justify="right")
+    top_table.add_column("Changes from Default")
+
+    for i, config_result in enumerate(result.all_results[:top_n]):
+        if config_result.rejected:
+            continue
+
+        rank = i + 1
+        metrics = config_result.aggregate_metrics
+        diff = describe_config_diff(config_result.config)
+
+        # Truncate diff if too long
+        if len(diff) > 50:
+            diff = diff[:47] + "..."
+
+        f1_style = "green" if metrics.f1 >= 0.80 else ("yellow" if metrics.f1 >= 0.60 else "red")
+
+        top_table.add_row(
+            str(rank),
+            f"[{f1_style}]{metrics.f1:.1%}[/{f1_style}]",
+            f"{metrics.mota:.1%}",
+            str(metrics.num_id_switches),
+            diff,
+        )
+
+    console.print(top_table)
+
+    # Export to file if requested
+    if output:
+        with open(output, "w") as f:
+            json.dump(result.to_dict(), f, indent=2)
+        console.print(f"\n[green]Full results exported to {output}[/green]")
 
 
 def _display_aggregate_metrics(metrics: MOTMetrics) -> None:

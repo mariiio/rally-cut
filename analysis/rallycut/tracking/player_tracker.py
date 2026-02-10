@@ -133,6 +133,9 @@ class PlayerTrackingResult:
     # Ball positions for trajectory overlay
     ball_positions: list[BallPosition] = field(default_factory=list)
 
+    # Raw positions before filtering (for parameter tuning)
+    raw_positions: list[PlayerPosition] = field(default_factory=list)
+
     @property
     def avg_players_per_frame(self) -> float:
         """Average number of players detected per frame."""
@@ -198,6 +201,10 @@ class PlayerTrackingResult:
                 for bp in self.ball_positions
             ]
 
+        # Raw positions before filtering (for parameter tuning)
+        if self.raw_positions:
+            result["rawPositions"] = [p.to_dict() for p in self.raw_positions]
+
         return result
 
     def to_json(self, path: Path) -> None:
@@ -249,6 +256,20 @@ class PlayerTrackingResult:
                 is_near_court=server_data["isNearCourt"],
             )
 
+        # Parse raw positions (for parameter tuning)
+        raw_positions = [
+            PlayerPosition(
+                frame_number=p["frameNumber"],
+                track_id=p["trackId"],
+                x=p["x"],
+                y=p["y"],
+                width=p["width"],
+                height=p["height"],
+                confidence=p["confidence"],
+            )
+            for p in data.get("rawPositions", [])
+        ]
+
         return cls(
             positions=positions,
             frame_count=data.get("frameCount", 0),
@@ -261,6 +282,7 @@ class PlayerTrackingResult:
             primary_track_ids=data.get("primaryTrackIds", []),
             ball_phases=ball_phases,
             server_info=server_info,
+            raw_positions=raw_positions,
         )
 
     def to_api_format(self) -> dict:
@@ -573,6 +595,20 @@ class PlayerTracker:
             primary_track_ids: list[int] = []
             filter_method: str | None = None
 
+            # Save raw positions before filtering (for parameter tuning)
+            raw_positions = [
+                PlayerPosition(
+                    frame_number=p.frame_number,
+                    track_id=p.track_id,
+                    x=p.x,
+                    y=p.y,
+                    width=p.width,
+                    height=p.height,
+                    confidence=p.confidence,
+                )
+                for p in positions
+            ]
+
             # Apply court player filtering if enabled (per-frame with track stability)
             if filter_enabled:
                 from rallycut.tracking.player_filter import (
@@ -642,6 +678,7 @@ class PlayerTracker:
                 court_split_y=court_split_y,
                 primary_track_ids=primary_track_ids,
                 filter_method=filter_method,
+                raw_positions=raw_positions,
             )
 
         finally:
