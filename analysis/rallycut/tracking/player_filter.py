@@ -1401,45 +1401,58 @@ def identify_primary_tracks(
         if stats.presence_rate < config.min_presence_rate:
             continue
 
-        # Filter stationary objects using combined spread + ball proximity check
-        # Stationary objects (posts, referees) have low spread AND low ball proximity
-        # Players who don't move much still engage with the ball
-        is_stationary = stats.position_spread < config.min_position_spread_for_primary
-        has_ball_engagement = stats.ball_proximity_score >= config.min_ball_proximity_for_stationary
-
-        if is_stationary and not has_ball_engagement:
-            logger.info(
-                f"Track {track_id} excluded from primary: spread={stats.position_spread:.4f}, "
-                f"ball_prox={stats.ball_proximity_score:.3f} (stationary + no ball engagement)"
-            )
-            continue
-
         # Track passes hard filters - add with stability score for later ranking
         primary.add((track_id, stability))
 
     # Convert to list and sort by stability (descending)
     candidates = sorted(primary, key=lambda x: x[1], reverse=True)
 
-    # Split into stable (pass threshold) and unstable (below threshold)
-    # Candidates are already sorted by stability descending
+    # Separate candidates into "active" (moving or ball-engaged) and "stationary"
+    # Stationary tracks are fallback candidates when we need more players
+    active_candidates: list[tuple[int, float]] = []
+    stationary_candidates: list[tuple[int, float]] = []
+
+    for tid, stability in candidates:
+        stats = track_stats[tid]
+        is_stationary = stats.position_spread < config.min_position_spread_for_primary
+        has_ball_engagement = stats.ball_proximity_score >= config.min_ball_proximity_for_stationary
+
+        if is_stationary and not has_ball_engagement:
+            stationary_candidates.append((tid, stability))
+        else:
+            active_candidates.append((tid, stability))
+
+    # Split active candidates into stable (pass threshold) and unstable
     stable_idx = 0
-    for i, (_, stab) in enumerate(candidates):
+    for i, (_, stab) in enumerate(active_candidates):
         if stab < config.min_stability_score:
             stable_idx = i
             break
     else:
-        stable_idx = len(candidates)
+        stable_idx = len(active_candidates)
 
-    # Select tracks: prioritize stability but ensure we get max_players if available
-    selected: list[tuple[int, float]] = list(candidates[:stable_idx])
+    # Select tracks: prioritize stable active tracks
+    selected: list[tuple[int, float]] = list(active_candidates[:stable_idx])
 
-    # If we have fewer than max_players, include lower-stability tracks
+    # If we have fewer than max_players, include lower-stability active tracks
     if len(selected) < config.max_players:
         needed = config.max_players - len(selected)
-        for tid, stab in candidates[stable_idx : stable_idx + needed]:
+        for tid, stab in active_candidates[stable_idx : stable_idx + needed]:
             logger.info(
                 f"Track {tid} included despite low stability={stab:.3f} "
                 f"(need {config.max_players} players, only {len(selected)} stable)"
+            )
+            selected.append((tid, stab))
+
+    # If we still need more players, include stationary candidates as fallback
+    if len(selected) < config.max_players and stationary_candidates:
+        needed = config.max_players - len(selected)
+        for tid, stab in stationary_candidates[:needed]:
+            stats = track_stats[tid]
+            logger.info(
+                f"Track {tid} included despite low movement: spread={stats.position_spread:.4f}, "
+                f"ball_prox={stats.ball_proximity_score:.3f} "
+                f"(need {config.max_players} players, only {len(selected)} active)"
             )
             selected.append((tid, stab))
 
