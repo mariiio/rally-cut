@@ -353,8 +353,15 @@ uv run rallycut evaluate-tracking tune-filter --all -o results.json  # Export fu
 | `rallycut label open` | Open video with pre-filled predictions |
 | `rallycut label save` | Export annotations as ground truth JSON |
 | `rallycut compare-tracking` | Compute MOT metrics from JSON files |
-| `rallycut evaluate-tracking` | Evaluate tracking from database with detailed breakdowns |
+| `rallycut evaluate-tracking` | Evaluate player tracking from database |
+| `rallycut evaluate-tracking --ball-only` | Evaluate ball tracking with detailed metrics |
 | `rallycut evaluate-tracking tune-filter` | Grid search for optimal PlayerFilterConfig parameters |
+
+**Ball tracking metrics (`--ball-only`):**
+- Detection Rate: % of GT frames with ball detected
+- Match Rate: % of GT frames with ball within 50px threshold
+- Mean/Median/P90 Error: Position error in pixels
+- Accuracy <20px/<50px: % of detections within threshold
 
 ## Code Style
 

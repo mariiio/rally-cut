@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Model configuration
-MODEL_NAME = "yolov8n.pt"  # YOLOv8 nano - fastest, 6MB
+MODEL_NAME = "yolov8s.pt"  # YOLOv8 small - better accuracy, 22MB
 PERSON_CLASS_ID = 0  # COCO class ID for person
 DEFAULT_CONFIDENCE = 0.25  # Lower threshold for detection (filter later)
 DEFAULT_IOU = 0.45  # NMS IoU threshold
