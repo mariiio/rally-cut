@@ -122,7 +122,7 @@ rallycut/
 │   ├── ball_tracker.py       # VballNet ONNX ball detection (9-frame temporal)
 │   ├── ball_filter.py        # Kalman filter for lag compensation and smoothing
 │   ├── ball_features.py      # Ball phase detection, server ID, reactivity scoring
-│   ├── player_tracker.py     # YOLO + ByteTrack player tracking
+│   ├── player_tracker.py     # YOLO + BoT-SORT player tracking
 │   ├── player_filter.py      # Multi-stage player filtering with court/ball scoring
 │   ├── player_features.py    # Appearance extraction (skin tone, jersey, proportions)
 │   └── match_tracker.py      # Cross-rally player ID consistency
@@ -243,7 +243,15 @@ API triggers Modal via webhook. Results posted back on completion.
 
 ## Player Tracking
 
-Uses YOLOv8s for person detection with BoT-SORT for temporal tracking. BoT-SORT reduces ID switches by 64% compared to ByteTrack through camera motion compensation.
+Uses YOLOv8 for person detection with BoT-SORT for temporal tracking. BoT-SORT reduces ID switches by 64% compared to ByteTrack through camera motion compensation.
+
+**YOLO Model Options:**
+| Model | FPS | F1 | Recall | Use Case |
+|-------|-----|-----|--------|----------|
+| **yolov8n** | 23 | 88.0% | 82.4% | Default - best speed/accuracy tradeoff |
+| yolov8s | 15 | 83.8% | 78.7% | - |
+| yolov8m | 7 | 89.2% | 86.4% | Best accuracy (3x slower) |
+| yolov8l | 5 | 88.4% | 85.5% | No benefit over medium |
 
 **Tracker Options:**
 | Tracker | ID | Strengths | Use Case |
@@ -255,20 +263,23 @@ Uses YOLOv8s for person detection with BoT-SORT for temporal tracking. BoT-SORT 
 | Method | ID | Description | Use Case |
 |--------|-----|-------------|----------|
 | None | `none` (default) | No preprocessing | Most videos |
-| CLAHE | `clahe` | Contrast enhancement via LAB color space | High-contrast sand backgrounds (tested, marginal benefit) |
+| CLAHE | `clahe` | Contrast enhancement via LAB color space | High-contrast sand backgrounds (tested, not beneficial) |
 
 ```bash
-# Default tracking (BoT-SORT)
+# Default tracking (yolov8n + BoT-SORT)
 uv run rallycut track-players video.mp4
 
-# Use ByteTrack instead
-uv run rallycut track-players video.mp4 --tracker bytetrack
+# Use medium model for best accuracy (3x slower)
+uv run rallycut track-players video.mp4 --yolo-model yolov8m
 
-# With CLAHE preprocessing
-uv run rallycut track-players video.mp4 --preprocessing clahe
+# Use ByteTrack instead of BoT-SORT
+uv run rallycut track-players video.mp4 --tracker bytetrack
 
 # Tune filter parameters for edge cases
 uv run rallycut track-players video.mp4 --min-bbox-area 0.002 --min-bbox-height 0.06
+
+# Compare YOLO model sizes
+uv run rallycut evaluate-tracking compare-yolo-models --all
 ```
 
 ## Player Tracking Filtering

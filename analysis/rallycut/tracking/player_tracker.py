@@ -1,9 +1,10 @@
 """
-Player tracking using YOLOv8s + BoT-SORT for volleyball videos.
+Player tracking using YOLOv8 + BoT-SORT for volleyball videos.
 
-Uses YOLOv8 small for person detection with BoT-SORT for temporal tracking.
+Uses YOLOv8 for person detection with BoT-SORT for temporal tracking.
 BoT-SORT adds camera motion compensation on top of ByteTrack, reducing ID switches.
-Optimized for CPU (~30-40 FPS on proxy video).
+Default model is yolov8n (nano) for best speed/accuracy tradeoff (~23 FPS, 88% F1).
+Use --yolo-model yolov8m for best accuracy at 3x slower speed.
 """
 
 from __future__ import annotations
