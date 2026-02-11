@@ -8,7 +8,11 @@
  * - Rally-bounded labels (hidden after rally ends via enabled: false)
  *
  * Requires Label Studio running locally with LABEL_STUDIO_API_KEY configured.
- * Project "RallyCut Ground Truth" is auto-created with framerate=29.97.
+ * Project "RallyCut Ground Truth" is auto-created on first export.
+ *
+ * Frame timing: All frame numbers are calculated at 30fps (LABEL_STUDIO_FPS)
+ * regardless of actual video fps. This ensures correct sync since Label Studio
+ * interprets frame numbers at its default 30fps rate.
  */
 
 import { prisma } from "../lib/prisma.js";
@@ -17,6 +21,11 @@ import { env } from "../config/env.js";
 // Label Studio API configuration
 const LABEL_STUDIO_URL = env.LABEL_STUDIO_URL || "http://localhost:8082";
 const LABEL_STUDIO_API_KEY = env.LABEL_STUDIO_API_KEY;
+
+// Frame rate used for Label Studio frame number calculations.
+// Label Studio interprets frame numbers at ~30fps regardless of actual video fps.
+// Using a fixed rate ensures correct timing across all video framerates.
+const LABEL_STUDIO_FPS = 30;
 
 // Label config for video object tracking with individual player labels
 const LABEL_CONFIG = `
@@ -131,8 +140,8 @@ function buildPredictions(
     const sequence = trackPositions.map((pos: any) => {
       // Calculate time from rally start + position frame offset
       const time = rallyStartTime + pos.frameNumber / fps;
-      // Frame is 1-indexed in Label Studio (frame 1 = time 0)
-      const frame = Math.round(time * fps) + 1;
+      // Frame calculated at LABEL_STUDIO_FPS (not video fps) for correct LS interpretation
+      const frame = Math.round(time * LABEL_STUDIO_FPS) + 1;
 
       // Convert normalized center to percentage top-left
       const xPct = (pos.x - pos.width / 2) * 100;
@@ -156,7 +165,7 @@ function buildPredictions(
       // Add a final keyframe with enabled: false to hide after rally ends
       const lastKeyframe = sequence[sequence.length - 1];
       const endTime = rallyEndTime + 0.001; // Just after rally end
-      const endFrame = Math.round(endTime * fps) + 1;
+      const endFrame = Math.round(endTime * LABEL_STUDIO_FPS) + 1;
       sequence.push({
         frame: endFrame,
         time: endTime,
@@ -193,8 +202,8 @@ function buildPredictions(
       .map((pos: any) => {
         // Calculate time from rally start + position frame offset
         const time = rallyStartTime + pos.frameNumber / fps;
-        // Frame is 1-indexed in Label Studio (frame 1 = time 0)
-        const frame = Math.round(time * fps) + 1;
+        // Frame calculated at LABEL_STUDIO_FPS (not video fps) for correct LS interpretation
+        const frame = Math.round(time * LABEL_STUDIO_FPS) + 1;
         const ballSizePct = 2.0;
 
         return {
@@ -213,7 +222,7 @@ function buildPredictions(
       // Add a final keyframe with enabled: false to hide after rally ends
       const lastKeyframe = ballSequence[ballSequence.length - 1];
       const endTime = rallyEndTime + 0.001;
-      const endFrame = Math.round(endTime * fps) + 1;
+      const endFrame = Math.round(endTime * LABEL_STUDIO_FPS) + 1;
       ballSequence.push({
         frame: endFrame,
         time: endTime,
@@ -446,6 +455,11 @@ function parseAnnotations(
   };
 }
 
+interface ExportOptions {
+  config?: Partial<LabelStudioConfig>;
+  forceRegenerate?: boolean;
+}
+
 /**
  * Export tracking predictions to Label Studio for labeling.
  */
@@ -453,8 +467,9 @@ export async function exportToLabelStudio(
   rallyId: string,
   userId: string,
   videoUrl: string,
-  config?: Partial<LabelStudioConfig>
+  options?: ExportOptions
 ): Promise<ExportResult> {
+  const { config, forceRegenerate = false } = options || {};
   // Get Label Studio config
   const lsConfig: LabelStudioConfig = {
     url: config?.url || LABEL_STUDIO_URL,
@@ -496,8 +511,8 @@ export async function exportToLabelStudio(
       };
     }
 
-    // Check if we already have a task for this rally
-    if (playerTrack.groundTruthTaskId) {
+    // Check if we already have a task for this rally (unless force regenerate)
+    if (playerTrack.groundTruthTaskId && !forceRegenerate) {
       const projectId = lsConfig.projectId || (await getOrCreateProject(lsConfig));
       const taskUrl = `${lsConfig.url}/projects/${projectId}/data?task=${playerTrack.groundTruthTaskId}`;
       console.log(`[LabelStudio] Reusing existing task ${playerTrack.groundTruthTaskId}`);
@@ -507,6 +522,10 @@ export async function exportToLabelStudio(
         projectId,
         taskUrl,
       };
+    }
+
+    if (forceRegenerate && playerTrack.groundTruthTaskId) {
+      console.log(`[LabelStudio] Force regenerating task (old task ID: ${playerTrack.groundTruthTaskId})`);
     }
 
     // Get or create project
@@ -519,8 +538,19 @@ export async function exportToLabelStudio(
     const videoDuration = (rally.video.durationMs || 0) / 1000;
     const predictions = buildPredictions(playerTrack, rallyStartTime, rallyEndTime, fps, videoDuration);
 
-    console.log(`[LabelStudio] Rally: ${rallyStartTime}s - ${rallyEndTime}s, video duration ${videoDuration}s`);
+    console.log(`[LabelStudio] Rally: ${rallyStartTime}s - ${rallyEndTime}s, video duration ${videoDuration}s, FPS: ${fps}`);
     console.log(`[LabelStudio] Building predictions from ${(playerTrack.positionsJson as any[])?.length || 0} positions, ${(playerTrack.ballPositionsJson as any[])?.length || 0} ball positions`);
+
+    // Debug: Log first position timing calculation
+    const positions = (playerTrack.positionsJson || []) as any[];
+    if (Array.isArray(positions) && positions.length > 0) {
+      const firstPos = [...positions].sort((a, b) => a.frameNumber - b.frameNumber)[0];
+      const firstTime = rallyStartTime + firstPos.frameNumber / fps;
+      const firstFrame = Math.round(firstTime * LABEL_STUDIO_FPS) + 1;
+      console.log(`[LabelStudio] First position: frameNumber=${firstPos.frameNumber} (segment-relative)`);
+      console.log(`[LabelStudio] Calculated: time=${firstTime.toFixed(3)}s, LS frame=${firstFrame} (at ${LABEL_STUDIO_FPS}fps)`);
+    }
+
     console.log(`[LabelStudio] Created ${predictions.length} prediction tracks`);
 
     // Create task

@@ -153,6 +153,7 @@ router.post(
       videoUrl: z.string().url(),
       apiKey: z.string().optional(),
       apiUrl: z.string().url().optional(),
+      forceRegenerate: z.boolean().optional(),
     }),
   }),
   async (req, res, next) => {
@@ -162,8 +163,11 @@ router.post(
         req.userId!,
         req.body.videoUrl,
         {
-          apiKey: req.body.apiKey,
-          url: req.body.apiUrl,
+          config: {
+            apiKey: req.body.apiKey,
+            url: req.body.apiUrl,
+          },
+          forceRegenerate: req.body.forceRegenerate,
         }
       );
       res.json(result);
