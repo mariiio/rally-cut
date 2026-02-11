@@ -158,31 +158,33 @@ def run_tracking(
         print(f"[LOCAL] Rally: {rally_id}")
         print(f"[LOCAL] Time range: {start_ms}ms - {end_ms}ms")
 
-        # Create tracker
-        tracker = PlayerTracker(
-            model="yolov8n.pt",
-            confidence_threshold=0.42,  # Lower threshold to catch darker-skinned players
-            max_players=4,  # Beach volleyball
-        )
+        # Create tracker with tuned confidence threshold
+        tracker = PlayerTracker(confidence=0.15)
+
+        # Import filter config for beach volleyball
+        from rallycut.tracking.player_filter import PlayerFilterConfig
+
+        filter_config = PlayerFilterConfig()
 
         # Run tracking with progress webhook
-        def progress_callback(progress: float, message: str) -> None:
-            print(f"[LOCAL] Tracking progress: {progress * 100:.0f}% - {message}")
+        def progress_callback(progress: float) -> None:
+            print(f"[LOCAL] Tracking progress: {progress * 100:.0f}%")
             send_progress_webhook(
                 callback_url,
                 webhook_secret,
                 job_id,
                 progress,
-                message,
+                "Tracking players",
             )
 
-        result = tracker.track_rally(
+        result = tracker.track_video(
             video_path=local_video_path,
             start_ms=start_ms,
             end_ms=end_ms,
-            calibration_data=calibration_data,
             progress_callback=progress_callback,
             ball_positions=ball_positions,
+            filter_enabled=True,
+            filter_config=filter_config,
         )
 
         processing_time_ms = (time.time() - start_time) * 1000
@@ -192,13 +194,13 @@ def run_tracking(
             "job_id": job_id,
             "status": "completed",
             "tracks_json": result.to_dict(),
-            "player_count": result.player_count,
+            "player_count": result.unique_track_count,
             "frame_count": result.frame_count,
             "processing_time_ms": round(processing_time_ms),
             "model_version": result.model_version,
         }
 
-        print(f"[LOCAL] Tracking complete: {result.player_count} players, {result.frame_count} frames")
+        print(f"[LOCAL] Tracking complete: {result.unique_track_count} players, {result.frame_count} frames")
         print(f"[LOCAL] Processing time: {processing_time_ms/1000:.1f}s")
 
         # Send webhook

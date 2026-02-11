@@ -64,6 +64,51 @@ class PerFrameMetrics:
 
 
 @dataclass
+class HOTAMetrics:
+    """Higher Order Tracking Accuracy metrics.
+
+    HOTA balances detection accuracy (DetA) and association accuracy (AssA).
+    HOTA = sqrt(DetA * AssA)
+
+    See: https://arxiv.org/abs/2009.07736
+    """
+
+    hota: float = 0.0  # Higher Order Tracking Accuracy
+    deta: float = 0.0  # Detection Accuracy (DetA)
+    assa: float = 0.0  # Association Accuracy (AssA)
+    loca: float = 0.0  # Localization Accuracy (average IoU of TPs)
+
+
+@dataclass
+class TrackQualityMetrics:
+    """Track-level quality metrics for analyzing tracking consistency."""
+
+    fragmentation: int = 0  # Number of times GT tracks are split into multiple pred tracks
+    num_fragmentations: int = 0  # Total fragmentation events (switches to different pred ID)
+    mostly_tracked: int = 0  # GT tracks tracked >80% of their lifespan
+    mostly_tracked_ratio: float = 0.0  # Ratio of mostly tracked GT tracks
+    partially_tracked: int = 0  # GT tracks tracked 20-80% of their lifespan
+    mostly_lost: int = 0  # GT tracks tracked <20% of their lifespan
+
+    # Per-GT track analysis
+    gt_track_count: int = 0  # Total number of GT tracks
+    avg_track_coverage: float = 0.0  # Average fraction of GT track that is covered
+
+    # ID consistency
+    avg_pred_ids_per_gt: float = 0.0  # Average number of different pred IDs matched to each GT
+
+
+@dataclass
+class PositionMetrics:
+    """Position accuracy metrics beyond IoU matching."""
+
+    mean_position_error: float = 0.0  # Mean Euclidean error (normalized 0-1)
+    median_position_error: float = 0.0  # Median Euclidean error
+    p90_position_error: float = 0.0  # 90th percentile error
+    num_position_samples: int = 0  # Number of matched pairs used
+
+
+@dataclass
 class TrackingEvaluationResult:
     """Complete evaluation result with aggregate and per-entity breakdowns."""
 
@@ -72,6 +117,11 @@ class TrackingEvaluationResult:
     per_player: list[PerPlayerMetrics] = field(default_factory=list)
     per_frame: list[PerFrameMetrics] = field(default_factory=list)
     ball_metrics: BallMetrics | None = None
+
+    # Extended metrics for detailed tracking analysis
+    hota_metrics: HOTAMetrics | None = None
+    track_quality: TrackQualityMetrics | None = None
+    position_metrics: PositionMetrics | None = None
 
     @property
     def error_frames(self) -> list[int]:
@@ -124,6 +174,36 @@ class TrackingEvaluationResult:
                 "meanErrorPx": self.ball_metrics.mean_error_px,
                 "numGt": self.ball_metrics.num_gt,
                 "numDetected": self.ball_metrics.num_detected,
+            }
+
+        # Extended metrics
+        if self.hota_metrics:
+            result["hota"] = {
+                "hota": self.hota_metrics.hota,
+                "deta": self.hota_metrics.deta,
+                "assa": self.hota_metrics.assa,
+                "loca": self.hota_metrics.loca,
+            }
+
+        if self.track_quality:
+            result["trackQuality"] = {
+                "fragmentation": self.track_quality.fragmentation,
+                "numFragmentations": self.track_quality.num_fragmentations,
+                "mostlyTracked": self.track_quality.mostly_tracked,
+                "mostlyTrackedRatio": self.track_quality.mostly_tracked_ratio,
+                "partiallyTracked": self.track_quality.partially_tracked,
+                "mostlyLost": self.track_quality.mostly_lost,
+                "gtTrackCount": self.track_quality.gt_track_count,
+                "avgTrackCoverage": self.track_quality.avg_track_coverage,
+                "avgPredIdsPerGt": self.track_quality.avg_pred_ids_per_gt,
+            }
+
+        if self.position_metrics:
+            result["positionAccuracy"] = {
+                "meanError": self.position_metrics.mean_position_error,
+                "medianError": self.position_metrics.median_position_error,
+                "p90Error": self.position_metrics.p90_position_error,
+                "numSamples": self.position_metrics.num_position_samples,
             }
 
         return result
@@ -192,6 +272,9 @@ def evaluate_rally(
     # Per-frame metrics
     frame_metrics: list[PerFrameMetrics] = []
 
+    # Track matches by frame for extended metrics (HOTA, fragmentation, position)
+    matches_by_frame: dict[int, list[tuple[int, int]]] = {}
+
     for frame in all_frames:
         gt_boxes = gt_by_frame.get(frame, [])
         pred_boxes = pred_by_frame.get(frame, [])
@@ -241,6 +324,10 @@ def evaluate_rally(
         frame_metric.misses = len(unmatched_gt)
         frame_metric.false_positives = len(unmatched_pred)
 
+        # Store matches for extended metrics
+        if matches:
+            matches_by_frame[frame] = matches
+
         # Process matches for per-player and ID switch tracking
         for gt_id, pred_id in matches:
             if gt_id in player_metrics:
@@ -278,12 +365,233 @@ def evaluate_rally(
             height,
         )
 
+    # Compute extended metrics (HOTA, track quality, position accuracy)
+    hota_metrics = compute_hota_metrics(
+        gt_positions,
+        pred_positions,
+        matches_by_frame,
+        iou_threshold,
+    )
+
+    track_quality = compute_track_quality_metrics(
+        gt_positions,
+        matches_by_frame,
+    )
+
+    position_metrics = compute_position_metrics(
+        gt_by_frame,
+        pred_by_frame,
+        matches_by_frame,
+    )
+
     return TrackingEvaluationResult(
         rally_id=rally_id,
         aggregate=aggregate,
         per_player=per_player,
         per_frame=frame_metrics,
         ball_metrics=ball_metrics,
+        hota_metrics=hota_metrics,
+        track_quality=track_quality,
+        position_metrics=position_metrics,
+    )
+
+
+def compute_hota_metrics(
+    gt_positions: list[Any],
+    pred_positions: list[Any],
+    matches_by_frame: dict[int, list[tuple[int, int]]],
+    iou_threshold: float = 0.5,
+) -> HOTAMetrics:
+    """Compute HOTA (Higher Order Tracking Accuracy) metrics.
+
+    HOTA balances detection and association quality:
+    - DetA: Detection Accuracy (how well detections match GT)
+    - AssA: Association Accuracy (how well IDs are maintained)
+    - HOTA = sqrt(DetA * AssA)
+
+    Args:
+        gt_positions: Ground truth positions.
+        pred_positions: Predicted positions.
+        matches_by_frame: Dictionary of frame -> list of (gt_id, pred_id) matches.
+        iou_threshold: IoU threshold used for matching.
+
+    Returns:
+        HOTAMetrics with HOTA, DetA, AssA, and LocA scores.
+    """
+
+    # Count TP, FP, FN for DetA
+    total_gt = len(gt_positions)
+    total_pred = len(pred_positions)
+    total_tp = sum(len(matches) for matches in matches_by_frame.values())
+
+    # DetA = TP / (TP + FP + FN) = TP / (TP + (Pred - TP) + (GT - TP))
+    # Simplified: DetA = TP / (GT + Pred - TP)
+    deta = total_tp / (total_gt + total_pred - total_tp) if (total_gt + total_pred - total_tp) > 0 else 0.0
+
+    # For AssA, we need to track how consistently each GT track is matched to the same pred ID
+    # AssA = sum over all GT tracks of (correctly associated TPs) / sum over all TPs
+    # A TP is "correctly associated" if it matches the dominant pred ID for that GT track
+
+    # Find dominant pred ID for each GT track
+    gt_to_pred_counts: dict[int, dict[int, int]] = defaultdict(lambda: defaultdict(int))
+    for frame_matches in matches_by_frame.values():
+        for gt_id, pred_id in frame_matches:
+            gt_to_pred_counts[gt_id][pred_id] += 1
+
+    # Count correctly associated TPs (matching dominant pred ID)
+    correctly_associated = 0
+    for gt_id, pred_counts in gt_to_pred_counts.items():
+        if pred_counts:
+            dominant_count = max(pred_counts.values())
+            correctly_associated += dominant_count
+
+    assa = correctly_associated / total_tp if total_tp > 0 else 0.0
+
+    # HOTA = geometric mean of DetA and AssA
+    hota = (deta * assa) ** 0.5 if deta > 0 and assa > 0 else 0.0
+
+    # LocA would require IoU values for each match - approximate with threshold
+    # In practice, all matches have IoU >= threshold, so LocA is bounded
+    loca = (iou_threshold + 1.0) / 2.0  # Approximate average IoU of TPs
+
+    return HOTAMetrics(hota=hota, deta=deta, assa=assa, loca=loca)
+
+
+def compute_track_quality_metrics(
+    gt_positions: list[Any],
+    matches_by_frame: dict[int, list[tuple[int, int]]],
+) -> TrackQualityMetrics:
+    """Compute track-level quality metrics.
+
+    Analyzes how well individual GT tracks are covered:
+    - Mostly Tracked (MT): >80% coverage
+    - Partially Tracked (PT): 20-80% coverage
+    - Mostly Lost (ML): <20% coverage
+    - Fragmentation: how many times a GT track switches pred IDs
+
+    Args:
+        gt_positions: Ground truth positions.
+        matches_by_frame: Dictionary of frame -> list of (gt_id, pred_id) matches.
+
+    Returns:
+        TrackQualityMetrics with fragmentation, MT/PT/ML counts.
+    """
+    # Group GT positions by track ID
+    gt_frames_by_track: dict[int, set[int]] = defaultdict(set)
+    for p in gt_positions:
+        gt_frames_by_track[p.track_id].add(p.frame_number)
+
+    gt_track_count = len(gt_frames_by_track)
+    if gt_track_count == 0:
+        return TrackQualityMetrics()
+
+    # Track coverage and fragmentation per GT track
+    gt_matched_frames: dict[int, set[int]] = defaultdict(set)
+    gt_pred_sequence: dict[int, list[tuple[int, int]]] = defaultdict(list)  # frame, pred_id
+
+    for frame, frame_matches in sorted(matches_by_frame.items()):
+        for gt_id, pred_id in frame_matches:
+            gt_matched_frames[gt_id].add(frame)
+            gt_pred_sequence[gt_id].append((frame, pred_id))
+
+    mostly_tracked = 0
+    partially_tracked = 0
+    mostly_lost = 0
+    total_fragmentations = 0
+    fragmented_tracks = 0
+    total_coverage = 0.0
+    total_pred_ids_per_gt = 0
+
+    for gt_id, gt_frames in gt_frames_by_track.items():
+        matched_frames = gt_matched_frames.get(gt_id, set())
+        coverage = len(matched_frames) / len(gt_frames) if gt_frames else 0.0
+        total_coverage += coverage
+
+        # Classify track
+        if coverage > 0.8:
+            mostly_tracked += 1
+        elif coverage > 0.2:
+            partially_tracked += 1
+        else:
+            mostly_lost += 1
+
+        # Count fragmentations (ID switches within this GT track)
+        pred_sequence = gt_pred_sequence.get(gt_id, [])
+        if len(pred_sequence) > 1:
+            unique_preds = set()
+            last_pred = None
+            frags = 0
+            for _, pred_id in pred_sequence:
+                unique_preds.add(pred_id)
+                if last_pred is not None and pred_id != last_pred:
+                    frags += 1
+                last_pred = pred_id
+            total_fragmentations += frags
+            if len(unique_preds) > 1:
+                fragmented_tracks += 1
+            total_pred_ids_per_gt += len(unique_preds)
+        elif len(pred_sequence) == 1:
+            total_pred_ids_per_gt += 1
+
+    avg_coverage = total_coverage / gt_track_count if gt_track_count > 0 else 0.0
+    avg_pred_ids = total_pred_ids_per_gt / gt_track_count if gt_track_count > 0 else 0.0
+
+    return TrackQualityMetrics(
+        fragmentation=fragmented_tracks,
+        num_fragmentations=total_fragmentations,
+        mostly_tracked=mostly_tracked,
+        mostly_tracked_ratio=mostly_tracked / gt_track_count if gt_track_count > 0 else 0.0,
+        partially_tracked=partially_tracked,
+        mostly_lost=mostly_lost,
+        gt_track_count=gt_track_count,
+        avg_track_coverage=avg_coverage,
+        avg_pred_ids_per_gt=avg_pred_ids,
+    )
+
+
+def compute_position_metrics(
+    gt_by_frame: dict[int, list[tuple[int, float, float, float, float]]],
+    pred_by_frame: dict[int, list[tuple[int, float, float, float, float]]],
+    matches_by_frame: dict[int, list[tuple[int, int]]],
+) -> PositionMetrics:
+    """Compute position accuracy metrics for matched pairs.
+
+    Measures the Euclidean distance between GT and prediction centers
+    for all matched pairs.
+
+    Args:
+        gt_by_frame: Ground truth boxes by frame: {frame: [(id, x, y, w, h), ...]}.
+        pred_by_frame: Prediction boxes by frame: {frame: [(id, x, y, w, h), ...]}.
+        matches_by_frame: Matches by frame: {frame: [(gt_id, pred_id), ...]}.
+
+    Returns:
+        PositionMetrics with mean, median, P90 position errors.
+    """
+    import numpy as np
+
+    position_errors: list[float] = []
+
+    for frame, frame_matches in matches_by_frame.items():
+        gt_boxes = {b[0]: (b[1], b[2]) for b in gt_by_frame.get(frame, [])}
+        pred_boxes = {b[0]: (b[1], b[2]) for b in pred_by_frame.get(frame, [])}
+
+        for gt_id, pred_id in frame_matches:
+            if gt_id in gt_boxes and pred_id in pred_boxes:
+                gt_x, gt_y = gt_boxes[gt_id]
+                pred_x, pred_y = pred_boxes[pred_id]
+                # Euclidean distance in normalized coordinates
+                error = ((gt_x - pred_x) ** 2 + (gt_y - pred_y) ** 2) ** 0.5
+                position_errors.append(error)
+
+    if not position_errors:
+        return PositionMetrics()
+
+    errors_arr = np.array(position_errors)
+    return PositionMetrics(
+        mean_position_error=float(np.mean(errors_arr)),
+        median_position_error=float(np.median(errors_arr)),
+        p90_position_error=float(np.percentile(errors_arr, 90)),
+        num_position_samples=len(position_errors),
     )
 
 

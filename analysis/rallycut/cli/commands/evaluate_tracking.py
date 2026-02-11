@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from rallycut.cli.commands.compare_tracking import BallMetrics, MOTMetrics
     from rallycut.evaluation.tracking.ball_metrics import BallTrackingMetrics
     from rallycut.evaluation.tracking.error_analysis import ErrorEvent
-    from rallycut.evaluation.tracking.metrics import PerPlayerMetrics
+    from rallycut.evaluation.tracking.metrics import PerPlayerMetrics, TrackingEvaluationResult
 
 app = typer.Typer(help="Evaluate player tracking against ground truth")
 console = Console()
@@ -271,6 +271,9 @@ def evaluate_tracking(
 
         _display_aggregate_metrics(result.aggregate)
 
+        # Display extended metrics (HOTA, track quality, position accuracy)
+        _display_extended_metrics(result)
+
         if result.ball_metrics:
             _display_ball_metrics(result.ball_metrics)
 
@@ -304,26 +307,35 @@ def evaluate_tracking(
         console.print(f"[bold]Player Tracking Evaluation - {len(results)} Rallies[/bold]")
         console.print("=" * 50)
 
-        # Per-rally table
+        # Per-rally table with extended metrics
         rally_table = Table(show_header=True, header_style="bold")
         rally_table.add_column("Rally")
         rally_table.add_column("MOTA", justify="right")
-        rally_table.add_column("Precision", justify="right")
-        rally_table.add_column("Recall", justify="right")
+        rally_table.add_column("HOTA", justify="right")
         rally_table.add_column("F1", justify="right")
         rally_table.add_column("ID Sw", justify="right")
-        rally_table.add_column("Errors", justify="right")
+        rally_table.add_column("MT", justify="right")  # Mostly Tracked
+        rally_table.add_column("Frag", justify="right")  # Fragmentation
 
         for result in results:
-            error_count = len(result.error_frames)
+            hota_str = "-"
+            if result.hota_metrics:
+                hota_str = f"{result.hota_metrics.hota:.1%}"
+
+            mt_str = "-"
+            frag_str = "-"
+            if result.track_quality:
+                mt_str = f"{result.track_quality.mostly_tracked}/{result.track_quality.gt_track_count}"
+                frag_str = str(result.track_quality.fragmentation)
+
             rally_table.add_row(
                 result.rally_id[:8] + "...",
                 f"{result.aggregate.mota:.1%}",
-                f"{result.aggregate.precision:.1%}",
-                f"{result.aggregate.recall:.1%}",
+                hota_str,
                 f"{result.aggregate.f1:.1%}",
                 str(result.aggregate.num_id_switches),
-                str(error_count),
+                mt_str,
+                frag_str,
             )
 
         console.print(rally_table)
@@ -332,6 +344,9 @@ def evaluate_tracking(
         console.print("\n[bold]Aggregate Metrics[/bold]")
         combined = aggregate_results(results)
         _display_aggregate_metrics(combined)
+
+        # Aggregate extended metrics (average across rallies)
+        _display_aggregate_extended_metrics(results)
 
         if analyze_errors and all_errors_list:
             _display_error_analysis(all_errors_list)
@@ -386,7 +401,7 @@ def tune_filter(
         str,
         typer.Option(
             "--grid", "-g",
-            help="Grid to search: quick, full, referee, stability, merge",
+            help="Grid to search: quick, full, referee, stability, merge, farside, relaxed",
         ),
     ] = "quick",
     iou_threshold: Annotated[
@@ -727,6 +742,176 @@ def _display_aggregate_metrics(metrics: MOTMetrics) -> None:
     console.print(f"  Matches (TP): {metrics.num_matches}")
     console.print(f"  Misses (FN): {metrics.num_misses}")
     console.print(f"  False positives (FP): {metrics.num_false_positives}")
+
+
+def _display_extended_metrics(result: TrackingEvaluationResult) -> None:
+    """Display extended tracking metrics (HOTA, track quality, position accuracy)."""
+
+    # HOTA Metrics
+    if result.hota_metrics:
+        hota = result.hota_metrics
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Metric")
+        table.add_column("Value", justify="right")
+        table.add_column("Target", justify="right")
+        table.add_column("Status")
+
+        table.add_row(
+            "HOTA",
+            f"{hota.hota:.2%}",
+            ">70%",
+            _status_icon(hota.hota, 0.70),
+        )
+        table.add_row(
+            "DetA (Detection)",
+            f"{hota.deta:.2%}",
+            ">70%",
+            _status_icon(hota.deta, 0.70),
+        )
+        table.add_row(
+            "AssA (Association)",
+            f"{hota.assa:.2%}",
+            ">80%",
+            _status_icon(hota.assa, 0.80),
+        )
+        table.add_row(
+            "LocA (Localization)",
+            f"{hota.loca:.2%}",
+            "-",
+            "",
+        )
+
+        console.print("\n[bold]HOTA Metrics[/bold] (Higher Order Tracking Accuracy)")
+        console.print(table)
+
+    # Track Quality Metrics
+    if result.track_quality:
+        tq = result.track_quality
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Metric")
+        table.add_column("Value", justify="right")
+        table.add_column("Target", justify="right")
+        table.add_column("Status")
+
+        table.add_row(
+            "Mostly Tracked",
+            f"{tq.mostly_tracked}/{tq.gt_track_count} ({tq.mostly_tracked_ratio:.0%})",
+            ">80%",
+            _status_icon(tq.mostly_tracked_ratio, 0.80),
+        )
+        table.add_row(
+            "Partially Tracked",
+            str(tq.partially_tracked),
+            "-",
+            "",
+        )
+        table.add_row(
+            "Mostly Lost",
+            str(tq.mostly_lost),
+            "<1",
+            _status_icon(tq.mostly_lost, 1, higher_better=False),
+        )
+        table.add_row(
+            "Fragmentation",
+            str(tq.fragmentation),
+            "<10%",
+            _status_icon(tq.fragmentation / max(1, tq.gt_track_count), 0.10, higher_better=False),
+        )
+        table.add_row(
+            "Avg Track Coverage",
+            f"{tq.avg_track_coverage:.1%}",
+            ">90%",
+            _status_icon(tq.avg_track_coverage, 0.90),
+        )
+        table.add_row(
+            "Avg Pred IDs per GT",
+            f"{tq.avg_pred_ids_per_gt:.2f}",
+            "<1.2",
+            _status_icon(tq.avg_pred_ids_per_gt, 1.2, higher_better=False),
+        )
+
+        console.print("\n[bold]Track Quality Metrics[/bold]")
+        console.print(table)
+
+    # Position Accuracy Metrics
+    if result.position_metrics and result.position_metrics.num_position_samples > 0:
+        pm = result.position_metrics
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Metric")
+        table.add_column("Value", justify="right")
+        table.add_column("Target", justify="right")
+        table.add_column("Status")
+
+        # Convert normalized error to percentage of frame
+        table.add_row(
+            "Mean Position Error",
+            f"{pm.mean_position_error * 100:.2f}%",
+            "<2%",
+            _status_icon(pm.mean_position_error, 0.02, higher_better=False),
+        )
+        table.add_row(
+            "Median Position Error",
+            f"{pm.median_position_error * 100:.2f}%",
+            "<1.5%",
+            _status_icon(pm.median_position_error, 0.015, higher_better=False),
+        )
+        table.add_row(
+            "P90 Position Error",
+            f"{pm.p90_position_error * 100:.2f}%",
+            "<5%",
+            _status_icon(pm.p90_position_error, 0.05, higher_better=False),
+        )
+
+        console.print("\n[bold]Position Accuracy[/bold]")
+        console.print(table)
+        console.print(f"  [dim]Based on {pm.num_position_samples} matched pairs[/dim]")
+
+
+def _display_aggregate_extended_metrics(results: list) -> None:
+    """Display aggregated extended metrics across multiple rallies."""
+    # Compute average HOTA metrics
+    hota_results = [r for r in results if r.hota_metrics]
+    if hota_results:
+        avg_hota = sum(r.hota_metrics.hota for r in hota_results) / len(hota_results)
+        avg_deta = sum(r.hota_metrics.deta for r in hota_results) / len(hota_results)
+        avg_assa = sum(r.hota_metrics.assa for r in hota_results) / len(hota_results)
+
+        console.print("\n[bold]Aggregate HOTA Metrics[/bold]")
+        console.print(f"  HOTA: {avg_hota:.1%}")
+        console.print(f"  DetA: {avg_deta:.1%}")
+        console.print(f"  AssA: {avg_assa:.1%}")
+
+    # Compute aggregate track quality metrics
+    tq_results = [r for r in results if r.track_quality]
+    if tq_results:
+        total_mt = sum(r.track_quality.mostly_tracked for r in tq_results)
+        total_gt = sum(r.track_quality.gt_track_count for r in tq_results)
+        total_frag = sum(r.track_quality.fragmentation for r in tq_results)
+        avg_coverage = sum(r.track_quality.avg_track_coverage for r in tq_results) / len(tq_results)
+        avg_pred_ids = sum(r.track_quality.avg_pred_ids_per_gt for r in tq_results) / len(tq_results)
+
+        mt_ratio = total_mt / total_gt if total_gt > 0 else 0.0
+        frag_ratio = total_frag / total_gt if total_gt > 0 else 0.0
+
+        console.print("\n[bold]Aggregate Track Quality[/bold]")
+        console.print(f"  Mostly Tracked: {total_mt}/{total_gt} ({mt_ratio:.0%})")
+        console.print(f"  Fragmentation: {total_frag} ({frag_ratio:.0%} of tracks)")
+        console.print(f"  Avg Track Coverage: {avg_coverage:.1%}")
+        console.print(f"  Avg Pred IDs per GT: {avg_pred_ids:.2f}")
+
+    # Compute aggregate position metrics
+    pm_results = [r for r in results if r.position_metrics and r.position_metrics.num_position_samples > 0]
+    if pm_results:
+        total_samples = sum(r.position_metrics.num_position_samples for r in pm_results)
+        # Weighted average by sample count
+        weighted_mean = sum(
+            r.position_metrics.mean_position_error * r.position_metrics.num_position_samples
+            for r in pm_results
+        ) / total_samples
+
+        console.print("\n[bold]Aggregate Position Accuracy[/bold]")
+        console.print(f"  Mean Position Error: {weighted_mean * 100:.2f}%")
+        console.print(f"  [dim]Based on {total_samples} matched pairs across {len(pm_results)} rallies[/dim]")
 
 
 def _display_ball_metrics(ball_metrics: BallMetrics) -> None:
