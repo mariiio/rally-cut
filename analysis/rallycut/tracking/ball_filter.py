@@ -38,10 +38,33 @@ class BallFilterConfig:
     lag_frames: int = 0  # Frames to extrapolate forward (0 = no extrapolation)
 
     # Jump detection (rejects impossible movements)
-    max_velocity: float = 0.3  # 30% of screen per frame is max plausible
+    # Note: Beach volleyball balls can move very fast (serves, spikes)
+    # 0.3 was too aggressive and rejected 60%+ of valid detections
+    # 0.8 allows fast movements while still filtering obvious errors
+    max_velocity: float = 0.8  # 80% of screen per frame max
 
     # Occlusion handling
     max_occlusion_frames: int = 30  # ~1s at 30fps before losing track
+
+    # Bidirectional smoothing (for offline processing only)
+    # Combines forward and backward Kalman passes for zero-lag smoothing
+    enable_bidirectional: bool = False
+
+    # Interpolation for missing frames
+    # Fills gaps in detection with linear interpolation between known positions
+    enable_interpolation: bool = True
+    max_interpolation_gap: int = 5  # Max frames to interpolate (larger gaps left empty)
+    interpolated_confidence: float = 0.5  # Confidence assigned to interpolated positions
+
+    # Outlier removal (post-processing to remove detection failures)
+    # Targets edge artifacts and trajectory inconsistencies
+    enable_outlier_removal: bool = True
+    # Edge margin: positions within this distance of screen edge are suspicious
+    edge_margin: float = 0.02  # 2% of screen = ~38px on 1920px
+    # Max deviation from trajectory interpolation to be considered valid
+    max_trajectory_deviation: float = 0.15  # 15% of screen = ~288px on 1920px
+    # Minimum neighbors required for trajectory-based outlier detection
+    min_neighbors_for_outlier: int = 2
 
 
 class BallTemporalFilter:
@@ -277,12 +300,321 @@ class BallTemporalFilter:
             filtered_pos = self.update(pos)
             filtered.append(filtered_pos)
 
-        # Log filtering summary
+        # Apply bidirectional smoothing if enabled
+        if self.config.enable_bidirectional and len(filtered) > 1:
+            filtered = self._smooth_bidirectional(sorted_positions, filtered)
+
+        # Track counts for logging
+        after_filter_count = len(filtered)
+        outlier_count = 0
+        interp_count = 0
+
+        # Apply outlier removal before interpolation
+        # (so we don't fill gaps created by removed outliers)
+        if self.config.enable_outlier_removal:
+            filtered = self._remove_outliers(filtered)
+            outlier_count = after_filter_count - len(filtered)
+
+        # Apply interpolation for missing frames
+        before_interp_count = len(filtered)
+        if self.config.enable_interpolation:
+            filtered = self._interpolate_missing(filtered)
+            interp_count = len(filtered) - before_interp_count
+
+        # Log summary
         if filtered:
-            logger.info(
-                f"Ball filter: {len(filtered)} positions, "
-                f"lag_comp={'ON' if self.config.enable_lag_compensation else 'OFF'}, "
-                f"lag_frames={self.config.lag_frames}"
-            )
+            parts = [f"Ball filter: {after_filter_count} positions"]
+            if outlier_count > 0:
+                parts.append(f"-{outlier_count} outliers")
+            if interp_count > 0:
+                parts.append(f"+{interp_count} interpolated")
+            if self.config.enable_bidirectional:
+                parts.append("bidirectional=ON")
+            logger.info(", ".join(parts))
 
         return filtered
+
+    def _smooth_bidirectional(
+        self,
+        raw_positions: list["BallPosition"],
+        forward_filtered: list["BallPosition"],
+    ) -> list["BallPosition"]:
+        """Apply RTS (Rauch-Tung-Striebel) smoother for bidirectional smoothing.
+
+        This combines forward and backward Kalman filter passes to produce
+        optimal zero-lag estimates. Only suitable for offline batch processing.
+
+        The algorithm:
+        1. Forward pass already done in filter_batch (stores state and covariance)
+        2. Backward pass to compute smoothed estimates
+
+        Args:
+            raw_positions: Original raw positions (sorted by frame)
+            forward_filtered: Results from forward pass
+
+        Returns:
+            Smoothed ball positions with zero lag
+        """
+        from rallycut.tracking.ball_tracker import BallPosition
+
+        if len(forward_filtered) < 2:
+            return forward_filtered
+
+        # Re-run forward pass storing all states and covariances
+        self.reset()
+        n = len(raw_positions)
+
+        # Storage for forward pass
+        forward_states: list[np.ndarray] = []
+        forward_covs: list[np.ndarray] = []
+        predicted_states: list[np.ndarray] = []
+        predicted_covs: list[np.ndarray] = []
+
+        for pos in raw_positions:
+            x, y, confidence = pos.x, pos.y, pos.confidence
+
+            if not self._initialized:
+                if confidence >= self.config.min_confidence_for_update:
+                    self._initialize(x, y)
+                    forward_states.append(self._state.copy())  # type: ignore
+                    forward_covs.append(self._covariance.copy())  # type: ignore
+                    predicted_states.append(self._state.copy())  # type: ignore
+                    predicted_covs.append(self._covariance.copy())  # type: ignore
+                else:
+                    # Not initialized yet - use dummy values
+                    dummy_state = np.array([x, y, 0.0, 0.0])
+                    dummy_cov = np.eye(4) * 1.0
+                    forward_states.append(dummy_state)
+                    forward_covs.append(dummy_cov)
+                    predicted_states.append(dummy_state)
+                    predicted_covs.append(dummy_cov)
+                continue
+
+            # Predict
+            pred_state, pred_cov = self._predict()
+            predicted_states.append(pred_state.copy())
+            predicted_covs.append(pred_cov.copy())
+
+            # Update
+            is_confident = confidence >= self.config.min_confidence_for_update
+            is_valid = is_confident and self._is_valid_jump(pred_state, x, y, confidence)
+
+            if is_valid:
+                z = np.array([x, y])
+                self._state, self._covariance = self._update(pred_state, pred_cov, z)
+            else:
+                self._state = pred_state
+                self._covariance = pred_cov
+
+            forward_states.append(self._state.copy())
+            forward_covs.append(self._covariance.copy())
+
+        # Backward smoothing pass (RTS smoother)
+        smoothed_states: list[np.ndarray] = [np.zeros(4)] * n
+        smoothed_states[n - 1] = forward_states[n - 1]
+
+        for k in range(n - 2, -1, -1):
+            # Compute smoother gain
+            # C_k = P_k @ F^T @ inv(P_{k+1|k})
+            try:
+                smoother_gain = (
+                    forward_covs[k]
+                    @ self._F.T
+                    @ np.linalg.inv(predicted_covs[k + 1])
+                )
+            except np.linalg.LinAlgError:
+                # Singular matrix - use forward estimate
+                smoothed_states[k] = forward_states[k]
+                continue
+
+            # Smoothed state
+            # x_k|n = x_k|k + C_k @ (x_{k+1|n} - x_{k+1|k})
+            smoothed_states[k] = (
+                forward_states[k]
+                + smoother_gain @ (smoothed_states[k + 1] - predicted_states[k + 1])
+            )
+
+        # Convert smoothed states back to BallPosition
+        smoothed_positions: list[BallPosition] = []
+        for i, pos in enumerate(raw_positions):
+            state = smoothed_states[i]
+            x_smooth = float(max(0.0, min(1.0, state[0])))
+            y_smooth = float(max(0.0, min(1.0, state[1])))
+
+            smoothed_positions.append(
+                BallPosition(
+                    frame_number=pos.frame_number,
+                    x=x_smooth,
+                    y=y_smooth,
+                    confidence=pos.confidence,  # Keep original confidence
+                )
+            )
+
+        return smoothed_positions
+
+    def _interpolate_missing(
+        self,
+        positions: list["BallPosition"],
+    ) -> list["BallPosition"]:
+        """Interpolate missing frames with linear interpolation.
+
+        Fills gaps where ball detection failed by linearly interpolating
+        between known positions. Only interpolates gaps up to max_interpolation_gap
+        frames to avoid creating fake trajectories across scene cuts.
+
+        Args:
+            positions: List of ball positions (sorted by frame number)
+
+        Returns:
+            List with interpolated positions added for missing frames
+        """
+        from rallycut.tracking.ball_tracker import BallPosition
+
+        if not positions:
+            return []
+
+        # Build map of confident positions
+        min_conf = self.config.min_confidence_for_update
+        pos_by_frame = {
+            p.frame_number: p for p in positions if p.confidence >= min_conf
+        }
+
+        if not pos_by_frame:
+            return positions
+
+        frames = sorted(pos_by_frame.keys())
+        result = list(positions)  # Start with original positions
+        interpolated_count = 0
+
+        # Find and fill gaps
+        for i in range(len(frames) - 1):
+            f1, f2 = frames[i], frames[i + 1]
+            gap = f2 - f1
+
+            # Only interpolate small gaps
+            if gap > 1 and gap <= self.config.max_interpolation_gap:
+                p1, p2 = pos_by_frame[f1], pos_by_frame[f2]
+
+                for f in range(f1 + 1, f2):
+                    # Linear interpolation factor
+                    t = (f - f1) / gap
+
+                    interp_pos = BallPosition(
+                        frame_number=f,
+                        x=p1.x + t * (p2.x - p1.x),
+                        y=p1.y + t * (p2.y - p1.y),
+                        confidence=self.config.interpolated_confidence,
+                    )
+                    result.append(interp_pos)
+                    interpolated_count += 1
+
+        if interpolated_count > 0:
+            logger.debug(f"Interpolated {interpolated_count} missing frames")
+            # Re-sort by frame number after adding interpolated positions
+            result.sort(key=lambda p: p.frame_number)
+
+        return result
+
+    def _remove_outliers(
+        self,
+        positions: list["BallPosition"],
+    ) -> list["BallPosition"]:
+        """Remove outlier positions that are likely detection failures.
+
+        Identifies and removes positions that:
+        1. Are at screen edges (common failure mode where model outputs 0,0 or 1,1)
+        2. Deviate significantly from the trajectory defined by neighbors
+
+        Args:
+            positions: List of ball positions (sorted by frame number)
+
+        Returns:
+            List with outlier positions removed
+        """
+        if len(positions) < 3:
+            return positions
+
+        # Build position map by frame
+        pos_by_frame = {p.frame_number: p for p in positions}
+        frames = sorted(pos_by_frame.keys())
+
+        outlier_frames: set[int] = set()
+
+        for i, frame in enumerate(frames):
+            pos = pos_by_frame[frame]
+
+            # Check 1: Edge detection (positions at screen boundaries)
+            margin = self.config.edge_margin
+            is_edge = (
+                pos.x < margin or pos.x > (1 - margin) or
+                pos.y < margin or pos.y > (1 - margin)
+            )
+
+            if is_edge:
+                # Only mark as outlier if confidence is low-medium
+                # High confidence edge positions might be legitimate (ball at edge)
+                if pos.confidence < 0.8:
+                    outlier_frames.add(frame)
+                    continue
+
+            # Check 2: Trajectory consistency with neighbors
+            # Find neighbors (previous and next positions)
+            prev_pos = None
+            next_pos = None
+
+            # Look for previous neighbor (up to 5 frames back)
+            for j in range(i - 1, max(-1, i - 6), -1):
+                if j >= 0 and frames[j] not in outlier_frames:
+                    prev_pos = pos_by_frame[frames[j]]
+                    prev_gap = frame - frames[j]
+                    break
+
+            # Look for next neighbor (up to 5 frames ahead)
+            for j in range(i + 1, min(len(frames), i + 6)):
+                if frames[j] not in outlier_frames:
+                    next_pos = pos_by_frame[frames[j]]
+                    next_gap = frames[j] - frame
+                    break
+
+            # Need at least min_neighbors for trajectory check
+            neighbor_count = (1 if prev_pos else 0) + (1 if next_pos else 0)
+            if neighbor_count < self.config.min_neighbors_for_outlier:
+                continue
+
+            # Interpolate expected position from neighbors
+            if prev_pos and next_pos:
+                # Both neighbors available - interpolate
+                total_gap = prev_gap + next_gap
+                t = prev_gap / total_gap
+                expected_x = prev_pos.x + t * (next_pos.x - prev_pos.x)
+                expected_y = prev_pos.y + t * (next_pos.y - prev_pos.y)
+            elif prev_pos:
+                # Only previous - use it directly (no extrapolation)
+                expected_x, expected_y = prev_pos.x, prev_pos.y
+            else:
+                # Only next - use it directly
+                expected_x, expected_y = next_pos.x, next_pos.y  # type: ignore
+
+            # Compute deviation from expected position
+            deviation = np.sqrt(
+                (pos.x - expected_x) ** 2 + (pos.y - expected_y) ** 2
+            )
+
+            # Mark as outlier if deviation exceeds threshold
+            # Scale threshold by confidence (lower confidence = stricter check)
+            conf_factor = 0.5 + 0.5 * pos.confidence  # 0.5 to 1.0
+            threshold = self.config.max_trajectory_deviation * conf_factor
+
+            if deviation > threshold:
+                outlier_frames.add(frame)
+                logger.debug(
+                    f"Frame {frame}: Outlier detected (deviation={deviation:.3f}, "
+                    f"threshold={threshold:.3f}, conf={pos.confidence:.2f})"
+                )
+
+        # Remove outliers
+        if outlier_frames:
+            logger.info(f"Removed {len(outlier_frames)} outlier positions")
+            return [p for p in positions if p.frame_number not in outlier_frames]
+
+        return positions

@@ -428,3 +428,76 @@ def aggregate_ball_metrics(
             combined.video_fps = r.video_fps
 
     return combined
+
+
+def find_optimal_frame_offset(
+    ground_truth: list[GroundTruthPosition],
+    predictions: list[BallPosition],
+    video_width: int = 1920,
+    video_height: int = 1080,
+    max_offset: int = 5,
+    match_threshold_px: float = 50.0,
+) -> tuple[int, float]:
+    """Find the optimal frame offset for aligning predictions with ground truth.
+
+    Different videos may have different frame alignment requirements due to:
+    - FPS differences (29.97 vs 30.0)
+    - Model prediction lag
+    - Ground truth labeling timing
+
+    This function tests offsets from 0 to max_offset and returns the one
+    that maximizes match rate.
+
+    Args:
+        ground_truth: Ground truth ball positions.
+        predictions: Predicted ball positions from tracker.
+        video_width: Video frame width for pixel conversion.
+        video_height: Video frame height for pixel conversion.
+        max_offset: Maximum offset to test (default 5 frames).
+        match_threshold_px: Distance threshold for counting matches.
+
+    Returns:
+        Tuple of (best_offset, best_match_rate).
+    """
+    gt_ball = [p for p in ground_truth if p.label == "ball"]
+    if not gt_ball:
+        return 0, 0.0
+
+    gt_by_frame = {p.frame_number: p for p in gt_ball}
+
+    best_offset = 0
+    best_match_rate = 0.0
+
+    for offset in range(max_offset + 1):
+        # Shift predictions by offset
+        pred_by_frame: dict[int, BallPosition] = {}
+        for p in predictions:
+            if p.confidence < 0.3:
+                continue
+            shifted_frame = p.frame_number - offset
+            existing = pred_by_frame.get(shifted_frame)
+            if existing is None or p.confidence > existing.confidence:
+                pred_by_frame[shifted_frame] = p
+
+        # Count matches
+        num_matched = 0
+        for frame, gt_pos in gt_by_frame.items():
+            pred = pred_by_frame.get(frame)
+            if pred is None:
+                continue
+
+            # Compute error in pixels
+            dx = (pred.x - gt_pos.x) * video_width
+            dy = (pred.y - gt_pos.y) * video_height
+            error_px = math.sqrt(dx * dx + dy * dy)
+
+            if error_px <= match_threshold_px:
+                num_matched += 1
+
+        match_rate = num_matched / len(gt_by_frame) if gt_by_frame else 0.0
+
+        if match_rate > best_match_rate:
+            best_match_rate = match_rate
+            best_offset = offset
+
+    return best_offset, best_match_rate

@@ -26,13 +26,21 @@ BALL_LAG_GRID: dict[str, list[float | int | bool]] = {
 }
 
 
-# Full grid for comprehensive sweep (486 combinations: 3*3*3*3*3*2)
+# Full grid for comprehensive sweep (972 combinations: 3*3*3*3*3*2*2)
 BALL_FULL_GRID: dict[str, list[float | int | bool]] = {
     "process_noise_position": [0.0005, 0.001, 0.002],
     "process_noise_velocity": [0.005, 0.01, 0.02],
     "measurement_noise": [0.002, 0.005, 0.01],
     "lag_frames": [2, 3, 5],
     "max_velocity": [0.25, 0.30, 0.35],
+    "enable_lag_compensation": [True, False],
+    "enable_bidirectional": [True, False],
+}
+
+
+# Bidirectional smoothing comparison grid (4 combinations)
+BALL_BIDIRECTIONAL_GRID: dict[str, list[float | int | bool]] = {
+    "enable_bidirectional": [True, False],
     "enable_lag_compensation": [True, False],
 }
 
@@ -63,6 +71,7 @@ BALL_AVAILABLE_GRIDS: dict[str, dict[str, list[Any]]] = {
     "full": BALL_FULL_GRID,
     "confidence": BALL_CONFIDENCE_GRID,
     "heatmap": HEATMAP_GRID,
+    "bidirectional": BALL_BIDIRECTIONAL_GRID,
 }
 
 

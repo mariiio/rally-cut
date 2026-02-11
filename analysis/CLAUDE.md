@@ -280,18 +280,52 @@ Detects game phases (SERVE, ATTACK, DEFENSE, TRANSITION) from ball velocity patt
 
 Kalman filter reduces lag and flickering in ball tracking. See `tracking/ball_filter.py`.
 
+### Ball Tracking Model Variants
+
+Multiple VballNet model variants are available via the `model` parameter:
+
+| Model | ID | Match Rate | Speed | Recommendation |
+|-------|-----|------------|-------|----------------|
+| **VballNetV2** | `v2` (default) | **70.6%** | 12.5s | **Recommended** - most consistent |
+| **VballNetFastV1** | `fast` | 69.1% | 3.5s | Use when speed matters (3.6x faster, 1.5% less accurate) |
+| **VballNetV1b** | `v1b` | 0-70% | - | **Not recommended** - can fail completely (0%) on some videos |
+
+Note: VballNetV1c is excluded as it requires recurrent hidden state input. Benchmarks on beach volleyball ground truth with auto-offset detection.
+
+```python
+from rallycut.tracking.ball_tracker import BallTracker
+
+# Default model (v2 - best accuracy)
+tracker = BallTracker()
+
+# Use v1b for highest detection rate
+tracker = BallTracker(model="v1b")
+
+# Use fast model for quicker inference
+tracker = BallTracker(model="fast")
+```
+
+CLI support:
+```bash
+rallycut track-players video.mp4 --ball-model v1b
+rallycut evaluate-tracking compare-ball-models --all  # Compare all models
+```
+
 ### Heatmap Decoding Options
 
 The VballNet model outputs heatmaps that are decoded to ball positions. See `tracking/ball_tracker.py`.
 
 **HeatmapDecodingConfig options:**
-- `threshold=0.5`: Base threshold for heatmap binarization (0-1)
+- `threshold=0.3`: Base threshold for heatmap binarization (0-1). Lower threshold improves detection.
 - `adaptive_threshold=False`: Scale threshold based on peak response (tested but hurts accuracy)
 - `centroid_method="contour"`: Method for centroid extraction
   - `"contour"`: Uses largest contour moments (default, **recommended**)
   - `"weighted"`: Uses heatmap values as weights (tested but hurts accuracy)
+- `enable_subpixel=False`: Parabolic fitting for sub-pixel accuracy (minimal improvement in practice)
+- `enable_multi_threshold=False`: Run at multiple thresholds and combine
+- `multi_thresholds=(0.3, 0.4, 0.5, 0.6)`: Thresholds for multi-threshold mode
 
-**Note:** Testing on ground truth data showed the defaults (`contour` + `threshold=0.5`) perform best. Adaptive threshold and weighted centroid were tested but increased false positives and reduced match rate.
+**Note:** Testing on ground truth (beach volleyball) showed `threshold=0.3` with `contour` centroid gives best results. With frame offset auto-detection, accuracy reaches **75% match rate** at 50px threshold.
 
 ```python
 from rallycut.tracking.ball_tracker import BallTracker, HeatmapDecodingConfig
@@ -299,8 +333,12 @@ from rallycut.tracking.ball_tracker import BallTracker, HeatmapDecodingConfig
 # Default config (recommended - best accuracy)
 tracker = BallTracker()
 
-# Custom threshold (for experimentation only)
-config = HeatmapDecodingConfig(threshold=0.4)
+# Enable sub-pixel refinement for improved accuracy
+config = HeatmapDecodingConfig(enable_subpixel=True)
+tracker = BallTracker(heatmap_config=config)
+
+# Enable multi-threshold detection to catch low-confidence balls
+config = HeatmapDecodingConfig(enable_multi_threshold=True)
 tracker = BallTracker(heatmap_config=config)
 ```
 
@@ -326,15 +364,25 @@ result = tracker.track_video(
 
 **Problems solved:**
 - **Lag**: VballNet model outputs positions that are slightly behind the actual ball. Filter extrapolates forward using velocity to compensate.
-- **Flickering/Jumps**: When ball is occluded, tracking can jump to false detections. Filter rejects impossible movements (>30% screen/frame).
+- **Flickering/Jumps**: When ball is occluded, tracking can jump to false detections. Filter rejects impossible movements (>80% screen/frame).
 - **Noise**: Raw detections have frame-to-frame jitter. Kalman filter smooths trajectory.
 
 **Key parameters (BallFilterConfig):**
 - `enable_lag_compensation=True`: Extrapolate position forward to reduce apparent lag
 - `lag_frames=0`: Frames to extrapolate forward (0 = disabled, grid search showed best results)
-- `max_velocity=0.3`: Max plausible movement (30% screen/frame) for jump rejection
+- `max_velocity=0.8`: Max plausible movement (80% screen/frame) for jump rejection. Note: 0.3 was too aggressive and rejected 60%+ of valid detections on beach volleyball.
 - `min_confidence_for_update=0.3`: Below this, use prediction only
 - `max_occlusion_frames=30`: Frames before marking track as lost (~1s at 30fps)
+- `enable_bidirectional=False`: Use RTS smoother for zero-lag offline processing
+- `enable_interpolation=True`: Fill missing frames with linear interpolation
+- `max_interpolation_gap=5`: Max frames to interpolate (larger gaps left empty)
+- `interpolated_confidence=0.5`: Confidence assigned to interpolated positions
+- `enable_outlier_removal=True`: Remove detection failures (edge artifacts, trajectory inconsistencies)
+- `edge_margin=0.02`: Positions within 2% of screen edge are suspicious
+- `max_trajectory_deviation=0.15`: Max deviation from interpolated trajectory (15% of screen)
+
+**Bidirectional Smoothing (RTS smoother):**
+For offline batch processing, bidirectional smoothing combines forward and backward Kalman passes for optimal zero-lag estimates. Only use for batch processing (not real-time).
 
 **Usage:**
 ```python
@@ -349,9 +397,42 @@ from rallycut.tracking import BallFilterConfig
 config = BallFilterConfig(lag_frames=3)  # Increase if ball marker appears behind
 result = tracker.track_video(video_path, filter_config=config)
 
+# Enable bidirectional smoothing for zero-lag (offline only)
+config = BallFilterConfig(enable_bidirectional=True)
+result = tracker.track_video(video_path, filter_config=config)
+
 # Keep raw positions for debugging
 result = tracker.track_video(video_path, preserve_raw=True)
 print(result.raw_positions)  # Original detections before filtering
+```
+
+**Grid search for optimal parameters:**
+```bash
+# Quick grid search (81 combinations)
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid quick
+
+# Test bidirectional smoothing
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid bidirectional
+
+# Full grid search (972 combinations)
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid full -o results.json
+```
+
+### Frame Offset Auto-Detection
+
+Different videos require different frame offsets due to FPS variations (29.97 vs 30.0) and ground truth labeling timing. The evaluation automatically detects the optimal offset (0-5 frames) per video.
+
+```python
+from rallycut.evaluation.tracking.ball_metrics import find_optimal_frame_offset
+
+# Find best offset for aligning predictions with ground truth
+best_offset, match_rate = find_optimal_frame_offset(
+    ground_truth=gt_positions,
+    predictions=ball_positions,
+    video_width=1920,
+    video_height=1080,
+)
+print(f"Optimal offset: +{best_offset} frames ({match_rate*100:.1f}% match)")
 ```
 
 ## Cross-Rally Player Consistency
@@ -416,6 +497,13 @@ uv run rallycut evaluate-tracking tune-ball-filter --all -o ball.json  # Export 
 - Match Rate: % of GT frames with ball within 50px threshold
 - Mean/Median/P90 Error: Position error in pixels
 - Accuracy <20px/<50px: % of detections within threshold
+
+**Valid ball ground truth videos:**
+Only these videos have validated ball tracking ground truth:
+- `a5866029-7cf4-42d6-adc2-8e28111ffd81`
+- `1efa35cf-4edd-4504-b4a4-834eee9e5218`
+
+Other videos have incorrect ball labels and are automatically filtered out when using `--ball-only`, `tune-ball-filter`, or `compare-ball-models`. See `VALID_BALL_GT_VIDEOS` in `evaluation/tracking/db.py`.
 
 ## Code Style
 
