@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from rallycut.tracking.ball_filter import BallFilterConfig
+    from rallycut.tracking.ball_smoother import TrajectorySmoothingConfig
 
 import cv2
 import numpy as np
@@ -61,6 +62,35 @@ def _download_model(url: str, dest_path: Path) -> None:
                         logger.debug(f"Downloaded {downloaded / 1024 / 1024:.1f}MB ({pct:.0f}%)")
 
     logger.info(f"Model downloaded: {dest_path.stat().st_size / 1024 / 1024:.1f}MB")
+
+
+@dataclass
+class HeatmapDecodingConfig:
+    """Configuration for heatmap-to-position decoding.
+
+    Note: Testing on ground truth data showed that the defaults (contour + 0.5 threshold)
+    perform best. Adaptive threshold and weighted centroid options were tested but
+    degraded accuracy - they increase detection count but introduce more false positives.
+    Keep these options available for experimentation but defaults are recommended.
+    """
+
+    # Base threshold for heatmap binarization
+    threshold: float = 0.5
+
+    # Adaptive threshold: scale threshold based on peak response
+    # Higher peaks = higher threshold for cleaner extraction
+    # Note: Testing showed this HURTS accuracy on beach volleyball (drops detection)
+    adaptive_threshold: bool = False
+
+    # Minimum threshold even with adaptive scaling
+    min_threshold: float = 0.3
+
+    # Maximum threshold even with adaptive scaling
+    max_threshold: float = 0.7
+
+    # Centroid method: "contour" (largest contour moments) or "weighted" (heatmap-weighted average)
+    # Note: Testing showed contour method performs better than weighted
+    centroid_method: str = "contour"
 
 
 @dataclass
@@ -173,15 +203,22 @@ class BallTracker:
     Optimized for CPU (~100 FPS on standard hardware).
     """
 
-    def __init__(self, model_path: Path | None = None):
+    def __init__(
+        self,
+        model_path: Path | None = None,
+        heatmap_config: HeatmapDecodingConfig | None = None,
+    ):
         """
         Initialize ball tracker.
 
         Args:
             model_path: Optional path to ONNX model. If not provided,
                        downloads to cache on first use.
+            heatmap_config: Configuration for heatmap decoding. If not provided,
+                           uses defaults (threshold=0.5, contour centroid).
         """
         self.model_path = model_path
+        self.heatmap_config = heatmap_config or HeatmapDecodingConfig()
         self._session: Any = None
 
     def _ensure_model(self) -> Path:
@@ -271,22 +308,118 @@ class BallTracker:
         sequence *= (1.0 / 255.0)  # In-place multiply is faster than divide
         return sequence[np.newaxis, ...]  # Add batch dimension: (1, 9, 288, 512)
 
-    def _decode_heatmap(
+    def _compute_adaptive_threshold(self, heatmap: np.ndarray) -> float:
+        """Compute adaptive threshold based on heatmap peak response.
+
+        Higher peaks allow higher thresholds for cleaner extraction.
+        Lower peaks use lower thresholds to avoid missing detections.
+
+        Args:
+            heatmap: 2D heatmap array (may be 0-1 or 0-255 scale)
+
+        Returns:
+            Threshold value in 0-1 scale.
+        """
+        config = self.heatmap_config
+        max_val = float(heatmap.max())
+
+        # Normalize to 0-1 if needed
+        if max_val > 1.0:
+            max_val /= 255.0
+
+        # Scale threshold based on peak: higher peaks = higher threshold
+        # Reference point: at max_val=0.8, use base threshold
+        scale_factor = max_val / 0.8 if max_val > 0 else 1.0
+        adaptive = config.threshold * scale_factor
+
+        # Clamp to valid range
+        return max(config.min_threshold, min(config.max_threshold, adaptive))
+
+    def _decode_heatmap_weighted(
         self,
         heatmap: np.ndarray,
-        threshold: float = 0.5,
+        threshold: float,
     ) -> tuple[float, float, float]:
-        """
-        Decode a single heatmap to ball position using contour detection.
+        """Decode heatmap using weighted centroid of all above-threshold pixels.
+
+        Uses heatmap values as weights for more accurate centroid when
+        multiple response regions exist.
 
         Args:
             heatmap: 2D heatmap array (height, width)
-            threshold: Threshold for binary detection
+            threshold: Threshold for including pixels
 
         Returns:
             Tuple of (x_norm, y_norm, confidence) where coordinates are 0-1 normalized
         """
-        # Normalize heatmap to 0-1 in-place if needed, avoiding extra allocations
+        max_val = float(heatmap.max())
+
+        # Normalize heatmap if needed
+        if max_val > 1.0:
+            heatmap_norm = heatmap.astype(np.float32) / 255.0
+            max_val /= 255.0
+        else:
+            heatmap_norm = heatmap.astype(np.float32)
+
+        # Create mask of above-threshold pixels
+        mask = heatmap_norm > (threshold * max_val) if max_val > 0 else heatmap_norm > threshold
+
+        if not mask.any():
+            return 0.5, 0.5, 0.0
+
+        # Get coordinates and weights
+        y_coords, x_coords = np.where(mask)
+        weights = heatmap_norm[mask]
+
+        # Compute weighted centroid
+        total_weight = weights.sum()
+        if total_weight == 0:
+            return 0.5, 0.5, 0.0
+
+        cx = np.average(x_coords, weights=weights)
+        cy = np.average(y_coords, weights=weights)
+
+        # Normalize to 0-1
+        x_norm = float(cx) / heatmap.shape[1]
+        y_norm = float(cy) / heatmap.shape[0]
+
+        # Clamp to valid range
+        x_norm = max(0.0, min(1.0, x_norm))
+        y_norm = max(0.0, min(1.0, y_norm))
+
+        return x_norm, y_norm, min(1.0, max_val)
+
+    def _decode_heatmap(
+        self,
+        heatmap: np.ndarray,
+        threshold: float | None = None,
+    ) -> tuple[float, float, float]:
+        """
+        Decode a single heatmap to ball position.
+
+        Uses configuration from self.heatmap_config for decoding options.
+
+        Args:
+            heatmap: 2D heatmap array (height, width)
+            threshold: Override threshold (if None, uses config)
+
+        Returns:
+            Tuple of (x_norm, y_norm, confidence) where coordinates are 0-1 normalized
+        """
+        config = self.heatmap_config
+
+        # Determine threshold
+        if threshold is None:
+            if config.adaptive_threshold:
+                threshold = self._compute_adaptive_threshold(heatmap)
+            else:
+                threshold = config.threshold
+
+        # Use weighted centroid if configured
+        if config.centroid_method == "weighted":
+            return self._decode_heatmap_weighted(heatmap, threshold)
+
+        # Default: contour-based centroid
         max_val = float(heatmap.max())
         if max_val > 1.0:
             # Scale threshold to match unnormalized range, avoiding division
@@ -402,6 +535,8 @@ class BallTracker:
         filter_config: "BallFilterConfig | None" = None,
         enable_filtering: bool = True,
         preserve_raw: bool = False,
+        enable_smoothing: bool = False,
+        smoothing_config: "TrajectorySmoothingConfig | None" = None,
     ) -> BallTrackingResult:
         """
         Track ball positions in a video segment.
@@ -414,6 +549,8 @@ class BallTracker:
             filter_config: Optional configuration for temporal filtering
             enable_filtering: Apply Kalman filter smoothing (default True)
             preserve_raw: Store raw positions in result for debugging
+            enable_smoothing: Apply post-processing trajectory smoothing (default False)
+            smoothing_config: Optional configuration for trajectory smoothing
 
         Returns:
             BallTrackingResult with all detected positions
@@ -421,6 +558,10 @@ class BallTracker:
         import time
 
         from rallycut.tracking.ball_filter import BallFilterConfig, BallTemporalFilter
+        from rallycut.tracking.ball_smoother import (
+            TrajectoryPostProcessor,
+            TrajectorySmoothingConfig,
+        )
 
         start_time = time.time()
         video_path = Path(video_path)
@@ -533,6 +674,13 @@ class BallTracker:
                 temporal_filter = BallTemporalFilter(config)
 
                 positions = temporal_filter.filter_batch(positions)
+
+            # Apply post-processing smoothing if enabled
+            if enable_smoothing:
+                smooth_config = smoothing_config or TrajectorySmoothingConfig()
+                smoother = TrajectoryPostProcessor(smooth_config)
+                positions = smoother.process(positions)
+                logger.info("Applied trajectory post-processing smoothing")
 
             return BallTrackingResult(
                 positions=positions,

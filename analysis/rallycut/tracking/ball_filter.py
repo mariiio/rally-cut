@@ -31,10 +31,11 @@ class BallFilterConfig:
     # Lag compensation for VballNet model bias
     # The model tends to output positions slightly behind the actual ball
     # Extrapolate forward using estimated velocity to compensate
-    # Note: Keep this low (2-4 frames) to avoid over-extrapolation when
-    # ball direction changes or velocity estimate becomes stale
+    # Note: Grid search on beach volleyball ground truth showed lag_frames=0
+    # performs best - the model may not have significant lag on these videos,
+    # or extrapolation introduces more error than it corrects
     enable_lag_compensation: bool = True
-    lag_frames: int = 3  # Frames to extrapolate forward (conservative)
+    lag_frames: int = 0  # Frames to extrapolate forward (0 = no extrapolation)
 
     # Jump detection (rejects impossible movements)
     max_velocity: float = 0.3  # 30% of screen per frame is max plausible

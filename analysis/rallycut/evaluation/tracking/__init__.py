@@ -1,10 +1,27 @@
 """Player and ball tracking evaluation framework."""
 
+from rallycut.evaluation.tracking.ball_grid_search import (
+    BallFilterConfigResult,
+    BallFilterGridSearchResult,
+    BallRawCache,
+    CachedBallData,
+    apply_ball_filter_config,
+    ball_grid_search,
+    evaluate_ball_config,
+)
 from rallycut.evaluation.tracking.ball_metrics import (
     BallFrameComparison,
     BallTrackingMetrics,
     aggregate_ball_metrics,
     evaluate_ball_tracking,
+)
+from rallycut.evaluation.tracking.ball_param_grid import (
+    BALL_AVAILABLE_GRIDS,
+    ball_grid_size,
+    describe_ball_config_diff,
+    generate_ball_filter_configs,
+    get_ball_grid,
+    get_default_ball_config,
 )
 from rallycut.evaluation.tracking.db import (
     TrackingEvaluationRally,
@@ -53,6 +70,21 @@ __all__ = [
     "BallTrackingMetrics",
     "aggregate_ball_metrics",
     "evaluate_ball_tracking",
+    # Ball parameter grid
+    "BALL_AVAILABLE_GRIDS",
+    "ball_grid_size",
+    "describe_ball_config_diff",
+    "generate_ball_filter_configs",
+    "get_ball_grid",
+    "get_default_ball_config",
+    # Ball grid search
+    "BallFilterConfigResult",
+    "BallFilterGridSearchResult",
+    "BallRawCache",
+    "CachedBallData",
+    "apply_ball_filter_config",
+    "ball_grid_search",
+    "evaluate_ball_config",
     # Player metrics
     "PerFrameMetrics",
     "PerPlayerMetrics",
@@ -65,7 +97,7 @@ __all__ = [
     "ErrorType",
     "analyze_errors",
     "summarize_errors",
-    # Parameter grid
+    # Player parameter grid
     "AVAILABLE_GRIDS",
     "describe_config_diff",
     "generate_filter_configs",
@@ -75,7 +107,7 @@ __all__ = [
     # Raw position cache
     "CachedRallyData",
     "RawPositionCache",
-    # Grid search
+    # Player grid search
     "FilterConfigResult",
     "FilterGridSearchResult",
     "apply_filter_config",

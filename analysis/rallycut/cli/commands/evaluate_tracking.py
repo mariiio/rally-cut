@@ -901,3 +901,336 @@ def _display_error_analysis(errors: list[ErrorEvent]) -> None:
             f"\n  [yellow]Max consecutive error frames: "
             f"{summary.consecutive_error_frames}[/yellow]"
         )
+
+
+@app.command(name="tune-ball-filter")
+@handle_errors
+def tune_ball_filter(
+    rally_id: Annotated[
+        str | None,
+        typer.Option(
+            "--rally-id", "-r",
+            help="Tune on specific rally by ID",
+        ),
+    ] = None,
+    video_id: Annotated[
+        str | None,
+        typer.Option(
+            "--video-id", "-v",
+            help="Tune on all labeled rallies in a video",
+        ),
+    ] = None,
+    all_rallies: Annotated[
+        bool,
+        typer.Option(
+            "--all", "-a",
+            help="Tune on all labeled rallies in database",
+        ),
+    ] = False,
+    grid: Annotated[
+        str,
+        typer.Option(
+            "--grid", "-g",
+            help="Grid to search: quick, lag, full, confidence",
+        ),
+    ] = "quick",
+    match_threshold: Annotated[
+        float,
+        typer.Option(
+            "--match-threshold", "-t",
+            help="Max distance (pixels) for a match",
+        ),
+    ] = 50.0,
+    min_rally_detection: Annotated[
+        float | None,
+        typer.Option(
+            "--min-rally-detection",
+            help="Reject configs where any rally drops below this detection rate",
+        ),
+    ] = None,
+    top_n: Annotated[
+        int,
+        typer.Option(
+            "--top", "-n",
+            help="Number of top results to show",
+        ),
+    ] = 10,
+    cache_only: Annotated[
+        bool,
+        typer.Option(
+            "--cache-only",
+            help="Only cache raw positions, don't run grid search",
+        ),
+    ] = False,
+    clear_cache: Annotated[
+        bool,
+        typer.Option(
+            "--clear-cache",
+            help="Clear raw position cache before starting",
+        ),
+    ] = False,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output", "-o",
+            help="Export full results to JSON file",
+        ),
+    ] = None,
+) -> None:
+    """Grid search for optimal BallFilterConfig parameters.
+
+    Searches over Kalman filter parameters to find the configuration that
+    maximizes match rate while minimizing position error.
+
+    Similar to tune-filter, this caches raw (unfiltered) ball positions
+    and re-runs the Kalman filter with different configs.
+
+    Examples:
+
+        # Cache raw ball positions first (requires raw_positions in predictions)
+        rallycut evaluate-tracking tune-ball-filter --all --cache-only
+
+        # Quick grid search (81 combinations)
+        rallycut evaluate-tracking tune-ball-filter --all --grid quick
+
+        # Test lag compensation settings
+        rallycut evaluate-tracking tune-ball-filter --all --grid lag
+
+        # Full search
+        rallycut evaluate-tracking tune-ball-filter --all --grid full
+
+        # Export results
+        rallycut evaluate-tracking tune-ball-filter --all -o results.json
+    """
+    from rallycut.evaluation.tracking.ball_grid_search import (
+        BallRawCache,
+        CachedBallData,
+        ball_grid_search,
+    )
+    from rallycut.evaluation.tracking.ball_param_grid import (
+        BALL_AVAILABLE_GRIDS,
+        ball_grid_size,
+        describe_ball_config_diff,
+        get_ball_grid,
+    )
+    from rallycut.evaluation.tracking.db import load_labeled_rallies
+
+    # Validate input
+    if not rally_id and not video_id and not all_rallies:
+        console.print(
+            "[red]Error:[/red] Specify --rally-id, --video-id, or --all"
+        )
+        raise typer.Exit(1)
+
+    if grid not in BALL_AVAILABLE_GRIDS:
+        console.print(
+            f"[red]Error:[/red] Unknown grid '{grid}'. "
+            f"Available: {', '.join(BALL_AVAILABLE_GRIDS.keys())}"
+        )
+        raise typer.Exit(1)
+
+    # Initialize cache
+    ball_cache = BallRawCache()
+
+    if clear_cache:
+        count = ball_cache.clear()
+        console.print(f"[yellow]Cleared {count} cached ball position files[/yellow]")
+
+    # Load rallies from database
+    console.print("[bold]Loading labeled rallies from database...[/bold]")
+    rallies = load_labeled_rallies(
+        video_id=video_id,
+        rally_id=rally_id,
+    )
+
+    if not rallies:
+        console.print("[yellow]No rallies with ground truth found[/yellow]")
+        raise typer.Exit(1)
+
+    console.print(f"  Found {len(rallies)} rally(s) with ground truth\n")
+
+    from rallycut.labeling.ground_truth import GroundTruthPosition
+
+    # Check for raw ball positions and build cache
+    # NOTE: Raw ball positions (before Kalman filtering) are not stored in the database.
+    # They must be cached via --cache-only after re-running ball tracking with preserve_raw=True.
+    # For now, we can use the filtered positions as a baseline - they'll still allow testing
+    # different Kalman filter parameters, though the starting point is already filtered.
+    cached_rallies: list[tuple[CachedBallData, list[GroundTruthPosition]]] = []
+    rallies_using_filtered: list = []
+
+    for rally in rallies:
+        if rally.predictions is None or not rally.predictions.ball_positions:
+            console.print(
+                f"[yellow]Rally {rally.rally_id[:8]}... has no ball predictions, skipping[/yellow]"
+            )
+            continue
+
+        # First check file cache
+        cached = ball_cache.get(rally.rally_id)
+        if cached:
+            # Filter GT to ball positions
+            gt_ball = [p for p in rally.ground_truth.positions if p.label == "ball"]
+            cached_rallies.append((cached, gt_ball))
+            continue
+
+        # No cached raw positions - use filtered positions as fallback
+        # This still allows testing Kalman filter parameters, though results may differ
+        # from running on truly raw (unfiltered) positions
+        cached_data = CachedBallData(
+            rally_id=rally.rally_id,
+            video_id=rally.video_id,
+            raw_ball_positions=rally.predictions.ball_positions,  # Using filtered as fallback
+            video_fps=rally.video_fps,
+            frame_count=rally.predictions.frame_count,
+            video_width=rally.video_width,
+            video_height=rally.video_height,
+            start_ms=rally.start_ms,
+            end_ms=rally.end_ms,
+        )
+        ball_cache.put(cached_data)
+        gt_ball = [p for p in rally.ground_truth.positions if p.label == "ball"]
+        cached_rallies.append((cached_data, gt_ball))
+        rallies_using_filtered.append(rally)
+
+    # Report status
+    if rallies_using_filtered:
+        console.print(
+            f"\n[dim]Note: {len(rallies_using_filtered)} rally(s) using already-filtered positions.[/dim]"
+        )
+        console.print(
+            "[dim]For more accurate results, re-run ball tracking with preserve_raw=True.[/dim]"
+        )
+
+    console.print(f"\n  Rallies available for grid search: {len(cached_rallies)}")
+
+    if cache_only:
+        stats = ball_cache.stats()
+        console.print("\n[green]Raw ball positions cached successfully![/green]")
+        console.print(f"  Cache location: {stats['cache_dir']}")
+        console.print(f"  Cached rallies: {stats['count']}")
+        console.print(f"  Total size: {stats['total_size_mb']:.2f} MB")
+        return
+
+    if not cached_rallies:
+        console.print("[red]No rallies available for grid search[/red]")
+        raise typer.Exit(1)
+
+    # Run grid search
+    param_grid = get_ball_grid(grid)
+    num_configs = ball_grid_size(param_grid)
+
+    console.print()
+    console.print(f"[bold]Ball Filter Grid Search - {num_configs} configs, {len(cached_rallies)} rallies[/bold]")
+    console.print("=" * 60)
+    console.print(f"Grid: {grid}")
+    console.print(f"Match threshold: {match_threshold:.0f}px")
+    if min_rally_detection is not None:
+        console.print(f"Min rally detection constraint: [yellow]{min_rally_detection:.0%}[/yellow]")
+
+    # Show parameters being searched
+    console.print("\n[dim]Parameters being searched:[/dim]")
+    for param, values in param_grid.items():
+        console.print(f"  {param}: {values}")
+
+    console.print()
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Searching...", total=num_configs)
+
+        def update_progress(current: int, total: int) -> None:
+            progress.update(task, completed=current)
+
+        result = ball_grid_search(
+            rallies=cached_rallies,
+            param_grid=param_grid,
+            match_threshold_px=match_threshold,
+            min_rally_detection_rate=min_rally_detection,
+            progress_callback=update_progress,
+        )
+
+    # Display results
+    console.print()
+    console.print("[bold]Best Configuration[/bold]")
+    console.print("=" * 60)
+
+    best = result.best_config
+    for param in param_grid.keys():
+        value = getattr(best, param)
+        default_val = getattr(type(best)(), param)
+        if value != default_val:
+            console.print(f"  [cyan]{param}[/cyan]: {value} [dim](default: {default_val})[/dim]")
+        else:
+            console.print(f"  [dim]{param}: {value}[/dim]")
+
+    console.print()
+    console.print(
+        f"Results: Detection=[bold green]{result.best_detection_rate:.1%}[/bold green], "
+        f"Match={result.best_match_rate:.1%}, "
+        f"Error={result.best_mean_error_px:.1f}px"
+    )
+
+    if result.improvement_match_rate != 0:
+        improvement_color = "green" if result.improvement_match_rate > 0 else "red"
+        console.print(
+            f"Improvement over default: [{improvement_color}]{result.improvement_match_rate:+.1%}[/{improvement_color}] "
+            f"(default match={result.default_match_rate:.1%})"
+        )
+
+    if result.rejected_count > 0:
+        console.print(
+            f"\n[yellow]Rejected {result.rejected_count} configs that violated constraints[/yellow]"
+        )
+
+    # Top N configurations
+    console.print()
+    console.print(f"[bold]Top {min(top_n, len(result.all_results))} Configurations[/bold]")
+
+    top_table = Table(show_header=True, header_style="bold")
+    top_table.add_column("Rank", justify="right")
+    top_table.add_column("Detection", justify="right")
+    top_table.add_column("Match", justify="right")
+    top_table.add_column("Error", justify="right")
+    top_table.add_column("<20px", justify="right")
+    top_table.add_column("Changes from Default")
+
+    shown = 0
+    for i, config_result in enumerate(result.all_results):
+        if config_result.rejected:
+            continue
+        if shown >= top_n:
+            break
+
+        rank = shown + 1
+        metrics = config_result.aggregate_metrics
+        diff = describe_ball_config_diff(config_result.config)
+
+        # Truncate diff if too long
+        if len(diff) > 40:
+            diff = diff[:37] + "..."
+
+        match_style = "green" if metrics.match_rate >= 0.70 else ("yellow" if metrics.match_rate >= 0.50 else "red")
+
+        top_table.add_row(
+            str(rank),
+            f"{metrics.detection_rate:.1%}",
+            f"[{match_style}]{metrics.match_rate:.1%}[/{match_style}]",
+            f"{metrics.mean_error_px:.1f}px",
+            f"{metrics.error_under_20px_rate:.1%}",
+            diff,
+        )
+        shown += 1
+
+    console.print(top_table)
+
+    # Export to file if requested
+    if output:
+        with open(output, "w") as f:
+            json.dump(result.to_dict(), f, indent=2)
+        console.print(f"\n[green]Full results exported to {output}[/green]")

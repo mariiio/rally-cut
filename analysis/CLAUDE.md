@@ -280,6 +280,50 @@ Detects game phases (SERVE, ATTACK, DEFENSE, TRANSITION) from ball velocity patt
 
 Kalman filter reduces lag and flickering in ball tracking. See `tracking/ball_filter.py`.
 
+### Heatmap Decoding Options
+
+The VballNet model outputs heatmaps that are decoded to ball positions. See `tracking/ball_tracker.py`.
+
+**HeatmapDecodingConfig options:**
+- `threshold=0.5`: Base threshold for heatmap binarization (0-1)
+- `adaptive_threshold=False`: Scale threshold based on peak response (tested but hurts accuracy)
+- `centroid_method="contour"`: Method for centroid extraction
+  - `"contour"`: Uses largest contour moments (default, **recommended**)
+  - `"weighted"`: Uses heatmap values as weights (tested but hurts accuracy)
+
+**Note:** Testing on ground truth data showed the defaults (`contour` + `threshold=0.5`) perform best. Adaptive threshold and weighted centroid were tested but increased false positives and reduced match rate.
+
+```python
+from rallycut.tracking.ball_tracker import BallTracker, HeatmapDecodingConfig
+
+# Default config (recommended - best accuracy)
+tracker = BallTracker()
+
+# Custom threshold (for experimentation only)
+config = HeatmapDecodingConfig(threshold=0.4)
+tracker = BallTracker(heatmap_config=config)
+```
+
+### Trajectory Post-Processing
+
+Optional post-processing smoothing for visualization quality. See `tracking/ball_smoother.py`.
+
+```python
+from rallycut.tracking.ball_smoother import TrajectorySmoothingConfig
+
+# Enable smoothing in track_video
+result = tracker.track_video(
+    video_path,
+    enable_smoothing=True,
+    smoothing_config=TrajectorySmoothingConfig(
+        enable_savgol=True,        # Savitzky-Golay filter
+        savgol_window=7,           # Window size (odd number)
+        enable_outlier_removal=True,
+        max_velocity_threshold=0.4,
+    ),
+)
+```
+
 **Problems solved:**
 - **Lag**: VballNet model outputs positions that are slightly behind the actual ball. Filter extrapolates forward using velocity to compensate.
 - **Flickering/Jumps**: When ball is occluded, tracking can jump to false detections. Filter rejects impossible movements (>30% screen/frame).
@@ -287,7 +331,7 @@ Kalman filter reduces lag and flickering in ball tracking. See `tracking/ball_fi
 
 **Key parameters (BallFilterConfig):**
 - `enable_lag_compensation=True`: Extrapolate position forward to reduce apparent lag
-- `lag_frames=3`: Frames to extrapolate forward (conservative to avoid over-extrapolation)
+- `lag_frames=0`: Frames to extrapolate forward (0 = disabled, grid search showed best results)
 - `max_velocity=0.3`: Max plausible movement (30% screen/frame) for jump rejection
 - `min_confidence_for_update=0.3`: Below this, use prediction only
 - `max_occlusion_frames=30`: Frames before marking track as lost (~1s at 30fps)
@@ -300,9 +344,9 @@ result = tracker.track_video(video_path)
 # Disable filtering for raw comparison
 result = tracker.track_video(video_path, enable_filtering=False)
 
-# Adjust lag compensation if ball marker appears behind
+# Adjust lag compensation (default is 0, grid search showed best results)
 from rallycut.tracking import BallFilterConfig
-config = BallFilterConfig(lag_frames=5)  # Increase from default 3 if needed
+config = BallFilterConfig(lag_frames=3)  # Increase if ball marker appears behind
 result = tracker.track_video(video_path, filter_config=config)
 
 # Keep raw positions for debugging
@@ -344,11 +388,17 @@ uv run rallycut evaluate-tracking --all --ball-only      # Ball tracking metrics
 uv run rallycut evaluate-tracking -r <rally-id> -b       # Ball eval for specific rally
 uv run rallycut evaluate-tracking --all -b -o ball.json  # Export ball metrics to JSON
 
-# Grid search for optimal filter parameters
+# Grid search for optimal player filter parameters
 uv run rallycut evaluate-tracking tune-filter --all --cache-only  # Cache raw positions (one-time)
 uv run rallycut evaluate-tracking tune-filter --all --grid quick  # Quick grid search
 uv run rallycut evaluate-tracking tune-filter --all --grid full --min-rally-f1 0.70  # Full search with constraint
 uv run rallycut evaluate-tracking tune-filter --all -o results.json  # Export full results
+
+# Grid search for optimal ball filter parameters
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid quick  # Quick grid (81 configs)
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid lag    # Test lag compensation
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid full   # Full search (486 configs)
+uv run rallycut evaluate-tracking tune-ball-filter --all -o ball.json  # Export results
 ```
 
 | Command | Purpose |
@@ -359,6 +409,7 @@ uv run rallycut evaluate-tracking tune-filter --all -o results.json  # Export fu
 | `rallycut evaluate-tracking` | Evaluate player tracking from database |
 | `rallycut evaluate-tracking --ball-only` | Evaluate ball tracking with detailed metrics |
 | `rallycut evaluate-tracking tune-filter` | Grid search for optimal PlayerFilterConfig parameters |
+| `rallycut evaluate-tracking tune-ball-filter` | Grid search for optimal BallFilterConfig parameters |
 
 **Ball tracking metrics (`--ball-only`):**
 - Detection Rate: % of GT frames with ball detected
