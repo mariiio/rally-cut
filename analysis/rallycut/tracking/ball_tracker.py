@@ -24,12 +24,27 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Model configuration
-MODEL_URL = "https://raw.githubusercontent.com/asigatchov/fast-volleyball-tracking-inference/master/models/VballNetV1b_seq9_grayscale_best.onnx"
-MODEL_NAME = "VballNetV1b_seq9_grayscale_best.onnx"
-MODEL_INPUT_HEIGHT = 288
-MODEL_INPUT_WIDTH = 512
-SEQUENCE_LENGTH = 9  # 9-frame temporal context
+# Model repository base URL
+MODEL_REPO_BASE = "https://raw.githubusercontent.com/asigatchov/fast-volleyball-tracking-inference/master/models"
+
+# Model registry: model_id -> (filename, height, width)
+# All models use 9-frame sequences and grayscale input
+BALL_MODELS: dict[str, tuple[str, int, int]] = {
+    "v1b": ("VballNetV1b_seq9_grayscale_best.onnx", 288, 512),
+    "v2": ("VballNetV2_seq9_grayscale_320_h288_w512.onnx", 288, 512),
+    # v1c excluded - requires recurrent hidden state input which is incompatible
+    "fast": ("VballNetFastV1_seq9_grayscale_233_h288_w512.onnx", 288, 512),
+}
+
+# Default model configuration
+# v2 is most consistent across videos (70.6% match rate on ground truth)
+# fast is 3.6x faster but 1.5% less accurate
+# v1b can fail completely on some videos (0% detection) - not recommended
+DEFAULT_BALL_MODEL = "v2"
+MODEL_NAME = BALL_MODELS[DEFAULT_BALL_MODEL][0]
+MODEL_INPUT_HEIGHT = BALL_MODELS[DEFAULT_BALL_MODEL][1]
+MODEL_INPUT_WIDTH = BALL_MODELS[DEFAULT_BALL_MODEL][2]
+SEQUENCE_LENGTH = 9  # 9-frame temporal context (all models)
 
 
 def _get_model_cache_dir() -> Path:
@@ -64,18 +79,61 @@ def _download_model(url: str, dest_path: Path) -> None:
     logger.info(f"Model downloaded: {dest_path.stat().st_size / 1024 / 1024:.1f}MB")
 
 
+def get_available_ball_models() -> list[str]:
+    """Return list of available ball tracking model IDs."""
+    return list(BALL_MODELS.keys())
+
+
+def get_ball_model_info(model_id: str) -> tuple[str, int, int]:
+    """Get model info (filename, height, width) for a model ID.
+
+    Args:
+        model_id: Model identifier (e.g., 'v1b', 'v2', 'fast')
+
+    Returns:
+        Tuple of (filename, height, width)
+
+    Raises:
+        ValueError: If model_id not in registry
+    """
+    if model_id not in BALL_MODELS:
+        available = ", ".join(BALL_MODELS.keys())
+        raise ValueError(f"Unknown ball model '{model_id}'. Available: {available}")
+    return BALL_MODELS[model_id]
+
+
+def ensure_ball_model(model_id: str) -> Path:
+    """Ensure a ball tracking model is downloaded and return its path.
+
+    Args:
+        model_id: Model identifier (e.g., 'v1b', 'v2', 'fast')
+
+    Returns:
+        Path to the downloaded model file
+    """
+    filename, _, _ = get_ball_model_info(model_id)
+    cache_dir = _get_model_cache_dir()
+    cached_path = cache_dir / filename
+
+    if not cached_path.exists():
+        url = f"{MODEL_REPO_BASE}/{filename}"
+        _download_model(url, cached_path)
+
+    return cached_path
+
+
 @dataclass
 class HeatmapDecodingConfig:
     """Configuration for heatmap-to-position decoding.
 
-    Note: Testing on ground truth data showed that the defaults (contour + 0.5 threshold)
-    perform best. Adaptive threshold and weighted centroid options were tested but
-    degraded accuracy - they increase detection count but introduce more false positives.
-    Keep these options available for experimentation but defaults are recommended.
+    Testing on ground truth data showed threshold=0.3 with contour centroid gives
+    best results: 98% detection rate, 24% match rate at 50px threshold.
+    Lower threshold captures more detections without significantly increasing false positives.
     """
 
     # Base threshold for heatmap binarization
-    threshold: float = 0.5
+    # 0.3 tested better than 0.5 on beach volleyball ground truth
+    threshold: float = 0.3
 
     # Adaptive threshold: scale threshold based on peak response
     # Higher peaks = higher threshold for cleaner extraction
@@ -91,6 +149,15 @@ class HeatmapDecodingConfig:
     # Centroid method: "contour" (largest contour moments) or "weighted" (heatmap-weighted average)
     # Note: Testing showed contour method performs better than weighted
     centroid_method: str = "contour"
+
+    # Sub-pixel refinement: fit parabola around peak for sub-pixel accuracy
+    # Expected improvement: ~0.5-1px accuracy when enabled
+    enable_subpixel: bool = False
+
+    # Multi-threshold detection: run at multiple thresholds and combine
+    # Helps catch low-confidence balls that would be missed at single threshold
+    enable_multi_threshold: bool = False
+    multi_thresholds: tuple[float, ...] = (0.3, 0.4, 0.5, 0.6)
 
 
 @dataclass
@@ -201,11 +268,17 @@ class BallTracker:
 
     Uses 9-frame grayscale sequences at 288x512 resolution.
     Optimized for CPU (~100 FPS on standard hardware).
+
+    Supports multiple model variants via the `model` parameter:
+    - 'v2' (default): VballNetV2 - most consistent across videos (70.6% match rate)
+    - 'fast': VballNetFastV1 - 3.6x faster, 1.5% less accurate (69.1% match rate)
+    - 'v1b': VballNetV1b - not recommended, can fail completely on some videos
     """
 
     def __init__(
         self,
         model_path: Path | None = None,
+        model: str = DEFAULT_BALL_MODEL,
         heatmap_config: HeatmapDecodingConfig | None = None,
     ):
         """
@@ -214,24 +287,31 @@ class BallTracker:
         Args:
             model_path: Optional path to ONNX model. If not provided,
                        downloads to cache on first use.
+            model: Model variant to use ('v2', 'fast', 'v1b').
+                  Ignored if model_path is provided.
             heatmap_config: Configuration for heatmap decoding. If not provided,
-                           uses defaults (threshold=0.5, contour centroid).
+                           uses defaults (threshold=0.3, contour centroid).
         """
         self.model_path = model_path
+        self.model_id = model
         self.heatmap_config = heatmap_config or HeatmapDecodingConfig()
         self._session: Any = None
+
+        # Get model dimensions from registry
+        if model_path is None:
+            _, self._input_height, self._input_width = get_ball_model_info(model)
+        else:
+            # Use default dimensions for custom models
+            self._input_height = MODEL_INPUT_HEIGHT
+            self._input_width = MODEL_INPUT_WIDTH
 
     def _ensure_model(self) -> Path:
         """Ensure model is available, downloading if necessary."""
         if self.model_path and self.model_path.exists():
             return self.model_path
 
-        cache_dir = _get_model_cache_dir()
-        cached_path = cache_dir / MODEL_NAME
-
-        if not cached_path.exists():
-            _download_model(MODEL_URL, cached_path)
-
+        # Use model registry to download the selected model
+        cached_path = ensure_ball_model(self.model_id)
         self.model_path = cached_path
         return cached_path
 
@@ -282,13 +362,13 @@ class BallTracker:
             frame: BGR frame from OpenCV
 
         Returns:
-            Grayscale frame resized to model input size (H=512, W=288)
+            Grayscale frame resized to model input size
         """
         # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # Resize to model input size (height=288, width=512)
-        resized = cv2.resize(gray, (MODEL_INPUT_WIDTH, MODEL_INPUT_HEIGHT))
+        # Resize to model input size (width, height for cv2.resize)
+        resized = cv2.resize(gray, (self._input_width, self._input_height))
 
         return resized
 
@@ -300,13 +380,13 @@ class BallTracker:
             frames: List of 9 preprocessed grayscale frames
 
         Returns:
-            Input tensor of shape (1, 9, 288, 512) normalized to 0-1
+            Input tensor of shape (1, 9, H, W) normalized to 0-1
         """
         # Stack frames directly as float32 and normalize in one operation
-        # Shape: (1, 9, 288, 512) - add batch dimension during stack
+        # Shape: (1, 9, H, W) - add batch dimension during stack
         sequence = np.stack(frames, axis=0).astype(np.float32, copy=False)
         sequence *= (1.0 / 255.0)  # In-place multiply is faster than divide
-        return sequence[np.newaxis, ...]  # Add batch dimension: (1, 9, 288, 512)
+        return sequence[np.newaxis, ...]  # Add batch dimension
 
     def _compute_adaptive_threshold(self, heatmap: np.ndarray) -> float:
         """Compute adaptive threshold based on heatmap peak response.
@@ -334,6 +414,169 @@ class BallTracker:
 
         # Clamp to valid range
         return max(config.min_threshold, min(config.max_threshold, adaptive))
+
+    def _subpixel_refine(
+        self,
+        heatmap: np.ndarray,
+        peak_x: float,
+        peak_y: float,
+    ) -> tuple[float, float]:
+        """Refine peak location to sub-pixel accuracy using parabolic fitting.
+
+        Fits a 2D parabola to the 3x3 neighborhood around the peak and
+        finds the sub-pixel location of the maximum.
+
+        Args:
+            heatmap: 2D heatmap array (height, width), already normalized to 0-1
+            peak_x: Initial peak X coordinate (may be float from centroid)
+            peak_y: Initial peak Y coordinate (may be float from centroid)
+
+        Returns:
+            Tuple of (refined_x, refined_y) sub-pixel coordinates
+        """
+        h, w = heatmap.shape
+
+        # Round to integer for neighborhood sampling
+        ix = int(round(peak_x))
+        iy = int(round(peak_y))
+
+        # Need 3x3 neighborhood, so check bounds
+        if ix < 1 or ix >= w - 1 or iy < 1 or iy >= h - 1:
+            return peak_x, peak_y
+
+        # Extract 3x3 neighborhood
+        # Use the actual peak as center (find local maximum)
+        neighborhood = heatmap[iy - 1 : iy + 2, ix - 1 : ix + 2].astype(np.float64)
+
+        # Ensure we're at a local maximum by finding peak in 3x3
+        local_peak = np.unravel_index(np.argmax(neighborhood), neighborhood.shape)
+        if local_peak != (1, 1):
+            # Peak is not at center of 3x3, shift to actual peak
+            iy_new = iy + int(local_peak[0]) - 1
+            ix_new = ix + int(local_peak[1]) - 1
+            if ix_new < 1 or ix_new >= w - 1 or iy_new < 1 or iy_new >= h - 1:
+                return peak_x, peak_y
+            ix, iy = ix_new, iy_new
+            neighborhood = heatmap[iy - 1 : iy + 2, ix - 1 : ix + 2].astype(np.float64)
+
+        # Extract 1D slices for parabolic fitting
+        # X direction: neighborhood[1, :]
+        # Y direction: neighborhood[:, 1]
+        x_slice = neighborhood[1, :]  # [left, center, right]
+        y_slice = neighborhood[:, 1]  # [top, center, bottom]
+
+        # Parabolic interpolation for X:
+        # f(x) = ax^2 + bx + c, fit to points at x=-1, 0, 1
+        # Maximum at x = -b / (2a)
+        # Using the formula: x_offset = (f(-1) - f(1)) / (2 * (f(-1) + f(1) - 2*f(0)))
+        denom_x = 2.0 * (x_slice[0] + x_slice[2] - 2.0 * x_slice[1])
+        if abs(denom_x) > 1e-10:
+            x_offset = (x_slice[0] - x_slice[2]) / denom_x
+            x_offset = max(-0.5, min(0.5, x_offset))  # Clamp to valid range
+        else:
+            x_offset = 0.0
+
+        # Parabolic interpolation for Y
+        denom_y = 2.0 * (y_slice[0] + y_slice[2] - 2.0 * y_slice[1])
+        if abs(denom_y) > 1e-10:
+            y_offset = (y_slice[0] - y_slice[2]) / denom_y
+            y_offset = max(-0.5, min(0.5, y_offset))  # Clamp to valid range
+        else:
+            y_offset = 0.0
+
+        refined_x = float(ix) + x_offset
+        refined_y = float(iy) + y_offset
+
+        return refined_x, refined_y
+
+    def _decode_heatmap_multi_threshold(
+        self,
+        heatmap: np.ndarray,
+    ) -> tuple[float, float, float]:
+        """Decode heatmap using multiple thresholds and combine detections.
+
+        Runs detection at multiple thresholds to catch low-confidence balls.
+        Uses highest confidence detection if multiple are found.
+
+        Args:
+            heatmap: 2D heatmap array (height, width)
+
+        Returns:
+            Tuple of (x_norm, y_norm, confidence) where coordinates are 0-1 normalized
+        """
+        config = self.heatmap_config
+        best_confidence = 0.0
+        best_x, best_y = 0.5, 0.5
+
+        for threshold in config.multi_thresholds:
+            x, y, conf = self._decode_heatmap_single(heatmap, threshold)
+            if conf > best_confidence:
+                best_confidence = conf
+                best_x, best_y = x, y
+
+        return best_x, best_y, best_confidence
+
+    def _decode_heatmap_single(
+        self,
+        heatmap: np.ndarray,
+        threshold: float,
+    ) -> tuple[float, float, float]:
+        """Decode heatmap at a single threshold (internal helper).
+
+        Args:
+            heatmap: 2D heatmap array (height, width)
+            threshold: Threshold for binarization (0-1)
+
+        Returns:
+            Tuple of (x_norm, y_norm, confidence)
+        """
+        config = self.heatmap_config
+        max_val = float(heatmap.max())
+
+        # Normalize heatmap for processing
+        if max_val > 1.0:
+            heatmap_norm = heatmap.astype(np.float32) / 255.0
+            max_val_norm = max_val / 255.0
+        else:
+            heatmap_norm = heatmap.astype(np.float32)
+            max_val_norm = max_val
+
+        if max_val_norm < threshold:
+            return 0.5, 0.5, 0.0
+
+        # Create binary mask
+        binary = (heatmap_norm > threshold).astype(np.uint8) * 255
+
+        # Find contours
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        if not contours:
+            return 0.5, 0.5, 0.0
+
+        # Find largest contour
+        largest_contour = max(contours, key=cv2.contourArea) if len(contours) > 1 else contours[0]
+
+        # Get centroid using moments
+        moments = cv2.moments(largest_contour)
+        if moments["m00"] == 0:
+            return 0.5, 0.5, 0.0
+
+        cx = moments["m10"] / moments["m00"]
+        cy = moments["m01"] / moments["m00"]
+
+        # Apply sub-pixel refinement if enabled
+        if config.enable_subpixel:
+            cx, cy = self._subpixel_refine(heatmap_norm, cx, cy)
+
+        # Normalize to 0-1
+        x_norm = float(cx) / heatmap.shape[1]
+        y_norm = float(cy) / heatmap.shape[0]
+
+        # Clamp to valid range
+        x_norm = max(0.0, min(1.0, x_norm))
+        y_norm = max(0.0, min(1.0, y_norm))
+
+        return x_norm, y_norm, min(1.0, max_val_norm)
 
     def _decode_heatmap_weighted(
         self,
@@ -408,6 +651,10 @@ class BallTracker:
         """
         config = self.heatmap_config
 
+        # Use multi-threshold detection if enabled
+        if config.enable_multi_threshold and threshold is None:
+            return self._decode_heatmap_multi_threshold(heatmap)
+
         # Determine threshold
         if threshold is None:
             if config.adaptive_threshold:
@@ -457,7 +704,17 @@ class BallTracker:
         cx = moments["m10"] / moments["m00"]
         cy = moments["m01"] / moments["m00"]
 
-        # Normalize to 0-1 (heatmap is in model space: height=288, width=512)
+        # Apply sub-pixel refinement if enabled
+        if config.enable_subpixel:
+            # Need normalized heatmap for sub-pixel refinement
+            if max_val < 1.0:
+                # Already normalized
+                heatmap_norm = heatmap.astype(np.float32)
+            else:
+                heatmap_norm = heatmap.astype(np.float32) / 255.0
+            cx, cy = self._subpixel_refine(heatmap_norm, cx, cy)
+
+        # Normalize to 0-1 (heatmap is in model space)
         x_norm = cx / heatmap.shape[1]
         y_norm = cy / heatmap.shape[0]
 
@@ -478,8 +735,8 @@ class BallTracker:
         """
         Decode model output to ball positions.
 
-        The VballNet model outputs heatmaps for 3 consecutive frames.
-        Output shape: (batch, 3, height, width)
+        The VballNet model outputs heatmaps for all 9 frames of the input sequence.
+        Output shape: (batch, 9, height, width)
 
         Args:
             output: Model output tensor
@@ -490,8 +747,8 @@ class BallTracker:
         """
         positions = []
 
-        # Model outputs 3 heatmaps for the middle 3 frames of the 9-frame input
-        # Output shape: (batch, 3, height, width) or (batch, height, width) for single frame
+        # Model outputs 9 heatmaps for all 9 frames of the input sequence
+        # Output shape: (batch, 9, height, width) or (batch, height, width) for single frame
         if output.ndim == 4:
             # Multi-frame output: (batch, num_frames, height, width)
             num_frames = output.shape[1]
@@ -601,10 +858,8 @@ class BallTracker:
                 f"({frames_to_process} frames, {fps:.1f} fps)"
             )
 
-            # Process frames with stride optimization
-            # Model takes 9 frames and outputs 3 predictions for middle frames
-            # So we can stride by 3 frames instead of 1 to avoid redundant inference
-            output_frames = 3  # Model outputs 3 frames per inference
+            # Process frames in non-overlapping windows
+            # Model takes 9 frames and outputs 9 predictions (one per input frame)
             positions: list[BallPosition] = []
             frame_buffer: list[np.ndarray] = []
             frame_idx = start_frame
@@ -643,15 +898,13 @@ class BallTracker:
                         logger.info(f"Model output shape: {output.shape}, dtype: {output.dtype}")
                         logger.info(f"Output range: [{output.min():.4f}, {output.max():.4f}]")
 
-                    # Decode output (prediction is for middle frames of sequence)
-                    # Model outputs 3 heatmaps for the middle 3 frames
-                    middle_frame = frame_idx - SEQUENCE_LENGTH + SEQUENCE_LENGTH // 2 - 1
-                    decoded_positions = self._decode_output(output, middle_frame)
+                    # Decode output - model outputs heatmaps for all 9 input frames
+                    first_frame = frame_idx - SEQUENCE_LENGTH
+                    decoded_positions = self._decode_output(output, first_frame)
                     positions.extend(decoded_positions)
 
-                    # Clear buffer and keep last (SEQUENCE_LENGTH - output_frames) frames
-                    # This gives us a stride of output_frames for ~3x speedup
-                    frame_buffer = frame_buffer[output_frames:]
+                    # Clear buffer completely for non-overlapping windows (stride by 9)
+                    frame_buffer = []
 
                 # Progress callback
                 if progress_callback and frame_idx % 30 == 0:
@@ -682,6 +935,9 @@ class BallTracker:
                 positions = smoother.process(positions)
                 logger.info("Applied trajectory post-processing smoothing")
 
+            # Get model filename for version string
+            model_filename = BALL_MODELS.get(self.model_id, (MODEL_NAME,))[0]
+
             return BallTrackingResult(
                 positions=positions,
                 frame_count=frames_to_process,
@@ -689,7 +945,7 @@ class BallTracker:
                 video_width=video_width,
                 video_height=video_height,
                 processing_time_ms=processing_time_ms,
-                model_version=MODEL_NAME,
+                model_version=model_filename,
                 filtering_enabled=enable_filtering,
                 raw_positions=raw_positions,
             )
@@ -719,7 +975,6 @@ class BallTracker:
         Yields:
             BallPosition for each frame (after initial buffer fills)
         """
-        output_frames = 3  # Model outputs 3 frames per inference
         session = self._load_session()
         frame_buffer: list[np.ndarray] = []
         frame_idx = 0
@@ -737,8 +992,8 @@ class BallTracker:
                 outputs = session.run([output_name], {input_name: input_tensor})
                 output = outputs[0]
 
-                middle_frame = frame_idx - SEQUENCE_LENGTH + SEQUENCE_LENGTH // 2 - 1
-                yield from self._decode_output(output, middle_frame)
+                first_frame = frame_idx - SEQUENCE_LENGTH
+                yield from self._decode_output(output, first_frame)
 
-                # Stride optimization: keep last (SEQUENCE_LENGTH - output_frames) frames
-                frame_buffer = frame_buffer[output_frames:]
+                # Clear buffer completely for non-overlapping windows (stride by 9)
+                frame_buffer = []

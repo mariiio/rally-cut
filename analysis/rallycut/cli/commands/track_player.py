@@ -13,7 +13,12 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn
 
 from rallycut.cli.utils import handle_errors, validate_video_file
 from rallycut.tracking.ball_features import detect_ball_phases_v2, detect_server
-from rallycut.tracking.ball_tracker import BallPosition, BallTracker
+from rallycut.tracking.ball_tracker import (
+    DEFAULT_BALL_MODEL,
+    BallPosition,
+    BallTracker,
+    get_available_ball_models,
+)
 from rallycut.tracking.player_filter import PlayerFilterConfig
 from rallycut.tracking.player_tracker import (
     BallPhaseInfo,
@@ -280,6 +285,11 @@ def track_players(
         "--quiet", "-q",
         help="Suppress progress output",
     ),
+    ball_model: str = typer.Option(
+        DEFAULT_BALL_MODEL,
+        "--ball-model",
+        help=f"Ball tracking model variant ({', '.join(get_available_ball_models())})",
+    ),
 ) -> None:
     """Track player positions in a beach volleyball video.
 
@@ -340,9 +350,9 @@ def track_players(
     ball_positions: list[BallPosition] | None = None
     if filter_court:
         if not quiet:
-            console.print("\n[dim]Running ball tracking for court filtering...[/dim]")
+            console.print(f"\n[dim]Running ball tracking (model: {ball_model}) for court filtering...[/dim]")
 
-        ball_tracker = BallTracker()
+        ball_tracker = BallTracker(model=ball_model)
         if quiet:
             ball_result = ball_tracker.track_video(
                 video,

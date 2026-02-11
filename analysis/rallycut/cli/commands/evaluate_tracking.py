@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 from rich.console import Console
@@ -134,6 +134,7 @@ def evaluate_tracking(
     rallies = load_labeled_rallies(
         video_id=video_id,
         rally_id=rally_id,
+        ball_gt_only=ball_only,  # Filter to validated ball GT for ball-only mode
     )
 
     if not rallies:
@@ -1036,18 +1037,19 @@ def tune_ball_filter(
         count = ball_cache.clear()
         console.print(f"[yellow]Cleared {count} cached ball position files[/yellow]")
 
-    # Load rallies from database
+    # Load rallies from database (only videos with validated ball ground truth)
     console.print("[bold]Loading labeled rallies from database...[/bold]")
     rallies = load_labeled_rallies(
         video_id=video_id,
         rally_id=rally_id,
+        ball_gt_only=True,  # Only use videos with validated ball ground truth
     )
 
     if not rallies:
-        console.print("[yellow]No rallies with ground truth found[/yellow]")
+        console.print("[yellow]No rallies with validated ball ground truth found[/yellow]")
         raise typer.Exit(1)
 
-    console.print(f"  Found {len(rallies)} rally(s) with ground truth\n")
+    console.print(f"  Found {len(rallies)} rally(s) with validated ball ground truth\n")
 
     from rallycut.labeling.ground_truth import GroundTruthPosition
 
@@ -1233,4 +1235,311 @@ def tune_ball_filter(
     if output:
         with open(output, "w") as f:
             json.dump(result.to_dict(), f, indent=2)
+        console.print(f"\n[green]Full results exported to {output}[/green]")
+
+
+@app.command(name="compare-ball-models")
+@handle_errors
+def compare_ball_models(
+    rally_id: Annotated[
+        str | None,
+        typer.Option(
+            "--rally-id", "-r",
+            help="Evaluate specific rally by ID",
+        ),
+    ] = None,
+    video_id: Annotated[
+        str | None,
+        typer.Option(
+            "--video-id", "-v",
+            help="Evaluate all labeled rallies in a video",
+        ),
+    ] = None,
+    all_rallies: Annotated[
+        bool,
+        typer.Option(
+            "--all", "-a",
+            help="Evaluate all labeled rallies in database",
+        ),
+    ] = False,
+    match_threshold: Annotated[
+        float,
+        typer.Option(
+            "--match-threshold", "-t",
+            help="Max distance (pixels) for a match",
+        ),
+    ] = 50.0,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output", "-o",
+            help="Export full results to JSON file",
+        ),
+    ] = None,
+) -> None:
+    """Compare all available ball tracking models on ground truth.
+
+    Runs each VballNet model variant on the labeled rallies and
+    outputs a comparison table with detection rate, accuracy, and error metrics.
+
+    Available models:
+    - v2: VballNetV2 (default) - best accuracy (24% match rate at 50px)
+    - v1b: VballNetV1b - highest detection rate (98%)
+    - fast: VballNetFastV1 - lighter weight, faster inference
+
+    Examples:
+
+        # Compare all models on all labeled rallies
+        rallycut evaluate-tracking compare-ball-models --all
+
+        # Compare models on specific video
+        rallycut evaluate-tracking compare-ball-models -v a7ee3d38-...
+
+        # Export results to JSON
+        rallycut evaluate-tracking compare-ball-models --all -o comparison.json
+    """
+    from rallycut.evaluation.tracking.ball_metrics import (
+        BallTrackingMetrics,  # noqa: F401 - used in type annotation
+        aggregate_ball_metrics,
+        evaluate_ball_tracking,
+    )
+    from rallycut.evaluation.tracking.db import get_video_path, load_labeled_rallies
+    from rallycut.tracking.ball_tracker import (
+        BALL_MODELS,
+        BallTracker,
+        get_available_ball_models,
+    )
+
+    # Validate input
+    if not rally_id and not video_id and not all_rallies:
+        console.print(
+            "[red]Error:[/red] Specify --rally-id, --video-id, or --all"
+        )
+        raise typer.Exit(1)
+
+    # Load rallies from database (only videos with validated ball ground truth)
+    console.print("[bold]Loading labeled rallies from database...[/bold]")
+    rallies = load_labeled_rallies(
+        video_id=video_id,
+        rally_id=rally_id,
+        ball_gt_only=True,  # Only use videos with validated ball ground truth
+    )
+
+    if not rallies:
+        console.print("[yellow]No rallies with validated ball ground truth found[/yellow]")
+        raise typer.Exit(1)
+
+    # Filter to rallies with ball ground truth
+    rallies_with_ball = []
+    for rally in rallies:
+        gt_ball = [p for p in rally.ground_truth.positions if p.label == "ball"]
+        if gt_ball:
+            rallies_with_ball.append(rally)
+
+    if not rallies_with_ball:
+        console.print("[red]No rallies with ball ground truth found[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"  Found {len(rallies_with_ball)} rally(s) with ball ground truth\n")
+
+    # Get list of models to compare
+    model_ids = get_available_ball_models()
+    console.print(f"[bold]Comparing {len(model_ids)} Ball Tracking Models[/bold]")
+    console.print("=" * 60)
+
+    # Results storage: model_id -> list of (rally_id, metrics)
+    model_results: dict[str, list[tuple[str, BallTrackingMetrics]]] = {}
+
+    # Run each model on all rallies
+    for model_id in model_ids:
+        model_filename = BALL_MODELS[model_id][0]
+        console.print(f"\n[bold]Model: {model_id}[/bold] ({model_filename})")
+
+        tracker = BallTracker(model=model_id)
+        model_results[model_id] = []
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(
+                f"Running {model_id}...",
+                total=len(rallies_with_ball),
+            )
+
+            for rally in rallies_with_ball:
+                # Get video path from database
+                video_path = get_video_path(rally.video_id)
+                if video_path is None:
+                    console.print(
+                        f"[yellow]Rally {rally.rally_id[:8]}... video not found, skipping[/yellow]"
+                    )
+                    progress.update(task, advance=1)
+                    continue
+
+                # Run ball tracking on the rally segment
+                try:
+                    result = tracker.track_video(
+                        video_path,
+                        start_ms=rally.start_ms,
+                        end_ms=rally.end_ms,
+                        enable_filtering=True,  # Use Kalman filter
+                    )
+
+                    # Convert prediction frame numbers to rally-relative
+                    # Predictions use absolute video frames, GT uses rally-relative
+                    # Use actual video FPS (not rally metadata) for consistency with tracker
+                    import cv2
+
+                    from rallycut.evaluation.tracking.ball_metrics import (
+                        find_optimal_frame_offset,
+                    )
+                    from rallycut.tracking.ball_tracker import BallPosition
+
+                    cap = cv2.VideoCapture(str(video_path))
+                    actual_fps = cap.get(cv2.CAP_PROP_FPS)
+                    cap.release()
+
+                    # Calculate start frame using actual FPS (matches tracker)
+                    start_frame = int(rally.start_ms / 1000 * actual_fps)
+
+                    relative_positions = [
+                        BallPosition(
+                            frame_number=p.frame_number - start_frame,
+                            x=p.x,
+                            y=p.y,
+                            confidence=p.confidence,
+                        )
+                        for p in result.positions
+                    ]
+
+                    # Auto-detect optimal frame offset for this video
+                    # Different videos need different offsets due to FPS/labeling timing
+                    optimal_offset, _ = find_optimal_frame_offset(
+                        gt_ball, relative_positions,
+                        rally.video_width, rally.video_height,
+                    )
+
+                    # Apply the optimal offset
+                    relative_positions = [
+                        BallPosition(
+                            frame_number=p.frame_number - optimal_offset,
+                            x=p.x,
+                            y=p.y,
+                            confidence=p.confidence,
+                        )
+                        for p in relative_positions
+                    ]
+
+                    # Evaluate against ground truth
+                    gt_ball = [p for p in rally.ground_truth.positions if p.label == "ball"]
+                    metrics = evaluate_ball_tracking(
+                        ground_truth=gt_ball,
+                        predictions=relative_positions,
+                        video_width=rally.video_width,
+                        video_height=rally.video_height,
+                        video_fps=rally.video_fps,
+                        match_threshold_px=match_threshold,
+                    )
+
+                    model_results[model_id].append((rally.rally_id, metrics))
+
+                except Exception as e:
+                    console.print(
+                        f"[red]Error processing rally {rally.rally_id[:8]}...: {e}[/red]"
+                    )
+
+                progress.update(task, advance=1)
+
+    # Display comparison table
+    console.print("\n")
+    console.print("[bold]Model Comparison Results[/bold]")
+    console.print("=" * 80)
+
+    comparison_table = Table(show_header=True, header_style="bold")
+    comparison_table.add_column("Model", style="cyan")
+    comparison_table.add_column("Detection", justify="right")
+    comparison_table.add_column("Match", justify="right")
+    comparison_table.add_column("Mean Err", justify="right")
+    comparison_table.add_column("Median", justify="right")
+    comparison_table.add_column("P90", justify="right")
+    comparison_table.add_column("<20px", justify="right")
+    comparison_table.add_column("Jitter", justify="right")
+
+    # Track best model for each metric
+    best_match = 0.0
+    best_model = ""
+
+    for model_id in model_ids:
+        results = model_results.get(model_id, [])
+        if not results:
+            comparison_table.add_row(
+                model_id, "-", "-", "-", "-", "-", "-", "-"
+            )
+            continue
+
+        # Aggregate metrics for this model
+        metrics_list = [m for _, m in results]
+        combined = aggregate_ball_metrics(metrics_list)
+
+        # Track best
+        if combined.match_rate > best_match:
+            best_match = combined.match_rate
+            best_model = model_id
+
+        # Style based on match rate
+        match_style = (
+            "green" if combined.match_rate >= 0.70
+            else ("yellow" if combined.match_rate >= 0.50 else "red")
+        )
+        detection_style = (
+            "green" if combined.detection_rate >= 0.70
+            else ("yellow" if combined.detection_rate >= 0.50 else "red")
+        )
+
+        comparison_table.add_row(
+            model_id,
+            f"[{detection_style}]{combined.detection_rate:.1%}[/{detection_style}]",
+            f"[{match_style}]{combined.match_rate:.1%}[/{match_style}]",
+            f"{combined.mean_error_px:.1f}px",
+            f"{combined.median_error_px:.1f}px",
+            f"{combined.p90_error_px:.1f}px",
+            f"{combined.error_under_20px_rate:.1%}",
+            f"{combined.mean_jitter_px:.1f}px" if combined.mean_jitter_px > 0 else "-",
+        )
+
+    console.print(comparison_table)
+
+    if best_model:
+        console.print(f"\n[green]Best model: {best_model}[/green] (highest match rate: {best_match:.1%})")
+
+    # Export to file if requested
+    if output:
+        output_data: dict[str, Any] = {
+            "rallies": len(rallies_with_ball),
+            "match_threshold_px": match_threshold,
+            "models": {},
+        }
+
+        for model_id in model_ids:
+            results = model_results.get(model_id, [])
+            if not results:
+                continue
+
+            metrics_list = [m for _, m in results]
+            combined = aggregate_ball_metrics(metrics_list)
+
+            output_data["models"][model_id] = {
+                "aggregate": combined.to_dict(),
+                "per_rally": [
+                    {"rally_id": rid, **m.to_dict()}
+                    for rid, m in results
+                ],
+            }
+
+        with open(output, "w") as f:
+            json.dump(output_data, f, indent=2)
         console.print(f"\n[green]Full results exported to {output}[/green]")

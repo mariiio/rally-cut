@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 from rallycut.evaluation.db import get_connection
@@ -17,6 +18,14 @@ from rallycut.tracking.player_tracker import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Videos with validated ball tracking ground truth
+# Other videos have ground truth labels that were found to be inaccurate
+# and should not be used for evaluation
+VALID_BALL_GT_VIDEOS = {
+    "a5866029-7cf4-42d6-adc2-8e28111ffd81",
+    "1efa35cf-4edd-4504-b4a4-834eee9e5218",
+}
 
 
 @dataclass
@@ -162,12 +171,15 @@ def _parse_predictions(
 def load_labeled_rallies(
     video_id: str | None = None,
     rally_id: str | None = None,
+    ball_gt_only: bool = False,
 ) -> list[TrackingEvaluationRally]:
     """Load rallies with ground truth labels from the database.
 
     Args:
         video_id: Filter by video ID (optional).
         rally_id: Filter by specific rally ID (optional).
+        ball_gt_only: If True, only load rallies from videos with validated
+            ball tracking ground truth (see VALID_BALL_GT_VIDEOS).
 
     Returns:
         List of TrackingEvaluationRally with ground truth and predictions.
@@ -303,5 +315,56 @@ def load_labeled_rallies(
                     )
                 )
 
+    # Filter to only valid ball GT videos if requested
+    if ball_gt_only:
+        original_count = len(results)
+        results = [r for r in results if r.video_id in VALID_BALL_GT_VIDEOS]
+        if original_count > len(results):
+            logger.info(
+                f"Filtered {original_count - len(results)} rallies with "
+                f"invalid ball ground truth"
+            )
+
     logger.info(f"Loaded {len(results)} rallies with ground truth labels")
     return results
+
+
+def get_video_path(video_id: str) -> Path | None:
+    """Get the local path for a video by downloading from S3 if needed.
+
+    Args:
+        video_id: The video ID from the database.
+
+    Returns:
+        Path to the local video file, or None if video not found.
+    """
+    from rallycut.evaluation.video_resolver import VideoResolver
+
+    query = """
+        SELECT s3_key, content_hash
+        FROM videos
+        WHERE id = %s
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, [video_id])
+            row = cur.fetchone()
+
+            if row is None:
+                logger.warning(f"Video {video_id} not found in database")
+                return None
+
+            s3_key, content_hash = row
+            if not s3_key or not content_hash:
+                logger.warning(f"Video {video_id} missing s3_key or content_hash")
+                return None
+
+            # Use VideoResolver to download/cache the video
+            resolver = VideoResolver()
+            try:
+                video_path = resolver.resolve(cast(str, s3_key), cast(str, content_hash))
+                return video_path
+            except Exception as e:
+                logger.error(f"Failed to download video {video_id}: {e}")
+                return None
