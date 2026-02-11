@@ -25,10 +25,24 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Model configuration
-MODEL_NAME = "yolov8s.pt"  # YOLOv8 small - better accuracy, 22MB
+MODEL_NAME = "yolov8n.pt"  # YOLOv8 nano - fastest with good accuracy (88% F1)
 PERSON_CLASS_ID = 0  # COCO class ID for person
 DEFAULT_CONFIDENCE = 0.15  # Lower threshold for detection (tuned via grid search)
 DEFAULT_IOU = 0.45  # NMS IoU threshold
+
+# Available YOLO model sizes (larger = more accurate but slower)
+# Benchmark on beach volleyball (8.8s rally):
+#   yolov8n: 23 FPS, 88.0% F1, 82.4% recall (default - best speed/accuracy)
+#   yolov8s: 15 FPS, 83.8% F1, 78.7% recall
+#   yolov8m:  7 FPS, 89.2% F1, 86.4% recall (best accuracy, 3x slower)
+#   yolov8l:  5 FPS, 88.4% F1, 85.5% recall (no benefit over medium)
+YOLO_MODELS = {
+    "yolov8n": "yolov8n.pt",  # Nano: 3.2M params, fastest (default)
+    "yolov8s": "yolov8s.pt",  # Small: 11.2M params
+    "yolov8m": "yolov8m.pt",  # Medium: 25.9M params, best accuracy
+    "yolov8l": "yolov8l.pt",  # Large: 43.7M params
+}
+DEFAULT_YOLO_MODEL = "yolov8n"
 
 # Tracker configs for better tracking stability
 BYTETRACK_CONFIG = Path(__file__).parent / "bytetrack_volleyball.yaml"
@@ -381,6 +395,7 @@ class PlayerTracker:
         iou: float = DEFAULT_IOU,
         preprocessing: str = PREPROCESSING_NONE,
         tracker: str = DEFAULT_TRACKER,
+        yolo_model: str = DEFAULT_YOLO_MODEL,
     ):
         """
         Initialize player tracker.
@@ -394,14 +409,20 @@ class PlayerTracker:
                           - "none": No preprocessing (default)
                           - "clahe": CLAHE contrast enhancement for sand backgrounds
             tracker: Tracking algorithm. Options:
-                    - "bytetrack": ByteTrack (default, motion-based)
-                    - "botsort": BoT-SORT (adds camera motion compensation)
+                    - "bytetrack": ByteTrack (motion-based)
+                    - "botsort": BoT-SORT (adds camera motion compensation, default)
+            yolo_model: YOLO model size. Options:
+                       - "yolov8n": Nano (fastest, lowest accuracy)
+                       - "yolov8s": Small (default, good balance)
+                       - "yolov8m": Medium (better accuracy)
+                       - "yolov8l": Large (best accuracy, slowest)
         """
         self.model_path = model_path
         self.confidence = confidence
         self.iou = iou
         self.preprocessing = preprocessing
         self.tracker = tracker
+        self.yolo_model = yolo_model
         self._model: Any = None
 
     def _get_tracker_config(self) -> Path:
@@ -410,13 +431,21 @@ class PlayerTracker:
             return BOTSORT_CONFIG
         return BYTETRACK_CONFIG
 
+    def _get_model_filename(self) -> str:
+        """Get the model filename for the selected YOLO model size."""
+        if self.yolo_model in YOLO_MODELS:
+            return YOLO_MODELS[self.yolo_model]
+        # Assume it's already a filename like "yolov8s.pt"
+        return self.yolo_model if self.yolo_model.endswith(".pt") else f"{self.yolo_model}.pt"
+
     def _ensure_model(self) -> Path:
         """Ensure model is available, downloading if necessary."""
         if self.model_path and self.model_path.exists():
             return self.model_path
 
         cache_dir = _get_model_cache_dir()
-        cached_path = cache_dir / MODEL_NAME
+        model_filename = self._get_model_filename()
+        cached_path = cache_dir / model_filename
 
         # YOLOv8 downloads models automatically on first use
         # We just return the expected cache path
@@ -438,20 +467,19 @@ class PlayerTracker:
 
         # Load model - ultralytics handles download automatically
         model_path = self._ensure_model()
+        model_filename = self._get_model_filename()
 
         # Try to load from cache first, fallback to auto-download
         if model_path.exists():
             self._model = YOLO(str(model_path))
         else:
-            # Download yolov8n.pt automatically
-            logger.info("Downloading YOLOv8n model...")
-            self._model = YOLO("yolov8n.pt")
-            # Save to cache for future use
-            # (ultralytics caches in its own location, but we track it)
+            # Download model automatically
+            logger.info(f"Downloading {model_filename} model...")
+            self._model = YOLO(model_filename)
 
         # Configure for CPU/GPU
         # ultralytics auto-detects available hardware
-        logger.info(f"Loaded YOLOv8n model: {model_path.name}")
+        logger.info(f"Loaded YOLO model: {model_filename}")
 
         return self._model
 
