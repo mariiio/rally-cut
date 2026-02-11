@@ -12,8 +12,130 @@ from rallycut.cli.commands.compare_tracking import (
     _match_detections,
     compute_ball_metrics,
 )
-from rallycut.labeling.ground_truth import GroundTruthResult
+from rallycut.labeling.ground_truth import GroundTruthPosition, GroundTruthResult
 from rallycut.tracking.player_tracker import PlayerTrackingResult
+
+
+def _compute_iou(box1: tuple[float, float, float, float], box2: tuple[float, float, float, float]) -> float:
+    """Compute IoU between two boxes (x, y, w, h format where x,y is center)."""
+    x1_min, x1_max = box1[0] - box1[2] / 2, box1[0] + box1[2] / 2
+    y1_min, y1_max = box1[1] - box1[3] / 2, box1[1] + box1[3] / 2
+    x2_min, x2_max = box2[0] - box2[2] / 2, box2[0] + box2[2] / 2
+    y2_min, y2_max = box2[1] - box2[3] / 2, box2[1] + box2[3] / 2
+
+    xi_min, xi_max = max(x1_min, x2_min), min(x1_max, x2_max)
+    yi_min, yi_max = max(y1_min, y2_min), min(y1_max, y2_max)
+
+    if xi_max < xi_min or yi_max < yi_min:
+        return 0.0
+
+    intersection = (xi_max - xi_min) * (yi_max - yi_min)
+    area1 = box1[2] * box1[3]
+    area2 = box2[2] * box2[3]
+    union = area1 + area2 - intersection
+
+    return intersection / union if union > 0 else 0.0
+
+
+def smart_interpolate_gt(
+    ground_truth: GroundTruthResult,
+    predictions: PlayerTrackingResult,
+    frame_count: int,
+    min_keyframe_iou_rate: float = 0.5,
+) -> GroundTruthResult:
+    """Interpolate ground truth with IoU-based filtering for sparse tracks.
+
+    Only interpolates tracks where a sufficient percentage of keyframes have
+    good IoU matches (>=0.5) with predictions. This prevents phantom GT
+    positions for tracks that are poorly detected, which would artificially
+    lower recall metrics.
+
+    Args:
+        ground_truth: Raw ground truth with keyframes only.
+        predictions: Predicted positions to check IoU against.
+        frame_count: Total frames to interpolate to.
+        min_keyframe_iou_rate: Minimum fraction of keyframes that must have
+            IoU >= 0.5 with predictions to enable interpolation. Default 0.5
+            means at least 50% of keyframes must match well.
+
+    Returns:
+        GroundTruthResult with smart interpolation applied.
+    """
+    # Group predictions by frame for fast lookup
+    pred_by_frame: dict[int, list[tuple[float, float, float, float]]] = defaultdict(list)
+    for p in predictions.positions:
+        pred_by_frame[p.frame_number].append((p.x, p.y, p.width, p.height))
+
+    # Group GT by track
+    tracks: dict[tuple[int, str], list[GroundTruthPosition]] = {}
+    for pos in ground_truth.positions:
+        key = (pos.track_id, pos.label)
+        if key not in tracks:
+            tracks[key] = []
+        tracks[key].append(pos)
+
+    interpolated: list[GroundTruthPosition] = []
+
+    for (track_id, label), keyframes in tracks.items():
+        keyframes = sorted(keyframes, key=lambda p: p.frame_number)
+
+        if len(keyframes) <= 1:
+            interpolated.extend(keyframes)
+            continue
+
+        # Calculate keyframe IoU quality for player tracks
+        should_interpolate = True
+        if label != "ball":  # Ball uses different evaluation
+            good_ious = 0
+            for kf in keyframes:
+                gt_box = (kf.x, kf.y, kf.width, kf.height)
+                preds_in_frame = pred_by_frame.get(kf.frame_number, [])
+                best_iou = max(
+                    (_compute_iou(gt_box, pred_box) for pred_box in preds_in_frame),
+                    default=0.0,
+                )
+                if best_iou >= 0.5:
+                    good_ious += 1
+
+            iou_rate = good_ious / len(keyframes)
+            should_interpolate = iou_rate >= min_keyframe_iou_rate
+
+        if not should_interpolate:
+            # Skip interpolation - keep keyframes only
+            interpolated.extend(keyframes)
+            continue
+
+        # Normal interpolation
+        for i in range(len(keyframes) - 1):
+            start = keyframes[i]
+            end = keyframes[i + 1]
+
+            for frame in range(start.frame_number, end.frame_number):
+                if frame == start.frame_number:
+                    interpolated.append(start)
+                else:
+                    t = (frame - start.frame_number) / (end.frame_number - start.frame_number)
+                    interpolated.append(
+                        GroundTruthPosition(
+                            frame_number=frame,
+                            track_id=track_id,
+                            label=label,
+                            x=start.x + t * (end.x - start.x),
+                            y=start.y + t * (end.y - start.y),
+                            width=start.width + t * (end.width - start.width),
+                            height=start.height + t * (end.height - start.height),
+                            confidence=1.0,
+                        )
+                    )
+
+        interpolated.append(keyframes[-1])
+
+    return GroundTruthResult(
+        positions=interpolated,
+        frame_count=frame_count,
+        video_width=ground_truth.video_width,
+        video_height=ground_truth.video_height,
+    )
 
 
 @dataclass
@@ -217,6 +339,8 @@ def evaluate_rally(
     video_width: int | None = None,
     video_height: int | None = None,
     interpolate_gt: bool = True,
+    smart_interpolate: bool = True,
+    min_keyframe_iou_rate: float = 0.5,
 ) -> TrackingEvaluationResult:
     """Evaluate tracking predictions against ground truth with detailed breakdowns.
 
@@ -229,13 +353,24 @@ def evaluate_rally(
         video_height: Video height for ball metrics (optional).
         interpolate_gt: If True, interpolate keyframe annotations to all frames.
             Label Studio exports only keyframes; this matches the visual display.
+        smart_interpolate: If True (default), only interpolate tracks where
+            keyframe IoU quality is sufficient. This prevents phantom GT
+            positions for poorly-detected sparse tracks.
+        min_keyframe_iou_rate: Minimum fraction of keyframes that must have
+            IoU >= 0.5 with predictions for interpolation (default 0.5).
+            Only used when smart_interpolate=True.
 
     Returns:
         TrackingEvaluationResult with aggregate, per-player, and per-frame metrics.
     """
     # Interpolate ground truth keyframes to match Label Studio's visual interpolation
     if interpolate_gt and predictions.frame_count > 0:
-        ground_truth = ground_truth.interpolate(predictions.frame_count)
+        if smart_interpolate:
+            ground_truth = smart_interpolate_gt(
+                ground_truth, predictions, predictions.frame_count, min_keyframe_iou_rate
+            )
+        else:
+            ground_truth = ground_truth.interpolate(predictions.frame_count)
 
     gt_positions = ground_truth.player_positions
     pred_positions = predictions.positions

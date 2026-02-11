@@ -158,7 +158,14 @@ class PlayerFilterConfig:
     two_team_hysteresis: float = 0.03  # Players must cross boundary + hysteresis to switch teams
 
     # Referee detection heuristics
-    referee_sideline_threshold: float = 0.20  # Track avg X near sidelines (x <= 0.20 or x >= 0.80)
+    # Note: This should be tighter than primary_sideline_threshold since referees stand
+    # at the very edge of the frame, not just outside the typical play area
+    referee_sideline_threshold: float = 0.08  # Track avg X near sidelines (x <= 0.08 or x >= 0.92)
+
+    # Primary track sideline filter - wider than referee detection
+    # Excludes tracks on far edges of frame (likely spectators/equipment)
+    # Set wider for cameras angled toward court edges where players may appear near frame edges
+    primary_sideline_threshold: float = 0.05  # Tracks with avg_x < this or > (1-this) are excluded
     referee_movement_ratio_min: float = 1.5  # X/Y movement ratio (referees move parallel to net)
     referee_ball_proximity_max: float = 0.12  # Referees occasionally near ball trajectory
     referee_y_std_max: float = 0.04  # Referees don't move up/down court like players (< 4%)
@@ -1346,7 +1353,7 @@ def identify_primary_tracks(
     Identify primary tracks that are likely real court players.
 
     Hard filters (must pass all):
-    1. Not on sidelines (x between 0.20-0.80)
+    1. Not on sidelines (x within primary_sideline_threshold, default 0.10-0.90)
     2. Not identified as referee
     3. Minimum presence rate (default 20%)
     4. Court presence >= threshold (if calibration available)
@@ -1377,9 +1384,13 @@ def identify_primary_tracks(
         # HARD FILTER 0: Exclude tracks on sidelines (image coordinates)
         # Players are in the middle of the frame; referees stand on sides
         # Beach volleyball: players typically at x=0.25-0.75
-        if stats.avg_x < 0.20 or stats.avg_x > 0.80:
+        # Use configurable threshold for cameras angled toward court edges
+        sideline_min = config.primary_sideline_threshold
+        sideline_max = 1.0 - config.primary_sideline_threshold
+        if stats.avg_x < sideline_min or stats.avg_x > sideline_max:
             logger.info(
-                f"Track {track_id} excluded: avg_x={stats.avg_x:.2f} (sideline position)"
+                f"Track {track_id} excluded: avg_x={stats.avg_x:.2f} (sideline position, "
+                f"threshold={sideline_min:.2f}-{sideline_max:.2f})"
             )
             continue
 
