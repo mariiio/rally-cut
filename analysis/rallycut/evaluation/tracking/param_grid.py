@@ -56,6 +56,38 @@ MERGE_GRID: dict[str, list[float | int]] = {
 }
 
 
+# Far-side player recall grid (108 combinations: 3*3*4*3)
+# Relaxed thresholds for far-side players that appear smaller due to perspective
+FARSIDE_GRID: dict[str, list[float]] = {
+    # Bbox size thresholds (far-side players appear smaller)
+    "min_bbox_area": [0.002, 0.003, 0.004],  # Default: 0.003
+    "min_bbox_height": [0.06, 0.08, 0.10],  # Default: 0.08
+
+    # Stationary filter (serve receivers are often stationary)
+    "min_position_spread_for_primary": [0.010, 0.012, 0.015, 0.018],  # Default: 0.015
+    "min_ball_proximity_for_stationary": [0.03, 0.05, 0.07],  # Default: 0.05
+}
+
+
+# Combined filter relaxation grid (486 combinations: 3*3*3*3*2*3)
+# Comprehensive test of filter relaxation parameters
+RELAXED_GRID: dict[str, list[float | int]] = {
+    # Bbox size (primary focus for far-side players)
+    "min_bbox_area": [0.002, 0.003, 0.004],
+    "min_bbox_height": [0.06, 0.08, 0.10],
+
+    # Presence and stability thresholds
+    "min_presence_rate": [0.15, 0.20, 0.25],
+    "min_stability_score": [0.15, 0.20, 0.25],
+
+    # Two-team hysteresis (prevents flickering at boundary)
+    "two_team_hysteresis": [0.02, 0.03],
+
+    # Ball proximity radius (defensive positioning spreads players out)
+    "ball_proximity_radius": [0.18, 0.20, 0.22],
+}
+
+
 # All available grids
 AVAILABLE_GRIDS: dict[str, dict[str, list[float | int]]] = {
     "quick": QUICK_GRID,
@@ -63,6 +95,8 @@ AVAILABLE_GRIDS: dict[str, dict[str, list[float | int]]] = {
     "referee": REFEREE_GRID,
     "stability": STABILITY_GRID,
     "merge": MERGE_GRID,
+    "farside": FARSIDE_GRID,  # Far-side player recall optimization
+    "relaxed": RELAXED_GRID,  # Comprehensive filter relaxation
 }
 
 

@@ -1,0 +1,33 @@
+# Custom BoT-SORT config for beach volleyball player tracking
+# BoT-SORT adds camera motion compensation and optional ReID on top of ByteTrack
+# Tuned to reduce ID switches and fragmentation
+
+tracker_type: botsort
+
+# Detection thresholds - matched to ByteTrack volleyball config
+track_high_thresh: 0.25  # First-stage match threshold
+track_low_thresh: 0.08   # Second-stage recovery threshold (lowered for recall)
+new_track_thresh: 0.35   # Threshold for new tracks
+
+# Longer buffer for track persistence (~3 seconds at 30fps)
+# Handles temporary occlusions common in volleyball (jumping, crossing)
+track_buffer: 90  # Increased to 3 seconds
+
+# Association threshold
+match_thresh: 0.80
+
+# Fuse detection score with motion for stable tracking
+fuse_score: True
+
+# BoT-SORT specific: Global motion compensation
+# sparseOptFlow handles camera panning/zooming common in volleyball broadcasts
+gmc_method: sparseOptFlow
+
+# ReID thresholds for identity consistency
+# These help when players cross paths or temporarily occlude each other
+proximity_thresh: 0.5   # Min IoU to consider tracks proximate for ReID
+appearance_thresh: 0.25  # Lowered from 0.8 - volleyball players often look similar
+
+# Disable external ReID model (use detector features instead)
+# Enable if ID switches remain high after testing
+with_reid: False

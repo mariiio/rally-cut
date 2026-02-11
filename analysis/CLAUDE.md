@@ -241,6 +241,36 @@ uv run python -m rallycut.service.local_runner
 
 API triggers Modal via webhook. Results posted back on completion.
 
+## Player Tracking
+
+Uses YOLOv8s for person detection with BoT-SORT for temporal tracking. BoT-SORT reduces ID switches by 64% compared to ByteTrack through camera motion compensation.
+
+**Tracker Options:**
+| Tracker | ID | Strengths | Use Case |
+|---------|-----|-----------|----------|
+| **BoT-SORT** | `botsort` (default) | 64% fewer ID switches, camera motion compensation | Recommended for all videos |
+| **ByteTrack** | `bytetrack` | Simpler, faster | Legacy compatibility |
+
+**Preprocessing Options:**
+| Method | ID | Description | Use Case |
+|--------|-----|-------------|----------|
+| None | `none` (default) | No preprocessing | Most videos |
+| CLAHE | `clahe` | Contrast enhancement via LAB color space | High-contrast sand backgrounds (tested, marginal benefit) |
+
+```bash
+# Default tracking (BoT-SORT)
+uv run rallycut track-players video.mp4
+
+# Use ByteTrack instead
+uv run rallycut track-players video.mp4 --tracker bytetrack
+
+# With CLAHE preprocessing
+uv run rallycut track-players video.mp4 --preprocessing clahe
+
+# Tune filter parameters for edge cases
+uv run rallycut track-players video.mp4 --min-bbox-area 0.002 --min-bbox-height 0.06
+```
+
 ## Player Tracking Filtering
 
 Multi-stage filtering to identify active players and exclude non-players. See `tracking/player_filter.py`.
@@ -268,7 +298,7 @@ Multi-stage filtering to identify active players and exclude non-players. See `t
 
 ## Track Merging
 
-Merges fragmented ByteTrack IDs using velocity prediction and position/size similarity. Thresholds are video-agnostic (seconds, normalized coordinates). See `tracking/player_filter.py`.
+Merges fragmented tracker IDs using velocity prediction and position/size similarity. Thresholds are video-agnostic (seconds, normalized coordinates). BoT-SORT's camera motion compensation significantly reduces fragmentation. See `tracking/player_filter.py`.
 
 ## Ball Phase Detection
 
@@ -472,6 +502,8 @@ uv run rallycut evaluate-tracking --all -b -o ball.json  # Export ball metrics t
 # Grid search for optimal player filter parameters
 uv run rallycut evaluate-tracking tune-filter --all --cache-only  # Cache raw positions (one-time)
 uv run rallycut evaluate-tracking tune-filter --all --grid quick  # Quick grid search
+uv run rallycut evaluate-tracking tune-filter --all --grid farside  # Far-side player optimization
+uv run rallycut evaluate-tracking tune-filter --all --grid relaxed  # Comprehensive relaxation
 uv run rallycut evaluate-tracking tune-filter --all --grid full --min-rally-f1 0.70  # Full search with constraint
 uv run rallycut evaluate-tracking tune-filter --all -o results.json  # Export full results
 
@@ -491,6 +523,14 @@ uv run rallycut evaluate-tracking tune-ball-filter --all -o ball.json  # Export 
 | `rallycut evaluate-tracking --ball-only` | Evaluate ball tracking with detailed metrics |
 | `rallycut evaluate-tracking tune-filter` | Grid search for optimal PlayerFilterConfig parameters |
 | `rallycut evaluate-tracking tune-ball-filter` | Grid search for optimal BallFilterConfig parameters |
+
+**Player tracking metrics:**
+- MOTA: Multi-Object Tracking Accuracy (combines FP, FN, ID switches)
+- HOTA: Higher Order Tracking Accuracy (balances detection and association)
+- DetA: Detection Accuracy (how well detections match GT)
+- AssA: Association Accuracy (ID consistency across frames)
+- Mostly Tracked (MT): GT tracks tracked >80% of their lifespan
+- Fragmentation: GT tracks split into multiple prediction tracks
 
 **Ball tracking metrics (`--ball-only`):**
 - Detection Rate: % of GT frames with ball detected

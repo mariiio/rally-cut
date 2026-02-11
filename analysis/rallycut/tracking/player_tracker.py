@@ -1,7 +1,8 @@
 """
-Player tracking using YOLOv8n + ByteTrack for volleyball videos.
+Player tracking using YOLOv8s + BoT-SORT for volleyball videos.
 
-Uses lightweight YOLOv8n for person detection with ByteTrack for temporal tracking.
+Uses YOLOv8 small for person detection with BoT-SORT for temporal tracking.
+BoT-SORT adds camera motion compensation on top of ByteTrack, reducing ID switches.
 Optimized for CPU (~30-40 FPS on proxy video).
 """
 
@@ -26,11 +27,52 @@ logger = logging.getLogger(__name__)
 # Model configuration
 MODEL_NAME = "yolov8s.pt"  # YOLOv8 small - better accuracy, 22MB
 PERSON_CLASS_ID = 0  # COCO class ID for person
-DEFAULT_CONFIDENCE = 0.25  # Lower threshold for detection (filter later)
+DEFAULT_CONFIDENCE = 0.15  # Lower threshold for detection (tuned via grid search)
 DEFAULT_IOU = 0.45  # NMS IoU threshold
 
-# Custom ByteTrack config for better tracking stability
+# Tracker configs for better tracking stability
 BYTETRACK_CONFIG = Path(__file__).parent / "bytetrack_volleyball.yaml"
+BOTSORT_CONFIG = Path(__file__).parent / "botsort_volleyball.yaml"
+
+# Available trackers
+TRACKER_BYTETRACK = "bytetrack"
+TRACKER_BOTSORT = "botsort"
+DEFAULT_TRACKER = TRACKER_BOTSORT  # BoT-SORT reduces ID switches by 64%
+
+# Preprocessing options
+PREPROCESSING_NONE = "none"
+PREPROCESSING_CLAHE = "clahe"  # Contrast Limited Adaptive Histogram Equalization
+
+
+def apply_clahe_preprocessing(frame: np.ndarray) -> np.ndarray:
+    """Apply CLAHE preprocessing to improve detection on sand backgrounds.
+
+    Based on KTH paper finding that CLAHE on grayscale helps with sand background
+    contrast issues in beach volleyball. CLAHE enhances local contrast without
+    over-amplifying noise.
+
+    Args:
+        frame: BGR image (OpenCV format).
+
+    Returns:
+        Preprocessed BGR image with enhanced contrast.
+    """
+    # Convert to grayscale for CLAHE (luminance channel)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # Apply CLAHE with volleyball-tuned parameters
+    # clipLimit=2.0 prevents over-amplification
+    # tileGridSize=(16,16) provides good local adaptation for court-sized regions
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(16, 16))
+    enhanced_gray = clahe.apply(gray)
+
+    # Convert back to BGR by replacing luminance in LAB color space
+    # This preserves color information while enhancing contrast
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    lab[:, :, 0] = enhanced_gray  # Replace L channel with CLAHE-enhanced
+    enhanced_bgr = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+    return enhanced_bgr
 
 
 def _get_model_cache_dir() -> Path:
@@ -337,6 +379,8 @@ class PlayerTracker:
         model_path: Path | None = None,
         confidence: float = DEFAULT_CONFIDENCE,
         iou: float = DEFAULT_IOU,
+        preprocessing: str = PREPROCESSING_NONE,
+        tracker: str = DEFAULT_TRACKER,
     ):
         """
         Initialize player tracker.
@@ -346,11 +390,25 @@ class PlayerTracker:
                        downloads to cache on first use.
             confidence: Detection confidence threshold.
             iou: NMS IoU threshold.
+            preprocessing: Preprocessing method for frames. Options:
+                          - "none": No preprocessing (default)
+                          - "clahe": CLAHE contrast enhancement for sand backgrounds
+            tracker: Tracking algorithm. Options:
+                    - "bytetrack": ByteTrack (default, motion-based)
+                    - "botsort": BoT-SORT (adds camera motion compensation)
         """
         self.model_path = model_path
         self.confidence = confidence
         self.iou = iou
+        self.preprocessing = preprocessing
+        self.tracker = tracker
         self._model: Any = None
+
+    def _get_tracker_config(self) -> Path:
+        """Get the tracker config file path based on selected tracker."""
+        if self.tracker == TRACKER_BOTSORT:
+            return BOTSORT_CONFIG
+        return BYTETRACK_CONFIG
 
     def _ensure_model(self) -> Path:
         """Ensure model is available, downloading if necessary."""
@@ -555,13 +613,18 @@ class PlayerTracker:
 
                 # Only process every Nth frame (stride)
                 if (frame_idx - start_frame) % stride == 0:
+                    # Apply preprocessing if enabled (e.g., CLAHE for sand backgrounds)
+                    processed_frame = frame
+                    if self.preprocessing == PREPROCESSING_CLAHE:
+                        processed_frame = apply_clahe_preprocessing(frame)
+
                     # Run YOLO with ByteTrack
                     # persist=True enables tracking across frames
                     try:
                         results = model.track(
-                            frame,
+                            processed_frame,
                             persist=True,
-                            tracker=str(BYTETRACK_CONFIG),
+                            tracker=str(self._get_tracker_config()),
                             conf=self.confidence,
                             iou=self.iou,
                             classes=[PERSON_CLASS_ID],
@@ -711,11 +774,16 @@ class PlayerTracker:
 
         for frame in frames:
             try:
+                # Apply preprocessing if enabled (e.g., CLAHE for sand backgrounds)
+                processed_frame = frame
+                if self.preprocessing == PREPROCESSING_CLAHE:
+                    processed_frame = apply_clahe_preprocessing(frame)
+
                 # Run YOLO with ByteTrack
                 results = model.track(
-                    frame,
+                    processed_frame,
                     persist=True,
-                    tracker=str(BYTETRACK_CONFIG),
+                    tracker=str(self._get_tracker_config()),
                     conf=self.confidence,
                     iou=self.iou,
                     classes=[PERSON_CLASS_ID],

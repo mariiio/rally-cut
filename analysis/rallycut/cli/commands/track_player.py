@@ -21,6 +21,11 @@ from rallycut.tracking.ball_tracker import (
 )
 from rallycut.tracking.player_filter import PlayerFilterConfig
 from rallycut.tracking.player_tracker import (
+    DEFAULT_TRACKER,
+    PREPROCESSING_CLAHE,
+    PREPROCESSING_NONE,
+    TRACKER_BOTSORT,
+    TRACKER_BYTETRACK,
     BallPhaseInfo,
     PlayerPosition,
     PlayerTracker,
@@ -290,6 +295,39 @@ def track_players(
         "--ball-model",
         help=f"Ball tracking model variant ({', '.join(get_available_ball_models())})",
     ),
+    # Filter parameter overrides for tuning edge cases
+    min_bbox_area: float | None = typer.Option(
+        None,
+        "--min-bbox-area",
+        help="Min bbox area threshold (default: 0.003, lower for far-side players)",
+    ),
+    min_bbox_height: float | None = typer.Option(
+        None,
+        "--min-bbox-height",
+        help="Min bbox height threshold (default: 0.08, lower for far-side players)",
+    ),
+    min_position_spread: float | None = typer.Option(
+        None,
+        "--min-position-spread",
+        help="Min position spread for active players (default: 0.015, lower for serve receivers)",
+    ),
+    min_presence_rate: float | None = typer.Option(
+        None,
+        "--min-presence-rate",
+        help="Min track presence rate (default: 0.20, lower for short rallies)",
+    ),
+    # Preprocessing options
+    preprocessing: str = typer.Option(
+        PREPROCESSING_NONE,
+        "--preprocessing",
+        help=f"Frame preprocessing: {PREPROCESSING_NONE} (default), {PREPROCESSING_CLAHE} (contrast enhancement)",
+    ),
+    # Tracker selection
+    tracker: str = typer.Option(
+        DEFAULT_TRACKER,
+        "--tracker",
+        help=f"Tracking algorithm: {TRACKER_BOTSORT} (default, fewer ID switches), {TRACKER_BYTETRACK}",
+    ),
 ) -> None:
     """Track player positions in a beach volleyball video.
 
@@ -385,15 +423,43 @@ def track_players(
                 f"[dim]Ball detection rate: {ball_result.detection_rate * 100:.1f}%[/dim]"
             )
 
-    # Create filter config (beach volleyball only for now)
-    filter_config = PlayerFilterConfig() if filter_court else None
+    # Create filter config with optional overrides (beach volleyball only for now)
+    filter_config = None
+    if filter_court:
+        filter_config = PlayerFilterConfig()
+        # Apply CLI overrides for parameter tuning
+        if min_bbox_area is not None:
+            filter_config.min_bbox_area = min_bbox_area
+        if min_bbox_height is not None:
+            filter_config.min_bbox_height = min_bbox_height
+        if min_position_spread is not None:
+            filter_config.min_position_spread_for_primary = min_position_spread
+        if min_presence_rate is not None:
+            filter_config.min_presence_rate = min_presence_rate
 
-    # Create player tracker
-    tracker = PlayerTracker(confidence=confidence)
+        # Log overrides
+        overrides = []
+        if min_bbox_area is not None:
+            overrides.append(f"min_bbox_area={min_bbox_area}")
+        if min_bbox_height is not None:
+            overrides.append(f"min_bbox_height={min_bbox_height}")
+        if min_position_spread is not None:
+            overrides.append(f"min_position_spread={min_position_spread}")
+        if min_presence_rate is not None:
+            overrides.append(f"min_presence_rate={min_presence_rate}")
+        if overrides and not quiet:
+            console.print(f"[dim]Filter overrides: {', '.join(overrides)}[/dim]")
+
+    # Create player tracker with optional preprocessing and tracker selection
+    if preprocessing != PREPROCESSING_NONE and not quiet:
+        console.print(f"[dim]Preprocessing: {preprocessing}[/dim]")
+    if tracker != DEFAULT_TRACKER and not quiet:
+        console.print(f"[dim]Tracker: {tracker}[/dim]")
+    player_tracker = PlayerTracker(confidence=confidence, preprocessing=preprocessing, tracker=tracker)
 
     # Track with progress
     if quiet:
-        result = tracker.track_video(
+        result = player_tracker.track_video(
             video,
             start_ms=start_ms,
             end_ms=end_ms,
@@ -415,7 +481,7 @@ def track_players(
             def update_progress(p: float) -> None:
                 progress.update(task, completed=int(p * 100))
 
-            result = tracker.track_video(
+            result = player_tracker.track_video(
                 video,
                 start_ms=start_ms,
                 end_ms=end_ms,
