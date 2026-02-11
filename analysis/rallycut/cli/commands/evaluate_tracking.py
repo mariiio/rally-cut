@@ -1728,3 +1728,285 @@ def compare_ball_models(
         with open(output, "w") as f:
             json.dump(output_data, f, indent=2)
         console.print(f"\n[green]Full results exported to {output}[/green]")
+
+
+@app.command(name="compare-yolo-models")
+@handle_errors
+def compare_yolo_models(
+    rally_id: Annotated[
+        str | None,
+        typer.Option(
+            "--rally-id", "-r",
+            help="Evaluate specific rally by ID",
+        ),
+    ] = None,
+    video_id: Annotated[
+        str | None,
+        typer.Option(
+            "--video-id", "-v",
+            help="Evaluate all labeled rallies in a video",
+        ),
+    ] = None,
+    all_rallies: Annotated[
+        bool,
+        typer.Option(
+            "--all", "-a",
+            help="Evaluate all labeled rallies in database",
+        ),
+    ] = False,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output", "-o",
+            help="Output JSON file for full results",
+        ),
+    ] = None,
+    models: Annotated[
+        str | None,
+        typer.Option(
+            "--models", "-m",
+            help="Comma-separated list of models to test (default: yolov8n,yolov8s,yolov8m)",
+        ),
+    ] = None,
+) -> None:
+    """Compare YOLO model sizes (n/s/m/l) for player detection.
+
+    Runs tracking with different model sizes and compares detection/tracking
+    accuracy. Useful for determining if larger models improve far-side player
+    recall.
+
+    Note: This caches nothing and runs fresh tracking for each model, so it
+    will take time proportional to (models × rallies × rally_duration).
+
+    Example:
+        # Compare all models on a single rally
+        rallycut evaluate-tracking compare-yolo-models -r <rally-id>
+
+        # Compare on all labeled rallies
+        rallycut evaluate-tracking compare-yolo-models --all
+
+        # Test specific models only
+        rallycut evaluate-tracking compare-yolo-models --all -m yolov8s,yolov8m
+    """
+    from rallycut.evaluation.tracking.db import get_video_path, load_labeled_rallies
+    from rallycut.evaluation.tracking.metrics import aggregate_results, evaluate_rally
+    from rallycut.tracking.player_filter import PlayerFilterConfig
+    from rallycut.tracking.player_tracker import (
+        DEFAULT_TRACKER,
+        YOLO_MODELS,
+        PlayerTracker,
+    )
+
+    # Validate input
+    if not rally_id and not video_id and not all_rallies:
+        console.print(
+            "[red]Error:[/red] Specify --rally-id, --video-id, or --all"
+        )
+        raise typer.Exit(1)
+
+    # Parse models to test
+    if models:
+        model_ids = [m.strip() for m in models.split(",")]
+        for m in model_ids:
+            if m not in YOLO_MODELS:
+                console.print(f"[red]Error:[/red] Unknown model '{m}'. Available: {', '.join(YOLO_MODELS.keys())}")
+                raise typer.Exit(1)
+    else:
+        # Default: test nano, small, medium (skip large for speed)
+        model_ids = ["yolov8n", "yolov8s", "yolov8m"]
+
+    # Load rallies from database
+    console.print("[bold]Loading labeled rallies from database...[/bold]")
+    rallies = load_labeled_rallies(
+        video_id=video_id,
+        rally_id=rally_id,
+    )
+
+    if not rallies:
+        console.print("[yellow]No labeled rallies found[/yellow]")
+        raise typer.Exit(1)
+
+    console.print(f"Found [cyan]{len(rallies)}[/cyan] labeled rallies")
+    console.print(f"Testing models: [cyan]{', '.join(model_ids)}[/cyan]")
+
+    # Results storage: model_id -> list of (rally_id, result)
+    model_results: dict[str, list[tuple[str, TrackingEvaluationResult]]] = {m: [] for m in model_ids}
+
+    # Group rallies by video for efficiency
+    rallies_by_video: dict[str, list[Any]] = {}
+    for rally in rallies:
+        vid = rally.video_id
+        if vid not in rallies_by_video:
+            rallies_by_video[vid] = []
+        rallies_by_video[vid].append(rally)
+
+    total_evaluations = len(model_ids) * len(rallies)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Comparing YOLO models...", total=total_evaluations)
+
+        for model_id in model_ids:
+            progress.update(task, description=f"Testing {model_id}...")
+            filter_config = PlayerFilterConfig()
+
+            for video_id_key, video_rallies in rallies_by_video.items():
+                video_path = get_video_path(video_id_key)
+                if not video_path or not video_path.exists():
+                    for _ in video_rallies:
+                        progress.update(task, advance=1)
+                    continue
+
+                # Create fresh tracker for each video to avoid state leakage
+                # (ByteTrack/BoT-SORT maintains internal state that doesn't reset)
+                tracker = PlayerTracker(
+                    yolo_model=model_id,
+                    tracker=DEFAULT_TRACKER,  # Use BoT-SORT for all
+                )
+
+                for rally in video_rallies:
+                    try:
+                        # Run tracking
+                        result = tracker.track_video(
+                            video_path,
+                            start_ms=rally.start_ms,
+                            end_ms=rally.end_ms,
+                            filter_enabled=True,
+                            filter_config=filter_config,
+                        )
+
+                        # Adjust frame numbers to rally-relative
+                        _adjust_frame_numbers(result, rally.start_ms, video_path)
+
+                        # Evaluate against ground truth
+                        eval_result = evaluate_rally(
+                            rally_id=rally.rally_id,
+                            ground_truth=rally.ground_truth,
+                            predictions=result,
+                        )
+
+                        model_results[model_id].append((rally.rally_id, eval_result))
+
+                    except Exception as e:
+                        console.print(f"[yellow]Warning: {model_id} failed on {rally.rally_id}: {e}[/yellow]")
+
+                    progress.update(task, advance=1)
+
+    # Display comparison table
+    console.print("\n[bold]YOLO Model Comparison Results[/bold]\n")
+
+    comparison_table = Table(title="Model Comparison")
+    comparison_table.add_column("Model", style="cyan")
+    comparison_table.add_column("MOTA", justify="right")
+    comparison_table.add_column("Precision", justify="right")
+    comparison_table.add_column("Recall", justify="right")
+    comparison_table.add_column("F1", justify="right")
+    comparison_table.add_column("ID Sw", justify="right")
+
+    best_f1 = 0.0
+    best_model = ""
+
+    for model_id in model_ids:
+        results = model_results.get(model_id, [])
+        if not results:
+            comparison_table.add_row(model_id, "-", "-", "-", "-", "-")
+            continue
+
+        # Aggregate results
+        eval_results = [r for _, r in results]
+        combined = aggregate_results(eval_results)
+
+        # Track best
+        if combined.f1 > best_f1:
+            best_f1 = combined.f1
+            best_model = model_id
+
+        # Style based on scores
+        f1_style = "green" if combined.f1 >= 0.90 else ("yellow" if combined.f1 >= 0.80 else "red")
+        recall_style = "green" if combined.recall >= 0.90 else ("yellow" if combined.recall >= 0.80 else "red")
+
+        comparison_table.add_row(
+            model_id,
+            f"{combined.mota:.1%}",
+            f"{combined.precision:.1%}",
+            f"[{recall_style}]{combined.recall:.1%}[/{recall_style}]",
+            f"[{f1_style}]{combined.f1:.1%}[/{f1_style}]",
+            str(combined.num_id_switches),
+        )
+
+    console.print(comparison_table)
+
+    if best_model:
+        console.print(f"\n[green]Best model: {best_model}[/green] (highest F1: {best_f1:.1%})")
+
+    # Export to file if requested
+    if output:
+        output_data: dict[str, Any] = {
+            "rallies": len(rallies),
+            "models": {},
+        }
+
+        for model_id in model_ids:
+            results = model_results.get(model_id, [])
+            if not results:
+                continue
+
+            eval_results = [r for _, r in results]
+            combined = aggregate_results(eval_results)
+
+            output_data["models"][model_id] = {
+                "aggregate": {
+                    "mota": combined.mota,
+                    "precision": combined.precision,
+                    "recall": combined.recall,
+                    "f1": combined.f1,
+                    "num_id_switches": combined.num_id_switches,
+                },
+                "per_rally": [
+                    {
+                        "rally_id": rid,
+                        "mota": r.aggregate.mota,
+                        "precision": r.aggregate.precision,
+                        "recall": r.aggregate.recall,
+                        "f1": r.aggregate.f1,
+                        "num_id_switches": r.aggregate.num_id_switches,
+                    }
+                    for rid, r in results
+                ],
+            }
+
+        with open(output, "w") as f:
+            json.dump(output_data, f, indent=2)
+        console.print(f"\n[green]Full results exported to {output}[/green]")
+
+
+def _adjust_frame_numbers(
+    result: Any,
+    start_ms: int,
+    video_path: Path,
+) -> None:
+    """Adjust PlayerTrackingResult frame numbers to rally-relative (in place).
+
+    Args:
+        result: PlayerTrackingResult from tracking (modified in place).
+        start_ms: Rally start time in milliseconds.
+        video_path: Path to video for FPS lookup.
+    """
+    import cv2
+
+    # Get video FPS for frame offset calculation
+    cap = cv2.VideoCapture(str(video_path))
+    video_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    cap.release()
+
+    # Calculate start frame
+    start_frame = int((start_ms / 1000.0) * video_fps)
+
+    # Adjust all frame numbers in place
+    for pos in result.positions:
+        pos.frame_number = pos.frame_number - start_frame

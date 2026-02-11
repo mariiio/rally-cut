@@ -22,10 +22,12 @@ from rallycut.tracking.ball_tracker import (
 from rallycut.tracking.player_filter import PlayerFilterConfig
 from rallycut.tracking.player_tracker import (
     DEFAULT_TRACKER,
+    DEFAULT_YOLO_MODEL,
     PREPROCESSING_CLAHE,
     PREPROCESSING_NONE,
     TRACKER_BOTSORT,
     TRACKER_BYTETRACK,
+    YOLO_MODELS,
     BallPhaseInfo,
     PlayerPosition,
     PlayerTracker,
@@ -328,6 +330,12 @@ def track_players(
         "--tracker",
         help=f"Tracking algorithm: {TRACKER_BOTSORT} (default, fewer ID switches), {TRACKER_BYTETRACK}",
     ),
+    # YOLO model selection
+    yolo_model: str = typer.Option(
+        DEFAULT_YOLO_MODEL,
+        "--yolo-model",
+        help=f"YOLO model size: {', '.join(YOLO_MODELS.keys())} (default: {DEFAULT_YOLO_MODEL})",
+    ),
 ) -> None:
     """Track player positions in a beach volleyball video.
 
@@ -455,7 +463,14 @@ def track_players(
         console.print(f"[dim]Preprocessing: {preprocessing}[/dim]")
     if tracker != DEFAULT_TRACKER and not quiet:
         console.print(f"[dim]Tracker: {tracker}[/dim]")
-    player_tracker = PlayerTracker(confidence=confidence, preprocessing=preprocessing, tracker=tracker)
+    if yolo_model != DEFAULT_YOLO_MODEL and not quiet:
+        console.print(f"[dim]YOLO model: {yolo_model}[/dim]")
+    player_tracker = PlayerTracker(
+        confidence=confidence,
+        preprocessing=preprocessing,
+        tracker=tracker,
+        yolo_model=yolo_model,
+    )
 
     # Track with progress
     if quiet:
