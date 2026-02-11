@@ -12,7 +12,13 @@ from rallycut.tracking.ball_boundary import (
 from rallycut.tracking.ball_cache import BallFeatureCache, get_ball_cache
 from rallycut.tracking.ball_features import SegmentBallFeatures, compute_ball_features
 from rallycut.tracking.ball_filter import BallFilterConfig, BallTemporalFilter
-from rallycut.tracking.ball_tracker import BallPosition, BallTracker, BallTrackingResult
+from rallycut.tracking.ball_smoother import TrajectoryPostProcessor, TrajectorySmoothingConfig
+from rallycut.tracking.ball_tracker import (
+    BallPosition,
+    BallTracker,
+    BallTrackingResult,
+    HeatmapDecodingConfig,
+)
 from rallycut.tracking.ball_validation import (
     BallValidationConfig,
     ValidationResult,
@@ -32,9 +38,13 @@ __all__ = [
     "BallTracker",
     "BallPosition",
     "BallTrackingResult",
+    "HeatmapDecodingConfig",
     # Ball filter
     "BallFilterConfig",
     "BallTemporalFilter",
+    # Ball smoother
+    "TrajectorySmoothingConfig",
+    "TrajectoryPostProcessor",
     # Ball features
     "SegmentBallFeatures",
     "compute_ball_features",

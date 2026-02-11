@@ -48,6 +48,16 @@ class BallTrackingMetrics:
     # Frame comparisons for detailed analysis
     comparisons: list[BallFrameComparison] = field(default_factory=list)
 
+    # Velocity error statistics (in pixels/frame)
+    velocity_errors_px: list[float] = field(default_factory=list)
+
+    # Temporal jitter (frame-to-frame position variance in pixels)
+    temporal_jitter_px: list[float] = field(default_factory=list)
+
+    # Per-confidence-band metrics
+    # Key: confidence band (e.g., "0.3-0.5"), Value: list of errors in that band
+    errors_by_confidence_band: dict[str, list[float]] = field(default_factory=dict)
+
     # Video metadata
     video_width: int = 1920
     video_height: int = 1080
@@ -114,9 +124,67 @@ class BallTrackingMetrics:
         under_50 = sum(1 for e in self.errors_px if e < 50)
         return under_50 / len(self.errors_px)
 
+    @property
+    def mean_velocity_error_px(self) -> float:
+        """Mean velocity error in pixels/frame."""
+        if not self.velocity_errors_px:
+            return 0.0
+        return sum(self.velocity_errors_px) / len(self.velocity_errors_px)
+
+    @property
+    def median_velocity_error_px(self) -> float:
+        """Median velocity error in pixels/frame."""
+        if not self.velocity_errors_px:
+            return 0.0
+        sorted_errors = sorted(self.velocity_errors_px)
+        n = len(sorted_errors)
+        if n % 2 == 0:
+            return (sorted_errors[n // 2 - 1] + sorted_errors[n // 2]) / 2
+        return sorted_errors[n // 2]
+
+    @property
+    def mean_jitter_px(self) -> float:
+        """Mean temporal jitter in pixels."""
+        if not self.temporal_jitter_px:
+            return 0.0
+        return sum(self.temporal_jitter_px) / len(self.temporal_jitter_px)
+
+    @property
+    def p90_jitter_px(self) -> float:
+        """90th percentile temporal jitter in pixels."""
+        if not self.temporal_jitter_px:
+            return 0.0
+        sorted_jitter = sorted(self.temporal_jitter_px)
+        idx = int(len(sorted_jitter) * 0.9)
+        return sorted_jitter[min(idx, len(sorted_jitter) - 1)]
+
+    def get_error_stats_by_confidence(self) -> dict[str, dict[str, float]]:
+        """Get error statistics broken down by confidence band.
+
+        Returns:
+            Dict mapping confidence band to error stats (mean, median, count).
+        """
+        result = {}
+        for band, errors in self.errors_by_confidence_band.items():
+            if not errors:
+                continue
+            sorted_errors = sorted(errors)
+            n = len(sorted_errors)
+            median = (
+                (sorted_errors[n // 2 - 1] + sorted_errors[n // 2]) / 2
+                if n % 2 == 0
+                else sorted_errors[n // 2]
+            )
+            result[band] = {
+                "mean": sum(errors) / n,
+                "median": median,
+                "count": n,
+            }
+        return result
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
-        return {
+        result: dict[str, Any] = {
             "numGtFrames": self.num_gt_frames,
             "numDetected": self.num_detected,
             "numMatched": self.num_matched,
@@ -131,6 +199,36 @@ class BallTrackingMetrics:
             "videoWidth": self.video_width,
             "videoHeight": self.video_height,
         }
+
+        # Add velocity and jitter metrics if available
+        if self.velocity_errors_px:
+            result["meanVelocityErrorPx"] = self.mean_velocity_error_px
+            result["medianVelocityErrorPx"] = self.median_velocity_error_px
+
+        if self.temporal_jitter_px:
+            result["meanJitterPx"] = self.mean_jitter_px
+            result["p90JitterPx"] = self.p90_jitter_px
+
+        # Add per-confidence-band breakdown if available
+        confidence_stats = self.get_error_stats_by_confidence()
+        if confidence_stats:
+            result["errorsByConfidenceBand"] = confidence_stats
+
+        return result
+
+
+def _get_confidence_band(confidence: float) -> str:
+    """Get the confidence band label for a given confidence value."""
+    if confidence < 0.3:
+        return "0.0-0.3"
+    elif confidence < 0.5:
+        return "0.3-0.5"
+    elif confidence < 0.7:
+        return "0.5-0.7"
+    elif confidence < 0.9:
+        return "0.7-0.9"
+    else:
+        return "0.9-1.0"
 
 
 def evaluate_ball_tracking(
@@ -180,6 +278,10 @@ def evaluate_ball_tracking(
         video_fps=video_fps,
     )
 
+    # Initialize confidence band dict
+    for band in ["0.0-0.3", "0.3-0.5", "0.5-0.7", "0.7-0.9", "0.9-1.0"]:
+        metrics.errors_by_confidence_band[band] = []
+
     for frame, gt_pos in gt_by_frame.items():
         matched_pred = pred_by_frame.get(frame)
 
@@ -217,6 +319,10 @@ def evaluate_ball_tracking(
         metrics.errors_norm.append(error_norm)
         metrics.errors_px.append(error_px)
 
+        # Add to per-confidence-band metrics
+        band = _get_confidence_band(matched_pred.confidence)
+        metrics.errors_by_confidence_band[band].append(error_px)
+
         metrics.comparisons.append(
             BallFrameComparison(
                 frame_number=frame,
@@ -230,6 +336,55 @@ def evaluate_ball_tracking(
                 detected=True,
             )
         )
+
+    # Compute velocity errors (compare GT velocity to prediction velocity)
+    # Sort comparisons by frame for velocity computation
+    detected_comparisons = [c for c in metrics.comparisons if c.detected]
+    detected_comparisons.sort(key=lambda c: c.frame_number)
+
+    for i in range(1, len(detected_comparisons)):
+        curr = detected_comparisons[i]
+        prev = detected_comparisons[i - 1]
+
+        # Skip if frames are not consecutive
+        if curr.frame_number != prev.frame_number + 1:
+            continue
+
+        # GT velocity
+        gt_vx = (curr.gt_x - prev.gt_x) * video_width
+        gt_vy = (curr.gt_y - prev.gt_y) * video_height
+
+        # Predicted velocity
+        pred_vx = (curr.pred_x - prev.pred_x) * video_width  # type: ignore
+        pred_vy = (curr.pred_y - prev.pred_y) * video_height  # type: ignore
+
+        # Velocity error (magnitude of velocity difference)
+        vel_error = math.sqrt(
+            (pred_vx - gt_vx) ** 2 + (pred_vy - gt_vy) ** 2
+        )
+        metrics.velocity_errors_px.append(vel_error)
+
+    # Compute temporal jitter (frame-to-frame variance in prediction error)
+    # Jitter measures how much the error changes from frame to frame
+    for i in range(1, len(detected_comparisons)):
+        curr = detected_comparisons[i]
+        prev = detected_comparisons[i - 1]
+
+        # Skip if frames are not consecutive
+        if curr.frame_number != prev.frame_number + 1:
+            continue
+
+        # Jitter is the change in predicted position between frames
+        # (ideally should be smooth)
+        pred_dx = (curr.pred_x - prev.pred_x) * video_width  # type: ignore
+        pred_dy = (curr.pred_y - prev.pred_y) * video_height  # type: ignore
+
+        gt_dx = (curr.gt_x - prev.gt_x) * video_width
+        gt_dy = (curr.gt_y - prev.gt_y) * video_height
+
+        # Jitter is the deviation from expected motion
+        jitter = math.sqrt((pred_dx - gt_dx) ** 2 + (pred_dy - gt_dy) ** 2)
+        metrics.temporal_jitter_px.append(jitter)
 
     return metrics
 
@@ -247,12 +402,25 @@ def aggregate_ball_metrics(
     """
     combined = BallTrackingMetrics()
 
+    # Initialize confidence band dict
+    for band in ["0.0-0.3", "0.3-0.5", "0.5-0.7", "0.7-0.9", "0.9-1.0"]:
+        combined.errors_by_confidence_band[band] = []
+
     for r in results:
         combined.num_gt_frames += r.num_gt_frames
         combined.num_detected += r.num_detected
         combined.num_matched += r.num_matched
         combined.errors_norm.extend(r.errors_norm)
         combined.errors_px.extend(r.errors_px)
+        combined.velocity_errors_px.extend(r.velocity_errors_px)
+        combined.temporal_jitter_px.extend(r.temporal_jitter_px)
+
+        # Aggregate confidence band errors
+        for band, errors in r.errors_by_confidence_band.items():
+            if band not in combined.errors_by_confidence_band:
+                combined.errors_by_confidence_band[band] = []
+            combined.errors_by_confidence_band[band].extend(errors)
+
         # Use first rally's video dimensions (should all be same video typically)
         if combined.video_width == 1920 and r.video_width != 1920:
             combined.video_width = r.video_width
