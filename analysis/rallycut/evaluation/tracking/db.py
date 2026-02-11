@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 VALID_BALL_GT_VIDEOS = {
     "a5866029-7cf4-42d6-adc2-8e28111ffd81",
     "1efa35cf-4edd-4504-b4a4-834eee9e5218",
+    "70ab9d7f-8cc4-48cb-892a-1c36793cac72",
 }
 
 
@@ -49,25 +50,32 @@ class TrackingEvaluationRally:
 def _parse_ground_truth(
     gt_json: dict[str, Any] | None,
     frame_offset: int = 0,
+    fps_scale: float = 1.0,
 ) -> GroundTruthResult | None:
     """Parse ground truth JSON from database into GroundTruthResult.
 
     Args:
         gt_json: Ground truth JSON from database.
         frame_offset: Frame number to subtract from all positions to convert
-            from absolute video frames to rally-relative frames.
+            from absolute video frames to rally-relative frames. This should
+            be calculated at Label Studio's FPS rate (30fps).
+        fps_scale: Scale factor for frame numbers to match prediction FPS.
+            E.g., 2.0 when predictions are at 60fps but GT was labeled at 30fps.
 
     Returns:
-        Parsed GroundTruthResult with rally-relative frame numbers.
+        Parsed GroundTruthResult with rally-relative frame numbers scaled to
+        match prediction FPS.
     """
     if gt_json is None:
         return None
 
-    # Label Studio exports 1-indexed frames, predictions are 0-indexed
-    # Subtract additional 1 to align frame numbers
+    # Label Studio exports 1-indexed frames at 30fps, predictions may be at different FPS
+    # 1. Subtract frame_offset (at Label Studio 30fps) to get rally-relative frames
+    # 2. Subtract 1 for 1-indexed to 0-indexed conversion
+    # 3. Scale by fps_scale to match prediction FPS (e.g., 2x for 60fps predictions)
     positions = [
         GroundTruthPosition(
-            frame_number=p["frameNumber"] - frame_offset - 1,
+            frame_number=int((p["frameNumber"] - frame_offset - 1) * fps_scale),
             track_id=p["trackId"],
             label=p["label"],
             x=p["x"],
@@ -257,13 +265,20 @@ def load_labeled_rallies(
                 ) = row
 
                 # Calculate frame offset to convert GT absolute frames to rally-relative
-                # GT frames are stored as absolute video frames, predictions are rally-relative
-                fps = cast(float, pt_fps) if pt_fps else 30.0
-                start_frame = int(cast(int, start_ms) / 1000 * fps)
+                # GT frames are stored as absolute video frames at Label Studio's 30fps rate
+                # Predictions are rally-relative at tracking FPS (pt_fps, may be 60fps)
+                tracking_fps = cast(float, pt_fps) if pt_fps else 30.0
+                label_studio_fps = 30.0  # Label Studio always uses 30fps for frame numbers
+                start_frame_at_ls_fps = int(cast(int, start_ms) / 1000 * label_studio_fps)
+                fps_scale = tracking_fps / label_studio_fps  # e.g., 2.0 for 60fps tracking
 
-                # Parse ground truth (with type cast and frame offset)
+                # Parse ground truth (with type cast, frame offset at LS fps, and fps scale)
                 gt_json_typed = cast(dict[str, Any] | None, ground_truth_json)
-                gt = _parse_ground_truth(gt_json_typed, frame_offset=start_frame)
+                gt = _parse_ground_truth(
+                    gt_json_typed,
+                    frame_offset=start_frame_at_ls_fps,
+                    fps_scale=fps_scale,
+                )
                 if gt is None:
                     logger.warning(f"Rally {rally_id_val} has NULL ground_truth_json, skipping")
                     continue

@@ -553,6 +553,7 @@ uv run rallycut evaluate-tracking tune-ball-filter --all -o ball.json  # Export 
 Only these videos have validated ball tracking ground truth:
 - `a5866029-7cf4-42d6-adc2-8e28111ffd81`
 - `1efa35cf-4edd-4504-b4a4-834eee9e5218`
+- `70ab9d7f-8cc4-48cb-892a-1c36793cac72`
 
 Other videos have incorrect ball labels and are automatically filtered out when using `--ball-only`, `tune-ball-filter`, or `compare-ball-models`. See `VALID_BALL_GT_VIDEOS` in `evaluation/tracking/db.py`.
 
