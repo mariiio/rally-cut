@@ -144,16 +144,17 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
 ### Label Studio Integration (Ground Truth)
 - `GET /v1/rallies/:id/label-studio` → status (hasTrackingData, hasGroundTruth, taskId)
 - `POST /v1/rallies/:id/label-studio/export` → exports tracking to Label Studio
-  - Body: `{ videoUrl, apiKey?, apiUrl? }` - video URL (must use API server URL for CORS)
+  - Body: `{ videoUrl, apiKey?, apiUrl?, forceRegenerate? }` - video URL (must use API server URL for CORS)
   - Returns: `{ taskUrl }` - opens in Label Studio with pre-filled predictions
   - **Labels**: player_1 (green), player_2 (blue), player_3 (orange), player_4 (purple), ball (red)
-  - **Task reuse**: Returns existing task if already exported (stored in `groundTruthTaskId`)
+  - **Task reuse**: Returns existing task if already exported, unless `forceRegenerate: true`
   - **Rally bounds**: Labels only appear during rally duration (enabled: false after end)
+  - **Frame timing**: Frames calculated at 30fps (Label Studio's default) regardless of video fps
 - `POST /v1/rallies/:id/label-studio/import` → imports corrected annotations
   - Body: `{ taskId, apiKey?, apiUrl? }` - Label Studio task ID
   - Saves to `PlayerTrack.groundTruthJson`
 - **Config**: `LABEL_STUDIO_URL` (default: localhost:8082), `LABEL_STUDIO_API_KEY`
-- **Project**: Auto-created "RallyCut Ground Truth" with framerate=29.97 for correct sync
+- **Project**: Auto-created "RallyCut Ground Truth" on first export
 
 ## Database Schema
 

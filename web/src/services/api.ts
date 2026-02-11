@@ -1886,18 +1886,18 @@ export async function getLabelStudioStatus(rallyId: string): Promise<LabelStudio
  *
  * @param rallyId - Backend rally ID (UUID)
  * @param videoUrl - Public URL of the video for Label Studio to access
- * @param config - Optional Label Studio API configuration
+ * @param options - Optional configuration including Label Studio API settings and forceRegenerate flag
  * @returns Export result with task URL
  */
 export async function exportToLabelStudio(
   rallyId: string,
   videoUrl: string,
-  config?: { apiKey?: string; apiUrl?: string }
+  options?: { apiKey?: string; apiUrl?: string; forceRegenerate?: boolean }
 ): Promise<LabelStudioExportResult> {
   const response = await fetch(`${API_BASE_URL}/v1/rallies/${rallyId}/label-studio/export`, {
     method: 'POST',
     headers: getHeaders('application/json'),
-    body: JSON.stringify({ videoUrl, ...config }),
+    body: JSON.stringify({ videoUrl, ...options }),
   });
 
   if (!response.ok) {

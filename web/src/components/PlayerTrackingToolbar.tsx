@@ -302,7 +302,9 @@ export function PlayerTrackingToolbar() {
     try {
       // Convert relative URL to absolute URL for Label Studio (must use API server, not web server)
       const videoUrl = new URL(activeMatch.videoUrl, API_BASE_URL).href;
-      const result = await exportToLabelStudio(backendRallyId, videoUrl);
+      // Always force regenerate to ensure fresh predictions with correct timing
+      // This fixes issues where existing tasks have stale/incorrect frame numbers
+      const result = await exportToLabelStudio(backendRallyId, videoUrl, { forceRegenerate: true });
       if (result.success && result.taskUrl) {
         setLabelStudioTaskId(result.taskId ?? null);
         // Open Label Studio in new tab
