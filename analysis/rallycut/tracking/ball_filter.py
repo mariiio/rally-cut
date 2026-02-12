@@ -1,7 +1,9 @@
 """
-Temporal filtering for ball tracking using Kalman filter.
+Temporal filtering for ball tracking.
 
-Reduces lag from temporal model context and smooths flickering/jumps.
+Two modes: raw mode (default) passes through VballNet positions with segment
+pruning + interpolation; Kalman mode applies full Kalman filter pipeline for
+smoother trajectories at the cost of detection rate.
 """
 
 import logging
@@ -97,18 +99,14 @@ class BallFilterConfig:
 
 
 class BallTemporalFilter:
-    """
-    Kalman filter for ball tracking with lag compensation and occlusion handling.
+    """Ball tracking filter with raw and Kalman modes.
 
-    State vector: [x, y, vx, vy] (position and velocity)
-    Observation: [x, y] (position from detector)
+    Raw mode (default): Passes through VballNet positions with segment pruning
+    and interpolation. Maximizes detection rate and match rate.
 
-    Features:
-    - Constant velocity motion model
-    - Confidence-weighted measurement updates
-    - Velocity-based position extrapolation for lag compensation
-    - Jump rejection for impossible movements
-    - Prediction-only mode during occlusion
+    Kalman mode: Full Kalman filter pipeline with Mahalanobis gating,
+    re-acquisition guard, exit detection, and outlier removal.
+    State vector: [x, y, vx, vy]. Produces smoother trajectories.
     """
 
     def __init__(self, config: BallFilterConfig | None = None):
@@ -578,7 +576,7 @@ class BallTemporalFilter:
         optimal zero-lag estimates. Only suitable for offline batch processing.
 
         The algorithm:
-        1. Forward pass already done in filter_batch (stores state and covariance)
+        1. Forward pass already done in _run_kalman_pipeline
         2. Backward pass to compute smoothed estimates
 
         Args:
