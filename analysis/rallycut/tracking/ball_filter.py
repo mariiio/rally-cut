@@ -1005,7 +1005,11 @@ class BallTemporalFilter:
         # Use half the jump threshold as proximity — tight enough to exclude
         # false positives (which jump to player positions 30-50% away) while
         # keeping real trajectory fragments (typically <5% from anchor).
+        # Also require temporal proximity: after a large gap (ball exited frame),
+        # VballNet can restart at a player position that happens to be spatially
+        # near the last anchor endpoint. These shouldn't be recovered.
         proximity = threshold / 2
+        max_recovery_gap = self.config.max_interpolation_gap * 3
         kept: list[BallPosition] = []
         removed_count = 0
         kept_info: list[str] = []
@@ -1030,6 +1034,9 @@ class BallTemporalFilter:
             for j in range(i - 1, -1, -1):
                 if j in anchor_indices:
                     ref = segments[j][-1]
+                    frame_gap = seg[0].frame_number - ref.frame_number
+                    if frame_gap > max_recovery_gap:
+                        break
                     dist = np.sqrt(
                         (centroid_x - ref.x) ** 2 + (centroid_y - ref.y) ** 2
                     )
@@ -1042,6 +1049,9 @@ class BallTemporalFilter:
                 for j in range(i + 1, len(segments)):
                     if j in anchor_indices:
                         ref = segments[j][0]
+                        frame_gap = ref.frame_number - seg[-1].frame_number
+                        if frame_gap > max_recovery_gap:
+                            break
                         dist = np.sqrt(
                             (centroid_x - ref.x) ** 2 + (centroid_y - ref.y) ** 2
                         )
