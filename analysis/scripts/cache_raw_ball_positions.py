@@ -106,6 +106,7 @@ def main() -> None:
                     x=p.x,
                     y=p.y,
                     confidence=p.confidence,
+                    motion_energy=p.motion_energy,
                 )
                 for p in result.positions
             ]

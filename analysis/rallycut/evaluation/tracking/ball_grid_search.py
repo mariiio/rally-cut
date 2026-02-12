@@ -57,6 +57,7 @@ class CachedBallData:
                     "x": bp.x,
                     "y": bp.y,
                     "confidence": bp.confidence,
+                    "motion_energy": bp.motion_energy,
                 }
                 for bp in self.raw_ball_positions
             ],
@@ -77,6 +78,7 @@ class CachedBallData:
                 x=bp["x"],
                 y=bp["y"],
                 confidence=bp["confidence"],
+                motion_energy=bp.get("motion_energy", 0.0),
             )
             for bp in data.get("raw_ball_positions", [])
         ]
