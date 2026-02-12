@@ -248,6 +248,11 @@ def cut(  # noqa: C901
         "--binary-head",
         help="Force binary head + decoder (84%% F1). Auto-enabled when features cached.",
     ),
+    temporal_maxer: bool = typer.Option(
+        False,
+        "--temporal-maxer",
+        help="Use TemporalMaxer TAS model (75%% LOO F1)",
+    ),
     binary_head_model: Path | None = typer.Option(
         None,
         "--binary-head-model",
@@ -387,6 +392,7 @@ def cut(  # noqa: C901
         temporal_model_version=temporal_version,
         use_binary_head_decoder=binary_head,
         binary_head_model_path=binary_head_model,
+        use_temporal_maxer=temporal_maxer,
         use_heuristics=heuristics,
         boundary_refinement=refine,
         ball_validation=ball_validation,
@@ -395,7 +401,9 @@ def cut(  # noqa: C901
     )
 
     # Show pipeline info
-    if binary_head:
+    if temporal_maxer:
+        console.print("[bold green]TemporalMaxer TAS model (75% LOO F1)[/bold green]")
+    elif binary_head:
         console.print("[bold green]Binary head + decoder enabled (84% F1)[/bold green]")
     elif experimental_temporal:
         console.print(

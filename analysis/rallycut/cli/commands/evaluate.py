@@ -326,6 +326,71 @@ def _apply_binary_head_decoder(
     return segments
 
 
+def _apply_temporal_maxer(
+    content_hash: str,
+    stride: int,
+    feature_cache_dir: Path | None = None,
+    temporal_maxer_model_path: Path | None = None,
+) -> list | None:
+    """Apply TemporalMaxer TAS model to cached features.
+
+    Args:
+        content_hash: Video content hash to look up cached features.
+        stride: Analysis stride in frames.
+        feature_cache_dir: Directory containing cached features.
+        temporal_maxer_model_path: Path to TemporalMaxer model (optional).
+
+    Returns:
+        List of TimeSegment objects, or None if features/model not found.
+    """
+    from rallycut.core.config import get_config
+    from rallycut.core.models import GameState, TimeSegment
+    from rallycut.temporal.features import FeatureCache
+    from rallycut.temporal.temporal_maxer.inference import TemporalMaxerInference
+
+    config = get_config()
+
+    # Determine model path
+    if temporal_maxer_model_path is not None:
+        model_path = temporal_maxer_model_path
+    else:
+        model_path = config.weights_dir / "temporal_maxer" / "best_temporal_maxer.pt"
+
+    if not model_path.exists():
+        return None
+
+    # Load features
+    cache_dir = feature_cache_dir or Path("training_data/features")
+    feature_cache = FeatureCache(cache_dir=cache_dir)
+    cached_data = feature_cache.get(content_hash, stride)
+
+    if cached_data is None:
+        return None
+
+    features, metadata = cached_data
+
+    # Run inference
+    inference = TemporalMaxerInference(model_path, device="cpu")
+    result = inference.predict(features=features, fps=metadata.fps, stride=stride)
+
+    # Convert to TimeSegments
+    segments = []
+    for start_time, end_time in result.segments:
+        start_frame = int(start_time * metadata.fps)
+        end_frame = int(end_time * metadata.fps)
+        segments.append(
+            TimeSegment(
+                start_frame=start_frame,
+                end_frame=end_frame,
+                start_time=start_time,
+                end_time=end_time,
+                state=GameState.PLAY,
+            )
+        )
+
+    return segments
+
+
 def _apply_temporal_model(
     cached: CachedAnalysis,
     model: object,  # torch.nn.Module
@@ -531,6 +596,7 @@ def _run_evaluation(
     temporal_model_path: Path | None = None,
     feature_cache_dir: Path | None = None,
     use_binary_head: bool = False,
+    use_temporal_maxer: bool = False,
     use_heuristics: bool = False,
     ball_validation: bool = False,
     ball_boundary: bool = False,
@@ -541,10 +607,11 @@ def _run_evaluation(
     """Run evaluation on a list of videos.
 
     Pipeline priority:
-    1. If temporal_model_path: use temporal model (deprecated)
-    2. If use_binary_head: use binary head + decoder
-    3. If use_heuristics: use heuristics
-    4. Auto: use binary head if features cached, else heuristics
+    1. If use_temporal_maxer: use TemporalMaxer TAS model
+    2. If temporal_model_path: use temporal model (deprecated)
+    3. If use_binary_head: use binary head + decoder
+    4. If use_heuristics: use heuristics
+    5. Auto: TemporalMaxer if model+features exist, else binary head, else heuristics
     """
     results: list[VideoEvaluationResult] = []
     total = len(videos)
@@ -582,10 +649,18 @@ def _run_evaluation(
                 model_id=model_id,
             )
 
-        # Apply post-processing (temporal model, binary head, or heuristics)
+        # Apply post-processing pipeline
         segments = None
 
-        if temporal_model is not None:
+        if use_temporal_maxer:
+            # TemporalMaxer TAS model (highest priority)
+            segments = _apply_temporal_maxer(
+                video.content_hash, stride, feature_cache_dir
+            )
+            if segments is None:
+                logger.warning("No cached features/model for %s, using heuristics", video.filename)
+
+        elif temporal_model is not None:
             # Deprecated temporal model path
             segments = _apply_temporal_model(
                 cached, temporal_model, stride, video.content_hash, feature_cache_dir
@@ -594,10 +669,18 @@ def _run_evaluation(
                 logger.warning("No cached features for %s, using heuristics", video.filename)
 
         elif use_binary_head or (not use_heuristics):
-            # Binary head path (explicit or auto-selected)
-            segments = _apply_binary_head_decoder(
-                video.content_hash, stride, feature_cache_dir
-            )
+            # Try TemporalMaxer auto-selection first (if not explicitly requesting binary head)
+            if not use_binary_head:
+                segments = _apply_temporal_maxer(
+                    video.content_hash, stride, feature_cache_dir
+                )
+
+            # Fall back to binary head
+            if segments is None:
+                segments = _apply_binary_head_decoder(
+                    video.content_hash, stride, feature_cache_dir
+                )
+
             if segments is not None and (ball_validation or ball_boundary):
                 # Apply ball tracking validation/refinement
                 video_path = resolver.resolve(video.s3_key, video.content_hash)
@@ -771,6 +854,13 @@ def evaluate(
             help="Use binary head + decoder for evaluation (84%% F1 at IoU=0.4, default when features cached)",
         ),
     ] = False,
+    temporal_maxer: Annotated[
+        bool,
+        typer.Option(
+            "--temporal-maxer",
+            help="Use TemporalMaxer TAS model (75%% LOO F1 at IoU=0.4)",
+        ),
+    ] = False,
     use_heuristics: Annotated[
         bool,
         typer.Option(
@@ -843,12 +933,16 @@ def evaluate(
         )
 
     # Show pipeline info
-    if binary_head:
+    if temporal_maxer:
+        console.print("Pipeline: [green]TemporalMaxer TAS model (75% LOO F1)[/green]")
+    elif binary_head:
         console.print("Pipeline: [green]Binary head + decoder (84% F1)[/green]")
     elif use_heuristics:
         console.print("Pipeline: [dim]Heuristics (57% F1)[/dim]")
     elif temporal_model is None:
-        console.print("Pipeline: [dim]Auto-selecting (binary head if features cached)[/dim]")
+        console.print(
+            "Pipeline: [dim]Auto-selecting (TemporalMaxer > binary head > heuristics)[/dim]"
+        )
 
     # Show ball validation info
     if ball_validation or ball_boundary:
@@ -1035,6 +1129,7 @@ def evaluate(
             temporal_model_path=temporal_model,
             feature_cache_dir=feature_cache_dir,
             use_binary_head=binary_head,
+            use_temporal_maxer=temporal_maxer,
             use_heuristics=use_heuristics,
             ball_validation=ball_validation,
             ball_boundary=ball_boundary,
@@ -1217,6 +1312,7 @@ def tune(
                 use_cache=True,
                 model_path=model_path,
                 model_id=model,
+                use_heuristics=True,  # Tune sweeps heuristic params only
             )
 
             aggregated = aggregate_metrics(video_results)

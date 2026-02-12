@@ -71,11 +71,18 @@ class GameStateClassifier:
     _processor: Any  # VideoMAEImageProcessor
     _onnx_session: Any  # ort.InferenceSession or None
 
+    # Known model variants and their HuggingFace model IDs
+    MODEL_VARIANTS: dict[str, str] = {
+        "v1": "MCG-NJU/videomae-base-finetuned-kinetics",
+        "v2": "OpenGVLab/VideoMAEv2-Base",
+    }
+
     def __init__(
         self,
         model_path: Path | None = None,
         device: str = "cpu",
         use_onnx: bool | None = None,
+        model_variant: str | None = None,
     ):
         self.device = device
         self.model_path = model_path
@@ -84,13 +91,25 @@ class GameStateClassifier:
         self._onnx_session = None
         self._onnx_export_attempted = False
 
+        # Model variant: "v1" (kinetics-finetuned), "v2" (VideoMAEv2 base)
+        # Can be overridden with RALLYCUT_VIDEOMAE_MODEL env var
+        import os
+
+        self._model_source_override: str | None = None
+        env_model = os.environ.get("RALLYCUT_VIDEOMAE_MODEL")
+        if env_model:
+            self._model_source_override = env_model
+            self.model_variant = "custom"
+        elif model_variant is not None:
+            self.model_variant = model_variant
+        else:
+            self.model_variant = "v1"
+
         # Determine ONNX usage:
         # - Explicit use_onnx parameter takes priority
         # - ONNX disabled on MPS (CoreML provider has compatibility issues)
         # - ONNX enabled on CUDA (good acceleration)
         # - ONNX disabled on CPU (no benefit)
-        import os
-
         if use_onnx is not None:
             self._use_onnx = use_onnx
         elif os.environ.get("RALLYCUT_DISABLE_ONNX"):
@@ -105,8 +124,6 @@ class GameStateClassifier:
         if self._model is not None:
             return
 
-        import os
-
         import torch
         from transformers import VideoMAEForVideoClassification, VideoMAEImageProcessor
 
@@ -114,14 +131,12 @@ class GameStateClassifier:
         use_local = self.model_path and self.model_path.exists()
         if use_local:
             model_source = str(self.model_path)
+        elif self._model_source_override:
+            model_source = self._model_source_override
         else:
-            # Use pretrained model from HuggingFace
-            # Override with RALLYCUT_VIDEOMAE_MODEL env var for testing variants
-            # Options: videomae-base, videomae-small (smaller/faster)
+            # Use model variant mapping
             default_model = "MCG-NJU/videomae-base-finetuned-kinetics"
-            model_source = os.environ.get("RALLYCUT_VIDEOMAE_MODEL", default_model)
-
-        self._processor = VideoMAEImageProcessor.from_pretrained(model_source)
+            model_source = self.MODEL_VARIANTS.get(self.model_variant, default_model)
 
         # Use half precision for CUDA with compute capability >= 7.0 (Volta+)
         # - MPS has precision issues (Input type mismatch errors)
@@ -138,13 +153,28 @@ class GameStateClassifier:
 
         if use_local:
             # Local weights already have correct 3-class structure
+            self._processor = VideoMAEImageProcessor.from_pretrained(model_source)
             self._model = VideoMAEForVideoClassification.from_pretrained(
                 model_source,
                 dtype=dtype,  # Updated from torch_dtype (deprecated)
                 low_cpu_mem_usage=True,
             )
+        elif self.model_variant == "v2":
+            # VideoMAEv2 uses custom model code from OpenGVLab
+            # v2 doesn't ship its own processor — use v1's processor (same preprocessing)
+            from transformers import AutoModel
+
+            self._processor = VideoMAEImageProcessor.from_pretrained(
+                "MCG-NJU/videomae-base-finetuned-kinetics"
+            )
+            self._model = AutoModel.from_pretrained(
+                model_source,
+                trust_remote_code=True,
+                low_cpu_mem_usage=True,
+            )
         else:
-            # HuggingFace Kinetics model needs classifier head replaced
+            # HuggingFace Kinetics model — processor and model from same source
+            self._processor = VideoMAEImageProcessor.from_pretrained(model_source)
             self._model = VideoMAEForVideoClassification.from_pretrained(
                 model_source,
                 num_labels=3,  # NO_PLAY, PLAY, SERVICE

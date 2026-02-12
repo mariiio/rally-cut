@@ -17,7 +17,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from rallycut.core.proxy import ProxyGenerator
-from rallycut.evaluation.ground_truth import load_evaluation_videos
+from rallycut.evaluation.ground_truth import EvaluationVideo, load_evaluation_videos
 from rallycut.evaluation.video_resolver import VideoResolver
 from rallycut.training.config import TrainingConfig
 from rallycut.training.sampler import generate_training_samples, get_sample_statistics
@@ -1876,3 +1876,169 @@ def train_binary_head_smooth_cmd(
     rprint(f"  Best epoch: {result.best_epoch + 1}")
     rprint(f"  Training time: {result.training_time_seconds:.1f}s")
     rprint(f"  Model saved to: [dim]{output_dir}/best_binary_head_smoothed.pt[/dim]")
+
+
+@app.command("temporal-maxer")
+def train_temporal_maxer_cmd(
+    feature_dir: Path = typer.Option(
+        Path("training_data/features"),
+        "--features",
+        "-f",
+        help="Directory with cached features",
+    ),
+    output_dir: Path = typer.Option(
+        Path("weights/temporal_maxer"),
+        "--output",
+        "-o",
+        help="Output directory for trained model",
+    ),
+    stride: int = typer.Option(48, "--stride", "-s", help="Feature stride used for extraction"),
+    epochs: int = typer.Option(50, "--epochs", "-e", help="Maximum training epochs"),
+    lr: float = typer.Option(5e-4, "--lr", help="Learning rate"),
+    batch_size: int = typer.Option(4, "--batch-size", "-b", help="Batch size (video sequences)"),
+    patience: int = typer.Option(10, "--patience", "-p", help="Early stopping patience"),
+    train_ratio: float = typer.Option(0.8, "--train-ratio", help="Train/val split ratio"),
+    seed: int = typer.Option(42, "--seed", help="Random seed"),
+    device: str = typer.Option("", "--device", help="Device (cpu/cuda/mps). Auto-detect if empty."),
+) -> None:
+    """Train TemporalMaxer TAS model on frozen encoder features.
+
+    Trains a temporal action segmentation model on pre-extracted VideoMAE
+    features using full video sequences. Achieves 75% F1 at IoU=0.4 (LOO CV).
+
+    Examples:
+        # Extract features first (if not done)
+        rallycut train extract-features --stride 48
+
+        # Train TemporalMaxer
+        rallycut train temporal-maxer --epochs 50
+
+        # Train with custom settings
+        rallycut train temporal-maxer --lr 1e-4 --batch-size 2
+    """
+    import numpy as np
+
+    from rallycut.temporal.binary_head import generate_overlap_labels
+    from rallycut.temporal.features import FeatureCache
+    from rallycut.temporal.temporal_maxer.training import (
+        TemporalMaxerTrainer,
+        TemporalMaxerTrainingConfig,
+    )
+    from rallycut.temporal.training import video_level_split
+
+    rprint("[bold]TemporalMaxer Training[/bold]")
+    rprint(f"  Feature directory: {feature_dir}")
+    rprint(f"  Stride: {stride}")
+    rprint()
+
+    # Auto-detect device
+    if not device:
+        import torch
+
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+    rprint(f"  Device: [yellow]{device}[/yellow]")
+
+    # Load videos with ground truth
+    rprint("Loading ground truth from database...")
+    videos = load_evaluation_videos()
+    if not videos:
+        rprint("[red]No videos with ground truth found![/red]")
+        raise typer.Exit(1)
+
+    rprint(f"Found [green]{len(videos)}[/green] videos with ground truth")
+
+    # Check features exist
+    cache = FeatureCache(cache_dir=feature_dir)
+    videos_with_features = [v for v in videos if cache.has(v.content_hash, stride)]
+
+    if not videos_with_features:
+        rprint(f"[red]No features found at stride={stride}![/red]")
+        rprint(f"Run: [cyan]rallycut train extract-features --stride {stride}[/cyan]")
+        raise typer.Exit(1)
+
+    if len(videos_with_features) < len(videos):
+        rprint(
+            f"[yellow]Warning: Only {len(videos_with_features)}/{len(videos)} videos "
+            f"have features at stride={stride}[/yellow]"
+        )
+        videos = videos_with_features
+
+    # Split into train/val
+    train_videos, val_videos = video_level_split(videos, train_ratio, seed)
+    rprint(f"  Train: {len(train_videos)} videos")
+    rprint(f"  Val: {len(val_videos)} videos")
+
+    # Build per-video feature/label lists
+    rprint()
+    rprint("Loading features and generating labels...")
+
+    def load_video_data(
+        video_list: list[EvaluationVideo],
+    ) -> tuple[list[np.ndarray], list[np.ndarray]]:
+        features_list: list[np.ndarray] = []
+        labels_list: list[np.ndarray] = []
+        for video in video_list:
+            cached_data = cache.get(video.content_hash, stride)
+            if cached_data is None:
+                continue
+            features, metadata = cached_data
+            duration_ms = int(metadata.duration_seconds * 1000)
+            labels = generate_overlap_labels(
+                rallies=video.ground_truth_rallies,
+                video_duration_ms=duration_ms,
+                fps=metadata.fps,
+                stride=stride,
+            )
+            # Align lengths
+            min_len = min(len(features), len(labels))
+            features_list.append(features[:min_len])
+            labels_list.append(np.array(labels[:min_len], dtype=np.float32))
+        return features_list, labels_list
+
+    train_features, train_labels = load_video_data(train_videos)
+    val_features, val_labels = load_video_data(val_videos)
+
+    if not train_features:
+        rprint("[red]No training data found![/red]")
+        raise typer.Exit(1)
+
+    total_train_windows = sum(len(f) for f in train_features)
+    total_val_windows = sum(len(f) for f in val_features)
+    rprint(f"  Train: {len(train_features)} videos, {total_train_windows} windows")
+    rprint(f"  Val: {len(val_features)} videos, {total_val_windows} windows")
+
+    # Create config and train
+    config = TemporalMaxerTrainingConfig(
+        learning_rate=lr,
+        epochs=epochs,
+        batch_size=batch_size,
+        patience=patience,
+        device=device,
+    )
+
+    rprint()
+    rprint("[bold]Training...[/bold]")
+
+    trainer = TemporalMaxerTrainer(config=config)
+    result = trainer.train(
+        train_features=train_features,
+        train_labels=train_labels,
+        val_features=val_features,
+        val_labels=val_labels,
+        output_dir=Path(output_dir),
+    )
+
+    # Report results
+    rprint()
+    rprint("[bold green]Training complete![/bold green]")
+    rprint(f"  Best F1:        [bold cyan]{result.best_val_f1:.4f}[/bold cyan]")
+    rprint(f"  Best precision: {result.best_val_precision:.4f}")
+    rprint(f"  Best recall:    {result.best_val_recall:.4f}")
+    rprint(f"  Best epoch:     {result.best_epoch + 1}")
+    rprint(f"  Training time:  {result.training_time_seconds:.1f}s")
+    rprint(f"  Model saved to: [dim]{output_dir}/best_temporal_maxer.pt[/dim]")

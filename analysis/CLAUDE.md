@@ -11,15 +11,16 @@ Volleyball video analysis CLI. Uses ML (VideoMAE) to detect game states and remo
 ## Commands
 
 ```bash
-# Core commands (binary head + decoder is default when features cached)
+# Core commands (TemporalMaxer is default when model+features exist)
 uv run rallycut cut <video.mp4>                 # Auto-selects best pipeline
-uv run rallycut cut <video.mp4> --heuristics    # Force heuristics (57% F1)
+uv run rallycut cut <video.mp4> --temporal-maxer # Force TemporalMaxer (75% LOO F1)
 uv run rallycut cut <video.mp4> --binary-head   # Force binary head (84% F1 at IoU=0.4)
+uv run rallycut cut <video.mp4> --heuristics    # Force heuristics (57% F1)
 uv run rallycut cut <video.mp4> --model beach   # Use beach volleyball model
 uv run rallycut profile <video.mp4>             # Performance profiling
 
-# One-time feature extraction (enables 84% F1 pipeline at IoU=0.4)
-uv run rallycut train extract-features --stride 48  # Required for binary head
+# One-time feature extraction (required for TemporalMaxer and binary head)
+uv run rallycut train extract-features --stride 48
 
 # Useful options for cut
 uv run rallycut cut video.mp4 --debug           # Timeline visualization + diagnostics
@@ -52,9 +53,9 @@ uv run rallycut train modal --cleanup                 # Delete from Modal (~$0.7
 uv run rallycut train export-dataset --name beach_v3  # Export all labeled data from DB
 uv run rallycut train push --name beach_v3            # Back up to S3 (deduplicates videos)
 
-# Step 2a: Retrain temporal model (fast, local, recommended first)
+# Step 2a: Retrain TemporalMaxer (fast, local, recommended first)
 uv run rallycut train extract-features --stride 48    # Extract features for new videos
-uv run rallycut train temporal --model v1 --epochs 50 # Retrain temporal smoother
+uv run rallycut train temporal-maxer --epochs 50      # Retrain TemporalMaxer
 
 # Step 2b: Fine-tune VideoMAE (slow, GPU required, only if needed)
 rm -rf training_data/
@@ -78,18 +79,21 @@ uv run rallycut train list-remote                     # List datasets backed up 
 # - Checkpoints saved every 100 steps (~5 min max loss)
 # - Resumes from latest checkpoint automatically
 
-# Temporal model training (DEPRECATED - use binary head instead)
-# Binary head achieves 84% F1 (IoU=0.4) vs temporal's 65% F1
+# Temporal model training (DEPRECATED - use TemporalMaxer instead)
 # uv run rallycut train temporal --model v1 --epochs 50
 
-# Binary head training (recommended)
+# TemporalMaxer training (recommended - 75% LOO F1 at IoU=0.4)
 uv run rallycut train export-dataset --name beach_v3  # Export labeled data
 uv run rallycut train extract-features --stride 48    # Extract VideoMAE features
+uv run rallycut train temporal-maxer --epochs 50      # Train TemporalMaxer TAS model
+# Model saved to weights/temporal_maxer/best_temporal_maxer.pt
+
+# Binary head training (alternative - 84% F1 train-on-all, 57.4% LOO)
 uv run rallycut train binary-head --epochs 50         # Train binary head classifier
-# Model saved to weights/binary_head/best_binary_head.pt
 
 # Evaluation
-uv run rallycut evaluate                              # Evaluate (auto-selects binary head if features cached)
+uv run rallycut evaluate                              # Evaluate (auto-selects TemporalMaxer > binary head)
+uv run rallycut evaluate --temporal-maxer             # Force TemporalMaxer (75% LOO F1)
 uv run rallycut evaluate --binary-head                # Force binary head evaluation (84% F1 at IoU=0.4)
 uv run rallycut evaluate --heuristics                 # Force heuristics evaluation (57% F1)
 uv run rallycut evaluate --model beach --iou 0.5      # Evaluate beach model
@@ -110,8 +114,12 @@ rallycut/
 ├── core/            # Config, models, Video wrapper, caching, profiler
 ├── analysis/        # GameStateAnalyzer (VideoMAE ML classifier)
 ├── processing/      # VideoCutter, FFmpegExporter
-├── temporal/        # Temporal models and binary head pipeline
-│   ├── binary_head.py        # Binary head classifier (recommended)
+├── temporal/        # Temporal models and TemporalMaxer pipeline
+│   ├── temporal_maxer/       # TemporalMaxer TAS model (recommended)
+│   │   ├── model.py          # Multi-scale temporal pyramid architecture
+│   │   ├── training.py       # Sequence-level training loop
+│   │   └── inference.py      # Inference and segment extraction
+│   ├── binary_head.py        # Binary head classifier (alternative)
 │   ├── deterministic_decoder.py  # Decoder for binary head output
 │   ├── boundary_refinement.py    # Fine-stride boundary refinement
 │   ├── features.py           # VideoMAE feature extraction and caching
@@ -183,26 +191,30 @@ Each model has optimized post-processing heuristics defined in `MODEL_PRESETS` (
 
 ## Detection Pipelines
 
-Three detection pipelines are available, with binary head + decoder as the recommended default:
+Four detection pipelines are available, with TemporalMaxer as the recommended default:
 
 | Pipeline | F1 (IoU=0.5) | F1 (IoU=0.4) | Overmerge | Command |
 |----------|--------------|--------------|-----------|---------|
-| Binary Head + Decoder (default) | ~78% | 84% | 0% | `rallycut cut video.mp4` |
+| TemporalMaxer (default) | 71.6% (LOO) | 75.0% (LOO) | 0% | `rallycut cut video.mp4 --temporal-maxer` |
+| Binary Head + Decoder | ~78% | 84% | 0% | `rallycut cut video.mp4 --binary-head` |
 | Heuristics (fallback) | 57% | - | ~10% | `rallycut cut video.mp4 --heuristics` |
 | Temporal (deprecated) | 65% | - | ~5% | `rallycut cut video.mp4 --experimental-temporal` |
 
-**Note:** IoU=0.4 better reflects detection accuracy when labeling marks serve toss start (model detects ~2s later when play begins).
+**Note:** IoU=0.4 better reflects detection accuracy when labeling marks serve toss start (model detects ~2s later when play begins). Binary head's 84% F1 is train-on-all (inflated); TemporalMaxer's 75% is honest LOO CV.
 
 **Pipeline auto-selection:**
-1. If `--binary-head` flag: use binary head + decoder
-2. If `--experimental-temporal` flag: use temporal model (deprecated)
-3. If `--heuristics` flag: use heuristics
-4. Auto: use binary head if features cached and model exists, else heuristics
+1. If `--temporal-maxer` flag: use TemporalMaxer
+2. If `--binary-head` flag: use binary head + decoder
+3. If `--experimental-temporal` flag: use temporal model (deprecated)
+4. If `--heuristics` flag: use heuristics
+5. Auto: TemporalMaxer if model+features exist, else binary head if features cached, else heuristics
 
-**Enabling 84% F1 pipeline (IoU=0.4):**
+**Enabling best pipeline:**
 ```bash
 # One-time feature extraction
 uv run rallycut train extract-features --stride 48
+# Train TemporalMaxer
+uv run rallycut train temporal-maxer --epochs 50
 ```
 
 ## Processing Heuristics
