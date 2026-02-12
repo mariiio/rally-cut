@@ -407,8 +407,8 @@ result = tracker.track_video(
 
 Default mode (`enable_kalman=False`): Raw VballNet positions with segment pruning +
 interpolation. Testing showed raw positions have higher match rate than Kalman output
-(35.4% vs 31.9%) because the Kalman filter smooths toward false detections. This mode
-maximizes detection rate (74.5%) and match rate while preserving VballNet's native accuracy.
+(38.5% vs 31.9%) because the Kalman filter smooths toward false detections. This mode
+maximizes detection rate (81.6%) and match rate while preserving VballNet's native accuracy.
 
 Kalman mode (`enable_kalman=True`): Full Kalman pipeline with Mahalanobis gating,
 re-acquisition guard, exit detection, and outlier removal. Produces smoother trajectories
@@ -416,8 +416,11 @@ with lower mean error but at the cost of detection rate (68.1%) and match rate. 
 visualization overlays where smooth trajectories are preferred.
 
 **Problems solved:**
-- **False segments at rally boundaries**: VballNet outputs consistent false detections at rally start/end (before temporal context builds up, or after ball exits frame). Segment pruning splits the trajectory at large position jumps (>20% screen) and discards short fragments (<15 frames).
-- **Missing frames**: Linear interpolation fills small gaps (up to 5 frames) between detections.
+- **False segments at rally boundaries**: VballNet outputs consistent false detections at rally start/end (before temporal context builds up, or after ball exits frame). Segment pruning splits the trajectory at large position jumps (>20% screen) and discards short fragments (<15 frames). Short fragments that are spatially close to an anchor segment (within 10% of screen of the nearest anchor endpoint) are recovered rather than discarded — these are real trajectory fragments between interleaved false positives.
+- **Interleaved false positives**: VballNet sometimes interleaves single-frame false detections (jumping to player positions) within real trajectory regions. Without anchor-proximity recovery, segment splitting at each jump fragments the real trajectory into tiny segments that all get pruned. The recovery step keeps real fragments and discards only the distant false positive clusters.
+- **Oscillating false detections**: After ball exits frame, VballNet can lock onto two players and alternate between them with high confidence. The pattern is cluster-based: positions stay near one player for 2-5 frames, jump to another for 1-2 frames, then back. Oscillation pruning uses spatial clustering to detect this: finds the two furthest-apart positions (poles) in each window, assigns positions to nearest pole, and counts cluster transitions. Both clusters must be compact (within 1.5% of screen of their pole — real VballNet player-locking has ~1% noise) and have ≥3 members. A transition rate ≥25% over 12+ frames triggers trimming.
+- **Hovering false detections**: After ball exits frame, VballNet can lock onto a single player position and produce many frames within a tiny radius. Detected by checking short segments (12-36 frames) that appear after a gap > max_interpolation_gap: if the first 12 positions all lie within 5% of screen of their centroid, the segment is dropped. Real ball trajectories always have spread >5% over 12 frames because the ball is in motion.
+- **Missing frames**: Linear interpolation fills small gaps (up to 10 frames) between detections.
 - **Flickering/Jumps** (Kalman mode): Mahalanobis distance gating rejects impossible movements. Hard max_velocity backstop at 50% screen/frame.
 - **False re-acquisition** (Kalman mode): Re-acquisition guard requires M consistent detections within radius R before re-initializing.
 - **Out-of-frame tracking** (Kalman mode): Exit detection suppresses false re-acquisitions from the opposite side.
@@ -429,8 +432,12 @@ visualization overlays where smooth trajectories are preferred.
 - `segment_jump_threshold=0.20`: Position jump threshold to split segments (20% of screen)
 - `min_segment_frames=15`: Minimum frames to keep a segment
 - `min_output_confidence=0.05`: Drop VballNet zero-confidence placeholders from output
+- `enable_oscillation_pruning=True`: Detect and trim cluster-based oscillation patterns
+- `min_oscillation_frames=12`: Sliding window size for cluster transition rate detection
+- `oscillation_reversal_rate=0.25`: Cluster transition rate threshold to trigger pruning
+- `oscillation_min_displacement=0.03`: Min pole distance (3% of screen) to detect oscillation
 - `enable_interpolation=True`: Fill missing frames with linear interpolation
-- `max_interpolation_gap=5`: Max frames to interpolate (larger gaps left empty)
+- `max_interpolation_gap=10`: Max frames to interpolate (larger gaps left empty)
 - `enable_outlier_removal=True`: Removes flickering and edge artifacts (runs after pruning in raw mode, before pruning in Kalman mode)
 
 Kalman-only parameters (used when `enable_kalman=True`):
@@ -540,6 +547,7 @@ uv run rallycut evaluate-tracking tune-ball-filter --all --grid segment-pruning 
 uv run rallycut evaluate-tracking tune-ball-filter --all --grid quick           # Kalman params (81 configs)
 uv run rallycut evaluate-tracking tune-ball-filter --all --grid mahalanobis     # Mahalanobis + re-acquisition (162 configs)
 uv run rallycut evaluate-tracking tune-ball-filter --all --grid outlier         # Outlier removal + exit detection (18 configs)
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid oscillation    # Oscillation pruning (18 configs)
 uv run rallycut evaluate-tracking tune-ball-filter --all --grid full            # Full Kalman search (486 configs)
 uv run rallycut evaluate-tracking tune-ball-filter --all -o ball.json           # Export results
 ```
@@ -575,6 +583,7 @@ Only these videos have validated ball tracking ground truth:
 - `70ab9d7f-8cc4-48cb-892a-1c36793cac72`
 - `07fedbd4-693e-4651-9fee-c616a1f4b413`
 - `920ba69d-2526-4e6c-a357-c44af3bf5c99`
+- `a7ee3d38-a3a9-4dcd-a2af-e0617997e708`
 
 Other videos have incorrect ball labels and are automatically filtered out when using `--ball-only`, `tune-ball-filter`, or `compare-ball-models`. See `VALID_BALL_GT_VIDEOS` in `evaluation/tracking/db.py`.
 

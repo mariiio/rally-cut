@@ -100,6 +100,16 @@ BALL_SEGMENT_PRUNING_GRID: dict[str, list[float | int | bool]] = {
 }
 
 
+# Oscillation pruning grid (18 combinations: 3*3*2)
+# Tunes cluster-based detection of player-locking after ball exits frame
+BALL_OSCILLATION_GRID: dict[str, list[float | int | bool]] = {
+    "enable_oscillation_pruning": [True],
+    "min_oscillation_frames": [6, 8, 12],
+    "oscillation_reversal_rate": [0.20, 0.25, 0.35],
+    "oscillation_min_displacement": [0.02, 0.03],
+}
+
+
 # All available grids
 BALL_AVAILABLE_GRIDS: dict[str, dict[str, list[Any]]] = {
     "quick": BALL_QUICK_GRID,
@@ -111,6 +121,7 @@ BALL_AVAILABLE_GRIDS: dict[str, dict[str, list[Any]]] = {
     "mahalanobis": BALL_MAHALANOBIS_GRID,
     "outlier": BALL_OUTLIER_GRID,
     "segment-pruning": BALL_SEGMENT_PRUNING_GRID,
+    "oscillation": BALL_OSCILLATION_GRID,
 }
 
 

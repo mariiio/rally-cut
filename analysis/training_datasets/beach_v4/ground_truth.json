@@ -610,12 +610,8 @@
     "filename": "natch.mp4",
     "rallies": [
       {
-        "start_ms": 47045,
-        "end_ms": 55869
-      },
-      {
         "start_ms": 76760,
-        "end_ms": 85260
+        "end_ms": 87260
       },
       {
         "start_ms": 120033,
