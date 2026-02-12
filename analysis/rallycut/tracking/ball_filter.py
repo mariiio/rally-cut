@@ -751,7 +751,7 @@ class BallTemporalFilter:
             forward_covs.append(self._covariance.copy())
 
         # Backward smoothing pass (RTS smoother)
-        smoothed_states: list[np.ndarray] = [np.zeros(4)] * n
+        smoothed_states: list[np.ndarray] = [np.zeros(4) for _ in range(n)]
         smoothed_states[n - 1] = forward_states[n - 1]
 
         for k in range(n - 2, -1, -1):
