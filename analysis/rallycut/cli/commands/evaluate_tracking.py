@@ -149,9 +149,24 @@ def evaluate_tracking(
 
     # Ball-only evaluation mode
     if ball_only:
+        from rallycut.evaluation.tracking.ball_grid_search import (
+            BallRawCache,
+            apply_ball_filter_config,
+        )
+        from rallycut.tracking.ball_filter import BallFilterConfig
+
+        raw_cache = BallRawCache()
         ball_results = []
         for rally in rallies:
-            if rally.predictions is None or not rally.predictions.ball_positions:
+            # Prefer cached raw positions + current filter over stale DB positions
+            cached = raw_cache.get(rally.rally_id)
+            if cached is not None:
+                predictions = apply_ball_filter_config(
+                    cached.raw_ball_positions, BallFilterConfig()
+                )
+            elif rally.predictions is not None and rally.predictions.ball_positions:
+                predictions = rally.predictions.ball_positions
+            else:
                 console.print(
                     f"[yellow]Rally {rally.rally_id[:8]}... has no ball predictions, skipping[/yellow]"
                 )
@@ -159,7 +174,7 @@ def evaluate_tracking(
 
             ball_metrics = evaluate_ball_tracking(
                 ground_truth=rally.ground_truth.positions,
-                predictions=rally.predictions.ball_positions,
+                predictions=predictions,
                 video_width=rally.video_width,
                 video_height=rally.video_height,
                 video_fps=rally.video_fps,
