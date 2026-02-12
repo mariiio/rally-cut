@@ -64,6 +64,25 @@ HEATMAP_GRID: dict[str, list[float | str | bool]] = {
 }
 
 
+# Mahalanobis gating and re-acquisition grid (162 combinations: 3*3*3*2*3)
+# Tunes the new Mahalanobis distance gating and re-acquisition guard
+BALL_MAHALANOBIS_GRID: dict[str, list[float | int | bool]] = {
+    "mahalanobis_threshold": [5.99, 9.21, 15.0],
+    "max_velocity": [0.3, 0.5, 0.8],
+    "reacquisition_threshold": [3, 5, 8],
+    "reacquisition_required": [2, 3],
+    "reacquisition_radius": [0.03, 0.05, 0.08],
+}
+
+
+# Outlier removal + exit detection grid (18 combinations: 3*3*2)
+BALL_OUTLIER_GRID: dict[str, list[float | int | bool]] = {
+    "max_trajectory_deviation": [0.05, 0.08, 0.12],
+    "exit_edge_margin": [0.03, 0.05, 0.08],
+    "enable_exit_detection": [True, False],
+}
+
+
 # All available grids
 BALL_AVAILABLE_GRIDS: dict[str, dict[str, list[Any]]] = {
     "quick": BALL_QUICK_GRID,
@@ -72,6 +91,8 @@ BALL_AVAILABLE_GRIDS: dict[str, dict[str, list[Any]]] = {
     "confidence": BALL_CONFIDENCE_GRID,
     "heatmap": HEATMAP_GRID,
     "bidirectional": BALL_BIDIRECTIONAL_GRID,
+    "mahalanobis": BALL_MAHALANOBIS_GRID,
+    "outlier": BALL_OUTLIER_GRID,
 }
 
 
