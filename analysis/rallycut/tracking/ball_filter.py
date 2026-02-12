@@ -559,12 +559,15 @@ class BallTemporalFilter:
                 filtered = self._remove_outliers(filtered)
                 outlier_count = after_oscillation_count - len(filtered)
 
-            # Re-prune segments that shrank below minimum after outlier removal.
-            # Outlier removal can reduce a valid segment below min_segment_frames,
-            # leaving short noisy fragments that cause visible appear/disappear.
-            if self.config.enable_segment_pruning and outlier_count > 0:
+            # Re-prune after outlier removal: outlier removal can fragment segments,
+            # exposing short false sub-segments and hovering patterns that were hidden
+            # inside longer segments during the first pass.
+            if outlier_count > 0:
                 before_reprune = len(filtered)
-                filtered = self._prune_segments(filtered)
+                if self.config.enable_oscillation_pruning:
+                    filtered = self._prune_oscillating(filtered)
+                if self.config.enable_segment_pruning:
+                    filtered = self._prune_segments(filtered)
                 reprune_count = before_reprune - len(filtered)
                 if reprune_count > 0:
                     pruned_count += reprune_count
