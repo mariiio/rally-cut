@@ -408,7 +408,7 @@ result = tracker.track_video(
 Default mode (`enable_kalman=False`): Raw VballNet positions with segment pruning +
 interpolation. Testing showed raw positions have higher match rate than Kalman output
 (38.5% vs 31.9%) because the Kalman filter smooths toward false detections. This mode
-maximizes detection rate (81.6%) and match rate while preserving VballNet's native accuracy.
+maximizes detection rate (78.6%) and match rate (47.1%) while preserving VballNet's native accuracy.
 
 Kalman mode (`enable_kalman=True`): Full Kalman pipeline with Mahalanobis gating,
 re-acquisition guard, exit detection, and outlier removal. Produces smoother trajectories
