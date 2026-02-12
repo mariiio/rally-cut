@@ -6,7 +6,7 @@ import json
 import random
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import cv2
 import numpy as np
@@ -748,6 +748,92 @@ def info(
     console.print(dist_table)
 
 
+def _export_tracking_ground_truth(
+    video_content_hashes: set[str],
+) -> dict[str, Any] | None:
+    """Export tracking ground truth (player + ball positions) from DB.
+
+    Queries player_tracks where ground_truth_json IS NOT NULL, filtered to
+    videos in the current dataset. Returns a JSON-serializable dict or None
+    if no tracking GT exists.
+
+    Args:
+        video_content_hashes: Content hashes of videos in the dataset.
+
+    Returns:
+        Dict with valid_ball_gt_video_ids, rallies, and stats, or None.
+    """
+    from rallycut.evaluation.db import get_connection
+    from rallycut.evaluation.tracking.db import VALID_BALL_GT_VIDEOS
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    v.content_hash,
+                    r.start_ms,
+                    r.end_ms,
+                    pt.ground_truth_json,
+                    v.id as video_id
+                FROM player_tracks pt
+                JOIN rallies r ON r.id = pt.rally_id
+                JOIN videos v ON v.id = r.video_id
+                WHERE pt.ground_truth_json IS NOT NULL
+                  AND v.deleted_at IS NULL
+                ORDER BY v.content_hash, r.start_ms
+                """
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return None
+
+    rallies: list[dict[str, Any]] = []
+    video_ids_seen: set[str] = set()
+    ball_gt_count = 0
+
+    for row in rows:
+        content_hash = str(row[0])
+        start_ms = row[1]
+        end_ms = row[2]
+        gt_json = row[3]
+        video_id = str(row[4])
+
+        if content_hash not in video_content_hashes:
+            continue
+
+        # gt_json may already be a dict (psycopg auto-parses JSON)
+        gt_data = gt_json if isinstance(gt_json, dict) else json.loads(str(gt_json))
+
+        rallies.append({
+            "video_content_hash": content_hash,
+            "rally_start_ms": start_ms,
+            "rally_end_ms": end_ms,
+            "ground_truth_json": gt_data,
+        })
+
+        video_ids_seen.add(video_id)
+        if video_id in VALID_BALL_GT_VIDEOS:
+            ball_gt_count += 1
+
+    if not rallies:
+        return None
+
+    return {
+        "valid_ball_gt_video_ids": sorted(VALID_BALL_GT_VIDEOS),
+        "rallies": rallies,
+        "stats": {
+            "total_rallies_with_tracking_gt": len(rallies),
+            "total_videos": len(video_ids_seen),
+            "ball_gt_rallies": ball_gt_count,
+        },
+    }
+
+
 @app.command("export-dataset")
 def export_dataset(
     name: str = typer.Option(
@@ -773,6 +859,7 @@ def export_dataset(
     Creates an organized dataset with:
     - manifest.json: Dataset metadata
     - ground_truth.json: Rally annotations per video
+    - tracking_ground_truth.json: Player/ball tracking GT (if any exists)
     - videos/: Video files (symlinked or copied)
 
     Example:
@@ -890,6 +977,20 @@ def export_dataset(
         json.dump(ground_truth_data, f, indent=2)
     rprint(f"Created [cyan]{ground_truth_path}[/cyan]")
 
+    # Export tracking ground truth (player + ball positions)
+    content_hashes = {str(v["content_hash"]) for v in video_info_list}
+    tracking_gt = _export_tracking_ground_truth(content_hashes)
+    if tracking_gt:
+        tracking_gt_path = dataset_dir / "tracking_ground_truth.json"
+        with open(tracking_gt_path, "w") as f:
+            json.dump(tracking_gt, f, indent=2)
+        tgt_stats = tracking_gt["stats"]
+        rprint(f"Created [cyan]{tracking_gt_path}[/cyan]")
+        rprint(
+            f"  Tracking GT: [green]{tgt_stats['total_rallies_with_tracking_gt']}[/green] rallies"
+            f" ({tgt_stats['ball_gt_rallies']} with ball GT)"
+        )
+
     # Summary
     rprint()
     rprint("[green]Dataset exported successfully![/green]")
@@ -922,7 +1023,8 @@ def push(
 ) -> None:
     """Push a dataset to S3 for backup.
 
-    Uploads manifest.json, ground_truth.json, and video files.
+    Uploads manifest.json, ground_truth.json, tracking_ground_truth.json
+    (if present), and video files.
     Videos are deduplicated by content_hash -- only new videos are uploaded.
 
     Example:
@@ -993,7 +1095,8 @@ def pull(
 ) -> None:
     """Pull a dataset from S3.
 
-    Downloads manifest.json, ground_truth.json, and video files.
+    Downloads manifest.json, ground_truth.json, tracking_ground_truth.json
+    (if present), and video files.
     Videos are cached at ~/.cache/rallycut/evaluation/ and symlinked
     into the dataset directory.
 
@@ -1070,8 +1173,9 @@ def restore(
 ) -> None:
     """Restore a dataset into the application database.
 
-    Inserts videos and rally annotations from a local dataset directory
-    into PostgreSQL, creating a session for web editor access.
+    Inserts videos, rally annotations, and tracking ground truth from a
+    local dataset directory into PostgreSQL, creating a session for web
+    editor access.
 
     Example:
         rallycut train restore --name beach_v2
@@ -1110,6 +1214,8 @@ def restore(
     rprint(f"  Videos inserted: [green]{result.videos_inserted}[/green]")
     rprint(f"  Videos skipped: [yellow]{result.videos_skipped}[/yellow] (already in DB)")
     rprint(f"  Rallies inserted: [green]{result.rallies_inserted}[/green]")
+    if result.tracking_gt_restored:
+        rprint(f"  Tracking GT restored: [green]{result.tracking_gt_restored}[/green]")
     rprint(f"  Session: [cyan]{result.session_created}[/cyan]")
 
     if result.errors:
