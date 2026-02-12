@@ -737,6 +737,7 @@ class TestOscillationPruning:
             enable_segment_pruning=False,
             enable_oscillation_pruning=False,  # Disabled
             enable_outlier_removal=False,
+            enable_blip_removal=False,
             enable_interpolation=False,
         )
         filt = BallTemporalFilter(config)
@@ -930,6 +931,465 @@ class TestOscillationPruning:
         assert oscillating_kept < 10, (
             f"Expected oscillating tail trimmed, but {oscillating_kept} survived"
         )
+
+
+class TestExitGhostRemoval:
+    """Tests for exit ghost removal (physics-impossible reversals near edges)."""
+
+    def test_top_exit_ghost_removed(self) -> None:
+        """Ball approaches top edge, reverses — ghosts should be removed."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_exit_ghost_removal=True,
+            exit_edge_zone=0.10,
+            exit_approach_frames=3,
+            exit_min_approach_speed=0.008,
+            max_interpolation_gap=10,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Ball moving across court, then approaching top edge
+        for i in range(20):
+            positions.append(_make_pos(i, 0.5, 0.3 - i * 0.01))
+
+        # Ball near top edge, approaching fast (y decreasing toward 0)
+        # y goes from 0.08 → 0.06 → 0.04 → 0.02
+        positions.append(_make_pos(20, 0.5, 0.08))
+        positions.append(_make_pos(21, 0.5, 0.06))
+        positions.append(_make_pos(22, 0.5, 0.04))
+        positions.append(_make_pos(23, 0.5, 0.02))  # Last real frame near top
+
+        # REVERSAL: ball "comes back" — these are ghosts
+        positions.append(_make_pos(24, 0.5, 0.10))  # Impossible reversal
+        positions.append(_make_pos(25, 0.5, 0.15))
+        positions.append(_make_pos(26, 0.5, 0.20))
+        positions.append(_make_pos(27, 0.5, 0.30))
+        positions.append(_make_pos(28, 0.5, 0.40))
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # Real frames should be kept
+        assert all(f in result_frames for f in range(24))
+        # Ghost frames should be removed
+        assert 24 not in result_frames, "Frame 24 (reversal) should be removed"
+        assert 25 not in result_frames, "Frame 25 (ghost) should be removed"
+        assert 28 not in result_frames, "Frame 28 (ghost) should be removed"
+
+    def test_bottom_exit_ghost_removed(self) -> None:
+        """Ball approaches bottom edge, reverses — ghosts should be removed."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_exit_ghost_removal=True,
+            exit_edge_zone=0.10,
+            exit_approach_frames=3,
+            exit_min_approach_speed=0.008,
+            max_interpolation_gap=10,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Ball approaching bottom edge (y increasing toward 1.0)
+        for i in range(10):
+            positions.append(_make_pos(i, 0.5, 0.5 + i * 0.04))
+
+        # Near bottom edge
+        positions.append(_make_pos(10, 0.5, 0.92))
+        positions.append(_make_pos(11, 0.5, 0.94))
+        positions.append(_make_pos(12, 0.5, 0.96))
+
+        # Ghost reversal
+        positions.append(_make_pos(13, 0.5, 0.85))  # Reversal
+        positions.append(_make_pos(14, 0.5, 0.75))
+        positions.append(_make_pos(15, 0.5, 0.65))
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # Ghosts removed
+        assert 13 not in result_frames
+        assert 14 not in result_frames
+        assert 15 not in result_frames
+        # Real frames kept
+        assert all(f in result_frames for f in range(13))
+
+    def test_approach_from_outside_edge_zone(self) -> None:
+        """Approach starting outside edge zone but reaching edge should trigger.
+
+        Reproduces production bug: ball approaches top edge with frames at
+        y=0.108, 0.085, 0.062. The first frame (y=0.108) is outside the 10%
+        edge zone, but the last frame (y=0.062) is inside. Only the last
+        approach frame needs to be in the edge zone.
+        """
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_exit_ghost_removal=True,
+            exit_edge_zone=0.10,
+            exit_approach_frames=3,
+            exit_min_approach_speed=0.008,
+            max_interpolation_gap=10,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Ball tracking approaching top (real production values)
+        for i in range(10):
+            positions.append(_make_pos(i, 0.39, 0.35 - i * 0.02))
+
+        # Approach: first frame outside edge zone, last inside
+        positions.append(_make_pos(10, 0.38, 0.108))  # Outside 10% zone
+        positions.append(_make_pos(11, 0.38, 0.085))  # Inside
+        positions.append(_make_pos(12, 0.37, 0.062))  # Inside (exit point)
+
+        # Ghost reversal after gap (ball was out of frame f=13-17)
+        positions.append(_make_pos(18, 0.29, 0.367))  # Ghost at player
+        positions.append(_make_pos(19, 0.29, 0.370))
+        positions.append(_make_pos(20, 0.28, 0.400))
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # Real frames kept
+        assert all(f in result_frames for f in range(13))
+        # Ghost frames removed
+        assert 18 not in result_frames, "Ghost at player position should be removed"
+        assert 19 not in result_frames
+        assert 20 not in result_frames
+
+    def test_no_false_positive_on_bounce(self) -> None:
+        """Ball reversal in center of screen (not near edge) should be kept."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_exit_ghost_removal=True,
+            exit_edge_zone=0.10,
+            exit_approach_frames=3,
+            exit_min_approach_speed=0.008,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Ball moving upward in center of court (y=0.5→0.3), then bounces back
+        for i in range(10):
+            positions.append(_make_pos(i, 0.5, 0.5 - i * 0.02))
+
+        # Reversal at y=0.30 (center, not near edge)
+        positions.append(_make_pos(10, 0.5, 0.32))
+        positions.append(_make_pos(11, 0.5, 0.35))
+        positions.append(_make_pos(12, 0.5, 0.40))
+
+        result = filt.filter_batch(positions)
+
+        # All frames should be kept — reversal is in center, not near edge
+        assert len(result) == 13
+
+    def test_no_false_positive_slow_approach(self) -> None:
+        """Ball near edge but approach speed too low should be kept."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_exit_ghost_removal=True,
+            exit_edge_zone=0.10,
+            exit_approach_frames=3,
+            exit_min_approach_speed=0.008,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Ball drifting very slowly near top edge (speed < 0.008)
+        positions.append(_make_pos(0, 0.5, 0.09))
+        positions.append(_make_pos(1, 0.5, 0.085))  # dy = -0.005 (too slow)
+        positions.append(_make_pos(2, 0.5, 0.080))  # dy = -0.005
+        positions.append(_make_pos(3, 0.5, 0.075))  # dy = -0.005
+
+        # Reversal
+        positions.append(_make_pos(4, 0.5, 0.12))
+
+        result = filt.filter_batch(positions)
+
+        # All kept — approach was too slow to confirm exit
+        assert len(result) == 5
+
+    def test_ghost_terminated_at_gap(self) -> None:
+        """Ghost marking should stop at a frame gap > max_interpolation_gap."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_exit_ghost_removal=True,
+            exit_edge_zone=0.10,
+            exit_approach_frames=3,
+            exit_min_approach_speed=0.008,
+            max_interpolation_gap=10,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Ball approaching top edge
+        positions.append(_make_pos(0, 0.5, 0.08))
+        positions.append(_make_pos(1, 0.5, 0.06))
+        positions.append(_make_pos(2, 0.5, 0.04))
+        positions.append(_make_pos(3, 0.5, 0.02))
+
+        # Ghost reversal
+        positions.append(_make_pos(4, 0.5, 0.10))
+        positions.append(_make_pos(5, 0.5, 0.15))
+
+        # Gap of 20 frames (> max_interpolation_gap=10) — new detections
+        positions.append(_make_pos(25, 0.5, 0.50))
+        positions.append(_make_pos(26, 0.5, 0.51))
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # Ghosts removed
+        assert 4 not in result_frames
+        assert 5 not in result_frames
+        # Post-gap positions kept
+        assert 25 in result_frames
+        assert 26 in result_frames
+
+
+    def test_ghost_terminated_at_edge_reentry(self) -> None:
+        """Ghost marking should stop when position returns to exit edge zone."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_exit_ghost_removal=True,
+            exit_edge_zone=0.10,
+            exit_approach_frames=3,
+            exit_min_approach_speed=0.008,
+            max_interpolation_gap=10,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Ball approaching top edge
+        positions.append(_make_pos(0, 0.5, 0.08))
+        positions.append(_make_pos(1, 0.5, 0.06))
+        positions.append(_make_pos(2, 0.5, 0.04))
+        positions.append(_make_pos(3, 0.5, 0.02))
+
+        # Ghost reversal (ball exits, VballNet locks on player)
+        positions.append(_make_pos(4, 0.5, 0.30))  # Ghost
+        positions.append(_make_pos(5, 0.5, 0.40))  # Ghost
+        positions.append(_make_pos(6, 0.5, 0.45))  # Ghost
+
+        # Ball re-enters from same edge (returns to edge zone)
+        positions.append(_make_pos(7, 0.5, 0.05))  # Back in top edge zone
+        positions.append(_make_pos(8, 0.5, 0.10))  # Moving away from edge
+        positions.append(_make_pos(9, 0.5, 0.15))
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # Ghost frames removed
+        assert 4 not in result_frames
+        assert 5 not in result_frames
+        assert 6 not in result_frames
+        # Re-entry frames kept
+        assert 7 in result_frames
+        assert 8 in result_frames
+        assert 9 in result_frames
+
+
+    def test_ghost_anchor_does_not_rescue_nearby_false_positives(self) -> None:
+        """Short segments near a ghost anchor should NOT be recovered.
+
+        Reproduces the real bug: ghost segment [145-161] becomes an anchor,
+        causing segment pruning to recover nearby false positives [135-136]
+        at player positions. With ghost-aware pruning, the ghost anchor is
+        excluded, so the false positive fragment gets pruned.
+        """
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=True,
+            enable_exit_ghost_removal=True,
+            exit_edge_zone=0.10,
+            exit_approach_frames=3,
+            exit_min_approach_speed=0.008,
+            max_interpolation_gap=10,
+            min_segment_frames=15,
+            segment_jump_threshold=0.20,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Main real trajectory: 20 frames at center-top of court
+        for i in range(20):
+            positions.append(_make_pos(i, 0.50, 0.20 + i * 0.002))
+
+        # Ball approaches top edge (y decreasing toward 0)
+        positions.append(_make_pos(20, 0.50, 0.08))
+        positions.append(_make_pos(21, 0.50, 0.06))
+        positions.append(_make_pos(22, 0.50, 0.04))
+        positions.append(_make_pos(23, 0.50, 0.02))
+
+        # Short gap (ball briefly gone)
+
+        # False positive detections at player position (y=0.37)
+        # These are close to the ghost segment below (within proximity)
+        positions.append(_make_pos(26, 0.30, 0.37, conf=0.60))
+        positions.append(_make_pos(27, 0.30, 0.37, conf=0.65))
+
+        # Ghost detections drifting to player (reversal from top edge)
+        # This forms a long segment that would normally be an anchor (≥15 frames)
+        for i in range(20):
+            positions.append(
+                _make_pos(30 + i, 0.30, 0.12 + i * 0.015, conf=0.70)
+            )
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # Main trajectory should be kept
+        assert all(f in result_frames for f in range(20))
+
+        # The false positives at player position should be pruned
+        # (ghost anchor excluded, so they have no anchor to recover from)
+        assert 26 not in result_frames, (
+            "False positive at player position should be pruned "
+            "(ghost anchor should not rescue it)"
+        )
+        assert 27 not in result_frames
+
+        # Ghost detections should be removed
+        for f in range(30, 50):
+            assert f not in result_frames, f"Ghost frame {f} should be removed"
+
+
+class TestTrajectoryBlipRemoval:
+    """Tests for multi-frame trajectory blip removal."""
+
+    def test_blip_at_player_position_removed(self) -> None:
+        """3-frame blip at player position mid-trajectory should be removed."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_exit_ghost_removal=False,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_blip_removal=True,
+            blip_context_min_frames=5,
+            blip_max_deviation=0.15,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Real trajectory moving right at y≈0.16
+        for i in range(15):
+            positions.append(_make_pos(i, 0.35 + i * 0.02, 0.16))
+
+        # Blip: 3 frames at player position (y=0.31, far from trajectory)
+        positions.append(_make_pos(15, 0.33, 0.31))
+        positions.append(_make_pos(16, 0.33, 0.31))
+        positions.append(_make_pos(17, 0.34, 0.31))
+
+        # Trajectory continues
+        for i in range(18, 30):
+            positions.append(_make_pos(i, 0.55 + (i - 18) * 0.02, 0.20))
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # Blip frames should be removed
+        assert 15 not in result_frames, "Blip frame 15 should be removed"
+        assert 16 not in result_frames, "Blip frame 16 should be removed"
+        assert 17 not in result_frames, "Blip frame 17 should be removed"
+        # Real trajectory preserved
+        assert all(f in result_frames for f in range(15))
+        assert all(f in result_frames for f in range(18, 30))
+
+    def test_single_frame_deviation_preserved(self) -> None:
+        """Single-frame deviation (real bounce) should NOT be removed."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_exit_ghost_removal=False,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_blip_removal=True,
+            blip_context_min_frames=5,
+            blip_max_deviation=0.15,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Smooth trajectory with single-frame direction change at f=15
+        for i in range(15):
+            positions.append(_make_pos(i, 0.3 + i * 0.01, 0.5))
+        positions.append(_make_pos(15, 0.45, 0.7))  # Single-frame jump
+        for i in range(16, 30):
+            positions.append(_make_pos(i, 0.46 + (i - 16) * 0.01, 0.5))
+
+        result = filt.filter_batch(positions)
+
+        # All preserved — single frame deviation is not a blip
+        assert len(result) == 30
+
+    def test_blip_removal_disabled_by_config(self) -> None:
+        """When enable_blip_removal=False, blips should be kept."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_exit_ghost_removal=False,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_blip_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+        for i in range(15):
+            positions.append(_make_pos(i, 0.35 + i * 0.02, 0.16))
+        # Blip
+        positions.append(_make_pos(15, 0.33, 0.31))
+        positions.append(_make_pos(16, 0.33, 0.31))
+        for i in range(17, 30):
+            positions.append(_make_pos(i, 0.55 + (i - 17) * 0.02, 0.20))
+
+        result = filt.filter_batch(positions)
+        assert len(result) == 30  # All preserved
 
 
 class TestEndToEnd:

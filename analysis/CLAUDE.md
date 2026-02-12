@@ -419,7 +419,9 @@ visualization overlays where smooth trajectories are preferred.
 - **False segments at rally boundaries**: VballNet outputs consistent false detections at rally start/end (before temporal context builds up, or after ball exits frame). Segment pruning splits the trajectory at large position jumps (>20% screen) and discards short fragments (<15 frames). Short fragments that are spatially close to an anchor segment (within 10% of screen of the nearest anchor endpoint) are recovered rather than discarded — these are real trajectory fragments between interleaved false positives.
 - **Interleaved false positives**: VballNet sometimes interleaves single-frame false detections (jumping to player positions) within real trajectory regions. Without anchor-proximity recovery, segment splitting at each jump fragments the real trajectory into tiny segments that all get pruned. The recovery step keeps real fragments and discards only the distant false positive clusters.
 - **Oscillating false detections**: After ball exits frame, VballNet can lock onto two players and alternate between them with high confidence. The pattern is cluster-based: positions stay near one player for 2-5 frames, jump to another for 1-2 frames, then back. Oscillation pruning uses spatial clustering to detect this: finds the two furthest-apart positions (poles) in each window, assigns positions to nearest pole, and counts cluster transitions. Both clusters must be compact (within 1.5% of screen of their pole — real VballNet player-locking has ~1% noise) and have ≥3 members. A transition rate ≥25% over 12+ frames triggers trimming.
+- **Exit ghost detections**: When the ball exits the frame mid-rally, VballNet produces false detections that smoothly drift from the exit point toward a player position. These "exit ghosts" are missed by other filters (no jump, no oscillation, no gap). Detected by physics: ball consistently approaching a screen edge with velocity > 0.8%/frame MUST exit — any reversal away from that edge is impossible. All subsequent positions are marked as ghosts until a gap > max_interpolation_gap frames.
 - **Hovering false detections**: After ball exits frame, VballNet can lock onto a single player position and produce many frames within a tiny radius. Detected by checking short segments (12-36 frames) that appear after a gap > max_interpolation_gap: if the first 12 positions all lie within 5% of screen of their centroid, the segment is dropped. Real ball trajectories always have spread >5% over 12 frames because the ball is in motion.
+- **Trajectory blips**: VballNet can briefly lock onto a player position for 2-5 consecutive frames mid-trajectory. Single-frame outlier detection misses these because consecutive false positives validate each other as neighbors. Blip removal uses distant trajectory context (positions ≥5 frames away) with a two-pass approach: first flags suspects, then re-evaluates with clean (non-suspect) context to prevent contamination. Only compact clusters of ≥2 consecutive suspect frames are removed (real bounces have trajectory spread, blips are tightly clustered at a fixed player position).
 - **Missing frames**: Linear interpolation fills small gaps (up to 10 frames) between detections.
 - **Flickering/Jumps** (Kalman mode): Mahalanobis distance gating rejects impossible movements. Hard max_velocity backstop at 50% screen/frame.
 - **False re-acquisition** (Kalman mode): Re-acquisition guard requires M consistent detections within radius R before re-initializing.
@@ -432,13 +434,20 @@ visualization overlays where smooth trajectories are preferred.
 - `segment_jump_threshold=0.20`: Position jump threshold to split segments (20% of screen)
 - `min_segment_frames=15`: Minimum frames to keep a segment
 - `min_output_confidence=0.05`: Drop VballNet zero-confidence placeholders from output
+- `enable_exit_ghost_removal=True`: Remove physics-impossible reversals near screen edges
+- `exit_edge_zone=0.10`: Screen edge zone (10%) for exit approach detection
+- `exit_approach_frames=3`: Min consecutive frames approaching edge before reversal triggers
+- `exit_min_approach_speed=0.008`: Min per-frame speed toward edge (~0.8% of screen)
 - `enable_oscillation_pruning=True`: Detect and trim cluster-based oscillation patterns
 - `min_oscillation_frames=12`: Sliding window size for cluster transition rate detection
 - `oscillation_reversal_rate=0.25`: Cluster transition rate threshold to trigger pruning
 - `oscillation_min_displacement=0.03`: Min pole distance (3% of screen) to detect oscillation
+- `enable_outlier_removal=True`: Removes flickering and edge artifacts (runs after pruning in raw mode, before pruning in Kalman mode)
+- `enable_blip_removal=True`: Remove multi-frame trajectory blips (consecutive false positives at player positions)
+- `blip_context_min_frames=5`: Min frame distance for distant context neighbors
+- `blip_max_deviation=0.15`: Max deviation from interpolated trajectory (15% of screen)
 - `enable_interpolation=True`: Fill missing frames with linear interpolation
 - `max_interpolation_gap=10`: Max frames to interpolate (larger gaps left empty)
-- `enable_outlier_removal=True`: Removes flickering and edge artifacts (runs after pruning in raw mode, before pruning in Kalman mode)
 
 Kalman-only parameters (used when `enable_kalman=True`):
 - `mahalanobis_threshold=5.99`: Chi-squared threshold for Mahalanobis gating

@@ -113,12 +113,12 @@ async function extractVideoSegment(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const args = [
+      '-ss', startSeconds.toString(), // Input-level seeking (fast, uses HTTP range requests)
       '-i', videoUrl,
-      '-ss', startSeconds.toString(),
       '-t', durationSeconds.toString(),
       '-c:v', 'libx264',
-      '-preset', 'ultrafast',
-      '-crf', '23',
+      '-preset', 'fast',
+      '-crf', '18', // Visually lossless — preserves detail for VballNet ball detection
       '-an', // No audio needed for player tracking
       '-y',
       outputPath,
@@ -444,8 +444,10 @@ export async function trackPlayersForRally(
   const outputPath = path.join(TEMP_DIR, `rally_${rallyId}_players.json`);
 
   try {
-    // Get video URL (prefer proxy for faster processing)
-    const videoKey = rally.video.proxyS3Key ?? rally.video.s3Key;
+    // Prefer original quality — proxy video (720p) degrades VballNet ball
+    // detection significantly due to lower resolution and re-encoding artifacts.
+    // Falls back to proxy if original has been quality-downgraded.
+    const videoKey = rally.video.s3Key ?? rally.video.proxyS3Key;
     if (!videoKey) {
       throw new ValidationError('Video has no accessible source');
     }
