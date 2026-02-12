@@ -17,11 +17,12 @@ build/
 *.swp
 *.swo
 
-# ML weights (large files)
+# ML weights and training data (large files)
 weights/
 *.pt
 *.pth
 *.onnx
+training_datasets/
 
 # Cache
 .cache/
@@ -38,6 +39,9 @@ weights/
 # OS
 .DS_Store
 Thumbs.db
+
+# Documents
+*.pdf
 
 # UV
 .uv/
