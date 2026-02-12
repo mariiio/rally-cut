@@ -1,8 +1,10 @@
 """Restore training datasets into the application database.
 
-Re-imports ground truth videos and rally annotations from a local dataset
-directory (manifest.json + ground_truth.json) into PostgreSQL, so the
-web editor can access them after a DB reset or fresh machine setup.
+Re-imports ground truth videos, rally annotations, and tracking ground truth
+from a local dataset directory into PostgreSQL, so the web editor can access
+them after a DB reset or fresh machine setup.
+
+Expected files: manifest.json, ground_truth.json, tracking_ground_truth.json (optional).
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ class RestoreResult:
     videos_inserted: int = 0
     videos_skipped: int = 0
     rallies_inserted: int = 0
+    tracking_gt_restored: int = 0
     session_created: str = ""
     errors: list[str] = field(default_factory=list)
 
@@ -143,7 +146,7 @@ def restore_dataset_to_db(
             user_id = _get_default_user_id(conn)
 
         if dry_run:
-            _preview_restore(conn, videos, gt_by_video, name, user_id)
+            _preview_restore(conn, videos, gt_by_video, name, user_id, dataset_dir)
             conn.rollback()
             return result
 
@@ -290,6 +293,11 @@ def restore_dataset_to_db(
 
             result.session_created = session_name
 
+            # Restore tracking ground truth if available
+            tracking_gt_path = dataset_dir / "tracking_ground_truth.json"
+            if tracking_gt_path.exists():
+                _restore_tracking_gt(conn, tracking_gt_path, result)
+
     finally:
         conn.close()
 
@@ -302,6 +310,7 @@ def _preview_restore(
     gt_by_video: dict[str, list[dict[str, int]]],
     name: str,
     user_id: str,
+    dataset_dir: Path,
 ) -> None:
     """Print a preview of what restore would do (for --dry-run)."""
     from rich import print as rprint
@@ -343,6 +352,85 @@ def _preview_restore(
     rprint(f"  Would skip: [yellow]{would_skip}[/yellow] videos (already exist)")
     rprint(f"  Would insert: [green]{total_rallies}[/green] rally annotations")
     rprint(f"  Would create session: [cyan]Training: {name}[/cyan]")
+
+    # Show tracking GT info if available
+    tracking_gt_path = dataset_dir / "tracking_ground_truth.json"
+    if tracking_gt_path.exists():
+        with open(tracking_gt_path) as f:
+            tracking_gt = json.load(f)
+        tgt_stats = tracking_gt.get("stats", {})
+        rprint(
+            f"  Would restore: [green]{tgt_stats.get('total_rallies_with_tracking_gt', 0)}[/green]"
+            f" tracking GT annotations"
+            f" ({tgt_stats.get('ball_gt_rallies', 0)} with ball GT)"
+        )
+
+
+def _restore_tracking_gt(
+    conn: psycopg.Connection[tuple[Any, ...]],
+    tracking_gt_path: Path,
+    result: RestoreResult,
+) -> None:
+    """Restore tracking ground truth from tracking_ground_truth.json.
+
+    For each entry, matches a rally by video content_hash + start_ms + end_ms,
+    then upserts into player_tracks with ground_truth_json.
+    """
+    with open(tracking_gt_path) as f:
+        tracking_gt = json.load(f)
+
+    rallies = tracking_gt.get("rallies", [])
+    if not rallies:
+        return
+
+    restored = 0
+    for entry in rallies:
+        content_hash = entry["video_content_hash"]
+        start_ms = entry["rally_start_ms"]
+        end_ms = entry["rally_end_ms"]
+        gt_json = entry["ground_truth_json"]
+
+        with conn.cursor() as cur:
+            # Find rally by video content_hash + timing
+            cur.execute(
+                """
+                SELECT r.id
+                FROM rallies r
+                JOIN videos v ON v.id = r.video_id
+                WHERE v.content_hash = %s
+                  AND r.start_ms = %s
+                  AND r.end_ms = %s
+                  AND v.deleted_at IS NULL
+                LIMIT 1
+                """,
+                (content_hash, start_ms, end_ms),
+            )
+            row = cur.fetchone()
+
+        if row is None:
+            result.errors.append(
+                f"No matching rally for {content_hash[:8]}... "
+                f"({start_ms}-{end_ms}ms)"
+            )
+            continue
+
+        rally_id = str(row[0])
+        gt_json_str = json.dumps(gt_json)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO player_tracks (id, rally_id, status, ground_truth_json, created_at)
+                VALUES (gen_random_uuid(), %s, 'COMPLETED', %s::jsonb, NOW())
+                ON CONFLICT (rally_id) DO UPDATE
+                    SET ground_truth_json = EXCLUDED.ground_truth_json
+                """,
+                (rally_id, gt_json_str),
+            )
+
+        restored += 1
+
+    result.tracking_gt_restored = restored
 
 
 def _find_video_file(
