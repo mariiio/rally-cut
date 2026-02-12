@@ -83,6 +83,15 @@ BALL_OUTLIER_GRID: dict[str, list[float | int | bool]] = {
 }
 
 
+# Segment pruning grid (18 combinations: 3*3*2)
+# Tunes post-processing that removes short false segments at rally boundaries
+BALL_SEGMENT_PRUNING_GRID: dict[str, list[float | int | bool]] = {
+    "segment_jump_threshold": [0.10, 0.15, 0.20],
+    "min_segment_frames": [10, 20, 30],
+    "enable_segment_pruning": [True, False],
+}
+
+
 # All available grids
 BALL_AVAILABLE_GRIDS: dict[str, dict[str, list[Any]]] = {
     "quick": BALL_QUICK_GRID,
@@ -93,6 +102,7 @@ BALL_AVAILABLE_GRIDS: dict[str, dict[str, list[Any]]] = {
     "bidirectional": BALL_BIDIRECTIONAL_GRID,
     "mahalanobis": BALL_MAHALANOBIS_GRID,
     "outlier": BALL_OUTLIER_GRID,
+    "segment-pruning": BALL_SEGMENT_PRUNING_GRID,
 }
 
 
