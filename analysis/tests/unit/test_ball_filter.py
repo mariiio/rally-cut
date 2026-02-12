@@ -470,6 +470,89 @@ class TestSegmentPruning:
         assert 24 not in result_frames, "Frame 24 (false cluster) should be removed"
         assert 25 not in result_frames, "Frame 25 (false cluster) should be removed"
 
+    def test_no_recovery_across_large_temporal_gap(self) -> None:
+        """Short segment spatially near anchor but after large gap should be pruned.
+
+        Reproduces the bd77efd1 bug: after a 58-frame gap (ball exits frame),
+        VballNet restarts at a player position that happens to be spatially
+        close to the last anchor endpoint. Without temporal gating, the
+        proximity recovery would keep this false segment.
+        """
+        config = BallFilterConfig(
+            enable_segment_pruning=True,
+            segment_jump_threshold=0.15,
+            min_segment_frames=10,
+            min_output_confidence=0.05,
+            max_interpolation_gap=10,  # recovery gate = 3 * 10 = 30 frames
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Anchor: 20 frames ending at (0.40, 0.37)
+        for i in range(20):
+            positions.append(_make_pos(i, 0.30 + i * 0.005, 0.30 + i * 0.004))
+
+        # Large gap: 50 frames (ball exits frame, no detections)
+
+        # Short segment at player position, spatially near anchor endpoint
+        # (0.38, 0.35) is within proximity of anchor end (0.395, 0.376)
+        # but temporally far (50 frames gap > 30 frame threshold)
+        # Must be < min_segment_frames (10) so it's not an anchor itself
+        for i in range(70, 78):
+            positions.append(
+                _make_pos(i, 0.38 + (i - 70) * 0.001, 0.35 + (i - 70) * 0.001)
+            )
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # Anchor should survive
+        assert all(f in result_frames for f in range(20))
+        # Short segment should be pruned (large temporal gap despite proximity)
+        assert not any(f >= 70 for f in result_frames), (
+            f"Segment across large gap should be pruned, but found: "
+            f"{sorted(f for f in result_frames if f >= 70)}"
+        )
+
+    def test_recovery_within_temporal_gap(self) -> None:
+        """Short segment spatially and temporally near anchor should be recovered."""
+        config = BallFilterConfig(
+            enable_segment_pruning=True,
+            segment_jump_threshold=0.15,
+            min_segment_frames=10,
+            min_output_confidence=0.05,
+            max_interpolation_gap=10,  # recovery gate = 3 * 10 = 30 frames
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Anchor: 20 frames ending at (0.395, 0.376)
+        for i in range(20):
+            positions.append(_make_pos(i, 0.30 + i * 0.005, 0.30 + i * 0.004))
+
+        # Small gap: 5 frames (within recovery gate of 30)
+
+        # Short segment spatially near anchor endpoint
+        for i in range(25, 33):
+            positions.append(
+                _make_pos(i, 0.38 + (i - 25) * 0.001, 0.35 + (i - 25) * 0.001)
+            )
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # Both should survive (small temporal gap + spatial proximity)
+        assert all(f in result_frames for f in range(20))
+        assert any(f >= 25 for f in result_frames), (
+            "Short segment within temporal gap should be recovered"
+        )
+
     def test_short_segment_far_from_anchor_still_pruned(self) -> None:
         """Short segments far from any anchor should still be pruned."""
         config = BallFilterConfig(
