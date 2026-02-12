@@ -18,9 +18,29 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class BallFilterConfig:
-    """Configuration for ball temporal filtering."""
+    """Configuration for ball temporal filtering.
 
-    # Kalman filter parameters
+    Default mode (enable_kalman=False): Raw VballNet positions are kept as-is,
+    with only segment pruning and interpolation applied. This preserves the
+    model's native accuracy (~63px median) while removing false detections at
+    rally boundaries. Testing showed raw positions have higher match rate than
+    Kalman-smoothed output (38.6% vs 31.9%) because the Kalman filter smooths
+    toward false detections instead of rejecting them.
+
+    Kalman mode (enable_kalman=True): Full Kalman filter pipeline with
+    Mahalanobis gating, re-acquisition guard, exit detection, and outlier
+    removal. Produces smoother trajectories with lower mean error but at the
+    cost of detection rate and match rate. Use for visualization overlays
+    where smooth trajectories are preferred over coverage.
+    """
+
+    # Kalman filter toggle
+    # When False (default), skip Kalman filtering and use raw VballNet positions
+    # directly with segment pruning + interpolation. This maximizes detection
+    # and match rate. When True, apply full Kalman pipeline for smooth trajectories.
+    enable_kalman: bool = False
+
+    # Kalman filter parameters (only used when enable_kalman=True)
     process_noise_position: float = 0.001  # Low: ball position is predictable
     process_noise_velocity: float = 0.01  # Higher: velocity changes on hits
     measurement_noise: float = 0.005  # Trust measurements reasonably
@@ -28,68 +48,51 @@ class BallFilterConfig:
     # Confidence thresholds
     min_confidence_for_update: float = 0.3  # Below this, use prediction only
 
-    # Lag compensation for VballNet model bias
-    # The model tends to output positions slightly behind the actual ball
-    # Extrapolate forward using estimated velocity to compensate
-    # Note: Grid search on beach volleyball ground truth showed lag_frames=0
-    # performs best - the model may not have significant lag on these videos,
-    # or extrapolation introduces more error than it corrects
+    # Lag compensation for VballNet model bias (only used when enable_kalman=True)
+    # Note: Grid search showed lag_frames=0 performs best
     enable_lag_compensation: bool = True
     lag_frames: int = 0  # Frames to extrapolate forward (0 = no extrapolation)
 
-    # Jump detection (rejects impossible movements)
-    # Mahalanobis gating uses Kalman innovation covariance for adaptive rejection:
-    # - When filter is confident (tight covariance) → small deviations rejected → catches flickering
-    # - When filter is uncertain (after direction change) → larger deviations accepted
-    # chi2 threshold for 2 DOF: 9.21 = 99th percentile, 5.99 = 95th percentile
-    # Grid search on raw positions: 5.99 optimal with init guard + exit persistence
+    # Jump detection (only used when enable_kalman=True)
+    # Mahalanobis gating uses Kalman innovation covariance for adaptive rejection
     mahalanobis_threshold: float = 5.99
     # Hard velocity limit as absolute backstop (50% of screen per frame)
     max_velocity: float = 0.5
 
-    # Re-acquisition guard (prevents single false positive from hijacking track)
-    # After losing track for N frames, require M consistent detections to re-acquire
+    # Re-acquisition guard (only used when enable_kalman=True)
     reacquisition_threshold: int = 8  # Prediction-only frames before tentative mode
     reacquisition_required: int = 3  # Consistent detections needed to re-acquire
     reacquisition_radius: float = 0.05  # Max spread of consistent detections (5% of screen)
 
-    # Occlusion handling
+    # Occlusion handling (only used when enable_kalman=True)
     max_occlusion_frames: int = 30  # ~1s at 30fps before losing track
 
-    # Bidirectional smoothing (for offline processing only)
-    # Combines forward and backward Kalman passes for zero-lag smoothing
+    # Bidirectional smoothing (only used when enable_kalman=True)
     enable_bidirectional: bool = False
 
     # Interpolation for missing frames
-    # Fills gaps in detection with linear interpolation between known positions
     enable_interpolation: bool = True
     max_interpolation_gap: int = 5  # Max frames to interpolate (larger gaps left empty)
     interpolated_confidence: float = 0.5  # Confidence assigned to interpolated positions
 
-    # Out-of-frame exit detection
-    # Detects when ball leaves the frame to suppress false re-acquisitions
+    # Out-of-frame exit detection (only used when enable_kalman=True)
     enable_exit_detection: bool = True
     exit_edge_margin: float = 0.05  # 5% of screen - ball near edge
-    # Suppress re-acquisition from opposite side of frame after exit
     exit_opposite_side_margin: float = 0.3  # Must be within 30% of exit edge
 
     # Trajectory segment pruning (post-processing)
-    # VballNet often outputs consistent false detections at rally start/end
-    # These form short segments disconnected from the main trajectory
-    # Pruning discards short fragments, keeping all substantial segments
+    # VballNet outputs consistent false detections at rally start/end
+    # Pruning splits trajectory at large jumps and discards short fragments
     enable_segment_pruning: bool = True
-    segment_jump_threshold: float = 0.15  # 15% of screen to split segments
-    min_segment_frames: int = 20  # Segments shorter than this are discarded
+    segment_jump_threshold: float = 0.20  # 20% of screen to split segments
+    min_segment_frames: int = 15  # Segments shorter than this are discarded
     min_output_confidence: float = 0.05  # Drop positions below this confidence
 
-    # Outlier removal (post-processing to remove detection failures)
-    # Targets edge artifacts and trajectory inconsistencies
-    enable_outlier_removal: bool = True
-    # Edge margin: positions within this distance of screen edge are suspicious
+    # Outlier removal (only used when enable_kalman=True)
+    # Targets edge artifacts and trajectory inconsistencies in Kalman output
+    enable_outlier_removal: bool = False
     edge_margin: float = 0.02  # 2% of screen = ~38px on 1920px
-    # Max deviation from trajectory interpolation to be considered valid
     max_trajectory_deviation: float = 0.08  # 8% of screen = ~154px on 1920px
-    # Minimum neighbors required for trajectory-based outlier detection
     min_neighbors_for_outlier: int = 2
 
 
@@ -478,6 +481,12 @@ class BallTemporalFilter:
         """
         Filter a complete list of ball positions.
 
+        When enable_kalman=False (default), applies only segment pruning and
+        interpolation to raw positions — preserving VballNet's native accuracy.
+
+        When enable_kalman=True, runs the full Kalman filter pipeline with
+        outlier removal for smoother trajectories.
+
         Args:
             positions: List of raw ball positions from detector
 
@@ -487,43 +496,34 @@ class BallTemporalFilter:
         if not positions:
             return []
 
-        self.reset()
-
         # Sort by frame number to ensure temporal order
         sorted_positions = sorted(positions, key=lambda p: p.frame_number)
 
-        # Forward pass
-        filtered = []
-        for pos in sorted_positions:
-            filtered_pos = self.update(pos)
-            filtered.append(filtered_pos)
-
-        # Apply bidirectional smoothing if enabled
-        if self.config.enable_bidirectional and len(filtered) > 1:
-            filtered = self._smooth_bidirectional(sorted_positions, filtered)
+        if self.config.enable_kalman:
+            filtered = self._run_kalman_pipeline(sorted_positions)
+        else:
+            # Raw mode: keep VballNet positions as-is
+            filtered = list(sorted_positions)
 
         # Track counts for logging
-        after_filter_count = len(filtered)
+        input_count = len(filtered)
         outlier_count = 0
         pruned_count = 0
         interp_count = 0
 
-        # Apply outlier removal first to clean up noisy detections
-        # (removes edge artifacts, trajectory deviations, velocity reversals)
+        # Outlier removal (primarily useful with Kalman output)
         if self.config.enable_outlier_removal:
             filtered = self._remove_outliers(filtered)
-            outlier_count = after_filter_count - len(filtered)
+            outlier_count = input_count - len(filtered)
 
         after_outlier_count = len(filtered)
 
-        # Prune short disconnected segments AFTER outlier removal
-        # Outlier removal cleans up noise so segments are cleaner
-        # This removes false detections at rally start/end
+        # Segment pruning: remove short disconnected false segments
         if self.config.enable_segment_pruning:
             filtered = self._prune_segments(filtered)
             pruned_count = after_outlier_count - len(filtered)
 
-        # Apply interpolation for missing frames
+        # Interpolation: fill small gaps
         before_interp_count = len(filtered)
         if self.config.enable_interpolation:
             filtered = self._interpolate_missing(filtered)
@@ -531,16 +531,39 @@ class BallTemporalFilter:
 
         # Log summary
         if filtered:
-            parts = [f"Ball filter: {after_filter_count} positions"]
+            mode = "kalman" if self.config.enable_kalman else "raw"
+            parts = [f"Ball filter ({mode}): {input_count} positions"]
             if outlier_count > 0:
                 parts.append(f"-{outlier_count} outliers")
             if pruned_count > 0:
                 parts.append(f"-{pruned_count} pruned")
             if interp_count > 0:
                 parts.append(f"+{interp_count} interpolated")
-            if self.config.enable_bidirectional:
-                parts.append("bidirectional=ON")
             logger.info(", ".join(parts))
+
+        return filtered
+
+    def _run_kalman_pipeline(
+        self,
+        sorted_positions: list["BallPosition"],
+    ) -> list["BallPosition"]:
+        """Run full Kalman filter pipeline (forward pass + optional bidirectional).
+
+        Args:
+            sorted_positions: Positions sorted by frame number.
+
+        Returns:
+            Kalman-filtered positions.
+        """
+        self.reset()
+
+        filtered = []
+        for pos in sorted_positions:
+            filtered_pos = self.update(pos)
+            filtered.append(filtered_pos)
+
+        if self.config.enable_bidirectional and len(filtered) > 1:
+            filtered = self._smooth_bidirectional(sorted_positions, filtered)
 
         return filtered
 

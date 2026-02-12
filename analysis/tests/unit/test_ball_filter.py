@@ -28,6 +28,7 @@ class TestMahalanobisGating:
     def test_rejects_flickering_on_converged_filter(self) -> None:
         """After convergence on stable position, a sudden jump should be rejected."""
         config = BallFilterConfig(
+            enable_kalman=True,
             enable_outlier_removal=False,
             enable_interpolation=False,
             # Reduce velocity process noise so covariance converges tighter
@@ -49,6 +50,7 @@ class TestMahalanobisGating:
     def test_accepts_valid_movement_with_high_uncertainty(self) -> None:
         """After few frames (high uncertainty), larger movements should be accepted."""
         config = BallFilterConfig(
+            enable_kalman=True,
             enable_outlier_removal=False,
             enable_interpolation=False,
         )
@@ -67,6 +69,7 @@ class TestMahalanobisGating:
     def test_hard_max_velocity_always_applies(self) -> None:
         """Max velocity limit should reject even with high uncertainty."""
         config = BallFilterConfig(
+            enable_kalman=True,
             max_velocity=0.3,
             reacquisition_required=2,
             reacquisition_radius=0.03,
@@ -88,6 +91,7 @@ class TestMahalanobisGating:
     def test_gradual_movement_accepted(self) -> None:
         """Smooth consistent movement should always be accepted."""
         config = BallFilterConfig(
+            enable_kalman=True,
             enable_outlier_removal=False,
             enable_interpolation=False,
         )
@@ -109,6 +113,7 @@ class TestReacquisitionGuard:
     def test_rejects_scattered_detections(self) -> None:
         """Scattered detections after track loss should not re-acquire."""
         config = BallFilterConfig(
+            enable_kalman=True,
             reacquisition_threshold=3,
             reacquisition_required=3,
             reacquisition_radius=0.05,
@@ -138,6 +143,7 @@ class TestReacquisitionGuard:
     def test_accepts_consistent_detections(self) -> None:
         """Consistent detections after track loss should re-acquire."""
         config = BallFilterConfig(
+            enable_kalman=True,
             reacquisition_threshold=3,
             reacquisition_required=3,
             reacquisition_radius=0.05,
@@ -171,6 +177,7 @@ class TestOutlierRemoval:
     def test_velocity_reversal_detected(self) -> None:
         """A→B→A flickering pattern should be removed as outlier."""
         config = BallFilterConfig(
+            enable_kalman=True,
             enable_outlier_removal=True,
             enable_interpolation=False,
             # Use very loose Kalman gating so all pass through
@@ -201,6 +208,7 @@ class TestOutlierRemoval:
     def test_smooth_trajectory_preserved(self) -> None:
         """A smooth trajectory should have no outliers removed."""
         config = BallFilterConfig(
+            enable_kalman=True,
             enable_outlier_removal=True,
             enable_interpolation=False,
             mahalanobis_threshold=100.0,
@@ -225,6 +233,7 @@ class TestExitDetection:
     def test_detects_exit_at_right_edge(self) -> None:
         """Ball near right edge moving right should be detected as exiting."""
         config = BallFilterConfig(
+            enable_kalman=True,
             enable_exit_detection=True,
             exit_edge_margin=0.05,
             enable_outlier_removal=False,
@@ -244,6 +253,7 @@ class TestExitDetection:
     def test_suppresses_opposite_side_reacquisition(self) -> None:
         """After exiting right, detection on left should be suppressed."""
         config = BallFilterConfig(
+            enable_kalman=True,
             enable_exit_detection=True,
             exit_edge_margin=0.05,
             exit_opposite_side_margin=0.3,
@@ -281,6 +291,7 @@ class TestExitDetection:
     def test_allows_same_side_reacquisition(self) -> None:
         """After exiting right, detection near right should not be suppressed."""
         config = BallFilterConfig(
+            enable_kalman=True,
             enable_exit_detection=True,
             exit_edge_margin=0.05,
             exit_opposite_side_margin=0.3,
@@ -409,6 +420,7 @@ class TestEndToEnd:
     def test_synthetic_trajectory_with_noise(self) -> None:
         """Synthetic trajectory with flickering, occlusion, and false positives."""
         config = BallFilterConfig(
+            enable_kalman=True,
             reacquisition_threshold=3,
             reacquisition_required=3,
             enable_exit_detection=True,
@@ -474,9 +486,65 @@ class TestEndToEnd:
         assert len(result) == 1
         assert result[0].frame_number == 0
 
+    def test_raw_mode_preserves_positions(self) -> None:
+        """Raw mode (enable_kalman=False) should preserve original positions."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions = [
+            _make_pos(0, 0.30, 0.50),
+            _make_pos(1, 0.31, 0.50),
+            _make_pos(2, 0.32, 0.50),
+            _make_pos(3, 0.33, 0.50),
+            _make_pos(4, 0.34, 0.50),
+        ]
+
+        result = filt.filter_batch(positions)
+
+        assert len(result) == 5
+        for orig, filtered in zip(positions, result):
+            assert filtered.x == orig.x
+            assert filtered.y == orig.y
+            assert filtered.frame_number == orig.frame_number
+
+    def test_raw_mode_with_segment_pruning(self) -> None:
+        """Raw mode + segment pruning removes short false segments."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=True,
+            segment_jump_threshold=0.15,
+            min_segment_frames=10,
+            min_output_confidence=0.05,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Short false segment (5 frames)
+        for i in range(5):
+            positions.append(_make_pos(i, 0.1, 0.1))
+
+        # Main trajectory (20 frames, big jump from false segment)
+        for i in range(10, 30):
+            positions.append(_make_pos(i, 0.6 + i * 0.005, 0.5))
+
+        result = filt.filter_batch(positions)
+
+        # Short segment should be pruned, main trajectory preserved
+        result_frames = [p.frame_number for p in result]
+        assert all(f >= 10 for f in result_frames)
+
     def test_low_confidence_not_initialized(self) -> None:
         """Filter should not initialize on low confidence detections."""
         config = BallFilterConfig(
+            enable_kalman=True,
             min_confidence_for_update=0.3,
             enable_outlier_removal=False,
             enable_interpolation=False,
@@ -492,6 +560,7 @@ class TestEndToEnd:
     def test_initialization_guard_rejects_single_false_positive(self) -> None:
         """A single false positive should not initialize the filter."""
         config = BallFilterConfig(
+            enable_kalman=True,
             reacquisition_required=2,
             reacquisition_radius=0.03,
             enable_outlier_removal=False,
@@ -521,6 +590,7 @@ class TestEndToEnd:
     def test_initialization_guard_accepts_consistent(self) -> None:
         """Consistent detections should initialize the filter."""
         config = BallFilterConfig(
+            enable_kalman=True,
             reacquisition_required=2,
             reacquisition_radius=0.03,
             enable_outlier_removal=False,
@@ -538,6 +608,7 @@ class TestEndToEnd:
     def test_exit_forces_tentative_mode(self) -> None:
         """After exit detection, tentative mode should activate immediately."""
         config = BallFilterConfig(
+            enable_kalman=True,
             enable_exit_detection=True,
             exit_edge_margin=0.05,
             reacquisition_threshold=10,  # High threshold - shouldn't matter
