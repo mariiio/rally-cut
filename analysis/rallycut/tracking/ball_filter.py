@@ -23,11 +23,10 @@ class BallFilterConfig:
     """Configuration for ball temporal filtering.
 
     Default mode (enable_kalman=False): Raw VballNet positions are kept as-is,
-    with only segment pruning and interpolation applied. This preserves the
-    model's native accuracy (~63px median) while removing false detections at
-    rally boundaries. Testing showed raw positions have higher match rate than
-    Kalman-smoothed output (38.6% vs 31.9%) because the Kalman filter smooths
-    toward false detections instead of rejecting them.
+    with segment pruning, blip removal, and interpolation applied. Testing
+    showed raw positions have higher match rate than Kalman-smoothed output
+    because the Kalman filter smooths toward false detections instead of
+    rejecting them. Current: 78.6% detection, 47.1% match, 56.6px mean error.
 
     Kalman mode (enable_kalman=True): Full Kalman filter pipeline with
     Mahalanobis gating, re-acquisition guard, exit detection, and outlier
@@ -128,6 +127,10 @@ class BallFilterConfig:
     enable_blip_removal: bool = True
     blip_context_min_frames: int = 5  # Min frame distance for context neighbors
     blip_max_deviation: float = 0.15  # 15% of screen = ~288px on 1920px
+    blip_max_context_gap: int = 30  # Max total context gap (~1s at 30fps)
+
+    # Outlier removal tuning
+    outlier_min_speed: float = 0.02  # 2% of screen/frame — below this, skip reversal check
 
 
 class BallTemporalFilter:
@@ -815,7 +818,14 @@ class BallTemporalFilter:
             return []
 
         # Build map of confident positions
-        min_conf = self.config.min_confidence_for_update
+        # In raw mode, use min_output_confidence (0.05) since VballNet positions
+        # are already filtered. min_confidence_for_update (0.3) is for Kalman mode
+        # where low-confidence observations should be prediction-only.
+        min_conf = (
+            self.config.min_output_confidence
+            if not self.config.enable_kalman
+            else self.config.min_confidence_for_update
+        )
         pos_by_frame = {
             p.frame_number: p for p in positions if p.confidence >= min_conf
         }
@@ -1512,7 +1522,7 @@ class BallTemporalFilter:
                 speed_out = np.sqrt(v_out_x ** 2 + v_out_y ** 2)
 
                 # Only check reversal if both speeds are significant
-                min_speed = 0.02  # 2% of screen per frame
+                min_speed = self.config.outlier_min_speed
                 if speed_in > min_speed and speed_out > min_speed:
                     # Cosine of angle between velocity vectors
                     dot = v_in_x * v_out_x + v_in_y * v_out_y
@@ -1620,6 +1630,7 @@ class BallTemporalFilter:
 
         min_dist = self.config.blip_context_min_frames
         max_dev = self.config.blip_max_deviation
+        max_ctx_gap = self.config.blip_max_context_gap
         # Blip cluster must be spatially compact (within 5% of screen).
         # Real bounces spread along a curve; VballNet player-locking blips
         # cluster tightly at a fixed position (~1% noise).
@@ -1636,8 +1647,7 @@ class BallTemporalFilter:
                 i, frames, pos_by_frame, min_dist, exclude=set()
             )
             # Skip if context is too far — linear interpolation becomes unreliable
-            # beyond ~30 frames (1 second at 30fps)
-            if not prev_ctx or not next_ctx or prev_gap + next_gap > 30:
+            if not prev_ctx or not next_ctx or prev_gap + next_gap > max_ctx_gap:
                 continue
 
             deviation = self._blip_deviation(
@@ -1658,8 +1668,7 @@ class BallTemporalFilter:
                 i, frames, pos_by_frame, min_dist, exclude=suspect_indices
             )
             # Skip if context is too far — linear interpolation becomes unreliable
-            # beyond ~30 frames (1 second at 30fps)
-            if not prev_ctx or not next_ctx or prev_gap + next_gap > 30:
+            if not prev_ctx or not next_ctx or prev_gap + next_gap > max_ctx_gap:
                 continue
 
             deviation = self._blip_deviation(
