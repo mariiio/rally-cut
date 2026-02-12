@@ -319,7 +319,7 @@ Detects game phases (SERVE, ATTACK, DEFENSE, TRANSITION) from ball velocity patt
 
 ## Ball Tracking Filtering
 
-Kalman filter reduces lag and flickering in ball tracking. See `tracking/ball_filter.py`.
+Multi-stage temporal filter for ball tracking. Default raw mode applies motion energy filtering, segment pruning, oscillation/blip removal, and interpolation. Optional Kalman mode adds lag compensation and smoothing. See `tracking/ball_filter.py`.
 
 ### Ball Tracking Model Variants
 
@@ -405,10 +405,11 @@ result = tracker.track_video(
 
 **Two filter modes:**
 
-Default mode (`enable_kalman=False`): Raw VballNet positions with segment pruning +
-interpolation. Testing showed raw positions have higher match rate than Kalman output
-(38.5% vs 31.9%) because the Kalman filter smooths toward false detections. This mode
-maximizes detection rate (78.6%) and match rate (47.1%) while preserving VballNet's native accuracy.
+Default mode (`enable_kalman=False`): Raw VballNet positions with motion energy filtering,
+segment pruning, and interpolation. Testing showed raw positions have higher match rate
+than Kalman output (38.5% vs 31.9%) because the Kalman filter smooths toward false
+detections. This mode maximizes detection rate (83.7%) and match rate (48.6%) while
+preserving VballNet's native accuracy.
 
 Kalman mode (`enable_kalman=True`): Full Kalman pipeline with Mahalanobis gating,
 re-acquisition guard, exit detection, and outlier removal. Produces smoother trajectories
@@ -416,6 +417,7 @@ with lower mean error but at the cost of detection rate (68.1%) and match rate. 
 visualization overlays where smooth trajectories are preferred.
 
 **Problems solved:**
+- **False positives at static positions**: VballNet frequently detects stationary players as the ball. The motion energy filter (step 0 in raw mode) computes temporal intensity change in a 15x15 patch around each detection. Real ball in flight creates high motion energy; a player standing still has near-zero energy. Positions with `motion_energy < 0.02` are zeroed out. This removes ~5% of false positives before segment pruning runs, improving detection rate from 78.6% to 83.7% and match rate from 47.1% to 48.6%.
 - **False segments at rally boundaries**: VballNet outputs consistent false detections at rally start/end (before temporal context builds up, or after ball exits frame). Segment pruning splits the trajectory at large position jumps (>20% screen) and discards short fragments (<15 frames). Short fragments that are spatially close to an anchor segment (within 10% of screen of the nearest anchor endpoint) are recovered rather than discarded — these are real trajectory fragments between interleaved false positives.
 - **Interleaved false positives**: VballNet sometimes interleaves single-frame false detections (jumping to player positions) within real trajectory regions. Without anchor-proximity recovery, segment splitting at each jump fragments the real trajectory into tiny segments that all get pruned. The recovery step keeps real fragments and discards only the distant false positive clusters.
 - **Oscillating false detections**: After ball exits frame, VballNet can lock onto two players and alternate between them with high confidence. The pattern is cluster-based: positions stay near one player for 2-5 frames, jump to another for 1-2 frames, then back. Oscillation pruning uses spatial clustering to detect this: finds the two furthest-apart positions (poles) in each window, assigns positions to nearest pole, and counts cluster transitions. Both clusters must be compact (within 1.5% of screen of their pole — real VballNet player-locking has ~1% noise) and have ≥3 members. A transition rate ≥25% over 12+ frames triggers trimming.
@@ -430,6 +432,8 @@ visualization overlays where smooth trajectories are preferred.
 
 **Key parameters (BallFilterConfig):**
 - `enable_kalman=False`: Skip Kalman filter, use raw positions (default, best detection/match)
+- `enable_motion_energy_filter=True`: Remove false positives at static positions (low temporal change)
+- `motion_energy_threshold=0.02`: Motion energy below this = likely false positive (zeroed)
 - `enable_segment_pruning=True`: Remove short disconnected false segments
 - `segment_jump_threshold=0.20`: Position jump threshold to split segments (20% of screen)
 - `min_segment_frames=15`: Minimum frames to keep a segment
