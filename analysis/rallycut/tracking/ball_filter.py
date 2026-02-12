@@ -927,20 +927,78 @@ class BallTemporalFilter:
         # enough to qualify as anchors, but they shouldn't rescue nearby short
         # segments from being pruned — those short segments are typically false
         # positives at player positions that only appear "near" the ghost anchor.
+        # Only exclude if the non-ghost portion is too short to be an anchor
+        # on its own — otherwise the real portion should still act as anchor.
         if ghost_ranges:
             ghost_anchors: set[int] = set()
             for i in anchor_indices:
                 seg = segments[i]
-                for g_start, g_end in ghost_ranges:
-                    if any(g_start <= p.frame_number <= g_end for p in seg):
-                        ghost_anchors.add(i)
-                        break
+                non_ghost_count = sum(
+                    1
+                    for p in seg
+                    if not any(
+                        g_start <= p.frame_number <= g_end
+                        for g_start, g_end in ghost_ranges
+                    )
+                )
+                if non_ghost_count < min_len:
+                    ghost_anchors.add(i)
             if ghost_anchors:
                 anchor_indices -= ghost_anchors
                 logger.debug(
                     f"Excluded {len(ghost_anchors)} ghost-overlapping "
-                    f"segments from anchors"
+                    f"segments from anchors (non-ghost portion < {min_len})"
                 )
+
+        # Step 3c: Remove false start/tail anchors (VballNet warmup/cooldown).
+        # VballNet's temporal context warmup produces false detections at rally
+        # start that can be long enough to qualify as anchors (>min_segment_frames).
+        # If the first anchor is much shorter than the second AND spatially
+        # disconnected, it's a warmup artifact. Same for the last anchor.
+        sorted_anchors = sorted(anchor_indices)
+        if len(sorted_anchors) >= 2:
+            # Check first anchor (false start)
+            first_idx = sorted_anchors[0]
+            second_idx = sorted_anchors[1]
+            first_seg = segments[first_idx]
+            second_seg = segments[second_idx]
+            if (
+                len(first_seg) < len(second_seg) / 3
+                and np.sqrt(
+                    (first_seg[-1].x - second_seg[0].x) ** 2
+                    + (first_seg[-1].y - second_seg[0].y) ** 2
+                )
+                > threshold
+            ):
+                anchor_indices.discard(first_idx)
+                logger.info(
+                    f"Segment pruning: removed false start anchor "
+                    f"[{first_seg[0].frame_number}-{first_seg[-1].frame_number}] "
+                    f"({len(first_seg)} frames, next anchor has {len(second_seg)})"
+                )
+
+            # Check last anchor (false tail)
+            last_idx = sorted_anchors[-1]
+            second_last_idx = sorted_anchors[-2]
+            # Re-check in case first anchor removal changed things
+            if last_idx in anchor_indices and second_last_idx in anchor_indices:
+                last_seg = segments[last_idx]
+                second_last_seg = segments[second_last_idx]
+                if (
+                    len(last_seg) < len(second_last_seg) / 3
+                    and np.sqrt(
+                        (last_seg[0].x - second_last_seg[-1].x) ** 2
+                        + (last_seg[0].y - second_last_seg[-1].y) ** 2
+                    )
+                    > threshold
+                ):
+                    anchor_indices.discard(last_idx)
+                    logger.info(
+                        f"Segment pruning: removed false tail anchor "
+                        f"[{last_seg[0].frame_number}-{last_seg[-1].frame_number}] "
+                        f"({len(last_seg)} frames, prev anchor has "
+                        f"{len(second_last_seg)})"
+                    )
 
         # Step 4: Keep short segments whose centroid is close to an anchor endpoint.
         # These are real trajectory fragments between interleaved false positives.
@@ -1623,7 +1681,14 @@ class BallTemporalFilter:
                 continue
 
             # Check cluster compactness — blips are at a fixed player position,
-            # real bounces spread along a curve
+            # real bounces spread along a curve.
+            # Scale spread tolerance with cluster length: longer blips have
+            # transitional frames as tracker moves to/from wrong position,
+            # creating more spread even though Phase 1 confirmed deviation.
+            effective_spread = min(
+                max_blip_spread + 0.01 * max(0, len(run) - 2),
+                3 * max_blip_spread,
+            )
             cluster_positions = [pos_by_frame[frames[i]] for i in run]
             cx = float(np.mean([p.x for p in cluster_positions]))
             cy = float(np.mean([p.y for p in cluster_positions]))
@@ -1632,7 +1697,7 @@ class BallTemporalFilter:
                 for p in cluster_positions
             ))
 
-            if spread <= max_blip_spread:
+            if spread <= effective_spread:
                 for i in run:
                     blip_frames.add(frames[i])
                 frame_range = f"[{frames[run[0]]}-{frames[run[-1]]}]"

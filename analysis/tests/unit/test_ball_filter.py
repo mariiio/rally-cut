@@ -1293,6 +1293,75 @@ class TestExitGhostRemoval:
             assert f not in result_frames, f"Ghost frame {f} should be removed"
 
 
+    def test_partial_ghost_overlap_preserves_non_ghost_anchor(self) -> None:
+        """Segment partially overlapping ghost range keeps anchor status.
+
+        Reproduces the 0d84f858 bug: a segment has ghost overlap at the
+        start, but the non-ghost portion is long enough (≥ min_segment_frames)
+        to be an anchor on its own. The segment should keep anchor status
+        so the non-ghost portion survives pruning.
+        """
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=True,
+            enable_exit_ghost_removal=True,
+            exit_edge_zone=0.10,
+            exit_approach_frames=3,
+            exit_min_approach_speed=0.008,
+            max_interpolation_gap=10,
+            min_segment_frames=15,
+            segment_jump_threshold=0.20,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # First anchor: 20 frames, ball approaching top edge
+        for i in range(20):
+            positions.append(
+                _make_pos(i, 0.10, 0.30 - i * 0.014, conf=0.80)
+            )
+        # Last 3 frames approach top edge: y=0.072, 0.058, 0.044
+        # (all approaching with speed > 0.008)
+
+        # Ghost reversal: ball "comes back" from top edge
+        # Frame 20 at y=0.15 is the reversal point (reversed from y≈0.04)
+        positions.append(_make_pos(20, 0.10, 0.15, conf=0.70))
+
+        # Frames 21-30: ghost portion drifting to player position
+        for i in range(21, 31):
+            positions.append(
+                _make_pos(i, 0.40, 0.15 + (i - 21) * 0.01, conf=0.74)
+            )
+
+        # Gap of 15 frames (> max_interpolation_gap=10) → ghost range terminates
+
+        # Frames 46-90: real detections (ball back in play, 45 frames)
+        # These form a single segment with the ghost portion because
+        # segment splitting uses position jumps, not frame gaps alone.
+        # But they are NOT in the ghost range (terminated at gap).
+        for i in range(46, 91):
+            positions.append(
+                _make_pos(i, 0.40, 0.25 + (i - 46) * 0.005, conf=0.76)
+            )
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # First anchor should survive
+        assert any(f < 20 for f in result_frames), "First anchor should survive"
+
+        # Non-ghost portion should survive — the segment [ghost + real]
+        # keeps anchor status because non-ghost frames ≥ min_segment_frames
+        non_ghost_kept = sum(1 for f in range(46, 91) if f in result_frames)
+        assert non_ghost_kept > 0, (
+            "Non-ghost portion of partially-overlapping segment should survive"
+        )
+
+
 class TestTrajectoryBlipRemoval:
     """Tests for multi-frame trajectory blip removal."""
 
@@ -1608,3 +1677,258 @@ class TestEndToEnd:
         # should be in tentative mode due to exit
         filt.update(_make_pos(20, 0.5, 0.5, conf=0.1))  # Low conf prediction
         assert filt._in_tentative_mode  # Forced by exit, not waiting for threshold
+
+
+class TestBlipRemovalSpreadScaling:
+    """Tests for blip removal with spread scaling for longer excursions."""
+
+    def test_long_blip_with_transitional_spread_removed(self) -> None:
+        """8-frame blip with transitional spread >5% but <11% should be removed.
+
+        Longer blips have transitional frames as the tracker moves to/from
+        the wrong position, creating more spread than the base 5% threshold.
+        The scaled threshold for 8 frames = 0.05 + 0.01*(8-2) = 0.11.
+
+        All frames must individually deviate >15% from the interpolated trajectory
+        to pass Phase 1, while having internal spread between 5% and 11%.
+        """
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_exit_ghost_removal=False,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_blip_removal=True,
+            blip_context_min_frames=5,
+            blip_max_deviation=0.15,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Real trajectory moving right at y≈0.16
+        for i in range(15):
+            positions.append(_make_pos(i, 0.35 + i * 0.02, 0.16))
+
+        # 8-frame blip at player position y≈0.55-0.62
+        # All frames deviate >25% from trajectory (which is at y≈0.16-0.20)
+        # Internal spread ~0.08 (>5% base threshold but <11% scaled threshold)
+        # Position is extreme enough that even Phase 1 (which includes suspect
+        # frames as context) flags the edge frames as suspects.
+        positions.append(_make_pos(15, 0.62, 0.55))
+        positions.append(_make_pos(16, 0.63, 0.57))
+        positions.append(_make_pos(17, 0.64, 0.60))
+        positions.append(_make_pos(18, 0.64, 0.61))
+        positions.append(_make_pos(19, 0.65, 0.60))
+        positions.append(_make_pos(20, 0.64, 0.62))
+        positions.append(_make_pos(21, 0.65, 0.61))
+        positions.append(_make_pos(22, 0.66, 0.63))
+
+        # Trajectory continues at y≈0.20
+        for i in range(23, 38):
+            positions.append(_make_pos(i, 0.65 + (i - 23) * 0.02, 0.20))
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # Blip frames (15-22) should be removed with scaled spread threshold
+        blip_kept = [f for f in range(15, 23) if f in result_frames]
+        assert len(blip_kept) == 0, (
+            f"Blip frames should be removed with scaled spread, "
+            f"but {blip_kept} survived"
+        )
+        # Real trajectory preserved
+        assert all(f in result_frames for f in range(15))
+        assert all(f in result_frames for f in range(23, 38))
+
+    def test_short_blip_still_requires_tight_spread(self) -> None:
+        """2-frame blip should still use base 5% spread threshold."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_exit_ghost_removal=False,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_blip_removal=True,
+            blip_context_min_frames=5,
+            blip_max_deviation=0.15,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Real trajectory
+        for i in range(15):
+            positions.append(_make_pos(i, 0.35 + i * 0.02, 0.16))
+
+        # 2-frame blip at player position (compact, spread < 5%)
+        positions.append(_make_pos(15, 0.33, 0.31))
+        positions.append(_make_pos(16, 0.34, 0.31))
+
+        # Trajectory continues
+        for i in range(17, 30):
+            positions.append(_make_pos(i, 0.55 + (i - 17) * 0.02, 0.20))
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # 2-frame blip should still be removed (spread < base 5%)
+        assert 15 not in result_frames
+        assert 16 not in result_frames
+
+
+class TestFalseStartAnchorRemoval:
+    """Tests for false start/tail anchor removal in segment pruning."""
+
+    def test_false_start_anchor_removed(self) -> None:
+        """Short initial anchor with jump to longer anchor should be removed.
+
+        Simulates VballNet warmup: 20-frame false segment at wrong position,
+        then the real 100-frame trajectory starts. The false segment is long
+        enough to be an anchor (>15 frames), but much shorter than the main
+        trajectory and spatially disconnected.
+        """
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=True,
+            segment_jump_threshold=0.20,
+            min_segment_frames=15,
+            min_output_confidence=0.05,
+            enable_exit_ghost_removal=False,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_blip_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # False start: 20 frames at wrong position (qualifies as anchor)
+        for i in range(20):
+            positions.append(_make_pos(i, 0.15 + i * 0.002, 0.70))
+
+        # Large jump (>20% of screen)
+
+        # Main trajectory: 100 frames (much longer anchor)
+        for i in range(25, 125):
+            positions.append(_make_pos(i, 0.50 + (i - 25) * 0.003, 0.30))
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # False start frames should be removed
+        assert not any(f < 20 for f in result_frames), (
+            f"False start anchor should be removed, but found: "
+            f"{sorted(f for f in result_frames if f < 20)}"
+        )
+        # Main trajectory preserved
+        assert all(f in result_frames for f in range(25, 125))
+
+    def test_false_tail_anchor_removed(self) -> None:
+        """Short trailing anchor with jump from longer anchor should be removed."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=True,
+            segment_jump_threshold=0.20,
+            min_segment_frames=15,
+            min_output_confidence=0.05,
+            enable_exit_ghost_removal=False,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_blip_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Main trajectory: 100 frames
+        for i in range(100):
+            positions.append(_make_pos(i, 0.30 + i * 0.003, 0.30))
+
+        # Large jump
+
+        # False tail: 20 frames at wrong position (qualifies as anchor)
+        for i in range(110, 130):
+            positions.append(_make_pos(i, 0.15, 0.75 + (i - 110) * 0.002))
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # False tail frames should be removed
+        assert not any(f >= 110 for f in result_frames), (
+            f"False tail anchor should be removed, but found: "
+            f"{sorted(f for f in result_frames if f >= 110)}"
+        )
+        # Main trajectory preserved
+        assert all(f in result_frames for f in range(100))
+
+    def test_single_anchor_not_removed(self) -> None:
+        """If there's only one anchor, it should NOT be removed."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=True,
+            segment_jump_threshold=0.20,
+            min_segment_frames=15,
+            min_output_confidence=0.05,
+            enable_exit_ghost_removal=False,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_blip_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Only one anchor segment (20 frames)
+        for i in range(20):
+            positions.append(_make_pos(i, 0.50 + i * 0.005, 0.30))
+
+        # Short non-anchor segment (5 frames, will be pruned)
+        for i in range(25, 30):
+            positions.append(_make_pos(i, 0.10, 0.80))
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # Single anchor should survive
+        assert all(f in result_frames for f in range(20))
+
+    def test_similar_length_anchors_both_kept(self) -> None:
+        """Two anchors of similar length should both be kept (no false start)."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=True,
+            segment_jump_threshold=0.20,
+            min_segment_frames=15,
+            min_output_confidence=0.05,
+            enable_exit_ghost_removal=False,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_blip_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # First anchor: 50 frames
+        for i in range(50):
+            positions.append(_make_pos(i, 0.20 + i * 0.003, 0.30))
+
+        # Large jump
+
+        # Second anchor: 60 frames (similar length, not 3x longer)
+        for i in range(60, 120):
+            positions.append(_make_pos(i, 0.70 + (i - 60) * 0.003, 0.70))
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # Both anchors should survive (50 is NOT < 60/3 = 20)
+        assert any(f < 50 for f in result_frames), "First anchor should survive"
+        assert any(f >= 60 for f in result_frames), "Second anchor should survive"
