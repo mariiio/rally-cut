@@ -1586,7 +1586,7 @@ def compare_ball_models(
                         video_path,
                         start_ms=rally.start_ms,
                         end_ms=rally.end_ms,
-                        enable_filtering=True,  # Use Kalman filter
+                        enable_filtering=True,  # Raw mode + segment pruning
                     )
 
                     # Convert prediction frame numbers to rally-relative
@@ -1616,6 +1616,9 @@ def compare_ball_models(
                         for p in result.positions
                     ]
 
+                    # Extract ground truth ball positions for this rally
+                    gt_ball = [p for p in rally.ground_truth.positions if p.label == "ball"]
+
                     # Auto-detect optimal frame offset for this video
                     # Different videos need different offsets due to FPS/labeling timing
                     optimal_offset, _ = find_optimal_frame_offset(
@@ -1633,9 +1636,6 @@ def compare_ball_models(
                         )
                         for p in relative_positions
                     ]
-
-                    # Evaluate against ground truth
-                    gt_ball = [p for p in rally.ground_truth.positions if p.label == "ball"]
                     metrics = evaluate_ball_tracking(
                         ground_truth=gt_ball,
                         predictions=relative_positions,

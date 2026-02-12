@@ -911,6 +911,26 @@ class BallTracker:
                     progress = (frame_idx - start_frame) / frames_to_process
                     progress_callback(progress)
 
+            # Handle remaining frames in buffer (partial final window)
+            # Without this, up to 8 frames at the end of each segment are silently dropped
+            if frame_buffer:
+                real_frame_count = len(frame_buffer)
+                # Pad with last frame repeated to fill the 9-frame window
+                last_frame = frame_buffer[-1]
+                while len(frame_buffer) < SEQUENCE_LENGTH:
+                    frame_buffer.append(last_frame)
+
+                input_tensor = self._create_sequence(frame_buffer)
+                outputs = session.run([output_name], {input_name: input_tensor})
+                output = outputs[0]
+                inference_count += 1
+
+                first_frame = frame_idx - real_frame_count
+                decoded_positions = self._decode_output(output, first_frame)
+                # Only keep positions for real frames (discard padded)
+                positions.extend(decoded_positions[:real_frame_count])
+                frame_buffer = []
+
             # Final progress
             if progress_callback:
                 progress_callback(1.0)
@@ -997,3 +1017,18 @@ class BallTracker:
 
                 # Clear buffer completely for non-overlapping windows (stride by 9)
                 frame_buffer = []
+
+        # Handle remaining frames in buffer (partial final window)
+        if frame_buffer:
+            real_frame_count = len(frame_buffer)
+            last_frame = frame_buffer[-1]
+            while len(frame_buffer) < SEQUENCE_LENGTH:
+                frame_buffer.append(last_frame)
+
+            input_tensor = self._create_sequence(frame_buffer)
+            outputs = session.run([output_name], {input_name: input_tensor})
+            output = outputs[0]
+
+            first_frame = frame_idx - real_frame_count
+            decoded_positions = self._decode_output(output, first_frame)
+            yield from decoded_positions[:real_frame_count]
