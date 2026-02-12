@@ -11,6 +11,7 @@ from rallycut.tracking.ball_filter import BallFilterConfig
 # Quick grid for fast iteration (81 combinations: 3^4)
 # Focused on high-impact Kalman filter parameters
 BALL_QUICK_GRID: dict[str, list[float | int | bool]] = {
+    "enable_kalman": [True],
     "process_noise_position": [0.0005, 0.001, 0.002],
     "process_noise_velocity": [0.005, 0.01, 0.02],
     "measurement_noise": [0.002, 0.005, 0.01],
@@ -21,6 +22,7 @@ BALL_QUICK_GRID: dict[str, list[float | int | bool]] = {
 # Lag-focused grid (validate current lag compensation setting)
 # 14 combinations: 2 * 7
 BALL_LAG_GRID: dict[str, list[float | int | bool]] = {
+    "enable_kalman": [True],
     "enable_lag_compensation": [True, False],
     "lag_frames": [0, 1, 2, 3, 4, 5, 8],
 }
@@ -28,6 +30,7 @@ BALL_LAG_GRID: dict[str, list[float | int | bool]] = {
 
 # Full grid for comprehensive sweep (972 combinations: 3*3*3*3*3*2*2)
 BALL_FULL_GRID: dict[str, list[float | int | bool]] = {
+    "enable_kalman": [True],
     "process_noise_position": [0.0005, 0.001, 0.002],
     "process_noise_velocity": [0.005, 0.01, 0.02],
     "measurement_noise": [0.002, 0.005, 0.01],
@@ -40,6 +43,7 @@ BALL_FULL_GRID: dict[str, list[float | int | bool]] = {
 
 # Bidirectional smoothing comparison grid (4 combinations)
 BALL_BIDIRECTIONAL_GRID: dict[str, list[float | int | bool]] = {
+    "enable_kalman": [True],
     "enable_bidirectional": [True, False],
     "enable_lag_compensation": [True, False],
 }
@@ -48,6 +52,7 @@ BALL_BIDIRECTIONAL_GRID: dict[str, list[float | int | bool]] = {
 # Confidence-focused grid (27 combinations: 3^3)
 # Tune confidence thresholds and occlusion handling
 BALL_CONFIDENCE_GRID: dict[str, list[float | int | bool]] = {
+    "enable_kalman": [True],
     "min_confidence_for_update": [0.2, 0.3, 0.4],
     "max_occlusion_frames": [20, 30, 45],
     "max_velocity": [0.25, 0.30, 0.35],
@@ -67,6 +72,7 @@ HEATMAP_GRID: dict[str, list[float | str | bool]] = {
 # Mahalanobis gating and re-acquisition grid (162 combinations: 3*3*3*2*3)
 # Tunes the new Mahalanobis distance gating and re-acquisition guard
 BALL_MAHALANOBIS_GRID: dict[str, list[float | int | bool]] = {
+    "enable_kalman": [True],
     "mahalanobis_threshold": [5.99, 9.21, 15.0],
     "max_velocity": [0.3, 0.5, 0.8],
     "reacquisition_threshold": [3, 5, 8],
@@ -77,6 +83,8 @@ BALL_MAHALANOBIS_GRID: dict[str, list[float | int | bool]] = {
 
 # Outlier removal + exit detection grid (18 combinations: 3*3*2)
 BALL_OUTLIER_GRID: dict[str, list[float | int | bool]] = {
+    "enable_kalman": [True],
+    "enable_outlier_removal": [True],
     "max_trajectory_deviation": [0.05, 0.08, 0.12],
     "exit_edge_margin": [0.03, 0.05, 0.08],
     "enable_exit_detection": [True, False],

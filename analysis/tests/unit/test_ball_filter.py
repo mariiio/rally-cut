@@ -1,4 +1,4 @@
-"""Unit tests for ball temporal filter (Kalman filter with gating)."""
+"""Unit tests for ball temporal filter (raw mode and Kalman mode)."""
 
 from __future__ import annotations
 
