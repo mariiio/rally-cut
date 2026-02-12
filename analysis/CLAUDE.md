@@ -403,53 +403,56 @@ result = tracker.track_video(
 )
 ```
 
+**Two filter modes:**
+
+Default mode (`enable_kalman=False`): Raw VballNet positions with segment pruning +
+interpolation. Testing showed raw positions have higher match rate than Kalman output
+(35.4% vs 31.9%) because the Kalman filter smooths toward false detections. This mode
+maximizes detection rate (74.5%) and match rate while preserving VballNet's native accuracy.
+
+Kalman mode (`enable_kalman=True`): Full Kalman pipeline with Mahalanobis gating,
+re-acquisition guard, exit detection, and outlier removal. Produces smoother trajectories
+with lower mean error but at the cost of detection rate (68.1%) and match rate. Use for
+visualization overlays where smooth trajectories are preferred.
+
 **Problems solved:**
-- **Lag**: VballNet model outputs positions that are slightly behind the actual ball. Filter extrapolates forward using velocity to compensate.
-- **Flickering/Jumps**: Mahalanobis distance gating uses Kalman innovation covariance for adaptive rejection — tight gate when filter is confident (catches flickering), loose gate during uncertainty (accepts fast movements). Hard max_velocity backstop at 50% screen/frame.
-- **False re-acquisition**: After losing track, re-acquisition guard requires M consistent detections within radius R before re-initializing. Prevents single false positives from hijacking the filter.
-- **Out-of-frame tracking**: Exit detection marks when ball leaves the frame and suppresses false re-acquisitions from the opposite side.
-- **Noise**: Raw detections have frame-to-frame jitter. Kalman filter smooths trajectory.
-- **Outlier removal**: Post-processing removes edge artifacts, trajectory deviations (8% of screen), and velocity reversal patterns (A→B→A flickering).
-- **Segment pruning**: VballNet outputs consistent false detections at rally start/end (before temporal context builds up, or after ball exits frame). Segment pruning splits the trajectory at large position jumps (>15% screen) and discards short fragments (<20 frames), keeping all substantial tracking segments.
+- **False segments at rally boundaries**: VballNet outputs consistent false detections at rally start/end (before temporal context builds up, or after ball exits frame). Segment pruning splits the trajectory at large position jumps (>20% screen) and discards short fragments (<15 frames).
+- **Missing frames**: Linear interpolation fills small gaps (up to 5 frames) between detections.
+- **Flickering/Jumps** (Kalman mode): Mahalanobis distance gating rejects impossible movements. Hard max_velocity backstop at 50% screen/frame.
+- **False re-acquisition** (Kalman mode): Re-acquisition guard requires M consistent detections within radius R before re-initializing.
+- **Out-of-frame tracking** (Kalman mode): Exit detection suppresses false re-acquisitions from the opposite side.
+- **Outlier removal** (Kalman mode): Removes edge artifacts, trajectory deviations, and velocity reversal patterns.
 
 **Key parameters (BallFilterConfig):**
-- `mahalanobis_threshold=5.99`: Chi-squared threshold for Mahalanobis gating (2 DOF, 95th percentile; grid search optimal on raw positions)
-- `max_velocity=0.5`: Hard velocity limit as absolute backstop (50% screen/frame)
-- `reacquisition_threshold=8`: Prediction-only frames before entering tentative mode
-- `reacquisition_required=3`: Consistent detections needed to re-acquire track
-- `reacquisition_radius=0.05`: Max spread of consistent detections (5% of screen)
-- `enable_exit_detection=True`: Detect ball leaving frame to suppress false re-acquisitions
-- `exit_edge_margin=0.05`: Distance from edge to consider ball as exiting
-- `enable_lag_compensation=True`: Extrapolate position forward to reduce apparent lag
-- `lag_frames=0`: Frames to extrapolate forward (0 = disabled, grid search showed best results)
-- `min_confidence_for_update=0.3`: Below this, use prediction only
-- `max_occlusion_frames=30`: Frames before marking track as lost (~1s at 30fps)
-- `enable_bidirectional=False`: Use RTS smoother for zero-lag offline processing
+- `enable_kalman=False`: Skip Kalman filter, use raw positions (default, best detection/match)
+- `enable_segment_pruning=True`: Remove short disconnected false segments
+- `segment_jump_threshold=0.20`: Position jump threshold to split segments (20% of screen)
+- `min_segment_frames=15`: Minimum frames to keep a segment
+- `min_output_confidence=0.05`: Drop VballNet zero-confidence placeholders from output
 - `enable_interpolation=True`: Fill missing frames with linear interpolation
 - `max_interpolation_gap=5`: Max frames to interpolate (larger gaps left empty)
-- `interpolated_confidence=0.5`: Confidence assigned to interpolated positions
-- `enable_outlier_removal=True`: Remove detection failures (edge artifacts, trajectory inconsistencies, velocity reversals)
-- `edge_margin=0.02`: Positions within 2% of screen edge are suspicious
-- `max_trajectory_deviation=0.08`: Max deviation from interpolated trajectory (8% of screen)
-- `enable_segment_pruning=True`: Remove short disconnected false segments
-- `segment_jump_threshold=0.15`: Position jump threshold to split segments (15% of screen)
-- `min_segment_frames=20`: Minimum frames to keep a segment
-- `min_output_confidence=0.05`: Drop VballNet zero-confidence placeholders from output
+- `enable_outlier_removal=False`: Outlier removal off by default (for Kalman mode)
 
-**Bidirectional Smoothing (RTS smoother):**
-For offline batch processing, bidirectional smoothing combines forward and backward Kalman passes for optimal zero-lag estimates. Only use for batch processing (not real-time).
+Kalman-only parameters (used when `enable_kalman=True`):
+- `mahalanobis_threshold=5.99`: Chi-squared threshold for Mahalanobis gating
+- `max_velocity=0.5`: Hard velocity limit (50% screen/frame)
+- `reacquisition_threshold=8`: Prediction-only frames before tentative mode
+- `reacquisition_required=3`: Consistent detections needed to re-acquire
+- `reacquisition_radius=0.05`: Max spread of consistent detections (5% of screen)
+- `enable_exit_detection=True`: Detect ball leaving frame
+- `enable_bidirectional=False`: RTS smoother for zero-lag offline processing
 
 **Usage:**
 ```python
-# Filtering with lag compensation is enabled by default
+# Default: raw mode with segment pruning (best detection/match rate)
 result = tracker.track_video(video_path)
 
-# Disable filtering for raw comparison
+# Disable filtering entirely for raw comparison
 result = tracker.track_video(video_path, enable_filtering=False)
 
-# Adjust lag compensation (default is 0, grid search showed best results)
+# Enable Kalman mode for smooth trajectories (visualization overlays)
 from rallycut.tracking import BallFilterConfig
-config = BallFilterConfig(lag_frames=3)  # Increase if ball marker appears behind
+config = BallFilterConfig(enable_kalman=True)
 result = tracker.track_video(video_path, filter_config=config)
 
 # Enable bidirectional smoothing for zero-lag (offline only)
@@ -533,12 +536,12 @@ uv run rallycut evaluate-tracking tune-filter --all --grid full --min-rally-f1 0
 uv run rallycut evaluate-tracking tune-filter --all -o results.json  # Export full results
 
 # Grid search for optimal ball filter parameters
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid quick        # Quick grid (81 configs)
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid lag          # Test lag compensation
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid mahalanobis  # Mahalanobis + re-acquisition (162 configs)
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid outlier      # Outlier removal + exit detection (18 configs)
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid full         # Full search (486 configs)
-uv run rallycut evaluate-tracking tune-ball-filter --all -o ball.json        # Export results
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid segment-pruning  # Segment pruning (18 configs)
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid quick           # Kalman params (81 configs)
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid mahalanobis     # Mahalanobis + re-acquisition (162 configs)
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid outlier         # Outlier removal + exit detection (18 configs)
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid full            # Full Kalman search (486 configs)
+uv run rallycut evaluate-tracking tune-ball-filter --all -o ball.json           # Export results
 ```
 
 | Command | Purpose |
