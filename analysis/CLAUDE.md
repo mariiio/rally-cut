@@ -405,22 +405,36 @@ result = tracker.track_video(
 
 **Problems solved:**
 - **Lag**: VballNet model outputs positions that are slightly behind the actual ball. Filter extrapolates forward using velocity to compensate.
-- **Flickering/Jumps**: When ball is occluded, tracking can jump to false detections. Filter rejects impossible movements (>80% screen/frame).
+- **Flickering/Jumps**: Mahalanobis distance gating uses Kalman innovation covariance for adaptive rejection — tight gate when filter is confident (catches flickering), loose gate during uncertainty (accepts fast movements). Hard max_velocity backstop at 50% screen/frame.
+- **False re-acquisition**: After losing track, re-acquisition guard requires M consistent detections within radius R before re-initializing. Prevents single false positives from hijacking the filter.
+- **Out-of-frame tracking**: Exit detection marks when ball leaves the frame and suppresses false re-acquisitions from the opposite side.
 - **Noise**: Raw detections have frame-to-frame jitter. Kalman filter smooths trajectory.
+- **Outlier removal**: Post-processing removes edge artifacts, trajectory deviations (8% of screen), and velocity reversal patterns (A→B→A flickering).
+- **Segment pruning**: VballNet outputs consistent false detections at rally start/end (before temporal context builds up, or after ball exits frame). Segment pruning splits the trajectory at large position jumps (>15% screen) and discards short fragments (<20 frames), keeping all substantial tracking segments.
 
 **Key parameters (BallFilterConfig):**
+- `mahalanobis_threshold=5.99`: Chi-squared threshold for Mahalanobis gating (2 DOF, 95th percentile; grid search optimal on raw positions)
+- `max_velocity=0.5`: Hard velocity limit as absolute backstop (50% screen/frame)
+- `reacquisition_threshold=8`: Prediction-only frames before entering tentative mode
+- `reacquisition_required=3`: Consistent detections needed to re-acquire track
+- `reacquisition_radius=0.05`: Max spread of consistent detections (5% of screen)
+- `enable_exit_detection=True`: Detect ball leaving frame to suppress false re-acquisitions
+- `exit_edge_margin=0.05`: Distance from edge to consider ball as exiting
 - `enable_lag_compensation=True`: Extrapolate position forward to reduce apparent lag
 - `lag_frames=0`: Frames to extrapolate forward (0 = disabled, grid search showed best results)
-- `max_velocity=0.8`: Max plausible movement (80% screen/frame) for jump rejection. Note: 0.3 was too aggressive and rejected 60%+ of valid detections on beach volleyball.
 - `min_confidence_for_update=0.3`: Below this, use prediction only
 - `max_occlusion_frames=30`: Frames before marking track as lost (~1s at 30fps)
 - `enable_bidirectional=False`: Use RTS smoother for zero-lag offline processing
 - `enable_interpolation=True`: Fill missing frames with linear interpolation
 - `max_interpolation_gap=5`: Max frames to interpolate (larger gaps left empty)
 - `interpolated_confidence=0.5`: Confidence assigned to interpolated positions
-- `enable_outlier_removal=True`: Remove detection failures (edge artifacts, trajectory inconsistencies)
+- `enable_outlier_removal=True`: Remove detection failures (edge artifacts, trajectory inconsistencies, velocity reversals)
 - `edge_margin=0.02`: Positions within 2% of screen edge are suspicious
-- `max_trajectory_deviation=0.15`: Max deviation from interpolated trajectory (15% of screen)
+- `max_trajectory_deviation=0.08`: Max deviation from interpolated trajectory (8% of screen)
+- `enable_segment_pruning=True`: Remove short disconnected false segments
+- `segment_jump_threshold=0.15`: Position jump threshold to split segments (15% of screen)
+- `min_segment_frames=20`: Minimum frames to keep a segment
+- `min_output_confidence=0.05`: Drop VballNet zero-confidence placeholders from output
 
 **Bidirectional Smoothing (RTS smoother):**
 For offline batch processing, bidirectional smoothing combines forward and backward Kalman passes for optimal zero-lag estimates. Only use for batch processing (not real-time).
@@ -519,10 +533,12 @@ uv run rallycut evaluate-tracking tune-filter --all --grid full --min-rally-f1 0
 uv run rallycut evaluate-tracking tune-filter --all -o results.json  # Export full results
 
 # Grid search for optimal ball filter parameters
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid quick  # Quick grid (81 configs)
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid lag    # Test lag compensation
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid full   # Full search (486 configs)
-uv run rallycut evaluate-tracking tune-ball-filter --all -o ball.json  # Export results
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid quick        # Quick grid (81 configs)
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid lag          # Test lag compensation
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid mahalanobis  # Mahalanobis + re-acquisition (162 configs)
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid outlier      # Outlier removal + exit detection (18 configs)
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid full         # Full search (486 configs)
+uv run rallycut evaluate-tracking tune-ball-filter --all -o ball.json        # Export results
 ```
 
 | Command | Purpose |
@@ -554,6 +570,7 @@ Only these videos have validated ball tracking ground truth:
 - `a5866029-7cf4-42d6-adc2-8e28111ffd81`
 - `1efa35cf-4edd-4504-b4a4-834eee9e5218`
 - `70ab9d7f-8cc4-48cb-892a-1c36793cac72`
+- `07fedbd4-693e-4651-9fee-c616a1f4b413`
 
 Other videos have incorrect ball labels and are automatically filtered out when using `--ball-only`, `tune-ball-filter`, or `compare-ball-models`. See `VALID_BALL_GT_VIDEOS` in `evaluation/tracking/db.py`.
 

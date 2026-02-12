@@ -38,10 +38,20 @@ class BallFilterConfig:
     lag_frames: int = 0  # Frames to extrapolate forward (0 = no extrapolation)
 
     # Jump detection (rejects impossible movements)
-    # Note: Beach volleyball balls can move very fast (serves, spikes)
-    # 0.3 was too aggressive and rejected 60%+ of valid detections
-    # 0.8 allows fast movements while still filtering obvious errors
-    max_velocity: float = 0.8  # 80% of screen per frame max
+    # Mahalanobis gating uses Kalman innovation covariance for adaptive rejection:
+    # - When filter is confident (tight covariance) → small deviations rejected → catches flickering
+    # - When filter is uncertain (after direction change) → larger deviations accepted
+    # chi2 threshold for 2 DOF: 9.21 = 99th percentile, 5.99 = 95th percentile
+    # Grid search on raw positions: 5.99 optimal with init guard + exit persistence
+    mahalanobis_threshold: float = 5.99
+    # Hard velocity limit as absolute backstop (50% of screen per frame)
+    max_velocity: float = 0.5
+
+    # Re-acquisition guard (prevents single false positive from hijacking track)
+    # After losing track for N frames, require M consistent detections to re-acquire
+    reacquisition_threshold: int = 8  # Prediction-only frames before tentative mode
+    reacquisition_required: int = 3  # Consistent detections needed to re-acquire
+    reacquisition_radius: float = 0.05  # Max spread of consistent detections (5% of screen)
 
     # Occlusion handling
     max_occlusion_frames: int = 30  # ~1s at 30fps before losing track
@@ -56,13 +66,29 @@ class BallFilterConfig:
     max_interpolation_gap: int = 5  # Max frames to interpolate (larger gaps left empty)
     interpolated_confidence: float = 0.5  # Confidence assigned to interpolated positions
 
+    # Out-of-frame exit detection
+    # Detects when ball leaves the frame to suppress false re-acquisitions
+    enable_exit_detection: bool = True
+    exit_edge_margin: float = 0.05  # 5% of screen - ball near edge
+    # Suppress re-acquisition from opposite side of frame after exit
+    exit_opposite_side_margin: float = 0.3  # Must be within 30% of exit edge
+
+    # Trajectory segment pruning (post-processing)
+    # VballNet often outputs consistent false detections at rally start/end
+    # These form short segments disconnected from the main trajectory
+    # Pruning discards short fragments, keeping all substantial segments
+    enable_segment_pruning: bool = True
+    segment_jump_threshold: float = 0.15  # 15% of screen to split segments
+    min_segment_frames: int = 20  # Segments shorter than this are discarded
+    min_output_confidence: float = 0.05  # Drop positions below this confidence
+
     # Outlier removal (post-processing to remove detection failures)
     # Targets edge artifacts and trajectory inconsistencies
     enable_outlier_removal: bool = True
     # Edge margin: positions within this distance of screen edge are suspicious
     edge_margin: float = 0.02  # 2% of screen = ~38px on 1920px
     # Max deviation from trajectory interpolation to be considered valid
-    max_trajectory_deviation: float = 0.15  # 15% of screen = ~288px on 1920px
+    max_trajectory_deviation: float = 0.08  # 8% of screen = ~154px on 1920px
     # Minimum neighbors required for trajectory-based outlier detection
     min_neighbors_for_outlier: int = 2
 
@@ -88,6 +114,14 @@ class BallTemporalFilter:
         self._covariance: np.ndarray | None = None  # 4x4 covariance matrix
         self._frames_since_confident: int = 0
         self._initialized: bool = False
+
+        # Re-acquisition guard state
+        self._in_tentative_mode: bool = False
+        self._tentative_buffer: list[tuple[float, float, float]] = []  # (x, y, confidence)
+
+        # Exit detection state
+        self._exited: bool = False
+        self._exit_edge: str | None = None  # "left", "right", "top", "bottom"
 
         # State transition matrix (constant velocity model)
         # x' = x + vx, y' = y + vy, vx' = vx, vy' = vy
@@ -121,6 +155,10 @@ class BallTemporalFilter:
         self._covariance = None
         self._frames_since_confident = 0
         self._initialized = False
+        self._in_tentative_mode = False
+        self._tentative_buffer = []
+        self._exited = False
+        self._exit_edge = None
 
     def _initialize(self, x: float, y: float) -> None:
         """Initialize filter state from first valid measurement."""
@@ -142,23 +180,106 @@ class BallTemporalFilter:
 
         return predicted_state, predicted_cov
 
-    def _is_valid_jump(
+    def _is_valid_measurement(
         self,
         predicted_state: np.ndarray,
+        predicted_cov: np.ndarray,
         new_x: float,
         new_y: float,
-        confidence: float,
     ) -> bool:
-        """Check if position change is physically plausible."""
+        """Check if measurement is plausible using Mahalanobis distance gating.
+
+        Uses the Kalman filter's innovation covariance for adaptive rejection:
+        - When filter is confident (tight P) → small gate → rejects flickering
+        - When filter is uncertain (wide P after occlusion) → large gate → accepts fast moves
+        Also enforces a hard max_velocity limit as absolute backstop.
+        """
+        # Hard velocity limit (absolute backstop)
         pred_x, pred_y = predicted_state[0], predicted_state[1]
         distance = np.sqrt((new_x - pred_x) ** 2 + (new_y - pred_y) ** 2)
+        if distance > self.config.max_velocity:
+            return False
 
-        # Allow larger jumps for higher confidence detections
-        # At confidence=1.0, use max_velocity; at confidence=0.5, use 1.5x max_velocity
-        confidence_factor = 1.0 + (1.0 - confidence)
-        max_jump = self.config.max_velocity * confidence_factor
+        # Mahalanobis distance gating
+        z = np.array([new_x, new_y])
+        innovation = z - self._H @ predicted_state
+        innov_cov = self._H @ predicted_cov @ self._H.T + self._R
+        try:
+            innov_cov_inv = np.linalg.inv(innov_cov)
+        except np.linalg.LinAlgError:
+            # Singular covariance - fall back to distance check only
+            return True
+        mahalanobis_sq = float(innovation.T @ innov_cov_inv @ innovation)
 
-        return bool(distance <= max_jump)
+        return mahalanobis_sq <= self.config.mahalanobis_threshold
+
+    def _check_tentative_consistent(self) -> bool:
+        """Check if buffered tentative detections are spatially consistent."""
+        if len(self._tentative_buffer) < self.config.reacquisition_required:
+            return False
+
+        xs = [p[0] for p in self._tentative_buffer]
+        ys = [p[1] for p in self._tentative_buffer]
+
+        # Check if all detections are within radius of each other
+        for i in range(len(xs)):
+            for j in range(i + 1, len(xs)):
+                dist = np.sqrt((xs[i] - xs[j]) ** 2 + (ys[i] - ys[j]) ** 2)
+                if dist > self.config.reacquisition_radius:
+                    return False
+        return True
+
+    def _detect_exit(self, x: float, y: float, vx: float, vy: float) -> None:
+        """Detect if ball is exiting the frame based on position and velocity.
+
+        Once exit is detected, the state persists until cleared by re-acquisition.
+        This prevents false detections from resetting the exit state.
+        """
+        if not self.config.enable_exit_detection:
+            return
+
+        # Don't clear exit state - it persists until re-acquisition
+        if self._exited:
+            return
+
+        margin = self.config.exit_edge_margin
+
+        # Check each edge: ball near edge AND moving toward it
+        if x < margin and vx < 0:
+            self._exited = True
+            self._exit_edge = "left"
+        elif x > (1 - margin) and vx > 0:
+            self._exited = True
+            self._exit_edge = "right"
+        elif y < margin and vy < 0:
+            self._exited = True
+            self._exit_edge = "top"
+        elif y > (1 - margin) and vy > 0:
+            self._exited = True
+            self._exit_edge = "bottom"
+
+    def _is_suppressed_reacquisition(self, x: float, y: float) -> bool:
+        """Check if a re-acquisition should be suppressed due to exit detection.
+
+        After ball exits one side, suppress detections from the opposite side
+        (likely false positives from audience/equipment).
+        """
+        if not self._exited or self._exit_edge is None:
+            return False
+
+        margin = self.config.exit_opposite_side_margin
+
+        # Suppress detections from opposite side of where ball exited
+        if self._exit_edge == "left" and x > (1 - margin):
+            return True
+        if self._exit_edge == "right" and x < margin:
+            return True
+        if self._exit_edge == "top" and y > (1 - margin):
+            return True
+        if self._exit_edge == "bottom" and y < margin:
+            return True
+
+        return False
 
     def _update(
         self,
@@ -196,42 +317,119 @@ class BallTemporalFilter:
             Filtered ball position with smoothed coordinates
         """
         x, y, confidence = position.x, position.y, position.confidence
+        is_confident = confidence >= self.config.min_confidence_for_update
 
-        # Initialize on first confident detection
+        # Initialization guard: require consistent detections before first track
+        # Prevents a single false positive from starting the filter at the wrong place
         if not self._initialized:
-            if confidence >= self.config.min_confidence_for_update:
-                self._initialize(x, y)
-                return self._create_output(position)
-            else:
-                # Not enough confidence to initialize, return as-is
-                return position
+            if is_confident:
+                self._tentative_buffer.append((x, y, confidence))
+                if self._check_tentative_consistent():
+                    mean_x = np.mean([p[0] for p in self._tentative_buffer])
+                    mean_y = np.mean([p[1] for p in self._tentative_buffer])
+                    self._initialize(float(mean_x), float(mean_y))
+                    self._tentative_buffer = []
+                    logger.debug(
+                        f"Frame {position.frame_number}: Initialized at "
+                        f"({mean_x:.3f},{mean_y:.3f}) after "
+                        f"{self.config.reacquisition_required} consistent detections"
+                    )
+                    return self._create_output(position)
+            # Not initialized yet, return as-is
+            return position
 
         # Predict step
         predicted_state, predicted_cov = self._predict()
 
-        # Determine if we should update with this measurement
-        is_confident = confidence >= self.config.min_confidence_for_update
-        is_valid = is_confident and self._is_valid_jump(predicted_state, x, y, confidence)
+        # After exit: force tentative mode immediately (don't wait for threshold)
+        # This prevents false detections from hijacking the track after ball leaves frame
+        if self._exited and not self._in_tentative_mode:
+            self._in_tentative_mode = True
+            self._tentative_buffer = []
+            logger.debug(
+                f"Frame {position.frame_number}: Entering tentative mode "
+                f"(ball exited {self._exit_edge})"
+            )
+
+        # Tentative mode: require consistent detections before re-acquiring
+        if self._in_tentative_mode and is_confident:
+            # Suppress opposite-side re-acquisitions after exit
+            if self._is_suppressed_reacquisition(x, y):
+                logger.debug(
+                    f"Frame {position.frame_number}: Suppressed re-acquisition "
+                    f"(exit_edge={self._exit_edge}, pos={x:.3f},{y:.3f})"
+                )
+                self._state = predicted_state
+                self._covariance = predicted_cov
+                self._frames_since_confident += 1
+                return self._create_output(position)
+
+            # Buffer detection for consistency check
+            self._tentative_buffer.append((x, y, confidence))
+
+            if self._check_tentative_consistent():
+                # Re-acquire: re-initialize from mean of consistent detections
+                mean_x = np.mean([p[0] for p in self._tentative_buffer])
+                mean_y = np.mean([p[1] for p in self._tentative_buffer])
+                self._initialize(float(mean_x), float(mean_y))
+                self._in_tentative_mode = False
+                self._tentative_buffer = []
+                self._exited = False
+                self._exit_edge = None
+                logger.debug(
+                    f"Frame {position.frame_number}: Re-acquired track at "
+                    f"({mean_x:.3f},{mean_y:.3f}) after "
+                    f"{self.config.reacquisition_required} consistent detections"
+                )
+                return self._create_output(position)
+
+            # Not enough consistent detections yet - use prediction only
+            self._state = predicted_state
+            self._covariance = predicted_cov
+            self._frames_since_confident += 1
+            return self._create_output(position)
+
+        is_valid = is_confident and self._is_valid_measurement(
+            predicted_state, predicted_cov, x, y,
+        )
 
         if is_valid:
             # Measurement update
             z = np.array([x, y])
             self._state, self._covariance = self._update(predicted_state, predicted_cov, z)
             self._frames_since_confident = 0
+            self._in_tentative_mode = False
+            self._tentative_buffer = []
+            # Check for exit after successful update
+            self._detect_exit(
+                self._state[0], self._state[1], self._state[2], self._state[3],
+            )
         else:
             # Prediction only (occlusion or invalid jump)
             self._state = predicted_state
             self._covariance = predicted_cov
             self._frames_since_confident += 1
 
+            # Enter tentative mode after enough prediction-only frames
+            if (
+                self._frames_since_confident >= self.config.reacquisition_threshold
+                and not self._in_tentative_mode
+            ):
+                self._in_tentative_mode = True
+                self._tentative_buffer = []
+                logger.debug(
+                    f"Frame {position.frame_number}: Entering tentative mode "
+                    f"after {self._frames_since_confident} prediction-only frames"
+                )
+
             if not is_confident:
                 logger.debug(
                     f"Frame {position.frame_number}: Low confidence ({confidence:.2f}), "
                     f"using prediction only"
                 )
-            elif not self._is_valid_jump(predicted_state, x, y, confidence):
+            else:
                 logger.debug(
-                    f"Frame {position.frame_number}: Jump rejected "
+                    f"Frame {position.frame_number}: Measurement rejected "
                     f"(pred={predicted_state[0]:.3f},{predicted_state[1]:.3f} "
                     f"meas={x:.3f},{y:.3f})"
                 )
@@ -307,13 +505,23 @@ class BallTemporalFilter:
         # Track counts for logging
         after_filter_count = len(filtered)
         outlier_count = 0
+        pruned_count = 0
         interp_count = 0
 
-        # Apply outlier removal before interpolation
-        # (so we don't fill gaps created by removed outliers)
+        # Apply outlier removal first to clean up noisy detections
+        # (removes edge artifacts, trajectory deviations, velocity reversals)
         if self.config.enable_outlier_removal:
             filtered = self._remove_outliers(filtered)
             outlier_count = after_filter_count - len(filtered)
+
+        after_outlier_count = len(filtered)
+
+        # Prune short disconnected segments AFTER outlier removal
+        # Outlier removal cleans up noise so segments are cleaner
+        # This removes false detections at rally start/end
+        if self.config.enable_segment_pruning:
+            filtered = self._prune_segments(filtered)
+            pruned_count = after_outlier_count - len(filtered)
 
         # Apply interpolation for missing frames
         before_interp_count = len(filtered)
@@ -326,6 +534,8 @@ class BallTemporalFilter:
             parts = [f"Ball filter: {after_filter_count} positions"]
             if outlier_count > 0:
                 parts.append(f"-{outlier_count} outliers")
+            if pruned_count > 0:
+                parts.append(f"-{pruned_count} pruned")
             if interp_count > 0:
                 parts.append(f"+{interp_count} interpolated")
             if self.config.enable_bidirectional:
@@ -397,7 +607,9 @@ class BallTemporalFilter:
 
             # Update
             is_confident = confidence >= self.config.min_confidence_for_update
-            is_valid = is_confident and self._is_valid_jump(pred_state, x, y, confidence)
+            is_valid = is_confident and self._is_valid_measurement(
+                pred_state, pred_cov, x, y,
+            )
 
             if is_valid:
                 z = np.array([x, y])
@@ -515,6 +727,83 @@ class BallTemporalFilter:
 
         return result
 
+    def _prune_segments(
+        self,
+        positions: list["BallPosition"],
+    ) -> list["BallPosition"]:
+        """Remove short disconnected segments from the trajectory.
+
+        VballNet often outputs consistent false detections at the start and end
+        of rallies (before it has enough temporal context, or after the ball
+        leaves the frame). These form short trajectory segments that are
+        spatially disconnected from the main ball trajectory.
+
+        This method:
+        1. Drops very low confidence positions (VballNet "no detection" placeholders)
+        2. Splits the trajectory into segments at large position jumps
+        3. Discards short segments (<min_segment_frames), keeping all substantial ones
+        """
+        if len(positions) < 2:
+            return positions
+
+        # Step 1: Drop positions below minimum output confidence
+        # VballNet outputs (0.5, 0.5) at conf=0.0 for frames without detection
+        min_conf = self.config.min_output_confidence
+        confident = [p for p in positions if p.confidence >= min_conf]
+        if not confident:
+            return []
+
+        dropped = len(positions) - len(confident)
+        if dropped > 0:
+            logger.debug(f"Dropped {dropped} positions below confidence {min_conf}")
+
+        # Step 2: Split into segments at large jumps or gaps
+        threshold = self.config.segment_jump_threshold
+        segments: list[list[BallPosition]] = [[confident[0]]]
+
+        for i in range(1, len(confident)):
+            prev = confident[i - 1]
+            curr = confident[i]
+            frame_gap = curr.frame_number - prev.frame_number
+            dist = np.sqrt((curr.x - prev.x) ** 2 + (curr.y - prev.y) ** 2)
+
+            # Split on large position jump (normalized by gap for velocity)
+            # or large frame gap (likely different context)
+            if dist > threshold or frame_gap > 15:
+                segments.append([curr])
+            else:
+                segments[-1].append(curr)
+
+        if len(segments) <= 1:
+            return confident
+
+        # Step 3: Keep all segments with at least min_segment_frames positions
+        # Discard short fragments (likely false detections at rally start/end)
+        min_len = self.config.min_segment_frames
+        kept: list[BallPosition] = []
+        removed_count = 0
+        kept_info: list[str] = []
+        removed_info: list[str] = []
+
+        for seg in segments:
+            tag = f"[{seg[0].frame_number}-{seg[-1].frame_number}]({len(seg)})"
+            if len(seg) >= min_len:
+                kept.extend(seg)
+                kept_info.append(tag)
+            else:
+                removed_count += len(seg)
+                removed_info.append(tag)
+
+        if removed_count > 0:
+            logger.info(
+                f"Segment pruning: kept {len(kept_info)} segments "
+                f"({', '.join(kept_info)}), "
+                f"removed {removed_count} positions from "
+                f"{len(removed_info)} short segments"
+            )
+
+        return kept if kept else confident  # Fall back to all if nothing survives
+
     def _remove_outliers(
         self,
         positions: list["BallPosition"],
@@ -611,6 +900,36 @@ class BallTemporalFilter:
                     f"Frame {frame}: Outlier detected (deviation={deviation:.3f}, "
                     f"threshold={threshold:.3f}, conf={pos.confidence:.2f})"
                 )
+                continue
+
+            # Check 3: Velocity reversal detection (A→B→A flickering pattern)
+            # If we have both neighbors, check if velocity reverses sharply
+            if prev_pos and next_pos:
+                # Velocity into this point
+                v_in_x = pos.x - prev_pos.x
+                v_in_y = pos.y - prev_pos.y
+                # Velocity out of this point
+                v_out_x = next_pos.x - pos.x
+                v_out_y = next_pos.y - pos.y
+
+                speed_in = np.sqrt(v_in_x ** 2 + v_in_y ** 2)
+                speed_out = np.sqrt(v_out_x ** 2 + v_out_y ** 2)
+
+                # Only check reversal if both speeds are significant
+                min_speed = 0.02  # 2% of screen per frame
+                if speed_in > min_speed and speed_out > min_speed:
+                    # Cosine of angle between velocity vectors
+                    dot = v_in_x * v_out_x + v_in_y * v_out_y
+                    cos_angle = dot / (speed_in * speed_out)
+
+                    # Sharp reversal (cos < -0.5 means angle > 120 degrees)
+                    if cos_angle < -0.5:
+                        outlier_frames.add(frame)
+                        logger.debug(
+                            f"Frame {frame}: Velocity reversal detected "
+                            f"(cos_angle={cos_angle:.2f}, speed_in={speed_in:.3f}, "
+                            f"speed_out={speed_out:.3f})"
+                        )
 
         # Remove outliers
         if outlier_frames:
