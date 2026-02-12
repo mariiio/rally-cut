@@ -132,6 +132,13 @@ class BallFilterConfig:
     # Outlier removal tuning
     outlier_min_speed: float = 0.02  # 2% of screen/frame — below this, skip reversal check
 
+    # Motion energy filter (removes false positives at stationary positions)
+    # Real ball in flight creates temporal intensity change. False positives
+    # at player positions have low motion energy because players move slowly
+    # relative to the ball.
+    enable_motion_energy_filter: bool = True
+    motion_energy_threshold: float = 0.02  # Below this = suspicious (reduce conf to 0)
+
 
 class BallTemporalFilter:
     """Ball tracking filter with raw and Kalman modes.
@@ -507,6 +514,44 @@ class BallTemporalFilter:
             confidence=confidence,
         )
 
+    def _motion_energy_filter(
+        self,
+        positions: list["BallPosition"],
+    ) -> list["BallPosition"]:
+        """Remove false positives with low motion energy.
+
+        A real ball in flight creates high temporal intensity change at its
+        position (it wasn't there before, or it leaves after). False positive
+        detections at player/court positions have low motion energy because
+        those regions are relatively static.
+
+        Zeroes the confidence of positions where motion_energy is below threshold.
+        """
+        from rallycut.tracking.ball_tracker import BallPosition
+
+        threshold = self.config.motion_energy_threshold
+        removed = 0
+        result = []
+
+        for p in positions:
+            if p.confidence > 0 and p.motion_energy > 0 and p.motion_energy < threshold:
+                # Low motion energy = likely false positive at static position
+                result.append(BallPosition(
+                    frame_number=p.frame_number,
+                    x=p.x,
+                    y=p.y,
+                    confidence=0.0,
+                    motion_energy=p.motion_energy,
+                ))
+                removed += 1
+            else:
+                result.append(p)
+
+        if removed > 0:
+            logger.info(f"Motion energy filter: zeroed {removed} low-energy positions")
+
+        return result
+
     def filter_batch(
         self,
         positions: list["BallPosition"],
@@ -546,6 +591,7 @@ class BallTemporalFilter:
         blip_count = 0
         oscillation_count = 0
         interp_count = 0
+        motion_energy_count = 0
 
         if self.config.enable_kalman:
             # Kalman mode: outlier removal first (cleans Kalman artifacts),
@@ -561,6 +607,7 @@ class BallTemporalFilter:
                 pruned_count = after_outlier_count - len(filtered)
         else:
             # Raw mode pipeline:
+            # 0. motion energy filter (remove FP at static positions)
             # 1. detect exit ghost frame ranges (on raw data, before pruning)
             # 2. segment pruning (splits at jumps, discards short fragments)
             # 3. apply exit ghost removal (remove ghost ranges from pruned data)
@@ -569,6 +616,12 @@ class BallTemporalFilter:
             # 4. oscillation pruning (trims A→B→A→B tails from player-locking)
             # 5. outlier removal (cleans flickering within real segments)
             # 6. re-prune (after outlier removal may fragment segments)
+            if self.config.enable_motion_energy_filter:
+                before_me = sum(1 for p in filtered if p.confidence > 0)
+                filtered = self._motion_energy_filter(filtered)
+                after_me = sum(1 for p in filtered if p.confidence > 0)
+                motion_energy_count = before_me - after_me
+
             ghost_ranges: list[tuple[int, int]] = []
             if self.config.enable_exit_ghost_removal:
                 ghost_ranges = self._detect_exit_ghost_ranges(filtered)
@@ -636,6 +689,8 @@ class BallTemporalFilter:
         if filtered:
             mode = "kalman" if self.config.enable_kalman else "raw"
             parts = [f"Ball filter ({mode}): {input_count} positions"]
+            if motion_energy_count > 0:
+                parts.append(f"-{motion_energy_count} low-energy")
             if outlier_count > 0:
                 parts.append(f"-{outlier_count} outliers")
             if pruned_count > 0:
