@@ -431,7 +431,7 @@ visualization overlays where smooth trajectories are preferred.
 - `min_output_confidence=0.05`: Drop VballNet zero-confidence placeholders from output
 - `enable_interpolation=True`: Fill missing frames with linear interpolation
 - `max_interpolation_gap=5`: Max frames to interpolate (larger gaps left empty)
-- `enable_outlier_removal=False`: Outlier removal off by default (for Kalman mode)
+- `enable_outlier_removal=True`: Removes flickering and edge artifacts (runs after pruning in raw mode, before pruning in Kalman mode)
 
 Kalman-only parameters (used when `enable_kalman=True`):
 - `mahalanobis_threshold=5.99`: Chi-squared threshold for Mahalanobis gating
