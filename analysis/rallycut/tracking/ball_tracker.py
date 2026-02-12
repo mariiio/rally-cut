@@ -733,6 +733,50 @@ class BallTracker:
 
         return x_norm, y_norm, confidence
 
+    # Motion energy: half-width of the comparison patch (15x15 pixels)
+    _ME_PATCH_HALF = 7
+
+    def _compute_motion_energy(
+        self,
+        positions: list[BallPosition],
+        frame_buffer: list[np.ndarray],
+        prev_frame: np.ndarray | None,
+    ) -> None:
+        """Compute motion energy for detected positions in-place.
+
+        Compares each detected position's patch against the previous frame's
+        patch at the same location. High energy = real ball (temporal change),
+        low energy = likely false positive at a static position.
+
+        Args:
+            positions: Decoded positions to annotate with motion_energy.
+            frame_buffer: Preprocessed grayscale frames for the current window.
+            prev_frame: Last frame from the previous window (for cross-window
+                continuity), or None if this is the first window.
+        """
+        h = self._ME_PATCH_HALF
+        w, ht = self._input_width, self._input_height
+
+        for i, pos in enumerate(positions):
+            if pos.confidence <= 0:
+                continue
+
+            # Determine the reference frame for differencing
+            if i == 0:
+                ref = prev_frame
+            else:
+                ref = frame_buffer[i - 1]
+            if ref is None:
+                continue
+
+            px = max(h, min(int(pos.x * w), w - h - 1))
+            py = max(h, min(int(pos.y * ht), ht - h - 1))
+            cur = frame_buffer[i][py - h : py + h + 1, px - h : px + h + 1]
+            prev = ref[py - h : py + h + 1, px - h : px + h + 1]
+            pos.motion_energy = float(
+                np.mean(np.abs(cur.astype(np.float32) - prev.astype(np.float32))) / 255.0
+            )
+
     def _decode_output(
         self,
         output: np.ndarray,
@@ -876,9 +920,6 @@ class BallTracker:
             input_name = session.get_inputs()[0].name
             output_name = session.get_outputs()[0].name
 
-            # Motion energy patch size (half-width)
-            _ME_HALF = 7  # 15x15 patch -> half = 7
-
             while frame_idx < end_frame:
                 ret, frame = cap.read()
                 if not ret:
@@ -912,23 +953,9 @@ class BallTracker:
                     first_frame = frame_idx - SEQUENCE_LENGTH
                     decoded_positions = self._decode_output(output, first_frame)
 
-                    # Compute motion energy for each decoded position
-                    for pi, pos in enumerate(decoded_positions):
-                        if pos.confidence > 0 and prev_preprocessed is not None and pi == 0:
-                            # First frame of window: compare with last frame of prev window
-                            px = max(_ME_HALF, min(int(pos.x * self._input_width), self._input_width - _ME_HALF - 1))
-                            py = max(_ME_HALF, min(int(pos.y * self._input_height), self._input_height - _ME_HALF - 1))
-                            cur_patch = frame_buffer[pi][py - _ME_HALF:py + _ME_HALF + 1, px - _ME_HALF:px + _ME_HALF + 1]
-                            prev_patch = prev_preprocessed[py - _ME_HALF:py + _ME_HALF + 1, px - _ME_HALF:px + _ME_HALF + 1]
-                            pos.motion_energy = float(np.mean(np.abs(cur_patch.astype(float) - prev_patch.astype(float))) / 255.0)
-                        elif pos.confidence > 0 and pi > 0:
-                            # Subsequent frames: compare with previous frame in buffer
-                            px = max(_ME_HALF, min(int(pos.x * self._input_width), self._input_width - _ME_HALF - 1))
-                            py = max(_ME_HALF, min(int(pos.y * self._input_height), self._input_height - _ME_HALF - 1))
-                            cur_patch = frame_buffer[pi][py - _ME_HALF:py + _ME_HALF + 1, px - _ME_HALF:px + _ME_HALF + 1]
-                            prev_patch = frame_buffer[pi - 1][py - _ME_HALF:py + _ME_HALF + 1, px - _ME_HALF:px + _ME_HALF + 1]
-                            pos.motion_energy = float(np.mean(np.abs(cur_patch.astype(float) - prev_patch.astype(float))) / 255.0)
-
+                    self._compute_motion_energy(
+                        decoded_positions, frame_buffer, prev_preprocessed
+                    )
                     positions.extend(decoded_positions)
 
                     # Update prev_preprocessed to last frame of this window
@@ -961,21 +988,9 @@ class BallTracker:
                 # Only keep positions for real frames (discard padded)
                 decoded_positions = decoded_positions[:real_frame_count]
 
-                # Compute motion energy for remaining frames
-                for pi, pos in enumerate(decoded_positions):
-                    if pos.confidence > 0 and prev_preprocessed is not None and pi == 0:
-                        px = max(_ME_HALF, min(int(pos.x * self._input_width), self._input_width - _ME_HALF - 1))
-                        py = max(_ME_HALF, min(int(pos.y * self._input_height), self._input_height - _ME_HALF - 1))
-                        cur_patch = frame_buffer[pi][py - _ME_HALF:py + _ME_HALF + 1, px - _ME_HALF:px + _ME_HALF + 1]
-                        prev_patch = prev_preprocessed[py - _ME_HALF:py + _ME_HALF + 1, px - _ME_HALF:px + _ME_HALF + 1]
-                        pos.motion_energy = float(np.mean(np.abs(cur_patch.astype(float) - prev_patch.astype(float))) / 255.0)
-                    elif pos.confidence > 0 and pi > 0:
-                        px = max(_ME_HALF, min(int(pos.x * self._input_width), self._input_width - _ME_HALF - 1))
-                        py = max(_ME_HALF, min(int(pos.y * self._input_height), self._input_height - _ME_HALF - 1))
-                        cur_patch = frame_buffer[pi][py - _ME_HALF:py + _ME_HALF + 1, px - _ME_HALF:px + _ME_HALF + 1]
-                        prev_patch = frame_buffer[pi - 1][py - _ME_HALF:py + _ME_HALF + 1, px - _ME_HALF:px + _ME_HALF + 1]
-                        pos.motion_energy = float(np.mean(np.abs(cur_patch.astype(float) - prev_patch.astype(float))) / 255.0)
-
+                self._compute_motion_energy(
+                    decoded_positions, frame_buffer, prev_preprocessed
+                )
                 positions.extend(decoded_positions)
                 frame_buffer = []
 
