@@ -74,7 +74,7 @@ class BallFilterConfig:
 
     # Interpolation for missing frames
     enable_interpolation: bool = True
-    max_interpolation_gap: int = 5  # Max frames to interpolate (larger gaps left empty)
+    max_interpolation_gap: int = 10  # Max frames to interpolate (larger gaps left empty)
     interpolated_confidence: float = 0.5  # Confidence assigned to interpolated positions
 
     # Out-of-frame exit detection (only used when enable_kalman=True)
@@ -83,12 +83,26 @@ class BallFilterConfig:
     exit_opposite_side_margin: float = 0.3  # Must be within 30% of exit edge
 
     # Trajectory segment pruning (post-processing)
-    # VballNet outputs consistent false detections at rally start/end
-    # Pruning splits trajectory at large jumps and discards short fragments
+    # VballNet outputs consistent false detections at rally start/end.
+    # Pruning splits trajectory at large jumps, discards short fragments,
+    # but recovers short segments spatially close to anchor segments
+    # (real trajectory fragments between interleaved false positives).
     enable_segment_pruning: bool = True
     segment_jump_threshold: float = 0.20  # 20% of screen to split segments
     min_segment_frames: int = 15  # Segments shorter than this are discarded
     min_output_confidence: float = 0.05  # Drop positions below this confidence
+
+    # Oscillation pruning (detects cluster-based player-locking after ball exits)
+    # VballNet can lock onto two players and alternate with high confidence
+    # after the ball leaves the frame. The pattern is cluster-based: positions
+    # stay near player B for 2-5 frames, jump to player A for 1-2 frames, then
+    # back. Detection uses spatial clustering: find two poles (furthest-apart
+    # positions) in each window, assign positions to nearest pole, and count
+    # transitions between clusters.
+    enable_oscillation_pruning: bool = True
+    min_oscillation_frames: int = 12  # Sliding window size for cluster transition rate
+    oscillation_reversal_rate: float = 0.25  # Cluster transition rate threshold
+    oscillation_min_displacement: float = 0.03  # Min pole distance (3% of screen)
 
     # Outlier removal (removes flickering and edge artifacts)
     # In raw mode, runs after segment pruning to clean within real segments.
@@ -508,6 +522,7 @@ class BallTemporalFilter:
         input_count = len(filtered)
         outlier_count = 0
         pruned_count = 0
+        oscillation_count = 0
         interp_count = 0
 
         if self.config.enable_kalman:
@@ -524,6 +539,7 @@ class BallTemporalFilter:
                 pruned_count = after_outlier_count - len(filtered)
         else:
             # Raw mode: segment pruning first (removes false detection clusters),
+            # then oscillation pruning (trims A→B→A→B tails from player-locking),
             # then outlier removal (cleans flickering within real segments).
             # Order matters: pruning first prevents outlier removal from bridging
             # gaps between real trajectory and false clusters.
@@ -533,9 +549,25 @@ class BallTemporalFilter:
 
             after_prune_count = len(filtered)
 
+            if self.config.enable_oscillation_pruning:
+                filtered = self._prune_oscillating(filtered)
+                oscillation_count = after_prune_count - len(filtered)
+
+            after_oscillation_count = len(filtered)
+
             if self.config.enable_outlier_removal:
                 filtered = self._remove_outliers(filtered)
-                outlier_count = after_prune_count - len(filtered)
+                outlier_count = after_oscillation_count - len(filtered)
+
+            # Re-prune segments that shrank below minimum after outlier removal.
+            # Outlier removal can reduce a valid segment below min_segment_frames,
+            # leaving short noisy fragments that cause visible appear/disappear.
+            if self.config.enable_segment_pruning and outlier_count > 0:
+                before_reprune = len(filtered)
+                filtered = self._prune_segments(filtered)
+                reprune_count = before_reprune - len(filtered)
+                if reprune_count > 0:
+                    pruned_count += reprune_count
 
         # Interpolation: fill small gaps
         before_interp_count = len(filtered)
@@ -551,6 +583,8 @@ class BallTemporalFilter:
                 parts.append(f"-{outlier_count} outliers")
             if pruned_count > 0:
                 parts.append(f"-{pruned_count} pruned")
+            if oscillation_count > 0:
+                parts.append(f"-{oscillation_count} oscillating")
             if interp_count > 0:
                 parts.append(f"+{interp_count} interpolated")
             logger.info(", ".join(parts))
@@ -775,10 +809,18 @@ class BallTemporalFilter:
         leaves the frame). These form short trajectory segments that are
         spatially disconnected from the main ball trajectory.
 
+        VballNet also interleaves single-frame false positives (jumping to
+        player positions) within real trajectory regions. This creates many
+        tiny real-trajectory fragments separated by false jumps. To handle
+        this, short segments that are spatially close to an anchor (long)
+        segment are kept rather than discarded.
+
         This method:
         1. Drops very low confidence positions (VballNet "no detection" placeholders)
         2. Splits the trajectory into segments at large position jumps
-        3. Discards short segments (<min_segment_frames), keeping all substantial ones
+        3. Identifies anchor segments (long enough to be reliable trajectory)
+        4. Keeps non-anchor segments whose centroid is close to an anchor endpoint
+        5. Discards remaining segments (false detections)
         """
         if len(positions) < 2:
             return positions
@@ -814,32 +856,248 @@ class BallTemporalFilter:
         if len(segments) <= 1:
             return confident
 
-        # Step 3: Keep all segments with at least min_segment_frames positions
-        # Discard short fragments (likely false detections at rally start/end)
+        # Step 3: Identify anchor segments (long enough to be reliable)
         min_len = self.config.min_segment_frames
+        anchor_indices: set[int] = set()
+        for i, seg in enumerate(segments):
+            if len(seg) >= min_len:
+                anchor_indices.add(i)
+
+        # Step 4: Keep short segments whose centroid is close to an anchor endpoint.
+        # These are real trajectory fragments between interleaved false positives.
+        # Use half the jump threshold as proximity — tight enough to exclude
+        # false positives (which jump to player positions 30-50% away) while
+        # keeping real trajectory fragments (typically <5% from anchor).
+        proximity = threshold / 2
         kept: list[BallPosition] = []
         removed_count = 0
         kept_info: list[str] = []
         removed_info: list[str] = []
+        recovered_count = 0
 
-        for seg in segments:
+        for i, seg in enumerate(segments):
             tag = f"[{seg[0].frame_number}-{seg[-1].frame_number}]({len(seg)})"
-            if len(seg) >= min_len:
+
+            if i in anchor_indices:
                 kept.extend(seg)
                 kept_info.append(tag)
+                continue
+
+            # Short segment: check proximity to nearest anchor endpoints
+            centroid_x = float(np.mean([p.x for p in seg]))
+            centroid_y = float(np.mean([p.y for p in seg]))
+
+            close_to_anchor = False
+
+            # Check previous anchor (end position)
+            for j in range(i - 1, -1, -1):
+                if j in anchor_indices:
+                    ref = segments[j][-1]
+                    dist = np.sqrt(
+                        (centroid_x - ref.x) ** 2 + (centroid_y - ref.y) ** 2
+                    )
+                    if dist < proximity:
+                        close_to_anchor = True
+                    break
+
+            # Check next anchor (start position)
+            if not close_to_anchor:
+                for j in range(i + 1, len(segments)):
+                    if j in anchor_indices:
+                        ref = segments[j][0]
+                        dist = np.sqrt(
+                            (centroid_x - ref.x) ** 2 + (centroid_y - ref.y) ** 2
+                        )
+                        if dist < proximity:
+                            close_to_anchor = True
+                        break
+
+            if close_to_anchor:
+                kept.extend(seg)
+                kept_info.append(tag + "*")  # * marks recovered segments
+                recovered_count += len(seg)
             else:
                 removed_count += len(seg)
                 removed_info.append(tag)
 
-        if removed_count > 0:
-            logger.info(
+        if removed_count > 0 or recovered_count > 0:
+            parts = [
                 f"Segment pruning: kept {len(kept_info)} segments "
-                f"({', '.join(kept_info)}), "
-                f"removed {removed_count} positions from "
-                f"{len(removed_info)} short segments"
-            )
+                f"({', '.join(kept_info)})"
+            ]
+            if removed_count > 0:
+                parts.append(
+                    f"removed {removed_count} positions from "
+                    f"{len(removed_info)} short segments"
+                )
+            if recovered_count > 0:
+                parts.append(f"recovered {recovered_count} near-anchor positions")
+            logger.info(", ".join(parts))
 
         return kept if kept else confident  # Fall back to all if nothing survives
+
+    def _prune_oscillating(
+        self,
+        positions: list["BallPosition"],
+    ) -> list["BallPosition"]:
+        """Trim sustained oscillation from trajectory tails using cluster detection.
+
+        VballNet can lock onto two players and alternate between them with high
+        confidence after the ball exits the frame. The pattern is cluster-based:
+        positions stay near player B for 2-5 frames, jump to player A for 1-2
+        frames, then back. Per-frame displacement is tiny within each cluster,
+        so displacement-reversal detection misses this pattern entirely.
+
+        Also detects single-cluster hovering: after a large gap (ball exited
+        frame), VballNet can lock onto a single player position and produce
+        many frames within a tiny radius. Detected by checking short segments
+        (≤3x window) after a large gap: if the first window positions all lie
+        within segment_jump_threshold/4 of their centroid, the segment is dropped.
+
+        Algorithm (cluster transition detection):
+        1. Split into contiguous segments (gap > 5 frames)
+        2. For each segment after a large gap, check for hovering (all
+           positions within a small radius of centroid → drop entire segment)
+        3. For each remaining segment, slide a window across positions:
+           a. Find two poles: the pair of positions with maximum distance
+           b. If pole distance < min_displacement: skip (jitter, not oscillation)
+           c. Assign each position to nearest pole (binary cluster label)
+           d. Count transitions (cluster[i] != cluster[i+1])
+           e. If transition_rate >= threshold: trim from window start onward
+        """
+        if len(positions) < self.config.min_oscillation_frames + 2:
+            return positions
+
+        min_pole_dist = self.config.oscillation_min_displacement
+        window = self.config.min_oscillation_frames
+        rate_threshold = self.config.oscillation_reversal_rate
+
+        # Step 1: Split into contiguous segments (gap > 5 frames)
+        segments: list[list[BallPosition]] = [[positions[0]]]
+        for i in range(1, len(positions)):
+            if positions[i].frame_number - positions[i - 1].frame_number > 5:
+                segments.append([positions[i]])
+            else:
+                segments[-1].append(positions[i])
+
+        result: list[BallPosition] = []
+        max_gap = self.config.max_interpolation_gap
+        hover_radius = self.config.segment_jump_threshold / 4
+        prev_end_frame: int | None = None
+
+        for seg in segments:
+            # Hovering detection: single-player lock-on after ball exits frame.
+            # If segment follows a large gap and all positions cluster within
+            # a tiny radius, it's VballNet locked onto a stationary player.
+            # Only flag short segments — long ones that start slow are likely
+            # real (ball gradually accelerating after serve/bounce).
+            gap = (
+                seg[0].frame_number - prev_end_frame
+                if prev_end_frame is not None
+                else 0
+            )
+            if gap > max_gap and window <= len(seg) <= window * 3:
+                first_w = seg[:window]
+                cx = float(np.mean([p.x for p in first_w]))
+                cy = float(np.mean([p.y for p in first_w]))
+                max_spread = float(
+                    max(
+                        np.sqrt((p.x - cx) ** 2 + (p.y - cy) ** 2)
+                        for p in first_w
+                    )
+                )
+                if max_spread < hover_radius:
+                    frame_range = (
+                        f"[{seg[0].frame_number}-{seg[-1].frame_number}]"
+                    )
+                    logger.info(
+                        f"Oscillation pruning: dropped hovering segment "
+                        f"{frame_range} ({len(seg)} frames, "
+                        f"spread={max_spread:.4f}, gap={gap})"
+                    )
+                    prev_end_frame = seg[-1].frame_number
+                    continue
+
+            if len(seg) < window + 2:
+                result.extend(seg)
+                prev_end_frame = seg[-1].frame_number
+                continue
+
+            n = len(seg)
+            trim_idx = None  # Index into seg where trimming starts
+
+            # Slide a window across the segment
+            for start in range(n - window + 1):
+                w = seg[start : start + window]
+
+                # Find two poles: pair with maximum distance
+                max_dist = 0.0
+                pole_a = (w[0].x, w[0].y)
+                pole_b = (w[0].x, w[0].y)
+                for i in range(len(w)):
+                    for j in range(i + 1, len(w)):
+                        d = np.sqrt((w[i].x - w[j].x) ** 2 + (w[i].y - w[j].y) ** 2)
+                        if d > max_dist:
+                            max_dist = d
+                            pole_a = (w[i].x, w[i].y)
+                            pole_b = (w[j].x, w[j].y)
+
+                # Skip if poles are too close (jitter, not oscillation)
+                if max_dist < min_pole_dist:
+                    continue
+
+                # Assign each position to nearest pole, tracking distance
+                labels = []
+                dists_a: list[float] = []  # distances to pole_a for cluster 0
+                dists_b: list[float] = []  # distances to pole_b for cluster 1
+                for p in w:
+                    da = np.sqrt((p.x - pole_a[0]) ** 2 + (p.y - pole_a[1]) ** 2)
+                    db = np.sqrt((p.x - pole_b[0]) ** 2 + (p.y - pole_b[1]) ** 2)
+                    if da <= db:
+                        labels.append(0)
+                        dists_a.append(da)
+                    else:
+                        labels.append(1)
+                        dists_b.append(db)
+
+                # Both clusters must have at least 3 positions to be oscillation.
+                # A single spike + geometric artifacts won't reach 3.
+                if len(dists_a) < 3 or len(dists_b) < 3:
+                    continue
+
+                # Clusters must be compact: in real oscillation, VballNet locks
+                # onto fixed player positions so within-cluster spread is tiny
+                # (<1% of screen). In a ball bounce passing through the midpoint,
+                # cluster members span a wide trajectory arc. Use half the pole
+                # distance as the max allowed spread per cluster.
+                max_cluster_spread = min_pole_dist / 2
+                if max(dists_a) > max_cluster_spread or max(dists_b) > max_cluster_spread:
+                    continue
+
+                # Count transitions between clusters
+                transitions = sum(
+                    1 for k in range(len(labels) - 1) if labels[k] != labels[k + 1]
+                )
+                rate = transitions / (len(labels) - 1)
+
+                if rate >= rate_threshold:
+                    trim_idx = start
+                    break
+
+            if trim_idx is not None:
+                trimmed = len(seg) - trim_idx
+                result.extend(seg[:trim_idx])
+                frame_range = f"[{seg[trim_idx].frame_number}-{seg[-1].frame_number}]"
+                logger.info(
+                    f"Oscillation pruning: trimmed {trimmed} frames {frame_range} "
+                    f"from segment [{seg[0].frame_number}-{seg[-1].frame_number}]"
+                )
+            else:
+                result.extend(seg)
+
+            prev_end_frame = seg[-1].frame_number
+
+        return result
 
     def _remove_outliers(
         self,

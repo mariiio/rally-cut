@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from rallycut.tracking.ball_filter import BallFilterConfig, BallTemporalFilter
 from rallycut.tracking.ball_tracker import BallPosition
 
@@ -357,7 +359,7 @@ class TestSegmentPruning:
         )
 
     def test_preserves_all_long_segments(self) -> None:
-        """Multiple long segments should all be preserved."""
+        """Multiple long segments should all be preserved as anchors."""
         config = BallFilterConfig(
             enable_segment_pruning=True,
             segment_jump_threshold=0.15,
@@ -374,13 +376,13 @@ class TestSegmentPruning:
         for i in range(10):
             positions.append(_make_pos(i, 0.2 + i * 0.005, 0.5))
 
-        # Segment 2: 10 frames at right side (big jump)
+        # Segment 2: 10 frames at right side (far away but long enough)
         for i in range(20, 30):
             positions.append(_make_pos(i, 0.8 + (i - 20) * 0.005, 0.5))
 
         result = filt.filter_batch(positions)
 
-        # Both long segments should survive
+        # Both long segments should survive as anchors
         result_frames = {p.frame_number for p in result}
         assert any(f < 10 for f in result_frames), "Segment 1 should survive"
         assert any(f >= 20 for f in result_frames), "Segment 2 should survive"
@@ -412,6 +414,522 @@ class TestSegmentPruning:
             assert p.confidence >= 0.05, (
                 f"Frame {p.frame_number} has confidence {p.confidence} < 0.05"
             )
+
+
+    def test_recovers_short_segments_near_anchor(self) -> None:
+        """Short trajectory fragments near anchors should be kept, not pruned.
+
+        Simulates VballNet interleaving single-frame false positives within a
+        real trajectory: real(20f) → false(1f) → real(3f) → false(3f) → real(2f).
+        The real fragments are near the anchor, false positives are far away.
+        """
+        config = BallFilterConfig(
+            enable_segment_pruning=True,
+            segment_jump_threshold=0.15,
+            min_segment_frames=10,
+            min_output_confidence=0.05,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Anchor segment: 20 frames of real trajectory at x≈0.5, y≈0.3
+        for i in range(20):
+            positions.append(_make_pos(i, 0.50 + i * 0.002, 0.30))
+
+        # Single-frame false positive (jumps to player position)
+        positions.append(_make_pos(20, 0.90, 0.70, conf=0.8))
+
+        # Short real fragment: 3 frames close to anchor end
+        for i in range(21, 24):
+            positions.append(_make_pos(i, 0.54 + (i - 21) * 0.002, 0.30))
+
+        # Multi-frame false cluster (3 frames at player position)
+        for i in range(24, 27):
+            positions.append(_make_pos(i, 0.88, 0.72, conf=0.7))
+
+        # Short real fragment: 2 frames close to anchor
+        for i in range(27, 29):
+            positions.append(_make_pos(i, 0.55, 0.30))
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # Anchor frames (0-19) must survive
+        assert all(f in result_frames for f in range(20)), "Anchor should survive"
+
+        # Real fragments near anchor should be recovered
+        assert 21 in result_frames, "Frame 21 (near anchor) should be recovered"
+        assert 22 in result_frames, "Frame 22 (near anchor) should be recovered"
+        assert 27 in result_frames, "Frame 27 (near anchor) should be recovered"
+
+        # False positive frames should NOT be in output
+        assert 20 not in result_frames, "Frame 20 (false positive) should be removed"
+        assert 24 not in result_frames, "Frame 24 (false cluster) should be removed"
+        assert 25 not in result_frames, "Frame 25 (false cluster) should be removed"
+
+    def test_short_segment_far_from_anchor_still_pruned(self) -> None:
+        """Short segments far from any anchor should still be pruned."""
+        config = BallFilterConfig(
+            enable_segment_pruning=True,
+            segment_jump_threshold=0.15,
+            min_segment_frames=10,
+            min_output_confidence=0.05,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Short false segment at beginning (5 frames far from anchor)
+        for i in range(5):
+            positions.append(_make_pos(i, 0.2, 0.8, conf=0.7))
+
+        # Main anchor trajectory (20 frames)
+        for i in range(10, 30):
+            positions.append(_make_pos(i, 0.6 + i * 0.005, 0.3))
+
+        # Short false segment at end (5 frames far from anchor)
+        for i in range(35, 40):
+            positions.append(_make_pos(i, 0.1, 0.9, conf=0.6))
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # Only anchor frames should survive
+        assert all(f >= 10 and f < 30 for f in result_frames), (
+            f"Only anchor frames expected, got: {sorted(result_frames)}"
+        )
+
+
+class TestOscillationPruning:
+    """Tests for oscillation (A→B→A→B) pruning."""
+
+    def test_sustained_oscillation_trimmed(self) -> None:
+        """A→B→A→B tail after real trajectory should be trimmed."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_oscillation_pruning=True,
+            min_oscillation_frames=12,
+            oscillation_reversal_rate=0.25,
+            oscillation_min_displacement=0.03,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Real trajectory: smooth rightward movement (30 frames)
+        for i in range(30):
+            positions.append(_make_pos(i, 0.3 + i * 0.01, 0.5))
+
+        # Oscillating tail: alternating between two player positions (20 frames)
+        for i in range(30, 50):
+            if i % 2 == 0:
+                positions.append(_make_pos(i, 0.7, 0.3))  # Player A
+            else:
+                positions.append(_make_pos(i, 0.7, 0.6))  # Player B
+
+        result = filt.filter_batch(positions)
+
+        # Real trajectory should survive, oscillating tail should be trimmed
+        result_frames = {p.frame_number for p in result}
+        # At least some real frames kept
+        assert any(f < 30 for f in result_frames)
+        # Most oscillating frames should be trimmed
+        oscillating_kept = sum(1 for f in result_frames if f >= 30)
+        assert oscillating_kept < 10, (
+            f"Expected most oscillating frames trimmed, but {oscillating_kept} survived"
+        )
+
+    def test_cluster_oscillation_trimmed(self) -> None:
+        """Cluster-based oscillation (real VballNet pattern) should be trimmed.
+
+        Real pattern from rally 0d84f858: positions stay near player B
+        (x≈0.875) for 2-5 frames, jump to player A (x≈0.82) for 1-2 frames,
+        then back. Within-cluster displacement is tiny (<0.01), but the
+        cluster transition rate is high.
+        """
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_oscillation_pruning=True,
+            min_oscillation_frames=12,
+            oscillation_reversal_rate=0.25,
+            oscillation_min_displacement=0.03,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Real trajectory: smooth rightward movement (30 frames)
+        for i in range(30):
+            positions.append(_make_pos(i, 0.3 + i * 0.01, 0.5))
+
+        # Cluster-based oscillating tail (20 frames):
+        # Positions stay at B for 2-3 frames, jump to A for 1-2 frames, repeat
+        # Pattern: BBBAAABBBBBAABBBB (mimics real VballNet output)
+        cluster_pattern = [
+            # B cluster (x=0.875, y=0.48)
+            (0.875, 0.48), (0.876, 0.481), (0.874, 0.479),
+            # A cluster (x=0.82, y=0.50)
+            (0.827, 0.50), (0.825, 0.501),
+            # B cluster
+            (0.875, 0.48), (0.876, 0.481), (0.874, 0.479), (0.875, 0.48), (0.876, 0.481),
+            # A cluster
+            (0.825, 0.50), (0.827, 0.501),
+            # B cluster
+            (0.875, 0.48), (0.876, 0.481), (0.874, 0.479), (0.875, 0.48),
+            # A cluster
+            (0.825, 0.50), (0.827, 0.501),
+            # B cluster
+            (0.875, 0.48), (0.876, 0.481),
+        ]
+        for i, (x, y) in enumerate(cluster_pattern):
+            positions.append(_make_pos(30 + i, x, y))
+
+        result = filt.filter_batch(positions)
+
+        # Real trajectory should survive, cluster oscillation should be trimmed
+        result_frames = {p.frame_number for p in result}
+        assert any(f < 30 for f in result_frames)
+        oscillating_kept = sum(1 for f in result_frames if f >= 30)
+        assert oscillating_kept < 10, (
+            f"Expected cluster oscillation trimmed, but {oscillating_kept} survived"
+        )
+
+    def test_brief_direction_change_preserved(self) -> None:
+        """A 2-frame direction change (bounce/hit) should NOT be trimmed."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_oscillation_pruning=True,
+            min_oscillation_frames=12,
+            oscillation_reversal_rate=0.25,
+            oscillation_min_displacement=0.03,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Smooth trajectory with a brief bounce at frame 15
+        for i in range(30):
+            x = 0.3 + i * 0.01
+            y = 0.5
+            if i == 15:
+                y = 0.4  # Brief deflection (1 frame)
+            positions.append(_make_pos(i, x, y))
+
+        result = filt.filter_batch(positions)
+
+        # All 30 frames should be preserved (no sustained oscillation)
+        assert len(result) == 30
+
+    def test_ball_bounce_with_brief_confusion_preserved(self) -> None:
+        """Ball bounce + 1-frame VballNet confusion should NOT be trimmed.
+
+        Real pattern from rally 1bfcbc4f: ball descends near net (y≈0.25),
+        bounces to player area (y≈0.42), VballNet briefly reads net area for
+        1 frame, then continues at player area. Creates 3 transitions in a
+        window but the clusters are NOT compact (ball is moving through space,
+        not locked onto fixed positions).
+        """
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_oscillation_pruning=True,
+            min_oscillation_frames=12,
+            oscillation_reversal_rate=0.25,
+            oscillation_min_displacement=0.03,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Ball descending near net (x≈0.55, y decreasing from 0.37 to 0.25)
+        for i in range(20):
+            y = 0.37 - i * 0.006
+            positions.append(_make_pos(i, 0.55, y))
+
+        # Ball bounces to player area
+        positions.append(_make_pos(20, 0.55, 0.42))  # Bounce to court
+        positions.append(_make_pos(21, 0.55, 0.27))  # VballNet confusion (1 frame)
+        positions.append(_make_pos(22, 0.56, 0.39))  # Continues at player area
+        positions.append(_make_pos(23, 0.56, 0.39))
+
+        # Ball hit and moves left across court
+        for i in range(24, 40):
+            x = 0.55 - (i - 24) * 0.015
+            positions.append(_make_pos(i, x, 0.30))
+
+        result = filt.filter_batch(positions)
+
+        # All 40 frames should be preserved — this is a real trajectory
+        assert len(result) == 40, (
+            f"Expected 40 frames preserved, but only {len(result)} survived"
+        )
+
+    def test_smooth_trajectory_untouched(self) -> None:
+        """A smooth arc trajectory should have all frames kept."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_oscillation_pruning=True,
+            min_oscillation_frames=12,
+            oscillation_reversal_rate=0.25,
+            oscillation_min_displacement=0.03,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        # Parabolic arc (serve trajectory)
+        positions: list[BallPosition] = []
+        for i in range(40):
+            t = i / 39.0
+            x = 0.2 + 0.6 * t
+            y = 0.3 + 0.4 * t * (1 - t)  # Parabola
+            positions.append(_make_pos(i, x, y))
+
+        result = filt.filter_batch(positions)
+        assert len(result) == 40
+
+    def test_stationary_ball_with_noise_untouched(self) -> None:
+        """Sub-threshold jitter around a stationary position should not trigger."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_oscillation_pruning=True,
+            min_oscillation_frames=12,
+            oscillation_reversal_rate=0.25,
+            oscillation_min_displacement=0.03,  # 3% threshold
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        # Stationary ball with tiny jitter (< 0.01 = 1% screen)
+        positions: list[BallPosition] = []
+        rng = np.random.default_rng(42)
+        for i in range(30):
+            x = 0.5 + rng.uniform(-0.005, 0.005)
+            y = 0.5 + rng.uniform(-0.005, 0.005)
+            positions.append(_make_pos(i, x, y))
+
+        result = filt.filter_batch(positions)
+        assert len(result) == 30
+
+    def test_oscillation_disabled_by_config(self) -> None:
+        """When enable_oscillation_pruning=False, oscillation should be kept."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_oscillation_pruning=False,  # Disabled
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Real trajectory + oscillating tail
+        for i in range(20):
+            positions.append(_make_pos(i, 0.3 + i * 0.01, 0.5))
+        for i in range(20, 40):
+            if i % 2 == 0:
+                positions.append(_make_pos(i, 0.7, 0.3))
+            else:
+                positions.append(_make_pos(i, 0.7, 0.6))
+
+        result = filt.filter_batch(positions)
+
+        # All 40 frames should be preserved (pruning disabled)
+        assert len(result) == 40
+
+    def test_oscillation_in_separate_segments(self) -> None:
+        """Only the oscillating segment should be trimmed, not the clean one."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_oscillation_pruning=True,
+            min_oscillation_frames=12,
+            oscillation_reversal_rate=0.25,
+            oscillation_min_displacement=0.03,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Segment 1: clean trajectory (frames 0-19)
+        for i in range(20):
+            positions.append(_make_pos(i, 0.3 + i * 0.01, 0.5))
+
+        # Gap of >5 frames (segment break)
+        # Segment 2: oscillating (frames 30-49)
+        for i in range(30, 50):
+            if i % 2 == 0:
+                positions.append(_make_pos(i, 0.7, 0.3))
+            else:
+                positions.append(_make_pos(i, 0.7, 0.6))
+
+        result = filt.filter_batch(positions)
+
+        result_frames = {p.frame_number for p in result}
+        # Segment 1 fully preserved
+        assert all(f in result_frames for f in range(20))
+        # Segment 2 mostly trimmed
+        oscillating_kept = sum(1 for f in result_frames if f >= 30)
+        assert oscillating_kept < 5, (
+            f"Expected most of segment 2 trimmed, but {oscillating_kept} survived"
+        )
+
+    def test_hovering_segment_after_gap_trimmed(self) -> None:
+        """Segment hovering near one position after a large gap should be dropped.
+
+        Models the VballNet pattern where ball exits frame and the model locks
+        onto a single player position, producing many frames within ~3% of screen.
+        """
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_oscillation_pruning=True,
+            min_oscillation_frames=12,
+            oscillation_reversal_rate=0.25,
+            oscillation_min_displacement=0.03,
+            max_interpolation_gap=10,
+            segment_jump_threshold=0.20,  # hover_radius = 0.20/4 = 0.05
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Real trajectory: 30 frames of ball moving across court
+        for i in range(30):
+            positions.append(_make_pos(i, 0.3 + i * 0.01, 0.5))
+
+        # Gap of 40 frames (ball exits frame, no detections)
+
+        # Hovering segment: 20 frames of player lock-on (all within 0.03 of centroid)
+        # This is after a gap >> max_interpolation_gap=10
+        for i in range(70, 90):
+            x = 0.875 + (i - 70) * 0.001  # tiny jitter, spread ~0.02
+            y = 0.48 + (i - 70) * 0.0005
+            positions.append(_make_pos(i, x, y))
+
+        result = filt.filter_batch(positions)
+
+        # Real trajectory should survive
+        result_frames = {p.frame_number for p in result}
+        assert any(f < 30 for f in result_frames), "Real trajectory should survive"
+
+        # Hovering segment should be dropped entirely
+        hovering_kept = sum(1 for f in result_frames if f >= 70)
+        assert hovering_kept == 0, (
+            f"Expected hovering segment dropped, but {hovering_kept} frames survived"
+        )
+
+    def test_hovering_without_gap_preserved(self) -> None:
+        """Compact segment without a preceding gap should NOT be flagged as hovering."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=False,
+            enable_oscillation_pruning=True,
+            min_oscillation_frames=12,
+            oscillation_reversal_rate=0.25,
+            oscillation_min_displacement=0.03,
+            max_interpolation_gap=10,
+            segment_jump_threshold=0.20,
+            enable_outlier_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Segment 1: 20 frames of trajectory
+        for i in range(20):
+            positions.append(_make_pos(i, 0.3 + i * 0.01, 0.5))
+
+        # Small gap (only 8 frames, below max_interpolation_gap=10)
+
+        # Segment 2: compact but with small gap (not hovering false positive)
+        for i in range(28, 48):
+            x = 0.6 + (i - 28) * 0.001
+            y = 0.5 + (i - 28) * 0.0005
+            positions.append(_make_pos(i, x, y))
+
+        result = filt.filter_batch(positions)
+
+        # Both segments should survive (gap too small to trigger hovering)
+        result_frames = {p.frame_number for p in result}
+        assert any(f < 20 for f in result_frames), "Segment 1 should survive"
+        assert any(f >= 28 for f in result_frames), "Segment 2 should survive (no large gap)"
+
+    def test_end_to_end_raw_pipeline_with_oscillation(self) -> None:
+        """Full raw pipeline: leading segment pruned + oscillating tail trimmed."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_segment_pruning=True,
+            segment_jump_threshold=0.15,
+            min_segment_frames=10,
+            min_output_confidence=0.05,
+            enable_oscillation_pruning=True,
+            min_oscillation_frames=12,
+            oscillation_reversal_rate=0.25,
+            oscillation_min_displacement=0.03,
+            enable_outlier_removal=True,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions: list[BallPosition] = []
+
+        # Short false segment at start (5 frames, should be segment-pruned)
+        for i in range(5):
+            positions.append(_make_pos(i, 0.1, 0.1, conf=0.7))
+
+        # Main trajectory (frames 10-39, 30 frames)
+        for i in range(10, 40):
+            positions.append(_make_pos(i, 0.3 + (i - 10) * 0.01, 0.5))
+
+        # Oscillating tail (frames 40-59, 20 frames)
+        for i in range(40, 60):
+            if i % 2 == 0:
+                positions.append(_make_pos(i, 0.7, 0.3))
+            else:
+                positions.append(_make_pos(i, 0.7, 0.6))
+
+        result = filt.filter_batch(positions)
+
+        result_frames = {p.frame_number for p in result}
+
+        # Leading false segment should be pruned
+        assert not any(f < 10 for f in result_frames), "Leading segment should be pruned"
+
+        # Main trajectory should survive
+        main_kept = sum(1 for f in result_frames if 10 <= f < 40)
+        assert main_kept >= 20, f"Expected most main trajectory kept, got {main_kept}"
+
+        # Oscillating tail should be mostly trimmed
+        oscillating_kept = sum(1 for f in result_frames if f >= 40)
+        assert oscillating_kept < 10, (
+            f"Expected oscillating tail trimmed, but {oscillating_kept} survived"
+        )
 
 
 class TestEndToEnd:
