@@ -296,7 +296,37 @@ async function getOrCreateProject(config: LabelStudioConfig): Promise<number> {
 }
 
 /**
- * Create a labeling task in Label Studio.
+ * Find an existing task in Label Studio by video URL.
+ */
+async function findTaskByVideoUrl(
+  config: LabelStudioConfig,
+  projectId: number,
+  videoUrl: string
+): Promise<number | null> {
+  const headers = {
+    Authorization: `Token ${config.apiKey}`,
+  };
+
+  const params = new URLSearchParams({
+    fields: "all",
+    search: videoUrl,
+  });
+
+  const resp = await fetch(
+    `${config.url}/api/projects/${projectId}/tasks?${params}`,
+    { headers }
+  );
+
+  if (!resp.ok) return null;
+
+  const tasks = (await resp.json()) as Array<{ id: number; data?: { video?: string } }>;
+  const match = tasks.find((t) => t.data?.video === videoUrl);
+  return match?.id ?? null;
+}
+
+/**
+ * Create a labeling task in Label Studio, reusing an existing task if one
+ * already exists with the same video URL.
  */
 async function createTask(
   config: LabelStudioConfig,
@@ -309,7 +339,14 @@ async function createTask(
     "Content-Type": "application/json",
   };
 
-  // First create the task
+  // Check for existing task with the same video URL
+  const existingTaskId = await findTaskByVideoUrl(config, projectId, videoUrl);
+  if (existingTaskId) {
+    console.log(`[LabelStudio] Found existing task ${existingTaskId} for video URL, reusing`);
+    return existingTaskId;
+  }
+
+  // Create the task
   const taskData = {
     data: { video: videoUrl },
   };
