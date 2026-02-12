@@ -90,9 +90,10 @@ class BallFilterConfig:
     min_segment_frames: int = 15  # Segments shorter than this are discarded
     min_output_confidence: float = 0.05  # Drop positions below this confidence
 
-    # Outlier removal (only used when enable_kalman=True)
-    # Targets edge artifacts and trajectory inconsistencies in Kalman output
-    enable_outlier_removal: bool = False
+    # Outlier removal (removes flickering and edge artifacts)
+    # In raw mode, runs after segment pruning to clean within real segments.
+    # In Kalman mode, runs before segment pruning to clean Kalman artifacts.
+    enable_outlier_removal: bool = True
     edge_margin: float = 0.02  # 2% of screen = ~38px on 1920px
     max_trajectory_deviation: float = 0.08  # 8% of screen = ~154px on 1920px
     min_neighbors_for_outlier: int = 2
@@ -509,17 +510,32 @@ class BallTemporalFilter:
         pruned_count = 0
         interp_count = 0
 
-        # Outlier removal (primarily useful with Kalman output)
-        if self.config.enable_outlier_removal:
-            filtered = self._remove_outliers(filtered)
-            outlier_count = input_count - len(filtered)
+        if self.config.enable_kalman:
+            # Kalman mode: outlier removal first (cleans Kalman artifacts),
+            # then segment pruning
+            if self.config.enable_outlier_removal:
+                filtered = self._remove_outliers(filtered)
+                outlier_count = input_count - len(filtered)
 
-        after_outlier_count = len(filtered)
+            after_outlier_count = len(filtered)
 
-        # Segment pruning: remove short disconnected false segments
-        if self.config.enable_segment_pruning:
-            filtered = self._prune_segments(filtered)
-            pruned_count = after_outlier_count - len(filtered)
+            if self.config.enable_segment_pruning:
+                filtered = self._prune_segments(filtered)
+                pruned_count = after_outlier_count - len(filtered)
+        else:
+            # Raw mode: segment pruning first (removes false detection clusters),
+            # then outlier removal (cleans flickering within real segments).
+            # Order matters: pruning first prevents outlier removal from bridging
+            # gaps between real trajectory and false clusters.
+            if self.config.enable_segment_pruning:
+                filtered = self._prune_segments(filtered)
+                pruned_count = input_count - len(filtered)
+
+            after_prune_count = len(filtered)
+
+            if self.config.enable_outlier_removal:
+                filtered = self._remove_outliers(filtered)
+                outlier_count = after_prune_count - len(filtered)
 
         # Interpolation: fill small gaps
         before_interp_count = len(filtered)
