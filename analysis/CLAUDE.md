@@ -571,6 +571,7 @@ Only these videos have validated ball tracking ground truth:
 - `1efa35cf-4edd-4504-b4a4-834eee9e5218`
 - `70ab9d7f-8cc4-48cb-892a-1c36793cac72`
 - `07fedbd4-693e-4651-9fee-c616a1f4b413`
+- `920ba69d-2526-4e6c-a357-c44af3bf5c99`
 
 Other videos have incorrect ball labels and are automatically filtered out when using `--ball-only`, `tune-ball-filter`, or `compare-ball-models`. See `VALID_BALL_GT_VIDEOS` in `evaluation/tracking/db.py`.
 
