@@ -30,7 +30,7 @@ MODEL_NAME = "yolov8n.pt"  # YOLOv8 nano - fastest with good accuracy (88% F1)
 PERSON_CLASS_ID = 0  # COCO class ID for person
 DEFAULT_CONFIDENCE = 0.15  # Lower threshold for detection (tuned via grid search)
 DEFAULT_IOU = 0.45  # NMS IoU threshold
-DEFAULT_IMGSZ = 640  # Default inference resolution (higher = better small object detection)
+DEFAULT_IMGSZ = 1280  # Inference resolution (1280 = +8pp far-court recall vs 640, 2x slower)
 
 # Available YOLO model sizes (larger = more accurate but slower)
 # Benchmark on beach volleyball (8.8s rally):
@@ -438,8 +438,8 @@ class PlayerTracker:
             appearance_thresh: Override BoT-SORT appearance threshold for ReID.
                               If None, uses value from config YAML.
             imgsz: Inference resolution. Higher values improve small/far object
-                  detection at the cost of speed. 640 (default), 1280 (2x resolution
-                  for far-side players), 1920 (native resolution).
+                  detection at the cost of speed. 1280 (default, best tradeoff),
+                  640 (faster, lower far-court recall), 1920 (native resolution).
         """
         self.model_path = model_path
         self.confidence = confidence

@@ -79,6 +79,13 @@ uv run rallycut train list-remote                     # List datasets backed up 
 # - Checkpoints saved every 100 steps (~5 min max loss)
 # - Resumes from latest checkpoint automatically
 
+# TrackNet ball tracker training (fine-tune on beach volleyball)
+cd analysis && uv run python -m experiments.pseudo_label_export --extract-frames  # Export pseudo-labels + frames
+uv run rallycut train tracknet-modal --upload       # Upload to Modal volume
+uv run rallycut train tracknet-modal --epochs 30    # Train on T4 GPU (~$0.59/hr)
+uv run rallycut train tracknet-modal --download     # Download best.pt + last.pt
+uv run rallycut train tracknet-modal --cleanup      # Delete from Modal volume
+
 # Temporal model training (DEPRECATED - use TemporalMaxer instead)
 # uv run rallycut train temporal --model v1 --epochs 50
 

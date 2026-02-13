@@ -696,6 +696,143 @@ def modal(
     subprocess.run(cmd)
 
 
+@app.command("tracknet-modal")
+def tracknet_modal(
+    epochs: int = typer.Option(30, "--epochs", "-e", help="Number of training epochs"),
+    batch_size: int = typer.Option(16, "--batch-size", "-b", help="Batch size (16-32 for T4 GPU)"),
+    upload: bool = typer.Option(
+        False, "--upload", help="Upload pseudo-labels + frames to Modal volume"
+    ),
+    download: bool = typer.Option(
+        False, "--download", help="Download trained TrackNet model from Modal"
+    ),
+    cleanup: bool = typer.Option(
+        False, "--cleanup", help="Delete TrackNet data/models from Modal volume"
+    ),
+    fresh: bool = typer.Option(
+        False, "--fresh", help="Start fresh training, ignoring existing checkpoints"
+    ),
+    data_dir: Path = typer.Option(
+        Path("experiments/pseudo_labels"),
+        "--data-dir",
+        "-d",
+        help="Local directory with pseudo-labels and frames",
+    ),
+) -> None:
+    """Train TrackNet ball tracker on Modal GPU (T4 - ~$0.59/hr).
+
+    Workflow:
+        1. Export pseudo-labels and frames locally:
+           cd analysis && uv run python -m experiments.pseudo_label_export --extract-frames
+
+        2. Upload to Modal:
+           rallycut train tracknet-modal --upload
+
+        3. Train on T4 GPU:
+           rallycut train tracknet-modal --epochs 30
+
+        4. Download trained model:
+           rallycut train tracknet-modal --download
+
+        5. Clean up Modal storage:
+           rallycut train tracknet-modal --cleanup
+    """
+    import subprocess
+
+    if upload:
+        rprint("[bold]Uploading TrackNet training data to Modal...[/bold]")
+        if not data_dir.exists():
+            rprint(f"[red]Data directory not found: {data_dir}[/red]")
+            rprint(
+                "Run pseudo-label export first:\n"
+                "  [cyan]uv run python -m experiments.pseudo_label_export --extract-frames[/cyan]"
+            )
+            raise typer.Exit(1)
+
+        # Check for CSVs and images
+        csv_count = len(list(data_dir.glob("*.csv")))
+        img_dirs = [d for d in (data_dir / "images").iterdir() if d.is_dir()] if (data_dir / "images").exists() else []
+        if csv_count == 0 or not img_dirs:
+            rprint(f"[red]No training data found in {data_dir}[/red]")
+            rprint(f"  CSVs: {csv_count}, Image dirs: {len(img_dirs)}")
+            raise typer.Exit(1)
+
+        rprint(f"  CSVs: {csv_count}, Image dirs: {len(img_dirs)}")
+
+        cmd = [
+            "python3", "-m", "modal", "volume", "put", "-f",
+            "rallycut-training", str(data_dir) + "/", "tracknet_data/",
+        ]
+        rprint(f"Running: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            rprint("[green]TrackNet training data uploaded![/green]")
+            rprint()
+            rprint("Next: [cyan]rallycut train tracknet-modal --epochs 30[/cyan]")
+        else:
+            rprint(f"[red]Upload failed: {result.stderr}[/red]")
+        return
+
+    if download:
+        rprint("[bold]Downloading TrackNet model from Modal...[/bold]")
+        output = Path("weights/tracknet")
+        output.mkdir(parents=True, exist_ok=True)
+
+        for filename in ["best.pt", "last.pt"]:
+            cmd = [
+                "python3", "-m", "modal", "volume", "get", "--force",
+                "rallycut-training", f"models/tracknet/{filename}", str(output) + "/",
+            ]
+            rprint(f"Downloading {filename}...")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                rprint(f"[green]{filename} downloaded[/green]")
+            else:
+                rprint(f"[yellow]{filename} not found or download failed[/yellow]")
+
+        rprint(f"\n[green]Model saved to {output}[/green]")
+        return
+
+    if cleanup:
+        rprint("[bold]Cleaning up TrackNet data from Modal...[/bold]")
+
+        for folder in ["tracknet_data/", "models/tracknet/"]:
+            cmd = [
+                "python3", "-m", "modal", "volume", "rm",
+                "rallycut-training", folder, "-r",
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                rprint(f"[green]Deleted {folder}[/green]")
+            else:
+                rprint(f"[yellow]{folder} not found or already deleted[/yellow]")
+
+        rprint("[green]Cleanup complete![/green]")
+        return
+
+    # Run training on Modal
+    rprint("[bold]Starting TrackNet training on Modal T4 GPU...[/bold]")
+    rprint(f"  Epochs: {epochs}, Batch size: {batch_size}")
+    if fresh:
+        rprint("[yellow]  Fresh training: ignoring existing checkpoints[/yellow]")
+    rprint()
+
+    cmd = [
+        "python3", "-m", "modal",
+        "run",
+        "--detach",
+        "rallycut/training/modal_tracknet.py",
+        "--epochs", str(epochs),
+        "--batch-size", str(batch_size),
+    ]
+    if fresh:
+        cmd.append("--fresh")
+
+    rprint(f"Running: {' '.join(cmd)}")
+    rprint()
+    subprocess.run(cmd)
+
+
 @app.command()
 def info(
     data: Path = typer.Option(
