@@ -12,7 +12,6 @@ from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
 from rallycut.cli.utils import handle_errors, validate_video_file
-from rallycut.tracking.ball_features import detect_ball_phases_v2, detect_server
 from rallycut.tracking.ball_tracker import (
     DEFAULT_BALL_MODEL,
     BallPosition,
@@ -29,11 +28,9 @@ from rallycut.tracking.player_tracker import (
     TRACKER_BOTSORT,
     TRACKER_BYTETRACK,
     YOLO_MODELS,
-    BallPhaseInfo,
     PlayerPosition,
     PlayerTracker,
     PlayerTrackingResult,
-    ServerInfo,
 )
 
 console = Console()
@@ -523,57 +520,9 @@ def track_players(
                 filter_config=filter_config,
             )
 
-    # Compute ball phases and server detection (if ball tracking available)
-    if ball_positions and result.positions:
-        if not quiet:
-            console.print("\n[dim]Analyzing ball phases...[/dim]")
-
-        # Include ball positions in result for trajectory overlay
+    # Include ball positions in result for trajectory overlay
+    if ball_positions:
         result.ball_positions = ball_positions
-
-        # Detect ball phases using game-flow-aware state machine
-        phases = detect_ball_phases_v2(ball_positions, result.positions)
-        result.ball_phases = [
-            BallPhaseInfo(
-                phase=p.phase.value,
-                frame_start=p.frame_start,
-                frame_end=p.frame_end,
-                velocity=p.velocity,
-                ball_x=p.ball_position[0],
-                ball_y=p.ball_position[1],
-            )
-            for p in phases
-        ]
-
-        # Detect server - only consider primary tracks (actual players)
-        primary_set = set(result.primary_track_ids) if result.primary_track_ids else set()
-        server_positions = [p for p in result.positions if p.track_id in primary_set] if primary_set else result.positions
-        server_result = detect_server(
-            server_positions,
-            ball_positions,
-            rally_start_frame=0,
-            calibrator=calibrator,
-        )
-        if server_result.track_id >= 0:
-            result.server_info = ServerInfo(
-                track_id=server_result.track_id,
-                confidence=server_result.confidence,
-                serve_frame=server_result.serve_frame,
-                serve_velocity=server_result.serve_velocity,
-                is_near_court=server_result.is_near_court,
-            )
-
-        if not quiet:
-            phase_counts: dict[str, int] = {}
-            for p in result.ball_phases:
-                phase_counts[p.phase] = phase_counts.get(p.phase, 0) + 1
-            console.print(f"[dim]Ball phases: {phase_counts}[/dim]")
-            console.print(f"[dim]Ball positions: {len(ball_positions)}[/dim]")
-            if result.server_info:
-                console.print(
-                    f"[dim]Server detected: track #{result.server_info.track_id} "
-                    f"(confidence: {result.server_info.confidence:.1%})[/dim]"
-                )
 
     # Run action classification if requested
     actions_data = None

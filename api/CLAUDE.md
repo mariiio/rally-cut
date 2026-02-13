@@ -138,7 +138,7 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
 ### Player Tracking
 - `POST /v1/rallies/:id/track-players` → triggers local YOLO + ByteTrack tracking
   - Body: `{ calibrationCorners?: [{x,y}]x4 }` - optional court calibration
-  - Returns player positions, ball phases, server info
+  - Returns player positions, ball trajectory, contacts, and actions
 - `GET /v1/rallies/:id/player-track` → retrieves existing tracking data
 
 ### Label Studio Integration (Ground Truth)

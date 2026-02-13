@@ -1726,25 +1726,6 @@ export interface PlayerPosition {
   confidence: number;
 }
 
-// Ball phase detection
-export interface BallPhase {
-  phase: 'serve' | 'attack' | 'defense' | 'transition' | 'unknown';
-  frameStart: number;
-  frameEnd: number;
-  velocity: number;
-  ballX: number;
-  ballY: number;
-}
-
-// Server detection info
-export interface ServerInfo {
-  trackId: number;
-  confidence: number;
-  serveFrame: number;
-  serveVelocity: number;
-  isNearCourt: boolean;
-}
-
 // Contact detection from ball trajectory inflection points
 export interface ContactInfo {
   frame: number;
@@ -1799,9 +1780,6 @@ export interface TrackPlayersResponse {
   primaryTrackIds?: number[];
   // Positions included for immediate display
   positions?: PlayerPosition[];
-  // Ball phase detection
-  ballPhases?: BallPhase[];
-  serverInfo?: ServerInfo;
   // Ball positions for trajectory overlay
   ballPositions?: BallPosition[];
   // Contact detection and action classification
@@ -1820,8 +1798,6 @@ export interface GetPlayerTrackResponse {
   courtSplitY?: number;
   primaryTrackIds?: number[];
   positions?: PlayerPosition[];
-  ballPhases?: BallPhase[];
-  serverInfo?: ServerInfo;
   ballPositions?: BallPosition[];
   contacts?: ContactsData;
   actions?: ActionsData;

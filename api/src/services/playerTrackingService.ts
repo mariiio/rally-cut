@@ -36,25 +36,6 @@ interface PlayerPosition {
   confidence: number;
 }
 
-// Ball phase detection
-interface BallPhase {
-  phase: string;  // "serve", "attack", "defense", "transition", "unknown"
-  frameStart: number;
-  frameEnd: number;
-  velocity: number;
-  ballX: number;
-  ballY: number;
-}
-
-// Server detection info
-interface ServerInfo {
-  trackId: number;
-  confidence: number;
-  serveFrame: number;
-  serveVelocity: number;
-  isNearCourt: boolean;
-}
-
 // Ball position for trajectory overlay
 interface BallPosition {
   frameNumber: number;
@@ -118,9 +99,6 @@ export interface TrackPlayersResult {
   primaryTrackIds?: number[];
   // Positions included for immediate display
   positions?: PlayerPosition[];
-  // Ball phase detection
-  ballPhases?: BallPhase[];
-  serverInfo?: ServerInfo;
   // Ball positions for trajectory overlay
   ballPositions?: BallPosition[];
   // Contact detection and action classification
@@ -139,8 +117,6 @@ export interface GetPlayerTrackResult {
   courtSplitY?: number;
   primaryTrackIds?: number[];
   positions?: PlayerPosition[];
-  ballPhases?: BallPhase[];
-  serverInfo?: ServerInfo;
   ballPositions?: BallPosition[];
   contacts?: ContactsData;
   actions?: ActionsData;
@@ -203,8 +179,6 @@ interface PlayerTrackerOutput {
   uniqueTrackCount: number;
   courtSplitY?: number;
   primaryTrackIds?: number[];
-  ballPhases?: BallPhase[];
-  serverInfo?: ServerInfo;
   ballPositions?: BallPosition[];
   contacts?: ContactsData;
   actions?: ActionsData;
@@ -325,25 +299,6 @@ async function runPlayerTracker(
         // Filter method used
         const filterMethod = result.filterMethod as string | undefined;
 
-        // Ball phase detection
-        const ballPhases: BallPhase[] | undefined = result.ballPhases?.map((bp: BallPhase) => ({
-          phase: bp.phase,
-          frameStart: bp.frameStart,
-          frameEnd: bp.frameEnd,
-          velocity: bp.velocity,
-          ballX: bp.ballX,
-          ballY: bp.ballY,
-        }));
-
-        // Server detection
-        const serverInfo: ServerInfo | undefined = result.serverInfo ? {
-          trackId: result.serverInfo.trackId,
-          confidence: result.serverInfo.confidence,
-          serveFrame: result.serverInfo.serveFrame,
-          serveVelocity: result.serverInfo.serveVelocity,
-          isNearCourt: result.serverInfo.isNearCourt,
-        } : undefined;
-
         // Ball positions for trajectory overlay
         const ballPositions: BallPosition[] | undefined = result.ballPositions?.map((bp: BallPosition) => ({
           frameNumber: bp.frameNumber,
@@ -405,16 +360,6 @@ async function runPlayerTracker(
         } else {
           console.log(`[PLAYER_TRACK] Warning: No court split detected - two-team filtering may not be working`);
         }
-        if (ballPhases?.length) {
-          const phaseCounts: Record<string, number> = {};
-          for (const bp of ballPhases) {
-            phaseCounts[bp.phase] = (phaseCounts[bp.phase] || 0) + 1;
-          }
-          console.log(`[PLAYER_TRACK] Ball phases: ${JSON.stringify(phaseCounts)}`);
-        }
-        if (serverInfo && serverInfo.trackId >= 0) {
-          console.log(`[PLAYER_TRACK] Server detected: track #${serverInfo.trackId} (confidence: ${(serverInfo.confidence * 100).toFixed(0)}%)`);
-        }
         if (actions?.actions.length) {
           console.log(`[PLAYER_TRACK] Actions: ${actions.actionSequence.join(' → ')} (${actions.numContacts} contacts)`);
         }
@@ -430,8 +375,6 @@ async function runPlayerTracker(
           uniqueTrackCount,
           courtSplitY,
           primaryTrackIds,
-          ballPhases,
-          serverInfo,
           ballPositions,
           contacts,
           actions,
@@ -483,8 +426,6 @@ export async function getPlayerTrack(
     courtSplitY: track.courtSplitY ?? undefined,
     primaryTrackIds: (track.primaryTrackIds as number[] | null) ?? undefined,
     positions: (track.positionsJson as PlayerPosition[] | null) ?? undefined,
-    ballPhases: (track.ballPhasesJson as BallPhase[] | null) ?? undefined,
-    serverInfo: (track.serverInfoJson as ServerInfo | null) ?? undefined,
     ballPositions: (track.ballPositionsJson as BallPosition[] | null) ?? undefined,
     contacts: (track.contactsJson as ContactsData | null) ?? undefined,
     actions: (track.actionsJson as ActionsData | null) ?? undefined,
@@ -573,8 +514,6 @@ export async function trackPlayersForRally(
         primaryTrackIds: trackerResult.primaryTrackIds as unknown as number[],
         positionsJson: trackerResult.positions as unknown as object[],
         rawPositionsJson: trackerResult.rawPositions as unknown as object[],
-        ballPhasesJson: trackerResult.ballPhases as unknown as object[],
-        serverInfoJson: trackerResult.serverInfo as unknown as object,
         ballPositionsJson: trackerResult.ballPositions as unknown as object[],
         contactsJson: trackerResult.contacts as unknown as object,
         actionsJson: trackerResult.actions as unknown as object,
@@ -594,8 +533,6 @@ export async function trackPlayersForRally(
         primaryTrackIds: trackerResult.primaryTrackIds as unknown as number[],
         positionsJson: trackerResult.positions as unknown as object[],
         rawPositionsJson: trackerResult.rawPositions as unknown as object[],
-        ballPhasesJson: trackerResult.ballPhases as unknown as object[],
-        serverInfoJson: trackerResult.serverInfo as unknown as object,
         ballPositionsJson: trackerResult.ballPositions as unknown as object[],
         contactsJson: trackerResult.contacts as unknown as object,
         actionsJson: trackerResult.actions as unknown as object,
@@ -618,8 +555,6 @@ export async function trackPlayersForRally(
       courtSplitY: trackerResult.courtSplitY,
       primaryTrackIds: trackerResult.primaryTrackIds,
       positions: trackerResult.positions,
-      ballPhases: trackerResult.ballPhases,
-      serverInfo: trackerResult.serverInfo,
       ballPositions: trackerResult.ballPositions,
       contacts: trackerResult.contacts,
       actions: trackerResult.actions,
