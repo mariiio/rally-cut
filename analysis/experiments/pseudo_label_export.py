@@ -72,8 +72,9 @@ def export_pseudo_labels(
 ) -> ExportStats:
     """Export VballNet detections as TrackNet training data.
 
-    Loads cached raw ball positions, applies quality filters,
-    and writes TrackNet CSV files (one per rally).
+    Reads from BallRawCache (raw VballNet positions with motion_energy),
+    applies quality filters, and writes TrackNet CSV files (one per rally).
+    Gold GT labels are included where available and overwrite pseudo-labels.
 
     Args:
         output_dir: Directory to write CSV files.
@@ -84,30 +85,36 @@ def export_pseudo_labels(
     Returns:
         ExportStats with counts of exported frames.
     """
+    from rallycut.evaluation.tracking.ball_grid_search import BallRawCache
     from rallycut.evaluation.tracking.db import load_labeled_rallies
 
     cfg = config or PseudoLabelConfig()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     stats = ExportStats()
+    ball_cache = BallRawCache()
 
-    # Load rallies with cached raw positions
+    # Load rallies for GT labels and rally metadata
     rallies = load_labeled_rallies(ball_gt_only=True)
     if video_ids:
         rallies = [r for r in rallies if r.video_id in video_ids]
 
     for rally in rallies:
-        # Get ball positions from predictions (filtered ball tracking output)
-        ball_positions = (
-            rally.predictions.ball_positions
-            if rally.predictions and rally.predictions.ball_positions
-            else []
-        )
-        if not ball_positions:
-            logger.warning(f"No ball positions for rally {rally.rally_id}")
+        # Read raw VballNet positions from cache (before filtering)
+        cached = ball_cache.get(rally.rally_id)
+        if cached is None:
+            logger.warning(
+                f"No raw ball cache for rally {rally.rally_id[:8]}. "
+                "Run `evaluate-tracking tune-ball-filter --all --cache-only` first."
+            )
             continue
 
-        # Build frame -> position mapping
+        ball_positions = cached.raw_ball_positions
+        if not ball_positions:
+            logger.warning(f"Empty raw ball cache for rally {rally.rally_id[:8]}")
+            continue
+
+        # Build frame -> position mapping from raw VballNet output
         frame_data: dict[int, dict[str, Any]] = {}
         max_frame = 0
 
@@ -115,23 +122,19 @@ def export_pseudo_labels(
             frame = bp.frame_number
             max_frame = max(max_frame, frame)
 
-            # Apply filters
+            # Skip VballNet zero-confidence placeholders (0.5, 0.5 at conf=0.0)
             if bp.confidence < cfg.min_confidence:
                 stats.filtered_low_confidence += 1
-                frame_data[frame] = {"visibility": 0, "x": 0, "y": 0}
                 continue
 
-            motion_energy = getattr(bp, "motion_energy", None)
-            if motion_energy is not None and motion_energy < cfg.min_motion_energy:
+            # Filter stationary false positives (low motion energy = player position)
+            if bp.motion_energy < cfg.min_motion_energy:
                 stats.filtered_low_motion += 1
-                frame_data[frame] = {"visibility": 0, "x": 0, "y": 0}
                 continue
 
             # Convert normalized coords to TrackNet pixel coords
             px = int(bp.x * cfg.tracknet_width)
             py = int(bp.y * cfg.tracknet_height)
-
-            # Clamp to valid range
             px = max(0, min(px, cfg.tracknet_width - 1))
             py = max(0, min(py, cfg.tracknet_height - 1))
 
@@ -173,13 +176,16 @@ def export_pseudo_labels(
                 ])
                 stats.total_frames += 1
 
+        visible_count = sum(
+            1 for d in frame_data.values() if d.get("visibility") == 1
+        )
         logger.info(
-            f"Exported {rally.rally_id}: {sum(1 for d in frame_data.values() if d.get('visibility') == 1)}"
-            f" visible / {max_frame + 1} total frames → {csv_path}"
+            f"Exported {rally.rally_id[:8]}: "
+            f"{visible_count} visible / {max_frame + 1} total frames → {csv_path}"
         )
 
     logger.info(
-        f"Export complete: {stats.visible_frames} visible frames, "
+        f"Export complete: {stats.visible_frames} pseudo-labels, "
         f"{stats.gold_label_frames} gold labels, "
         f"{stats.total_frames} total frames"
     )
