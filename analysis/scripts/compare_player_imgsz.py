@@ -54,11 +54,13 @@ VARIANTS: dict[str, dict[str, Any]] = {
     },
 }
 
-# Distance buckets: Y-position ranges (normalized 0-1, top=0, bottom=1)
+# Distance buckets based on actual beach volleyball camera angles.
+# Camera behind baseline: near-side players at bottom (high y), far-side at top (low y).
+# Player GT Y-range is 0.34-0.80 — standard 33% buckets miss all far-court positions.
 DISTANCE_BUCKETS = {
-    "near": (0.67, 1.0),   # Bottom 33% of frame (closest players)
-    "mid": (0.33, 0.67),   # Middle 33%
-    "far": (0.0, 0.33),    # Top 33% (farthest players)
+    "near": (0.58, 1.0),   # Near-side team (larger bbox, easy to detect)
+    "mid": (0.48, 0.58),   # Net area / transition zone
+    "far": (0.0, 0.48),    # Far-side team (smaller bbox, harder to detect)
 }
 
 
@@ -99,8 +101,8 @@ def compute_bucketed_recall(
     bucket_hits: dict[str, int] = {"near": 0, "mid": 0, "far": 0}
     bucket_total: dict[str, int] = {"near": 0, "mid": 0, "far": 0}
 
-    # Filter to person labels only
-    gt_persons = [g for g in gt_positions if g.label == "person"]
+    # Filter to player labels only (player, player_1, player_2, etc.)
+    gt_persons = [g for g in gt_positions if g.is_player]
 
     # Group GT by frame
     gt_by_frame: dict[int, list[Any]] = {}
@@ -116,8 +118,8 @@ def compute_bucketed_recall(
         preds = pred_by_frame.get(frame, [])
 
         for gt in gt_list:
-            # Determine bucket from GT center Y
-            gt_center_y = gt.y + gt.height / 2 if hasattr(gt, "height") else gt.y
+            # Determine bucket from GT center Y (y is already center-based)
+            gt_center_y = gt.y
             bucket = "mid"  # default
             for bucket_name, (y_min, y_max) in DISTANCE_BUCKETS.items():
                 if y_min <= gt_center_y <= y_max:

@@ -33,6 +33,9 @@ htmlcov/
 !**/ground_truth.json
 !pyproject.toml
 
+# Pseudo-labels (generated from database)
+experiments/pseudo_labels/
+
 # Training data (generated, large)
 training_data/
 
