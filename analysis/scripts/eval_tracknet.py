@@ -167,7 +167,7 @@ def main() -> None:
     model = load_tracknet(args.model)
 
     # Load rallies with ball GT
-    rallies = load_labeled_rallies(ball_gt_only=True)
+    rallies = load_labeled_rallies()
     if not rallies:
         console.print("[red]No rallies with ball GT found[/red]")
         return

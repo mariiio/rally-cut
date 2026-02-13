@@ -362,7 +362,6 @@ def _preview_restore(
         rprint(
             f"  Would restore: [green]{tgt_stats.get('total_rallies_with_tracking_gt', 0)}[/green]"
             f" tracking GT annotations"
-            f" ({tgt_stats.get('ball_gt_rallies', 0)} with ball GT)"
         )
 
 

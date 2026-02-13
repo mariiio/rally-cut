@@ -347,13 +347,13 @@ class EvalHarness:
     ) -> BallEvalSummary:
         """Evaluate ball tracking predictions against ground truth.
 
-        Uses the 6 validated ball GT videos. Loads predictions from database
-        and evaluates with auto frame-offset detection.
+        Loads predictions from database and evaluates with auto frame-offset
+        detection.
 
         Args:
             match_threshold_px: Max distance (px) for a "match".
             min_confidence: Min prediction confidence to consider.
-            video_ids: Specific video IDs to evaluate (default: all ball GT videos).
+            video_ids: Specific video IDs to evaluate (default: all labeled videos).
 
         Returns:
             BallEvalSummary with per-rally and aggregate metrics.
@@ -365,7 +365,7 @@ class EvalHarness:
         from rallycut.evaluation.tracking.db import load_labeled_rallies
         from rallycut.tracking.ball_tracker import BallPosition
 
-        rallies = load_labeled_rallies(ball_gt_only=True)
+        rallies = load_labeled_rallies()
         if video_ids:
             rallies = [r for r in rallies if r.video_id in video_ids]
 

@@ -96,7 +96,7 @@ def export_pseudo_labels(
     ball_cache = BallRawCache()
 
     # Load rallies for GT labels and rally metadata
-    rallies = load_labeled_rallies(ball_gt_only=True)
+    rallies = load_labeled_rallies()
     if video_ids:
         rallies = [r for r in rallies if r.video_id in video_ids]
 
@@ -213,7 +213,7 @@ def export_gold_only(
 
     stats = ExportStats()
 
-    rallies = load_labeled_rallies(ball_gt_only=True)
+    rallies = load_labeled_rallies()
     if video_ids:
         rallies = [r for r in rallies if r.video_id in video_ids]
 
@@ -281,7 +281,7 @@ def extract_frames(
     cfg = config or PseudoLabelConfig()
     images_dir = output_dir / "images"
 
-    rallies = load_labeled_rallies(ball_gt_only=True)
+    rallies = load_labeled_rallies()
     if video_ids:
         rallies = [r for r in rallies if r.video_id in video_ids]
 

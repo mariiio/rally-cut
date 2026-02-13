@@ -17,18 +17,6 @@ from rallycut.tracking.player_tracker import (
 
 logger = logging.getLogger(__name__)
 
-# Videos with validated ball tracking ground truth
-# Other videos have ground truth labels that were found to be inaccurate
-# and should not be used for evaluation
-VALID_BALL_GT_VIDEOS = {
-    "a5866029-7cf4-42d6-adc2-8e28111ffd81",
-    "1efa35cf-4edd-4504-b4a4-834eee9e5218",
-    "70ab9d7f-8cc4-48cb-892a-1c36793cac72",
-    "07fedbd4-693e-4651-9fee-c616a1f4b413",
-    "920ba69d-2526-4e6c-a357-c44af3bf5c99",
-    "a7ee3d38-a3a9-4dcd-a2af-e0617997e708",
-}
-
 
 @dataclass
 class TrackingEvaluationRally:
@@ -150,15 +138,12 @@ def _parse_predictions(
 def load_labeled_rallies(
     video_id: str | None = None,
     rally_id: str | None = None,
-    ball_gt_only: bool = False,
 ) -> list[TrackingEvaluationRally]:
     """Load rallies with ground truth labels from the database.
 
     Args:
         video_id: Filter by video ID (optional).
         rally_id: Filter by specific rally ID (optional).
-        ball_gt_only: If True, only load rallies from videos with validated
-            ball tracking ground truth (see VALID_BALL_GT_VIDEOS).
 
     Returns:
         List of TrackingEvaluationRally with ground truth and predictions.
@@ -294,16 +279,6 @@ def load_labeled_rallies(
                         raw_positions=raw_positions,
                     )
                 )
-
-    # Filter to only valid ball GT videos if requested
-    if ball_gt_only:
-        original_count = len(results)
-        results = [r for r in results if r.video_id in VALID_BALL_GT_VIDEOS]
-        if original_count > len(results):
-            logger.info(
-                f"Filtered {original_count - len(results)} rallies with "
-                f"invalid ball ground truth"
-            )
 
     logger.info(f"Loaded {len(results)} rallies with ground truth labels")
     return results

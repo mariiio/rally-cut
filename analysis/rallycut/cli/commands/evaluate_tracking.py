@@ -134,7 +134,6 @@ def evaluate_tracking(
     rallies = load_labeled_rallies(
         video_id=video_id,
         rally_id=rally_id,
-        ball_gt_only=ball_only,  # Filter to validated ball GT for ball-only mode
     )
 
     if not rallies:
@@ -1237,19 +1236,18 @@ def tune_ball_filter(
         count = ball_cache.clear()
         console.print(f"[yellow]Cleared {count} cached ball position files[/yellow]")
 
-    # Load rallies from database (only videos with validated ball ground truth)
+    # Load rallies from database
     console.print("[bold]Loading labeled rallies from database...[/bold]")
     rallies = load_labeled_rallies(
         video_id=video_id,
         rally_id=rally_id,
-        ball_gt_only=True,  # Only use videos with validated ball ground truth
     )
 
     if not rallies:
-        console.print("[yellow]No rallies with validated ball ground truth found[/yellow]")
+        console.print("[yellow]No rallies with ball ground truth found[/yellow]")
         raise typer.Exit(1)
 
-    console.print(f"  Found {len(rallies)} rally(s) with validated ball ground truth\n")
+    console.print(f"  Found {len(rallies)} rally(s) with ball ground truth\n")
 
     from rallycut.labeling.ground_truth import GroundTruthPosition
 
@@ -1517,16 +1515,15 @@ def compare_ball_models(
         )
         raise typer.Exit(1)
 
-    # Load rallies from database (only videos with validated ball ground truth)
+    # Load rallies from database
     console.print("[bold]Loading labeled rallies from database...[/bold]")
     rallies = load_labeled_rallies(
         video_id=video_id,
         rally_id=rally_id,
-        ball_gt_only=True,  # Only use videos with validated ball ground truth
     )
 
     if not rallies:
-        console.print("[yellow]No rallies with validated ball ground truth found[/yellow]")
+        console.print("[yellow]No rallies with ball ground truth found[/yellow]")
         raise typer.Exit(1)
 
     # Filter to rallies with ball ground truth

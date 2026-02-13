@@ -898,10 +898,9 @@ def _export_tracking_ground_truth(
         video_content_hashes: Content hashes of videos in the dataset.
 
     Returns:
-        Dict with valid_ball_gt_video_ids, rallies, and stats, or None.
+        Dict with rallies and stats, or None.
     """
     from rallycut.evaluation.db import get_connection
-    from rallycut.evaluation.tracking.db import VALID_BALL_GT_VIDEOS
 
     conn = get_connection()
     try:
@@ -931,7 +930,6 @@ def _export_tracking_ground_truth(
 
     rallies: list[dict[str, Any]] = []
     video_ids_seen: set[str] = set()
-    ball_gt_count = 0
 
     for row in rows:
         content_hash = str(row[0])
@@ -954,19 +952,15 @@ def _export_tracking_ground_truth(
         })
 
         video_ids_seen.add(video_id)
-        if video_id in VALID_BALL_GT_VIDEOS:
-            ball_gt_count += 1
 
     if not rallies:
         return None
 
     return {
-        "valid_ball_gt_video_ids": sorted(VALID_BALL_GT_VIDEOS),
         "rallies": rallies,
         "stats": {
             "total_rallies_with_tracking_gt": len(rallies),
             "total_videos": len(video_ids_seen),
-            "ball_gt_rallies": ball_gt_count,
         },
     }
 
@@ -1125,7 +1119,6 @@ def export_dataset(
         rprint(f"Created [cyan]{tracking_gt_path}[/cyan]")
         rprint(
             f"  Tracking GT: [green]{tgt_stats['total_rallies_with_tracking_gt']}[/green] rallies"
-            f" ({tgt_stats['ball_gt_rallies']} with ball GT)"
         )
 
     # Summary
