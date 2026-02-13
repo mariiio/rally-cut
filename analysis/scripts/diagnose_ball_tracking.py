@@ -230,7 +230,7 @@ def main() -> None:
 
     # Load GT data for rallies that have it
     try:
-        gt_rallies = load_labeled_rallies(ball_gt_only=True)
+        gt_rallies = load_labeled_rallies()
         gt_by_rally = {r.rally_id: r for r in gt_rallies}
         print(f"GT rallies loaded: {len(gt_rallies)}")
     except Exception as e:

@@ -42,7 +42,7 @@ def main() -> None:
         logger.info("Cleared ball cache")
 
     # Load GT rallies
-    rallies = load_labeled_rallies(video_id=args.video, ball_gt_only=True)
+    rallies = load_labeled_rallies(video_id=args.video)
     if not rallies:
         logger.error("No rallies found with ball GT")
         sys.exit(1)

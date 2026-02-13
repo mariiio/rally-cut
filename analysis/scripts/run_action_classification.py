@@ -190,17 +190,12 @@ def main() -> None:
     parser.add_argument("-o", "--output", type=Path, help="Output JSON file")
     parser.add_argument("--rally-id", type=str, help="Test single rally (prefix match)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show contact details")
-    parser.add_argument(
-        "--ball-gt-only", action="store_true", default=True,
-        help="Only use rallies with validated ball GT (default: True)",
-    )
-
     args = parser.parse_args()
 
     from rallycut.evaluation.tracking.db import load_labeled_rallies
 
     print("Loading labeled rallies from database...")
-    rallies = load_labeled_rallies(ball_gt_only=args.ball_gt_only)
+    rallies = load_labeled_rallies()
 
     if args.rally_id:
         rallies = [r for r in rallies if r.rally_id.startswith(args.rally_id)]
