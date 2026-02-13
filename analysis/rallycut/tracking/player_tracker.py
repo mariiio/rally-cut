@@ -42,6 +42,10 @@ YOLO_MODELS = {
     "yolov8s": "yolov8s.pt",  # Small: 11.2M params
     "yolov8m": "yolov8m.pt",  # Medium: 25.9M params, best accuracy
     "yolov8l": "yolov8l.pt",  # Large: 43.7M params
+    "yolo11n": "yolo11n.pt",  # YOLO11 Nano: 2.6M params
+    "yolo11s": "yolo11s.pt",  # YOLO11 Small: 9.4M params
+    "yolo11m": "yolo11m.pt",  # YOLO11 Medium: 20.1M params
+    "yolo11l": "yolo11l.pt",  # YOLO11 Large: 25.3M params
 }
 DEFAULT_YOLO_MODEL = "yolov8n"
 
@@ -397,6 +401,8 @@ class PlayerTracker:
         preprocessing: str = PREPROCESSING_NONE,
         tracker: str = DEFAULT_TRACKER,
         yolo_model: str = DEFAULT_YOLO_MODEL,
+        with_reid: bool = False,
+        appearance_thresh: float | None = None,
     ):
         """
         Initialize player tracker.
@@ -417,6 +423,9 @@ class PlayerTracker:
                        - "yolov8s": Small (default, good balance)
                        - "yolov8m": Medium (better accuracy)
                        - "yolov8l": Large (best accuracy, slowest)
+            with_reid: Enable BoT-SORT ReID model for appearance-based re-identification.
+            appearance_thresh: Override BoT-SORT appearance threshold for ReID.
+                              If None, uses value from config YAML.
         """
         self.model_path = model_path
         self.confidence = confidence
@@ -424,13 +433,54 @@ class PlayerTracker:
         self.preprocessing = preprocessing
         self.tracker = tracker
         self.yolo_model = yolo_model
+        self.with_reid = with_reid
+        self.appearance_thresh = appearance_thresh
         self._model: Any = None
+        self._custom_tracker_config: Path | None = None
 
     def _get_tracker_config(self) -> Path:
-        """Get the tracker config file path based on selected tracker."""
-        if self.tracker == TRACKER_BOTSORT:
-            return BOTSORT_CONFIG
-        return BYTETRACK_CONFIG
+        """Get the tracker config file path based on selected tracker.
+
+        If with_reid or appearance_thresh is set, creates a modified config
+        with the overrides.
+        """
+        if self._custom_tracker_config is not None:
+            return self._custom_tracker_config
+
+        base_config = BOTSORT_CONFIG if self.tracker == TRACKER_BOTSORT else BYTETRACK_CONFIG
+
+        # If overrides are set, create a modified config
+        needs_override = (
+            self.tracker == TRACKER_BOTSORT
+            and (self.with_reid or self.appearance_thresh is not None)
+        )
+        if needs_override:
+            import tempfile
+
+            import yaml
+
+            with open(base_config) as f:
+                config = yaml.safe_load(f)
+
+            if self.with_reid:
+                config["with_reid"] = True
+                # "auto" uses YOLO's native features for ReID (no separate model)
+                config.setdefault("model", "auto")
+                logger.info("Enabling BoT-SORT ReID")
+            if self.appearance_thresh is not None:
+                config["appearance_thresh"] = self.appearance_thresh
+                logger.info(f"Overriding appearance_thresh to {self.appearance_thresh}")
+
+            # Write to temp file (persists for tracker lifetime)
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".yaml", prefix="botsort_", delete=False
+            )
+            yaml.dump(config, tmp)
+            tmp.close()
+            self._custom_tracker_config = Path(tmp.name)
+            return self._custom_tracker_config
+
+        return base_config
 
     def _get_model_filename(self) -> str:
         """Get the model filename for the selected YOLO model size."""
@@ -520,20 +570,24 @@ class PlayerTracker:
             for i in range(n_detections):
                 try:
                     # Get class ID - only process person class
-                    cls = int(boxes.cls[i].item()) if hasattr(boxes, "cls") and boxes.cls is not None and i < len(boxes.cls) else 0
+                    cls_val = boxes.cls[i] if hasattr(boxes, "cls") and boxes.cls is not None and i < len(boxes.cls) else 0
+                    cls = int(cls_val.item() if hasattr(cls_val, "item") else cls_val)
                     if cls != PERSON_CLASS_ID:
                         continue
 
                     # Get confidence
-                    conf = float(boxes.conf[i].item()) if hasattr(boxes, "conf") and boxes.conf is not None and i < len(boxes.conf) else 1.0
+                    conf_val = boxes.conf[i] if hasattr(boxes, "conf") and boxes.conf is not None and i < len(boxes.conf) else 1.0
+                    conf = float(conf_val.item() if hasattr(conf_val, "item") else conf_val)
 
                     # Get track ID if available (may have fewer elements than boxes)
                     track_id = -1
                     if hasattr(boxes, "id") and boxes.id is not None and i < len(boxes.id):
-                        track_id = int(boxes.id[i].item())
+                        id_val = boxes.id[i]
+                        track_id = int(id_val.item() if hasattr(id_val, "item") else id_val)
 
                     # Get bounding box (xyxy format)
-                    xyxy = boxes.xyxy[i].cpu().numpy()
+                    xyxy_raw = boxes.xyxy[i]
+                    xyxy = xyxy_raw.cpu().numpy() if hasattr(xyxy_raw, "cpu") else np.asarray(xyxy_raw)
                     x1, y1, x2, y2 = xyxy
 
                     # Convert to normalized center coordinates
@@ -595,6 +649,19 @@ class PlayerTracker:
 
         # Load YOLO model
         model = self._load_model()
+
+        # Reset tracker state from any previous track_video call.
+        # ultralytics caches trackers, feature hooks, and ReID state on the
+        # predictor when persist=True. When ReID is enabled (with_reid),
+        # the feature extraction hook state can't be cleanly reset without
+        # a full model reload. For non-ReID, just clearing trackers suffices.
+        if hasattr(model, "predictor") and model.predictor is not None:
+            if self.with_reid:
+                # Full reload needed for clean ReID hook state
+                self._model = None
+                model = self._load_model()
+            elif hasattr(model.predictor, "trackers"):
+                del model.predictor.trackers
 
         # Open video
         cap = cv2.VideoCapture(str(video_path))
