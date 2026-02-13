@@ -11,10 +11,8 @@ from rallycut.evaluation.db import get_connection
 from rallycut.labeling.ground_truth import GroundTruthPosition, GroundTruthResult
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.player_tracker import (
-    BallPhaseInfo,
     PlayerPosition,
     PlayerTrackingResult,
-    ServerInfo,
 )
 
 logger = logging.getLogger(__name__)
@@ -135,34 +133,6 @@ def _parse_predictions(
                 )
             )
 
-    # Parse ball phases if available
-    ball_phases: list[BallPhaseInfo] = []
-    phases_json = pt_data.get("ball_phases_json")
-    if phases_json:
-        for phase in phases_json:
-            ball_phases.append(
-                BallPhaseInfo(
-                    phase=phase["phase"],
-                    frame_start=phase["frameStart"],
-                    frame_end=phase["frameEnd"],
-                    velocity=phase["velocity"],
-                    ball_x=phase["ballX"],
-                    ball_y=phase["ballY"],
-                )
-            )
-
-    # Parse server info if available
-    server_info: ServerInfo | None = None
-    server_json = pt_data.get("server_info_json")
-    if server_json:
-        server_info = ServerInfo(
-            track_id=server_json["trackId"],
-            confidence=server_json["confidence"],
-            serve_frame=server_json["serveFrame"],
-            serve_velocity=server_json["serveVelocity"],
-            is_near_court=server_json["isNearCourt"],
-        )
-
     return PlayerTrackingResult(
         positions=positions,
         frame_count=pt_data.get("frame_count") or 0,
@@ -173,8 +143,6 @@ def _parse_predictions(
         model_version=pt_data.get("model_version") or "yolov8n.pt",
         court_split_y=pt_data.get("court_split_y"),
         primary_track_ids=pt_data.get("primary_track_ids") or [],
-        ball_phases=ball_phases,
-        server_info=server_info,
         ball_positions=ball_positions,
     )
 
@@ -227,8 +195,6 @@ def load_labeled_rallies(
             pt.model_version,
             pt.court_split_y,
             pt.primary_track_ids,
-            pt.ball_phases_json,
-            pt.server_info_json,
             pt.ball_positions_json
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
@@ -262,8 +228,6 @@ def load_labeled_rallies(
                     model_version,
                     court_split_y,
                     primary_track_ids,
-                    ball_phases_json,
-                    server_info_json,
                     ball_positions_json,
                 ) = row
 
@@ -295,8 +259,6 @@ def load_labeled_rallies(
                     "model_version": model_version,
                     "court_split_y": court_split_y,
                     "primary_track_ids": primary_track_ids,
-                    "ball_phases_json": ball_phases_json,
-                    "server_info_json": server_info_json,
                     "ball_positions_json": ball_positions_json,
                 }
                 predictions = _parse_predictions(positions_json_typed, pt_data)

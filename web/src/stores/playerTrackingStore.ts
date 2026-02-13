@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { trackPlayers, getPlayerTrack, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPhase, type ServerInfo, type BallPosition, type ContactsData, type ActionsData } from '@/services/api';
+import { trackPlayers, getPlayerTrack, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData } from '@/services/api';
 
 // Types for player tracking data (store format)
 export interface PlayerPosition {
@@ -23,9 +23,6 @@ export interface TracksJson {
   fps: number;
   frameCount: number;
   tracks: PlayerTrackData[];
-  // Ball phase detection
-  ballPhases?: BallPhase[];
-  serverInfo?: ServerInfo;
   // Ball positions for trajectory overlay
   ballPositions?: BallPosition[];
   // Contact detection and action classification
@@ -157,8 +154,6 @@ function apiResponseToPlayerTrack(
       fps,
       frameCount: response.frameCount || 0,
       tracks,
-      ballPhases: response.ballPhases,
-      serverInfo: response.serverInfo,
       ballPositions: response.ballPositions,
       contacts: response.contacts,
       actions: response.actions,

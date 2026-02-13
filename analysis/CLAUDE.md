@@ -136,7 +136,7 @@ rallycut/
 ├── tracking/        # Ball and player tracking
 │   ├── ball_tracker.py       # VballNet ONNX ball detection (9-frame temporal)
 │   ├── ball_filter.py        # Kalman filter for lag compensation and smoothing
-│   ├── ball_features.py      # Ball phase detection, server ID, reactivity scoring
+│   ├── ball_features.py      # Ball features, server ID, reactivity scoring
 │   ├── player_tracker.py     # YOLO + BoT-SORT player tracking
 │   ├── player_filter.py      # Multi-stage player filtering with court/ball scoring
 │   ├── player_features.py    # Appearance extraction (skin tone, jersey, proportions)
@@ -333,12 +333,6 @@ Multi-stage filtering to identify active players and exclude non-players. See `t
 ## Track Merging
 
 Merges fragmented tracker IDs using velocity prediction and position/size similarity. Thresholds are video-agnostic (seconds, normalized coordinates). BoT-SORT's camera motion compensation significantly reduces fragmentation. See `tracking/player_filter.py`.
-
-## Ball Phase Detection
-
-Detects game phases (SERVE, ATTACK, DEFENSE, TRANSITION) from ball velocity patterns. Identifies server by finding player closest to ball during velocity spike in first 3 seconds. See `tracking/ball_features.py`.
-
-**Output:** `ballPhases`, `serverInfo`, `ballPositions` for overlay visualization.
 
 ## Ball Tracking Filtering
 

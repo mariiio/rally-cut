@@ -77,17 +77,13 @@ Debug visualization for player and ball detection:
 
 - **PlayerTrackingToolbar**: Controls for tracking, calibration, overlay toggles, and Label Studio integration
 - **PlayerOverlay**: Renders player bounding boxes on video with interpolation for smooth display
-- **BallTrackOverlay**: Renders ball trajectory with phase-colored trail effect
+- **BallTrackOverlay**: Renders ball trajectory trail overlay
 
 Features:
 - **Court calibration**: 4-corner court mapping for position projection
-- **Ball phase detection**: Real-time display of serve/attack/defense/transition phases
-- **Server identification**: Detects which player served based on ball trajectory
 - **Primary track filtering**: Only shows the 4 identified players (excludes referees/spectators)
 - **Position interpolation**: Fills gaps up to 1.5s and shows last position for 1s after detection ends
 - **Label Studio integration**: "Label" button exports to Label Studio, "Save GT" imports corrections
-
-Ball phases highlighted in real-time during playback with pulsing indicator.
 
 ### Ground Truth Labeling (Label Studio)
 
