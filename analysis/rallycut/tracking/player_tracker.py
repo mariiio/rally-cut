@@ -387,10 +387,10 @@ class PlayerTrackingResult:
 
 class PlayerTracker:
     """
-    Player tracker using YOLOv8n + ByteTrack.
+    Player tracker using YOLO + BoT-SORT.
 
-    Uses YOLOv8 nano for fast person detection with ByteTrack for
-    temporal tracking across frames.
+    Uses YOLO for person detection with BoT-SORT for temporal tracking
+    across frames. Supports YOLOv8 and YOLO11 model families.
     """
 
     def __init__(
@@ -418,11 +418,8 @@ class PlayerTracker:
             tracker: Tracking algorithm. Options:
                     - "bytetrack": ByteTrack (motion-based)
                     - "botsort": BoT-SORT (adds camera motion compensation, default)
-            yolo_model: YOLO model size. Options:
-                       - "yolov8n": Nano (fastest, lowest accuracy)
-                       - "yolov8s": Small (default, good balance)
-                       - "yolov8m": Medium (better accuracy)
-                       - "yolov8l": Large (best accuracy, slowest)
+            yolo_model: YOLO model size (default: yolov8n). Options:
+                       yolov8n/s/m/l and yolo11n/s/m/l.
             with_reid: Enable BoT-SORT ReID model for appearance-based re-identification.
             appearance_thresh: Override BoT-SORT appearance threshold for ReID.
                               If None, uses value from config YAML.

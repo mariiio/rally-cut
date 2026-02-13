@@ -264,6 +264,10 @@ Uses YOLOv8 for person detection with BoT-SORT for temporal tracking. BoT-SORT r
 | yolov8s | 15 | 83.8% | 78.7% | - |
 | yolov8m | 7 | 89.2% | 86.4% | Best accuracy (3x slower) |
 | yolov8l | 5 | 88.4% | 85.5% | No benefit over medium |
+| yolo11n | 23 | 88.5% | 83.1% | Marginal +0.9pp HOTA over yolov8n |
+| yolo11s | 14 | 89.0% | 84.2% | Best overall metrics, 1.6x slower |
+| yolo11m | 7 | - | - | Untested |
+| yolo11l | 5 | - | - | Untested |
 
 **Tracker Options:**
 | Tracker | ID | Strengths | Use Case |
