@@ -341,7 +341,7 @@ def track_players(
     imgsz: int = typer.Option(
         DEFAULT_IMGSZ,
         "--imgsz",
-        help="Inference resolution. Higher = better small/far player detection, slower. (640, 1280, 1920)",
+        help="Inference resolution. 1280 = best tradeoff (default), 640 = faster, 1920 = native.",
     ),
     # Action classification
     actions: bool = typer.Option(
