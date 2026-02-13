@@ -33,14 +33,18 @@ htmlcov/
 !**/ground_truth.json
 !pyproject.toml
 
-# Pseudo-labels (generated from database)
+# Pseudo-labels and training frames (generated from database)
 experiments/pseudo_labels/
+experiments/gold_labels/
 
 # Training data (generated, large)
 training_data/
 
 # Model weights (downloaded/trained)
 weights/
+
+# Vendor repos (cloned for training)
+vendor/
 
 # Cache
 .cache/

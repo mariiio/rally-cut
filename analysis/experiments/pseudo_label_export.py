@@ -37,7 +37,8 @@ class PseudoLabelConfig:
     require_post_filter_pass: bool = True
     video_width: int = 1920
     video_height: int = 1080
-    # TrackNet uses pixel coordinates
+    # TrackNetV2 uses normalized coordinates (0-1) in its CSV labels
+    # and frame images resized to 512x288 for training
     tracknet_width: int = 512
     tracknet_height: int = 288
 
@@ -132,13 +133,11 @@ def export_pseudo_labels(
                 stats.filtered_low_motion += 1
                 continue
 
-            # Convert normalized coords to TrackNet pixel coords
-            px = int(bp.x * cfg.tracknet_width)
-            py = int(bp.y * cfg.tracknet_height)
-            px = max(0, min(px, cfg.tracknet_width - 1))
-            py = max(0, min(py, cfg.tracknet_height - 1))
+            # Store normalized coordinates (0-1) — TrackNetV2 expects this
+            x_norm = max(0.0, min(bp.x, 1.0))
+            y_norm = max(0.0, min(bp.y, 1.0))
 
-            frame_data[frame] = {"visibility": 1, "x": px, "y": py}
+            frame_data[frame] = {"visibility": 1, "x": x_norm, "y": y_norm}
             stats.visible_frames += 1
 
         # Include gold GT labels (overwrite pseudo-labels where available)
@@ -147,24 +146,22 @@ def export_pseudo_labels(
                 p for p in rally.ground_truth.positions if p.label == "ball"
             ]
             for gt_pos in gt_ball:
-                px = int(gt_pos.x * cfg.tracknet_width)
-                py = int(gt_pos.y * cfg.tracknet_height)
-                px = max(0, min(px, cfg.tracknet_width - 1))
-                py = max(0, min(py, cfg.tracknet_height - 1))
+                x_norm = max(0.0, min(gt_pos.x, 1.0))
+                y_norm = max(0.0, min(gt_pos.y, 1.0))
 
                 frame_data[gt_pos.frame_number] = {
                     "visibility": 1,
-                    "x": px,
-                    "y": py,
+                    "x": x_norm,
+                    "y": y_norm,
                     "is_gold": True,
                 }
                 stats.gold_label_frames += 1
 
-        # Write TrackNet CSV
+        # Write TrackNetV2 CSV (frame_num, visible, x, y — normalized coords)
         csv_path = output_dir / f"{rally.rally_id}.csv"
         with open(csv_path, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["Frame", "Visibility", "X", "Y"])
+            writer.writerow(["frame_num", "visible", "x", "y"])
 
             for frame in range(max_frame + 1):
                 data = frame_data.get(frame, {"visibility": 0, "x": 0, "y": 0})
@@ -212,7 +209,6 @@ def export_gold_only(
     """
     from rallycut.evaluation.tracking.db import load_labeled_rallies
 
-    cfg = config or PseudoLabelConfig()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     stats = ExportStats()
@@ -234,11 +230,9 @@ def export_gold_only(
         # Build frame -> position mapping
         frame_data: dict[int, dict[str, Any]] = {}
         for gt_pos in gt_ball:
-            px = int(gt_pos.x * cfg.tracknet_width)
-            py = int(gt_pos.y * cfg.tracknet_height)
-            px = max(0, min(px, cfg.tracknet_width - 1))
-            py = max(0, min(py, cfg.tracknet_height - 1))
-            frame_data[gt_pos.frame_number] = {"visibility": 1, "x": px, "y": py}
+            x_norm = max(0.0, min(gt_pos.x, 1.0))
+            y_norm = max(0.0, min(gt_pos.y, 1.0))
+            frame_data[gt_pos.frame_number] = {"visibility": 1, "x": x_norm, "y": y_norm}
             stats.gold_label_frames += 1
             stats.visible_frames += 1
 
@@ -246,7 +240,7 @@ def export_gold_only(
         csv_path = output_dir / f"{rally.rally_id}_gold.csv"
         with open(csv_path, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["Frame", "Visibility", "X", "Y"])
+            writer.writerow(["frame_num", "visible", "x", "y"])
 
             for frame in range(max_frame + 1):
                 data = frame_data.get(frame, {"visibility": 0, "x": 0, "y": 0})
@@ -256,6 +250,85 @@ def export_gold_only(
         logger.info(f"Exported gold GT: {rally.rally_id} ({len(gt_ball)} frames)")
 
     return stats
+
+
+def extract_frames(
+    output_dir: Path,
+    config: PseudoLabelConfig | None = None,
+    video_ids: list[str] | None = None,
+) -> int:
+    """Extract video frames as JPEGs for TrackNetV2 training.
+
+    Creates directory structure:
+        output_dir/images/{rally_id}/0.jpg, 1.jpg, ...
+
+    Args:
+        output_dir: Root output directory.
+        config: Export configuration (uses tracknet_width/height for resize).
+        video_ids: Specific video IDs to process.
+
+    Returns:
+        Number of frames extracted.
+    """
+    try:
+        import cv2
+    except ImportError:
+        logger.error("opencv-python required for frame extraction: pip install opencv-python")
+        return 0
+
+    from rallycut.evaluation.tracking.db import get_video_path, load_labeled_rallies
+
+    cfg = config or PseudoLabelConfig()
+    images_dir = output_dir / "images"
+
+    rallies = load_labeled_rallies(ball_gt_only=True)
+    if video_ids:
+        rallies = [r for r in rallies if r.video_id in video_ids]
+
+    total_frames = 0
+
+    for rally in rallies:
+        video_path = get_video_path(rally.video_id)
+        if video_path is None:
+            logger.warning(f"Video not found for rally {rally.rally_id[:8]}")
+            continue
+
+        rally_dir = images_dir / rally.rally_id
+        rally_dir.mkdir(parents=True, exist_ok=True)
+
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            logger.warning(f"Cannot open video: {video_path}")
+            continue
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        start_frame = int(rally.start_ms / 1000.0 * fps)
+        end_frame = int(rally.end_ms / 1000.0 * fps)
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+        frame_idx = 0
+        while cap.get(cv2.CAP_PROP_POS_FRAMES) <= end_frame:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            # Resize to TrackNet dimensions
+            resized = cv2.resize(
+                frame, (cfg.tracknet_width, cfg.tracknet_height)
+            )
+
+            frame_path = rally_dir / f"{frame_idx}.jpg"
+            cv2.imwrite(str(frame_path), resized)
+            frame_idx += 1
+
+        cap.release()
+        total_frames += frame_idx
+        logger.info(
+            f"Extracted {frame_idx} frames for rally {rally.rally_id[:8]}"
+        )
+
+    return total_frames
 
 
 if __name__ == "__main__":
@@ -268,6 +341,10 @@ if __name__ == "__main__":
     parser.add_argument("--min-confidence", type=float, default=0.3)
     parser.add_argument("--min-motion-energy", type=float, default=0.02)
     parser.add_argument("--gold-only", action="store_true", help="Export only gold GT labels")
+    parser.add_argument(
+        "--extract-frames", action="store_true",
+        help="Extract video frames as JPEGs for training",
+    )
     args = parser.parse_args()
 
     config = PseudoLabelConfig(
@@ -281,3 +358,7 @@ if __name__ == "__main__":
         stats = export_pseudo_labels(args.output_dir, config)
 
     print(f"\nExport stats: {stats.to_dict()}")
+
+    if args.extract_frames:
+        num_frames = extract_frames(args.output_dir, config)
+        print(f"\nExtracted {num_frames} frames")
