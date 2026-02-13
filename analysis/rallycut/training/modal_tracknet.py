@@ -29,6 +29,11 @@ image = (
         "opencv-python-headless>=4.8.0",
         "numpy>=1.24.0",
         "tqdm>=4.65.0",
+        # Required by rallycut package init chain (config.py imports)
+        "pyyaml>=6.0.0",
+        "pydantic>=2.0.0",
+        "pydantic-settings>=2.0.0",
+        "platformdirs>=4.0.0",
     )
     .workdir("/app")
     .env({"PYTHONPATH": "/app"})

@@ -284,6 +284,7 @@ def train_tracknet(
 
     start_epoch = 0
     best_val_loss = float("inf")
+    best_f1 = 0.0
 
     # Resume from checkpoint
     if resume_checkpoint and resume_checkpoint.exists():
@@ -293,6 +294,7 @@ def train_tracknet(
         scheduler.load_state_dict(ckpt["lr_scheduler"])
         start_epoch = ckpt["epoch"]
         best_val_loss = ckpt.get("best_val_loss", float("inf"))
+        best_f1 = ckpt.get("best_f1", 0.0)
         print(f"Resumed from epoch {start_epoch}")
 
     # Output directories
@@ -375,12 +377,14 @@ def train_tracknet(
         # ── Save weights ──
         if (epoch + 1) % config.save_every == 0:
             torch.save(model.state_dict(), output_dir / "last.pt")
-            if avg_val_loss < best_val_loss:
+            current_f1 = val_metrics.get("f1", 0.0)
+            if current_f1 > best_f1 or (current_f1 == best_f1 and avg_val_loss < best_val_loss):
+                best_f1 = current_f1
                 best_val_loss = avg_val_loss
                 best_epoch = epoch + 1
                 best_metrics = val_metrics or best_metrics
                 torch.save(model.state_dict(), output_dir / "best.pt")
-                print(f"  -> New best model (val_loss: {best_val_loss:.0f})")
+                print(f"  -> New best model (F1: {best_f1:.3f}, val_loss: {best_val_loss:.0f})")
 
         # ── Full checkpoint for resume ──
         if (epoch + 1) % config.checkpoint_every == 0:
@@ -390,13 +394,16 @@ def train_tracknet(
                 "lr_scheduler": scheduler.state_dict(),
                 "epoch": epoch + 1,
                 "best_val_loss": best_val_loss,
+                "best_f1": best_f1,
             }
             torch.save(ckpt_data, ckpt_dir / f"ckpt_{epoch + 1}.pt")
             torch.save(ckpt_data, ckpt_dir / "ckpt_latest.pt")
 
     # Save final weights
     torch.save(model.state_dict(), output_dir / "last.pt")
-    if avg_val_loss <= best_val_loss:
+    final_f1 = val_metrics.get("f1", 0.0) if val_metrics else 0.0
+    if final_f1 > best_f1:
+        best_f1 = final_f1
         best_val_loss = avg_val_loss
         best_epoch = config.epochs
         best_metrics = val_metrics or best_metrics
