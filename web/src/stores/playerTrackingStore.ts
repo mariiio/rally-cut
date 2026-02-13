@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { trackPlayers, getPlayerTrack, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPhase, type ServerInfo, type BallPosition } from '@/services/api';
+import { trackPlayers, getPlayerTrack, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPhase, type ServerInfo, type BallPosition, type ContactsData, type ActionsData } from '@/services/api';
 
 // Types for player tracking data (store format)
 export interface PlayerPosition {
@@ -28,6 +28,9 @@ export interface TracksJson {
   serverInfo?: ServerInfo;
   // Ball positions for trajectory overlay
   ballPositions?: BallPosition[];
+  // Contact detection and action classification
+  contacts?: ContactsData;
+  actions?: ActionsData;
 }
 
 export interface PlayerTrack {
@@ -157,6 +160,8 @@ function apiResponseToPlayerTrack(
       ballPhases: response.ballPhases,
       serverInfo: response.serverInfo,
       ballPositions: response.ballPositions,
+      contacts: response.contacts,
+      actions: response.actions,
     },
     playerCount: response.uniqueTrackCount || 0,
     progress: 100,

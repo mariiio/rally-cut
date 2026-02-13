@@ -1,0 +1,73 @@
+# Experiment 1: Fine-tune TrackNetV2/V3 on beach volleyball
+# Goal: Replace VballNet with fine-tuned model
+# Expected: match rate 48.6% → 60-70%, mean error 57px → 30-40px
+
+experiment:
+  name: exp-ball-tracknet
+  description: "Fine-tune TrackNetV2/V3 on beach volleyball pseudo-labels + gold GT"
+
+# Data configuration
+data:
+  # Gold labels (from Label Studio)
+  gold_label_count: 531  # Current labeled frames
+  gold_videos:
+    - a5866029-7cf4-42d6-adc2-8e28111ffd81
+    - 1efa35cf-4edd-4504-b4a4-834eee9e5218
+    - 70ab9d7f-8cc4-48cb-892a-1c36793cac72
+    - 07fedbd4-693e-4651-9fee-c616a1f4b413
+    - 920ba69d-2526-4e6c-a357-c44af3bf5c99
+    - a7ee3d38-a3a9-4dcd-a2af-e0617997e708
+
+  # Pseudo-label filtering thresholds
+  pseudo_label:
+    min_confidence: 0.3
+    min_motion_energy: 0.02
+    require_post_filter_pass: true
+    expected_frames: 3000  # ~3K-4K pseudo-labeled frames
+
+  # TrackNet CSV format
+  output_format: tracknet_csv  # Frame,Visibility,X,Y
+  visibility_mapping:
+    visible: 1
+    out_of_frame: 0
+    occluded: 2
+
+# Model configuration
+model:
+  # TrackNetV2 (primary)
+  architecture: tracknetv2
+  repo: "ChgygLin/TrackNetV2-pytorch"
+  input_frames: 3
+  input_channels: 3  # RGB (not grayscale like VballNet)
+  input_height: 288
+  input_width: 512
+  pretrained_weights: badminton  # Transfer from badminton
+
+  # Training
+  training:
+    epochs: 30
+    batch_size: 8
+    learning_rate: 0.001
+    lr_scheduler: cosine
+    freeze_early_layers: true  # Freeze first 2 VGG blocks
+    optimizer: adam
+    weight_decay: 0.0001
+    # Weighted focal loss (handle class imbalance: mostly no-ball frames)
+    loss: weighted_bce
+    pos_weight: 5.0
+
+  # TrackNetV3 variant (if V2 succeeds)
+  v3_variant:
+    background_subtraction: true  # Leverage fixed tripod
+    median_background_frames: 100  # Frames for background computation
+
+# Evaluation
+evaluation:
+  match_threshold_px: 50.0
+  min_confidence: 0.3
+  split_strategy: video_level  # Never mix frames from same rally
+  metrics:
+    - match_rate
+    - mean_error_px
+    - detection_rate
+    - false_positive_rate

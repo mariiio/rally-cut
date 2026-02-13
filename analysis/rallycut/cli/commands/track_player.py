@@ -21,6 +21,7 @@ from rallycut.tracking.ball_tracker import (
 )
 from rallycut.tracking.player_filter import PlayerFilterConfig
 from rallycut.tracking.player_tracker import (
+    DEFAULT_IMGSZ,
     DEFAULT_TRACKER,
     DEFAULT_YOLO_MODEL,
     PREPROCESSING_CLAHE,
@@ -336,6 +337,18 @@ def track_players(
         "--yolo-model",
         help=f"YOLO model size: {', '.join(YOLO_MODELS.keys())} (default: {DEFAULT_YOLO_MODEL})",
     ),
+    # Inference resolution
+    imgsz: int = typer.Option(
+        DEFAULT_IMGSZ,
+        "--imgsz",
+        help="Inference resolution. Higher = better small/far player detection, slower. (640, 1280, 1920)",
+    ),
+    # Action classification
+    actions: bool = typer.Option(
+        False,
+        "--actions/--no-actions",
+        help="Run action classification (contact detection + rule-based classification)",
+    ),
 ) -> None:
     """Track player positions in a beach volleyball video.
 
@@ -465,11 +478,14 @@ def track_players(
         console.print(f"[dim]Tracker: {tracker}[/dim]")
     if yolo_model != DEFAULT_YOLO_MODEL and not quiet:
         console.print(f"[dim]YOLO model: {yolo_model}[/dim]")
+    if imgsz != DEFAULT_IMGSZ and not quiet:
+        console.print(f"[dim]Inference resolution: {imgsz}[/dim]")
     player_tracker = PlayerTracker(
         confidence=confidence,
         preprocessing=preprocessing,
         tracker=tracker,
         yolo_model=yolo_model,
+        imgsz=imgsz,
     )
 
     # Track with progress
@@ -559,8 +575,34 @@ def track_players(
                     f"(confidence: {result.server_info.confidence:.1%})[/dim]"
                 )
 
+    # Run action classification if requested
+    actions_data = None
+    if actions and ball_positions and result.positions:
+        from rallycut.tracking.action_classifier import classify_rally_actions
+        from rallycut.tracking.contact_detector import detect_contacts
+
+        if not quiet:
+            console.print("\n[dim]Running action classification...[/dim]")
+
+        contact_seq = detect_contacts(
+            ball_positions=ball_positions,
+            player_positions=result.positions,
+        )
+        rally_actions = classify_rally_actions(contact_seq)
+
+        actions_data = {
+            "contacts": contact_seq.to_dict(),
+            "actions": rally_actions.to_dict(),
+        }
+
+        if not quiet:
+            seq = [a.action_type.value for a in rally_actions.actions]
+            console.print(f"[dim]Contacts: {contact_seq.num_contacts}[/dim]")
+            if seq:
+                console.print(f"[dim]Actions: {' → '.join(seq)}[/dim]")
+
     # Save results
-    result.to_json(output)
+    result.to_json(output, extra_data=actions_data)
 
     # Print summary
     if not quiet:

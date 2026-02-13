@@ -1,0 +1,40 @@
+# Experiment 6: Semi-supervised ball tracking with pseudo-label bootstrapping
+# Goal: Teacher-student iteration for improved ball tracking
+# Expected: 2-3K pseudo-labels per iteration; student >= VballNet accuracy
+
+experiment:
+  name: exp-ball-ssl
+  description: "Teacher-student pseudo-label bootstrapping for ball tracking"
+
+# Pseudo-label pipeline
+pseudo_labels:
+  # Round 1: Export from VballNet
+  round_1:
+    source: vballnet_v2
+    filters:
+      min_confidence: 0.3
+      min_motion_energy: 0.02
+      require_post_filter_pass: true
+    expected_frames: 3000
+
+  # Round 2+: Export from teacher model
+  teacher_rounds:
+    confidence_threshold: 0.9  # Higher threshold for teacher labels
+    max_rounds: 3
+    convergence_check: true  # Stop if improvement < 1% match rate
+
+# Training
+training:
+  model: tracknetv2
+  epochs_per_round: 20
+  batch_size: 8
+  learning_rate: 0.001
+  gold_label_weight: 2.0  # Upweight gold labels vs pseudo-labels
+
+# Evaluation
+evaluation:
+  held_out_rallies: 2  # Hold out 2 rallies for evaluation
+  metrics:
+    - pseudo_label_match_rate  # How good are pseudo-labels vs gold GT?
+    - student_match_rate       # Student model accuracy
+    - training_loss            # Convergence monitoring
