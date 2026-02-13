@@ -1,0 +1,41 @@
+# Experiment 3: Rule-based action classification
+# Goal: Detect serve/receive/set/spike/block from ball trajectory + player positions
+# Expected: ~75-85% macro F1 (serves and spikes easiest; sets and blocks hardest)
+
+experiment:
+  name: exp-action-rules
+  description: "Rule-based action classification from trajectory inflection points"
+
+# Contact detection parameters
+contact_detection:
+  min_peak_velocity: 0.012
+  min_peak_prominence: 0.006
+  smoothing_window: 5
+  min_peak_distance_frames: 12
+  min_direction_change_deg: 30.0
+  player_contact_radius: 0.15
+  high_velocity_threshold: 0.025
+
+# Action classification rules
+classification:
+  serve_window_frames: 60
+  serve_min_velocity: 0.015
+  block_max_frame_gap: 8
+  block_net_zone: 0.08
+
+# Evaluation
+evaluation:
+  # Target: 100 manually labeled actions across 5 rallies
+  min_labeled_actions: 100
+  action_classes:
+    - serve
+    - receive
+    - set
+    - spike
+    - block
+  metrics:
+    - per_class_f1
+    - macro_f1
+    - confusion_matrix
+    - accuracy
+  target_macro_f1: 0.75

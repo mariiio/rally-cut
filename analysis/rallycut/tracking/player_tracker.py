@@ -30,6 +30,7 @@ MODEL_NAME = "yolov8n.pt"  # YOLOv8 nano - fastest with good accuracy (88% F1)
 PERSON_CLASS_ID = 0  # COCO class ID for person
 DEFAULT_CONFIDENCE = 0.15  # Lower threshold for detection (tuned via grid search)
 DEFAULT_IOU = 0.45  # NMS IoU threshold
+DEFAULT_IMGSZ = 640  # Default inference resolution (higher = better small object detection)
 
 # Available YOLO model sizes (larger = more accurate but slower)
 # Benchmark on beach volleyball (8.8s rally):
@@ -268,10 +269,22 @@ class PlayerTrackingResult:
 
         return result
 
-    def to_json(self, path: Path) -> None:
-        """Write result to JSON file."""
+    def to_json(
+        self,
+        path: Path,
+        extra_data: dict[str, Any] | None = None,
+    ) -> None:
+        """Write result to JSON file.
+
+        Args:
+            path: Output file path.
+            extra_data: Optional extra data to merge into the output dict.
+        """
+        data = self.to_dict()
+        if extra_data:
+            data.update(extra_data)
         with open(path, "w") as f:
-            json.dump(self.to_dict(), f, indent=2)
+            json.dump(data, f, indent=2)
 
     @classmethod
     def from_json(cls, path: Path) -> PlayerTrackingResult:
@@ -403,6 +416,7 @@ class PlayerTracker:
         yolo_model: str = DEFAULT_YOLO_MODEL,
         with_reid: bool = False,
         appearance_thresh: float | None = None,
+        imgsz: int = DEFAULT_IMGSZ,
     ):
         """
         Initialize player tracker.
@@ -423,6 +437,9 @@ class PlayerTracker:
             with_reid: Enable BoT-SORT ReID model for appearance-based re-identification.
             appearance_thresh: Override BoT-SORT appearance threshold for ReID.
                               If None, uses value from config YAML.
+            imgsz: Inference resolution. Higher values improve small/far object
+                  detection at the cost of speed. 640 (default), 1280 (2x resolution
+                  for far-side players), 1920 (native resolution).
         """
         self.model_path = model_path
         self.confidence = confidence
@@ -432,6 +449,7 @@ class PlayerTracker:
         self.yolo_model = yolo_model
         self.with_reid = with_reid
         self.appearance_thresh = appearance_thresh
+        self.imgsz = imgsz
         self._model: Any = None
         self._custom_tracker_config: Path | None = None
 
@@ -720,6 +738,7 @@ class PlayerTracker:
                             tracker=str(self._get_tracker_config()),
                             conf=self.confidence,
                             iou=self.iou,
+                            imgsz=self.imgsz,
                             classes=[PERSON_CLASS_ID],
                             verbose=False,
                         )
@@ -879,6 +898,7 @@ class PlayerTracker:
                     tracker=str(self._get_tracker_config()),
                     conf=self.confidence,
                     iou=self.iou,
+                    imgsz=self.imgsz,
                     classes=[PERSON_CLASS_ID],
                     verbose=False,
                 )

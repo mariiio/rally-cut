@@ -1745,6 +1745,46 @@ export interface ServerInfo {
   isNearCourt: boolean;
 }
 
+// Contact detection from ball trajectory inflection points
+export interface ContactInfo {
+  frame: number;
+  ballX: number;
+  ballY: number;
+  velocity: number;
+  directionChangeDeg: number;
+  playerTrackId: number;
+  playerDistance: number;
+  courtSide: string;
+  isAtNet: boolean;
+  isValidated: boolean;
+}
+
+export interface ContactsData {
+  numContacts: number;
+  netY: number;
+  rallyStartFrame: number;
+  contacts: ContactInfo[];
+}
+
+// Action classification from contact sequence
+export interface ActionInfo {
+  action: string;  // "serve", "receive", "set", "spike", "block", "dig", "unknown"
+  frame: number;
+  ballX: number;
+  ballY: number;
+  velocity: number;
+  playerTrackId: number;
+  courtSide: string;
+  confidence: number;
+}
+
+export interface ActionsData {
+  rallyId: string;
+  numContacts: number;
+  actionSequence: string[];
+  actions: ActionInfo[];
+}
+
 export interface TrackPlayersResponse {
   status: 'completed' | 'failed';
   frameCount?: number;
@@ -1764,6 +1804,9 @@ export interface TrackPlayersResponse {
   serverInfo?: ServerInfo;
   // Ball positions for trajectory overlay
   ballPositions?: BallPosition[];
+  // Contact detection and action classification
+  contacts?: ContactsData;
+  actions?: ActionsData;
 }
 
 export interface GetPlayerTrackResponse {
@@ -1780,6 +1823,8 @@ export interface GetPlayerTrackResponse {
   ballPhases?: BallPhase[];
   serverInfo?: ServerInfo;
   ballPositions?: BallPosition[];
+  contacts?: ContactsData;
+  actions?: ActionsData;
   error?: string;
 }
 

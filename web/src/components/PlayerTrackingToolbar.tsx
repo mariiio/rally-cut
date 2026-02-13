@@ -15,19 +15,27 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
-import type { BallPhase } from '@/services/api';
+import type { BallPhase, ActionsData } from '@/services/api';
 import { getLabelStudioStatus, exportToLabelStudio, importFromLabelStudio, API_BASE_URL } from '@/services/api';
 
-// Phase colors matching volleyball semantics
+// Phase colors matching BallPhase enum values from ball_features.py
 const PHASE_COLORS: Record<string, string> = {
-  serve: '#4CAF50',     // Green - start of play
-  receive: '#2196F3',   // Blue - first touch (pass)
-  set: '#FFC107',       // Amber - setter touch
-  attack: '#f44336',    // Red - spike/hit
-  dig: '#9C27B0',       // Purple - defensive save
-  defense: '#2196F3',   // Blue (legacy alias for receive)
-  transition: '#FFC107', // Amber (legacy alias for set)
-  unknown: '#9e9e9e',   // Grey
+  serve: '#4CAF50',      // Green - start of play
+  attack: '#f44336',     // Red - spike/hit
+  defense: '#2196F3',    // Blue - receive/dig
+  transition: '#FFC107', // Amber - set/transition
+  unknown: '#9e9e9e',    // Grey
+};
+
+// Action colors for classified contacts
+const ACTION_COLORS: Record<string, string> = {
+  serve: '#4CAF50',
+  receive: '#2196F3',
+  set: '#FFC107',
+  spike: '#f44336',
+  block: '#9C27B0',
+  dig: '#FF9800',
+  unknown: '#9e9e9e',
 };
 
 // Format frame number to timestamp (mm:ss.ms)
@@ -567,6 +575,41 @@ export function PlayerTrackingToolbar() {
         </Box>
       )}
       </Box>
+
+      {/* Action Sequence - from contact detection + classification */}
+      {hasTrackingData && trackData?.actions?.actions?.length && !isCalibrating && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5, px: 0.5, flexWrap: 'wrap' }}>
+          <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 'bold', mr: 0.5 }}>
+            Actions:
+          </Typography>
+          {(trackData.actions as ActionsData).actions.map((action, index) => (
+            <Box key={index} sx={{ display: 'flex', alignItems: 'center' }}>
+              {index > 0 && (
+                <Typography variant="caption" sx={{ color: 'text.disabled', mx: 0.25 }}>
+                  {'\u2192'}
+                </Typography>
+              )}
+              <Tooltip title={`Frame ${action.frame} | Player #${action.playerTrackId} | ${action.courtSide} court`}>
+                <Chip
+                  label={formatPhase(action.action)}
+                  size="small"
+                  sx={{
+                    bgcolor: ACTION_COLORS[action.action] || ACTION_COLORS.unknown,
+                    color: 'white',
+                    fontSize: '0.7rem',
+                    height: 22,
+                    fontWeight: 'bold',
+                    '& .MuiChip-label': { px: 0.75 },
+                  }}
+                />
+              </Tooltip>
+            </Box>
+          ))}
+          <Typography variant="caption" sx={{ color: 'text.secondary', ml: 1 }}>
+            ({(trackData.actions as ActionsData).numContacts} contacts)
+          </Typography>
+        </Box>
+      )}
 
       {/* Phase Timeline - Visual horizontal bar */}
       {hasTrackingData && ballPhases.length > 0 && !isCalibrating && trackData && (

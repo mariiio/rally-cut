@@ -1,0 +1,46 @@
+# Experiment 4: Court homography calibration
+# Goal: Establish court homography for real-world coordinate mapping
+# Expected: Reprojection error <0.5m
+
+experiment:
+  name: exp-court-calib
+  description: "Court line detection + manual annotation for homography"
+
+# Court dimensions (beach volleyball)
+court:
+  width_m: 8.0
+  length_m: 16.0  # 8m per side
+  net_height_m: 2.43  # Men's net height
+
+# Calibration methods
+methods:
+  - name: manual_corners
+    description: "Manual 4-corner annotation per video (30s each)"
+    corner_order: [top_left, top_right, bottom_right, bottom_left]
+
+  - name: auto_line_detection
+    description: "Hough line detection on edge-detected frames"
+    hough_params:
+      rho: 1
+      theta_deg: 1
+      threshold: 100
+      min_line_length: 100
+      max_line_gap: 20
+    edge_detection:
+      method: canny
+      low_threshold: 50
+      high_threshold: 150
+
+# Evaluation
+evaluation:
+  metrics:
+    - reprojection_error_m
+    - distance_measurement_accuracy
+  known_distances:
+    - name: court_width
+      expected_m: 8.0
+    - name: half_court_length
+      expected_m: 8.0
+    - name: net_to_baseline
+      expected_m: 8.0
+  target_reprojection_error_m: 0.5

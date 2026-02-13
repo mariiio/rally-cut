@@ -3,6 +3,7 @@
 import typer
 from rich.console import Console
 
+from rallycut.cli.commands.analyze import app as analyze_app
 from rallycut.cli.commands.compare_tracking import compare_tracking as compare_tracking_command
 from rallycut.cli.commands.cut import cut as cut_command
 from rallycut.cli.commands.evaluate import app as evaluate_app
@@ -29,6 +30,7 @@ app.add_typer(evaluate_tracking_app, name="evaluate-tracking")
 app.add_typer(label_app, name="label")
 app.add_typer(evaluate_app, name="evaluate")
 app.add_typer(train_app, name="train")
+app.add_typer(analyze_app, name="analyze")
 
 
 @app.callback()

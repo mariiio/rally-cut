@@ -63,6 +63,46 @@ interface BallPosition {
   confidence: number;
 }
 
+// Contact detection from ball trajectory
+interface ContactInfo {
+  frame: number;
+  ballX: number;
+  ballY: number;
+  velocity: number;
+  directionChangeDeg: number;
+  playerTrackId: number;
+  playerDistance: number;
+  courtSide: string;
+  isAtNet: boolean;
+  isValidated: boolean;
+}
+
+interface ContactsData {
+  numContacts: number;
+  netY: number;
+  rallyStartFrame: number;
+  contacts: ContactInfo[];
+}
+
+// Action classification from contact sequence
+interface ActionInfo {
+  action: string;  // "serve", "receive", "set", "spike", "block", "dig", "unknown"
+  frame: number;
+  ballX: number;
+  ballY: number;
+  velocity: number;
+  playerTrackId: number;
+  courtSide: string;
+  confidence: number;
+}
+
+interface ActionsData {
+  rallyId: string;
+  numContacts: number;
+  actionSequence: string[];
+  actions: ActionInfo[];
+}
+
 export interface TrackPlayersResult {
   status: 'completed' | 'failed';
   frameCount?: number;
@@ -83,6 +123,9 @@ export interface TrackPlayersResult {
   serverInfo?: ServerInfo;
   // Ball positions for trajectory overlay
   ballPositions?: BallPosition[];
+  // Contact detection and action classification
+  contacts?: ContactsData;
+  actions?: ActionsData;
 }
 
 export interface GetPlayerTrackResult {
@@ -99,6 +142,8 @@ export interface GetPlayerTrackResult {
   ballPhases?: BallPhase[];
   serverInfo?: ServerInfo;
   ballPositions?: BallPosition[];
+  contacts?: ContactsData;
+  actions?: ActionsData;
   error?: string;
 }
 
@@ -161,6 +206,8 @@ interface PlayerTrackerOutput {
   ballPhases?: BallPhase[];
   serverInfo?: ServerInfo;
   ballPositions?: BallPosition[];
+  contacts?: ContactsData;
+  actions?: ActionsData;
 }
 
 /**
@@ -180,6 +227,7 @@ async function runPlayerTracker(
       'track-players',
       videoPath,
       '--output', outputPath,
+      '--actions',  // Enable contact detection + action classification
       // Note: Not using --quiet so we can see filter logs
     ];
 
@@ -315,6 +363,41 @@ async function runPlayerTracker(
           confidence: p.confidence,
         }));
 
+        // Contact detection and action classification (from --actions flag)
+        const contacts: ContactsData | undefined = result.contacts ? {
+          numContacts: result.contacts.numContacts,
+          netY: result.contacts.netY,
+          rallyStartFrame: result.contacts.rallyStartFrame,
+          contacts: (result.contacts.contacts || []).map((c: ContactInfo) => ({
+            frame: c.frame,
+            ballX: c.ballX,
+            ballY: c.ballY,
+            velocity: c.velocity,
+            directionChangeDeg: c.directionChangeDeg,
+            playerTrackId: c.playerTrackId,
+            playerDistance: c.playerDistance,
+            courtSide: c.courtSide,
+            isAtNet: c.isAtNet,
+            isValidated: c.isValidated,
+          })),
+        } : undefined;
+
+        const actions: ActionsData | undefined = result.actions ? {
+          rallyId: result.actions.rallyId || '',
+          numContacts: result.actions.numContacts,
+          actionSequence: result.actions.actionSequence || [],
+          actions: (result.actions.actions || []).map((a: ActionInfo) => ({
+            action: a.action,
+            frame: a.frame,
+            ballX: a.ballX,
+            ballY: a.ballY,
+            velocity: a.velocity,
+            playerTrackId: a.playerTrackId,
+            courtSide: a.courtSide,
+            confidence: a.confidence,
+          })),
+        } : undefined;
+
         console.log(`[PLAYER_TRACK] Output: frameCount=${frameCount}, detectionRate=${detectionRate.toFixed(2)}, avgPlayers=${avgPlayerCount.toFixed(1)}, tracks=${uniqueTrackCount}, positions=${positions.length}, rawPositions=${rawPositions?.length ?? 0}, ballPositions=${ballPositions?.length ?? 0}`);
         console.log(`[PLAYER_TRACK] Filter method: ${filterMethod ?? 'none (filtering may have failed)'}`);
         if (courtSplitY !== undefined) {
@@ -332,6 +415,9 @@ async function runPlayerTracker(
         if (serverInfo && serverInfo.trackId >= 0) {
           console.log(`[PLAYER_TRACK] Server detected: track #${serverInfo.trackId} (confidence: ${(serverInfo.confidence * 100).toFixed(0)}%)`);
         }
+        if (actions?.actions.length) {
+          console.log(`[PLAYER_TRACK] Actions: ${actions.actionSequence.join(' → ')} (${actions.numContacts} contacts)`);
+        }
 
         resolve({
           positions,
@@ -347,6 +433,8 @@ async function runPlayerTracker(
           ballPhases,
           serverInfo,
           ballPositions,
+          contacts,
+          actions,
         });
       } catch (parseError) {
         reject(new Error(`Failed to parse player tracker output: ${parseError}`));
@@ -398,6 +486,8 @@ export async function getPlayerTrack(
     ballPhases: (track.ballPhasesJson as BallPhase[] | null) ?? undefined,
     serverInfo: (track.serverInfoJson as ServerInfo | null) ?? undefined,
     ballPositions: (track.ballPositionsJson as BallPosition[] | null) ?? undefined,
+    contacts: (track.contactsJson as ContactsData | null) ?? undefined,
+    actions: (track.actionsJson as ActionsData | null) ?? undefined,
   };
 }
 
@@ -486,6 +576,8 @@ export async function trackPlayersForRally(
         ballPhasesJson: trackerResult.ballPhases as unknown as object[],
         serverInfoJson: trackerResult.serverInfo as unknown as object,
         ballPositionsJson: trackerResult.ballPositions as unknown as object[],
+        contactsJson: trackerResult.contacts as unknown as object,
+        actionsJson: trackerResult.actions as unknown as object,
         processingTimeMs,
         modelVersion: 'yolov8n',
         completedAt: new Date(),
@@ -505,6 +597,8 @@ export async function trackPlayersForRally(
         ballPhasesJson: trackerResult.ballPhases as unknown as object[],
         serverInfoJson: trackerResult.serverInfo as unknown as object,
         ballPositionsJson: trackerResult.ballPositions as unknown as object[],
+        contactsJson: trackerResult.contacts as unknown as object,
+        actionsJson: trackerResult.actions as unknown as object,
         processingTimeMs,
         modelVersion: 'yolov8n',
         completedAt: new Date(),
@@ -527,6 +621,8 @@ export async function trackPlayersForRally(
       ballPhases: trackerResult.ballPhases,
       serverInfo: trackerResult.serverInfo,
       ballPositions: trackerResult.ballPositions,
+      contacts: trackerResult.contacts,
+      actions: trackerResult.actions,
     };
   } catch (error) {
     console.error(`[PLAYER_TRACK] Error:`, error);

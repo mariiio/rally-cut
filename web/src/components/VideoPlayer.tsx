@@ -16,6 +16,7 @@ import { RotationGridOverlay } from './RotationGridOverlay';
 import { CropMaskOverlay } from './CropMaskOverlay';
 import { CourtCalibrationPanel } from './CourtCalibrationPanel';
 import { PlayerOverlay } from './PlayerOverlay';
+import { ActionOverlay } from './ActionOverlay';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { AspectRatio } from '@/constants/enums';
 
@@ -876,6 +877,16 @@ export function VideoPlayer() {
               videoRef={videoRef}
               ballPhases={playerTracks[currentRally._backendId]!.tracksJson!.ballPhases}
               showPhaseColors={true}
+            />
+          )}
+          {/* Action labels overlay */}
+          {showBallOverlay && currentRally && currentRally._backendId && playerTracks[currentRally._backendId]?.tracksJson?.actions?.actions?.length && (
+            <ActionOverlay
+              actions={playerTracks[currentRally._backendId]!.tracksJson!.actions!}
+              frameCount={playerTracks[currentRally._backendId]!.tracksJson!.frameCount}
+              rallyStartTime={currentRally.start_time}
+              rallyEndTime={currentRally.end_time}
+              videoRef={videoRef}
             />
           )}
           {/* Transform wrapper - video frame callback updates, CSS transition smooths between frames */}

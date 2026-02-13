@@ -1,0 +1,60 @@
+# Experiment 2: High-resolution player detection
+# Goal: Improve far-side player detection recall from 0-36% to >70%
+# Expected: Far-side recall 0-36% → 60-80% (1280 alone should get ~50%+)
+
+experiment:
+  name: exp-player-hires
+  description: "Higher resolution inference + P2 head for small player detection"
+
+# Variants to compare
+variants:
+  - name: baseline
+    yolo_model: yolov8n
+    imgsz: 640
+    description: "Current default"
+
+  - name: yolov8n_1280
+    yolo_model: yolov8n
+    imgsz: 1280
+    description: "Nano model at 2x resolution"
+
+  - name: yolo11m_1280
+    yolo_model: yolo11m
+    imgsz: 1280
+    description: "Medium model at 2x resolution"
+
+  - name: yolo11m_1280_p2
+    yolo_model: yolo11m
+    imgsz: 1280
+    p2_head: true  # Replace P5 with P2 detection head
+    description: "Medium model with P2 small-object head"
+
+  - name: yolo11m_1280_sahi
+    yolo_model: yolo11m
+    imgsz: 1280
+    sahi:
+      enabled: true
+      slice_height: 640
+      slice_width: 640
+      overlap: 0.2
+      region: upper_40  # Only SAHI on upper 40% (far court)
+    description: "Medium model with selective SAHI on far court"
+
+# Evaluation
+evaluation:
+  distance_buckets:
+    near: [0.67, 1.0]   # Bottom 33% of frame
+    mid: [0.33, 0.67]    # Middle 33%
+    far: [0.0, 0.33]     # Top 33% (farthest)
+  metrics:
+    - recall_per_bucket
+    - precision
+    - f1
+    - mota
+    - hota
+    - id_switches
+    - fps
+  target_recall:
+    near: 0.95
+    mid: 0.85
+    far: 0.70

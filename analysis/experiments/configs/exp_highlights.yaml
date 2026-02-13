@@ -1,0 +1,37 @@
+# Experiment 5: Highlight ranking and generation
+# Goal: Rank rally clips by excitement
+# Expected: Precision@10 > 60%
+
+experiment:
+  name: exp-highlights
+  description: "Multi-signal highlight ranking for automatic clip generation"
+
+# Scoring weights
+scoring:
+  weight_duration: 0.30
+  weight_action: 0.35
+  weight_audio: 0.20
+  weight_context: 0.15
+
+  # Duration scoring
+  max_duration_seconds: 20.0
+  min_duration_seconds: 3.0
+
+  # Action bonuses
+  block_bonus: 0.25
+  extended_exchange_bonus: 0.20
+  high_velocity_threshold: 0.04
+
+# Evaluation
+evaluation:
+  # Human evaluation protocol:
+  # 3 reviewers rate top-20 clips on 1-5 excitement scale
+  num_reviewers: 3
+  rating_scale: [1, 2, 3, 4, 5]
+  exciting_threshold: 4  # Rating >= 4 = "exciting"
+  metrics:
+    - precision_at_5
+    - precision_at_10
+    - ndcg
+    - inter_rater_agreement
+  target_precision_at_10: 0.60
