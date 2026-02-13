@@ -5,10 +5,10 @@ Loads evaluation JSON outputs from each experiment and outputs a comparison
 table in markdown format. Highlights per-rally regressions.
 
 Usage:
-    # Compare all experiment results (expects files in current dir or specified paths)
+    # Compare experiment results (expects files in current dir or specified paths)
     uv run python scripts/compare_tracking_experiments.py \
         --baseline baseline.json \
-        --experiments exp_a.json exp_b.json exp_c.json
+        --experiments exp_yolo11n.json exp_reid.json
 
     # Auto-discover experiment files
     uv run python scripts/compare_tracking_experiments.py --auto
@@ -25,9 +25,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 # Key metrics to compare (higher is better unless noted)
-METRICS = {
+METRICS: dict[str, dict[str, Any]] = {
     "hota": {"label": "HOTA", "higher_better": True, "format": ".1f", "unit": "%"},
     "mota": {"label": "MOTA", "higher_better": True, "format": ".1f", "unit": "%"},
     "idf1": {"label": "IDF1", "higher_better": True, "format": ".1f", "unit": "%"},
@@ -48,7 +47,8 @@ REGRESSION_THRESHOLD = 0.05
 def load_results(path: Path) -> dict[str, Any]:
     """Load evaluation results from JSON file."""
     with open(path) as f:
-        return json.load(f)
+        result: dict[str, Any] = json.load(f)
+    return result
 
 
 def extract_metrics(results: dict[str, Any]) -> dict[str, float]:
@@ -250,13 +250,16 @@ def auto_discover_results() -> dict[str, Path]:
 
     patterns = {
         "baseline": ["baseline.json", "baseline_tracking.json"],
-        "A (ReID)": ["exp_a.json", "exp_a_reid.json", "experiment_a.json"],
-        "B (YOLO11)": ["exp_b.json", "exp_b_yolo11.json", "experiment_b.json"],
-        "C (BoxMOT)": ["exp_c.json", "exp_c_boxmot.json", "experiment_c.json"],
-        "D (GTA)": ["exp_d.json", "exp_d_gta.json", "experiment_d.json"],
-        "E (Bidir)": ["exp_e.json", "exp_e_bidir.json", "experiment_e.json"],
-        "F (Court)": ["exp_f.json", "exp_f_court.json", "experiment_f.json"],
     }
+
+    # Auto-discover any exp_*.json files
+    for search_dir in search_dirs:
+        if not search_dir.is_dir():
+            continue
+        for f in sorted(search_dir.glob("exp_*.json")):
+            name = f.stem.replace("exp_", "").replace("_", " ").title()
+            if name not in discovered:
+                discovered[name] = f
 
     for exp_name, filenames in patterns.items():
         for search_dir in search_dirs:
@@ -374,7 +377,7 @@ def main() -> None:
         parser.print_help()
         print("\nExample:")
         print("  python scripts/compare_tracking_experiments.py --auto")
-        print("  python scripts/compare_tracking_experiments.py -b baseline.json -e exp_a.json exp_b.json")
+        print("  python scripts/compare_tracking_experiments.py -b baseline.json -e exp_yolo11n.json exp_reid.json")
         sys.exit(1)
 
 

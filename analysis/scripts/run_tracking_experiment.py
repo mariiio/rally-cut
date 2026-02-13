@@ -12,9 +12,6 @@ Usage:
     # Run with specific options
     uv run python scripts/run_tracking_experiment.py --yolo-model yolo11n -o exp_b.json
 
-    # Run with bidirectional tracking
-    uv run python scripts/run_tracking_experiment.py --bidirectional -o exp_e.json
-
     # Quick test on single rally
     uv run python scripts/run_tracking_experiment.py --rally-id 1bfcbc4f -o quick.json
 """
@@ -27,6 +24,7 @@ import logging
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 # Add analysis root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -35,12 +33,11 @@ logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def run_experiment(args: argparse.Namespace) -> dict:
+def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
     """Run tracking experiment on all labeled rallies."""
     from rallycut.evaluation.tracking.db import get_video_path, load_labeled_rallies
     from rallycut.evaluation.tracking.metrics import aggregate_results, evaluate_rally
-    from rallycut.tracking.player_filter import PlayerFilterConfig, stabilize_track_ids
-    from rallycut.tracking.player_filter import PlayerFilter
+    from rallycut.tracking.player_filter import PlayerFilterConfig
     from rallycut.tracking.player_tracker import PlayerTracker
 
     # Load labeled rallies from DB
@@ -48,7 +45,7 @@ def run_experiment(args: argparse.Namespace) -> dict:
     rallies = load_labeled_rallies()
 
     # Filter by rally_id prefix if specified
-    if hasattr(args, "rally_id") and args.rally_id:
+    if args.rally_id:
         prefix = args.rally_id
         rallies = [r for r in rallies if r.rally_id.startswith(prefix)]
 
@@ -59,25 +56,25 @@ def run_experiment(args: argparse.Namespace) -> dict:
         return {}
 
     # Create tracker with experiment settings
-    tracker_kwargs = {
+    tracker_kwargs: dict[str, Any] = {
         "yolo_model": args.yolo_model,
         "confidence": args.confidence,
         "tracker": args.tracker,
         "preprocessing": args.preprocessing,
     }
 
-    # Experiment A: ReID
-    if hasattr(args, "appearance_thresh") and args.appearance_thresh is not None:
+    # ReID overrides
+    if args.appearance_thresh is not None:
         tracker_kwargs["appearance_thresh"] = args.appearance_thresh
-    if hasattr(args, "with_reid") and args.with_reid:
+    if args.with_reid:
         tracker_kwargs["with_reid"] = True
 
     print(f"Tracker config: {tracker_kwargs}")
     tracker = PlayerTracker(**tracker_kwargs)
 
     # Track each rally and evaluate
-    all_results = []
-    per_rally_metrics = {}
+    all_results: list[Any] = []
+    per_rally_metrics: dict[str, dict[str, Any]] = {}
     total_start = time.time()
 
     for i, rally in enumerate(rallies):
@@ -93,24 +90,14 @@ def run_experiment(args: argparse.Namespace) -> dict:
         # Run tracking
         track_start = time.time()
         try:
-            track_kwargs = {
-                "video_path": video_path,
-                "start_ms": rally.start_ms,
-                "end_ms": rally.end_ms,
-                "stride": 1,
-                "filter_enabled": True,
-                "filter_config": PlayerFilterConfig(),
-            }
-
-            # Experiment E: bidirectional
-            if hasattr(args, "bidirectional") and args.bidirectional:
-                track_kwargs["bidirectional"] = True
-
-            # Experiment D: tracklet postprocess
-            if hasattr(args, "tracklet_postprocess") and args.tracklet_postprocess:
-                track_kwargs["tracklet_postprocess"] = True
-
-            result = tracker.track_video(**track_kwargs)
+            result = tracker.track_video(
+                video_path=video_path,
+                start_ms=rally.start_ms,
+                end_ms=rally.end_ms,
+                stride=1,
+                filter_enabled=True,
+                filter_config=PlayerFilterConfig(),
+            )
 
             # Offset frame numbers to rally-relative (0-based) to match GT
             if result.positions:
@@ -210,8 +197,6 @@ def run_experiment(args: argparse.Namespace) -> dict:
         output = {
             "experiment": {
                 "tracker_config": tracker_kwargs,
-                "bidirectional": getattr(args, "bidirectional", False),
-                "tracklet_postprocess": getattr(args, "tracklet_postprocess", False),
                 "iou_threshold": args.iou_threshold,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "total_time_s": total_time,
@@ -251,11 +236,9 @@ def main() -> None:
     parser.add_argument("--preprocessing", default="none", help="Preprocessing (none/clahe)")
     parser.add_argument("--iou-threshold", type=float, default=0.5, help="Eval IoU threshold")
 
-    # Experiment-specific flags
-    parser.add_argument("--with-reid", action="store_true", help="Exp A: Enable BoT-SORT ReID")
-    parser.add_argument("--appearance-thresh", type=float, help="Exp A: ReID appearance threshold")
-    parser.add_argument("--bidirectional", action="store_true", help="Exp E: bidirectional tracking")
-    parser.add_argument("--tracklet-postprocess", action="store_true", help="Exp D: GTA postprocess")
+    # Optional overrides
+    parser.add_argument("--with-reid", action="store_true", help="Enable BoT-SORT ReID")
+    parser.add_argument("--appearance-thresh", type=float, help="ReID appearance threshold")
 
     args = parser.parse_args()
 
