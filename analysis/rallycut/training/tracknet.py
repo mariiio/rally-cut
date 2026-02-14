@@ -77,7 +77,6 @@ class TrackNet(nn.Module):
 def wbce_loss(
     y_true: torch.Tensor,
     y_pred: torch.Tensor,
-    sample_weights: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Weighted Binary Cross-Entropy with focal-like weighting.
 
@@ -88,17 +87,11 @@ def wbce_loss(
     Args:
         y_true: Ground truth heatmaps (B, 3, H, W).
         y_pred: Predicted heatmaps (B, 3, H, W).
-        sample_weights: Per-frame source weights (B, 3). Scales loss per frame
-            based on label source quality (gold=1.0, filtered=0.7, none=0.3).
-            If None, all frames weighted equally.
     """
     per_pixel = -(
         ((1 - y_pred) ** 2) * y_true * torch.log(torch.clamp(y_pred, 1e-7, 1))
         + (y_pred ** 2) * (1 - y_true) * torch.log(torch.clamp(1 - y_pred, 1e-7, 1))
     )
-    if sample_weights is not None:
-        # sample_weights: (B, 3) -> (B, 3, 1, 1) to broadcast over (H, W)
-        per_pixel = per_pixel * sample_weights.unsqueeze(-1).unsqueeze(-1)
     return per_pixel.sum()
 
 
@@ -119,22 +112,12 @@ def gen_heatmap(
     return hm
 
 
-# Source-based loss weights: how much to trust each label source
-# Gold GT (source=2): fully trusted, weight=1.0
-# Filtered (source=1): high-quality pseudo-label from BallFilter pipeline
-# None (source=0): no detection — still informative (ball not here)
-SOURCE_WEIGHTS = {0: 0.3, 1: 0.7, 2: 1.0}
-
-
-class TrackNetDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]):
-    """Dataset for TrackNet training from pseudo-label CSVs and frame images.
+class TrackNetDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
+    """Dataset for TrackNet training from label CSVs and frame images.
 
     Expected layout:
-        data_dir/{rally_id}.csv          - Labels (frame_num, visible, x, y[, source])
+        data_dir/{rally_id}.csv          - Labels (frame_num, visible, x, y)
         data_dir/images/{rally_id}/0.jpg - Frame images at 512x288
-
-    CSV source column (optional): 0=none, 1=filtered, 2=gold.
-    If missing, all labels are treated as source=1 (filtered).
     """
 
     def __init__(self, data_dir: Path, rally_ids: list[str], augment: bool = False) -> None:
@@ -142,8 +125,6 @@ class TrackNetDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]):
         self.augment = augment
         # Cache labels: rally_id -> (N, 3) array [visible, x, y]
         self._labels: dict[str, np.ndarray] = {}
-        # Cache source weights: rally_id -> (N,) array of loss weights
-        self._weights: dict[str, np.ndarray] = {}
         self.samples: list[tuple[str, int]] = []
 
         for rally_id in rally_ids:
@@ -155,20 +136,15 @@ class TrackNetDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]):
 
             with open(csv_path) as f:
                 reader = csv.reader(f)
-                header = next(reader)
-                has_source = len(header) >= 5  # frame_num, visible, x, y, source
+                next(reader)  # skip header
                 rows = []
-                sources = []
                 for r in reader:
                     rows.append([int(r[1]), float(r[2]), float(r[3])])
-                    source = int(r[4]) if has_source and len(r) >= 5 else 1
-                    sources.append(SOURCE_WEIGHTS.get(source, 0.7))
 
             if len(rows) < NUM_INPUT_FRAMES:
                 continue
 
             self._labels[rally_id] = np.array(rows, dtype=np.float32)
-            self._weights[rally_id] = np.array(sources, dtype=np.float32)
 
             # 3-frame sliding windows
             for i in range(len(rows) - NUM_INPUT_FRAMES + 1):
@@ -244,10 +220,9 @@ class TrackNetDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]):
 
         return aug_frames, aug_labels
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         rally_id, start = self.samples[idx]
         labels = self._labels[rally_id]
-        weights = self._weights[rally_id]
 
         # Load 3 consecutive frames as HWC uint8
         raw_frames: list[np.ndarray] = []
@@ -258,9 +233,8 @@ class TrackNetDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]):
                 img = np.zeros((IMG_HEIGHT, IMG_WIDTH, 3), dtype=np.uint8)
             raw_frames.append(img)
 
-        # Get labels and weights for this window
+        # Get labels for this window
         window_labels = labels[start : start + NUM_INPUT_FRAMES]
-        window_weights = weights[start : start + NUM_INPUT_FRAMES]
 
         # Apply augmentation (before CHW transpose)
         if self.augment:
@@ -281,8 +255,7 @@ class TrackNetDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]):
                 heatmaps.append(np.zeros((IMG_HEIGHT, IMG_WIDTH), dtype=np.float32))
 
         y = torch.from_numpy(np.stack(heatmaps))
-        w = torch.from_numpy(window_weights)  # (3,) per-frame source weights
-        return x, y, w
+        return x, y
 
 
 @dataclass
@@ -437,14 +410,13 @@ def train_tracknet(
         train_batches = 0
 
         pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{config.epochs}")
-        for x_batch, y_batch, w_batch in pbar:
+        for x_batch, y_batch in pbar:
             x_batch = x_batch.to(device)
             y_batch = y_batch.to(device)
-            w_batch = w_batch.to(device)
             optimizer.zero_grad()
             with torch.amp.autocast("cuda", enabled=use_amp):
                 y_pred = model(x_batch)
-                loss = wbce_loss(y_batch, y_pred, w_batch)
+                loss = wbce_loss(y_batch, y_pred)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -465,13 +437,12 @@ def train_tracknet(
             total_tp = total_fp = total_fn = 0
 
             with torch.no_grad():
-                for x_batch, y_batch, w_batch in val_loader:
+                for x_batch, y_batch in val_loader:
                     x_batch = x_batch.to(device)
                     y_batch = y_batch.to(device)
-                    w_batch = w_batch.to(device)
                     with torch.amp.autocast("cuda", enabled=use_amp):
                         y_pred = model(x_batch)
-                        val_loss += wbce_loss(y_batch, y_pred, w_batch).item()
+                        val_loss += wbce_loss(y_batch, y_pred).item()
                     val_batches += 1
                     tp, fp, fn = _compute_detection_metrics(y_batch, y_pred)
                     total_tp += tp
