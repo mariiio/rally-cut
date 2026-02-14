@@ -105,35 +105,14 @@ def merge_wasb_primary(
 def apply_light_filter(
     positions: list[BallPosition],
 ) -> list[BallPosition]:
-    """Apply a lighter filter tuned for ensemble output.
+    """Apply ensemble-optimized filter to merged positions.
 
-    WASB positions are already high-precision, so we use:
-    - Shorter min_segment_frames (WASB has shorter accurate segments)
-    - No motion energy filter (WASB doesn't produce stationary FPs)
-    - Keep interpolation (fills gaps between WASB/VballNet detections)
-    - Keep segment pruning with relaxed thresholds
+    Uses get_ensemble_filter_config() which is tuned to not hurt
+    the ensemble's 79.4% unfiltered baseline.
     """
-    config = BallFilterConfig(
-        # Lighter segment pruning (WASB has shorter but accurate segments)
-        enable_segment_pruning=True,
-        segment_jump_threshold=0.20,
-        min_segment_frames=5,  # Was 15 — WASB segments can be short but accurate
-        # Skip motion energy filter (WASB doesn't have this issue)
-        enable_motion_energy_filter=False,
-        # Keep exit ghost removal
-        enable_exit_ghost_removal=True,
-        # Lighter oscillation pruning
-        enable_oscillation_pruning=True,
-        min_oscillation_frames=12,
-        # Keep outlier/blip removal
-        enable_outlier_removal=True,
-        enable_blip_removal=True,
-        # Interpolation to fill gaps
-        enable_interpolation=True,
-        max_interpolation_gap=10,
-        # Output threshold
-        min_output_confidence=0.05,
-    )
+    from rallycut.tracking.ball_filter import get_ensemble_filter_config
+
+    config = get_ensemble_filter_config()
     return apply_ball_filter_config(positions, config)
 
 
