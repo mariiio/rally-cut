@@ -74,17 +74,32 @@ class TrackNet(nn.Module):
         return result
 
 
-def wbce_loss(y_true: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
+def wbce_loss(
+    y_true: torch.Tensor,
+    y_pred: torch.Tensor,
+    sample_weights: torch.Tensor | None = None,
+) -> torch.Tensor:
     """Weighted Binary Cross-Entropy with focal-like weighting.
 
     Harder examples get higher weight:
     - Positives: weight = (1 - y_pred)^2
     - Negatives: weight = y_pred^2
+
+    Args:
+        y_true: Ground truth heatmaps (B, 3, H, W).
+        y_pred: Predicted heatmaps (B, 3, H, W).
+        sample_weights: Per-frame source weights (B, 3). Scales loss per frame
+            based on label source quality (gold=1.0, filtered=0.7, none=0.3).
+            If None, all frames weighted equally.
     """
-    return -(
+    per_pixel = -(
         ((1 - y_pred) ** 2) * y_true * torch.log(torch.clamp(y_pred, 1e-7, 1))
         + (y_pred ** 2) * (1 - y_true) * torch.log(torch.clamp(1 - y_pred, 1e-7, 1))
-    ).sum()
+    )
+    if sample_weights is not None:
+        # sample_weights: (B, 3) -> (B, 3, 1, 1) to broadcast over (H, W)
+        per_pixel = per_pixel * sample_weights.unsqueeze(-1).unsqueeze(-1)
+    return per_pixel.sum()
 
 
 def gen_heatmap(
@@ -104,18 +119,31 @@ def gen_heatmap(
     return hm
 
 
-class TrackNetDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
+# Source-based loss weights: how much to trust each label source
+# Gold GT (source=2): fully trusted, weight=1.0
+# Filtered (source=1): high-quality pseudo-label from BallFilter pipeline
+# None (source=0): no detection — still informative (ball not here)
+SOURCE_WEIGHTS = {0: 0.3, 1: 0.7, 2: 1.0}
+
+
+class TrackNetDataset(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]):
     """Dataset for TrackNet training from pseudo-label CSVs and frame images.
 
     Expected layout:
-        data_dir/{rally_id}.csv          - Labels (frame_num, visible, x, y)
+        data_dir/{rally_id}.csv          - Labels (frame_num, visible, x, y[, source])
         data_dir/images/{rally_id}/0.jpg - Frame images at 512x288
+
+    CSV source column (optional): 0=none, 1=filtered, 2=gold.
+    If missing, all labels are treated as source=1 (filtered).
     """
 
-    def __init__(self, data_dir: Path, rally_ids: list[str]) -> None:
+    def __init__(self, data_dir: Path, rally_ids: list[str], augment: bool = False) -> None:
         self.data_dir = data_dir
-        # Cache labels in memory: rally_id -> (N, 3) array [visible, x, y]
+        self.augment = augment
+        # Cache labels: rally_id -> (N, 3) array [visible, x, y]
         self._labels: dict[str, np.ndarray] = {}
+        # Cache source weights: rally_id -> (N,) array of loss weights
+        self._weights: dict[str, np.ndarray] = {}
         self.samples: list[tuple[str, int]] = []
 
         for rally_id in rally_ids:
@@ -127,48 +155,134 @@ class TrackNetDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
 
             with open(csv_path) as f:
                 reader = csv.reader(f)
-                next(reader)  # Skip header
-                rows = [[int(r[1]), float(r[2]), float(r[3])] for r in reader]
+                header = next(reader)
+                has_source = len(header) >= 5  # frame_num, visible, x, y, source
+                rows = []
+                sources = []
+                for r in reader:
+                    rows.append([int(r[1]), float(r[2]), float(r[3])])
+                    source = int(r[4]) if has_source and len(r) >= 5 else 1
+                    sources.append(SOURCE_WEIGHTS.get(source, 0.7))
 
             if len(rows) < NUM_INPUT_FRAMES:
                 continue
 
-            labels = np.array(rows, dtype=np.float32)
-            self._labels[rally_id] = labels
+            self._labels[rally_id] = np.array(rows, dtype=np.float32)
+            self._weights[rally_id] = np.array(sources, dtype=np.float32)
 
             # 3-frame sliding windows
-            for i in range(len(labels) - NUM_INPUT_FRAMES + 1):
+            for i in range(len(rows) - NUM_INPUT_FRAMES + 1):
                 self.samples.append((rally_id, i))
 
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    @staticmethod
+    def _augment(
+        frames: list[np.ndarray],
+        labels: np.ndarray,
+        rng: np.random.Generator,
+    ) -> tuple[list[np.ndarray], np.ndarray]:
+        """Apply data augmentation to HWC uint8 frames and labels.
+
+        Augmentations (applied consistently across all 3 frames in triplet):
+        - Brightness: uniform ±15%
+        - Contrast: uniform ±10%
+        - Gamma correction: log-uniform [0.7, 1.4] (simulates exposure variation)
+        - Color temperature: shift B/R channels ±10% (simulates warm/cool lighting)
+        - Gaussian noise: sigma 0-8 (simulates camera sensor noise)
+        - Horizontal flip: 50% chance (flips x labels)
+
+        Args:
+            frames: List of HWC uint8 frame arrays.
+            labels: (N, 3) array of [visible, x, y] for each frame.
+            rng: Numpy random generator for thread safety.
+
+        Returns:
+            Augmented (frames, labels) tuple. Labels array is copied if modified.
+        """
+        # Sample all augmentation parameters once (consistent across triplet)
+        brightness = rng.uniform(0.85, 1.15)
+        contrast = rng.uniform(0.90, 1.10)
+        gamma = float(np.exp(rng.uniform(np.log(0.7), np.log(1.4))))
+        # Color temperature: shift blue (cool) vs red (warm)
+        temp_shift = rng.uniform(-0.10, 0.10)
+        noise_sigma = rng.uniform(0, 8)
+
+        # Precompute gamma LUT for efficiency (uint8 → uint8)
+        inv_gamma = 1.0 / gamma
+        gamma_lut = ((np.arange(256, dtype=np.float32) / 255.0) ** inv_gamma) * 255.0
+
+        aug_frames = []
+        for frame in frames:
+            f = frame.astype(np.float32)
+            # Brightness
+            f = f * brightness
+            # Contrast
+            mean = f.mean()
+            f = (f - mean) * contrast + mean
+            f = np.clip(f, 0, 255)
+            # Gamma correction via LUT
+            f = gamma_lut[f.astype(np.uint8)]
+            # Color temperature: BGR format — shift B down/up and R up/down
+            f[:, :, 0] = f[:, :, 0] * (1 - temp_shift)  # Blue
+            f[:, :, 2] = f[:, :, 2] * (1 + temp_shift)  # Red
+            # Gaussian noise
+            if noise_sigma > 0.5:
+                noise = rng.normal(0, noise_sigma, f.shape).astype(np.float32)
+                f = f + noise
+            aug_frames.append(np.clip(f, 0, 255).astype(np.uint8))
+
+        # Horizontal flip: 50% chance
+        aug_labels = labels
+        if rng.random() < 0.5:
+            aug_frames = [frame[:, ::-1, :].copy() for frame in aug_frames]
+            aug_labels = labels.copy()
+            # Flip x coordinate: x → 1 - x (only for visible frames)
+            visible_mask = aug_labels[:, 0] >= 1
+            aug_labels[visible_mask, 1] = 1.0 - aug_labels[visible_mask, 1]
+
+        return aug_frames, aug_labels
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         rally_id, start = self.samples[idx]
         labels = self._labels[rally_id]
+        weights = self._weights[rally_id]
 
-        # Load 3 consecutive frames and concatenate channels → (9, H, W)
-        frames: list[np.ndarray] = []
+        # Load 3 consecutive frames as HWC uint8
+        raw_frames: list[np.ndarray] = []
         for i in range(NUM_INPUT_FRAMES):
             img_path = self.data_dir / "images" / rally_id / f"{start + i}.jpg"
             img = cv2.imread(str(img_path))
             if img is None:
                 img = np.zeros((IMG_HEIGHT, IMG_WIDTH, 3), dtype=np.uint8)
-            frames.append(img.transpose(2, 0, 1))  # HWC → CHW
+            raw_frames.append(img)
 
-        x = torch.from_numpy(np.concatenate(frames, axis=0)).float() / 255.0
+        # Get labels and weights for this window
+        window_labels = labels[start : start + NUM_INPUT_FRAMES]
+        window_weights = weights[start : start + NUM_INPUT_FRAMES]
+
+        # Apply augmentation (before CHW transpose)
+        if self.augment:
+            rng = np.random.default_rng()
+            raw_frames, window_labels = self._augment(raw_frames, window_labels, rng)
+
+        # HWC → CHW and concatenate → (9, H, W)
+        chw_frames = [f.transpose(2, 0, 1) for f in raw_frames]
+        x = torch.from_numpy(np.concatenate(chw_frames, axis=0)).float() / 255.0
 
         # Generate heatmaps for each frame → (3, H, W)
         heatmaps: list[np.ndarray] = []
         for i in range(NUM_INPUT_FRAMES):
-            vis, lx, ly = labels[start + i]
+            vis, lx, ly = window_labels[i]
             if vis >= 1:
                 heatmaps.append(gen_heatmap(float(lx), float(ly)))
             else:
                 heatmaps.append(np.zeros((IMG_HEIGHT, IMG_WIDTH), dtype=np.float32))
 
         y = torch.from_numpy(np.stack(heatmaps))
-        return x, y
+        w = torch.from_numpy(window_weights)  # (3,) per-frame source weights
+        return x, y, w
 
 
 @dataclass
@@ -246,9 +360,9 @@ def train_tracknet(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    # Create datasets
-    train_dataset = TrackNetDataset(data_dir, train_rally_ids)
-    val_dataset = TrackNetDataset(data_dir, val_rally_ids) if val_rally_ids else None
+    # Create datasets (augment training data only)
+    train_dataset = TrackNetDataset(data_dir, train_rally_ids, augment=True)
+    val_dataset = TrackNetDataset(data_dir, val_rally_ids, augment=False) if val_rally_ids else None
 
     if len(train_dataset) == 0:
         raise ValueError(
@@ -305,6 +419,12 @@ def train_tracknet(
     param_count = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {param_count:,}")
 
+    # Mixed precision for faster training on Ampere+ GPUs (A10G, A100)
+    use_amp = device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+    if use_amp:
+        print("Mixed precision (fp16) enabled")
+
     best_metrics: dict[str, float] = {"precision": 0.0, "recall": 0.0, "f1": 0.0}
     best_epoch = start_epoch
     avg_val_loss = float("inf")
@@ -317,14 +437,17 @@ def train_tracknet(
         train_batches = 0
 
         pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{config.epochs}")
-        for x_batch, y_batch in pbar:
+        for x_batch, y_batch, w_batch in pbar:
             x_batch = x_batch.to(device)
             y_batch = y_batch.to(device)
+            w_batch = w_batch.to(device)
             optimizer.zero_grad()
-            y_pred = model(x_batch)
-            loss = wbce_loss(y_batch, y_pred)
-            loss.backward()
-            optimizer.step()
+            with torch.amp.autocast("cuda", enabled=use_amp):
+                y_pred = model(x_batch)
+                loss = wbce_loss(y_batch, y_pred, w_batch)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             train_loss += loss.item()
             train_batches += 1
             pbar.set_postfix(loss=f"{loss.item():.0f}")
@@ -342,11 +465,13 @@ def train_tracknet(
             total_tp = total_fp = total_fn = 0
 
             with torch.no_grad():
-                for x_batch, y_batch in val_loader:
+                for x_batch, y_batch, w_batch in val_loader:
                     x_batch = x_batch.to(device)
                     y_batch = y_batch.to(device)
-                    y_pred = model(x_batch)
-                    val_loss += wbce_loss(y_batch, y_pred).item()
+                    w_batch = w_batch.to(device)
+                    with torch.amp.autocast("cuda", enabled=use_amp):
+                        y_pred = model(x_batch)
+                        val_loss += wbce_loss(y_batch, y_pred, w_batch).item()
                     val_batches += 1
                     tp, fp, fn = _compute_detection_metrics(y_batch, y_pred)
                     total_tp += tp

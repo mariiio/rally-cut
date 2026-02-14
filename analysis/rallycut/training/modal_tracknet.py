@@ -1,7 +1,7 @@
 """Modal deployment for TrackNet ball tracking fine-tuning.
 
 Trains a TrackNetV2 model on pseudo-labeled ball positions (from VballNet)
-and gold ground truth labels. Uses T4 GPU on Modal.
+and gold ground truth labels. Uses A10G GPU on Modal with mixed precision.
 
 Data must be uploaded to Modal volume first:
     rallycut train tracknet-modal --upload
@@ -46,8 +46,8 @@ training_volume = modal.Volume.from_name("rallycut-training", create_if_missing=
 
 @app.function(
     image=image,
-    gpu="T4",
-    timeout=7200,  # 2 hours max (TrackNet trains faster than VideoMAE)
+    gpu="A10G",
+    timeout=14400,  # 4 hours max
     volumes={"/data": training_volume},
     memory=16384,
     retries=modal.Retries(
@@ -64,14 +64,14 @@ def train_model(
     output_dir: str = "/data/models/tracknet",
     fresh: bool = False,
 ) -> dict:
-    """Train TrackNet on Modal T4 GPU.
+    """Train TrackNet on Modal A10G GPU.
 
     Scans data_dir for available rallies (CSV + images), splits by rally
     into train/val, and trains the model.
 
     Args:
         epochs: Number of training epochs.
-        batch_size: Batch size (T4 16GB VRAM supports 16-32 for TrackNet).
+        batch_size: Batch size (A10G 24GB VRAM supports 16-32 for TrackNet).
         val_ratio: Fraction of rallies held out for validation.
         data_dir: Path to training data on volume.
         output_dir: Path to save model on volume.
@@ -90,7 +90,7 @@ def train_model(
 
     from rallycut.training.tracknet import TrackNetConfig, train_tracknet
 
-    print("Starting TrackNet training on Modal T4 GPU")
+    print("Starting TrackNet training on Modal A10G GPU")
     print(f"  Epochs: {epochs}")
     print(f"  Batch size: {batch_size}")
     print(f"  Val ratio: {val_ratio}")

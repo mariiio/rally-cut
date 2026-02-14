@@ -4,6 +4,7 @@ Usage:
     cd analysis
     uv run python scripts/eval_tracknet.py
     uv run python scripts/eval_tracknet.py --model last  # Use last.pt instead of best.pt
+    uv run python scripts/eval_tracknet.py --ensemble    # Include ensemble (TrackNet + VballNet)
 """
 
 from __future__ import annotations
@@ -161,10 +162,16 @@ def run_tracknet_inference(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate TrackNet vs VballNet")
     parser.add_argument("--model", default="best", help="Model name: best or last")
+    parser.add_argument("--ensemble", action="store_true", help="Include ensemble evaluation")
     args = parser.parse_args()
+
+    show_ensemble = args.ensemble
 
     # Load model
     model = load_tracknet(args.model)
+
+    if show_ensemble:
+        from rallycut.tracking.ball_ensemble import ensemble_positions
 
     # Load rallies with ball GT
     rallies = load_labeled_rallies()
@@ -172,13 +179,18 @@ def main() -> None:
         console.print("[red]No rallies with ball GT found[/red]")
         return
 
-    console.print(f"Found {len(rallies)} rallies with ball ground truth\n")
+    console.print(f"Found {len(rallies)} rallies with ball ground truth")
+    if show_ensemble:
+        console.print("[cyan]Ensemble mode: trajectory-aware merge (agree=avg, disagree=VballNet)[/cyan]")
+    print()
 
     # Collect results for comparison table
     vballnet_results: list[tuple[str, dict[str, float]]] = []
     tracknet_results: list[tuple[str, dict[str, float]]] = []
+    ensemble_results: list[tuple[str, dict[str, float]]] = []
 
     raw_cache = BallRawCache()
+    filter_config = BallFilterConfig()
 
     for rally in rallies:
         rally_label = f"{rally.rally_id[:8]}..."
@@ -186,10 +198,10 @@ def main() -> None:
 
         # --- VballNet baseline ---
         cached = raw_cache.get(rally.rally_id)
+        raw_vballnet: list[BallPosition] = []
         if cached is not None:
-            vballnet_preds = apply_ball_filter_config(
-                cached.raw_ball_positions, BallFilterConfig()
-            )
+            raw_vballnet = cached.raw_ball_positions
+            vballnet_preds = apply_ball_filter_config(raw_vballnet, filter_config)
         elif rally.predictions is not None and rally.predictions.ball_positions:
             vballnet_preds = rally.predictions.ball_positions
         else:
@@ -213,9 +225,10 @@ def main() -> None:
         video_path = get_video_path(rally.video_id)
         if video_path is None:
             console.print("  [yellow]Video not available, skipping TrackNet[/yellow]")
-            tracknet_results.append((rally.rally_id, {
-                "detection": 0.0, "match": 0.0, "mean_err": 0.0,
-            }))
+            empty = {"detection": 0.0, "match": 0.0, "mean_err": 0.0}
+            tracknet_results.append((rally.rally_id, empty))
+            if show_ensemble:
+                ensemble_results.append((rally.rally_id, empty))
             continue
 
         t0 = time.time()
@@ -225,7 +238,7 @@ def main() -> None:
         inference_time = time.time() - t0
 
         # Apply same ball filter pipeline
-        tracknet_filtered = apply_ball_filter_config(tracknet_preds, BallFilterConfig())
+        tracknet_filtered = apply_ball_filter_config(tracknet_preds, filter_config)
 
         tracknet_metrics = evaluate_ball_tracking(
             ground_truth=rally.ground_truth.positions,
@@ -251,71 +264,145 @@ def main() -> None:
             f"err={tracknet_metrics.mean_error_px:.1f}px  "
             f"({inference_time:.1f}s, {len(tracknet_preds)} raw → {len(tracknet_filtered)} filtered)"
         )
+
+        # --- Ensemble ---
+        if show_ensemble:
+            merged = ensemble_positions(tracknet_preds, raw_vballnet)
+            merged_filtered = apply_ball_filter_config(merged, filter_config)
+
+            ens_metrics = evaluate_ball_tracking(
+                ground_truth=rally.ground_truth.positions,
+                predictions=merged_filtered,
+                video_width=rally.video_width,
+                video_height=rally.video_height,
+                video_fps=rally.video_fps,
+            )
+            ensemble_results.append((rally.rally_id, {
+                "detection": ens_metrics.detection_rate,
+                "match": ens_metrics.match_rate,
+                "mean_err": ens_metrics.mean_error_px,
+            }))
+            console.print(
+                f"  Ensemble:  det={ens_metrics.detection_rate:.1%}  "
+                f"match={ens_metrics.match_rate:.1%}  "
+                f"err={ens_metrics.mean_error_px:.1f}px  "
+                f"({len(merged)} merged → {len(merged_filtered)} filtered)"
+            )
+
         print()
 
     # Summary comparison table
     console.print("\n[bold]== Summary Comparison ==[/bold]")
     table = Table(show_header=True, header_style="bold")
     table.add_column("Rally")
-    table.add_column("VballNet Det%", justify="right")
-    table.add_column("TrackNet Det%", justify="right")
-    table.add_column("VballNet Match%", justify="right")
-    table.add_column("TrackNet Match%", justify="right")
-    table.add_column("VballNet Err", justify="right")
-    table.add_column("TrackNet Err", justify="right")
+    table.add_column("VNet Det%", justify="right")
+    table.add_column("TNet Det%", justify="right")
+    if show_ensemble:
+        table.add_column("Ens Det%", justify="right")
+    table.add_column("VNet Match%", justify="right")
+    table.add_column("TNet Match%", justify="right")
+    if show_ensemble:
+        table.add_column("Ens Match%", justify="right")
+    table.add_column("VNet Err", justify="right")
+    table.add_column("TNet Err", justify="right")
+    if show_ensemble:
+        table.add_column("Ens Err", justify="right")
     table.add_column("Winner")
 
-    total_v_det = total_t_det = 0.0
-    total_v_match = total_t_match = 0.0
-    total_v_err = total_t_err = 0.0
+    total_v_det = total_t_det = total_e_det = 0.0
+    total_v_match = total_t_match = total_e_match = 0.0
+    total_v_err = total_t_err = total_e_err = 0.0
     count = 0
 
+    ens_iter = iter(ensemble_results) if show_ensemble else iter([])
     for (rid, vr), (_, tr) in zip(vballnet_results, tracknet_results):
-        winner = ""
-        if tr["match"] > vr["match"]:
-            winner = "[green]TrackNet[/green]"
-        elif vr["match"] > tr["match"]:
-            winner = "[blue]VballNet[/blue]"
-        else:
-            winner = "Tie"
+        er = next(ens_iter, (rid, {"detection": 0.0, "match": 0.0, "mean_err": 0.0}))[1] if show_ensemble else None
 
-        table.add_row(
+        # Determine winner by match rate
+        candidates = {"VballNet": vr["match"], "TrackNet": tr["match"]}
+        if er is not None:
+            candidates["Ensemble"] = er["match"]
+        best_name = max(candidates, key=lambda k: candidates[k])
+        best_val = candidates[best_name]
+        if list(candidates.values()).count(best_val) > 1:
+            winner = "Tie"
+        elif best_name == "VballNet":
+            winner = "[blue]VballNet[/blue]"
+        elif best_name == "TrackNet":
+            winner = "[green]TrackNet[/green]"
+        else:
+            winner = "[magenta]Ensemble[/magenta]"
+
+        row: list[str] = [
             rid[:8],
             f"{vr['detection']:.1%}",
             f"{tr['detection']:.1%}",
+        ]
+        if show_ensemble and er is not None:
+            row.append(f"{er['detection']:.1%}")
+        row.extend([
             f"{vr['match']:.1%}",
             f"{tr['match']:.1%}",
+        ])
+        if show_ensemble and er is not None:
+            row.append(f"{er['match']:.1%}")
+        row.extend([
             f"{vr['mean_err']:.1f}px",
             f"{tr['mean_err']:.1f}px" if tr['mean_err'] > 0 else "N/A",
-            winner,
-        )
+        ])
+        if show_ensemble and er is not None:
+            row.append(f"{er['mean_err']:.1f}px" if er['mean_err'] > 0 else "N/A")
+        row.append(winner)
+        table.add_row(*row)
+
         total_v_det += vr["detection"]
         total_t_det += tr["detection"]
         total_v_match += vr["match"]
         total_t_match += tr["match"]
         total_v_err += vr["mean_err"]
         total_t_err += tr["mean_err"]
+        if er is not None:
+            total_e_det += er["detection"]
+            total_e_match += er["match"]
+            total_e_err += er["mean_err"]
         count += 1
 
     if count > 0:
-        avg_winner = ""
-        avg_v_match = total_v_match / count
-        avg_t_match = total_t_match / count
-        if avg_t_match > avg_v_match:
+        avg_candidates = {
+            "VballNet": total_v_match / count,
+            "TrackNet": total_t_match / count,
+        }
+        if show_ensemble:
+            avg_candidates["Ensemble"] = total_e_match / count
+        avg_best = max(avg_candidates, key=lambda k: avg_candidates[k])
+        if avg_best == "Ensemble":
+            avg_winner = "[magenta]Ensemble[/magenta]"
+        elif avg_best == "TrackNet":
             avg_winner = "[green]TrackNet[/green]"
         else:
             avg_winner = "[blue]VballNet[/blue]"
 
-        table.add_row(
+        avg_row: list[str] = [
             "[bold]Average",
             f"[bold]{total_v_det / count:.1%}",
             f"[bold]{total_t_det / count:.1%}",
+        ]
+        if show_ensemble:
+            avg_row.append(f"[bold]{total_e_det / count:.1%}")
+        avg_row.extend([
             f"[bold]{total_v_match / count:.1%}",
             f"[bold]{total_t_match / count:.1%}",
+        ])
+        if show_ensemble:
+            avg_row.append(f"[bold]{total_e_match / count:.1%}")
+        avg_row.extend([
             f"[bold]{total_v_err / count:.1f}px",
             f"[bold]{total_t_err / count:.1f}px",
-            avg_winner,
-        )
+        ])
+        if show_ensemble:
+            avg_row.append(f"[bold]{total_e_err / count:.1f}px")
+        avg_row.append(avg_winner)
+        table.add_row(*avg_row)
 
     console.print(table)
 
