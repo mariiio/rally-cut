@@ -80,11 +80,10 @@ uv run rallycut train list-remote                     # List datasets backed up 
 # - Resumes from latest checkpoint automatically
 
 # TrackNet ball tracker training (fine-tune on beach volleyball)
-uv run python scripts/expand_tracknet_training.py --extract-frames  # Expand pseudo-labels + frames
-uv run rallycut train tracknet-modal --upload --data-dir experiments/tracknet_expanded  # Upload to Modal
-uv run rallycut train tracknet-modal --epochs 10 --fresh  # Train on A10G GPU (~$1.10/hr)
+uv run rallycut train tracknet-modal --upload       # Upload training data to Modal
+uv run rallycut train tracknet-modal --epochs 30 --fresh  # Train on A10G GPU (~$1.10/hr)
 uv run rallycut train tracknet-modal --download     # Download best.pt + last.pt
-uv run python scripts/eval_tracknet.py --ensemble   # Evaluate TrackNet vs VballNet vs Ensemble
+uv run python scripts/eval_tracknet.py              # Evaluate TrackNet vs VballNet
 uv run rallycut train tracknet-modal --cleanup      # Delete from Modal volume
 
 # Temporal model training (DEPRECATED - use TemporalMaxer instead)
