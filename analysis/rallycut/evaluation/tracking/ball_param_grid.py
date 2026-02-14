@@ -110,6 +110,25 @@ BALL_OSCILLATION_GRID: dict[str, list[float | int | bool]] = {
 }
 
 
+# Ensemble (WASB+VballNet) filter tuning grid (288 combinations: 4*3*3*2*2*2*2)
+# Tuned for ensemble output where WASB provides high-precision positions and
+# VballNet fills gaps. Key differences from VballNet-only grids:
+# - Motion energy filter disabled (WASB doesn't produce stationary FPs)
+# - Shorter min_segment_frames (WASB segments can be short but accurate)
+# - Wider blip_max_deviation (VballNet fallback positions deviate from WASB trajectory)
+# - Enable/disable toggles for stages that may hurt ensemble output
+BALL_ENSEMBLE_GRID: dict[str, list[float | int | bool]] = {
+    "enable_motion_energy_filter": [False],
+    "min_segment_frames": [3, 5, 8, 10],
+    "segment_jump_threshold": [0.15, 0.20, 0.25],
+    "blip_max_deviation": [0.10, 0.15, 0.20],
+    "max_interpolation_gap": [5, 10],
+    "enable_blip_removal": [True, False],
+    "enable_outlier_removal": [True, False],
+    "enable_oscillation_pruning": [True, False],
+}
+
+
 # All available grids
 BALL_AVAILABLE_GRIDS: dict[str, dict[str, list[Any]]] = {
     "quick": BALL_QUICK_GRID,
@@ -122,6 +141,7 @@ BALL_AVAILABLE_GRIDS: dict[str, dict[str, list[Any]]] = {
     "outlier": BALL_OUTLIER_GRID,
     "segment-pruning": BALL_SEGMENT_PRUNING_GRID,
     "oscillation": BALL_OSCILLATION_GRID,
+    "ensemble": BALL_ENSEMBLE_GRID,
 }
 
 

@@ -140,6 +140,45 @@ class BallFilterConfig:
     motion_energy_threshold: float = 0.02  # Below this = suspicious (reduce conf to 0)
 
 
+def get_ensemble_filter_config() -> BallFilterConfig:
+    """Get optimized BallFilterConfig for WASB+VballNet ensemble output.
+
+    Tuned via grid search (576 configs, 7 GT rallies). Key differences
+    from the default VballNet-only config:
+    - Motion energy filter disabled (WASB doesn't produce stationary FPs)
+    - Oscillation and outlier removal disabled (they remove valid VballNet
+      fallback positions at WASB/VballNet model-switch boundaries)
+    - Wider segment_jump_threshold (0.25 vs 0.20) — WASB/VballNet transitions
+      create larger position jumps that shouldn't trigger segment splits
+    - Shorter min_segment_frames (8 vs 15) — WASB segments can be short
+      but are accurate
+    - Shorter max_interpolation_gap (5 vs 10) — reduces false interpolation
+      across model-switch boundaries
+
+    Result: 78.2% match rate (+1.0% vs unfiltered), 42.8px error
+    (-43px vs unfiltered 86.1px). Halves error while improving match rate.
+    """
+    return BallFilterConfig(
+        enable_kalman=False,
+        # Segment pruning with relaxed thresholds for ensemble
+        enable_segment_pruning=True,
+        segment_jump_threshold=0.25,
+        min_segment_frames=8,
+        min_output_confidence=0.05,
+        # No motion energy filter (WASB doesn't have this issue)
+        enable_motion_energy_filter=False,
+        # Keep exit ghost removal
+        enable_exit_ghost_removal=True,
+        # Disable stages that hurt ensemble output
+        enable_oscillation_pruning=False,
+        enable_outlier_removal=False,
+        enable_blip_removal=False,
+        # Shorter interpolation gap to avoid false interpolation at model switches
+        enable_interpolation=True,
+        max_interpolation_gap=5,
+    )
+
+
 class BallTemporalFilter:
     """Ball tracking filter with raw and Kalman modes.
 

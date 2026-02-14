@@ -62,7 +62,7 @@ class EnsembleBallTracker:
         Runs both trackers, merges per-frame (WASB priority), then
         optionally applies filtering.
         """
-        from rallycut.tracking.ball_filter import BallFilterConfig, BallTemporalFilter
+        from rallycut.tracking.ball_filter import BallTemporalFilter
         from rallycut.tracking.ball_smoother import (
             TrajectoryPostProcessor,
             TrajectorySmoothingConfig,
@@ -157,7 +157,12 @@ class EnsembleBallTracker:
         if enable_filtering:
             if preserve_raw:
                 raw_positions = merged.copy()
-            config = filter_config or BallFilterConfig()
+            if filter_config is not None:
+                config = filter_config
+            else:
+                from rallycut.tracking.ball_filter import get_ensemble_filter_config
+
+                config = get_ensemble_filter_config()
             temporal_filter = BallTemporalFilter(config)
             merged = temporal_filter.filter_batch(merged)
 
