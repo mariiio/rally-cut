@@ -80,8 +80,11 @@ def _download_model(url: str, dest_path: Path) -> None:
 
 
 def get_available_ball_models() -> list[str]:
-    """Return list of available ball tracking model IDs."""
-    return list(BALL_MODELS.keys())
+    """Return list of available ball tracking model IDs.
+
+    Includes VballNet variants (v2, fast, v1b) and WASB/ensemble options.
+    """
+    return list(BALL_MODELS.keys()) + ["wasb", "ensemble"]
 
 
 def get_ball_model_info(model_id: str) -> tuple[str, int, int]:
@@ -1095,3 +1098,42 @@ class BallTracker:
             first_frame = frame_idx - real_frame_count
             decoded_positions = self._decode_output(output, first_frame)
             yield from decoded_positions[:real_frame_count]
+
+
+def create_ball_tracker(
+    model: str = DEFAULT_BALL_MODEL,
+    **kwargs: Any,
+) -> Any:
+    """Factory function to create a ball tracker by model name.
+
+    Supports VballNet variants (v2, fast, v1b), WASB HRNet, and ensemble.
+    All returned trackers have a compatible track_video() interface.
+
+    Args:
+        model: Model identifier. VballNet: 'v2', 'fast', 'v1b'.
+            WASB: 'wasb'. Ensemble: 'ensemble'.
+        **kwargs: Additional keyword arguments passed to the tracker constructor.
+            For WASB/ensemble: device, threshold, weights_path/wasb_weights.
+
+    Returns:
+        A tracker instance (BallTracker, WASBBallTracker, or EnsembleBallTracker).
+    """
+    if model == "wasb":
+        from rallycut.tracking.wasb_model import WASBBallTracker
+
+        return WASBBallTracker(
+            weights_path=kwargs.get("weights_path"),
+            device=kwargs.get("device"),
+            threshold=kwargs.get("threshold", 0.3),
+        )
+    elif model == "ensemble":
+        from rallycut.tracking.ball_ensemble import EnsembleBallTracker
+
+        return EnsembleBallTracker(
+            vballnet_model=kwargs.get("vballnet_model", DEFAULT_BALL_MODEL),
+            wasb_weights=kwargs.get("wasb_weights"),
+            wasb_device=kwargs.get("device"),
+            wasb_threshold=kwargs.get("threshold", 0.3),
+        )
+    else:
+        return BallTracker(model=model)

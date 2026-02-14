@@ -340,33 +340,37 @@ Multi-stage temporal filter for ball tracking. Default raw mode applies motion e
 
 ### Ball Tracking Model Variants
 
-Multiple VballNet model variants are available via the `model` parameter:
+Multiple ball tracking models are available via the `model` parameter:
 
-| Model | ID | Match Rate | Speed | Recommendation |
-|-------|-----|------------|-------|----------------|
-| **VballNetV2** | `v2` (default) | **70.6%** | 12.5s | **Recommended** - most consistent |
-| **VballNetFastV1** | `fast` | 69.1% | 3.5s | Use when speed matters (3.6x faster, 1.5% less accurate) |
-| **VballNetV1b** | `v1b` | 0-70% | - | **Not recommended** - can fail completely (0%) on some videos |
+| Model | ID | Match Rate | Error | Speed | Recommendation |
+|-------|-----|------------|-------|-------|----------------|
+| **Ensemble** | `ensemble` | **79.4%** | 62.5px | ~8s/rally | **Best accuracy** - WASB+VballNet combined |
+| **WASB HRNet** | `wasb` | 67.5% | 51.9px | 6.4 FPS (MPS) | High precision, lower recall |
+| **VballNetV2** | `v2` (default) | 41.7% | 92.7px | 100 FPS (CPU) | **Default** - fastest, ONNX |
+| **VballNetFastV1** | `fast` | ~40% | ~95px | 280 FPS (CPU) | Speed priority (3.6x faster) |
+| **VballNetV1b** | `v1b` | 0-70% | - | - | **Not recommended** - can fail completely |
 
-Note: VballNetV1c is excluded as it requires recurrent hidden state input. Benchmarks on beach volleyball ground truth with auto-offset detection.
+WASB (BMVC 2023) is an HRNet pretrained on indoor volleyball. The ensemble uses WASB as primary (high precision) with VballNet as fallback (high recall). WASB requires PyTorch; VballNet uses ONNX.
 
 ```python
-from rallycut.tracking.ball_tracker import BallTracker
+from rallycut.tracking import create_ball_tracker
 
-# Default model (v2 - best accuracy)
-tracker = BallTracker()
+# Ensemble (best accuracy - 79.4% match rate)
+tracker = create_ball_tracker("ensemble")
 
-# Use v1b for highest detection rate
-tracker = BallTracker(model="v1b")
+# WASB only (high precision, 67.5% match rate)
+tracker = create_ball_tracker("wasb")
 
-# Use fast model for quicker inference
-tracker = BallTracker(model="fast")
+# Default VballNet (fastest, 41.7% match rate)
+tracker = create_ball_tracker("v2")
 ```
 
 CLI support:
 ```bash
-rallycut track-players video.mp4 --ball-model v1b
-rallycut evaluate-tracking compare-ball-models --all  # Compare all models
+rallycut track-players video.mp4 --ball-model ensemble  # Best accuracy
+rallycut track-players video.mp4 --ball-model wasb       # WASB only
+rallycut track-players video.mp4 --ball-model v2         # Default (fastest)
+rallycut evaluate-tracking compare-ball-models --all     # Compare VballNet variants
 ```
 
 ### Heatmap Decoding Options

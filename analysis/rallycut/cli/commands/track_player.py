@@ -15,7 +15,7 @@ from rallycut.cli.utils import handle_errors, validate_video_file
 from rallycut.tracking.ball_tracker import (
     DEFAULT_BALL_MODEL,
     BallPosition,
-    BallTracker,
+    create_ball_tracker,
     get_available_ball_models,
 )
 from rallycut.tracking.player_filter import PlayerFilterConfig
@@ -408,7 +408,7 @@ def track_players(
         if not quiet:
             console.print(f"\n[dim]Running ball tracking (model: {ball_model}) for court filtering...[/dim]")
 
-        ball_tracker = BallTracker(model=ball_model)
+        ball_tracker = create_ball_tracker(model=ball_model)
         if quiet:
             ball_result = ball_tracker.track_video(
                 video,
