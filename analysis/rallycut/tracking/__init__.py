@@ -10,6 +10,7 @@ from rallycut.tracking.ball_boundary import (
     refine_segment_boundaries,
 )
 from rallycut.tracking.ball_cache import BallFeatureCache, get_ball_cache
+from rallycut.tracking.ball_ensemble import EnsembleBallTracker
 from rallycut.tracking.ball_features import SegmentBallFeatures, compute_ball_features
 from rallycut.tracking.ball_filter import BallFilterConfig, BallTemporalFilter
 from rallycut.tracking.ball_smoother import TrajectoryPostProcessor, TrajectorySmoothingConfig
@@ -20,6 +21,7 @@ from rallycut.tracking.ball_tracker import (
     BallTracker,
     BallTrackingResult,
     HeatmapDecodingConfig,
+    create_ball_tracker,
     ensure_ball_model,
     get_available_ball_models,
     get_ball_model_info,
@@ -37,10 +39,14 @@ from rallycut.tracking.player_tracker import (
     PlayerTracker,
     PlayerTrackingResult,
 )
+from rallycut.tracking.wasb_model import WASBBallTracker
 
 __all__ = [
     # Ball tracker
     "BallTracker",
+    "WASBBallTracker",
+    "EnsembleBallTracker",
+    "create_ball_tracker",
     "BallPosition",
     "BallTrackingResult",
     "HeatmapDecodingConfig",

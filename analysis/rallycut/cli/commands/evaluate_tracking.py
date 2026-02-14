@@ -1504,8 +1504,7 @@ def compare_ball_models(
     from rallycut.evaluation.tracking.db import get_video_path, load_labeled_rallies
     from rallycut.tracking.ball_tracker import (
         BALL_MODELS,
-        BallTracker,
-        get_available_ball_models,
+        create_ball_tracker,
     )
 
     # Validate input
@@ -1539,8 +1538,8 @@ def compare_ball_models(
 
     console.print(f"  Found {len(rallies_with_ball)} rally(s) with ball ground truth\n")
 
-    # Get list of models to compare
-    model_ids = get_available_ball_models()
+    # Get list of models to compare (only VballNet ONNX variants for automated comparison)
+    model_ids = list(BALL_MODELS.keys())
     console.print(f"[bold]Comparing {len(model_ids)} Ball Tracking Models[/bold]")
     console.print("=" * 60)
 
@@ -1552,7 +1551,7 @@ def compare_ball_models(
         model_filename = BALL_MODELS[model_id][0]
         console.print(f"\n[bold]Model: {model_id}[/bold] ({model_filename})")
 
-        tracker = BallTracker(model=model_id)
+        tracker = create_ball_tracker(model=model_id)
         model_results[model_id] = []
 
         with Progress(
