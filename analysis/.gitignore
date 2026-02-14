@@ -36,6 +36,7 @@ htmlcov/
 # Pseudo-labels and training frames (generated from database)
 experiments/pseudo_labels*/
 experiments/gold_labels/
+experiments/tracknet_expanded/
 
 # Training data (generated, large)
 training_data/

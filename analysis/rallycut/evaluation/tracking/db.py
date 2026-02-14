@@ -19,6 +19,21 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class RallyMetadata:
+    """Lightweight rally info for bulk loading (no GT or predictions)."""
+
+    rally_id: str
+    video_id: str
+    start_ms: int
+    end_ms: int
+    video_fps: float = 30.0
+    video_width: int = 1920
+    video_height: int = 1080
+    has_ground_truth: bool = False
+    has_ball_positions: bool = False
+
+
+@dataclass
 class TrackingEvaluationRally:
     """A rally with ground truth and predictions for evaluation."""
 
@@ -282,6 +297,138 @@ def load_labeled_rallies(
 
     logger.info(f"Loaded {len(results)} rallies with ground truth labels")
     return results
+
+
+def load_all_rallies(
+    video_id: str | None = None,
+    max_per_video: int | None = None,
+) -> list[RallyMetadata]:
+    """Load all rallies from the database (lightweight, no GT/predictions).
+
+    Args:
+        video_id: Filter by video ID (optional).
+        max_per_video: Max rallies per video, evenly spaced across timeline.
+
+    Returns:
+        List of RallyMetadata for all matching rallies.
+    """
+    where_clauses: list[str] = []
+    params: list[str] = []
+
+    if video_id:
+        where_clauses.append("r.video_id = %s")
+        params.append(video_id)
+
+    where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+
+    query = f"""
+        SELECT
+            r.id as rally_id,
+            r.video_id,
+            r.start_ms,
+            r.end_ms,
+            v.fps as video_fps,
+            v.width as video_width,
+            v.height as video_height,
+            pt.ground_truth_json IS NOT NULL as has_ground_truth,
+            pt.ball_positions_json IS NOT NULL as has_ball_positions
+        FROM rallies r
+        JOIN videos v ON v.id = r.video_id
+        LEFT JOIN player_tracks pt ON pt.rally_id = r.id
+        {where_sql}
+        ORDER BY r.video_id, r.start_ms
+    """
+
+    results: list[RallyMetadata] = []
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+            for row in rows:
+                (
+                    rally_id_val,
+                    video_id_val,
+                    start_ms,
+                    end_ms,
+                    video_fps,
+                    video_width,
+                    video_height,
+                    has_gt,
+                    has_ball,
+                ) = row
+
+                results.append(
+                    RallyMetadata(
+                        rally_id=str(rally_id_val),
+                        video_id=str(video_id_val),
+                        start_ms=cast(int, start_ms),
+                        end_ms=cast(int, end_ms),
+                        video_fps=cast(float, video_fps) if video_fps else 30.0,
+                        video_width=cast(int, video_width) if video_width else 1920,
+                        video_height=cast(int, video_height) if video_height else 1080,
+                        has_ground_truth=bool(has_gt),
+                        has_ball_positions=bool(has_ball),
+                    )
+                )
+
+    # Evenly space rallies across each video's timeline for diversity
+    if max_per_video is not None and max_per_video > 0:
+        by_video: dict[str, list[RallyMetadata]] = {}
+        for r in results:
+            by_video.setdefault(r.video_id, []).append(r)
+
+        selected: list[RallyMetadata] = []
+        for vid_rallies in by_video.values():
+            if len(vid_rallies) <= max_per_video:
+                selected.extend(vid_rallies)
+            else:
+                # Evenly space indices across the timeline-sorted list
+                step = len(vid_rallies) / max_per_video
+                indices = [int(i * step) for i in range(max_per_video)]
+                selected.extend(vid_rallies[i] for i in indices)
+
+        results = sorted(selected, key=lambda r: (r.video_id, r.start_ms))
+
+    logger.info(f"Loaded {len(results)} rallies from database")
+    return results
+
+
+def get_ball_positions_from_db(rally_id: str) -> list[BallPosition] | None:
+    """Retrieve existing ball_positions_json from DB without re-running VballNet.
+
+    Args:
+        rally_id: The rally ID.
+
+    Returns:
+        List of BallPosition if available, None otherwise.
+    """
+    query = """
+        SELECT pt.ball_positions_json
+        FROM player_tracks pt
+        WHERE pt.rally_id = %s
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, [rally_id])
+            row = cur.fetchone()
+
+            if row is None or row[0] is None:
+                return None
+
+            ball_json = cast(list[dict[str, Any]], row[0])
+            return [
+                BallPosition(
+                    frame_number=bp["frameNumber"],
+                    x=bp["x"],
+                    y=bp["y"],
+                    confidence=bp["confidence"],
+                    motion_energy=bp.get("motionEnergy", 0.0),
+                )
+                for bp in ball_json
+            ]
 
 
 def get_video_path(video_id: str) -> Path | None:
