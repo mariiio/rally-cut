@@ -8,9 +8,17 @@ from rallycut.tracking.ball_filter import BallFilterConfig, BallTemporalFilter
 from rallycut.tracking.ball_tracker import BallPosition
 
 
-def _make_pos(frame: int, x: float, y: float, conf: float = 0.9) -> BallPosition:
+def _make_pos(
+    frame: int,
+    x: float,
+    y: float,
+    conf: float = 0.9,
+    motion_energy: float = 0.0,
+) -> BallPosition:
     """Helper to create a BallPosition."""
-    return BallPosition(frame_number=frame, x=x, y=y, confidence=conf)
+    return BallPosition(
+        frame_number=frame, x=x, y=y, confidence=conf, motion_energy=motion_energy,
+    )
 
 
 def _converge_filter(
@@ -2015,3 +2023,209 @@ class TestFalseStartAnchorRemoval:
         # Both anchors should survive (50 is NOT < 60/3 = 20)
         assert any(f < 50 for f in result_frames), "First anchor should survive"
         assert any(f >= 60 for f in result_frames), "Second anchor should survive"
+
+
+class TestEnsembleSourceAware:
+    """Tests for source-aware filtering of WASB+VballNet ensemble output."""
+
+    def _ensemble_config(self, **overrides: object) -> BallFilterConfig:
+        """Base config for ensemble source-aware tests."""
+        defaults = dict(
+            enable_kalman=False,
+            ensemble_source_aware=True,
+            enable_segment_pruning=True,
+            segment_jump_threshold=0.25,
+            min_segment_frames=8,
+            min_output_confidence=0.05,
+            enable_motion_energy_filter=False,
+            enable_exit_ghost_removal=False,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_blip_removal=False,
+            enable_interpolation=False,
+        )
+        defaults.update(overrides)
+        return BallFilterConfig(**defaults)  # type: ignore[arg-type]
+
+    def test_is_wasb_identifies_wasb_positions(self) -> None:
+        """_is_wasb returns True for positions with motion_energy >= 1.0."""
+        filt = BallTemporalFilter(self._ensemble_config())
+
+        wasb = _make_pos(0, 0.5, 0.5, motion_energy=1.0)
+        vnet = _make_pos(1, 0.5, 0.5, motion_energy=0.015)
+        zero = _make_pos(2, 0.5, 0.5, motion_energy=0.0)
+
+        assert filt._is_wasb(wasb) is True
+        assert filt._is_wasb(vnet) is False
+        assert filt._is_wasb(zero) is False
+
+    def test_is_wasb_disabled_when_source_aware_off(self) -> None:
+        """_is_wasb always returns False when ensemble_source_aware=False."""
+        filt = BallTemporalFilter(self._ensemble_config(ensemble_source_aware=False))
+
+        wasb = _make_pos(0, 0.5, 0.5, motion_energy=1.0)
+        assert filt._is_wasb(wasb) is False
+
+    def test_outlier_removal_never_flags_wasb(self) -> None:
+        """WASB positions should never be removed as outliers."""
+        config = self._ensemble_config(enable_outlier_removal=True)
+        filt = BallTemporalFilter(config)
+
+        positions = []
+        # Smooth VballNet trajectory
+        for i in range(20):
+            positions.append(_make_pos(i, 0.30 + i * 0.01, 0.50, motion_energy=0.01))
+
+        # WASB position that deviates significantly from VballNet trajectory —
+        # normally would be flagged as outlier, but source-aware protects it
+        positions.append(_make_pos(10, 0.60, 0.60, motion_energy=1.0))
+        # Remove the VballNet position at the same frame to avoid duplicate
+        positions = [p for p in positions if not (p.frame_number == 10 and p.motion_energy < 1.0)]
+
+        result = filt._remove_outliers(sorted(positions, key=lambda p: p.frame_number))
+        result_frames = {p.frame_number for p in result}
+
+        # WASB position at frame 10 must survive
+        assert 10 in result_frames
+
+    def test_outlier_removal_flags_wasb_when_source_aware_off(self) -> None:
+        """Without source-awareness, outlier removal treats all positions equally."""
+        config = self._ensemble_config(
+            ensemble_source_aware=False, enable_outlier_removal=True,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions = []
+        # Smooth trajectory at y=0.50
+        for i in range(20):
+            positions.append(_make_pos(i, 0.30 + i * 0.01, 0.50, motion_energy=0.01))
+
+        # Large deviation at frame 10 — should be flagged
+        positions.append(_make_pos(10, 0.60, 0.80, motion_energy=1.0))
+        positions = [p for p in positions if not (p.frame_number == 10 and p.motion_energy < 1.0)]
+
+        result = filt._remove_outliers(sorted(positions, key=lambda p: p.frame_number))
+        result_frames = {p.frame_number for p in result}
+
+        # Without source-awareness, the deviant position should be removed
+        assert 10 not in result_frames
+
+    def test_segment_pruning_halves_threshold_for_wasb(self) -> None:
+        """WASB-containing segments need only half min_segment_frames to be anchors."""
+        config = self._ensemble_config(min_segment_frames=8)
+        filt = BallTemporalFilter(config)
+
+        positions = []
+        # Short WASB segment: 5 frames (< 8, but >= 8//2=4 so qualifies as anchor)
+        for i in range(5):
+            positions.append(_make_pos(i, 0.30 + i * 0.01, 0.40, motion_energy=1.0))
+
+        # Large jump → short VballNet segment (5 frames, will be pruned)
+        for i in range(50, 55):
+            positions.append(_make_pos(i, 0.80, 0.80, motion_energy=0.01))
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # WASB segment (frames 0-4) survives as anchor with halved threshold
+        assert all(f in result_frames for f in range(5))
+        # VballNet segment (frames 50-54) pruned as non-anchor
+        assert not any(f in result_frames for f in range(50, 55))
+
+    def test_segment_pruning_no_halving_without_source_aware(self) -> None:
+        """Without source-awareness, short segments are pruned regardless of source."""
+        config = self._ensemble_config(
+            ensemble_source_aware=False, min_segment_frames=8,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions = []
+        # Short segment: 5 frames (< 8, not anchor without source-awareness)
+        for i in range(5):
+            positions.append(_make_pos(i, 0.30 + i * 0.01, 0.40, motion_energy=1.0))
+
+        # Large jump → another short segment
+        for i in range(50, 55):
+            positions.append(_make_pos(i, 0.80, 0.80, motion_energy=0.01))
+
+        result = filt.filter_batch(positions)
+
+        # Both segments too short, but _prune_segments falls back to `confident`
+        # (returns all if nothing survives). Just verify no anchor behavior.
+        # With 2 segments both < min_segment_frames and no anchors,
+        # fall-back returns all confident positions.
+        assert len(result) == 10  # All survive as fallback
+
+    def test_oscillation_skips_windows_with_wasb(self) -> None:
+        """Oscillation pruning skips windows containing WASB positions."""
+        config = self._ensemble_config(
+            enable_oscillation_pruning=True,
+            min_oscillation_frames=6,
+            oscillation_reversal_rate=0.25,
+            oscillation_min_displacement=0.03,
+        )
+        filt = BallTemporalFilter(config)
+
+        # Build an oscillating trajectory that would normally be trimmed
+        positions = []
+        # 10 stable frames first
+        for i in range(10):
+            positions.append(_make_pos(i, 0.30 + i * 0.005, 0.40, motion_energy=0.01))
+
+        # 8-frame oscillation between two player positions — but one frame is WASB
+        for i in range(10, 18):
+            if i % 2 == 0:
+                x, y = 0.40, 0.30  # Player A
+            else:
+                x, y = 0.50, 0.70  # Player B
+            # Frame 12 is WASB — should protect the entire window
+            me = 1.0 if i == 12 else 0.01
+            positions.append(_make_pos(i, x, y, motion_energy=me))
+
+        result = filt._prune_oscillating(positions)
+
+        # All 18 positions should survive because WASB position in window
+        assert len(result) == 18
+
+    def test_blip_removal_never_flags_wasb(self) -> None:
+        """WASB positions should never be flagged as trajectory blips."""
+        config = self._ensemble_config(
+            enable_blip_removal=True,
+            blip_max_deviation=0.10,
+            blip_context_min_frames=5,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions = []
+        # Smooth trajectory
+        for i in range(30):
+            positions.append(_make_pos(i, 0.30 + i * 0.005, 0.40, motion_energy=0.01))
+
+        # Replace frames 14-16 with WASB positions that deviate from trajectory —
+        # normally would be flagged as blips, but source-aware protects them
+        for i in [14, 15, 16]:
+            positions = [p for p in positions if p.frame_number != i]
+            positions.append(_make_pos(i, 0.60, 0.70, motion_energy=1.0))
+
+        positions.sort(key=lambda p: p.frame_number)
+        result = filt._remove_trajectory_blips(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # WASB positions at frames 14-16 must survive
+        assert all(f in result_frames for f in [14, 15, 16])
+
+    def test_get_ensemble_filter_config(self) -> None:
+        """get_ensemble_filter_config returns source-aware config."""
+        from rallycut.tracking.ball_filter import get_ensemble_filter_config
+
+        config = get_ensemble_filter_config()
+
+        assert config.ensemble_source_aware is True
+        assert config.enable_kalman is False
+        assert config.enable_segment_pruning is True
+        assert config.enable_oscillation_pruning is True
+        assert config.enable_outlier_removal is True
+        assert config.enable_blip_removal is True
+        assert config.enable_motion_energy_filter is False
+        assert config.min_segment_frames == 8
+        assert config.segment_jump_threshold == 0.25

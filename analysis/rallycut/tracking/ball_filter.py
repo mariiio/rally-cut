@@ -139,29 +139,38 @@ class BallFilterConfig:
     enable_motion_energy_filter: bool = True
     motion_energy_threshold: float = 0.02  # Below this = suspicious (reduce conf to 0)
 
+    # Source-aware ensemble filtering
+    # When True, filter stages treat WASB and VballNet positions differently.
+    # WASB positions (motion_energy >= 1.0) are high-precision and should never
+    # be flagged as outliers, blips, or oscillation. VballNet positions
+    # (motion_energy < 1.0) are lower-precision and get standard filtering.
+    ensemble_source_aware: bool = False
+
 
 def get_ensemble_filter_config() -> BallFilterConfig:
     """Get optimized BallFilterConfig for WASB+VballNet ensemble output.
 
-    Tuned via grid search (576 configs, 7 GT rallies) with VballNet
-    motion energy pre-filter applied before merging. Key differences
-    from the default VballNet-only config:
+    Uses source-aware filtering: WASB positions (motion_energy >= 1.0) are
+    treated as high-precision anchors that should never be flagged as outliers,
+    blips, or oscillation. VballNet positions get standard filtering.
+
+    Key differences from the default VballNet-only config:
+    - ensemble_source_aware=True — filter stages consult position source
     - Motion energy filter disabled at ensemble level (applied to VballNet
       positions before merging in EnsembleBallTracker instead)
-    - Oscillation pruning disabled (WASB/VballNet transitions trigger false
-      oscillation detection)
+    - Oscillation pruning re-enabled (safe with source-awareness — WASB
+      positions in windows prevent false oscillation detection)
     - Wider segment_jump_threshold (0.25 vs 0.20) — WASB/VballNet transitions
       create larger position jumps that shouldn't trigger segment splits
     - Shorter min_segment_frames (8 vs 15) — WASB segments can be short
-      but are accurate
+      but are accurate (halved threshold for WASB-containing segments)
     - Wider blip_max_deviation (0.20 vs 0.15) — VballNet fallback positions
       deviate more from WASB-dominated trajectory context
-
-    Result: 78.2% match rate (+1.5% vs unfiltered 76.7%), 43.1px error
-    (-30px vs unfiltered 73.4px).
     """
     return BallFilterConfig(
         enable_kalman=False,
+        # Source-aware: treat WASB and VballNet positions differently
+        ensemble_source_aware=True,
         # Segment pruning with relaxed thresholds for ensemble
         enable_segment_pruning=True,
         segment_jump_threshold=0.25,
@@ -171,9 +180,9 @@ def get_ensemble_filter_config() -> BallFilterConfig:
         enable_motion_energy_filter=False,
         # Keep exit ghost removal
         enable_exit_ghost_removal=True,
-        # Oscillation pruning hurts ensemble (-2.9%)
-        enable_oscillation_pruning=False,
-        # Outlier and blip removal now safe with VballNet pre-filter
+        # Oscillation pruning now safe with source-awareness
+        enable_oscillation_pruning=True,
+        # Outlier and blip removal now safe with source-awareness
         enable_outlier_removal=True,
         enable_blip_removal=True,
         blip_max_deviation=0.20,
@@ -234,6 +243,15 @@ class BallTemporalFilter:
 
         # Measurement noise covariance
         self._R = np.eye(2) * self.config.measurement_noise
+
+    def _is_wasb(self, pos: "BallPosition") -> bool:
+        """Check if position originates from WASB model (high-precision).
+
+        WASB positions have motion_energy >= 1.0 (set by EnsembleBallTracker
+        to distinguish from VballNet positions which have real motion energy
+        values < 1.0). Only returns True when ensemble_source_aware is enabled.
+        """
+        return self.config.ensemble_source_aware and pos.motion_energy >= 1.0
 
     def reset(self) -> None:
         """Reset filter state for a new video."""
@@ -1024,10 +1042,18 @@ class BallTemporalFilter:
             return confident
 
         # Step 3: Identify anchor segments (long enough to be reliable)
+        # Source-aware: segments containing WASB positions need only half the
+        # minimum length — WASB is high-precision so even short segments are
+        # trustworthy (e.g., 4 WASB frames ≈ 8 VballNet frames).
         min_len = self.config.min_segment_frames
         anchor_indices: set[int] = set()
         for i, seg in enumerate(segments):
-            if len(seg) >= min_len:
+            effective_min = min_len
+            if self.config.ensemble_source_aware and any(
+                self._is_wasb(p) for p in seg
+            ):
+                effective_min = max(3, min_len // 2)
+            if len(seg) >= effective_min:
                 anchor_indices.add(i)
 
         # Step 3b: Exclude anchors that overlap with ghost ranges.
@@ -1117,6 +1143,8 @@ class BallTemporalFilter:
         # VballNet can restart at a player position that happens to be spatially
         # near the last anchor endpoint. These shouldn't be recovered.
         proximity = threshold / 2
+        # Source-aware: wider recovery for WASB-containing segments
+        wasb_proximity = threshold * 0.75 if self.config.ensemble_source_aware else proximity
         max_recovery_gap = self.config.max_interpolation_gap * 3
         kept: list[BallPosition] = []
         removed_count = 0
@@ -1136,6 +1164,12 @@ class BallTemporalFilter:
             centroid_x = float(np.mean([p.x for p in seg]))
             centroid_y = float(np.mean([p.y for p in seg]))
 
+            # Source-aware: use wider proximity for WASB-containing segments
+            seg_has_wasb = self.config.ensemble_source_aware and any(
+                self._is_wasb(p) for p in seg
+            )
+            seg_proximity = wasb_proximity if seg_has_wasb else proximity
+
             close_to_anchor = False
 
             # Check previous anchor (end position)
@@ -1148,7 +1182,7 @@ class BallTemporalFilter:
                     dist = np.sqrt(
                         (centroid_x - ref.x) ** 2 + (centroid_y - ref.y) ** 2
                     )
-                    if dist < proximity:
+                    if dist < seg_proximity:
                         close_to_anchor = True
                     break
 
@@ -1163,7 +1197,7 @@ class BallTemporalFilter:
                         dist = np.sqrt(
                             (centroid_x - ref.x) ** 2 + (centroid_y - ref.y) ** 2
                         )
-                        if dist < proximity:
+                        if dist < seg_proximity:
                             close_to_anchor = True
                         break
 
@@ -1284,6 +1318,15 @@ class BallTemporalFilter:
             # Slide a window across the segment
             for start in range(n - window + 1):
                 w = seg[start : start + window]
+
+                # Source-aware: skip windows containing WASB positions —
+                # WASB doesn't oscillate between player positions, and
+                # WASB/VballNet spatial alternation looks like oscillation
+                # but isn't.
+                if self.config.ensemble_source_aware and any(
+                    self._is_wasb(p) for p in w
+                ):
+                    continue
 
                 # Find two poles: pair with maximum distance
                 max_dist = 0.0
@@ -1536,6 +1579,10 @@ class BallTemporalFilter:
         for i, frame in enumerate(frames):
             pos = pos_by_frame[frame]
 
+            # Source-aware: never flag WASB positions as outliers
+            if self._is_wasb(pos):
+                continue
+
             # Check 1: Edge detection (positions at screen boundaries)
             margin = self.config.edge_margin
             is_edge = (
@@ -1552,22 +1599,48 @@ class BallTemporalFilter:
 
             # Check 2: Trajectory consistency with neighbors
             # Find neighbors (previous and next positions)
+            # Source-aware: prefer WASB neighbors (more reliable reference)
             prev_pos = None
             next_pos = None
 
             # Look for previous neighbor (up to 5 frames back)
+            # With source-awareness, prefer WASB neighbor over VballNet
+            prev_wasb = None
+            prev_wasb_gap = 0
             for j in range(i - 1, max(-1, i - 6), -1):
                 if j >= 0 and frames[j] not in outlier_frames:
-                    prev_pos = pos_by_frame[frames[j]]
-                    prev_gap = frame - frames[j]
-                    break
+                    candidate = pos_by_frame[frames[j]]
+                    if prev_pos is None:
+                        prev_pos = candidate
+                        prev_gap = frame - frames[j]
+                    if self._is_wasb(candidate) and prev_wasb is None:
+                        prev_wasb = candidate
+                        prev_wasb_gap = frame - frames[j]
+                        break
+                    if prev_pos is not None and not self.config.ensemble_source_aware:
+                        break
+            if prev_wasb is not None:
+                prev_pos = prev_wasb
+                prev_gap = prev_wasb_gap
 
             # Look for next neighbor (up to 5 frames ahead)
+            next_wasb = None
+            next_wasb_gap = 0
             for j in range(i + 1, min(len(frames), i + 6)):
                 if frames[j] not in outlier_frames:
-                    next_pos = pos_by_frame[frames[j]]
-                    next_gap = frames[j] - frame
-                    break
+                    candidate = pos_by_frame[frames[j]]
+                    if next_pos is None:
+                        next_pos = candidate
+                        next_gap = frames[j] - frame
+                    if self._is_wasb(candidate) and next_wasb is None:
+                        next_wasb = candidate
+                        next_wasb_gap = frames[j] - frame
+                        break
+                    if next_pos is not None and not self.config.ensemble_source_aware:
+                        break
+            if next_wasb is not None:
+                next_pos = next_wasb
+                next_gap = next_wasb_gap
 
             # Need at least min_neighbors for trajectory check
             neighbor_count = (1 if prev_pos else 0) + (1 if next_pos else 0)
@@ -1738,9 +1811,13 @@ class BallTemporalFilter:
         frames = sorted(pos_by_frame.keys())
 
         # Phase 1a: Flag suspect positions deviating from distant context
+        # Source-aware: never flag WASB positions as suspects
         suspect_indices: set[int] = set()
 
         for i, frame in enumerate(frames):
+            if self._is_wasb(pos_by_frame[frame]):
+                continue
+
             prev_ctx, prev_gap, next_ctx, next_gap = self._find_blip_context(
                 i, frames, pos_by_frame, min_dist, exclude=set()
             )
@@ -1760,6 +1837,7 @@ class BallTemporalFilter:
 
         # Phase 1b: Re-evaluate suspects with clean context (skip other suspects)
         # Prevents blip positions from contaminating nearby real frame context
+        # Source-aware: WASB positions already excluded from suspects in 1a
         confirmed: set[int] = set()
         for i in suspect_indices:
             prev_ctx, prev_gap, next_ctx, next_gap = self._find_blip_context(

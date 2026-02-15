@@ -120,6 +120,25 @@ def build_ablation_configs() -> list[tuple[str, BallFilterConfig]]:
         cfg_dict.update(overrides)
         configs.append((name, BallFilterConfig(**cfg_dict)))
 
+    # 12-16. Source-aware variants (ensemble_source_aware=True)
+    base_sa = _all_filter_config()
+    base_sa_dict = {f.name: getattr(base_sa, f.name) for f in fields(BallFilterConfig)}
+    base_sa_dict["ensemble_source_aware"] = True
+    configs.append(("source_aware_all", BallFilterConfig(**base_sa_dict)))
+
+    sa_stages = [
+        ("sa_all_except_outlier", {"ensemble_source_aware": True, "enable_outlier_removal": False}),
+        ("sa_all_except_oscillation", {"ensemble_source_aware": True, "enable_oscillation_pruning": False}),
+        ("sa_all_except_blip", {"ensemble_source_aware": True, "enable_blip_removal": False}),
+        ("sa_no_osc_no_blip", {"ensemble_source_aware": True,
+                               "enable_oscillation_pruning": False, "enable_blip_removal": False}),
+    ]
+
+    for name, overrides in sa_stages:
+        cfg_dict = {f.name: getattr(base_on, f.name) for f in fields(BallFilterConfig)}
+        cfg_dict.update(overrides)
+        configs.append((name, BallFilterConfig(**cfg_dict)))
+
     return configs
 
 
