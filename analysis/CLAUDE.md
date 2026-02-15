@@ -19,7 +19,7 @@ uv run rallycut cut <video.mp4> --heuristics    # Force heuristics (57% F1)
 uv run rallycut cut <video.mp4> --model beach   # Use beach volleyball model
 uv run rallycut profile <video.mp4>             # Performance profiling
 
-# One-time feature extraction (required for TemporalMaxer and binary head)
+# Pre-extract features (optional — TemporalMaxer auto-extracts on first run, required for binary head)
 uv run rallycut train extract-features --stride 48
 
 # Useful options for cut
@@ -210,17 +210,18 @@ Four detection pipelines are available, with TemporalMaxer as the recommended de
 **Note:** IoU=0.4 better reflects detection accuracy when labeling marks serve toss start (model detects ~2s later when play begins). Binary head's 84% F1 is train-on-all (inflated); TemporalMaxer's 75% is honest LOO CV.
 
 **Pipeline auto-selection:**
-1. If `--temporal-maxer` flag: use TemporalMaxer
+1. If `--temporal-maxer` flag: use TemporalMaxer (auto-extracts features if not cached)
 2. If `--binary-head` flag: use binary head + decoder
 3. If `--experimental-temporal` flag: use temporal model (deprecated)
 4. If `--heuristics` flag: use heuristics
 5. Auto: TemporalMaxer if model+features exist, else binary head if features cached, else heuristics
 
-**Enabling best pipeline:**
+**Cloud (DetectionService/Modal):** Automatically uses TemporalMaxer when weights are in the image. Features are extracted inline on first run and cached for subsequent runs.
+
+**Enabling best pipeline (local):**
 ```bash
-# One-time feature extraction
-uv run rallycut train extract-features --stride 48
-# Train TemporalMaxer
+# Train TemporalMaxer (features auto-extracted on first run, or pre-extract for speed)
+uv run rallycut train extract-features --stride 48  # Optional: pre-extract for faster first run
 uv run rallycut train temporal-maxer --epochs 50
 ```
 
@@ -248,7 +249,10 @@ See `processing/cutter.py` and `core/config.py` for implementation.
 
 ## Cloud Detection (Modal)
 
-Production ML runs on Modal GPUs:
+Production ML runs on Modal GPUs. DetectionService automatically enables TemporalMaxer when
+`weights/temporal_maxer/best_temporal_maxer.pt` is present in the image (bundled via
+`modal_app.py`'s `.add_local_dir("weights", "/app/weights")`). Features are extracted inline
+on first detection and cached at `~/.cache/rallycut/features/` for subsequent runs.
 
 ```bash
 # Deploy
