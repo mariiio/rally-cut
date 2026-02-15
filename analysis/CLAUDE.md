@@ -348,32 +348,32 @@ Multiple ball tracking models are available via the `model` parameter:
 
 | Model | ID | Match Rate | Error | Speed | Recommendation |
 |-------|-----|------------|-------|-------|----------------|
-| **Ensemble** | `ensemble` | **79.4%** | 62.5px | ~8s/rally | **Best accuracy** - WASB+VballNet combined |
-| **WASB HRNet** | `wasb` | 67.5% | 51.9px | 6.4 FPS (MPS) | High precision, lower recall |
-| **VballNetV2** | `v2` (default) | 41.7% | 92.7px | 100 FPS (CPU) | **Default** - fastest, ONNX |
+| **Ensemble** | `ensemble` (default) | **82.5%** | 28.2px | 33 FPS (ONNX+CoreML) | **Default** - best accuracy |
+| **WASB HRNet** | `wasb` | 67.5% | 51.9px | 33 FPS (ONNX+CoreML) | High precision, lower recall |
+| **VballNetV2** | `v2` | 41.7% | 92.7px | 100 FPS (CPU) | Fastest, ONNX-only |
 | **VballNetFastV1** | `fast` | ~40% | ~95px | 280 FPS (CPU) | Speed priority (3.6x faster) |
 
-WASB (BMVC 2023) is an HRNet pretrained on indoor volleyball. The ensemble uses WASB as primary (high precision) with VballNet as fallback (high recall). WASB requires PyTorch; VballNet uses ONNX.
+WASB (BMVC 2023) is an HRNet pretrained on indoor volleyball. The ensemble uses WASB as primary (high precision) with VballNet as fallback (high recall). WASB uses ONNX+CoreML on Apple Silicon (auto-exported from PyTorch on first use); VballNet uses ONNX.
 
 ```python
 from rallycut.tracking import create_ball_tracker
 
-# Ensemble (best accuracy - 79.4% match rate)
-tracker = create_ball_tracker("ensemble")
+# Default: ensemble (best accuracy - 82.5% match rate)
+tracker = create_ball_tracker()
 
 # WASB only (high precision, 67.5% match rate)
 tracker = create_ball_tracker("wasb")
 
-# Default VballNet (fastest, 41.7% match rate)
+# VballNet only (fastest, 41.7% match rate)
 tracker = create_ball_tracker("v2")
 ```
 
 CLI support:
 ```bash
-rallycut track-players video.mp4 --ball-model ensemble  # Best accuracy
-rallycut track-players video.mp4 --ball-model wasb       # WASB only
-rallycut track-players video.mp4 --ball-model v2         # Default (fastest)
-rallycut evaluate-tracking compare-ball-models --all     # Compare VballNet variants
+rallycut track-players video.mp4                          # Default ensemble
+rallycut track-players video.mp4 --ball-model wasb        # WASB only
+rallycut track-players video.mp4 --ball-model v2          # VballNet only (fastest)
+rallycut evaluate-tracking compare-ball-models --all      # Compare all variants
 ```
 
 ### Heatmap Decoding Options

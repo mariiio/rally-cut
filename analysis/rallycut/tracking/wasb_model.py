@@ -11,10 +11,11 @@ Output: 3 heatmaps (one per frame) at 288x512, decoded to ball positions.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from rallycut.tracking.ball_filter import BallFilterConfig
@@ -592,21 +593,26 @@ def preprocess_frame(frame_bgr: np.ndarray) -> np.ndarray:
 def decode_heatmap_wasb(
     heatmap: np.ndarray,
     threshold: float = 0.5,
+    is_probability: bool = False,
 ) -> tuple[float, float, float]:
     """Decode a WASB heatmap to (x_norm, y_norm, confidence).
 
     Uses connected components with weighted centroid (matching WASB postprocessor).
 
     Args:
-        heatmap: Raw logits from model output (H, W). Sigmoid is applied here.
+        heatmap: Heatmap array (H, W). Raw logits or probabilities.
         threshold: Score threshold for blob detection.
+        is_probability: If True, skip sigmoid (already applied on GPU).
 
     Returns:
         Tuple of (x_norm, y_norm, confidence). Returns (0.5, 0.5, 0.0) if no detection.
     """
-    # Apply sigmoid to convert logits to probabilities
-    prob = 1.0 / (1.0 + np.exp(-heatmap.astype(np.float64)))
-    prob = prob.astype(np.float32)
+    if is_probability:
+        prob = heatmap if heatmap.dtype == np.float32 else heatmap.astype(np.float32)
+    else:
+        # Apply sigmoid to convert logits to probabilities
+        prob = 1.0 / (1.0 + np.exp(-heatmap.astype(np.float64)))
+        prob = prob.astype(np.float32)
 
     max_val = float(prob.max())
     if max_val <= threshold:
@@ -651,11 +657,16 @@ def decode_heatmap_wasb(
 
 
 class WASBBallTracker:
-    """Ball tracker using WASB HRNet (PyTorch).
+    """Ball tracker using WASB HRNet with ONNX/CoreML acceleration.
 
     Drop-in alternative to BallTracker with the same track_video() interface.
     Uses 3-frame sliding window with stride 1 for maximum coverage.
     For each frame, keeps the highest-confidence detection across overlapping windows.
+
+    Inference pipeline (ordered by preference):
+    1. ONNX + CoreML (33 FPS on Apple Silicon) — auto-exports from PyTorch on first use
+    2. ONNX + CPU (4 FPS) — fallback when CoreML unavailable
+    3. PyTorch batched (10 FPS on MPS) — fallback when ONNX unavailable
 
     WASB achieves 67.5% match rate on beach volleyball GT (vs 41.7% for VballNet)
     with higher positional accuracy (51.9px vs 92.7px mean error).
@@ -666,10 +677,15 @@ class WASBBallTracker:
         weights_path: Path | str | None = None,
         device: str | None = None,
         threshold: float = 0.3,
+        batch_size: int = 8,
+        use_onnx: bool = True,
     ):
         self.weights_path = Path(weights_path) if weights_path else None
         self.threshold = threshold
+        self.batch_size = batch_size
+        self.use_onnx = use_onnx
         self._model: HRNet | None = None
+        self._onnx_session: Any = None
 
         # Auto-detect device
         if device is None:
@@ -686,6 +702,109 @@ class WASBBallTracker:
         if self._model is None:
             self._model = load_wasb_model(self.weights_path, device=self.device)
         return self._model
+
+    def _get_onnx_path(self) -> Path:
+        """Get expected path for ONNX model."""
+        return WEIGHTS_DIR / "wasb_volleyball_best.onnx"
+
+    def _load_onnx_session(self) -> Any:
+        """Load ONNX Runtime session, auto-exporting from PyTorch if needed."""
+        if self._onnx_session is not None:
+            return self._onnx_session
+
+        import onnxruntime as ort
+
+        onnx_path = self._get_onnx_path()
+
+        if not onnx_path.exists():
+            logger.info("ONNX model not found, exporting from PyTorch weights...")
+            self._export_onnx(onnx_path)
+
+        sess_options = ort.SessionOptions()
+        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        num_threads = int(os.environ.get("ONNX_NUM_THREADS", os.cpu_count() or 4))
+        sess_options.intra_op_num_threads = num_threads
+
+        available_providers = ort.get_available_providers()
+        preferred_providers = []
+        if "CoreMLExecutionProvider" in available_providers:
+            preferred_providers.append("CoreMLExecutionProvider")
+        if "CUDAExecutionProvider" in available_providers:
+            preferred_providers.append("CUDAExecutionProvider")
+        preferred_providers.append("CPUExecutionProvider")
+
+        self._onnx_session = ort.InferenceSession(
+            str(onnx_path),
+            sess_options=sess_options,
+            providers=preferred_providers,
+        )
+
+        active_provider = (
+            self._onnx_session.get_providers()[0]
+            if self._onnx_session.get_providers()
+            else "unknown"
+        )
+        logger.info(
+            f"Loaded WASB ONNX model: {onnx_path.name} "
+            f"(provider: {active_provider}, threads: {num_threads})"
+        )
+        return self._onnx_session
+
+    def _export_onnx(self, onnx_path: Path) -> None:
+        """Export HRNet to ONNX format with dynamic batch axis."""
+        model = self._ensure_model()
+        onnx_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Wrapper to flatten HRNet's dict output to single tensor
+        class _HRNetWrapper(nn.Module):
+            def __init__(self, hrnet: HRNet) -> None:
+                super().__init__()
+                self.hrnet = hrnet
+
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                out = self.hrnet(x)
+                return out[0]  # type: ignore[no-any-return]  # dict[int, Tensor]
+
+        wrapper = _HRNetWrapper(model)
+        wrapper.eval()
+
+        dummy_input = torch.randn(1, 9, IMG_HEIGHT, IMG_WIDTH, device=self.device)
+
+        torch.onnx.export(
+            wrapper,
+            dummy_input,
+            str(onnx_path),
+            opset_version=17,
+            input_names=["input"],
+            output_names=["heatmaps"],
+            dynamic_axes={
+                "input": {0: "batch_size"},
+                "heatmaps": {0: "batch_size"},
+            },
+            dynamo=False,  # Legacy exporter required for CoreMLExecutionProvider
+        )
+
+        # Verify numerical equivalence
+        import onnxruntime as ort
+
+        sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+        test_input = torch.randn(2, 9, IMG_HEIGHT, IMG_WIDTH)
+        with torch.inference_mode():
+            pytorch_out = wrapper.cpu()(test_input).numpy()
+        onnx_out = sess.run(None, {"input": test_input.numpy()})[0]
+
+        if not np.allclose(pytorch_out, onnx_out, atol=1e-4):
+            onnx_path.unlink()
+            raise RuntimeError(
+                "ONNX export verification failed: outputs differ from PyTorch. "
+                f"Max diff: {np.max(np.abs(pytorch_out - onnx_out)):.6f}"
+            )
+
+        # Move model back to original device
+        if self.device != "cpu":
+            model.to(self.device)
+
+        logger.info(f"ONNX model exported and verified: {onnx_path}")
 
     def track_video(
         self,
@@ -709,8 +828,6 @@ class WASBBallTracker:
 
         if not video_path.exists():
             raise FileNotFoundError(f"Video not found: {video_path}")
-
-        model = self._ensure_model()
 
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
@@ -756,50 +873,101 @@ class WASBBallTracker:
                     model_version="wasb_hrnet",
                 )
 
-            # Run sliding window inference
+            # Cache preprocessed frames (each frame preprocessed once, not 3x)
+            preprocessed_frames = [preprocess_frame(f) for f in raw_frames]
+            num_frames = len(raw_frames)
+            del raw_frames  # Free BGR frames (~1GB for long rallies)
+
+            # Run sliding window inference with batching
             frame_detections: dict[int, BallPosition] = {}
             inference_count = 0
+            num_windows = num_frames - NUM_INPUT_FRAMES + 1
 
-            with torch.no_grad():
-                for i in range(len(raw_frames) - NUM_INPUT_FRAMES + 1):
-                    preprocessed = [
-                        preprocess_frame(raw_frames[i + j]) for j in range(NUM_INPUT_FRAMES)
-                    ]
-                    triplet = np.concatenate(preprocessed, axis=0)  # (9, H, W)
-                    x = torch.from_numpy(triplet).float().unsqueeze(0).to(self.device)
+            def _build_batch(batch_indices: list[int]) -> np.ndarray:
+                """Stack triplets from cached preprocessed frames into (B, 9, H, W)."""
+                return np.stack([
+                    np.concatenate(
+                        [preprocessed_frames[i + j] for j in range(NUM_INPUT_FRAMES)],
+                        axis=0,
+                    )
+                    for i in batch_indices
+                ], axis=0)
 
-                    output = model(x)
-                    heatmaps = output[0][0].cpu().numpy()  # (3, H, W)
-                    inference_count += 1
-
+            def _decode_batch(
+                probs: np.ndarray,
+                batch_indices: list[int],
+            ) -> None:
+                """Decode (B, 3, H, W) probability maps into frame_detections."""
+                for b_idx, i in enumerate(batch_indices):
                     for j in range(NUM_INPUT_FRAMES):
                         frame_idx = i + j
-                        if frame_idx >= len(raw_frames):
+                        if frame_idx >= num_frames:
                             break
-
                         x_norm, y_norm, conf = decode_heatmap_wasb(
-                            heatmaps[j], threshold=self.threshold
+                            probs[b_idx, j], threshold=self.threshold,
+                            is_probability=True,
                         )
-
                         if conf > 0.0:
                             bp = BallPosition(
                                 frame_number=frame_idx,
-                                x=x_norm,
-                                y=y_norm,
-                                confidence=conf,
-                                motion_energy=0.0,
+                                x=x_norm, y=y_norm,
+                                confidence=conf, motion_energy=0.0,
                             )
                             existing = frame_detections.get(frame_idx)
                             if existing is None or conf > existing.confidence:
                                 frame_detections[frame_idx] = bp
 
-                    if progress_callback and inference_count % 30 == 0:
-                        progress = i / max(1, len(raw_frames) - NUM_INPUT_FRAMES)
-                        progress_callback(min(0.99, progress))
+            # Try ONNX first, fall back to PyTorch
+            use_onnx = self.use_onnx
+            onnx_session = None
+            if use_onnx:
+                try:
+                    onnx_session = self._load_onnx_session()
+                    onnx_input_name = onnx_session.get_inputs()[0].name
+                except Exception as e:
+                    logger.warning(f"ONNX unavailable, falling back to PyTorch: {e}")
+                    use_onnx = False
+
+            if use_onnx and onnx_session is not None:
+                # ONNX batched inference
+                for batch_start in range(0, num_windows, self.batch_size):
+                    batch_end = min(batch_start + self.batch_size, num_windows)
+                    batch_indices = list(range(batch_start, batch_end))
+
+                    batch_np = _build_batch(batch_indices)
+                    onnx_out = onnx_session.run(None, {onnx_input_name: batch_np})[0]
+                    inference_count += len(batch_indices)
+
+                    # Batch sigmoid (float64 for precision near 0, then back to float32)
+                    probs = (1.0 / (1.0 + np.exp(-onnx_out.astype(np.float64)))).astype(
+                        np.float32
+                    )
+                    _decode_batch(probs, batch_indices)
+
+                    if progress_callback and inference_count % 30 < self.batch_size:
+                        progress_callback(min(0.99, batch_end / max(1, num_windows)))
+            else:
+                # PyTorch batched inference with GPU sigmoid
+                model = self._ensure_model()
+                with torch.inference_mode():
+                    for batch_start in range(0, num_windows, self.batch_size):
+                        batch_end = min(batch_start + self.batch_size, num_windows)
+                        batch_indices = list(range(batch_start, batch_end))
+
+                        batch_np = _build_batch(batch_indices)
+                        x = torch.from_numpy(batch_np).float().to(self.device)
+                        output = model(x)
+                        probs = torch.sigmoid(output[0]).cpu().numpy()
+                        inference_count += len(batch_indices)
+
+                        _decode_batch(probs, batch_indices)
+
+                        if progress_callback and inference_count % 30 < self.batch_size:
+                            progress_callback(min(0.99, batch_end / max(1, num_windows)))
 
             # Build complete position list (zeros for undetected frames)
             positions: list[BallPosition] = []
-            for frame_idx in range(len(raw_frames)):
+            for frame_idx in range(num_frames):
                 if frame_idx in frame_detections:
                     positions.append(frame_detections[frame_idx])
                 else:
@@ -812,9 +980,12 @@ class WASBBallTracker:
                 progress_callback(1.0)
 
             processing_time_ms = (time.time() - start_time) * 1000
+            backend = "ONNX" if (use_onnx and onnx_session is not None) else f"PyTorch/{self.device}"
+            elapsed_s = processing_time_ms / 1000
+            frame_fps = num_frames / elapsed_s if elapsed_s > 0 else 0
             logger.info(
-                f"WASB completed {inference_count} inferences in "
-                f"{processing_time_ms / 1000:.1f}s ({self.device})"
+                f"WASB: {num_frames} frames in {elapsed_s:.1f}s "
+                f"({frame_fps:.1f} FPS, {backend}, batch={self.batch_size})"
             )
 
             # Apply temporal filtering
@@ -828,7 +999,7 @@ class WASBBallTracker:
 
             return BallTrackingResult(
                 positions=positions,
-                frame_count=len(raw_frames),
+                frame_count=num_frames,
                 video_fps=fps,
                 video_width=video_width,
                 video_height=video_height,
