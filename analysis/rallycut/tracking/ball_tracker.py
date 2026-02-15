@@ -34,13 +34,15 @@ BALL_MODELS: dict[str, tuple[str, int, int]] = {
     "fast": ("VballNetFastV1_seq9_grayscale_233_h288_w512.onnx", 288, 512),
 }
 
-# Default model configuration
-# v2 is most consistent across videos (70.6% match rate on ground truth)
-# fast is 3.6x faster but 1.5% less accurate
-DEFAULT_BALL_MODEL = "v2"
-MODEL_NAME = BALL_MODELS[DEFAULT_BALL_MODEL][0]
-MODEL_INPUT_HEIGHT = BALL_MODELS[DEFAULT_BALL_MODEL][1]
-MODEL_INPUT_WIDTH = BALL_MODELS[DEFAULT_BALL_MODEL][2]
+# Default ball tracking model. Ensemble (WASB+VballNet) is best accuracy (82.5% match).
+# VballNet v2 alone is fastest (100 FPS) but only 41.7% match rate.
+DEFAULT_BALL_MODEL = "ensemble"
+
+# VballNet-specific constants (used by BallTracker ONNX class only)
+_DEFAULT_VBALLNET = "v2"
+MODEL_NAME = BALL_MODELS[_DEFAULT_VBALLNET][0]
+MODEL_INPUT_HEIGHT = BALL_MODELS[_DEFAULT_VBALLNET][1]
+MODEL_INPUT_WIDTH = BALL_MODELS[_DEFAULT_VBALLNET][2]
 SEQUENCE_LENGTH = 9  # 9-frame temporal context (all models)
 
 
@@ -260,7 +262,7 @@ class BallTracker:
     def __init__(
         self,
         model_path: Path | None = None,
-        model: str = DEFAULT_BALL_MODEL,
+        model: str = _DEFAULT_VBALLNET,
         heatmap_config: HeatmapDecodingConfig | None = None,
     ):
         """
@@ -818,7 +820,7 @@ def create_ball_tracker(
         from rallycut.tracking.ball_ensemble import EnsembleBallTracker
 
         return EnsembleBallTracker(
-            vballnet_model=kwargs.get("vballnet_model", DEFAULT_BALL_MODEL),
+            vballnet_model=kwargs.get("vballnet_model", _DEFAULT_VBALLNET),
             wasb_weights=kwargs.get("wasb_weights"),
             wasb_device=kwargs.get("device"),
             wasb_threshold=kwargs.get("threshold", 0.3),
