@@ -80,7 +80,7 @@ Debug visualization for player and ball detection:
 - **BallTrackOverlay**: Renders ball trajectory trail overlay
 
 Features:
-- **Court calibration**: 4-corner court mapping for position projection
+- **Court calibration**: 4-corner court mapping for position projection, persisted to DB per video (localStorage as fast cache, synced with API)
 - **Primary track filtering**: Only shows the 4 identified players (excludes referees/spectators)
 - **Position interpolation**: Fills gaps up to 1.5s and shows last position for 1s after detection ends
 - **Label Studio integration**: "Label" button exports to Label Studio, "Save GT" imports corrections

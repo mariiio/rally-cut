@@ -135,9 +135,16 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
 - **Unified accept**: `GET /v1/share/:token` and `POST /v1/share/:token/accept` detect share type (session vs video)
 - **Permission checks**: `canAccessVideoRallies()` checks both direct video membership and session membership
 
+### Court Calibration
+- `PUT /v1/videos/:id/court-calibration` → save 4 corner points (persisted per video)
+  - Body: `{ corners: [{x,y}]x4 }` - normalized coordinates (0-1)
+- `DELETE /v1/videos/:id/court-calibration` → clear calibration
+- Calibration returned in `GET /v1/videos/:id/editor` response as `courtCalibrationJson`
+
 ### Player Tracking
 - `POST /v1/rallies/:id/track-players` → triggers local YOLO + ByteTrack tracking
   - Body: `{ calibrationCorners?: [{x,y}]x4 }` - optional court calibration
+  - If not provided, auto-loads from `video.courtCalibrationJson` in database
   - Returns player positions, ball trajectory, contacts, and actions
 - `GET /v1/rallies/:id/player-track` → retrieves existing tracking data
 

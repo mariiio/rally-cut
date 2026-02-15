@@ -462,6 +462,15 @@ export async function trackPlayersForRally(
     throw new ForbiddenError('You do not have permission to track players for this rally');
   }
 
+  // Auto-load calibration from DB if not provided in request
+  if ((!calibrationCorners || calibrationCorners.length !== 4) && rally.video.courtCalibrationJson) {
+    const dbCorners = rally.video.courtCalibrationJson as unknown as CalibrationCorner[];
+    if (Array.isArray(dbCorners) && dbCorners.length === 4) {
+      calibrationCorners = dbCorners;
+      console.log(`[PLAYER_TRACK] Using court calibration from database for video ${rally.video.id}`);
+    }
+  }
+
   // Check duration limit
   const durationMs = rally.endMs - rally.startMs;
   if (durationMs > MAX_DURATION_MS) {

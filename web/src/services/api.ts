@@ -689,6 +689,7 @@ interface ApiVideoEditorResponse {
     rallies: ApiRally[];
     status: 'PENDING' | 'UPLOADED' | 'DETECTING' | 'DETECTED' | 'ERROR';
     cameraSettings?: ApiVideoCameraSettings | null;
+    courtCalibrationJson?: Array<{ x: number; y: number }> | null;
   };
   allVideosSessionId: string;
   highlights: ApiHighlight[];
@@ -713,6 +714,7 @@ export interface FetchVideoEditorResult {
   allVideosSessionId: string;
   cameraEdits: CameraEditMap;
   globalCameraSettings: GlobalCameraSettingsMap;
+  courtCalibration: Array<{ x: number; y: number }> | null;
 }
 
 /**
@@ -861,6 +863,7 @@ export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEd
     allVideosSessionId: data.allVideosSessionId,
     cameraEdits,
     globalCameraSettings,
+    courtCalibration: data.video.courtCalibrationJson ?? null,
   };
 }
 
@@ -1687,6 +1690,44 @@ export async function submitFeedback(feedback: SubmitFeedbackRequest): Promise<F
   }
 
   return response.json();
+}
+
+// ============================================================================
+// Court Calibration
+// ============================================================================
+
+/**
+ * Save court calibration corners for a video.
+ */
+export async function saveCourtCalibration(
+  videoId: string,
+  corners: Array<{ x: number; y: number }>
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/court-calibration`, {
+    method: 'PUT',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify({ corners }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to save court calibration: ${response.status}`);
+  }
+}
+
+/**
+ * Delete court calibration for a video.
+ */
+export async function deleteCourtCalibration(videoId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/court-calibration`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to delete court calibration: ${response.status}`);
+  }
 }
 
 // ============================================================================

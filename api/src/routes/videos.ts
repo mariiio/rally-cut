@@ -1,6 +1,7 @@
 import { Router, Request } from "express";
 import { Readable } from "stream";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 
@@ -43,6 +44,11 @@ import {
   updateVideo,
 } from "../services/videoService.js";
 import { queueVideoProcessing } from "../services/processingService.js";
+
+const calibrationCornerSchema = z.object({
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+});
 
 const router = Router();
 
@@ -475,6 +481,75 @@ router.patch(
       res.json(video);
     } catch (error) {
       next(error);
+    }
+  }
+);
+
+// ============================================================================
+// Court Calibration Endpoints
+// ============================================================================
+
+/**
+ * PUT /v1/videos/:id/court-calibration
+ * Save court calibration corners for a video
+ */
+router.put(
+  "/v1/videos/:id/court-calibration",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: z.object({
+      corners: z.array(calibrationCornerSchema).length(4),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const video = await prisma.video.findFirst({
+        where: { id: req.params.id, userId: req.userId!, deletedAt: null },
+      });
+
+      if (!video) {
+        return res.status(404).json({ error: "Video not found" });
+      }
+
+      await prisma.video.update({
+        where: { id: req.params.id },
+        data: { courtCalibrationJson: req.body.corners },
+      });
+
+      return res.json({ success: true });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+/**
+ * DELETE /v1/videos/:id/court-calibration
+ * Clear court calibration for a video
+ */
+router.delete(
+  "/v1/videos/:id/court-calibration",
+  requireUser,
+  validateRequest({ params: z.object({ id: uuidSchema }) }),
+  async (req, res, next) => {
+    try {
+      const video = await prisma.video.findFirst({
+        where: { id: req.params.id, userId: req.userId!, deletedAt: null },
+      });
+
+      if (!video) {
+        return res.status(404).json({ error: "Video not found" });
+      }
+
+      await prisma.video.update({
+        where: { id: req.params.id },
+        data: { courtCalibrationJson: Prisma.DbNull },
+      });
+
+      return res.json({ success: true });
+    } catch (error) {
+      return next(error);
     }
   }
 );
