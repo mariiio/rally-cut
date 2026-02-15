@@ -103,9 +103,28 @@ class EnsembleBallTracker:
             enable_filtering=False,
         )
 
+        # Pre-filter VballNet: remove stationary false positives before merging.
+        # VballNet detects players as ball with low motion energy — these would
+        # become fallback positions where WASB has no detection. Motion energy
+        # filter zeroes their confidence so they're excluded from the merge.
+        from rallycut.tracking.ball_filter import BallFilterConfig
+
+        vnet_prefilter = BallFilterConfig(
+            enable_motion_energy_filter=True,
+            enable_segment_pruning=False,
+            enable_oscillation_pruning=False,
+            enable_exit_ghost_removal=False,
+            enable_outlier_removal=False,
+            enable_blip_removal=False,
+            enable_interpolation=False,
+        )
+        vnet_prefiltered = BallTemporalFilter(vnet_prefilter).filter_batch(
+            vnet_result.positions
+        )
+
         # Merge: WASB-primary, VballNet-fallback (per frame)
         wasb_by_frame = {p.frame_number: p for p in wasb_result.positions}
-        vnet_by_frame = {p.frame_number: p for p in vnet_result.positions}
+        vnet_by_frame = {p.frame_number: p for p in vnet_prefiltered}
 
         all_frames = sorted(set(wasb_by_frame.keys()) | set(vnet_by_frame.keys()))
         merged: list[BallPosition] = []
