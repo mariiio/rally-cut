@@ -1298,14 +1298,43 @@ class VideoCutter:
         )
 
         if progress_callback:
-            progress_callback(0.9, "Converting segments...")
+            progress_callback(0.85, "Converting segments...")
+
+        raw_segments = result.segments
+
+        # Apply ball-based validation if enabled (Phase 1: False Positive Filtering)
+        if self.ball_validation and raw_segments:
+            if progress_callback:
+                progress_callback(0.87, "Validating with ball tracking...")
+
+            raw_segments, _ = self._apply_ball_validation(
+                input_path,
+                raw_segments,
+                None,  # TemporalMaxer doesn't produce per-segment confidences
+                content_hash,
+                source_fps,
+            )
+
+        # Apply ball-based boundary refinement if enabled (Phase 2)
+        if self.ball_boundary_refinement and raw_segments:
+            if progress_callback:
+                progress_callback(0.90, "Refining boundaries with ball tracking...")
+
+            raw_segments = self._apply_ball_boundary_refinement(
+                input_path,
+                raw_segments,
+                content_hash,
+            )
+
+        if progress_callback:
+            progress_callback(0.93, "Applying padding...")
 
         # Convert to TimeSegments with padding
         padding_start_frames = int(self.padding_seconds * source_fps)
         padding_end_frames = int(self.padding_end_seconds * source_fps)
 
         segments = []
-        for start_time, end_time in result.segments:
+        for start_time, end_time in raw_segments:
             start_frame = int(start_time * source_fps)
             end_frame = int(end_time * source_fps)
 
