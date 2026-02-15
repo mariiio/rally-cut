@@ -106,6 +106,12 @@ uv run rallycut evaluate --heuristics                 # Force heuristics evaluat
 uv run rallycut evaluate --model beach --iou 0.5      # Evaluate beach model
 uv run rallycut evaluate tune-decoder --iou 0.4       # Grid search decoder parameters
 
+# Cross-rally player matching
+uv run rallycut match-players <video-id>                 # Assign consistent player IDs 1-4
+uv run rallycut match-players <video-id> -o result.json  # Export assignments to JSON
+uv run rallycut match-players <video-id> --num-samples 20  # More frames per track (default: 12)
+uv run rallycut match-players <video-id> -q              # Quiet mode
+
 # Development
 uv run pytest tests                    # Run tests (excludes slow ML tests)
 uv run pytest tests --run-slow         # Include slow ML inference tests
@@ -471,7 +477,22 @@ print(f"Optimal offset: +{best_offset} frames ({match_rate*100:.1f}% match)")
 
 ## Cross-Rally Player Consistency
 
-Maintains consistent player IDs (1-4) across match using appearance features (skin tone, jersey color, body proportions). Detects side switches by comparing assignment costs. See `tracking/player_features.py` and `tracking/match_tracker.py`.
+Maintains consistent player IDs (1-4) across a match using appearance-based matching.
+
+**How it works:**
+1. For each rally, sample ~12 video frames per primary track
+2. Extract appearance features (skin tone HSV, jersey color, body proportions)
+3. Use Hungarian algorithm (`scipy.optimize.linear_sum_assignment`) to match tracks to accumulated player profiles
+4. Detect side switches when swapped assignment cost < 70% of normal cost (requires 3+ rallies)
+5. Update profiles with new appearance data after assignment
+
+**Cost function:** 50% skin tone + 30% height + 20% jersey color (lower = better match).
+
+**Key files:** `tracking/player_features.py` (feature extraction, similarity), `tracking/match_tracker.py` (orchestration, Hungarian assignment, side switch detection), `evaluation/tracking/db.py` (`load_rallies_for_video`), `cli/commands/match_players.py` (CLI).
+
+```bash
+uv run rallycut match-players <video-id> -o result.json
+```
 
 ## Ground Truth Labeling
 

@@ -10,6 +10,7 @@ from typing import Any, cast
 from rallycut.evaluation.db import get_connection
 from rallycut.labeling.ground_truth import GroundTruthPosition, GroundTruthResult
 from rallycut.tracking.ball_tracker import BallPosition
+from rallycut.tracking.match_tracker import RallyTrackData
 from rallycut.tracking.player_tracker import (
     PlayerPosition,
     PlayerTrackingResult,
@@ -323,3 +324,99 @@ def get_video_path(video_id: str) -> Path | None:
             except Exception as e:
                 logger.error(f"Failed to download video {video_id}: {e}")
                 return None
+
+
+def load_rallies_for_video(video_id: str) -> list[RallyTrackData]:
+    """Load all tracked rallies for a video from the database.
+
+    Queries rallies with completed player tracks, ordered chronologically.
+
+    Args:
+        video_id: The video ID to load rallies for.
+
+    Returns:
+        List of RallyTrackData sorted by start_ms.
+    """
+    query = """
+        SELECT
+            r.id as rally_id,
+            r.video_id,
+            r.start_ms,
+            r.end_ms,
+            pt.positions_json,
+            pt.primary_track_ids,
+            pt.court_split_y,
+            pt.ball_positions_json
+        FROM rallies r
+        JOIN player_tracks pt ON pt.rally_id = r.id
+        WHERE r.video_id = %s
+          AND pt.positions_json IS NOT NULL
+        ORDER BY r.start_ms
+    """
+
+    results: list[RallyTrackData] = []
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, [video_id])
+            rows = cur.fetchall()
+
+            for row in rows:
+                (
+                    rally_id_val,
+                    video_id_val,
+                    start_ms,
+                    end_ms,
+                    positions_json,
+                    primary_track_ids,
+                    court_split_y,
+                    ball_positions_json,
+                ) = row
+
+                # Parse positions
+                pos_json = cast(list[dict[str, Any]] | None, positions_json)
+                if not pos_json:
+                    continue
+
+                positions = [
+                    PlayerPosition(
+                        frame_number=p["frameNumber"],
+                        track_id=p["trackId"],
+                        x=p["x"],
+                        y=p["y"],
+                        width=p["width"],
+                        height=p["height"],
+                        confidence=p["confidence"],
+                    )
+                    for p in pos_json
+                ]
+
+                # Parse ball positions
+                ball_positions: list[BallPosition] = []
+                bp_json = cast(list[dict[str, Any]] | None, ball_positions_json)
+                if bp_json:
+                    for bp in bp_json:
+                        ball_positions.append(
+                            BallPosition(
+                                frame_number=bp["frameNumber"],
+                                x=bp["x"],
+                                y=bp["y"],
+                                confidence=bp["confidence"],
+                            )
+                        )
+
+                results.append(
+                    RallyTrackData(
+                        rally_id=str(rally_id_val),
+                        video_id=str(video_id_val),
+                        start_ms=cast(int, start_ms),
+                        end_ms=cast(int, end_ms),
+                        positions=positions,
+                        primary_track_ids=cast(list[int], primary_track_ids) or [],
+                        court_split_y=cast(float | None, court_split_y),
+                        ball_positions=ball_positions,
+                    )
+                )
+
+    logger.info(f"Loaded {len(results)} tracked rallies for video {video_id}")
+    return results
