@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 
 if TYPE_CHECKING:
+    from rallycut.court.calibration import CourtCalibrator
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.player_filter import PlayerFilterConfig
 
@@ -335,7 +336,7 @@ class PlayerTracker:
         preprocessing: str = PREPROCESSING_NONE,
         tracker: str = DEFAULT_TRACKER,
         yolo_model: str = DEFAULT_YOLO_MODEL,
-        with_reid: bool = False,
+        with_reid: bool = True,
         appearance_thresh: float | None = None,
         imgsz: int = DEFAULT_IMGSZ,
     ):
@@ -355,7 +356,8 @@ class PlayerTracker:
                     - "botsort": BoT-SORT (adds camera motion compensation, default)
             yolo_model: YOLO model size (default: yolov8n). Options:
                        yolov8n/s/m/l and yolo11n/s/m/l.
-            with_reid: Enable BoT-SORT ReID model for appearance-based re-identification.
+            with_reid: Enable BoT-SORT ReID for appearance-based re-identification.
+                      Enabled by default (reduces ID switches by ~40-60%).
             appearance_thresh: Override BoT-SORT appearance threshold for ReID.
                               If None, uses value from config YAML.
             imgsz: Inference resolution. Higher values improve small/far object
@@ -377,18 +379,18 @@ class PlayerTracker:
     def _get_tracker_config(self) -> Path:
         """Get the tracker config file path based on selected tracker.
 
-        If with_reid or appearance_thresh is set, creates a modified config
-        with the overrides.
+        The YAML config has with_reid and model set by default. Only creates
+        a modified config if appearance_thresh or with_reid=False is explicitly set.
         """
         if self._custom_tracker_config is not None:
             return self._custom_tracker_config
 
         base_config = BOTSORT_CONFIG if self.tracker == TRACKER_BOTSORT else BYTETRACK_CONFIG
 
-        # If overrides are set, create a modified config
+        # Only override if appearance_thresh is explicitly set or ReID is disabled
         needs_override = (
             self.tracker == TRACKER_BOTSORT
-            and (self.with_reid or self.appearance_thresh is not None)
+            and (self.appearance_thresh is not None or not self.with_reid)
         )
         if needs_override:
             import tempfile
@@ -398,11 +400,9 @@ class PlayerTracker:
             with open(base_config) as f:
                 config = yaml.safe_load(f)
 
-            if self.with_reid:
-                config["with_reid"] = True
-                # "auto" uses YOLO's native features for ReID (no separate model)
-                config.setdefault("model", "auto")
-                logger.info("Enabling BoT-SORT ReID")
+            if not self.with_reid:
+                config["with_reid"] = False
+                logger.info("Disabling BoT-SORT ReID")
             if self.appearance_thresh is not None:
                 config["appearance_thresh"] = self.appearance_thresh
                 logger.info(f"Overriding appearance_thresh to {self.appearance_thresh}")
@@ -548,6 +548,61 @@ class PlayerTracker:
 
         return positions
 
+    def _filter_off_court(
+        self,
+        positions: list[PlayerPosition],
+        court_calibrator: CourtCalibrator,
+        sideline_margin: float = 2.0,
+        baseline_margin: float = 4.0,
+    ) -> list[PlayerPosition]:
+        """Filter out detections whose feet project outside court bounds.
+
+        Uses court calibration to project each detection's feet position
+        (bbox bottom-center) to court coordinates and checks bounds.
+        This removes spectators, cameramen, and other off-court people
+        before they can confuse the tracker or post-processing.
+
+        Args:
+            positions: Decoded player positions for a single frame.
+            court_calibrator: Calibrated court calibrator with homography.
+            sideline_margin: Court sideline margin in meters.
+            baseline_margin: Court baseline margin in meters (larger for serves).
+
+        Returns:
+            Filtered positions (only on-court detections).
+        """
+        if not positions:
+            return positions
+
+        filtered: list[PlayerPosition] = []
+        for p in positions:
+            # Use feet position (bbox bottom-center) for court projection
+            feet_x = p.x
+            feet_y = p.y + p.height / 2
+
+            try:
+                # (1, 1) for image dimensions since coordinates are already normalized 0-1
+                court_point = court_calibrator.image_to_court(
+                    (feet_x, feet_y), 1, 1
+                )
+                if court_calibrator.is_point_in_court_with_margin(
+                    court_point,
+                    sideline_margin=sideline_margin,
+                    baseline_margin=baseline_margin,
+                ):
+                    filtered.append(p)
+            except (RuntimeError, ValueError):
+                # Keep detection if projection fails (edge case)
+                filtered.append(p)
+
+        if len(filtered) < len(positions):
+            logger.debug(
+                f"Court filter: {len(positions)} -> {len(filtered)} "
+                f"(removed {len(positions) - len(filtered)} off-court detections)"
+            )
+
+        return filtered
+
     def track_video(
         self,
         video_path: Path | str,
@@ -558,6 +613,7 @@ class PlayerTracker:
         ball_positions: list[BallPosition] | None = None,
         filter_enabled: bool = False,
         filter_config: PlayerFilterConfig | None = None,
+        court_calibrator: CourtCalibrator | None = None,
     ) -> PlayerTrackingResult:
         """
         Track players in a video segment.
@@ -571,6 +627,9 @@ class PlayerTracker:
             ball_positions: Ball tracking results for court player filtering.
             filter_enabled: If True, filter to court players only.
             filter_config: Configuration for player filtering (court type, thresholds).
+            court_calibrator: Optional calibrated court calibrator. When provided,
+                            detections outside court bounds are filtered immediately
+                            after YOLO inference, preventing off-court tracks.
 
         Returns:
             PlayerTrackingResult with all detected positions.
@@ -668,6 +727,13 @@ class PlayerTracker:
                         frame_positions = self._decode_results(
                             results, frame_idx, video_width, video_height
                         )
+
+                        # Filter off-court detections if calibrator available
+                        if court_calibrator is not None and court_calibrator.is_calibrated:
+                            frame_positions = self._filter_off_court(
+                                frame_positions, court_calibrator
+                            )
+
                         positions.extend(frame_positions)
                     except (IndexError, RuntimeError, ValueError) as e:
                         # Handle any errors from YOLO/ByteTrack internals
@@ -724,6 +790,7 @@ class PlayerTracker:
                     ball_positions=ball_positions,
                     total_frames=total_frames_in_range,
                     config=config,
+                    court_calibrator=court_calibrator,
                 )
 
                 # Step 2: Analyze all positions to identify stable tracks
