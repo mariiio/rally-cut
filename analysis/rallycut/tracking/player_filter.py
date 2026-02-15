@@ -1725,6 +1725,84 @@ def should_use_ball_filtering(
     return use_ball
 
 
+def detect_distractor_tracks(
+    all_positions: list[PlayerPosition],
+    primary_tracks: set[int],
+    track_stats: dict[int, TrackStats],
+    max_players: int = 4,
+    min_coexistence_ratio: float = 0.80,
+) -> set[int]:
+    """Detect distractor tracks using the hard 4-player constraint.
+
+    A distractor is a non-primary track that mostly exists during frames where
+    all expected players are already accounted for. These are spectators, refs,
+    or objects that passed earlier filters but co-exist with the full player set.
+
+    Args:
+        all_positions: All player positions from all frames.
+        primary_tracks: Set of primary (player) track IDs.
+        track_stats: Statistics for each track.
+        max_players: Expected number of players (4 for beach volleyball).
+        min_coexistence_ratio: Fraction of frames where the track coexists with
+            all primary tracks to be classified as distractor.
+
+    Returns:
+        Set of track IDs classified as distractors.
+    """
+    if len(primary_tracks) < max_players:
+        # Not enough primary tracks identified — can't reliably detect distractors
+        return set()
+
+    # Build per-frame track presence and per-track frame sets in one pass
+    frame_tracks: dict[int, set[int]] = {}
+    track_frames_lookup: dict[int, set[int]] = {}
+    for p in all_positions:
+        if p.track_id < 0:
+            continue
+        if p.frame_number not in frame_tracks:
+            frame_tracks[p.frame_number] = set()
+        frame_tracks[p.frame_number].add(p.track_id)
+        if p.track_id not in track_frames_lookup:
+            track_frames_lookup[p.track_id] = set()
+        track_frames_lookup[p.track_id].add(p.frame_number)
+
+    # Find frames where all primary tracks are present
+    all_primary_frames: set[int] = set()
+    for frame_num, tracks in frame_tracks.items():
+        if primary_tracks <= tracks:  # All primary tracks present
+            all_primary_frames.add(frame_num)
+
+    if not all_primary_frames:
+        return set()
+
+    # Check each non-primary track
+    distractors: set[int] = set()
+    non_primary_ids = set(track_stats.keys()) - primary_tracks
+
+    for track_id in non_primary_ids:
+        stats = track_stats.get(track_id)
+        if stats is None:
+            continue
+
+        track_frames = track_frames_lookup.get(track_id, set())
+        overlap = track_frames & all_primary_frames
+        coexistence_ratio = len(overlap) / len(track_frames) if track_frames else 0.0
+
+        if coexistence_ratio >= min_coexistence_ratio:
+            distractors.add(track_id)
+            logger.info(
+                f"Track {track_id} classified as distractor: coexists with all "
+                f"{max_players} primary tracks in {coexistence_ratio:.0%} of its frames"
+            )
+
+    if distractors:
+        logger.info(
+            f"Detected {len(distractors)} distractor tracks: {sorted(distractors)}"
+        )
+
+    return distractors
+
+
 class PlayerFilter:
     """
     Multi-signal player filter to identify court players.
@@ -1785,6 +1863,7 @@ class PlayerFilter:
         # Track stability (computed by analyze_tracks)
         self.track_stats: dict[int, TrackStats] = {}
         self.primary_tracks: set[int] = set()
+        self.distractor_tracks: set[int] = set()  # Tracks suppressed by 4-player constraint
         self._tracks_analyzed = False
 
         # Court position stats (computed by analyze_tracks if calibrator available)
@@ -1887,6 +1966,14 @@ class PlayerFilter:
             self.track_stats, self.config, self.court_config, referee_tracks
         )
 
+        # Detect distractor tracks (non-players that coexist with all primary tracks)
+        self.distractor_tracks = detect_distractor_tracks(
+            all_positions,
+            self.primary_tracks,
+            self.track_stats,
+            max_players=self.config.max_players,
+        )
+
         self._tracks_analyzed = True
 
         # Recompute court split using player positions (more reliable than ball alone)
@@ -1979,7 +2066,8 @@ class PlayerFilter:
             else:
                 filtered = filter_by_play_area(filtered, self.play_area)
 
-        # Step 3: Filter out stationary tracks and likely referees
+        # Step 3: Filter out distractors, stationary tracks, and likely referees
+        # - Distractors: non-primary tracks that coexist with all 4 primary tracks
         # - Stationary objects (low spread AND low ball proximity) are filtered
         # - Tracks marked as likely referees are filtered (unless they're primary)
         # - Players who don't move much still engage with the ball
@@ -1987,13 +2075,17 @@ class PlayerFilter:
             before_stationary = len(filtered)
 
             def is_valid_track(p: PlayerPosition) -> bool:
-                if p.track_id not in self.track_stats:
-                    return True  # Unknown track, keep it
-                stats = self.track_stats[p.track_id]
-
                 # Always keep primary tracks
                 if self.primary_tracks and p.track_id in self.primary_tracks:
                     return True
+
+                # Filter out distractor tracks (hard 4-player constraint)
+                if p.track_id in self.distractor_tracks:
+                    return False
+
+                if p.track_id not in self.track_stats:
+                    return True  # Unknown track, keep it
+                stats = self.track_stats[p.track_id]
 
                 # Filter out likely referees (sideline/stationary observers)
                 if stats.is_likely_referee:
@@ -2007,8 +2099,8 @@ class PlayerFilter:
             filtered = [p for p in filtered if is_valid_track(p)]
             if len(filtered) < before_stationary:
                 logger.debug(
-                    f"Stationary filter: {before_stationary} -> {len(filtered)} "
-                    f"(removed {before_stationary - len(filtered)} stationary tracks)"
+                    f"Stationary/distractor filter: {before_stationary} -> {len(filtered)} "
+                    f"(removed {before_stationary - len(filtered)} tracks)"
                 )
 
         # Step 4: Player selection (two-team or top-K)
@@ -2052,6 +2144,8 @@ class PlayerFilter:
             methods.append("court_presence")  # Hard filter by court presence
         if self._tracks_analyzed and self.track_stats:
             methods.append("stationary")  # Filters low-spread tracks (referees)
+        if self.distractor_tracks:
+            methods.append("distractor")  # Hard 4-player constraint
         if self._tracks_analyzed and self.primary_tracks:
             methods.append("track_stability")
         if self._use_two_team:

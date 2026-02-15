@@ -266,7 +266,7 @@ API triggers Modal via webhook. Results posted back on completion.
 
 ## Player Tracking
 
-Uses YOLOv8 for person detection with BoT-SORT for temporal tracking. BoT-SORT reduces ID switches by 64% compared to ByteTrack through camera motion compensation.
+Uses YOLOv8 for person detection with BoT-SORT for temporal tracking. BoT-SORT with ReID (enabled by default) reduces ID switches when players cross paths. GMC (camera motion compensation) is disabled for fixed tripod cameras.
 
 **YOLO Model Options:**
 | Model | FPS | F1 | Recall | Use Case |
@@ -283,7 +283,7 @@ Uses YOLOv8 for person detection with BoT-SORT for temporal tracking. BoT-SORT r
 **Tracker Options:**
 | Tracker | ID | Strengths | Use Case |
 |---------|-----|-----------|----------|
-| **BoT-SORT** | `botsort` (default) | 64% fewer ID switches, camera motion compensation | Recommended for all videos |
+| **BoT-SORT** | `botsort` (default) | ReID for identity consistency, reduced ID switches | Recommended for all videos |
 | **ByteTrack** | `bytetrack` | Simpler, faster | Legacy compatibility |
 
 **Preprocessing Options:**
@@ -329,14 +329,15 @@ Multi-stage filtering to identify active players and exclude non-players. See `t
 **Per-Frame Filtering:**
 1. Bbox size filter (removes small background detections, keeps primary tracks)
 2. Play area filter (convex hull of ball positions, keeps primary tracks)
-3. Referee/stationary filter (excludes non-primary tracks with low movement)
-4. Two-team selection (2 players per court side by Y position)
+3. Court boundary filter (if calibration available, removes off-court detections before tracking)
+4. Distractor/referee/stationary filter (hard 4-player constraint removes non-primary tracks coexisting with all players; excludes referees and stationary tracks)
+5. Two-team selection (2 players per court side by Y position)
 
 **Key insight:** Positively identify players by volleyball behaviors (ball engagement, court coverage, movement) rather than detecting "non-players".
 
 ## Track Merging
 
-Merges fragmented tracker IDs using velocity prediction and position/size similarity. Thresholds are video-agnostic (seconds, normalized coordinates). BoT-SORT's camera motion compensation significantly reduces fragmentation. See `tracking/player_filter.py`.
+Merges fragmented tracker IDs using velocity prediction and position/size similarity. Thresholds are video-agnostic (seconds, normalized coordinates). BoT-SORT's ReID reduces fragmentation by maintaining identity through brief occlusions. See `tracking/player_filter.py`.
 
 ## Ball Tracking Filtering
 
