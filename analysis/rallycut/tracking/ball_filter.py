@@ -143,20 +143,22 @@ class BallFilterConfig:
 def get_ensemble_filter_config() -> BallFilterConfig:
     """Get optimized BallFilterConfig for WASB+VballNet ensemble output.
 
-    Tuned via grid search (576 configs, 7 GT rallies). Key differences
+    Tuned via grid search (576 configs, 7 GT rallies) with VballNet
+    motion energy pre-filter applied before merging. Key differences
     from the default VballNet-only config:
-    - Motion energy filter disabled (WASB doesn't produce stationary FPs)
-    - Oscillation and outlier removal disabled (they remove valid VballNet
-      fallback positions at WASB/VballNet model-switch boundaries)
+    - Motion energy filter disabled at ensemble level (applied to VballNet
+      positions before merging in EnsembleBallTracker instead)
+    - Oscillation pruning disabled (WASB/VballNet transitions trigger false
+      oscillation detection)
     - Wider segment_jump_threshold (0.25 vs 0.20) — WASB/VballNet transitions
       create larger position jumps that shouldn't trigger segment splits
     - Shorter min_segment_frames (8 vs 15) — WASB segments can be short
       but are accurate
-    - Shorter max_interpolation_gap (5 vs 10) — reduces false interpolation
-      across model-switch boundaries
+    - Wider blip_max_deviation (0.20 vs 0.15) — VballNet fallback positions
+      deviate more from WASB-dominated trajectory context
 
-    Result: 78.2% match rate (+1.0% vs unfiltered), 42.8px error
-    (-43px vs unfiltered 86.1px). Halves error while improving match rate.
+    Result: 78.2% match rate (+1.5% vs unfiltered 76.7%), 43.1px error
+    (-30px vs unfiltered 73.4px).
     """
     return BallFilterConfig(
         enable_kalman=False,
@@ -165,17 +167,19 @@ def get_ensemble_filter_config() -> BallFilterConfig:
         segment_jump_threshold=0.25,
         min_segment_frames=8,
         min_output_confidence=0.05,
-        # No motion energy filter (WASB doesn't have this issue)
+        # No motion energy filter (applied to VballNet before merging)
         enable_motion_energy_filter=False,
         # Keep exit ghost removal
         enable_exit_ghost_removal=True,
-        # Disable stages that hurt ensemble output
+        # Oscillation pruning hurts ensemble (-2.9%)
         enable_oscillation_pruning=False,
-        enable_outlier_removal=False,
-        enable_blip_removal=False,
-        # Shorter interpolation gap to avoid false interpolation at model switches
+        # Outlier and blip removal now safe with VballNet pre-filter
+        enable_outlier_removal=True,
+        enable_blip_removal=True,
+        blip_max_deviation=0.20,
+        # Default interpolation gap
         enable_interpolation=True,
-        max_interpolation_gap=5,
+        max_interpolation_gap=10,
     )
 
 

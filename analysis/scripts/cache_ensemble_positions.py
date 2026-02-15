@@ -30,6 +30,7 @@ from rallycut.evaluation.tracking.db import (
     get_video_path,
     load_labeled_rallies,
 )
+from rallycut.tracking.ball_filter import BallFilterConfig, BallTemporalFilter
 from rallycut.tracking.ball_tracker import BallPosition, BallTracker
 from rallycut.tracking.wasb_model import load_wasb_model
 
@@ -230,8 +231,28 @@ def main() -> None:
                 ]
                 logger.info(f"    VballNet: {len(vnet_raw)} positions (fresh inference)")
 
+            # --- Pre-filter VballNet: remove stationary false positives ---
+            # VballNet detects players as ball with low motion energy. These would
+            # become fallback positions where WASB has no detection. Motion energy
+            # filter zeroes their confidence so they're excluded from the merge.
+            vnet_prefilter = BallFilterConfig(
+                enable_motion_energy_filter=True,
+                enable_segment_pruning=False,
+                enable_oscillation_pruning=False,
+                enable_exit_ghost_removal=False,
+                enable_outlier_removal=False,
+                enable_blip_removal=False,
+                enable_interpolation=False,
+            )
+            vnet_filtered = BallTemporalFilter(vnet_prefilter).filter_batch(vnet_raw)
+            me_removed = sum(1 for p in vnet_raw if p.confidence > 0) - sum(
+                1 for p in vnet_filtered if p.confidence > 0
+            )
+            if me_removed > 0:
+                logger.info(f"    VballNet pre-filter: removed {me_removed} low-energy FPs")
+
             # --- Merge ---
-            merged = merge_wasb_primary(wasb_shifted, vnet_raw)
+            merged = merge_wasb_primary(wasb_shifted, vnet_filtered)
             wasb_count = sum(1 for p in merged if p.motion_energy >= 1.0)
             vnet_count = sum(1 for p in merged if p.motion_energy < 1.0)
             logger.info(
