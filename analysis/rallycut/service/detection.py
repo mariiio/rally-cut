@@ -124,6 +124,7 @@ class DetectionService:
                 stride=config.stride,
                 model_variant=config.model_variant.value,
                 use_temporal_maxer=use_temporal_maxer,
+                ball_boundary_refinement=True,
             )
 
             def analysis_progress(pct: float, msg: str) -> None:
