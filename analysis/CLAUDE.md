@@ -340,7 +340,7 @@ Merges fragmented tracker IDs using velocity prediction and position/size simila
 
 ## Ball Tracking Filtering
 
-Multi-stage temporal filter for ball tracking. Default raw mode applies motion energy filtering, segment pruning, oscillation/blip removal, and interpolation. Optional Kalman mode adds lag compensation and smoothing. See `tracking/ball_filter.py`.
+Multi-stage temporal filter for ball tracking. Default raw mode applies motion energy filtering, stationarity detection, segment pruning, oscillation/blip removal, and interpolation. Optional Kalman mode adds lag compensation and smoothing. See `tracking/ball_filter.py`.
 
 ### Ball Tracking Model Variants
 
@@ -443,7 +443,8 @@ visualization overlays where smooth trajectories are preferred.
 
 **Problems solved:**
 - **False positives at static positions**: VballNet frequently detects stationary players as the ball. The motion energy filter (step 0 in raw mode) computes temporal intensity change in a 15x15 patch around each detection. Real ball in flight creates high motion energy; a player standing still has near-zero energy. Positions with `motion_energy < 0.02` are zeroed out. This removes ~5% of false positives before segment pruning runs, improving detection rate from 78.6% to 83.7% and match rate from 47.1% to 48.6%.
-- **False segments at rally boundaries**: VballNet outputs consistent false detections at rally start/end (before temporal context builds up, or after ball exits frame). Segment pruning splits the trajectory at large position jumps (>20% screen) and discards short fragments (<15 frames). Short fragments that are spatially close to an anchor segment (within 10% of screen of the nearest anchor endpoint) are recovered rather than discarded — these are real trajectory fragments between interleaved false positives.
+- **Player lock-on (stationarity)**: WASB can lock onto a player position for 12+ consecutive frames, producing nearly identical coordinates (spread < 0.5% of screen). Since a volleyball is always in motion during a rally, this is physics-impossible and indicates model failure. The stationarity filter uses a sliding window to detect and zero these blocks. Tight thresholds (0.5% spread, 12 frames minimum) avoid false positives on real slow-ball events like set apex (~0.8% spread) or slow net trajectories (~1.5%). Source-agnostic: applies equally to WASB and VballNet. Default off; enabled only in ensemble mode.
+- **False segments at rally boundaries**: VballNet outputs consistent false detections at rally start/end (before temporal context builds up, or after ball exits frame). Segment pruning splits the trajectory at large position jumps (>20% screen) and discards short fragments (<15 frames). Short fragments that are spatially close to an anchor segment (within 10-15% of screen of the nearest anchor endpoint, wider when the anchor contains WASB positions) are recovered rather than discarded — these are real trajectory fragments between interleaved false positives.
 - **Interleaved false positives**: VballNet sometimes interleaves single-frame false detections (jumping to player positions) within real trajectory regions. Without anchor-proximity recovery, segment splitting at each jump fragments the real trajectory into tiny segments that all get pruned. The recovery step keeps real fragments and discards only the distant false positive clusters.
 - **Oscillating false detections**: After ball exits frame, VballNet can lock onto two players and alternate between them with high confidence. The pattern is cluster-based: positions stay near one player for 2-5 frames, jump to another for 1-2 frames, then back. Oscillation pruning uses spatial clustering to detect this: finds the two furthest-apart positions (poles) in each window, assigns positions to nearest pole, and counts cluster transitions. Both clusters must be compact (within 1.5% of screen of their pole — real VballNet player-locking has ~1% noise) and have ≥3 members. A transition rate ≥25% over 12+ frames triggers trimming.
 - **Exit ghost detections**: When the ball exits the frame mid-rally, VballNet produces false detections that smoothly drift from the exit point toward a player position. These "exit ghosts" are missed by other filters (no jump, no oscillation, no gap). Detected by physics: ball consistently approaching a screen edge with velocity > 0.8%/frame MUST exit — any reversal away from that edge is impossible. All subsequent positions are marked as ghosts until a gap > max_interpolation_gap frames.
@@ -459,6 +460,9 @@ visualization overlays where smooth trajectories are preferred.
 - `enable_kalman=False`: Skip Kalman filter, use raw positions (default, best detection/match)
 - `enable_motion_energy_filter=True`: Remove false positives at static positions (low temporal change)
 - `motion_energy_threshold=0.02`: Motion energy below this = likely false positive (zeroed)
+- `enable_stationarity_filter=False`: Detect and remove player lock-on (12+ frames within 0.5% spread). Default off; enabled in ensemble mode
+- `stationarity_min_frames=12`: Minimum consecutive frames to flag as stationary (~0.4s at 30fps)
+- `stationarity_max_spread=0.005`: Maximum spread from centroid (0.5% of screen, ~10px at 1920px)
 - `enable_segment_pruning=True`: Remove short disconnected false segments
 - `segment_jump_threshold=0.20`: Position jump threshold to split segments (20% of screen)
 - `min_segment_frames=15`: Minimum frames to keep a segment
