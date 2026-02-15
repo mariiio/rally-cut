@@ -2227,5 +2227,6 @@ class TestEnsembleSourceAware:
         assert config.enable_outlier_removal is True
         assert config.enable_blip_removal is True
         assert config.enable_motion_energy_filter is False
-        assert config.min_segment_frames == 8
-        assert config.segment_jump_threshold == 0.25
+        assert config.min_segment_frames == 10
+        assert config.segment_jump_threshold == 0.20
+        assert config.blip_max_deviation == 0.10
