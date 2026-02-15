@@ -224,6 +224,7 @@ model Video {
   proxyGeneratedAt      DateTime?             @map("proxy_generated_at")
   proxyLastAccessedAt   DateTime?             @map("proxy_last_accessed_at")
   qualityDowngradedAt   DateTime?             @map("quality_downgraded_at")
+  courtCalibrationJson  Json?                 @map("court_calibration_json")
   rallies               Rally[]
   confirmation          RallyConfirmation?
   detectionJobs         RallyDetectionJob[]

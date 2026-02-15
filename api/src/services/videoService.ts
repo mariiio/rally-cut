@@ -1095,6 +1095,7 @@ export async function getVideoForEditor(videoId: string, userId: string) {
       status: video.status,
       rallies: transformedRallies,
       cameraSettings: video.cameraSettings[0] ?? null,
+      courtCalibrationJson: video.courtCalibrationJson ?? null,
     },
     allVideosSessionId: allVideosSession.id,
     highlights,

@@ -14,6 +14,7 @@ import {
 } from '@/types/rally';
 import { usePlayerStore } from './playerStore';
 import { fetchSession as fetchSessionFromApi, fetchVideoForEditor, getCurrentUser, getConfirmationStatus, AccessDeniedError, type CameraEditMap, type GlobalCameraSettingsMap } from '@/services/api';
+import { usePlayerTrackingStore } from './playerTrackingStore';
 import { useCameraStore } from './cameraStore';
 import type { RallyCameraEdit } from '@/types/camera';
 import { syncService } from '@/services/syncService';
@@ -686,6 +687,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // Load camera edits and global settings into camera store
       useCameraStore.getState().loadCameraEdits(result.cameraEdits, result.globalCameraSettings);
 
+      // Hydrate court calibration from API if not already in local store
+      if (result.courtCalibration) {
+        usePlayerTrackingStore.getState().hydrateCalibration(videoId, result.courtCalibration);
+      }
+
       // Fetch current user info
       try {
         const user = await getCurrentUser();
@@ -846,6 +852,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
         // Load camera edits and global settings into camera store
         useCameraStore.getState().loadCameraEdits(result.cameraEdits, result.globalCameraSettings);
+
+        // Hydrate court calibration from API if not already in local store
+        if (result.courtCalibration) {
+          usePlayerTrackingStore.getState().hydrateCalibration(state.singleVideoId, result.courtCalibration);
+        }
 
         // Build updated session with fresh match data
         const updatedSession = state.session ? {

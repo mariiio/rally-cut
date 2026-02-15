@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { trackPlayers, getPlayerTrack, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData } from '@/services/api';
+import { trackPlayers, getPlayerTrack, saveCourtCalibration, deleteCourtCalibration, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData } from '@/services/api';
 
 // Types for player tracking data (store format)
 export interface PlayerPosition {
@@ -76,7 +76,9 @@ interface PlayerTrackingState {
   setSelectedTrack: (trackId: number | null) => void;
   setIsCalibrating: (value: boolean) => void;
   saveCalibration: (videoId: string, corners: Corner[]) => void;
+  clearCalibration: (videoId: string) => void;
   getCalibration: (videoId: string) => CourtCalibration | null;
+  hydrateCalibration: (videoId: string, corners: Corner[]) => void;
   trackPlayersForRally: (rallyId: string, videoId: string, fallbackFps?: number) => Promise<void>;
   loadPlayerTrack: (rallyId: string, fallbackFps?: number) => Promise<boolean>;
 }
@@ -205,10 +207,40 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
           },
           isCalibrating: false,
         }));
+        // Fire-and-forget: persist to backend
+        saveCourtCalibration(videoId, corners).catch((err) => {
+          console.error('[PlayerTrackingStore] Failed to save calibration to API:', err);
+        });
+      },
+
+      clearCalibration: (videoId: string) => {
+        set((state) => {
+          const { [videoId]: _, ...rest } = state.calibrations;
+          return { calibrations: rest };
+        });
+        // Fire-and-forget: clear from backend
+        deleteCourtCalibration(videoId).catch((err) => {
+          console.error('[PlayerTrackingStore] Failed to delete calibration from API:', err);
+        });
       },
 
       getCalibration: (videoId: string) => {
         return get().calibrations[videoId] || null;
+      },
+
+      hydrateCalibration: (videoId: string, corners: Corner[]) => {
+        // Only hydrate if not already in local store (local is authoritative cache)
+        if (get().calibrations[videoId]) return;
+        set((state) => ({
+          calibrations: {
+            ...state.calibrations,
+            [videoId]: {
+              videoId,
+              corners,
+              savedAt: Date.now(),
+            },
+          },
+        }));
       },
 
       /**
