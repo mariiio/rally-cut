@@ -171,10 +171,12 @@ def get_ensemble_filter_config() -> BallFilterConfig:
         enable_kalman=False,
         # Source-aware: treat WASB and VballNet positions differently
         ensemble_source_aware=True,
-        # Segment pruning with relaxed thresholds for ensemble
+        # Segment pruning (tighter jump threshold catches more false jumps;
+        # higher min_segment_frames is safe because WASB segments get halved
+        # threshold automatically via source-awareness)
         enable_segment_pruning=True,
-        segment_jump_threshold=0.25,
-        min_segment_frames=8,
+        segment_jump_threshold=0.20,
+        min_segment_frames=10,
         min_output_confidence=0.05,
         # No motion energy filter (applied to VballNet before merging)
         enable_motion_energy_filter=False,
@@ -183,9 +185,10 @@ def get_ensemble_filter_config() -> BallFilterConfig:
         # Oscillation pruning now safe with source-awareness
         enable_oscillation_pruning=True,
         # Outlier and blip removal now safe with source-awareness
+        # Tighter blip threshold catches more VballNet false positives
         enable_outlier_removal=True,
         enable_blip_removal=True,
-        blip_max_deviation=0.20,
+        blip_max_deviation=0.10,
         # Default interpolation gap
         enable_interpolation=True,
         max_interpolation_gap=10,
