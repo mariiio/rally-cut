@@ -139,6 +139,19 @@ class BallFilterConfig:
     enable_motion_energy_filter: bool = True
     motion_energy_threshold: float = 0.02  # Below this = suspicious (reduce conf to 0)
 
+    # Stationarity filter (removes player lock-on regardless of source)
+    # A volleyball is always in motion during a rally. 12+ consecutive frames
+    # within 0.5% of screen = player lock-on, not a real ball trajectory.
+    # Source-agnostic: applies to WASB and VballNet equally (physics override).
+    # Default off: only needed for ensemble mode where WASB can lock onto players.
+    # VballNet false positives at player positions are handled by motion_energy_filter.
+    # Tight thresholds avoid false positives on real slow-ball events (apex of
+    # sets/tosses have spread ~0.8%, slow trajectories ~1.5%). True player lock-on
+    # has spread < 0.2% (random jitter only).
+    enable_stationarity_filter: bool = False
+    stationarity_min_frames: int = 12  # ~0.4s at 30fps
+    stationarity_max_spread: float = 0.005  # 0.5% of screen (~10px on 1920px)
+
     # Source-aware ensemble filtering
     # When True, filter stages treat WASB and VballNet positions differently.
     # WASB positions (motion_energy >= 1.0) are high-precision and should never
@@ -180,6 +193,8 @@ def get_ensemble_filter_config() -> BallFilterConfig:
         min_output_confidence=0.05,
         # No motion energy filter (applied to VballNet before merging)
         enable_motion_energy_filter=False,
+        # Stationarity filter: catches WASB player lock-on (physics override)
+        enable_stationarity_filter=True,
         # Keep exit ghost removal
         enable_exit_ghost_removal=True,
         # Oscillation pruning now safe with source-awareness
@@ -616,6 +631,121 @@ class BallTemporalFilter:
 
         return result
 
+    def _remove_stationary_runs(
+        self,
+        positions: list["BallPosition"],
+    ) -> list["BallPosition"]:
+        """Remove stationary sub-sequences using a sliding window.
+
+        A volleyball is always in motion during a rally. If 12+ consecutive
+        confident detections cluster within 0.5% of screen, it's a model
+        locked onto a player, not a real ball trajectory. This is source-agnostic:
+        it applies to WASB and VballNet equally because physics overrides
+        source trust.
+
+        Uses a sliding window to detect stationary blocks even when they are
+        interleaved with real detections in the same contiguous run. WASB can
+        intermittently snap back to a player position (e.g., 25 bad frames,
+        then 50 good, then 16 bad at the same spot). The window approach
+        catches each stationary block independently.
+
+        Tight thresholds (0.5% spread, 12 frames) avoid false positives on
+        real slow-ball events: ball apex during sets/tosses (~0.8% spread),
+        slow trajectories near the net (~1.5%). True player lock-on has
+        spread < 0.2% (random sub-pixel jitter only).
+        """
+        from rallycut.tracking.ball_tracker import BallPosition
+
+        min_frames = self.config.stationarity_min_frames
+        max_spread = self.config.stationarity_max_spread
+
+        # Collect confident positions with their indices into positions list
+        confident_indices = [
+            i for i, p in enumerate(positions) if p.confidence > 0
+        ]
+        if len(confident_indices) < min_frames:
+            return positions
+
+        # Sliding window: check each window of min_frames consecutive
+        # confident positions for stationarity
+        stationary_indices: set[int] = set()
+        n = len(confident_indices)
+        # Net displacement threshold: truly stationary positions have near-zero
+        # net displacement (random jitter), while slow-moving trajectories show
+        # consistent directional movement (net displacement > threshold).
+        net_disp_threshold = max_spread / 2
+
+        for start in range(n - min_frames + 1):
+            window = confident_indices[start : start + min_frames]
+            window_positions = [positions[i] for i in window]
+
+            # Require temporal contiguity: frame gap between first and last
+            # position in window must be reasonable (not spanning a huge gap)
+            frame_span = (
+                window_positions[-1].frame_number
+                - window_positions[0].frame_number
+            )
+            if frame_span > min_frames * 3:
+                continue
+
+            cx = float(np.mean([p.x for p in window_positions]))
+            cy = float(np.mean([p.y for p in window_positions]))
+            spread = float(max(
+                np.sqrt((p.x - cx) ** 2 + (p.y - cy) ** 2)
+                for p in window_positions
+            ))
+
+            if spread >= max_spread:
+                continue
+
+            # Check net displacement: distance from first to last position.
+            # Stationary lock-on has near-zero net displacement (jitter),
+            # while slow-moving real trajectories have measurable displacement.
+            first, last = window_positions[0], window_positions[-1]
+            net_disp = float(np.sqrt(
+                (last.x - first.x) ** 2 + (last.y - first.y) ** 2
+            ))
+            if net_disp > net_disp_threshold:
+                continue
+
+            for i in window:
+                stationary_indices.add(i)
+
+        if not stationary_indices:
+            return positions
+
+        # Log flagged regions grouped into contiguous runs
+        flagged_sorted = sorted(stationary_indices)
+        runs: list[list[int]] = [[flagged_sorted[0]]]
+        for idx in flagged_sorted[1:]:
+            if idx == runs[-1][-1] + 1:
+                runs[-1].append(idx)
+            else:
+                runs.append([idx])
+        for run in runs:
+            run_positions = [positions[i] for i in run]
+            logger.info(
+                f"Stationarity filter: zeroed {len(run)} frames "
+                f"[{run_positions[0].frame_number}-"
+                f"{run_positions[-1].frame_number}] "
+                f"(spread<{max_spread})"
+            )
+
+        result = []
+        for i, p in enumerate(positions):
+            if i in stationary_indices:
+                result.append(BallPosition(
+                    frame_number=p.frame_number,
+                    x=p.x,
+                    y=p.y,
+                    confidence=0.0,
+                    motion_energy=p.motion_energy,
+                ))
+            else:
+                result.append(p)
+
+        return result
+
     def filter_batch(
         self,
         positions: list["BallPosition"],
@@ -656,6 +786,7 @@ class BallTemporalFilter:
         oscillation_count = 0
         interp_count = 0
         motion_energy_count = 0
+        stationarity_count = 0
 
         if self.config.enable_kalman:
             # Kalman mode: outlier removal first (cleans Kalman artifacts),
@@ -672,6 +803,7 @@ class BallTemporalFilter:
         else:
             # Raw mode pipeline:
             # 0. motion energy filter (remove FP at static positions)
+            # 0.5. stationarity filter (remove player lock-on runs)
             # 1. detect exit ghost frame ranges (on raw data, before pruning)
             # 2. segment pruning (splits at jumps, discards short fragments)
             # 3. apply exit ghost removal (remove ghost ranges from pruned data)
@@ -685,6 +817,12 @@ class BallTemporalFilter:
                 filtered = self._motion_energy_filter(filtered)
                 after_me = sum(1 for p in filtered if p.confidence > 0)
                 motion_energy_count = before_me - after_me
+
+            if self.config.enable_stationarity_filter:
+                before_st = sum(1 for p in filtered if p.confidence > 0)
+                filtered = self._remove_stationary_runs(filtered)
+                after_st = sum(1 for p in filtered if p.confidence > 0)
+                stationarity_count = before_st - after_st
 
             ghost_ranges: list[tuple[int, int]] = []
             if self.config.enable_exit_ghost_removal:
@@ -755,6 +893,8 @@ class BallTemporalFilter:
             parts = [f"Ball filter ({mode}): {input_count} positions"]
             if motion_energy_count > 0:
                 parts.append(f"-{motion_energy_count} low-energy")
+            if stationarity_count > 0:
+                parts.append(f"-{stationarity_count} stationary")
             if outlier_count > 0:
                 parts.append(f"-{outlier_count} outliers")
             if pruned_count > 0:
@@ -1167,11 +1307,11 @@ class BallTemporalFilter:
             centroid_x = float(np.mean([p.x for p in seg]))
             centroid_y = float(np.mean([p.y for p in seg]))
 
-            # Source-aware: use wider proximity for WASB-containing segments
+            # Source-aware: use wider proximity when EITHER the short segment
+            # OR the reference anchor contains WASB positions.
             seg_has_wasb = self.config.ensemble_source_aware and any(
                 self._is_wasb(p) for p in seg
             )
-            seg_proximity = wasb_proximity if seg_has_wasb else proximity
 
             close_to_anchor = False
 
@@ -1182,10 +1322,18 @@ class BallTemporalFilter:
                     frame_gap = seg[0].frame_number - ref.frame_number
                     if frame_gap > max_recovery_gap:
                         break
+                    ref_has_wasb = self.config.ensemble_source_aware and any(
+                        self._is_wasb(p) for p in segments[j]
+                    )
+                    eff_proximity = (
+                        wasb_proximity
+                        if (seg_has_wasb or ref_has_wasb)
+                        else proximity
+                    )
                     dist = np.sqrt(
                         (centroid_x - ref.x) ** 2 + (centroid_y - ref.y) ** 2
                     )
-                    if dist < seg_proximity:
+                    if dist < eff_proximity:
                         close_to_anchor = True
                     break
 
@@ -1197,10 +1345,18 @@ class BallTemporalFilter:
                         frame_gap = ref.frame_number - seg[-1].frame_number
                         if frame_gap > max_recovery_gap:
                             break
+                        ref_has_wasb = self.config.ensemble_source_aware and any(
+                            self._is_wasb(p) for p in segments[j]
+                        )
+                        eff_proximity = (
+                            wasb_proximity
+                            if (seg_has_wasb or ref_has_wasb)
+                            else proximity
+                        )
                         dist = np.sqrt(
                             (centroid_x - ref.x) ** 2 + (centroid_y - ref.y) ** 2
                         )
-                        if dist < seg_proximity:
+                        if dist < eff_proximity:
                             close_to_anchor = True
                         break
 

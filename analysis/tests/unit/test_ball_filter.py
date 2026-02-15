@@ -535,6 +535,7 @@ class TestSegmentPruning:
             max_interpolation_gap=10,  # recovery gate = 3 * 10 = 30 frames
             enable_outlier_removal=False,
             enable_interpolation=False,
+            enable_stationarity_filter=False,
         )
         filt = BallTemporalFilter(config)
 
@@ -2227,6 +2228,311 @@ class TestEnsembleSourceAware:
         assert config.enable_outlier_removal is True
         assert config.enable_blip_removal is True
         assert config.enable_motion_energy_filter is False
+        assert config.enable_stationarity_filter is True
         assert config.min_segment_frames == 10
         assert config.segment_jump_threshold == 0.20
         assert config.blip_max_deviation == 0.10
+
+    def test_vballnet_segment_near_wasb_anchor_recovered_wide(self) -> None:
+        """VballNet segment within WASB-wide proximity of WASB anchor is recovered.
+
+        A pure-VballNet short segment at 13% distance from a WASB anchor should
+        be recovered: 13% > narrow proximity (10%) but < wide proximity (15%).
+        The anchor being WASB triggers the wider threshold.
+        """
+        config = self._ensemble_config(
+            segment_jump_threshold=0.20,
+            min_segment_frames=8,
+            max_interpolation_gap=10,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions = []
+        # WASB anchor: 12 frames ending at x=0.50, y=0.40
+        for i in range(12):
+            positions.append(
+                _make_pos(i, 0.39 + i * 0.01, 0.40, motion_energy=1.0)
+            )
+
+        # Short VballNet segment: 5 frames, centroid ~13% away from anchor end
+        # anchor end at (0.50, 0.40), segment centroid at ~(0.50, 0.53)
+        # distance = 0.13 — between narrow (0.10) and wide (0.15)
+        # Frame gap 28-11=17 > 15 forces segment split
+        for i in range(28, 33):
+            positions.append(
+                _make_pos(i, 0.50, 0.52 + (i - 28) * 0.005, motion_energy=0.01)
+            )
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # WASB anchor survives
+        assert all(f in result_frames for f in range(12))
+        # VballNet segment recovered (WASB anchor triggers wide proximity)
+        assert any(f in result_frames for f in range(28, 33)), (
+            f"VballNet segment should be recovered near WASB anchor, "
+            f"got frames: {sorted(result_frames)}"
+        )
+
+    def test_vballnet_segment_near_vballnet_anchor_pruned(self) -> None:
+        """VballNet segment at 13% from VballNet anchor is NOT recovered.
+
+        Same distance (13%) but the anchor is pure VballNet, so narrow
+        proximity (10%) applies. The segment should be pruned.
+        """
+        config = self._ensemble_config(
+            segment_jump_threshold=0.20,
+            min_segment_frames=8,
+            max_interpolation_gap=10,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions = []
+        # VballNet anchor: 12 frames ending at x=0.50, y=0.40
+        for i in range(12):
+            positions.append(
+                _make_pos(i, 0.39 + i * 0.01, 0.40, motion_energy=0.01)
+            )
+
+        # Short VballNet segment: 5 frames, centroid ~13% away from anchor end
+        # Frame gap 28-11=17 > 15 forces segment split
+        for i in range(28, 33):
+            positions.append(
+                _make_pos(i, 0.50, 0.52 + (i - 28) * 0.005, motion_energy=0.01)
+            )
+
+        result = filt.filter_batch(positions)
+        result_frames = {p.frame_number for p in result}
+
+        # Anchor survives
+        assert all(f in result_frames for f in range(12))
+        # VballNet segment pruned (narrow proximity, 13% > 10%)
+        assert not any(f in result_frames for f in range(28, 33)), (
+            f"VballNet segment should be pruned with narrow proximity, "
+            f"got frames: {sorted(f for f in result_frames if f >= 28)}"
+        )
+
+
+class TestRemoveStationaryRuns:
+    """Tests for stationarity detection (player lock-on removal)."""
+
+    def test_stationary_wasb_run_zeroed(self) -> None:
+        """20 frames at a fixed position should be zeroed (WASB player lock-on)."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_stationarity_filter=True,
+            stationarity_min_frames=12,
+            stationarity_max_spread=0.005,
+            enable_segment_pruning=False,
+            enable_motion_energy_filter=False,
+            enable_exit_ghost_removal=False,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_blip_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        # 20 frames at nearly fixed position (WASB locked onto player)
+        positions = []
+        for i in range(20):
+            # Tiny jitter within 0.1% — well under 0.5% threshold
+            positions.append(
+                _make_pos(i, 0.40 + i * 0.0001, 0.35 + i * 0.00005,
+                          motion_energy=1.0)
+            )
+
+        result = filt.filter_batch(positions)
+
+        # All positions should be zeroed
+        confident = [p for p in result if p.confidence > 0]
+        assert len(confident) == 0, (
+            f"Expected all stationary positions zeroed, "
+            f"but {len(confident)} still confident"
+        )
+
+    def test_moving_trajectory_preserved(self) -> None:
+        """Trajectory with >2% spread per frame should be preserved."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_stationarity_filter=True,
+            stationarity_min_frames=12,
+            stationarity_max_spread=0.005,
+            enable_segment_pruning=False,
+            enable_motion_energy_filter=False,
+            enable_exit_ghost_removal=False,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_blip_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        # Real ball movement: ~2% per frame
+        positions = []
+        for i in range(20):
+            positions.append(
+                _make_pos(i, 0.30 + i * 0.02, 0.40, motion_energy=1.0)
+            )
+
+        result = filt.filter_batch(positions)
+
+        # All positions should be preserved
+        confident = [p for p in result if p.confidence > 0]
+        assert len(confident) == 20
+
+    def test_short_stationary_run_preserved(self) -> None:
+        """10 frames at fixed position (below 12-frame threshold) should be preserved."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_stationarity_filter=True,
+            stationarity_min_frames=12,
+            stationarity_max_spread=0.005,
+            enable_segment_pruning=False,
+            enable_motion_energy_filter=False,
+            enable_exit_ghost_removal=False,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_blip_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        # Only 10 stationary frames — below threshold of 12
+        positions = []
+        for i in range(10):
+            positions.append(
+                _make_pos(i, 0.40, 0.35, motion_energy=1.0)
+            )
+
+        result = filt.filter_batch(positions)
+
+        # All should be preserved (too short to flag)
+        confident = [p for p in result if p.confidence > 0]
+        assert len(confident) == 10
+
+    def test_stationarity_filter_disabled(self) -> None:
+        """When disabled, stationary runs should be preserved."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_stationarity_filter=False,
+            enable_segment_pruning=False,
+            enable_motion_energy_filter=False,
+            enable_exit_ghost_removal=False,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_blip_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        # 15 stationary frames
+        positions = []
+        for i in range(15):
+            positions.append(
+                _make_pos(i, 0.40, 0.35, motion_energy=1.0)
+            )
+
+        result = filt.filter_batch(positions)
+
+        # All preserved when filter is disabled
+        confident = [p for p in result if p.confidence > 0]
+        assert len(confident) == 15
+
+    def test_large_gap_splits_windows(self) -> None:
+        """Large gap prevents sliding window from spanning both groups."""
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_stationarity_filter=True,
+            stationarity_min_frames=12,
+            stationarity_max_spread=0.005,
+            enable_segment_pruning=False,
+            enable_motion_energy_filter=False,
+            enable_exit_ghost_removal=False,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_blip_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions = []
+        # First group: 8 stationary frames (frames 0-7)
+        for i in range(8):
+            positions.append(
+                _make_pos(i, 0.40, 0.35, motion_energy=1.0)
+            )
+        # Large gap of 40 frames — windows spanning this gap exceed
+        # the temporal contiguity limit (min_frames * 3 = 36)
+        # Second group: 8 stationary frames (frames 48-55)
+        for i in range(48, 56):
+            positions.append(
+                _make_pos(i, 0.40, 0.35, motion_energy=1.0)
+            )
+
+        result = filt.filter_batch(positions)
+
+        # Each group has 8 < 12 frames; windows spanning the gap are rejected
+        # by temporal contiguity check, so all preserved
+        confident = [p for p in result if p.confidence > 0]
+        assert len(confident) == 16
+
+    def test_interleaved_stationary_blocks_detected(self) -> None:
+        """Stationary blocks interleaved with moving positions are detected.
+
+        WASB can intermittently snap back to a fixed player position between
+        real detections. The sliding window catches each stationary block
+        independently, even within one contiguous trajectory.
+        """
+        config = BallFilterConfig(
+            enable_kalman=False,
+            enable_stationarity_filter=True,
+            stationarity_min_frames=12,
+            stationarity_max_spread=0.005,
+            enable_segment_pruning=False,
+            enable_motion_energy_filter=False,
+            enable_exit_ghost_removal=False,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_blip_removal=False,
+            enable_interpolation=False,
+        )
+        filt = BallTemporalFilter(config)
+
+        positions = []
+        # 15 frames locked at (0.10, 0.33) — stationary block
+        for i in range(15):
+            positions.append(
+                _make_pos(i, 0.10, 0.33, motion_energy=1.0)
+            )
+        # 20 frames of real moving trajectory
+        for i in range(15, 35):
+            positions.append(
+                _make_pos(i, 0.30 + i * 0.01, 0.40, motion_energy=1.0)
+            )
+        # 15 frames back at the same locked position
+        for i in range(35, 50):
+            positions.append(
+                _make_pos(i, 0.10, 0.33, motion_energy=1.0)
+            )
+
+        result = filt.filter_batch(positions)
+        confident = [p for p in result if p.confidence > 0]
+
+        # The 20 moving frames should survive
+        moving_survived = [
+            p for p in confident
+            if 15 <= p.frame_number < 35 and p.x > 0.20
+        ]
+        assert len(moving_survived) == 20, (
+            f"Expected 20 moving frames, got {len(moving_survived)}"
+        )
+
+        # Both stationary blocks should be zeroed
+        stationary_survived = [
+            p for p in confident
+            if abs(p.x - 0.10) < 0.02 and abs(p.y - 0.33) < 0.02
+        ]
+        assert len(stationary_survived) == 0, (
+            f"Expected 0 stationary frames, got {len(stationary_survived)}"
+        )
