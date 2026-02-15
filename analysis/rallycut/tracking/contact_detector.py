@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -22,6 +22,10 @@ if TYPE_CHECKING:
     from rallycut.tracking.player_tracker import PlayerPosition
 
 logger = logging.getLogger(__name__)
+
+# Minimum confidence to treat a ball position as a real detection.
+# VballNet confidence is bimodal: either 0.0 (no detection) or >=0.3 (confident).
+_CONFIDENCE_THRESHOLD = 0.3
 
 
 @dataclass
@@ -37,6 +41,15 @@ class ContactDetectionConfig:
     # Direction change thresholds
     min_direction_change_deg: float = 30.0  # Min angle change to confirm contact
     direction_check_frames: int = 5  # Frames before/after to check direction
+
+    # Inflection detection
+    enable_inflection_detection: bool = True
+    min_inflection_angle_deg: float = 25.0  # Min angle for inflection candidate
+    inflection_check_frames: int = 5  # Frames before/after for inflection check
+
+    # Noise spike filter
+    enable_noise_filter: bool = True
+    noise_spike_max_jump: float = 0.20  # Max distance to predecessor/successor
 
     # Player proximity
     player_contact_radius: float = 0.15  # Max distance (normalized) for attribution
@@ -119,7 +132,7 @@ class ContactSequence:
 
 def _compute_velocities(
     ball_positions: list[BallPosition],
-    confidence_threshold: float = 0.3,
+    confidence_threshold: float = _CONFIDENCE_THRESHOLD,
 ) -> dict[int, tuple[float, float, float]]:
     """Compute ball velocity at each frame.
 
@@ -246,11 +259,128 @@ def _find_nearest_player(
     return best_track_id, best_distance
 
 
+def _filter_noise_spikes(
+    ball_positions: list[BallPosition],
+    max_jump: float,
+    confidence_threshold: float = _CONFIDENCE_THRESHOLD,
+) -> list[BallPosition]:
+    """Zero out noise spikes where ball jumps far from both predecessor and successor.
+
+    VballNet produces single-frame false positives that jump to player positions.
+    If a position is far from BOTH its predecessor and successor, it's a spike.
+    """
+    confident = [
+        bp for bp in ball_positions if bp.confidence >= confidence_threshold
+    ]
+    confident.sort(key=lambda bp: bp.frame_number)
+
+    if len(confident) < 3:
+        return ball_positions
+
+    # Build set of spike frame numbers
+    spike_frames: set[int] = set()
+
+    for i in range(1, len(confident) - 1):
+        prev_bp = confident[i - 1]
+        curr_bp = confident[i]
+        next_bp = confident[i + 1]
+
+        dist_prev = math.sqrt(
+            (curr_bp.x - prev_bp.x) ** 2 + (curr_bp.y - prev_bp.y) ** 2
+        )
+        dist_next = math.sqrt(
+            (curr_bp.x - next_bp.x) ** 2 + (curr_bp.y - next_bp.y) ** 2
+        )
+
+        if dist_prev > max_jump and dist_next > max_jump:
+            spike_frames.add(curr_bp.frame_number)
+
+    if not spike_frames:
+        return ball_positions
+
+    logger.debug(f"Noise filter: zeroing {len(spike_frames)} spike frames")
+
+    # Return new list with spike frames zeroed (confidence=0.0)
+    return [
+        replace(bp, confidence=0.0) if bp.frame_number in spike_frames else bp
+        for bp in ball_positions
+    ]
+
+
+def _find_inflection_candidates(
+    ball_by_frame: dict[int, BallPosition],
+    confident_frames: list[int],
+    min_angle_deg: float,
+    check_frames: int,
+    min_distance_frames: int,
+) -> list[int]:
+    """Find trajectory inflection points (direction changes) as contact candidates.
+
+    Returns sorted list of candidate frame numbers.
+    """
+    if len(confident_frames) < 3:
+        return []
+
+    # Compute angle at each confident frame
+    frame_angles: list[tuple[int, float]] = []
+    for frame in confident_frames:
+        angle = _compute_direction_change(ball_by_frame, frame, check_frames)
+        if angle >= min_angle_deg:
+            frame_angles.append((frame, angle))
+
+    if not frame_angles:
+        return []
+
+    # Enforce min distance: when two candidates are close, keep largest angle
+    frame_angles.sort(key=lambda x: x[0])
+    angle_by_frame = dict(frame_angles)
+    selected: list[int] = []
+
+    for frame, angle in frame_angles:
+        if not selected:
+            selected.append(frame)
+            continue
+
+        if frame - selected[-1] >= min_distance_frames:
+            selected.append(frame)
+        elif angle > angle_by_frame[selected[-1]]:
+            selected[-1] = frame
+
+    return selected
+
+
+def _merge_candidates(
+    velocity_peak_frames: list[int],
+    inflection_frames: list[int],
+    min_distance_frames: int,
+) -> list[int]:
+    """Merge velocity peak and inflection candidates, preferring velocity peaks.
+
+    Velocity peaks are kept as-is. Inflection candidates are added only if
+    no existing candidate is within min_distance_frames.
+    """
+    merged = set(velocity_peak_frames)
+
+    for frame in inflection_frames:
+        too_close = any(
+            abs(frame - existing) < min_distance_frames
+            for existing in merged
+        )
+        if not too_close:
+            merged.add(frame)
+
+    return sorted(merged)
+
+
 def estimate_net_position(
     ball_positions: list[BallPosition],
-    confidence_threshold: float = 0.3,
+    confidence_threshold: float = _CONFIDENCE_THRESHOLD,
 ) -> float:
-    """Estimate net Y position from ball trajectory direction changes.
+    """Estimate net Y position from ball trajectory Y extrema midpoint.
+
+    Uses the midpoint between local Y minima (far-side arc peaks) and local
+    Y maxima (near-side arc peaks) for more robust estimation than simple
+    direction-reversal median.
 
     Returns:
         Estimated net Y position (normalized 0-1). Returns 0.5 as fallback.
@@ -263,25 +393,27 @@ def estimate_net_position(
     if len(confident) < 10:
         return 0.5
 
-    direction_change_ys: list[float] = []
+    # Find local Y minima and maxima using a sliding window
+    window = 5
+    local_minima_ys: list[float] = []
+    local_maxima_ys: list[float] = []
 
-    for i in range(2, len(confident)):
-        curr = confident[i]
-        prev = confident[i - 1]
-        prev_prev = confident[i - 2]
+    for i in range(window, len(confident) - window):
+        curr_y = confident[i].y
+        neighbors_before = [confident[j].y for j in range(i - window, i)]
+        neighbors_after = [confident[j].y for j in range(i + 1, i + window + 1)]
 
-        frame_gap = curr.frame_number - prev.frame_number
-        if frame_gap <= 0 or frame_gap > 5:
-            continue
+        if all(curr_y <= y for y in neighbors_before) and all(
+            curr_y <= y for y in neighbors_after
+        ):
+            local_minima_ys.append(curr_y)
+        elif all(curr_y >= y for y in neighbors_before) and all(
+            curr_y >= y for y in neighbors_after
+        ):
+            local_maxima_ys.append(curr_y)
 
-        dy = curr.y - prev.y
-        prev_dy = prev.y - prev_prev.y
-
-        if (dy > 0 and prev_dy < -0.005) or (dy < 0 and prev_dy > 0.005):
-            direction_change_ys.append(prev.y)
-
-    if direction_change_ys:
-        return float(np.median(direction_change_ys))
+    if local_minima_ys and local_maxima_ys:
+        return (float(np.median(local_minima_ys)) + float(np.median(local_maxima_ys))) / 2
 
     # Fallback: Y range midpoint
     y_values = [bp.y for bp in confident]
@@ -292,23 +424,26 @@ def detect_contacts(
     ball_positions: list[BallPosition],
     player_positions: list[PlayerPosition] | None = None,
     config: ContactDetectionConfig | None = None,
+    net_y: float | None = None,
 ) -> ContactSequence:
-    """Detect ball contacts from trajectory inflection points.
+    """Detect ball contacts from trajectory inflection points and velocity peaks.
 
     Algorithm:
-    1. Compute smoothed ball velocity signal
-    2. Find velocity peaks (local maxima) = candidate contacts
-    3. Validate each peak:
-       - Direction change at peak >= threshold, OR
-       - Player is nearby (within contact_radius), OR
-       - High velocity (auto-accept)
-    4. Attribute each contact to nearest player
-    5. Classify court side based on ball Y vs net Y
+    1. Pre-filter noise spikes (single-frame false positives)
+    2. Estimate net position (or use provided net_y)
+    3. Compute smoothed ball velocity signal
+    4. Find velocity peak candidates (local maxima)
+    5. Find inflection candidates (direction changes)
+    6. Merge candidates (velocity peaks preferred)
+    7. Validate each candidate, attribute player, classify side
 
     Args:
         ball_positions: Ball tracking positions.
         player_positions: Player tracking positions (optional but recommended).
         config: Detection configuration.
+        net_y: Explicit net Y position override. If provided, skips auto-estimation.
+            Pass court_split_y from player tracking for more reliable court side
+            classification.
 
     Returns:
         ContactSequence with all detected contacts.
@@ -320,44 +455,78 @@ def detect_contacts(
     if not ball_positions:
         return ContactSequence()
 
-    # Estimate net position
-    net_y = estimate_net_position(ball_positions)
+    # Step 1: Pre-filter noise spikes
+    if cfg.enable_noise_filter:
+        ball_positions = _filter_noise_spikes(
+            ball_positions, cfg.noise_spike_max_jump
+        )
 
-    # Compute velocities
+    # Step 2: Estimate net position
+    if net_y is not None:
+        estimated_net_y = net_y
+    else:
+        estimated_net_y = estimate_net_position(ball_positions)
+
+    # Step 3: Compute velocities from filtered positions
     velocities = _compute_velocities(ball_positions)
     if not velocities:
-        return ContactSequence(net_y=net_y)
+        return ContactSequence(net_y=estimated_net_y)
 
     # Sort frames and smooth velocity
     frames = sorted(velocities.keys())
     if len(frames) < 3:
-        return ContactSequence(net_y=net_y)
+        return ContactSequence(net_y=estimated_net_y)
 
     speeds = [velocities[f][0] for f in frames]
     smoothed = _smooth_signal(speeds, cfg.smoothing_window)
 
-    # Find peaks
+    # Step 4: Find velocity peak candidates
     peak_indices, _ = find_peaks(
         smoothed,
         height=cfg.min_peak_velocity,
         prominence=cfg.min_peak_prominence,
         distance=cfg.min_peak_distance_frames,
     )
+    velocity_peak_frames = [frames[idx] for idx in peak_indices]
 
-    if len(peak_indices) == 0:
-        return ContactSequence(net_y=net_y)
-
-    # Index ball positions by frame
-    ball_by_frame = {bp.frame_number: bp for bp in ball_positions}
+    # Index ball positions by frame (only confident ones)
+    ball_by_frame: dict[int, BallPosition] = {
+        bp.frame_number: bp
+        for bp in ball_positions
+        if bp.confidence >= _CONFIDENCE_THRESHOLD
+    }
     first_frame = frames[0]
+
+    # Step 5: Find inflection candidates
+    inflection_frames: list[int] = []
+    if cfg.enable_inflection_detection:
+        confident_frames = sorted(ball_by_frame.keys())
+        inflection_frames = _find_inflection_candidates(
+            ball_by_frame,
+            confident_frames,
+            min_angle_deg=cfg.min_inflection_angle_deg,
+            check_frames=cfg.inflection_check_frames,
+            min_distance_frames=cfg.min_peak_distance_frames,
+        )
+
+    # Step 6: Merge candidates
+    candidate_frames = _merge_candidates(
+        velocity_peak_frames, inflection_frames, cfg.min_peak_distance_frames
+    )
+
+    if not candidate_frames:
+        return ContactSequence(net_y=estimated_net_y)
+
+    # Build velocity lookup for any frame
+    velocity_lookup = dict(zip(frames, smoothed))
 
     contacts: list[Contact] = []
 
-    for idx in peak_indices:
-        frame = frames[idx]
-        velocity = smoothed[idx]
+    for frame in candidate_frames:
+        # Get velocity (may be 0 for inflection-only candidates)
+        velocity = velocity_lookup.get(frame, 0.0)
 
-        # Get ball position at peak
+        # Get ball position at candidate frame
         ball = ball_by_frame.get(frame)
         if ball is None:
             for offset in [-1, 1, -2, 2]:
@@ -396,14 +565,14 @@ def detect_contacts(
             court_side = "near"
         elif ball.y <= cfg.baseline_y_far:
             court_side = "far"
-        elif ball.y < net_y:
+        elif ball.y < estimated_net_y:
             court_side = "far"
         else:
             court_side = "near"
 
         # Check if at net
         net_zone = 0.08  # ±8% of screen around net
-        is_at_net = abs(ball.y - net_y) < net_zone
+        is_at_net = abs(ball.y - estimated_net_y) < net_zone
 
         contacts.append(Contact(
             frame=frame,
@@ -419,12 +588,14 @@ def detect_contacts(
         ))
 
     logger.info(
-        f"Detected {len(contacts)} contacts from {len(peak_indices)} peaks "
-        f"(net_y={net_y:.3f})"
+        f"Detected {len(contacts)} contacts "
+        f"({len(velocity_peak_frames)} velocity peaks + "
+        f"{len(inflection_frames)} inflections → "
+        f"{len(candidate_frames)} candidates, net_y={estimated_net_y:.3f})"
     )
 
     return ContactSequence(
         contacts=contacts,
-        net_y=net_y,
+        net_y=estimated_net_y,
         rally_start_frame=first_frame,
     )

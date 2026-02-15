@@ -96,10 +96,14 @@ def classify_actions(
         console.print(f"  Ball positions: {len(ball_positions)}")
         console.print(f"  Player positions: {len(player_positions)}")
 
+    # Use courtSplitY from tracking data if available (more reliable than ball-based)
+    court_split_y = data.get("courtSplitY")
+
     # Step 1: Contact detection
     contact_seq = detect_contacts(
         ball_positions=ball_positions,
         player_positions=player_positions if player_positions else None,
+        net_y=court_split_y,
     )
 
     if not quiet:
@@ -247,7 +251,10 @@ def rank_highlights(
         ]
 
         # Run contact detection + action classification
-        contact_seq = detect_contacts(ball_positions, player_positions or None)
+        court_split_y = data.get("courtSplitY")
+        contact_seq = detect_contacts(
+            ball_positions, player_positions or None, net_y=court_split_y,
+        )
         rally_actions = classify_rally_actions(contact_seq, rally_id=rally_id)
 
         # Compute rally stats
