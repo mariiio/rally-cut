@@ -135,7 +135,7 @@ rallycut/
 │   └── training.py           # Training loop with validation
 ├── tracking/        # Ball and player tracking
 │   ├── ball_tracker.py       # VballNet ONNX ball detection (9-frame temporal)
-│   ├── ball_filter.py        # Kalman filter for lag compensation and smoothing
+│   ├── ball_filter.py        # Temporal filter for ball tracking post-processing
 │   ├── ball_features.py      # Ball features, server ID, reactivity scoring
 │   ├── player_tracker.py     # YOLO + BoT-SORT player tracking
 │   ├── player_filter.py      # Multi-stage player filtering with court/ball scoring
@@ -340,7 +340,7 @@ Merges fragmented tracker IDs using velocity prediction and position/size simila
 
 ## Ball Tracking Filtering
 
-Multi-stage temporal filter for ball tracking. Default raw mode applies motion energy filtering, stationarity detection, segment pruning, oscillation/blip removal, and interpolation. Optional Kalman mode adds lag compensation and smoothing. See `tracking/ball_filter.py`.
+Multi-stage temporal filter for ball tracking. Default raw mode applies motion energy filtering, stationarity detection, segment pruning, oscillation/blip removal, and interpolation. See `tracking/ball_filter.py`.
 
 ### Ball Tracking Model Variants
 
@@ -352,7 +352,6 @@ Multiple ball tracking models are available via the `model` parameter:
 | **WASB HRNet** | `wasb` | 67.5% | 51.9px | 6.4 FPS (MPS) | High precision, lower recall |
 | **VballNetV2** | `v2` (default) | 41.7% | 92.7px | 100 FPS (CPU) | **Default** - fastest, ONNX |
 | **VballNetFastV1** | `fast` | ~40% | ~95px | 280 FPS (CPU) | Speed priority (3.6x faster) |
-| **VballNetV1b** | `v1b` | 0-70% | - | - | **Not recommended** - can fail completely |
 
 WASB (BMVC 2023) is an HRNet pretrained on indoor volleyball. The ensemble uses WASB as primary (high precision) with VballNet as fallback (high recall). WASB requires PyTorch; VballNet uses ONNX.
 
@@ -381,65 +380,12 @@ rallycut evaluate-tracking compare-ball-models --all     # Compare VballNet vari
 
 The VballNet model outputs heatmaps that are decoded to ball positions. See `tracking/ball_tracker.py`.
 
-**HeatmapDecodingConfig options:**
-- `threshold=0.3`: Base threshold for heatmap binarization (0-1). Lower threshold improves detection.
-- `adaptive_threshold=False`: Scale threshold based on peak response (tested but hurts accuracy)
-- `centroid_method="contour"`: Method for centroid extraction
-  - `"contour"`: Uses largest contour moments (default, **recommended**)
-  - `"weighted"`: Uses heatmap values as weights (tested but hurts accuracy)
-- `enable_subpixel=False`: Parabolic fitting for sub-pixel accuracy (minimal improvement in practice)
-- `enable_multi_threshold=False`: Run at multiple thresholds and combine
-- `multi_thresholds=(0.3, 0.4, 0.5, 0.6)`: Thresholds for multi-threshold mode
+**HeatmapDecodingConfig:**
+- `threshold=0.3`: Threshold for heatmap binarization. Uses contour method for centroid extraction.
 
-**Note:** Testing on ground truth (beach volleyball) showed `threshold=0.3` with `contour` centroid gives best results. With frame offset auto-detection, accuracy reaches **75% match rate** at 50px threshold.
+Testing on ground truth (beach volleyball) showed `threshold=0.3` with contour centroid gives best results. With frame offset auto-detection, accuracy reaches **75% match rate** at 50px threshold.
 
-```python
-from rallycut.tracking.ball_tracker import BallTracker, HeatmapDecodingConfig
-
-# Default config (recommended - best accuracy)
-tracker = BallTracker()
-
-# Enable sub-pixel refinement for improved accuracy
-config = HeatmapDecodingConfig(enable_subpixel=True)
-tracker = BallTracker(heatmap_config=config)
-
-# Enable multi-threshold detection to catch low-confidence balls
-config = HeatmapDecodingConfig(enable_multi_threshold=True)
-tracker = BallTracker(heatmap_config=config)
-```
-
-### Trajectory Post-Processing
-
-Optional post-processing smoothing for visualization quality. See `tracking/ball_smoother.py`.
-
-```python
-from rallycut.tracking.ball_smoother import TrajectorySmoothingConfig
-
-# Enable smoothing in track_video
-result = tracker.track_video(
-    video_path,
-    enable_smoothing=True,
-    smoothing_config=TrajectorySmoothingConfig(
-        enable_savgol=True,        # Savitzky-Golay filter
-        savgol_window=7,           # Window size (odd number)
-        enable_outlier_removal=True,
-        max_velocity_threshold=0.4,
-    ),
-)
-```
-
-**Two filter modes:**
-
-Default mode (`enable_kalman=False`): Raw VballNet positions with motion energy filtering,
-segment pruning, and interpolation. Testing showed raw positions have higher match rate
-than Kalman output (38.5% vs 31.9%) because the Kalman filter smooths toward false
-detections. This mode maximizes detection rate (83.7%) and match rate (48.6%) while
-preserving VballNet's native accuracy.
-
-Kalman mode (`enable_kalman=True`): Full Kalman pipeline with Mahalanobis gating,
-re-acquisition guard, exit detection, and outlier removal. Produces smoother trajectories
-with lower mean error but at the cost of detection rate (68.1%) and match rate. Use for
-visualization overlays where smooth trajectories are preferred.
+The raw filter pipeline maximizes detection rate and match rate through post-processing (segment pruning, outlier removal, blip removal, interpolation) rather than Kalman smoothing.
 
 **Problems solved:**
 - **False positives at static positions**: VballNet frequently detects stationary players as the ball. The motion energy filter (step 0 in raw mode) computes temporal intensity change in a 15x15 patch around each detection. Real ball in flight creates high motion energy; a player standing still has near-zero energy. Positions with `motion_energy < 0.02` are zeroed out. This removes ~5% of false positives before segment pruning runs, improving detection rate from 78.6% to 83.7% and match rate from 47.1% to 48.6%.
@@ -451,13 +397,8 @@ visualization overlays where smooth trajectories are preferred.
 - **Hovering false detections**: After ball exits frame, VballNet can lock onto a single player position and produce many frames within a tiny radius. Detected by checking short segments (12-36 frames) that appear after a gap > max_interpolation_gap: if the first 12 positions all lie within 5% of screen of their centroid, the segment is dropped. Real ball trajectories always have spread >5% over 12 frames because the ball is in motion.
 - **Trajectory blips**: VballNet can briefly lock onto a player position for 2-5 consecutive frames mid-trajectory. Single-frame outlier detection misses these because consecutive false positives validate each other as neighbors. Blip removal uses distant trajectory context (positions ≥5 frames away) with a two-pass approach: first flags suspects, then re-evaluates with clean (non-suspect) context to prevent contamination. Only compact clusters of ≥2 consecutive suspect frames are removed (real bounces have trajectory spread, blips are tightly clustered at a fixed player position).
 - **Missing frames**: Linear interpolation fills small gaps (up to 10 frames) between detections.
-- **Flickering/Jumps** (Kalman mode): Mahalanobis distance gating rejects impossible movements. Hard max_velocity backstop at 50% screen/frame.
-- **False re-acquisition** (Kalman mode): Re-acquisition guard requires M consistent detections within radius R before re-initializing.
-- **Out-of-frame tracking** (Kalman mode): Exit detection suppresses false re-acquisitions from the opposite side.
-- **Outlier removal** (Kalman mode): Removes edge artifacts, trajectory deviations, and velocity reversal patterns.
 
 **Key parameters (BallFilterConfig):**
-- `enable_kalman=False`: Skip Kalman filter, use raw positions (default, best detection/match)
 - `enable_motion_energy_filter=True`: Remove false positives at static positions (low temporal change)
 - `motion_energy_threshold=0.02`: Motion energy below this = likely false positive (zeroed)
 - `enable_stationarity_filter=False`: Detect and remove player lock-on (12+ frames within 0.5% spread). Default off; enabled in ensemble mode
@@ -475,21 +416,12 @@ visualization overlays where smooth trajectories are preferred.
 - `min_oscillation_frames=12`: Sliding window size for cluster transition rate detection
 - `oscillation_reversal_rate=0.25`: Cluster transition rate threshold to trigger pruning
 - `oscillation_min_displacement=0.03`: Min pole distance (3% of screen) to detect oscillation
-- `enable_outlier_removal=True`: Removes flickering and edge artifacts (runs after pruning in raw mode, before pruning in Kalman mode)
+- `enable_outlier_removal=True`: Removes flickering and edge artifacts (runs after pruning)
 - `enable_blip_removal=True`: Remove multi-frame trajectory blips (consecutive false positives at player positions)
 - `blip_context_min_frames=5`: Min frame distance for distant context neighbors
 - `blip_max_deviation=0.15`: Max deviation from interpolated trajectory (15% of screen)
 - `enable_interpolation=True`: Fill missing frames with linear interpolation
 - `max_interpolation_gap=10`: Max frames to interpolate (larger gaps left empty)
-
-Kalman-only parameters (used when `enable_kalman=True`):
-- `mahalanobis_threshold=5.99`: Chi-squared threshold for Mahalanobis gating
-- `max_velocity=0.5`: Hard velocity limit (50% screen/frame)
-- `reacquisition_threshold=8`: Prediction-only frames before tentative mode
-- `reacquisition_required=3`: Consistent detections needed to re-acquire
-- `reacquisition_radius=0.05`: Max spread of consistent detections (5% of screen)
-- `enable_exit_detection=True`: Detect ball leaving frame
-- `enable_bidirectional=False`: RTS smoother for zero-lag offline processing
 
 **Usage:**
 ```python
@@ -499,15 +431,6 @@ result = tracker.track_video(video_path)
 # Disable filtering entirely for raw comparison
 result = tracker.track_video(video_path, enable_filtering=False)
 
-# Enable Kalman mode for smooth trajectories (visualization overlays)
-from rallycut.tracking import BallFilterConfig
-config = BallFilterConfig(enable_kalman=True)
-result = tracker.track_video(video_path, filter_config=config)
-
-# Enable bidirectional smoothing for zero-lag (offline only)
-config = BallFilterConfig(enable_bidirectional=True)
-result = tracker.track_video(video_path, filter_config=config)
-
 # Keep raw positions for debugging
 result = tracker.track_video(video_path, preserve_raw=True)
 print(result.raw_positions)  # Original detections before filtering
@@ -515,14 +438,17 @@ print(result.raw_positions)  # Original detections before filtering
 
 **Grid search for optimal parameters:**
 ```bash
-# Quick grid search (81 combinations)
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid quick
+# Segment pruning grid search
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid segment-pruning
 
-# Test bidirectional smoothing
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid bidirectional
+# Oscillation pruning grid search
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid oscillation
 
-# Full grid search (972 combinations)
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid full -o results.json
+# Outlier removal grid search
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid outlier
+
+# Ensemble grid search
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid ensemble -o results.json
 ```
 
 ### Frame Offset Auto-Detection
@@ -586,11 +512,9 @@ uv run rallycut evaluate-tracking tune-filter --all -o results.json  # Export fu
 
 # Grid search for optimal ball filter parameters
 uv run rallycut evaluate-tracking tune-ball-filter --all --grid segment-pruning  # Segment pruning (18 configs)
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid quick           # Kalman params (81 configs)
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid mahalanobis     # Mahalanobis + re-acquisition (162 configs)
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid oscillation     # Oscillation pruning (18 configs)
 uv run rallycut evaluate-tracking tune-ball-filter --all --grid outlier         # Outlier removal + exit detection (18 configs)
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid oscillation    # Oscillation pruning (18 configs)
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid full            # Full Kalman search (486 configs)
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid ensemble        # Ensemble search
 uv run rallycut evaluate-tracking tune-ball-filter --all -o ball.json           # Export results
 ```
 

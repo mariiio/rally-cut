@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from rallycut.tracking.ball_filter import BallFilterConfig
-    from rallycut.tracking.ball_smoother import TrajectorySmoothingConfig
     from rallycut.tracking.ball_tracker import BallTrackingResult
 
 import cv2
@@ -697,18 +696,12 @@ class WASBBallTracker:
         filter_config: BallFilterConfig | None = None,
         enable_filtering: bool = True,
         preserve_raw: bool = False,
-        enable_smoothing: bool = False,
-        smoothing_config: TrajectorySmoothingConfig | None = None,
     ) -> BallTrackingResult:
         """Track ball positions using WASB HRNet.
 
         Same interface as BallTracker.track_video().
         """
         from rallycut.tracking.ball_filter import BallFilterConfig, BallTemporalFilter
-        from rallycut.tracking.ball_smoother import (
-            TrajectoryPostProcessor,
-            TrajectorySmoothingConfig,
-        )
         from rallycut.tracking.ball_tracker import BallPosition, BallTrackingResult
 
         start_time = time.time()
@@ -832,12 +825,6 @@ class WASBBallTracker:
                 config = filter_config or BallFilterConfig()
                 temporal_filter = BallTemporalFilter(config)
                 positions = temporal_filter.filter_batch(positions)
-
-            # Apply post-processing smoothing
-            if enable_smoothing:
-                smooth_config = smoothing_config or TrajectorySmoothingConfig()
-                smoother = TrajectoryPostProcessor(smooth_config)
-                positions = smoother.process(positions)
 
             return BallTrackingResult(
                 positions=positions,

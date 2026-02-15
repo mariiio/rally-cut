@@ -1131,9 +1131,9 @@ def tune_ball_filter(
         str,
         typer.Option(
             "--grid", "-g",
-            help="Grid to search: quick, lag, full, confidence",
+            help="Grid to search: segment-pruning, oscillation, outlier, ensemble",
         ),
-    ] = "quick",
+    ] = "segment-pruning",
     match_threshold: Annotated[
         float,
         typer.Option(
@@ -1179,25 +1179,25 @@ def tune_ball_filter(
 ) -> None:
     """Grid search for optimal BallFilterConfig parameters.
 
-    Searches over Kalman filter parameters to find the configuration that
+    Searches over ball filter parameters to find the configuration that
     maximizes match rate while minimizing position error.
 
-    Similar to tune-filter, this caches raw (unfiltered) ball positions
-    and re-runs the Kalman filter with different configs.
+    Caches raw (unfiltered) ball positions and re-runs the filter pipeline
+    with different configs.
 
     Examples:
 
         # Cache raw ball positions first (requires raw_positions in predictions)
         rallycut evaluate-tracking tune-ball-filter --all --cache-only
 
-        # Quick grid search (81 combinations)
-        rallycut evaluate-tracking tune-ball-filter --all --grid quick
+        # Segment pruning grid (18 combinations)
+        rallycut evaluate-tracking tune-ball-filter --all --grid segment-pruning
 
-        # Test lag compensation settings
-        rallycut evaluate-tracking tune-ball-filter --all --grid lag
+        # Oscillation pruning grid (18 combinations)
+        rallycut evaluate-tracking tune-ball-filter --all --grid oscillation
 
-        # Full search
-        rallycut evaluate-tracking tune-ball-filter --all --grid full
+        # Ensemble grid (1152 combinations)
+        rallycut evaluate-tracking tune-ball-filter --all --grid ensemble
 
         # Export results
         rallycut evaluate-tracking tune-ball-filter --all -o results.json
@@ -1482,7 +1482,6 @@ def compare_ball_models(
 
     Available models:
     - v2: VballNetV2 (default) - best accuracy (24% match rate at 50px)
-    - v1b: VballNetV1b - highest detection rate (98%)
     - fast: VballNetFastV1 - lighter weight, faster inference
 
     Examples:
