@@ -657,6 +657,17 @@ def _run_evaluation(
             segments = _apply_temporal_maxer(
                 video.content_hash, stride, feature_cache_dir
             )
+            if segments is not None and (ball_validation or ball_boundary):
+                # Apply ball tracking validation/refinement
+                video_path = resolver.resolve(video.s3_key, video.content_hash)
+                segments = _apply_ball_tracking(
+                    video_path,
+                    segments,
+                    video.content_hash,
+                    ball_validation=ball_validation,
+                    ball_boundary=ball_boundary,
+                    ball_fast=ball_fast,
+                )
             if segments is None:
                 logger.warning("No cached features/model for %s, using heuristics", video.filename)
 
@@ -879,9 +890,9 @@ def evaluate(
         bool,
         typer.Option(
             "--ball-boundary/--no-ball-boundary",
-            help="Ball-based boundary refinement (improves start/end accuracy)",
+            help="Ball-based boundary refinement (disabled by default: hurts IoU=0.5 F1 by 2.7%%)",
         ),
-    ] = True,
+    ] = False,
     ball_fast: Annotated[
         bool,
         typer.Option(
