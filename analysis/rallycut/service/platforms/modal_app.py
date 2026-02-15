@@ -45,6 +45,8 @@ image = (
         "tqdm>=4.65.0",
         "scipy>=1.11.0",
         "filterpy>=1.4.5",
+        # ONNX inference (GPU-accelerated for WASB ball tracker)
+        "onnxruntime-gpu>=1.17.0",
         # AWS S3 access
         "boto3>=1.34.0",
         # Web endpoint

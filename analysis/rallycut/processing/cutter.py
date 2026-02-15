@@ -195,9 +195,9 @@ class VideoCutter:
     def _get_ball_tracker(self) -> BallTracker:
         """Lazy load ball tracker."""
         if self._ball_tracker is None:
-            from rallycut.tracking import BallTracker as BallTrackerImpl
+            from rallycut.tracking import create_ball_tracker
 
-            self._ball_tracker = BallTrackerImpl()
+            self._ball_tracker = create_ball_tracker()
         return self._ball_tracker
 
     def _get_ball_cache(self) -> BallFeatureCache:
