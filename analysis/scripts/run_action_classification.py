@@ -84,11 +84,20 @@ def run_pipeline(
             print(f"  [{i+1}/{len(rallies)}] Rally {rally_id_short}: no ball positions, skipping")
             continue
 
+        # Use court_split_y from player tracking as net_y (more reliable than
+        # ball-based estimation)
+        court_split_y = (
+            rally.predictions.court_split_y
+            if rally.predictions and rally.predictions.court_split_y is not None
+            else None
+        )
+
         # Step 1: Contact detection
         contact_seq = detect_contacts(
             ball_positions=ball_positions,
             player_positions=player_positions if player_positions else None,
             config=config,
+            net_y=court_split_y,
         )
 
         # Step 2: Action classification
