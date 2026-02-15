@@ -186,12 +186,10 @@ class VideoCutter:
     def _get_feature_cache(self) -> FeatureCache:
         """Lazy load feature cache."""
         if self._feature_cache is None:
-            from pathlib import Path
-
             from rallycut.temporal.features import FeatureCache as FeatureCacheImpl
 
-            # Use training features directory (same as extract-features command)
-            self._feature_cache = FeatureCacheImpl(cache_dir=Path("training_data/features"))
+            # Use default cache dir (~/.cache/rallycut/features/)
+            self._feature_cache = FeatureCacheImpl()
         return self._feature_cache
 
     def _get_ball_tracker(self) -> BallTracker:
@@ -213,6 +211,9 @@ class VideoCutter:
     def _has_cached_features(self, content_hash: str) -> bool:
         """Check if coarse-stride features are cached for this video.
 
+        Checks both default cache dir (~/.cache/rallycut/features/) and
+        training_data/features/ (backward compat with extract-features command).
+
         Args:
             content_hash: Video content hash.
 
@@ -220,7 +221,13 @@ class VideoCutter:
             True if cached features exist at coarse stride.
         """
         cache = self._get_feature_cache()
-        return cache.has(content_hash, self.base_stride)
+        if cache.has(content_hash, self.base_stride):
+            return True
+        # Check training data dir (backward compat with extract-features command)
+        from rallycut.temporal.features import FeatureCache as FeatureCacheImpl
+
+        training_cache = FeatureCacheImpl(cache_dir=Path("training_data/features"))
+        return training_cache.has(content_hash, self.base_stride)
 
     def _has_fine_features(self, content_hash: str) -> bool:
         """Check if fine-stride features are cached for this video.
@@ -1063,6 +1070,12 @@ class VideoCutter:
 
         cached = cache.get(content_hash, stride)
         if cached is None:
+            # Check training data dir (backward compat with extract-features command)
+            from rallycut.temporal.features import FeatureCache as FeatureCacheImpl
+
+            training_cache = FeatureCacheImpl(cache_dir=Path("training_data/features"))
+            cached = training_cache.get(content_hash, stride)
+        if cached is None:
             raise ValueError(
                 f"No cached features found for video (stride={stride}). "
                 "Run 'rallycut train extract-features' first."
@@ -1241,7 +1254,7 @@ class VideoCutter:
 
         inference = TemporalMaxerInference(model_path, device=self.device)
 
-        # Load cached features
+        # Load cached features (or extract inline if not cached)
         if progress_callback:
             progress_callback(0.05, "Loading cached features...")
 
@@ -1250,12 +1263,30 @@ class VideoCutter:
 
         cached = cache.get(content_hash, stride)
         if cached is None:
-            raise ValueError(
-                f"No cached features found for video (stride={stride}). "
-                "Run 'rallycut train extract-features' first."
-            )
+            # Check training data dir (backward compat with extract-features command)
+            from rallycut.temporal.features import FeatureCache as FeatureCacheImpl
 
-        features, _ = cached
+            training_cache = FeatureCacheImpl(cache_dir=Path("training_data/features"))
+            cached = training_cache.get(content_hash, stride)
+
+        if cached is None:
+            # Extract features inline (slow — VideoMAE over full video)
+            logger.info("Extracting VideoMAE features for TemporalMaxer...")
+            if progress_callback:
+                progress_callback(0.05, "Extracting video features (this may take a few minutes)...")
+            from lib.volleyball_ml.video_mae import GameStateClassifier
+            from rallycut.temporal.features import extract_features_for_video
+
+            classifier = GameStateClassifier(
+                model_path=self._model_path, device=self.device
+            )
+            features, metadata = extract_features_for_video(
+                input_path, classifier, stride=stride
+            )
+            metadata.content_hash = content_hash
+            cache.put(content_hash, stride, features, metadata)
+        else:
+            features, _ = cached
 
         if progress_callback:
             progress_callback(0.1, "Running TemporalMaxer inference...")

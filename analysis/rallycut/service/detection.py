@@ -1,5 +1,6 @@
 """Core detection service for cloud deployment."""
 
+import logging
 import time
 import uuid
 from collections.abc import Callable
@@ -21,6 +22,8 @@ from rallycut.service.schemas import (
     VideoMetadata,
 )
 from rallycut.service.storage import cleanup_temp, download_video
+
+logger = logging.getLogger(__name__)
 
 
 class DetectionService:
@@ -95,6 +98,23 @@ class DetectionService:
 
             # Phase 2: Run analysis (10-90% progress)
             config = request.config or DetectionConfig()
+
+            # Enable TemporalMaxer when weights are available (75% LOO F1 vs 57% heuristics)
+            from rallycut.core.config import get_config
+
+            cfg = get_config()
+            temporal_maxer_path = (
+                cfg.weights_dir / "temporal_maxer" / "best_temporal_maxer.pt"
+            )
+            use_temporal_maxer = temporal_maxer_path.exists()
+
+            if use_temporal_maxer:
+                logger.info("Using TemporalMaxer for rally detection (75% LOO F1)")
+            else:
+                logger.info(
+                    "TemporalMaxer weights not found, using heuristics fallback"
+                )
+
             cutter = VideoCutter(
                 device=self.device,
                 padding_seconds=config.padding_seconds,
@@ -103,6 +123,7 @@ class DetectionService:
                 use_proxy=config.use_proxy,
                 stride=config.stride,
                 model_variant=config.model_variant.value,
+                use_temporal_maxer=use_temporal_maxer,
             )
 
             def analysis_progress(pct: float, msg: str) -> None:
