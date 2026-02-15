@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from rallycut.tracking.ball_filter import BallFilterConfig
-    from rallycut.tracking.ball_smoother import TrajectorySmoothingConfig
 
 import cv2
 import numpy as np
@@ -30,7 +29,6 @@ MODEL_REPO_BASE = "https://raw.githubusercontent.com/asigatchov/fast-volleyball-
 # Model registry: model_id -> (filename, height, width)
 # All models use 9-frame sequences and grayscale input
 BALL_MODELS: dict[str, tuple[str, int, int]] = {
-    "v1b": ("VballNetV1b_seq9_grayscale_best.onnx", 288, 512),
     "v2": ("VballNetV2_seq9_grayscale_320_h288_w512.onnx", 288, 512),
     # v1c excluded - requires recurrent hidden state input which is incompatible
     "fast": ("VballNetFastV1_seq9_grayscale_233_h288_w512.onnx", 288, 512),
@@ -39,7 +37,6 @@ BALL_MODELS: dict[str, tuple[str, int, int]] = {
 # Default model configuration
 # v2 is most consistent across videos (70.6% match rate on ground truth)
 # fast is 3.6x faster but 1.5% less accurate
-# v1b can fail completely on some videos (0% detection) - not recommended
 DEFAULT_BALL_MODEL = "v2"
 MODEL_NAME = BALL_MODELS[DEFAULT_BALL_MODEL][0]
 MODEL_INPUT_HEIGHT = BALL_MODELS[DEFAULT_BALL_MODEL][1]
@@ -82,7 +79,7 @@ def _download_model(url: str, dest_path: Path) -> None:
 def get_available_ball_models() -> list[str]:
     """Return list of available ball tracking model IDs.
 
-    Includes VballNet variants (v2, fast, v1b) and WASB/ensemble options.
+    Includes VballNet variants (v2, fast) and WASB/ensemble options.
     """
     return list(BALL_MODELS.keys()) + ["wasb", "ensemble"]
 
@@ -91,7 +88,7 @@ def get_ball_model_info(model_id: str) -> tuple[str, int, int]:
     """Get model info (filename, height, width) for a model ID.
 
     Args:
-        model_id: Model identifier (e.g., 'v1b', 'v2', 'fast')
+        model_id: Model identifier (e.g., 'v2', 'fast')
 
     Returns:
         Tuple of (filename, height, width)
@@ -109,7 +106,7 @@ def ensure_ball_model(model_id: str) -> Path:
     """Ensure a ball tracking model is downloaded and return its path.
 
     Args:
-        model_id: Model identifier (e.g., 'v1b', 'v2', 'fast')
+        model_id: Model identifier (e.g., 'v2', 'fast')
 
     Returns:
         Path to the downloaded model file
@@ -129,38 +126,15 @@ def ensure_ball_model(model_id: str) -> Path:
 class HeatmapDecodingConfig:
     """Configuration for heatmap-to-position decoding.
 
-    Testing on ground truth data showed threshold=0.3 with contour centroid gives
-    best results: 98% detection rate, 24% match rate at 50px threshold.
-    Lower threshold captures more detections without significantly increasing false positives.
+    Uses contour centroid at a fixed threshold. Testing on ground truth data showed
+    threshold=0.3 gives best results: 98% detection rate, 24% match rate at 50px.
+    Adaptive threshold, weighted centroid, sub-pixel refinement, and multi-threshold
+    were all tested and rejected (hurt accuracy on beach volleyball).
     """
 
-    # Base threshold for heatmap binarization
+    # Threshold for heatmap binarization
     # 0.3 tested better than 0.5 on beach volleyball ground truth
     threshold: float = 0.3
-
-    # Adaptive threshold: scale threshold based on peak response
-    # Higher peaks = higher threshold for cleaner extraction
-    # Note: Testing showed this HURTS accuracy on beach volleyball (drops detection)
-    adaptive_threshold: bool = False
-
-    # Minimum threshold even with adaptive scaling
-    min_threshold: float = 0.3
-
-    # Maximum threshold even with adaptive scaling
-    max_threshold: float = 0.7
-
-    # Centroid method: "contour" (largest contour moments) or "weighted" (heatmap-weighted average)
-    # Note: Testing showed contour method performs better than weighted
-    centroid_method: str = "contour"
-
-    # Sub-pixel refinement: fit parabola around peak for sub-pixel accuracy
-    # Expected improvement: ~0.5-1px accuracy when enabled
-    enable_subpixel: bool = False
-
-    # Multi-threshold detection: run at multiple thresholds and combine
-    # Helps catch low-confidence balls that would be missed at single threshold
-    enable_multi_threshold: bool = False
-    multi_thresholds: tuple[float, ...] = (0.3, 0.4, 0.5, 0.6)
 
 
 @dataclass
@@ -281,7 +255,6 @@ class BallTracker:
     Supports multiple model variants via the `model` parameter:
     - 'v2' (default): VballNetV2 - most consistent across videos (70.6% match rate)
     - 'fast': VballNetFastV1 - 3.6x faster, 1.5% less accurate (69.1% match rate)
-    - 'v1b': VballNetV1b - not recommended, can fail completely on some videos
     """
 
     def __init__(
@@ -296,7 +269,7 @@ class BallTracker:
         Args:
             model_path: Optional path to ONNX model. If not provided,
                        downloads to cache on first use.
-            model: Model variant to use ('v2', 'fast', 'v1b').
+            model: Model variant to use ('v2', 'fast').
                   Ignored if model_path is provided.
             heatmap_config: Configuration for heatmap decoding. If not provided,
                            uses defaults (threshold=0.3, contour centroid).
@@ -397,285 +370,25 @@ class BallTracker:
         sequence *= (1.0 / 255.0)  # In-place multiply is faster than divide
         return sequence[np.newaxis, ...]  # Add batch dimension
 
-    def _compute_adaptive_threshold(self, heatmap: np.ndarray) -> float:
-        """Compute adaptive threshold based on heatmap peak response.
-
-        Higher peaks allow higher thresholds for cleaner extraction.
-        Lower peaks use lower thresholds to avoid missing detections.
-
-        Args:
-            heatmap: 2D heatmap array (may be 0-1 or 0-255 scale)
-
-        Returns:
-            Threshold value in 0-1 scale.
-        """
-        config = self.heatmap_config
-        max_val = float(heatmap.max())
-
-        # Normalize to 0-1 if needed
-        if max_val > 1.0:
-            max_val /= 255.0
-
-        # Scale threshold based on peak: higher peaks = higher threshold
-        # Reference point: at max_val=0.8, use base threshold
-        scale_factor = max_val / 0.8 if max_val > 0 else 1.0
-        adaptive = config.threshold * scale_factor
-
-        # Clamp to valid range
-        return max(config.min_threshold, min(config.max_threshold, adaptive))
-
-    def _subpixel_refine(
-        self,
-        heatmap: np.ndarray,
-        peak_x: float,
-        peak_y: float,
-    ) -> tuple[float, float]:
-        """Refine peak location to sub-pixel accuracy using parabolic fitting.
-
-        Fits a 2D parabola to the 3x3 neighborhood around the peak and
-        finds the sub-pixel location of the maximum.
-
-        Args:
-            heatmap: 2D heatmap array (height, width), already normalized to 0-1
-            peak_x: Initial peak X coordinate (may be float from centroid)
-            peak_y: Initial peak Y coordinate (may be float from centroid)
-
-        Returns:
-            Tuple of (refined_x, refined_y) sub-pixel coordinates
-        """
-        h, w = heatmap.shape
-
-        # Round to integer for neighborhood sampling
-        ix = int(round(peak_x))
-        iy = int(round(peak_y))
-
-        # Need 3x3 neighborhood, so check bounds
-        if ix < 1 or ix >= w - 1 or iy < 1 or iy >= h - 1:
-            return peak_x, peak_y
-
-        # Extract 3x3 neighborhood
-        # Use the actual peak as center (find local maximum)
-        neighborhood = heatmap[iy - 1 : iy + 2, ix - 1 : ix + 2].astype(np.float64)
-
-        # Ensure we're at a local maximum by finding peak in 3x3
-        local_peak = np.unravel_index(np.argmax(neighborhood), neighborhood.shape)
-        if local_peak != (1, 1):
-            # Peak is not at center of 3x3, shift to actual peak
-            iy_new = iy + int(local_peak[0]) - 1
-            ix_new = ix + int(local_peak[1]) - 1
-            if ix_new < 1 or ix_new >= w - 1 or iy_new < 1 or iy_new >= h - 1:
-                return peak_x, peak_y
-            ix, iy = ix_new, iy_new
-            neighborhood = heatmap[iy - 1 : iy + 2, ix - 1 : ix + 2].astype(np.float64)
-
-        # Extract 1D slices for parabolic fitting
-        # X direction: neighborhood[1, :]
-        # Y direction: neighborhood[:, 1]
-        x_slice = neighborhood[1, :]  # [left, center, right]
-        y_slice = neighborhood[:, 1]  # [top, center, bottom]
-
-        # Parabolic interpolation for X:
-        # f(x) = ax^2 + bx + c, fit to points at x=-1, 0, 1
-        # Maximum at x = -b / (2a)
-        # Using the formula: x_offset = (f(-1) - f(1)) / (2 * (f(-1) + f(1) - 2*f(0)))
-        denom_x = 2.0 * (x_slice[0] + x_slice[2] - 2.0 * x_slice[1])
-        if abs(denom_x) > 1e-10:
-            x_offset = (x_slice[0] - x_slice[2]) / denom_x
-            x_offset = max(-0.5, min(0.5, x_offset))  # Clamp to valid range
-        else:
-            x_offset = 0.0
-
-        # Parabolic interpolation for Y
-        denom_y = 2.0 * (y_slice[0] + y_slice[2] - 2.0 * y_slice[1])
-        if abs(denom_y) > 1e-10:
-            y_offset = (y_slice[0] - y_slice[2]) / denom_y
-            y_offset = max(-0.5, min(0.5, y_offset))  # Clamp to valid range
-        else:
-            y_offset = 0.0
-
-        refined_x = float(ix) + x_offset
-        refined_y = float(iy) + y_offset
-
-        return refined_x, refined_y
-
-    def _decode_heatmap_multi_threshold(
-        self,
-        heatmap: np.ndarray,
-    ) -> tuple[float, float, float]:
-        """Decode heatmap using multiple thresholds and combine detections.
-
-        Runs detection at multiple thresholds to catch low-confidence balls.
-        Uses highest confidence detection if multiple are found.
-
-        Args:
-            heatmap: 2D heatmap array (height, width)
-
-        Returns:
-            Tuple of (x_norm, y_norm, confidence) where coordinates are 0-1 normalized
-        """
-        config = self.heatmap_config
-        best_confidence = 0.0
-        best_x, best_y = 0.5, 0.5
-
-        for threshold in config.multi_thresholds:
-            x, y, conf = self._decode_heatmap_single(heatmap, threshold)
-            if conf > best_confidence:
-                best_confidence = conf
-                best_x, best_y = x, y
-
-        return best_x, best_y, best_confidence
-
-    def _decode_heatmap_single(
-        self,
-        heatmap: np.ndarray,
-        threshold: float,
-    ) -> tuple[float, float, float]:
-        """Decode heatmap at a single threshold (internal helper).
-
-        Args:
-            heatmap: 2D heatmap array (height, width)
-            threshold: Threshold for binarization (0-1)
-
-        Returns:
-            Tuple of (x_norm, y_norm, confidence)
-        """
-        config = self.heatmap_config
-        max_val = float(heatmap.max())
-
-        # Normalize heatmap for processing
-        if max_val > 1.0:
-            heatmap_norm = heatmap.astype(np.float32) / 255.0
-            max_val_norm = max_val / 255.0
-        else:
-            heatmap_norm = heatmap.astype(np.float32)
-            max_val_norm = max_val
-
-        if max_val_norm < threshold:
-            return 0.5, 0.5, 0.0
-
-        # Create binary mask
-        binary = (heatmap_norm > threshold).astype(np.uint8) * 255
-
-        # Find contours
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        if not contours:
-            return 0.5, 0.5, 0.0
-
-        # Find largest contour
-        largest_contour = max(contours, key=cv2.contourArea) if len(contours) > 1 else contours[0]
-
-        # Get centroid using moments
-        moments = cv2.moments(largest_contour)
-        if moments["m00"] == 0:
-            return 0.5, 0.5, 0.0
-
-        cx = moments["m10"] / moments["m00"]
-        cy = moments["m01"] / moments["m00"]
-
-        # Apply sub-pixel refinement if enabled
-        if config.enable_subpixel:
-            cx, cy = self._subpixel_refine(heatmap_norm, cx, cy)
-
-        # Normalize to 0-1
-        x_norm = float(cx) / heatmap.shape[1]
-        y_norm = float(cy) / heatmap.shape[0]
-
-        # Clamp to valid range
-        x_norm = max(0.0, min(1.0, x_norm))
-        y_norm = max(0.0, min(1.0, y_norm))
-
-        return x_norm, y_norm, min(1.0, max_val_norm)
-
-    def _decode_heatmap_weighted(
-        self,
-        heatmap: np.ndarray,
-        threshold: float,
-    ) -> tuple[float, float, float]:
-        """Decode heatmap using weighted centroid of all above-threshold pixels.
-
-        Uses heatmap values as weights for more accurate centroid when
-        multiple response regions exist.
-
-        Args:
-            heatmap: 2D heatmap array (height, width)
-            threshold: Threshold for including pixels
-
-        Returns:
-            Tuple of (x_norm, y_norm, confidence) where coordinates are 0-1 normalized
-        """
-        max_val = float(heatmap.max())
-
-        # Normalize heatmap if needed
-        if max_val > 1.0:
-            heatmap_norm = heatmap.astype(np.float32) / 255.0
-            max_val /= 255.0
-        else:
-            heatmap_norm = heatmap.astype(np.float32)
-
-        # Create mask of above-threshold pixels
-        mask = heatmap_norm > (threshold * max_val) if max_val > 0 else heatmap_norm > threshold
-
-        if not mask.any():
-            return 0.5, 0.5, 0.0
-
-        # Get coordinates and weights
-        y_coords, x_coords = np.where(mask)
-        weights = heatmap_norm[mask]
-
-        # Compute weighted centroid
-        total_weight = weights.sum()
-        if total_weight == 0:
-            return 0.5, 0.5, 0.0
-
-        cx = np.average(x_coords, weights=weights)
-        cy = np.average(y_coords, weights=weights)
-
-        # Normalize to 0-1
-        x_norm = float(cx) / heatmap.shape[1]
-        y_norm = float(cy) / heatmap.shape[0]
-
-        # Clamp to valid range
-        x_norm = max(0.0, min(1.0, x_norm))
-        y_norm = max(0.0, min(1.0, y_norm))
-
-        return x_norm, y_norm, min(1.0, max_val)
-
     def _decode_heatmap(
         self,
         heatmap: np.ndarray,
-        threshold: float | None = None,
     ) -> tuple[float, float, float]:
         """
-        Decode a single heatmap to ball position.
+        Decode a single heatmap to ball position using contour centroid.
 
-        Uses configuration from self.heatmap_config for decoding options.
+        Thresholds the heatmap, finds the largest contour, and returns its
+        centroid as the ball position.
 
         Args:
             heatmap: 2D heatmap array (height, width)
-            threshold: Override threshold (if None, uses config)
 
         Returns:
             Tuple of (x_norm, y_norm, confidence) where coordinates are 0-1 normalized
         """
-        config = self.heatmap_config
+        threshold = self.heatmap_config.threshold
 
-        # Use multi-threshold detection if enabled
-        if config.enable_multi_threshold and threshold is None:
-            return self._decode_heatmap_multi_threshold(heatmap)
-
-        # Determine threshold
-        if threshold is None:
-            if config.adaptive_threshold:
-                threshold = self._compute_adaptive_threshold(heatmap)
-            else:
-                threshold = config.threshold
-
-        # Use weighted centroid if configured
-        if config.centroid_method == "weighted":
-            return self._decode_heatmap_weighted(heatmap, threshold)
-
-        # Default: contour-based centroid
+        # Contour-based centroid
         max_val = float(heatmap.max())
         if max_val > 1.0:
             # Scale threshold to match unnormalized range, avoiding division
@@ -712,16 +425,6 @@ class BallTracker:
 
         cx = moments["m10"] / moments["m00"]
         cy = moments["m01"] / moments["m00"]
-
-        # Apply sub-pixel refinement if enabled
-        if config.enable_subpixel:
-            # Need normalized heatmap for sub-pixel refinement
-            if max_val < 1.0:
-                # Already normalized
-                heatmap_norm = heatmap.astype(np.float32)
-            else:
-                heatmap_norm = heatmap.astype(np.float32) / 255.0
-            cx, cy = self._subpixel_refine(heatmap_norm, cx, cy)
 
         # Normalize to 0-1 (heatmap is in model space)
         x_norm = cx / heatmap.shape[1]
@@ -845,8 +548,6 @@ class BallTracker:
         filter_config: "BallFilterConfig | None" = None,
         enable_filtering: bool = True,
         preserve_raw: bool = False,
-        enable_smoothing: bool = False,
-        smoothing_config: "TrajectorySmoothingConfig | None" = None,
     ) -> BallTrackingResult:
         """
         Track ball positions in a video segment.
@@ -859,8 +560,6 @@ class BallTracker:
             filter_config: Optional configuration for temporal filtering
             enable_filtering: Apply Kalman filter smoothing (default True)
             preserve_raw: Store raw positions in result for debugging
-            enable_smoothing: Apply post-processing trajectory smoothing (default False)
-            smoothing_config: Optional configuration for trajectory smoothing
 
         Returns:
             BallTrackingResult with all detected positions
@@ -868,10 +567,6 @@ class BallTracker:
         import time
 
         from rallycut.tracking.ball_filter import BallFilterConfig, BallTemporalFilter
-        from rallycut.tracking.ball_smoother import (
-            TrajectoryPostProcessor,
-            TrajectorySmoothingConfig,
-        )
 
         start_time = time.time()
         video_path = Path(video_path)
@@ -1014,13 +709,6 @@ class BallTracker:
 
                 positions = temporal_filter.filter_batch(positions)
 
-            # Apply post-processing smoothing if enabled
-            if enable_smoothing:
-                smooth_config = smoothing_config or TrajectorySmoothingConfig()
-                smoother = TrajectoryPostProcessor(smooth_config)
-                positions = smoother.process(positions)
-                logger.info("Applied trajectory post-processing smoothing")
-
             # Get model filename for version string
             model_filename = BALL_MODELS.get(self.model_id, (MODEL_NAME,))[0]
 
@@ -1106,11 +794,11 @@ def create_ball_tracker(
 ) -> Any:
     """Factory function to create a ball tracker by model name.
 
-    Supports VballNet variants (v2, fast, v1b), WASB HRNet, and ensemble.
+    Supports VballNet variants (v2, fast), WASB HRNet, and ensemble.
     All returned trackers have a compatible track_video() interface.
 
     Args:
-        model: Model identifier. VballNet: 'v2', 'fast', 'v1b'.
+        model: Model identifier. VballNet: 'v2', 'fast'.
             WASB: 'wasb'. Ensemble: 'ensemble'.
         **kwargs: Additional keyword arguments passed to the tracker constructor.
             For WASB/ensemble: device, threshold, weights_path/wasb_weights.

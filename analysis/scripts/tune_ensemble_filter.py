@@ -50,7 +50,6 @@ ENSEMBLE_CACHE_DIR = Path.home() / ".cache" / "rallycut" / "ensemble_grid_search
 def _no_filter_config() -> BallFilterConfig:
     """Config that disables all filter stages (passthrough)."""
     return BallFilterConfig(
-        enable_kalman=False,
         enable_segment_pruning=False,
         enable_oscillation_pruning=False,
         enable_exit_ghost_removal=False,

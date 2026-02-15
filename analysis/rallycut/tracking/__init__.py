@@ -13,7 +13,6 @@ from rallycut.tracking.ball_cache import BallFeatureCache, get_ball_cache
 from rallycut.tracking.ball_ensemble import EnsembleBallTracker
 from rallycut.tracking.ball_features import SegmentBallFeatures, compute_ball_features
 from rallycut.tracking.ball_filter import BallFilterConfig, BallTemporalFilter
-from rallycut.tracking.ball_smoother import TrajectoryPostProcessor, TrajectorySmoothingConfig
 from rallycut.tracking.ball_tracker import (
     BALL_MODELS,
     DEFAULT_BALL_MODEL,
@@ -58,9 +57,6 @@ __all__ = [
     # Ball filter
     "BallFilterConfig",
     "BallTemporalFilter",
-    # Ball smoother
-    "TrajectorySmoothingConfig",
-    "TrajectoryPostProcessor",
     # Ball features
     "SegmentBallFeatures",
     "compute_ball_features",

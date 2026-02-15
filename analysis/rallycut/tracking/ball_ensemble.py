@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from rallycut.tracking.ball_filter import BallFilterConfig
-    from rallycut.tracking.ball_smoother import TrajectorySmoothingConfig
     from rallycut.tracking.ball_tracker import BallTrackingResult
 
 logger = logging.getLogger(__name__)
@@ -54,8 +53,6 @@ class EnsembleBallTracker:
         filter_config: BallFilterConfig | None = None,
         enable_filtering: bool = True,
         preserve_raw: bool = False,
-        enable_smoothing: bool = False,
-        smoothing_config: TrajectorySmoothingConfig | None = None,
     ) -> BallTrackingResult:
         """Track ball using WASB + VballNet ensemble.
 
@@ -63,10 +60,6 @@ class EnsembleBallTracker:
         optionally applies filtering.
         """
         from rallycut.tracking.ball_filter import BallTemporalFilter
-        from rallycut.tracking.ball_smoother import (
-            TrajectoryPostProcessor,
-            TrajectorySmoothingConfig,
-        )
         from rallycut.tracking.ball_tracker import BallPosition, BallTracker, BallTrackingResult
         from rallycut.tracking.wasb_model import WASBBallTracker
 
@@ -184,11 +177,6 @@ class EnsembleBallTracker:
                 config = get_ensemble_filter_config()
             temporal_filter = BallTemporalFilter(config)
             merged = temporal_filter.filter_batch(merged)
-
-        if enable_smoothing:
-            smooth_config = smoothing_config or TrajectorySmoothingConfig()
-            smoother = TrajectoryPostProcessor(smooth_config)
-            merged = smoother.process(merged)
 
         return BallTrackingResult(
             positions=merged,

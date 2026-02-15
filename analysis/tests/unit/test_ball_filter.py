@@ -1,4 +1,4 @@
-"""Unit tests for ball temporal filter (raw mode and Kalman mode)."""
+"""Unit tests for ball temporal filter."""
 
 from __future__ import annotations
 
@@ -21,178 +21,15 @@ def _make_pos(
     )
 
 
-def _converge_filter(
-    filt: BallTemporalFilter,
-    x: float = 0.5,
-    y: float = 0.5,
-    n: int = 20,
-) -> None:
-    """Feed consistent positions to converge the filter (tighten covariance)."""
-    for i in range(n):
-        filt.update(_make_pos(i, x, y))
-
-
-class TestMahalanobisGating:
-    """Tests for Mahalanobis distance-based measurement validation."""
-
-    def test_rejects_flickering_on_converged_filter(self) -> None:
-        """After convergence on stable position, a sudden jump should be rejected."""
-        config = BallFilterConfig(
-            enable_kalman=True,
-            enable_outlier_removal=False,
-            enable_interpolation=False,
-            # Reduce velocity process noise so covariance converges tighter
-            process_noise_velocity=0.001,
-            mahalanobis_threshold=5.99,
-        )
-        filt = BallTemporalFilter(config)
-
-        # Converge on (0.5, 0.5) for 30 frames to tighten covariance
-        _converge_filter(filt, 0.5, 0.5, n=30)
-
-        # Sudden jump to (0.8, 0.8) - should be rejected by Mahalanobis gate
-        result = filt.update(_make_pos(30, 0.8, 0.8))
-
-        # Filter should output near (0.5, 0.5), not (0.8, 0.8)
-        assert abs(result.x - 0.5) < 0.05
-        assert abs(result.y - 0.5) < 0.05
-
-    def test_accepts_valid_movement_with_high_uncertainty(self) -> None:
-        """After few frames (high uncertainty), larger movements should be accepted."""
-        config = BallFilterConfig(
-            enable_kalman=True,
-            enable_outlier_removal=False,
-            enable_interpolation=False,
-        )
-        filt = BallTemporalFilter(config)
-
-        # Only 2 frames - filter still uncertain
-        filt.update(_make_pos(0, 0.5, 0.5))
-        filt.update(_make_pos(1, 0.5, 0.5))
-
-        # Movement to (0.6, 0.6) should be accepted given high uncertainty
-        result = filt.update(_make_pos(2, 0.6, 0.6))
-
-        # Should be close to (0.6, 0.6) (accepted measurement)
-        assert result.x > 0.55
-
-    def test_hard_max_velocity_always_applies(self) -> None:
-        """Max velocity limit should reject even with high uncertainty."""
-        config = BallFilterConfig(
-            enable_kalman=True,
-            max_velocity=0.3,
-            reacquisition_required=2,
-            reacquisition_radius=0.03,
-            enable_outlier_removal=False,
-            enable_interpolation=False,
-        )
-        filt = BallTemporalFilter(config)
-
-        # Initialize with consistent detections (required by init guard)
-        filt.update(_make_pos(0, 0.1, 0.1))
-        filt.update(_make_pos(1, 0.11, 0.11))  # Consistent → initializes
-
-        # Jump across entire screen - should be rejected by max_velocity
-        result = filt.update(_make_pos(2, 0.9, 0.9))
-
-        # Should stay near initial position (prediction)
-        assert result.x < 0.3
-
-    def test_gradual_movement_accepted(self) -> None:
-        """Smooth consistent movement should always be accepted."""
-        config = BallFilterConfig(
-            enable_kalman=True,
-            enable_outlier_removal=False,
-            enable_interpolation=False,
-        )
-        filt = BallTemporalFilter(config)
-
-        # Ball moving smoothly right
-        for i in range(20):
-            x = 0.3 + i * 0.01  # 1% per frame
-            filt.update(_make_pos(i, x, 0.5))
-
-        # Next step in same direction should be accepted
-        result = filt.update(_make_pos(20, 0.5, 0.5))
-        assert result.x > 0.45
-
-
-class TestReacquisitionGuard:
-    """Tests for re-acquisition after track loss."""
-
-    def test_rejects_scattered_detections(self) -> None:
-        """Scattered detections after track loss should not re-acquire."""
-        config = BallFilterConfig(
-            enable_kalman=True,
-            reacquisition_threshold=3,
-            reacquisition_required=3,
-            reacquisition_radius=0.05,
-            enable_outlier_removal=False,
-            enable_interpolation=False,
-        )
-        filt = BallTemporalFilter(config)
-
-        # Converge filter
-        _converge_filter(filt, 0.5, 0.5, n=10)
-
-        # Lose track for several frames (low confidence)
-        for i in range(10, 16):
-            filt.update(_make_pos(i, 0.5, 0.5, conf=0.1))
-
-        # Should now be in tentative mode
-        assert filt._in_tentative_mode
-
-        # Send scattered detections (spread > radius)
-        filt.update(_make_pos(16, 0.2, 0.2))  # far apart
-        filt.update(_make_pos(17, 0.8, 0.8))  # far apart
-        filt.update(_make_pos(18, 0.5, 0.1))  # far apart
-
-        # Should still be in tentative mode (not re-acquired)
-        assert filt._in_tentative_mode
-
-    def test_accepts_consistent_detections(self) -> None:
-        """Consistent detections after track loss should re-acquire."""
-        config = BallFilterConfig(
-            enable_kalman=True,
-            reacquisition_threshold=3,
-            reacquisition_required=3,
-            reacquisition_radius=0.05,
-            enable_outlier_removal=False,
-            enable_interpolation=False,
-        )
-        filt = BallTemporalFilter(config)
-
-        # Converge filter
-        _converge_filter(filt, 0.5, 0.5, n=10)
-
-        # Lose track
-        for i in range(10, 16):
-            filt.update(_make_pos(i, 0.5, 0.5, conf=0.1))
-
-        assert filt._in_tentative_mode
-
-        # Send 3 consistent detections near (0.7, 0.7)
-        filt.update(_make_pos(16, 0.70, 0.70))
-        filt.update(_make_pos(17, 0.71, 0.71))
-        result = filt.update(_make_pos(18, 0.72, 0.72))
-
-        # Should have re-acquired
-        assert not filt._in_tentative_mode
-        assert abs(result.x - 0.71) < 0.02
-
-
 class TestOutlierRemoval:
     """Tests for post-processing outlier removal."""
 
     def test_velocity_reversal_detected(self) -> None:
         """A→B→A flickering pattern should be removed as outlier."""
         config = BallFilterConfig(
-            enable_kalman=True,
             enable_outlier_removal=True,
+            enable_segment_pruning=False,
             enable_interpolation=False,
-            # Use very loose Kalman gating so all pass through
-            mahalanobis_threshold=100.0,
-            max_velocity=1.0,
         )
         filt = BallTemporalFilter(config)
 
@@ -218,11 +55,9 @@ class TestOutlierRemoval:
     def test_smooth_trajectory_preserved(self) -> None:
         """A smooth trajectory should have no outliers removed."""
         config = BallFilterConfig(
-            enable_kalman=True,
             enable_outlier_removal=True,
+            enable_segment_pruning=False,
             enable_interpolation=False,
-            mahalanobis_threshold=100.0,
-            max_velocity=1.0,
         )
         filt = BallTemporalFilter(config)
 
@@ -235,102 +70,6 @@ class TestOutlierRemoval:
 
         # All positions should be preserved (no outliers)
         assert len(result) == len(positions)
-
-
-class TestExitDetection:
-    """Tests for out-of-frame exit detection."""
-
-    def test_detects_exit_at_right_edge(self) -> None:
-        """Ball near right edge moving right should be detected as exiting."""
-        config = BallFilterConfig(
-            enable_kalman=True,
-            enable_exit_detection=True,
-            exit_edge_margin=0.05,
-            enable_outlier_removal=False,
-            enable_interpolation=False,
-        )
-        filt = BallTemporalFilter(config)
-
-        # Ball moving right toward edge, starting near edge
-        for i in range(20):
-            x = 0.8 + i * 0.01  # Moving right from 0.8 to 0.99
-            filt.update(_make_pos(i, min(x, 0.99), 0.5))
-
-        # Ball should be detected as exiting (x > 0.95 with positive vx)
-        assert filt._exited
-        assert filt._exit_edge == "right"
-
-    def test_suppresses_opposite_side_reacquisition(self) -> None:
-        """After exiting right, detection on left should be suppressed."""
-        config = BallFilterConfig(
-            enable_kalman=True,
-            enable_exit_detection=True,
-            exit_edge_margin=0.05,
-            exit_opposite_side_margin=0.3,
-            reacquisition_threshold=3,
-            reacquisition_required=3,
-            enable_outlier_removal=False,
-            enable_interpolation=False,
-        )
-        filt = BallTemporalFilter(config)
-
-        # Ball moving right toward edge, starting near edge
-        for i in range(20):
-            x = 0.8 + i * 0.01
-            filt.update(_make_pos(i, min(x, 0.99), 0.5))
-
-        # Verify exit detected
-        assert filt._exited
-        assert filt._exit_edge == "right"
-
-        # Lose track
-        for i in range(20, 30):
-            filt.update(_make_pos(i, 0.99, 0.5, conf=0.1))
-
-        # Should now be in tentative mode
-        assert filt._in_tentative_mode
-
-        # Detection at x=0.1 (left side) should be suppressed after right exit
-        filt.update(_make_pos(30, 0.1, 0.5))
-        filt.update(_make_pos(31, 0.1, 0.5))
-        filt.update(_make_pos(32, 0.1, 0.5))
-
-        # Should still be in tentative mode (suppressed)
-        assert filt._in_tentative_mode
-
-    def test_allows_same_side_reacquisition(self) -> None:
-        """After exiting right, detection near right should not be suppressed."""
-        config = BallFilterConfig(
-            enable_kalman=True,
-            enable_exit_detection=True,
-            exit_edge_margin=0.05,
-            exit_opposite_side_margin=0.3,
-            reacquisition_threshold=3,
-            reacquisition_required=3,
-            reacquisition_radius=0.05,
-            enable_outlier_removal=False,
-            enable_interpolation=False,
-        )
-        filt = BallTemporalFilter(config)
-
-        # Ball moving right toward edge
-        for i in range(20):
-            x = 0.8 + i * 0.01
-            filt.update(_make_pos(i, min(x, 0.99), 0.5))
-
-        # Lose track
-        for i in range(20, 30):
-            filt.update(_make_pos(i, 0.99, 0.5, conf=0.1))
-
-        assert filt._in_tentative_mode
-
-        # Detection near right side (same side as exit) - should NOT be suppressed
-        filt.update(_make_pos(30, 0.85, 0.5))
-        filt.update(_make_pos(31, 0.86, 0.5))
-        filt.update(_make_pos(32, 0.87, 0.5))
-
-        # Should have re-acquired
-        assert not filt._in_tentative_mode
 
 
 class TestSegmentPruning:
@@ -603,7 +342,6 @@ class TestOscillationPruning:
     def test_sustained_oscillation_trimmed(self) -> None:
         """A→B→A→B tail after real trajectory should be trimmed."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_oscillation_pruning=True,
             min_oscillation_frames=12,
@@ -648,7 +386,6 @@ class TestOscillationPruning:
         cluster transition rate is high.
         """
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_oscillation_pruning=True,
             min_oscillation_frames=12,
@@ -700,7 +437,6 @@ class TestOscillationPruning:
     def test_brief_direction_change_preserved(self) -> None:
         """A 2-frame direction change (bounce/hit) should NOT be trimmed."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_oscillation_pruning=True,
             min_oscillation_frames=12,
@@ -736,7 +472,6 @@ class TestOscillationPruning:
         not locked onto fixed positions).
         """
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_oscillation_pruning=True,
             min_oscillation_frames=12,
@@ -775,7 +510,6 @@ class TestOscillationPruning:
     def test_smooth_trajectory_untouched(self) -> None:
         """A smooth arc trajectory should have all frames kept."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_oscillation_pruning=True,
             min_oscillation_frames=12,
@@ -800,7 +534,6 @@ class TestOscillationPruning:
     def test_stationary_ball_with_noise_untouched(self) -> None:
         """Sub-threshold jitter around a stationary position should not trigger."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_oscillation_pruning=True,
             min_oscillation_frames=12,
@@ -825,7 +558,6 @@ class TestOscillationPruning:
     def test_oscillation_disabled_by_config(self) -> None:
         """When enable_oscillation_pruning=False, oscillation should be kept."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_oscillation_pruning=False,  # Disabled
             enable_outlier_removal=False,
@@ -853,7 +585,6 @@ class TestOscillationPruning:
     def test_oscillation_in_separate_segments(self) -> None:
         """Only the oscillating segment should be trimmed, not the clean one."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_oscillation_pruning=True,
             min_oscillation_frames=12,
@@ -896,7 +627,6 @@ class TestOscillationPruning:
         onto a single player position, producing many frames within ~3% of screen.
         """
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_oscillation_pruning=True,
             min_oscillation_frames=12,
@@ -939,7 +669,6 @@ class TestOscillationPruning:
     def test_hovering_without_gap_preserved(self) -> None:
         """Compact segment without a preceding gap should NOT be flagged as hovering."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_oscillation_pruning=True,
             min_oscillation_frames=12,
@@ -976,7 +705,6 @@ class TestOscillationPruning:
     def test_end_to_end_raw_pipeline_with_oscillation(self) -> None:
         """Full raw pipeline: leading segment pruned + oscillating tail trimmed."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=True,
             segment_jump_threshold=0.15,
             min_segment_frames=10,
@@ -1031,7 +759,6 @@ class TestExitGhostRemoval:
     def test_top_exit_ghost_removed(self) -> None:
         """Ball approaches top edge, reverses — ghosts should be removed."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_exit_ghost_removal=True,
             exit_edge_zone=0.10,
@@ -1077,7 +804,6 @@ class TestExitGhostRemoval:
     def test_bottom_exit_ghost_removed(self) -> None:
         """Ball approaches bottom edge, reverses — ghosts should be removed."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_exit_ghost_removal=True,
             exit_edge_zone=0.10,
@@ -1125,7 +851,6 @@ class TestExitGhostRemoval:
         approach frame needs to be in the edge zone.
         """
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_exit_ghost_removal=True,
             exit_edge_zone=0.10,
@@ -1167,7 +892,6 @@ class TestExitGhostRemoval:
     def test_no_false_positive_on_bounce(self) -> None:
         """Ball reversal in center of screen (not near edge) should be kept."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_exit_ghost_removal=True,
             exit_edge_zone=0.10,
@@ -1198,7 +922,6 @@ class TestExitGhostRemoval:
     def test_no_false_positive_slow_approach(self) -> None:
         """Ball near edge but approach speed too low should be kept."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_exit_ghost_removal=True,
             exit_edge_zone=0.10,
@@ -1229,7 +952,6 @@ class TestExitGhostRemoval:
     def test_ghost_terminated_at_gap(self) -> None:
         """Ghost marking should stop at a frame gap > max_interpolation_gap."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_exit_ghost_removal=True,
             exit_edge_zone=0.10,
@@ -1272,7 +994,6 @@ class TestExitGhostRemoval:
     def test_ghost_terminated_at_edge_reentry(self) -> None:
         """Ghost marking should stop when position returns to exit edge zone."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_exit_ghost_removal=True,
             exit_edge_zone=0.10,
@@ -1325,7 +1046,6 @@ class TestExitGhostRemoval:
         excluded, so the false positive fragment gets pruned.
         """
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=True,
             enable_exit_ghost_removal=True,
             exit_edge_zone=0.10,
@@ -1394,7 +1114,6 @@ class TestExitGhostRemoval:
         so the non-ghost portion survives pruning.
         """
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=True,
             enable_exit_ghost_removal=True,
             exit_edge_zone=0.10,
@@ -1460,7 +1179,6 @@ class TestTrajectoryBlipRemoval:
     def test_blip_at_player_position_removed(self) -> None:
         """3-frame blip at player position mid-trajectory should be removed."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_exit_ghost_removal=False,
             enable_oscillation_pruning=False,
@@ -1501,7 +1219,6 @@ class TestTrajectoryBlipRemoval:
     def test_single_frame_deviation_preserved(self) -> None:
         """Single-frame deviation (real bounce) should NOT be removed."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_exit_ghost_removal=False,
             enable_oscillation_pruning=False,
@@ -1530,7 +1247,6 @@ class TestTrajectoryBlipRemoval:
     def test_blip_removal_disabled_by_config(self) -> None:
         """When enable_blip_removal=False, blips should be kept."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_exit_ghost_removal=False,
             enable_oscillation_pruning=False,
@@ -1557,12 +1273,15 @@ class TestEndToEnd:
     """End-to-end tests with synthetic trajectories."""
 
     def test_synthetic_trajectory_with_noise(self) -> None:
-        """Synthetic trajectory with flickering, occlusion, and false positives."""
+        """Synthetic trajectory with flickering and false positives."""
         config = BallFilterConfig(
-            enable_kalman=True,
-            reacquisition_threshold=3,
-            reacquisition_required=3,
-            enable_exit_detection=True,
+            enable_outlier_removal=True,
+            enable_segment_pruning=True,
+            segment_jump_threshold=0.20,
+            min_segment_frames=5,
+            min_output_confidence=0.05,
+            enable_interpolation=True,
+            max_interpolation_gap=10,
         )
         filt = BallTemporalFilter(config)
 
@@ -1581,33 +1300,18 @@ class TestEndToEnd:
             x = 0.3 + i * 0.01
             positions.append(_make_pos(i, x, 0.5))
 
-        # Phase 4: Occlusion (frames 30-39, low confidence)
-        for i in range(30, 40):
-            positions.append(_make_pos(i, 0.5, 0.5, conf=0.1))
-
-        # Phase 5: False positive on wrong side (frame 40-42)
-        positions.append(_make_pos(40, 0.05, 0.95, conf=0.7))
-        positions.append(_make_pos(41, 0.95, 0.05, conf=0.7))
-        positions.append(_make_pos(42, 0.15, 0.85, conf=0.7))
-
-        # Phase 6: Real re-acquisition (frames 43-45)
-        positions.append(_make_pos(43, 0.60, 0.50))
-        positions.append(_make_pos(44, 0.61, 0.50))
-        positions.append(_make_pos(45, 0.62, 0.50))
-
         result = filt.filter_batch(positions)
 
-        # Should have output for all frames
+        # Should have output
         assert len(result) > 0
 
         # The flickering frame (20) should be removed by outlier removal
-        # (velocity reversal or trajectory deviation detection)
+        # (interpolation may fill it with an interpolated position)
         result_by_frame = {p.frame_number: p for p in result}
         if 20 in result_by_frame:
-            # If it survived filtering, it should have been pulled toward trajectory
-            # With loose Mahalanobis it may pass the Kalman gate, but outlier removal
-            # should catch it. If it's still here, accept it as long as it's not exact
-            assert result_by_frame[20].x != 0.9  # Should be modified from raw false detection
+            # Interpolated position should not be the original false detection
+            assert result_by_frame[20].x != 0.9
+            assert result_by_frame[20].y != 0.1
 
     def test_filter_batch_empty(self) -> None:
         """Empty input should return empty output."""
@@ -1626,9 +1330,8 @@ class TestEndToEnd:
         assert result[0].frame_number == 0
 
     def test_raw_mode_preserves_positions(self) -> None:
-        """Raw mode (enable_kalman=False) should preserve original positions."""
+        """Raw mode should preserve original positions."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_outlier_removal=False,
             enable_interpolation=False,
@@ -1654,7 +1357,6 @@ class TestEndToEnd:
     def test_raw_mode_with_segment_pruning(self) -> None:
         """Raw mode + segment pruning removes short false segments."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=True,
             segment_jump_threshold=0.15,
             min_segment_frames=10,
@@ -1680,97 +1382,6 @@ class TestEndToEnd:
         result_frames = [p.frame_number for p in result]
         assert all(f >= 10 for f in result_frames)
 
-    def test_low_confidence_not_initialized(self) -> None:
-        """Filter should not initialize on low confidence detections."""
-        config = BallFilterConfig(
-            enable_kalman=True,
-            min_confidence_for_update=0.3,
-            enable_outlier_removal=False,
-            enable_interpolation=False,
-        )
-        filt = BallTemporalFilter(config)
-
-        result = filt.update(_make_pos(0, 0.5, 0.5, conf=0.1))
-        assert not filt._initialized
-        # Should return as-is
-        assert result.x == 0.5
-        assert result.confidence == 0.1
-
-    def test_initialization_guard_rejects_single_false_positive(self) -> None:
-        """A single false positive should not initialize the filter."""
-        config = BallFilterConfig(
-            enable_kalman=True,
-            reacquisition_required=2,
-            reacquisition_radius=0.03,
-            enable_outlier_removal=False,
-            enable_interpolation=False,
-        )
-        filt = BallTemporalFilter(config)
-
-        # First detection at (0.5, 0.5)
-        filt.update(_make_pos(0, 0.5, 0.5))
-        assert not filt._initialized  # Not yet - need 2 consistent
-
-        # Second detection far away (inconsistent)
-        filt.update(_make_pos(1, 0.9, 0.1))
-        assert not filt._initialized  # Inconsistent pair → rejected
-
-        # Third detection near first (consistent with first? no, buffer has all 3)
-        # Buffer: [(0.5,0.5), (0.9,0.1), (0.51,0.51)] - not all within radius
-        filt.update(_make_pos(2, 0.51, 0.51))
-        assert not filt._initialized
-
-        # Fourth detection consistent with third
-        filt.update(_make_pos(3, 0.52, 0.52))
-        # Buffer: [(0.5,0.5), (0.9,0.1), (0.51,0.51), (0.52,0.52)]
-        # The pair check requires ALL pairs within radius, so still not consistent
-        assert not filt._initialized
-
-    def test_initialization_guard_accepts_consistent(self) -> None:
-        """Consistent detections should initialize the filter."""
-        config = BallFilterConfig(
-            enable_kalman=True,
-            reacquisition_required=2,
-            reacquisition_radius=0.03,
-            enable_outlier_removal=False,
-            enable_interpolation=False,
-        )
-        filt = BallTemporalFilter(config)
-
-        # Two consistent detections
-        filt.update(_make_pos(0, 0.50, 0.50))
-        filt.update(_make_pos(1, 0.51, 0.51))
-
-        # Should be initialized now
-        assert filt._initialized
-
-    def test_exit_forces_tentative_mode(self) -> None:
-        """After exit detection, tentative mode should activate immediately."""
-        config = BallFilterConfig(
-            enable_kalman=True,
-            enable_exit_detection=True,
-            exit_edge_margin=0.05,
-            reacquisition_threshold=10,  # High threshold - shouldn't matter
-            reacquisition_required=2,
-            reacquisition_radius=0.03,
-            enable_outlier_removal=False,
-            enable_interpolation=False,
-        )
-        filt = BallTemporalFilter(config)
-
-        # Ball moving right toward edge
-        for i in range(20):
-            x = 0.8 + i * 0.01
-            filt.update(_make_pos(i, min(x, 0.99), 0.5))
-
-        assert filt._exited
-
-        # Very next frame (even before reacquisition_threshold=10 frames)
-        # should be in tentative mode due to exit
-        filt.update(_make_pos(20, 0.5, 0.5, conf=0.1))  # Low conf prediction
-        assert filt._in_tentative_mode  # Forced by exit, not waiting for threshold
-
-
 class TestBlipRemovalSpreadScaling:
     """Tests for blip removal with spread scaling for longer excursions."""
 
@@ -1785,7 +1396,6 @@ class TestBlipRemovalSpreadScaling:
         to pass Phase 1, while having internal spread between 5% and 11%.
         """
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_exit_ghost_removal=False,
             enable_oscillation_pruning=False,
@@ -1837,7 +1447,6 @@ class TestBlipRemovalSpreadScaling:
     def test_short_blip_still_requires_tight_spread(self) -> None:
         """2-frame blip should still use base 5% spread threshold."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=False,
             enable_exit_ghost_removal=False,
             enable_oscillation_pruning=False,
@@ -1883,7 +1492,6 @@ class TestFalseStartAnchorRemoval:
         trajectory and spatially disconnected.
         """
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=True,
             segment_jump_threshold=0.20,
             min_segment_frames=15,
@@ -1922,7 +1530,6 @@ class TestFalseStartAnchorRemoval:
     def test_false_tail_anchor_removed(self) -> None:
         """Short trailing anchor with jump from longer anchor should be removed."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=True,
             segment_jump_threshold=0.20,
             min_segment_frames=15,
@@ -1961,7 +1568,6 @@ class TestFalseStartAnchorRemoval:
     def test_single_anchor_not_removed(self) -> None:
         """If there's only one anchor, it should NOT be removed."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=True,
             segment_jump_threshold=0.20,
             min_segment_frames=15,
@@ -1993,7 +1599,6 @@ class TestFalseStartAnchorRemoval:
     def test_similar_length_anchors_both_kept(self) -> None:
         """Two anchors of similar length should both be kept (no false start)."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_segment_pruning=True,
             segment_jump_threshold=0.20,
             min_segment_frames=15,
@@ -2032,7 +1637,6 @@ class TestEnsembleSourceAware:
     def _ensemble_config(self, **overrides: object) -> BallFilterConfig:
         """Base config for ensemble source-aware tests."""
         defaults = dict(
-            enable_kalman=False,
             ensemble_source_aware=True,
             enable_segment_pruning=True,
             segment_jump_threshold=0.25,
@@ -2222,16 +1826,17 @@ class TestEnsembleSourceAware:
         config = get_ensemble_filter_config()
 
         assert config.ensemble_source_aware is True
-        assert config.enable_kalman is False
         assert config.enable_segment_pruning is True
-        assert config.enable_oscillation_pruning is True
+        assert config.enable_oscillation_pruning is False
         assert config.enable_outlier_removal is True
         assert config.enable_blip_removal is True
         assert config.enable_motion_energy_filter is False
         assert config.enable_stationarity_filter is True
-        assert config.min_segment_frames == 10
+        assert config.min_segment_frames == 12
         assert config.segment_jump_threshold == 0.20
         assert config.blip_max_deviation == 0.10
+        assert config.exit_edge_zone == 0.15
+        assert config.exit_approach_frames == 4
 
     def test_vballnet_segment_near_wasb_anchor_recovered_wide(self) -> None:
         """VballNet segment within WASB-wide proximity of WASB anchor is recovered.
@@ -2319,7 +1924,6 @@ class TestRemoveStationaryRuns:
     def test_stationary_wasb_run_zeroed(self) -> None:
         """20 frames at a fixed position should be zeroed (WASB player lock-on)."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_stationarity_filter=True,
             stationarity_min_frames=12,
             stationarity_max_spread=0.005,
@@ -2354,7 +1958,6 @@ class TestRemoveStationaryRuns:
     def test_moving_trajectory_preserved(self) -> None:
         """Trajectory with >2% spread per frame should be preserved."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_stationarity_filter=True,
             stationarity_min_frames=12,
             stationarity_max_spread=0.005,
@@ -2384,7 +1987,6 @@ class TestRemoveStationaryRuns:
     def test_short_stationary_run_preserved(self) -> None:
         """10 frames at fixed position (below 12-frame threshold) should be preserved."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_stationarity_filter=True,
             stationarity_min_frames=12,
             stationarity_max_spread=0.005,
@@ -2414,7 +2016,6 @@ class TestRemoveStationaryRuns:
     def test_stationarity_filter_disabled(self) -> None:
         """When disabled, stationary runs should be preserved."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_stationarity_filter=False,
             enable_segment_pruning=False,
             enable_motion_energy_filter=False,
@@ -2442,7 +2043,6 @@ class TestRemoveStationaryRuns:
     def test_large_gap_splits_windows(self) -> None:
         """Large gap prevents sliding window from spanning both groups."""
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_stationarity_filter=True,
             stationarity_min_frames=12,
             stationarity_max_spread=0.005,
@@ -2485,7 +2085,6 @@ class TestRemoveStationaryRuns:
         independently, even within one contiguous trajectory.
         """
         config = BallFilterConfig(
-            enable_kalman=False,
             enable_stationarity_filter=True,
             stationarity_min_frames=12,
             stationarity_max_spread=0.005,
