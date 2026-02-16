@@ -1,0 +1,84 @@
+{
+  "_updated": "2026-02-16",
+  "_description": "Canonical baselines for ML experiments. Read by agents at runtime. Update after significant eval runs.",
+
+  "ball_tracking": {
+    "ensemble_tuned": {
+      "match_pct": 85.3,
+      "error_px": 26.0,
+      "config": "get_ensemble_filter_config()",
+      "notes": "Source-aware, 9 rallies, Feb 2026"
+    },
+    "ensemble_unfiltered": {
+      "match_pct": 76.7,
+      "error_px": 73.4
+    },
+    "wasb_hrnet": {
+      "match_pct": 67.5,
+      "error_px": 51.9,
+      "notes": "t=0.3, MPS"
+    },
+    "vballnet_v2": {
+      "match_pct": 41.7,
+      "error_px": 92.7,
+      "detection_pct": 83.7,
+      "notes": "With motion energy filter"
+    }
+  },
+
+  "per_rally": {
+    "1bfcbc4f": { "match_pct": 86.5, "error_px": 11.9, "video_id": "07fedbd4" },
+    "73581b32": { "match_pct": 92.7, "error_px": 12.1, "video_id": "1efa35cf" },
+    "1f87460b": { "match_pct": 77.5, "error_px": 86.5, "video_id": "4cd680c7" },
+    "c3b31af2": { "match_pct": 98.4, "error_px": 8.7,  "video_id": "5c641cfe" },
+    "9dbe457a": { "match_pct": 61.4, "error_px": 44.6, "video_id": "70ab9d7f" },
+    "0af554b5": { "match_pct": 88.1, "error_px": 33.4, "video_id": "920ba69d" },
+    "bd77efd1": { "match_pct": 96.5, "error_px": 18.1, "video_id": "a5866029" },
+    "0d84f858": { "match_pct": 67.2, "error_px": 6.2,  "video_id": "a7ee3d38" },
+    "87ce7bff": { "match_pct": 99.4, "error_px": 12.7, "video_id": "cb3b68f0" }
+  },
+
+  "rally_detection": {
+    "temporal_maxer_loo": { "f1_iou04": 75.0, "f1_iou05": 71.6 },
+    "temporal_maxer_train_all": { "f1_iou04": 84.7, "f1_iou05": 84.1 },
+    "binary_head_train_all": { "f1_iou04": 84.0 },
+    "binary_head_loo": { "f1_iou04": 57.4 }
+  },
+
+  "player_detection": {
+    "yolov8n_640": { "f1": 74.1, "far_recall": 55.3, "fps": 15.3 },
+    "yolov8n_1280": { "f1": 79.4, "far_recall": 63.5, "fps": 7.7, "recommended": true },
+    "yolo11m_1280": { "far_recall": 89.4, "mid_recall": 74.4, "fps": 2.4 }
+  },
+
+  "filter_config_tuned": {
+    "segment_jump_threshold": 0.20,
+    "min_segment_frames": 12,
+    "blip_max_deviation": 0.10,
+    "max_interpolation_gap": 10,
+    "exit_approach_frames": 4,
+    "exit_edge_zone": 0.15,
+    "motion_energy_threshold": 0.02,
+    "source_aware": true,
+    "oscillation": "disabled"
+  },
+
+  "known_problem_rallies": {
+    "0d84f858": "Stationary FPs — motion energy filter's biggest win (was 8.2% → 67.2%)",
+    "0af554b5": "VballNet limitation — 29.8% VballNet vs 82.1% WASB alone",
+    "9dbe457a": "Weakest ensemble rally — 61.4% match, 44.6px error",
+    "1f87460b": "High error despite decent match — 77.5% match, 86.5px error"
+  },
+
+  "video_to_rally": {
+    "a5866029": "bd77efd1",
+    "920ba69d": "0af554b5",
+    "07fedbd4": "1bfcbc4f",
+    "1efa35cf": "73581b32",
+    "70ab9d7f": "9dbe457a",
+    "a7ee3d38": "0d84f858",
+    "4cd680c7": "1f87460b",
+    "cb3b68f0": "87ce7bff",
+    "5c641cfe": "c3b31af2"
+  }
+}

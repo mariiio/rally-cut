@@ -31,6 +31,7 @@ htmlcov/
 !rallycut.yaml
 !**/manifest.json
 !**/ground_truth.json
+!baselines.json
 !pyproject.toml
 
 # Pseudo-labels and training frames (generated from database)
