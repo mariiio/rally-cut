@@ -147,6 +147,10 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
   - If not provided, auto-loads from `video.courtCalibrationJson` in database
   - Returns player positions, ball trajectory, contacts, and actions
 - `GET /v1/rallies/:id/player-track` → retrieves existing tracking data
+- `POST /v1/rallies/:id/player-track/swap` → swap two track IDs from a frame onward
+  - Body: `{ trackA: number, trackB: number, fromFrame: number }`
+  - Fixes YOLO+BoT-SORT ID switches when players overlap/cross paths
+  - Only modifies `positionsJson` (filtered positions), not `rawPositionsJson`
 
 ### Label Studio Integration (Ground Truth)
 - `GET /v1/rallies/:id/label-studio` → status (hasTrackingData, hasGroundTruth, taskId)

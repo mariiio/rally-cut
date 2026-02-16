@@ -10,7 +10,7 @@ import {
   listRallies,
   updateRally,
 } from "../services/rallyService.js";
-import { trackPlayersForRally, getPlayerTrack } from "../services/playerTrackingService.js";
+import { trackPlayersForRally, getPlayerTrack, swapPlayerTracks } from "../services/playerTrackingService.js";
 import {
   exportToLabelStudio,
   importFromLabelStudio,
@@ -120,6 +120,33 @@ router.get(
   async (req, res, next) => {
     try {
       const result = await getPlayerTrack(req.params.id, req.userId!);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.post(
+  "/v1/rallies/:id/player-track/swap",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: z.object({
+      trackA: z.number().int(),
+      trackB: z.number().int(),
+      fromFrame: z.number().int().min(0),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const result = await swapPlayerTracks(
+        req.params.id,
+        req.userId!,
+        req.body.trackA,
+        req.body.trackB,
+        req.body.fromFrame,
+      );
       res.json(result);
     } catch (error) {
       next(error);
