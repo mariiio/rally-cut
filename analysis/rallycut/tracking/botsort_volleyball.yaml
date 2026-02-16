@@ -14,7 +14,7 @@ new_track_thresh: 0.35   # Threshold for new tracks (original)
 track_buffer: 45  # Was 90 (3s)
 
 # Association threshold
-match_thresh: 0.80
+match_thresh: 0.90  # +2.4pp HOTA, +5.4pp MOTA vs 0.80, but IDsw 14→20
 
 # Fuse detection score with motion for stable tracking
 fuse_score: True
