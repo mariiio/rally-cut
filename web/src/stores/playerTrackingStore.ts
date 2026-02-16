@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { trackPlayers, getPlayerTrack, saveCourtCalibration, deleteCourtCalibration, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData } from '@/services/api';
+import { trackPlayers, getPlayerTrack, swapPlayerTracks, saveCourtCalibration, deleteCourtCalibration, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData } from '@/services/api';
 
 // Types for player tracking data (store format)
 export interface PlayerPosition {
@@ -80,7 +80,8 @@ interface PlayerTrackingState {
   getCalibration: (videoId: string) => CourtCalibration | null;
   hydrateCalibration: (videoId: string, corners: Corner[]) => void;
   trackPlayersForRally: (rallyId: string, videoId: string, fallbackFps?: number) => Promise<void>;
-  loadPlayerTrack: (rallyId: string, fallbackFps?: number) => Promise<boolean>;
+  loadPlayerTrack: (rallyId: string, fallbackFps?: number, forceRefresh?: boolean) => Promise<boolean>;
+  swapTracks: (rallyId: string, trackA: number, trackB: number, fromFrame: number, fallbackFps?: number) => Promise<void>;
 }
 
 /**
@@ -247,10 +248,10 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
        * Load existing player tracking data for a rally.
        * Returns true if data was found and loaded.
        */
-      loadPlayerTrack: async (rallyId: string, fallbackFps: number = 30): Promise<boolean> => {
+      loadPlayerTrack: async (rallyId: string, fallbackFps: number = 30, forceRefresh: boolean = false): Promise<boolean> => {
         // Skip if already loaded or currently loading
         const state = get();
-        if (state.playerTracks[rallyId]?.status === 'COMPLETED') {
+        if (!forceRefresh && state.playerTracks[rallyId]?.status === 'COMPLETED') {
           return true;
         }
         if (state.isLoadingTrack[rallyId]) {
@@ -318,6 +319,17 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
               [rallyId]: error instanceof Error ? error.message : 'Tracking failed',
             },
           }));
+        }
+      },
+
+      swapTracks: async (rallyId: string, trackA: number, trackB: number, fromFrame: number, fallbackFps: number = 30) => {
+        try {
+          await swapPlayerTracks(rallyId, trackA, trackB, fromFrame);
+          // Re-fetch from server (old data stays visible until new data arrives)
+          await get().loadPlayerTrack(rallyId, fallbackFps, true);
+        } catch (error) {
+          console.error('[PlayerTrackingStore] Failed to swap tracks:', error);
+          throw error;
         }
       },
     }),

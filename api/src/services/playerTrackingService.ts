@@ -432,6 +432,69 @@ export async function getPlayerTrack(
   };
 }
 
+/**
+ * Swap two player tracks from a given frame onward.
+ * For all positions with frameNumber >= fromFrame, swaps trackId A ↔ B.
+ */
+export async function swapPlayerTracks(
+  rallyId: string,
+  userId: string,
+  trackA: number,
+  trackB: number,
+  fromFrame: number,
+): Promise<{ swappedCount: number }> {
+  if (trackA === trackB) {
+    throw new ValidationError('trackA and trackB must be different');
+  }
+
+  const rally = await prisma.rally.findUnique({
+    where: { id: rallyId },
+    include: {
+      video: true,
+      playerTrack: true,
+    },
+  });
+
+  if (!rally) {
+    throw new NotFoundError('Rally', rallyId);
+  }
+
+  if (rally.video.userId !== userId) {
+    throw new ForbiddenError('You do not have permission to modify player tracking for this rally');
+  }
+
+  if (!rally.playerTrack || rally.playerTrack.status !== 'COMPLETED') {
+    throw new ValidationError('No completed player tracking data found for this rally');
+  }
+
+  const positions = rally.playerTrack.positionsJson as PlayerPosition[] | null;
+  if (!positions || positions.length === 0) {
+    throw new ValidationError('No player positions found in tracking data');
+  }
+
+  let swappedCount = 0;
+  for (const pos of positions) {
+    if (pos.frameNumber >= fromFrame) {
+      if (pos.trackId === trackA) {
+        pos.trackId = trackB;
+        swappedCount++;
+      } else if (pos.trackId === trackB) {
+        pos.trackId = trackA;
+        swappedCount++;
+      }
+    }
+  }
+
+  await prisma.playerTrack.update({
+    where: { rallyId },
+    data: { positionsJson: positions as unknown as object[] },
+  });
+
+  console.log(`[PLAYER_TRACK] Swapped tracks ${trackA} ↔ ${trackB} from frame ${fromFrame}: ${swappedCount} positions updated`);
+
+  return { swappedCount };
+}
+
 // Calibration corner from frontend
 interface CalibrationCorner {
   x: number;

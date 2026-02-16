@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Box, Button, CircularProgress, Tooltip, Typography, Chip, Dialog, DialogTitle, DialogContent, DialogActions, TextField } from '@mui/material';
+import { Box, Button, CircularProgress, Tooltip, Typography, Chip, Dialog, DialogTitle, DialogContent, DialogActions, TextField, FormControl, InputLabel, Select, MenuItem, FormControlLabel, Checkbox } from '@mui/material';
 import CropFreeIcon from '@mui/icons-material/CropFree';
 import PersonSearchIcon from '@mui/icons-material/PersonSearch';
 import VisibilityIcon from '@mui/icons-material/Visibility';
@@ -10,8 +10,10 @@ import SportsVolleyballIcon from '@mui/icons-material/SportsVolleyball';
 import EditIcon from '@mui/icons-material/Edit';
 import SaveIcon from '@mui/icons-material/Save';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { useEditorStore } from '@/stores/editorStore';
+import { usePlayerStore } from '@/stores/playerStore';
 import type { ActionsData } from '@/services/api';
 import { getLabelStudioStatus, exportToLabelStudio, importFromLabelStudio, API_BASE_URL } from '@/services/api';
 
@@ -37,6 +39,11 @@ export function PlayerTrackingToolbar() {
   const [labelStudioTaskId, setLabelStudioTaskId] = useState<number | null>(null);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [importTaskId, setImportTaskId] = useState('');
+  const [showSwapDialog, setShowSwapDialog] = useState(false);
+  const [swapTrackA, setSwapTrackA] = useState<number | ''>('');
+  const [swapTrackB, setSwapTrackB] = useState<number | ''>('');
+  const [swapFromCurrent, setSwapFromCurrent] = useState(true);
+  const [isSwapping, setIsSwapping] = useState(false);
 
   const activeMatchId = useEditorStore((state) => state.activeMatchId);
   const selectedRallyId = useEditorStore((state) => state.selectedRallyId);
@@ -56,7 +63,10 @@ export function PlayerTrackingToolbar() {
     togglePlayerOverlay,
     showBallOverlay,
     toggleBallOverlay,
+    swapTracks,
   } = usePlayerTrackingStore();
+
+  const currentTime = usePlayerStore((state) => state.currentTime);
 
   // Get backend rally ID from selected rally
   const selectedRally = rallies.find((r) => r.id === selectedRallyId);
@@ -197,6 +207,36 @@ export function PlayerTrackingToolbar() {
     }
   };
 
+  // Available track IDs for swap dialog
+  const availableTrackIds = trackData?.tracks?.map(t => t.trackId) ?? [];
+
+  const handleOpenSwapDialog = () => {
+    setSwapTrackA('');
+    setSwapTrackB('');
+    setSwapFromCurrent(true);
+    setShowSwapDialog(true);
+  };
+
+  const handleSwapSubmit = async () => {
+    if (!backendRallyId || swapTrackA === '' || swapTrackB === '' || swapTrackA === swapTrackB) return;
+
+    const rallyStart = selectedRally?.start_time ?? 0;
+    const fromFrame = swapFromCurrent
+      ? Math.max(0, Math.round((currentTime - rallyStart) * fps))
+      : 0;
+
+    setIsSwapping(true);
+    try {
+      await swapTracks(backendRallyId, swapTrackA, swapTrackB, fromFrame, fps);
+      setShowSwapDialog(false);
+    } catch (error) {
+      console.error('Failed to swap tracks:', error);
+      alert(error instanceof Error ? error.message : 'Failed to swap tracks');
+    } finally {
+      setIsSwapping(false);
+    }
+  };
+
   const hasBallPositions = !!trackData?.ballPositions?.length;
 
   return (
@@ -283,6 +323,21 @@ export function PlayerTrackingToolbar() {
         </Tooltip>
       )}
 
+      {/* Swap Tracks button */}
+      {hasTrackingData && !isCalibrating && availableTrackIds.length >= 2 && (
+        <Tooltip title="Swap two player track IDs from current time">
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<SwapHorizIcon />}
+            onClick={handleOpenSwapDialog}
+            disabled={isSwapping}
+          >
+            Swap Tracks
+          </Button>
+        </Tooltip>
+      )}
+
       {/* Label Studio Integration - Ground Truth Labeling */}
       {hasTrackingData && !isCalibrating && (
         <>
@@ -352,6 +407,71 @@ export function PlayerTrackingToolbar() {
           </Typography>
         </Box>
       )}
+
+      {/* Swap Tracks Dialog */}
+      <Dialog open={showSwapDialog} onClose={() => !isSwapping && setShowSwapDialog(false)}>
+        <DialogTitle>Swap Player Tracks</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            Swap track IDs between two players to fix ID switches.
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
+            <FormControl fullWidth size="small">
+              <InputLabel>Track A</InputLabel>
+              <Select
+                value={swapTrackA}
+                label="Track A"
+                onChange={(e) => setSwapTrackA(e.target.value as number)}
+              >
+                {availableTrackIds.map((id) => (
+                  <MenuItem key={id} value={id} disabled={id === swapTrackB}>
+                    Player #{id}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl fullWidth size="small">
+              <InputLabel>Track B</InputLabel>
+              <Select
+                value={swapTrackB}
+                label="Track B"
+                onChange={(e) => setSwapTrackB(e.target.value as number)}
+              >
+                {availableTrackIds.map((id) => (
+                  <MenuItem key={id} value={id} disabled={id === swapTrackA}>
+                    Player #{id}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Box>
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={swapFromCurrent}
+                onChange={(e) => setSwapFromCurrent(e.target.checked)}
+              />
+            }
+            label={`From current time (frame ${Math.max(0, Math.round((currentTime - (selectedRally?.start_time ?? 0)) * fps))})`}
+          />
+          {!swapFromCurrent && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 4 }}>
+              Swaps for entire rally
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowSwapDialog(false)} disabled={isSwapping}>Cancel</Button>
+          <Button
+            onClick={handleSwapSubmit}
+            variant="contained"
+            disabled={swapTrackA === '' || swapTrackB === '' || swapTrackA === swapTrackB || isSwapping}
+            startIcon={isSwapping ? <CircularProgress size={16} /> : undefined}
+          >
+            {isSwapping ? 'Swapping...' : 'Swap'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Import Task ID Dialog */}
       <Dialog open={showImportDialog} onClose={() => setShowImportDialog(false)}>

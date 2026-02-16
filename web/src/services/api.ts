@@ -1896,6 +1896,29 @@ export async function getPlayerTrack(rallyId: string): Promise<GetPlayerTrackRes
   return response.json();
 }
 
+/**
+ * Swap two player tracks from a given frame onward.
+ */
+export async function swapPlayerTracks(
+  rallyId: string,
+  trackA: number,
+  trackB: number,
+  fromFrame: number,
+): Promise<{ swappedCount: number }> {
+  const response = await fetch(`${API_BASE_URL}/v1/rallies/${rallyId}/player-track/swap`, {
+    method: 'POST',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify({ trackA, trackB, fromFrame }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to swap player tracks: ${response.status}`);
+  }
+
+  return response.json();
+}
+
 // ============================================================================
 // Label Studio Integration (Ground Truth Labeling)
 // ============================================================================
