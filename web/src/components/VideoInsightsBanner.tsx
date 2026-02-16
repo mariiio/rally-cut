@@ -31,14 +31,15 @@ export function VideoInsightsBanner({ currentMatch }: VideoInsightsBannerProps) 
     if (!chars) return [];
 
     const msgs: string[] = [];
-    if (chars.brightness?.category === 'dark') {
-      msgs.push('Low lighting detected — tracking accuracy may be reduced');
-    }
     if (chars.cameraDistance?.category === 'far') {
-      msgs.push('Camera is far from the court — player tracking may miss distant players');
+      msgs.push('Far camera angle — player tracking may be less accurate for distant players');
+    }
+    if (chars.cameraDistance?.category === 'close' || chars.cameraDistance?.category === 'medium') {
+      // Medium/close cameras have worse ball tracking (38.7% vs 92.1% for far)
+      msgs.push('Close camera angle — ball tracking may be less accurate when the ball leaves the frame');
     }
     if (chars.sceneComplexity?.category === 'complex') {
-      msgs.push('Multiple non-players detected in scene — some spectators may appear in results');
+      msgs.push('Crowded scene detected — some spectators may appear in tracking results');
     }
     return msgs;
   }, [currentMatch?.characteristicsJson]);

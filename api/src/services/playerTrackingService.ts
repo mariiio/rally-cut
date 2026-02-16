@@ -634,8 +634,16 @@ export async function trackPlayersForRally(
         cameraDistance = { avgBboxHeight: Math.round(avgBboxHeight * 1000) / 1000, category };
       }
 
-      // Scene complexity from average people per frame
-      const avgPeople = trackerResult.avgPlayerCount ?? 0;
+      // Scene complexity from raw (unfiltered) detections per frame
+      const rawPositions = trackerResult.rawPositions ?? trackerResult.positions;
+      const rawFrameCounts: Record<number, number> = {};
+      for (const p of rawPositions as Array<{ frameNumber: number }>) {
+        rawFrameCounts[p.frameNumber] = (rawFrameCounts[p.frameNumber] ?? 0) + 1;
+      }
+      const rawFrameValues = Object.values(rawFrameCounts);
+      const avgPeople = rawFrameValues.length > 0
+        ? rawFrameValues.reduce((a, b) => a + b, 0) / rawFrameValues.length
+        : 0;
       const sceneComplexity = {
         avgPeople: Math.round(avgPeople * 10) / 10,
         category: (avgPeople > 6 ? 'complex' : 'simple') as 'simple' | 'complex',
