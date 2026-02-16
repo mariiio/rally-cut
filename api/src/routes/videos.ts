@@ -45,9 +45,10 @@ import {
 } from "../services/videoService.js";
 import { queueVideoProcessing } from "../services/processingService.js";
 
+// Calibration corners can be outside 0-1 if dragged outside video bounds
 const calibrationCornerSchema = z.object({
-  x: z.number().min(0).max(1),
-  y: z.number().min(0).max(1),
+  x: z.number(),
+  y: z.number(),
 });
 
 const router = Router();
