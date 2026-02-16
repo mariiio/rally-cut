@@ -106,6 +106,10 @@ uv run rallycut evaluate --heuristics                 # Force heuristics evaluat
 uv run rallycut evaluate --model beach --iou 0.5      # Evaluate beach model
 uv run rallycut evaluate tune-decoder --iou 0.4       # Grid search decoder parameters
 
+# Stratified evaluation (by video characteristics)
+uv run python scripts/eval_stratified.py             # Group metrics by brightness/camera/complexity
+uv run python scripts/eval_stratified.py --ball-only # Ball metrics only
+
 # Cross-rally player matching
 uv run rallycut match-players <video-id>                 # Assign consistent player IDs 1-4
 uv run rallycut match-players <video-id> -o result.json  # Export assignments to JSON

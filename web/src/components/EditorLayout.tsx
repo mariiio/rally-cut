@@ -22,6 +22,7 @@ import { MobileEditorLayout } from './mobile';
 import { AccessRequestForm } from './AccessRequestForm';
 import { TutorialProvider, TutorialContext } from './tutorial';
 import { PlayerTrackingToolbar } from './PlayerTrackingToolbar';
+import { VideoInsightsBanner } from './VideoInsightsBanner';
 import { useEditorStore } from '@/stores/editorStore';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { designTokens } from '@/app/theme';
@@ -398,6 +399,7 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
             <UploadProgress />
             <ExportProgress />
             <OriginalQualityBanner currentMatch={currentMatch} />
+            <VideoInsightsBanner currentMatch={currentMatch} />
             {/* Player tracking toolbar */}
             <PlayerTrackingToolbar />
             <VideoPlayer />

@@ -35,6 +35,8 @@ class TrackingEvaluationRally:
     video_height: int = 1080
     # Raw positions before filtering (for parameter tuning)
     raw_positions: list[PlayerPosition] | None = None
+    # Video characteristics (brightness, camera distance, scene complexity)
+    video_characteristics: dict[str, Any] | None = None
 
 
 def _parse_ground_truth(
@@ -181,7 +183,8 @@ def load_labeled_rallies(
             pt.model_version,
             pt.court_split_y,
             pt.primary_track_ids,
-            pt.ball_positions_json
+            pt.ball_positions_json,
+            v.characteristics_json
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
         JOIN videos v ON v.id = r.video_id
@@ -215,6 +218,7 @@ def load_labeled_rallies(
                     court_split_y,
                     primary_track_ids,
                     ball_positions_json,
+                    characteristics_json,
                 ) = row
 
                 # Calculate frame offset to convert GT absolute frames to rally-relative
@@ -278,6 +282,9 @@ def load_labeled_rallies(
                         video_width=cast(int, video_width) if video_width else 1920,
                         video_height=cast(int, video_height) if video_height else 1080,
                         raw_positions=raw_positions,
+                        video_characteristics=cast(
+                            dict[str, Any] | None, characteristics_json
+                        ),
                     )
                 )
 
