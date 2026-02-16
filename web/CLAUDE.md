@@ -84,7 +84,7 @@ Features:
 - **Primary track filtering**: Only shows the 4 identified players (excludes referees/spectators)
 - **Position interpolation**: Fills gaps up to 1.5s and shows last position for 1s after detection ends
 - **Track swapping**: "Swap Tracks" dialog fixes ID switches by swapping two track IDs from current frame onward
-- **Label Studio integration**: "Label" button exports to Label Studio, "Save GT" imports corrections
+- **Label Studio integration**: "Label" exports fresh predictions to Label Studio, "Edit" resumes existing annotations, "Save GT" imports corrections
 
 ### Ground Truth Labeling (Label Studio)
 
