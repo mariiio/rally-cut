@@ -132,8 +132,8 @@ async function main() {
         },
         select: {
           positionsJson: true,
+          rawPositionsJson: true,
           primaryTrackIds: true,
-          avgPlayerCount: true,
         },
         orderBy: { completedAt: "desc" },
       });
@@ -157,13 +157,21 @@ async function main() {
           console.log(`  [CAMERA] ${video.name}: ${(avgBboxHeight * 100).toFixed(1)}% (${category})`);
         }
 
-        // Scene complexity
-        const avgPeople = trackData.avgPlayerCount ?? 0;
+        // Scene complexity from raw (unfiltered) detections
+        const rawPositions = (trackData.rawPositionsJson ?? trackData.positionsJson) as Array<{ frameNumber: number }>;
+        const rawFrameCounts: Record<number, number> = {};
+        for (const p of rawPositions) {
+          rawFrameCounts[p.frameNumber] = (rawFrameCounts[p.frameNumber] ?? 0) + 1;
+        }
+        const rawFrameValues = Object.values(rawFrameCounts);
+        const avgPeople = rawFrameValues.length > 0
+          ? rawFrameValues.reduce((a, b) => a + b, 0) / rawFrameValues.length
+          : 0;
         updates.sceneComplexity = {
           avgPeople: Math.round(avgPeople * 10) / 10,
           category: avgPeople > 6 ? "complex" : "simple",
         };
-        console.log(`  [SCENE] ${video.name}: ${avgPeople.toFixed(1)} people (${avgPeople > 6 ? "complex" : "simple"})`);
+        console.log(`  [SCENE] ${video.name}: ${avgPeople.toFixed(1)} raw people/frame (${avgPeople > 6 ? "complex" : "simple"})`);
       } else {
         console.log(`  [TRACKING SKIP] ${video.name}: no tracking data`);
       }
