@@ -93,7 +93,7 @@ class Contact:
             "velocity": self.velocity,
             "directionChangeDeg": self.direction_change_deg,
             "playerTrackId": self.player_track_id,
-            "playerDistance": self.player_distance,
+            "playerDistance": self.player_distance if math.isfinite(self.player_distance) else None,
             "courtSide": self.court_side,
             "isAtNet": self.is_at_net,
             "isValidated": self.is_validated,
