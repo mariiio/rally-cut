@@ -1,13 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Box, Button, CircularProgress, Tooltip, Typography, Chip, Dialog, DialogTitle, DialogContent, DialogActions, TextField, FormControl, InputLabel, Select, MenuItem, FormControlLabel, Checkbox } from '@mui/material';
+import { Box, Button, IconButton, CircularProgress, Tooltip, Typography, Chip, Divider, Dialog, DialogTitle, DialogContent, DialogActions, TextField, FormControl, InputLabel, Select, MenuItem, FormControlLabel, Checkbox } from '@mui/material';
 import CropFreeIcon from '@mui/icons-material/CropFree';
 import PersonSearchIcon from '@mui/icons-material/PersonSearch';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import SportsVolleyballIcon from '@mui/icons-material/SportsVolleyball';
 import EditIcon from '@mui/icons-material/Edit';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import SaveIcon from '@mui/icons-material/Save';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
@@ -121,24 +122,21 @@ export function PlayerTrackingToolbar() {
     await trackPlayersForRally(backendRallyId, activeMatchId, fps);
   };
 
-  // Open tracking data in Label Studio for correction
-  const handleOpenInLabelStudio = async () => {
+  // Open Label Studio — fresh export (forceRegenerate) or resume existing task
+  const handleOpenLabelStudio = async (forceRegenerate: boolean) => {
     if (!backendRallyId || !activeMatch?.videoUrl) return;
 
     setLabelStudioLoading(true);
     try {
-      // Convert relative URL to absolute URL for Label Studio (must use API server, not web server)
       const videoUrl = new URL(activeMatch.videoUrl, API_BASE_URL).href;
-      // Reuse existing task if available (task ID stored in groundTruthTaskId)
-      // Frame timing is now calculated at fixed 30fps for correct Label Studio sync
-      const result = await exportToLabelStudio(backendRallyId, videoUrl);
+      const opts = forceRegenerate ? { forceRegenerate: true as const } : undefined;
+      const result = await exportToLabelStudio(backendRallyId, videoUrl, opts);
       if (result.success && result.taskUrl) {
         setLabelStudioTaskId(result.taskId ?? null);
-        // Open Label Studio in new tab
         window.open(result.taskUrl, '_blank');
       } else {
-        console.error('Failed to export to Label Studio:', result.error);
-        alert(result.error || 'Failed to export to Label Studio');
+        console.error('Failed to open Label Studio:', result.error);
+        alert(result.error || 'Failed to open Label Studio');
       }
     } catch (error) {
       console.error('Failed to open Label Studio:', error);
@@ -239,143 +237,145 @@ export function PlayerTrackingToolbar() {
 
   const hasBallPositions = !!trackData?.ballPositions?.length;
 
-  return (
-    <Box
-      sx={{
-        display: 'flex',
-        flexDirection: 'column',
-        py: 1,
-        px: 0.5,
-      }}
-    >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-      {/* Calibration button */}
-      {!isCalibrating && (
-        <Button
-          size="small"
-          variant="outlined"
-          startIcon={<CropFreeIcon />}
-          onClick={handleStartCalibration}
-        >
-          {hasCalibration ? 'Re-calibrate Court' : 'Calibrate Court'}
-        </Button>
-      )}
+  const showTrackingTools = hasTrackingData && !isCalibrating;
 
-      {/* Track Players button */}
-      {!isCalibrating && selectedRallyId && backendRallyId && (
-        <Tooltip title={!selectedRallyId ? 'Select a rally first' : ''}>
-          <span>
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', py: 0.75, px: 1 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+        {/* ── Setup ── */}
+        {!isCalibrating && (
+          <>
             <Button
               size="small"
               variant="outlined"
-              startIcon={
-                isTrackingRally || isLoadingTrackData ? (
-                  <CircularProgress size={16} />
-                ) : (
-                  <PersonSearchIcon />
-                )
-              }
-              onClick={handleTrackPlayers}
-              disabled={isTrackingRally || isLoadingTrackData || !selectedRallyId}
+              startIcon={<CropFreeIcon />}
+              onClick={handleStartCalibration}
             >
-              {isTrackingRally
-                ? 'Tracking...'
-                : isLoadingTrackData
-                  ? 'Loading...'
-                  : hasTrackingData
-                    ? 'Re-track Players'
-                    : 'Track Players'}
+              {hasCalibration ? 'Re-calibrate' : 'Calibrate'}
             </Button>
-          </span>
-        </Tooltip>
-      )}
 
-      {/* Toggle player overlay visibility */}
-      {hasTrackingData && !isCalibrating && (
-        <Tooltip title={showPlayerOverlay ? 'Hide player overlay' : 'Show player overlay'}>
-          <Button
-            size="small"
-            variant={showPlayerOverlay ? 'contained' : 'outlined'}
-            onClick={togglePlayerOverlay}
-            sx={{ minWidth: 'auto', px: 1 }}
-          >
-            {showPlayerOverlay ? <VisibilityIcon /> : <VisibilityOffIcon />}
-          </Button>
-        </Tooltip>
-      )}
-
-      {/* Toggle ball overlay visibility - only show if ball positions available */}
-      {hasTrackingData && hasBallPositions && !isCalibrating && (
-        <Tooltip title={showBallOverlay ? 'Hide ball track' : 'Show ball track'}>
-          <Button
-            size="small"
-            variant={showBallOverlay ? 'contained' : 'outlined'}
-            onClick={toggleBallOverlay}
-            sx={{
-              minWidth: 'auto',
-              px: 1,
-              bgcolor: showBallOverlay ? '#FFC107' : undefined,
-              '&:hover': showBallOverlay ? { bgcolor: '#FFB300' } : undefined,
-            }}
-          >
-            <SportsVolleyballIcon fontSize="small" />
-          </Button>
-        </Tooltip>
-      )}
-
-      {/* Swap Tracks button */}
-      {hasTrackingData && !isCalibrating && availableTrackIds.length >= 2 && (
-        <Tooltip title="Swap two player track IDs from current time">
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<SwapHorizIcon />}
-            onClick={handleOpenSwapDialog}
-            disabled={isSwapping}
-          >
-            Swap Tracks
-          </Button>
-        </Tooltip>
-      )}
-
-      {/* Label Studio Integration - Ground Truth Labeling */}
-      {hasTrackingData && !isCalibrating && (
-        <>
-          <Tooltip title="Open in Label Studio to correct tracking">
-            <span>
+            {selectedRallyId && backendRallyId && (
               <Button
                 size="small"
-                variant="outlined"
-                startIcon={labelStudioLoading ? <CircularProgress size={14} /> : <EditIcon />}
-                onClick={handleOpenInLabelStudio}
-                disabled={labelStudioLoading}
-                sx={{ ml: 1 }}
+                variant={hasTrackingData ? 'outlined' : 'contained'}
+                startIcon={
+                  isTrackingRally || isLoadingTrackData
+                    ? <CircularProgress size={16} />
+                    : <PersonSearchIcon />
+                }
+                onClick={handleTrackPlayers}
+                disabled={isTrackingRally || isLoadingTrackData}
               >
-                Label
+                {isTrackingRally
+                  ? 'Tracking...'
+                  : isLoadingTrackData
+                    ? 'Loading...'
+                    : hasTrackingData
+                      ? 'Re-track'
+                      : 'Track Players'}
               </Button>
-            </span>
-          </Tooltip>
-          <Tooltip title={hasGroundTruth ? 'Ground truth saved' : 'Save corrected labels as ground truth'}>
-            <span>
-              <Button
+            )}
+          </>
+        )}
+
+        {/* ── Overlays ── */}
+        {showTrackingTools && (
+          <>
+            <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
+            <Tooltip title={showPlayerOverlay ? 'Hide players' : 'Show players'}>
+              <IconButton
                 size="small"
-                variant={hasGroundTruth ? 'contained' : 'outlined'}
-                startIcon={hasGroundTruth ? <CheckCircleIcon /> : <SaveIcon />}
-                onClick={handleSaveGroundTruth}
-                disabled={labelStudioLoading}
-                color={hasGroundTruth ? 'success' : 'primary'}
+                onClick={togglePlayerOverlay}
+                color={showPlayerOverlay ? 'primary' : 'default'}
               >
-                {hasGroundTruth ? 'GT Saved' : 'Save GT'}
-              </Button>
-            </span>
-          </Tooltip>
-        </>
-      )}
+                {showPlayerOverlay ? <VisibilityIcon fontSize="small" /> : <VisibilityOffIcon fontSize="small" />}
+              </IconButton>
+            </Tooltip>
+            {hasBallPositions && (
+              <Tooltip title={showBallOverlay ? 'Hide ball track' : 'Show ball track'}>
+                <IconButton
+                  size="small"
+                  onClick={toggleBallOverlay}
+                  sx={{
+                    color: showBallOverlay ? '#FFC107' : 'action.active',
+                    '&:hover': { color: showBallOverlay ? '#FFB300' : undefined },
+                  }}
+                >
+                  <SportsVolleyballIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+          </>
+        )}
+
+        {/* ── Tools ── */}
+        {showTrackingTools && availableTrackIds.length >= 2 && (
+          <>
+            <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<SwapHorizIcon />}
+              onClick={handleOpenSwapDialog}
+              disabled={isSwapping}
+            >
+              Swap Tracks
+            </Button>
+          </>
+        )}
+
+        {/* ── Label Studio ── */}
+        {showTrackingTools && (
+          <>
+            <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
+            <Tooltip title="Export tracking to Label Studio">
+              <span>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={labelStudioLoading ? <CircularProgress size={14} /> : <EditIcon />}
+                  onClick={() => handleOpenLabelStudio(true)}
+                  disabled={labelStudioLoading}
+                >
+                  Label
+                </Button>
+              </span>
+            </Tooltip>
+            {labelStudioTaskId && (
+              <Tooltip title="Resume existing annotations">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={() => handleOpenLabelStudio(false)}
+                    disabled={labelStudioLoading}
+                    color="primary"
+                  >
+                    <OpenInNewIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
+            <Tooltip title={hasGroundTruth ? 'Ground truth saved' : 'Save labels as ground truth'}>
+              <span>
+                <Button
+                  size="small"
+                  variant={hasGroundTruth ? 'contained' : 'outlined'}
+                  startIcon={hasGroundTruth ? <CheckCircleIcon /> : <SaveIcon />}
+                  onClick={handleSaveGroundTruth}
+                  disabled={labelStudioLoading}
+                  color={hasGroundTruth ? 'success' : 'primary'}
+                >
+                  {hasGroundTruth ? 'GT Saved' : 'Save GT'}
+                </Button>
+              </span>
+            </Tooltip>
+          </>
+        )}
       </Box>
 
-      {/* Action Sequence - from contact detection + classification */}
-      {hasTrackingData && trackData?.actions?.actions?.length && !isCalibrating && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5, px: 0.5, flexWrap: 'wrap' }}>
+      {/* Action Sequence */}
+      {showTrackingTools && trackData?.actions?.actions?.length && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.75, flexWrap: 'wrap' }}>
           <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 'bold', mr: 0.5 }}>
             Actions:
           </Typography>

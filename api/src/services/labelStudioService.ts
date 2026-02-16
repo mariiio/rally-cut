@@ -388,6 +388,29 @@ async function createTask(
 }
 
 /**
+ * Delete a task from Label Studio.
+ */
+async function deleteTask(
+  config: LabelStudioConfig,
+  taskId: number
+): Promise<void> {
+  const headers = {
+    Authorization: `Token ${config.apiKey}`,
+  };
+
+  const resp = await fetch(`${config.url}/api/tasks/${taskId}`, {
+    method: "DELETE",
+    headers,
+  });
+
+  if (resp.ok || resp.status === 404) {
+    console.log(`[LabelStudio] Deleted task ${taskId}`);
+  } else {
+    throw new Error(`Failed to delete Label Studio task ${taskId}: ${resp.status}`);
+  }
+}
+
+/**
  * Get annotations for a task.
  */
 async function getTaskAnnotations(
@@ -561,12 +584,14 @@ export async function exportToLabelStudio(
       };
     }
 
-    if (forceRegenerate && playerTrack.groundTruthTaskId) {
-      console.log(`[LabelStudio] Force regenerating task (old task ID: ${playerTrack.groundTruthTaskId})`);
-    }
-
     // Get or create project
     const projectId = lsConfig.projectId || (await getOrCreateProject(lsConfig));
+
+    // Delete old task when force-regenerating so createTask builds a fresh one
+    if (forceRegenerate && playerTrack.groundTruthTaskId) {
+      console.log(`[LabelStudio] Force regenerating: deleting old task ${playerTrack.groundTruthTaskId}`);
+      await deleteTask(lsConfig, playerTrack.groundTruthTaskId);
+    }
 
     // Build predictions with rally start time
     const fps = playerTrack.fps || 30;
