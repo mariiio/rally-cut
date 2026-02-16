@@ -225,6 +225,7 @@ model Video {
   proxyLastAccessedAt   DateTime?             @map("proxy_last_accessed_at")
   qualityDowngradedAt   DateTime?             @map("quality_downgraded_at")
   courtCalibrationJson  Json?                 @map("court_calibration_json")
+  characteristicsJson   Json?                 @map("characteristics_json")
   rallies               Rally[]
   confirmation          RallyConfirmation?
   detectionJobs         RallyDetectionJob[]

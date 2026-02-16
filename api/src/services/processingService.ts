@@ -90,6 +90,16 @@ export async function generatePosterImmediate(
       console.log(`[POSTER] Failed to extract video metadata for ${videoId}:`, err);
     }
 
+    // Compute brightness for video characteristics
+    let characteristicsJson: { brightness: { mean: number; category: string }; version: number } | undefined;
+    try {
+      const brightness = await computeBrightness(inputPath);
+      characteristicsJson = { brightness, version: 1 };
+      console.log(`[POSTER] Video ${videoId} brightness: ${brightness.mean} (${brightness.category})`);
+    } catch (err) {
+      console.log(`[POSTER] Failed to compute brightness for ${videoId}:`, err);
+    }
+
     // Generate S3 key for poster
     const keyParts = s3Key.split("/");
     const filename = keyParts.pop()!;
@@ -134,6 +144,7 @@ export async function generatePosterImmediate(
         ...(fps !== null && { fps }),
         ...(width !== null && { width }),
         ...(height !== null && { height }),
+        ...(characteristicsJson && { characteristicsJson }),
       },
     });
 
@@ -716,6 +727,66 @@ async function checkNeedsOptimization(videoPath: string): Promise<boolean> {
     console.log(`[PROCESSING] Error checking video, will optimize: ${error}`);
     return true;
   }
+}
+
+/**
+ * Run FFmpeg and capture raw stdout bytes.
+ */
+function runFFmpegToBuffer(args: string[]): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
+
+    const chunks: Buffer[] = [];
+    proc.stdout?.on("data", (data: Buffer) => {
+      chunks.push(data);
+    });
+
+    let stderr = "";
+    proc.stderr?.on("data", (data: Buffer) => {
+      stderr += data.toString();
+    });
+
+    proc.on("error", (err) => {
+      reject(new Error(`FFmpeg failed to start: ${err.message}`));
+    });
+
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve(Buffer.concat(chunks));
+      } else {
+        reject(new Error(`FFmpeg exited with code ${code}: ${stderr.slice(-500)}`));
+      }
+    });
+  });
+}
+
+/**
+ * Compute average brightness from sampled grayscale frames.
+ * Returns mean pixel value (0-255) and a category.
+ */
+async function computeBrightness(
+  inputPath: string
+): Promise<{ mean: number; category: "dark" | "normal" | "bright" }> {
+  // Sample up to 5 grayscale frames (every 100th frame) at low resolution
+  const buf = await runFFmpegToBuffer([
+    "-i", inputPath,
+    "-vf", "select='not(mod(n\\,100))',scale=320:240",
+    "-frames:v", "5",
+    "-f", "rawvideo",
+    "-pix_fmt", "gray",
+    "pipe:1",
+  ]);
+
+  // Compute mean pixel value
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) {
+    sum += buf[i];
+  }
+  const mean = buf.length > 0 ? sum / buf.length : 128;
+  const rounded = Math.round(mean * 10) / 10;
+
+  const category = mean < 90 ? "dark" : mean > 180 ? "bright" : "normal";
+  return { mean: rounded, category };
 }
 
 /**

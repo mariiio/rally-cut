@@ -94,8 +94,9 @@ Cleanup job: `cleanupExpiredContent()` handles both phases per tier.
 
 ### Video Processing (after upload)
 1. **Poster**: Synchronous 1280px JPEG extraction (~2s)
-2. **Optimization**: Async H.264 + faststart if needed (high bitrate or moov not at start)
-3. **Proxy**: 720p version for faster editing
+2. **Brightness**: Computed during poster generation (grayscale frame sampling), stored in `Video.characteristicsJson`
+3. **Optimization**: Async H.264 + faststart if needed (high bitrate or moov not at start)
+4. **Proxy**: 720p version for faster editing
 
 Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
 
@@ -151,6 +152,7 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
   - Body: `{ trackA: number, trackB: number, fromFrame: number }`
   - Fixes YOLO+BoT-SORT ID switches when players overlap/cross paths
   - Only modifies `positionsJson` (filtered positions), not `rawPositionsJson`
+- After tracking completes, `Video.characteristicsJson` is updated with `cameraDistance` (median primary track bbox height) and `sceneComplexity` (avg people per frame), merged with existing brightness data
 
 ### Label Studio Integration (Ground Truth)
 - `GET /v1/rallies/:id/label-studio` → status (hasTrackingData, hasGroundTruth, taskId)
@@ -177,6 +179,7 @@ Rally → RallyCameraEdit → CameraKeyframe[]  # Instagram-style zoom/pan
 
 Video.status: PENDING → UPLOADED → DETECTING → DETECTED → ERROR
 Video.processingStatus: PENDING → PROCESSING → COMPLETED/FAILED (separate from status)
+Video.characteristicsJson: { brightness, cameraDistance, sceneComplexity, version }
 ```
 
 Key tables: User, Session, Video, Rally, Highlight, ExportJob, RallyDetectionJob, SessionShare, VideoShare

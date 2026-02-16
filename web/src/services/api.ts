@@ -108,6 +108,7 @@ interface ApiVideo {
   cameraSettings?: ApiVideoCameraSettings | null;
   createdAt: string;
   qualityDowngradedAt?: string | null;
+  characteristicsJson?: VideoCharacteristics | null;
 }
 
 interface ApiCameraKeyframe {
@@ -160,7 +161,7 @@ interface ApiHighlightRally {
 }
 
 // Frontend types (from @/types/rally)
-import type { Session, Match, Rally, Highlight, VideoMetadata } from '@/types/rally';
+import type { Session, Match, Rally, Highlight, VideoMetadata, VideoCharacteristics } from '@/types/rally';
 
 // Extended types with backend IDs for sync (internal use only)
 interface RallyWithBackendId extends Rally {
@@ -235,6 +236,7 @@ function apiVideoToMatch(apiVideo: ApiVideo, cloudfrontDomain?: string): Match {
     createdAt: apiVideo.createdAt,
     qualityDowngradedAt: apiVideo.qualityDowngradedAt,
     status: apiVideo.status,
+    characteristicsJson: apiVideo.characteristicsJson ?? null,
   };
 }
 
@@ -690,10 +692,14 @@ interface ApiVideoEditorResponse {
     status: 'PENDING' | 'UPLOADED' | 'DETECTING' | 'DETECTED' | 'ERROR';
     cameraSettings?: ApiVideoCameraSettings | null;
     courtCalibrationJson?: Array<{ x: number; y: number }> | null;
+    characteristicsJson?: VideoCharacteristics | null;
   };
   allVideosSessionId: string;
   highlights: ApiHighlight[];
 }
+
+// Re-export for convenience
+export type { VideoCharacteristics } from '@/types/rally';
 
 // Result type for fetchVideoForEditor
 export interface FetchVideoEditorResult {
@@ -715,6 +721,7 @@ export interface FetchVideoEditorResult {
   cameraEdits: CameraEditMap;
   globalCameraSettings: GlobalCameraSettingsMap;
   courtCalibration: Array<{ x: number; y: number }> | null;
+  characteristicsJson: VideoCharacteristics | null;
 }
 
 /**
@@ -800,6 +807,7 @@ export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEd
     },
     rallies,
     status: data.video.status,
+    characteristicsJson: data.video.characteristicsJson ?? null,
   };
 
   // Transform highlights to frontend format
@@ -864,6 +872,7 @@ export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEd
     cameraEdits,
     globalCameraSettings,
     courtCalibration: data.video.courtCalibrationJson ?? null,
+    characteristicsJson: data.video.characteristicsJson ?? null,
   };
 }
 

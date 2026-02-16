@@ -615,6 +615,54 @@ export async function trackPlayersForRally(
       },
     });
 
+    // Compute video characteristics from tracking data
+    try {
+      const videoId = rally.video.id;
+
+      // Camera distance from primary track bbox heights (normalized)
+      const primaryIds = new Set(trackerResult.primaryTrackIds ?? []);
+      const heights = (trackerResult.positions as Array<{ trackId: number; height: number }>)
+        .filter(p => primaryIds.has(p.trackId))
+        .map(p => p.height);
+
+      let cameraDistance: { avgBboxHeight: number; category: 'close' | 'medium' | 'far' } | undefined;
+      if (heights.length > 0) {
+        // Use median to resist jumping/crouching noise
+        const sorted = [...heights].sort((a, b) => a - b);
+        const avgBboxHeight = sorted[Math.floor(sorted.length / 2)];
+        const category = avgBboxHeight > 0.35 ? 'close' : avgBboxHeight < 0.20 ? 'far' : 'medium';
+        cameraDistance = { avgBboxHeight: Math.round(avgBboxHeight * 1000) / 1000, category };
+      }
+
+      // Scene complexity from average people per frame
+      const avgPeople = trackerResult.avgPlayerCount ?? 0;
+      const sceneComplexity = {
+        avgPeople: Math.round(avgPeople * 10) / 10,
+        category: (avgPeople > 6 ? 'complex' : 'simple') as 'simple' | 'complex',
+      };
+
+      // Merge with existing characteristicsJson (preserving brightness from Phase 1)
+      const video = await prisma.video.findUnique({
+        where: { id: videoId },
+        select: { characteristicsJson: true },
+      });
+      const existing = (video?.characteristicsJson as Record<string, unknown>) ?? {};
+      await prisma.video.update({
+        where: { id: videoId },
+        data: {
+          characteristicsJson: {
+            ...existing,
+            ...(cameraDistance && { cameraDistance }),
+            sceneComplexity,
+            version: 1,
+          },
+        },
+      });
+      console.log(`[PLAYER_TRACK] Updated video characteristics for ${videoId}`);
+    } catch (err) {
+      console.log(`[PLAYER_TRACK] Failed to update video characteristics:`, err);
+    }
+
     return {
       status: 'completed',
       frameCount: trackerResult.frameCount,

@@ -63,6 +63,15 @@ export interface Match {
   createdAt?: string;   // ISO timestamp when video was uploaded
   qualityDowngradedAt?: string | null; // ISO timestamp when original quality was removed (FREE tier)
   status?: 'PENDING' | 'UPLOADED' | 'DETECTING' | 'DETECTED' | 'ERROR'; // Video detection status
+  characteristicsJson?: VideoCharacteristics | null; // Auto-detected video quality characteristics
+}
+
+/** Auto-detected video characteristics for quality insights and stratified evaluation */
+export interface VideoCharacteristics {
+  brightness?: { mean: number; category: string };
+  cameraDistance?: { avgBboxHeight: number; category: string };
+  sceneComplexity?: { avgPeople: number; category: string };
+  version: number;
 }
 
 /** A session containing multiple matches */
