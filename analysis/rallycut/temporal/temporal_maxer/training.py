@@ -258,62 +258,74 @@ class TemporalMaxerTrainer:
             result.train_losses.append(avg_train_loss)
 
             # Validation
-            model.eval()
-            all_preds: list[int] = []
-            all_labels_flat: list[int] = []
+            if len(val_dataset) > 0:
+                model.eval()
+                all_preds: list[int] = []
+                all_labels_flat: list[int] = []
 
-            with torch.no_grad():
-                for features, labels, mask in val_loader:
-                    features = features.to(device)
-                    mask = mask.to(device)
+                with torch.no_grad():
+                    for features, labels, mask in val_loader:
+                        features = features.to(device)
+                        labels = labels.to(device)
+                        mask = mask.to(device)
 
-                    logits = model(features, mask)
-                    preds = logits.argmax(dim=1)  # (batch, T)
+                        logits = model(features, mask)
+                        preds = logits.argmax(dim=1)  # (batch, T)
 
-                    # Extract valid predictions
-                    mask_bool = mask.squeeze(1).bool()
-                    for b in range(features.shape[0]):
-                        valid_mask = mask_bool[b]
-                        all_preds.extend(preds[b][valid_mask].cpu().tolist())
-                        all_labels_flat.extend(labels[b][valid_mask].tolist())
+                        # Extract valid predictions
+                        mask_bool = mask.squeeze(1).bool()
+                        for b in range(features.shape[0]):
+                            valid_mask = mask_bool[b]
+                            all_preds.extend(preds[b][valid_mask].cpu().tolist())
+                            all_labels_flat.extend(labels[b][valid_mask].tolist())
 
-            # Compute F1
-            from sklearn.metrics import f1_score, precision_score, recall_score
+                # Compute F1
+                from sklearn.metrics import f1_score, precision_score, recall_score
 
-            y_true = np.array(all_labels_flat)
-            y_pred = np.array(all_preds)
+                y_true = np.array(all_labels_flat)
+                y_pred = np.array(all_preds)
 
-            f1 = f1_score(y_true, y_pred, zero_division=0)
-            precision = precision_score(y_true, y_pred, zero_division=0)
-            recall = recall_score(y_true, y_pred, zero_division=0)
-            result.val_f1s.append(f1)
+                f1 = f1_score(y_true, y_pred, zero_division=0)
+                precision = precision_score(y_true, y_pred, zero_division=0)
+                recall = recall_score(y_true, y_pred, zero_division=0)
+                result.val_f1s.append(f1)
 
-            # Check for improvement
-            if f1 > result.best_val_f1:
-                result.best_val_f1 = f1
-                result.best_val_precision = precision
-                result.best_val_recall = recall
-                result.best_epoch = epoch
-                patience_counter = 0
-                best_model_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                # Check for improvement
+                if f1 > result.best_val_f1:
+                    result.best_val_f1 = f1
+                    result.best_val_precision = precision
+                    result.best_val_recall = recall
+                    result.best_epoch = epoch
+                    patience_counter = 0
+                    best_model_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                else:
+                    patience_counter += 1
+
+                logger.info(
+                    "Epoch %d/%d: loss=%.4f, F1=%.4f, P=%.4f, R=%.4f (best F1=%.4f @ epoch %d)",
+                    epoch + 1,
+                    cfg.epochs,
+                    avg_train_loss,
+                    f1,
+                    precision,
+                    recall,
+                    result.best_val_f1,
+                    result.best_epoch + 1,
+                )
+
+                if patience_counter >= cfg.patience:
+                    logger.info("Early stopping at epoch %d", epoch + 1)
+                    break
             else:
-                patience_counter += 1
-
-            logger.info(
-                "Epoch %d/%d: loss=%.4f, F1=%.4f, P=%.4f, R=%.4f (best F1=%.4f @ epoch %d)",
-                epoch + 1,
-                cfg.epochs,
-                avg_train_loss,
-                f1,
-                precision,
-                recall,
-                result.best_val_f1,
-                result.best_epoch + 1,
-            )
-
-            if patience_counter >= cfg.patience:
-                logger.info("Early stopping at epoch %d", epoch + 1)
-                break
+                # No validation set — save every epoch, train for all epochs
+                best_model_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                result.best_epoch = epoch
+                logger.info(
+                    "Epoch %d/%d: loss=%.4f (no validation set)",
+                    epoch + 1,
+                    cfg.epochs,
+                    avg_train_loss,
+                )
 
         # Save best model
         if best_model_state is not None:

@@ -1,68 +1,152 @@
 {
   "name": "beach_v2",
   "description": "Training dataset: beach_v2",
-  "created": "2026-01-13T15:36:38.307769",
+  "created": "2026-02-16T13:12:28.710797",
   "videos": [
     {
-      "filename": "IMG_1887.MOV",
-      "video_id": "708dbc8c-e559-4e20-a58b-e7e2f0888b73",
-      "content_hash": "fe7527122e93a954052356471f9ad2386411349ac8dee270f2469ba6bb56a83a",
-      "duration_ms": 1341803,
-      "rally_count": 48
-    },
-    {
-      "filename": "IMG_1820.MOV",
-      "video_id": "96fd349f-69f5-490f-b671-8187630a5dda",
-      "content_hash": "a6ab35488bcefea5ddad042163033df76d134fb7dc422c035158ce24fff7951a",
-      "duration_ms": 1208555,
-      "rally_count": 36
+      "filename": "mochi.mp4",
+      "video_id": "07fedbd4-693e-4651-9fee-c616a1f4b413",
+      "content_hash": "d84522b493caae7d5c2f593fb59abb7f858acc92deda69bcb8b158d1340cf110",
+      "duration_ms": 196429,
+      "rally_count": 5
     },
     {
       "filename": "matahtach.mp4",
-      "video_id": "9d0744ef-0d3c-4cb2-9d62-1ee4ff19cf93",
+      "video_id": "1efa35cf-4edd-4504-b4a4-834eee9e5218",
       "content_hash": "a95f6b77a01f7fb886e319f50115b7381e34dc5d4cb0c0265a3e1466c18579c9",
       "duration_ms": 433766,
       "rally_count": 15
     },
     {
-      "filename": "match.mp4",
-      "video_id": "a7901364-9d71-4467-ab3e-deeb6a371cf0",
-      "content_hash": "96cf9a5c21fc4821aad0f69be208ab948e18d6a420f87129f85ee8f3b21a5dec",
-      "duration_ms": 834400,
-      "rally_count": 31
+      "filename": "machi.mp4",
+      "video_id": "23a5f798-78a0-4b3a-8647-b4a2166274b1",
+      "content_hash": "ab8ce1aca545fc80c63fd9f5f4327d2d18ad5764a8ae6d1f9f09d63b90d9667f",
+      "duration_ms": 199600,
+      "rally_count": 3
+    },
+    {
+      "filename": "matttch.mp4",
+      "video_id": "23b662ba-99e0-47d6-a9ac-90bb6fa9bdd1",
+      "content_hash": "178047d8abd84ade8bbd07bf78eb5f3fed334959687386170b891ab68b2c3080",
+      "duration_ms": 238438,
+      "rally_count": 8
+    },
+    {
+      "filename": "match-2.MOV",
+      "video_id": "2b2d7786-1f78-4856-95d5-d3003b15f2a3",
+      "content_hash": "f201e92eab9e74b418c23d4f0c5bd7b30107422a012277dcad93a57c79787e17",
+      "duration_ms": 300049,
+      "rally_count": 10
+    },
+    {
+      "filename": "IMG_1820.MOV",
+      "video_id": "35ff869f-5698-4982-bcdb-267e11d70e0d",
+      "content_hash": "40e92a6bdd9bd29f028d4a84d1218f946b5d56e97cd2fd35bef15d4795b2e0bf",
+      "duration_ms": 300050,
+      "rally_count": 11
     },
     {
       "filename": "dark.mp4",
-      "video_id": "b02f6586-0851-4e0f-943e-61da8c75a51c",
+      "video_id": "4cd680c7-2333-4dab-9fed-159f064a9e8c",
       "content_hash": "67b57630574fa0381b09c2ab9fca5fce3ae801fd11aaa7510f86dd359fadcdc4",
       "duration_ms": 357033,
       "rally_count": 11
     },
     {
-      "filename": "match-2.MOV",
-      "video_id": "e086d8e9-20f0-486a-9ad7-1650582134b7",
-      "content_hash": "983f2f351ea2120d14792ea165b296835f0eea0843746480993a0bbfe8112a0e",
-      "duration_ms": 739071,
-      "rally_count": 23
+      "filename": "michu.mp4",
+      "video_id": "56f2739d-ff3c-4cac-8ada-4f275e57ab63",
+      "content_hash": "719e3318c988415f8f90de67e01a11491782c7b27995523de425d8d019e2fb5e",
+      "duration_ms": 199899,
+      "rally_count": 7
+    },
+    {
+      "filename": "Micah_Nate vs Nick_Paul Game 3 - Nathan Gali (1080p, h264).mp4",
+      "video_id": "5c641cfe-2a98-44b3-816c-e093d700baef",
+      "content_hash": "a05071583fe72817c9c88092e2b2e3a751fe8e77d9c1e16b25f5ef36405cd113",
+      "duration_ms": 155300,
+      "rally_count": 5
+    },
+    {
+      "filename": "IMG_1887.MOV",
+      "video_id": "70ab9d7f-8cc4-48cb-892a-1c36793cac72",
+      "content_hash": "b014b0df902ab97420db1560c8291adf5b4999d6112b436f84ad8c603cd6e257",
+      "duration_ms": 300891,
+      "rally_count": 12
     },
     {
       "filename": "matchc.mp4",
-      "video_id": "f691aae0-0105-4eee-8cfc-764c81934613",
+      "video_id": "7c61e308-64b2-4e3d-a3e4-10815645bda2",
       "content_hash": "46eb0ed3eca0dbcf71ff99abe48566671989fbf8fb3bd08ebf14b62d0c10c33d",
       "duration_ms": 291724,
       "rally_count": 9
     },
     {
+      "filename": "match.mp4",
+      "video_id": "840e8b6b-8428-48d6-8af8-d239d7c64f5c",
+      "content_hash": "d5b1ec6c0856e6b502e3f966e44f316d3abb83576ffbbc2d6df0bb207e1400a1",
+      "duration_ms": 304170,
+      "rally_count": 11
+    },
+    {
+      "filename": "mechi.mp4",
+      "video_id": "85108567-a028-4303-87a7-5004a87603a5",
+      "content_hash": "d0734564e893bfffde90bd56b406e967243af4b65ba18c5085d9ee7cb8932ca2",
+      "duration_ms": 206840,
+      "rally_count": 5
+    },
+    {
+      "filename": "muchi.mp4",
+      "video_id": "9170269b-8259-462e-8a23-28da51026410",
+      "content_hash": "24e5b6de64016eef989293d643a425936b81db946b7e43449741f369b5b594c9",
+      "duration_ms": 178645,
+      "rally_count": 6
+    },
+    {
+      "filename": "matchop.mp4",
+      "video_id": "920ba69d-2526-4e6c-a357-c44af3bf5c99",
+      "content_hash": "7eb97a209ad3995655688419f47680ff0db8f405325288647f98f97ae1a5754d",
+      "duration_ms": 290156,
+      "rally_count": 10
+    },
+    {
+      "filename": "matchope.mp4",
+      "video_id": "a5866029-7cf4-42d6-adc2-8e28111ffd81",
+      "content_hash": "4b611e2a08d9d37a8f81d0863325a7916e1feec228f5b68192a7e4aff21311b5",
+      "duration_ms": 180346,
+      "rally_count": 6
+    },
+    {
       "filename": "natch.mp4",
-      "video_id": "fcd69f14-7540-4578-ab4e-d4e1523c62b1",
+      "video_id": "a7ee3d38-a3a9-4dcd-a2af-e0617997e708",
       "content_hash": "28b6d76171fd9a2a48dcbed74fadc6120f062eb17da85a6b12c11e9f862544bb",
       "duration_ms": 464700,
-      "rally_count": 11
+      "rally_count": 10
+    },
+    {
+      "filename": "mech.mp4",
+      "video_id": "c6e4c876-beca-4cb8-9cce-4a4fc70553f1",
+      "content_hash": "efe6e2e4c38b8061c66babbeaad9364f0d5297e4849008e68b8fc554d21213f0",
+      "duration_ms": 235068,
+      "rally_count": 9
+    },
+    {
+      "filename": "Newport Beach Games 10_12_25 Paul_Nate vs Colin_Tim - Nathan Gali (1080p, h264).mp4",
+      "video_id": "cb3b68f0-74df-4ab3-9e14-e76ac62ecb2d",
+      "content_hash": "cb8308d4b04711708b82200b2ab683c3e26e30f86a9ebddad6bd5aac597f6e38",
+      "duration_ms": 174433,
+      "rally_count": 5
+    },
+    {
+      "filename": "macho.mp4",
+      "video_id": "edc81438-10bc-431d-ae88-5c609f3fae93",
+      "content_hash": "fa9580db96b28820d69cf44d66a492de077c3e2e7ba17c62dad2cb3019b9ebc1",
+      "duration_ms": 190690,
+      "rally_count": 7
     }
   ],
   "stats": {
-    "total_videos": 8,
-    "total_rallies": 184,
-    "total_duration_min": 94.5
+    "total_videos": 20,
+    "total_rallies": 165,
+    "total_duration_min": 86.6
   }
 }
