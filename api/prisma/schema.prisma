@@ -307,9 +307,10 @@ model PlayerTrack {
   ballPositionsJson   Json?             @map("ball_positions_json")
   contactsJson        Json?             @map("contacts_json")
   actionsJson         Json?             @map("actions_json")
-  groundTruthJson     Json?             @map("ground_truth_json")
-  groundTruthTaskId   Int?              @map("ground_truth_task_id")
-  groundTruthSyncedAt DateTime?         @map("ground_truth_synced_at") @db.Timestamptz(6)
+  groundTruthJson           Json?             @map("ground_truth_json")
+  groundTruthTaskId         Int?              @map("ground_truth_task_id")
+  groundTruthSyncedAt       DateTime?         @map("ground_truth_synced_at") @db.Timestamptz(6)
+  actionGroundTruthJson     Json?             @map("action_ground_truth_json")
   rally               Rally             @relation(fields: [rallyId], references: [id], onDelete: Cascade)
 
   @@index([rallyId])

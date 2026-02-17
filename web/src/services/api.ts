@@ -1797,6 +1797,15 @@ export interface ContactsData {
   contacts: ContactInfo[];
 }
 
+// Action ground truth label
+export interface ActionGroundTruthLabel {
+  frame: number;
+  action: 'serve' | 'receive' | 'set' | 'spike' | 'block' | 'dig';
+  playerTrackId: number;
+  ballX?: number;
+  ballY?: number;
+}
+
 // Action classification from contact sequence
 export interface ActionInfo {
   action: string;  // "serve", "receive", "set", "spike", "block", "dig", "unknown"
@@ -2024,6 +2033,49 @@ export async function importFromLabelStudio(
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
     throw new Error(error.error?.message || `Failed to import from Label Studio: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// ============================================================================
+// Action Ground Truth
+// ============================================================================
+
+/**
+ * Get action ground truth labels for a rally.
+ */
+export async function getActionGroundTruth(
+  rallyId: string,
+): Promise<{ labels: ActionGroundTruthLabel[] }> {
+  const response = await fetch(`${API_BASE_URL}/v1/rallies/${rallyId}/action-ground-truth`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get action ground truth: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Save action ground truth labels for a rally.
+ */
+export async function saveActionGroundTruth(
+  rallyId: string,
+  labels: ActionGroundTruthLabel[],
+): Promise<{ savedCount: number }> {
+  const response = await fetch(`${API_BASE_URL}/v1/rallies/${rallyId}/action-ground-truth`, {
+    method: 'PUT',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify({ labels }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to save action ground truth: ${response.status}`);
   }
 
   return response.json();

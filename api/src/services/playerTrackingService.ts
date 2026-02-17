@@ -495,6 +495,87 @@ export async function swapPlayerTracks(
   return { swappedCount };
 }
 
+// Action ground truth label format
+interface ActionGroundTruthLabel {
+  frame: number;
+  action: string;  // "serve", "receive", "set", "spike", "block", "dig"
+  playerTrackId: number;
+  ballX?: number;
+  ballY?: number;
+}
+
+/**
+ * Get action ground truth labels for a rally.
+ */
+export async function getActionGroundTruth(
+  rallyId: string,
+  userId: string,
+): Promise<{ labels: ActionGroundTruthLabel[] } | null> {
+  const rally = await prisma.rally.findUnique({
+    where: { id: rallyId },
+    include: {
+      video: true,
+      playerTrack: true,
+    },
+  });
+
+  if (!rally) {
+    throw new NotFoundError('Rally', rallyId);
+  }
+
+  if (rally.video.userId !== userId) {
+    throw new ForbiddenError('You do not have permission to view action ground truth for this rally');
+  }
+
+  if (!rally.playerTrack) {
+    return null;
+  }
+
+  const labels = rally.playerTrack.actionGroundTruthJson as ActionGroundTruthLabel[] | null;
+  return labels ? { labels } : null;
+}
+
+/**
+ * Save action ground truth labels for a rally.
+ */
+export async function saveActionGroundTruth(
+  rallyId: string,
+  userId: string,
+  labels: ActionGroundTruthLabel[],
+): Promise<{ savedCount: number }> {
+  const rally = await prisma.rally.findUnique({
+    where: { id: rallyId },
+    include: {
+      video: true,
+      playerTrack: true,
+    },
+  });
+
+  if (!rally) {
+    throw new NotFoundError('Rally', rallyId);
+  }
+
+  if (rally.video.userId !== userId) {
+    throw new ForbiddenError('You do not have permission to modify action ground truth for this rally');
+  }
+
+  if (!rally.playerTrack) {
+    throw new ValidationError('No player tracking data found for this rally. Track players first.');
+  }
+
+  // Sort labels by frame
+  const sorted = [...labels].sort((a, b) => a.frame - b.frame);
+
+  await prisma.playerTrack.update({
+    where: { rallyId },
+    data: { actionGroundTruthJson: sorted as unknown as object[] },
+  });
+
+  console.log(`[PLAYER_TRACK] Saved ${sorted.length} action ground truth labels for rally ${rallyId}`);
+
+  return { savedCount: sorted.length };
+}
+
 // Calibration corner from frontend
 interface CalibrationCorner {
   x: number;

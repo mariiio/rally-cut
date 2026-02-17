@@ -10,7 +10,7 @@ import {
   listRallies,
   updateRally,
 } from "../services/rallyService.js";
-import { trackPlayersForRally, getPlayerTrack, swapPlayerTracks } from "../services/playerTrackingService.js";
+import { trackPlayersForRally, getPlayerTrack, swapPlayerTracks, getActionGroundTruth, saveActionGroundTruth } from "../services/playerTrackingService.js";
 import {
   exportToLabelStudio,
   importFromLabelStudio,
@@ -147,6 +147,50 @@ router.post(
         req.body.trackB,
         req.body.fromFrame,
       );
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Action Ground Truth
+const actionLabelSchema = z.object({
+  frame: z.number().int().min(0),
+  action: z.enum(["serve", "receive", "set", "spike", "block", "dig"]),
+  playerTrackId: z.number().int(),
+  ballX: z.number().min(0).max(1).optional(),
+  ballY: z.number().min(0).max(1).optional(),
+});
+
+router.get(
+  "/v1/rallies/:id/action-ground-truth",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      const result = await getActionGroundTruth(req.params.id, req.userId!);
+      res.json(result ?? { labels: [] });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.put(
+  "/v1/rallies/:id/action-ground-truth",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: z.object({
+      labels: z.array(actionLabelSchema),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const result = await saveActionGroundTruth(req.params.id, req.userId!, req.body.labels);
       res.json(result);
     } catch (error) {
       next(error);
