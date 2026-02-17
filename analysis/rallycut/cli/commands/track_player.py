@@ -648,6 +648,18 @@ def track_players(
             fps = result.frame_count / (result.processing_time_ms / 1000)
             console.print(f"  Speed: {fps:.1f} FPS")
 
+        # Quality report
+        if result.quality_report is not None:
+            qr = result.quality_report
+            score_pct = int(qr.trackability_score * 100)
+            console.print(f"\n  Quality Assessment: {score_pct}% trackability")
+            if qr.color_split_count > 0:
+                console.print(f"    Color splits: {qr.color_split_count}")
+            if qr.swap_fix_count > 0:
+                console.print(f"    Swap fixes: {qr.swap_fix_count}")
+            for suggestion in qr.suggestions:
+                console.print(f"    >> {suggestion}")
+
         # Warning for low detection rate
         if result.detection_rate < 0.5:
             console.print(

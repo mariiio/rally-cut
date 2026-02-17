@@ -1245,6 +1245,7 @@ def split_tracks_at_jumps(
     positions: list[PlayerPosition],
     max_displacement: float = 0.25,
     max_frame_gap: int = 3,
+    split_info_out: list[tuple[int, int, int]] | None = None,
 ) -> tuple[list[PlayerPosition], int]:
     """Split tracks at large inter-frame position jumps.
 
@@ -1260,6 +1261,8 @@ def split_tracks_at_jumps(
         max_displacement: Max normalized distance for a jump to trigger split.
         max_frame_gap: Only split on jumps within this many frames
             (larger gaps may be legitimate recovery after occlusion).
+        split_info_out: If provided, appended with (old_id, new_id, split_frame)
+            for each split. Allows callers to rekey external data structures.
 
     Returns:
         Tuple of (modified positions, number of splits).
@@ -1306,6 +1309,9 @@ def split_tracks_at_jumps(
                 # Reassign all positions from this point onward in this segment
                 for j in range(i, len(track_pos)):
                     track_pos[j].track_id = new_id
+
+                if split_info_out is not None:
+                    split_info_out.append((track_id, new_id, curr.frame_number))
 
                 logger.info(
                     f"Split track {track_id} at frame {curr.frame_number}: "
