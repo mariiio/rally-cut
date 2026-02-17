@@ -147,20 +147,20 @@ class TestFindNearestPlayer:
             _pp(10, 1, 0.3, 0.7),  # Far from ball
             _pp(10, 2, 0.51, 0.51),  # Close to ball (upper-quarter at y=0.51-0.15*0.25=0.4725)
         ]
-        track_id, dist = _find_nearest_player(10, 0.5, 0.5, players)
+        track_id, dist, player_y = _find_nearest_player(10, 0.5, 0.5, players)
         assert track_id == 2
         assert dist < 0.10
 
     def test_no_players_returns_default(self) -> None:
         """No players gives track_id=-1 and infinite distance."""
-        track_id, dist = _find_nearest_player(10, 0.5, 0.5, [])
+        track_id, dist, _ = _find_nearest_player(10, 0.5, 0.5, [])
         assert track_id == -1
         assert dist == float("inf")
 
     def test_respects_frame_window(self) -> None:
         """Players outside search window are ignored."""
         players = [_pp(100, 1, 0.5, 0.5)]  # Far from frame 10
-        track_id, dist = _find_nearest_player(10, 0.5, 0.5, players, search_frames=3)
+        track_id, dist, _ = _find_nearest_player(10, 0.5, 0.5, players, search_frames=3)
         assert track_id == -1
 
 
@@ -471,25 +471,25 @@ class TestDetectContacts:
             enable_noise_filter=False,
         )
 
-        # Gentle arc: ball moving right slowly, then changing direction at frame 15
+        # Gentle arc: direction change at frame 25 (past warmup_skip_frames=20).
+        # Trajectory: frames 0-49 with turn at frame 25.
         positions = []
-        for i in range(30):
-            if i <= 15:
-                x = 0.3 + i * 0.005
-                y = 0.5 - i * 0.005
+        for i in range(50):
+            if i <= 25:
+                x = 0.3 + i * 0.004
+                y = 0.5 - i * 0.004
             else:
-                x = 0.375 - (i - 15) * 0.005
-                y = 0.425 + (i - 15) * 0.005
+                x = 0.4 - (i - 25) * 0.004
+                y = 0.4 + (i - 25) * 0.004
             positions.append(_bp(i, x, y, conf=0.9))
 
         # Player near the direction change for compound validation
-        players = [_pp(15, 1, 0.375, 0.43)]
+        players = [_pp(25, 1, 0.40, 0.41)]
 
         result = detect_contacts(positions, player_positions=players, config=config)
-        # Should detect a contact near the direction change at frame 15
-        # The inflection detection should catch this even though velocity is low
+        # Should detect a contact near the direction change at frame 25
         inflection_contacts = [
-            c for c in result.contacts if abs(c.frame - 15) <= 3
+            c for c in result.contacts if abs(c.frame - 25) <= 3
         ]
         assert len(inflection_contacts) >= 1
 
