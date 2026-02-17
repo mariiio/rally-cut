@@ -957,7 +957,7 @@ class PlayerTracker:
             # Color histogram store for post-hoc track repair
             color_store = None
             histogram_stride = 3  # Extract every 3rd processed frame
-            if filter_enabled and self.court_roi is not None:
+            if filter_enabled:
                 from rallycut.tracking.color_repair import (
                     ColorHistogramStore,
                     extract_shorts_histogram,
@@ -1007,8 +1007,8 @@ class PlayerTracker:
                             results, frame_idx, video_width, video_height
                         )
 
-                        # Sport-aware detection filters (only when ROI masking is active)
-                        if self.court_roi is not None:
+                        # Sport-aware detection filters
+                        if filter_enabled:
                             frame_positions = self._filter_detections(frame_positions)
 
                         # Filter off-court detections if calibrator available
@@ -1089,16 +1089,14 @@ class PlayerTracker:
                 config = filter_config or PlayerFilterConfig()
 
                 # Step 0: Split tracks at large position jumps (detects ID switches)
-                # Only when ROI masking is active (avoids regression on default pipeline)
-                if self.court_roi is not None:
-                    split_info: list[tuple[int, int, int]] = []
-                    positions, num_jump_splits = split_tracks_at_jumps(
-                        positions, split_info_out=split_info
-                    )
-                    # Rekey color store for jump splits
-                    if color_store is not None:
-                        for old_id, new_id, split_frame in split_info:
-                            color_store.rekey(old_id, new_id, split_frame)
+                split_info: list[tuple[int, int, int]] = []
+                positions, num_jump_splits = split_tracks_at_jumps(
+                    positions, split_info_out=split_info
+                )
+                # Rekey color store for jump splits
+                if color_store is not None:
+                    for old_id, new_id, split_frame in split_info:
+                        color_store.rekey(old_id, new_id, split_frame)
 
                 # Step 0b: Color-based track splitting
                 if color_store is not None and color_store.has_data():
@@ -1159,7 +1157,7 @@ class PlayerTracker:
 
             # Step 5: Compute quality report
             quality_report = None
-            if filter_enabled and self.court_roi is not None:
+            if filter_enabled:
                 from rallycut.tracking.quality_report import compute_quality_report
 
                 ball_det_rate = 0.0
