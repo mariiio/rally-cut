@@ -486,6 +486,36 @@ export function PlayerTrackingToolbar() {
         </Box>
       )}
 
+      {/* Quality Report */}
+      {showTrackingTools && trackData?.qualityReport && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mt: 0.75, flexWrap: 'wrap' }}>
+          <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 'bold' }}>
+            Quality:
+          </Typography>
+          <Chip
+            label={`${Math.round(trackData.qualityReport.trackabilityScore * 100)}%`}
+            size="small"
+            sx={{
+              bgcolor: trackData.qualityReport.trackabilityScore >= 0.7
+                ? '#4CAF50'
+                : trackData.qualityReport.trackabilityScore >= 0.4
+                  ? '#FF9800'
+                  : '#f44336',
+              color: 'white',
+              fontSize: '0.7rem',
+              height: 22,
+              fontWeight: 'bold',
+              '& .MuiChip-label': { px: 0.75 },
+            }}
+          />
+          {trackData.qualityReport.suggestions.map((s, i) => (
+            <Typography key={i} variant="caption" sx={{ color: 'text.secondary' }}>
+              {s}
+            </Typography>
+          ))}
+        </Box>
+      )}
+
       {/* Action Labeling Shortcut Legend */}
       {isLabelingActions && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.75, flexWrap: 'wrap' }}>
