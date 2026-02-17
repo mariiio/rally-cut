@@ -127,7 +127,7 @@ def main() -> None:
         description="Tune contact detection parameters via grid search"
     )
     parser.add_argument("--rally", type=str, help="Specific rally ID")
-    parser.add_argument("--tolerance-ms", type=int, default=100, help="Time tolerance in ms (default: 100)")
+    parser.add_argument("--tolerance-ms", type=int, default=167, help="Time tolerance in ms (default: 167, ~5 frames at 30fps)")
     parser.add_argument("-o", "--output", help="Save results to JSON file")
     args = parser.parse_args()
 
