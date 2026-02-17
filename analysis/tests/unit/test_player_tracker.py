@@ -154,7 +154,7 @@ class TestComputeCourtRoiFromBall:
         # ROI should not extend to the outlier positions (0.01, 0.99)
         # With 3rd/97th percentile, the bounds should be close to center data
         assert min(xs) > 0.05  # Not dragged to 0.01 outlier
-        assert max(ys) < 0.85  # Not dragged to 0.99 outlier
+        assert max(ys) < 0.97  # Not dragged to 0.99 outlier
 
     def test_asymmetric_margins(self) -> None:
         """Bottom margin (near court) should be larger than top margin (far court)."""
@@ -199,11 +199,11 @@ class TestComputeCourtRoiFromBall:
         ys = [p[1] for p in roi]
         roi_height = max(ys) - min(ys)
 
-        # Should be at least 65% tall (min_roi_height default)
-        assert roi_height >= 0.65
+        # Should be at least 85% tall (min_roi_height default)
+        assert roi_height >= 0.85
 
-    def test_min_dimensions_expand_symmetrically(self) -> None:
-        """Minimum dimension expansion should be centered on ball trajectory."""
+    def test_min_dimensions_expand_near_trajectory(self) -> None:
+        """Minimum dimension expansion should stay near ball trajectory center."""
         # Ball centered at x=0.3: one-sided trajectory
         coords = [(0.2 + 0.2 * i / 50, 0.2 + 0.4 * (i % 10) / 10) for i in range(50)]
         positions = self._make_positions(coords)

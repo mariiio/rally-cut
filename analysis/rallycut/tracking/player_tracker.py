@@ -60,12 +60,12 @@ def compute_court_roi_from_ball(
     ball_positions: list[BallPosition],
     x_margin: float = 0.08,
     y_margin_top: float = 0.05,
-    y_margin_bottom: float = 0.12,
+    y_margin_bottom: float = 0.20,
     percentile_low: float = 3.0,
     percentile_high: float = 97.0,
-    max_roi_area: float = 0.75,
+    max_roi_area: float = 0.85,
     min_roi_width: float = 0.80,
-    min_roi_height: float = 0.65,
+    min_roi_height: float = 0.85,
 ) -> tuple[list[tuple[float, float]] | None, str]:
     """Compute a tight court ROI polygon from ball trajectory positions.
 
@@ -161,12 +161,19 @@ def compute_court_roi_from_ball(
 
     roi_height = roi_y_max - roi_y_min
     if roi_height < min_roi_height:
-        center_y = (roi_y_min + roi_y_max) / 2
-        half_h = min_roi_height / 2
-        roi_y_min = max(0.0, center_y - half_h)
-        roi_y_max = min(1.0, roi_y_min + min_roi_height)
+        # Asymmetric expansion: bias toward bottom (near-side players are
+        # well below the ball trajectory in beach volleyball)
+        deficit = min_roi_height - roi_height
+        expand_top = deficit * 0.3
+        expand_bottom = deficit * 0.7
+        roi_y_min = max(0.0, roi_y_min - expand_top)
+        roi_y_max = min(1.0, roi_y_max + expand_bottom)
+        # If clamped at bottom, shift remaining expansion to top
         if roi_y_max - roi_y_min < min_roi_height:
             roi_y_min = max(0.0, roi_y_max - min_roi_height)
+        # If clamped at top, shift remaining expansion to bottom
+        if roi_y_max - roi_y_min < min_roi_height:
+            roi_y_max = min(1.0, roi_y_min + min_roi_height)
 
     # Quality check: ROI too large (ball spread across full frame)
     roi_area = (roi_x_max - roi_x_min) * (roi_y_max - roi_y_min)
