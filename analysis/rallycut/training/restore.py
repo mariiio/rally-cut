@@ -218,6 +218,19 @@ def restore_dataset_to_db(
                     except Exception as e:
                         result.errors.append(f"S3 upload failed for {filename}: {e}")
 
+            # Restore court calibration for all videos (new and existing)
+            for video_info in videos:
+                court_cal = video_info.get("court_calibration")
+                if court_cal is not None:
+                    old_video_id = video_info["video_id"]
+                    if old_video_id in video_id_map:
+                        db_video_id = video_id_map[old_video_id]
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "UPDATE videos SET court_calibration_json = %s WHERE id = %s",
+                                (json.dumps(court_cal), db_video_id),
+                            )
+
             # Insert rallies only for newly inserted videos (skip existing to avoid duplicates)
             rally_params: list[tuple[str, str, int, int, int]] = []
             for video_info in videos:
