@@ -285,7 +285,7 @@ def build_confusion_matrix(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate action detection vs ground truth")
     parser.add_argument("--rally", type=str, help="Specific rally ID to evaluate")
-    parser.add_argument("--tolerance-ms", type=int, default=100, help="Time tolerance in ms for matching (default: 100)")
+    parser.add_argument("--tolerance-ms", type=int, default=167, help="Time tolerance in ms for matching (default: 167, ~5 frames at 30fps)")
     parser.add_argument("--redetect", action="store_true", help="Re-run contact detection instead of using stored results")
     parser.add_argument("--config", type=str, help="JSON config overrides for ContactDetectionConfig (implies --redetect)")
     args = parser.parse_args()

@@ -39,7 +39,7 @@ class ContactDetectionConfig:
     min_peak_distance_frames: int = 12  # Min frames between contacts (~0.4s @ 30fps)
 
     # Direction change thresholds
-    min_direction_change_deg: float = 20.0  # Min angle change to confirm contact
+    min_direction_change_deg: float = 30.0  # Min angle change to confirm contact
     direction_check_frames: int = 5  # Frames before/after to check direction
 
     # Inflection detection
@@ -52,7 +52,7 @@ class ContactDetectionConfig:
     noise_spike_max_jump: float = 0.20  # Max distance to predecessor/successor
 
     # Player proximity
-    player_contact_radius: float = 0.13  # Max distance (normalized) for attribution
+    player_contact_radius: float = 0.15  # Max distance (normalized) for attribution
     player_search_frames: int = 3  # Search ±N frames for nearby player
 
     # High-velocity contacts (lenient validation)
