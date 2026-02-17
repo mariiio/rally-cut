@@ -1285,6 +1285,7 @@ class PlayerTracker:
                     id_switch_count=num_jump_splits,
                     color_split_count=num_color_splits,
                     swap_fix_count=num_swap_fixes,
+                    has_court_calibration=court_calibrator is not None,
                 )
 
             processing_time_ms = (time.time() - start_time) * 1000
