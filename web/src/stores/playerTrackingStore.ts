@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { trackPlayers, getPlayerTrack, swapPlayerTracks, saveCourtCalibration, deleteCourtCalibration, getActionGroundTruth, saveActionGroundTruth as apiSaveActionGroundTruth, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData, type ActionGroundTruthLabel } from '@/services/api';
+import { trackPlayers, getPlayerTrack, swapPlayerTracks, saveCourtCalibration, deleteCourtCalibration, getActionGroundTruth, saveActionGroundTruth as apiSaveActionGroundTruth, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData, type ActionGroundTruthLabel, type QualityReport } from '@/services/api';
 
 // Types for player tracking data (store format)
 export interface PlayerPosition {
@@ -28,6 +28,7 @@ export interface TracksJson {
   // Contact detection and action classification
   contacts?: ContactsData;
   actions?: ActionsData;
+  qualityReport?: QualityReport;
 }
 
 export interface PlayerTrack {
@@ -174,6 +175,7 @@ function apiResponseToPlayerTrack(
       ballPositions: response.ballPositions,
       contacts: response.contacts,
       actions: response.actions,
+      qualityReport: response.qualityReport,
     },
     playerCount: response.uniqueTrackCount || 0,
     progress: 100,

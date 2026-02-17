@@ -39,7 +39,7 @@ src/
 │   ├── PlayerOverlay # Player bounding box visualization
 │   ├── BallTrackOverlay # Ball trajectory visualization
 │   ├── OriginalQualityBanner # FREE tier upgrade prompt (7-day quality warning)
-│   └── VideoInsightsBanner # Auto-detected quality insights (camera distance trade-offs, complex scene)
+│   └── VideoInsightsBanner # Auto-detected quality insights (camera distance, complex scene, calibration recommendation)
 ├── stores/           # Zustand stores (see below)
 ├── services/
 │   ├── api.ts        # REST client

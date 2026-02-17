@@ -104,6 +104,7 @@ export interface TrackPlayersResult {
   // Contact detection and action classification
   contacts?: ContactsData;
   actions?: ActionsData;
+  qualityReport?: QualityReport;
 }
 
 export interface GetPlayerTrackResult {
@@ -120,6 +121,7 @@ export interface GetPlayerTrackResult {
   ballPositions?: BallPosition[];
   contacts?: ContactsData;
   actions?: ActionsData;
+  qualityReport?: QualityReport;
   error?: string;
 }
 
@@ -168,6 +170,23 @@ async function extractVideoSegment(
   });
 }
 
+interface QualityReport {
+  ballDetectionRate: number;
+  ballTrajectorySpread: number;
+  avgDetectionsPerFrame: number;
+  primaryTrackCount: number;
+  trackCreationRate: number;
+  trackDestructionRate: number;
+  avgTrackLifespanFrames: number;
+  idSwitchCount: number;
+  colorSplitCount: number;
+  swapFixCount: number;
+  uniqueRawTrackCount: number;
+  calibrationRecommended: boolean;
+  trackabilityScore: number;
+  suggestions: string[];
+}
+
 interface PlayerTrackerOutput {
   positions: PlayerPosition[];
   rawPositions?: PlayerPosition[];  // Raw positions before filtering (for param tuning)
@@ -182,6 +201,7 @@ interface PlayerTrackerOutput {
   ballPositions?: BallPosition[];
   contacts?: ContactsData;
   actions?: ActionsData;
+  qualityReport?: QualityReport;
 }
 
 /**
@@ -364,6 +384,11 @@ async function runPlayerTracker(
           console.log(`[PLAYER_TRACK] Actions: ${actions.actionSequence.join(' → ')} (${actions.numContacts} contacts)`);
         }
 
+        const qualityReport = result.qualityReport as QualityReport | undefined;
+        if (qualityReport) {
+          console.log(`[PLAYER_TRACK] Quality: score=${qualityReport.trackabilityScore.toFixed(2)}, calibration=${qualityReport.calibrationRecommended ? 'recommended' : 'not needed'}`);
+        }
+
         resolve({
           positions,
           rawPositions,
@@ -378,6 +403,7 @@ async function runPlayerTracker(
           ballPositions,
           contacts,
           actions,
+          qualityReport,
         });
       } catch (parseError) {
         reject(new Error(`Failed to parse player tracker output: ${parseError}`));
@@ -429,6 +455,7 @@ export async function getPlayerTrack(
     ballPositions: (track.ballPositionsJson as BallPosition[] | null) ?? undefined,
     contacts: (track.contactsJson as ContactsData | null) ?? undefined,
     actions: (track.actionsJson as ActionsData | null) ?? undefined,
+    qualityReport: (track.qualityReportJson as QualityReport | null) ?? undefined,
   };
 }
 
@@ -670,6 +697,7 @@ export async function trackPlayersForRally(
         ballPositionsJson: trackerResult.ballPositions as unknown as object[],
         contactsJson: trackerResult.contacts as unknown as object,
         actionsJson: trackerResult.actions as unknown as object,
+        qualityReportJson: trackerResult.qualityReport as unknown as object,
         processingTimeMs,
         modelVersion: 'yolov8n',
         completedAt: new Date(),
@@ -689,6 +717,7 @@ export async function trackPlayersForRally(
         ballPositionsJson: trackerResult.ballPositions as unknown as object[],
         contactsJson: trackerResult.contacts as unknown as object,
         actionsJson: trackerResult.actions as unknown as object,
+        qualityReportJson: trackerResult.qualityReport as unknown as object,
         processingTimeMs,
         modelVersion: 'yolov8n',
         completedAt: new Date(),
@@ -767,6 +796,7 @@ export async function trackPlayersForRally(
       ballPositions: trackerResult.ballPositions,
       contacts: trackerResult.contacts,
       actions: trackerResult.actions,
+      qualityReport: trackerResult.qualityReport,
     };
   } catch (error) {
     console.error(`[PLAYER_TRACK] Error:`, error);
