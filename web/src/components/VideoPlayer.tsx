@@ -17,6 +17,7 @@ import { CropMaskOverlay } from './CropMaskOverlay';
 import { CourtCalibrationPanel } from './CourtCalibrationPanel';
 import { PlayerOverlay } from './PlayerOverlay';
 import { ActionOverlay } from './ActionOverlay';
+import { ActionLabelingMode } from './ActionLabelingMode';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { AspectRatio } from '@/constants/enums';
 
@@ -123,6 +124,10 @@ export function VideoPlayer() {
   const showPlayerOverlay = usePlayerTrackingStore((state) => state.showPlayerOverlay);
   const showBallOverlay = usePlayerTrackingStore((state) => state.showBallOverlay);
   const playerTracks = usePlayerTrackingStore((state) => state.playerTracks);
+  const isLabelingActions = usePlayerTrackingStore((state) => state.isLabelingActions);
+  const actionGroundTruth = usePlayerTrackingStore((state) => state.actionGroundTruth);
+  const updateActionLabel = usePlayerTrackingStore((state) => state.updateActionLabel);
+  const removeActionLabel = usePlayerTrackingStore((state) => state.removeActionLabel);
 
   // Get active match for fps
   const activeMatch = getActiveMatch();
@@ -885,8 +890,14 @@ export function VideoPlayer() {
               rallyStartTime={currentRally.start_time}
               rallyEndTime={currentRally.end_time}
               videoRef={videoRef}
+              groundTruthLabels={actionGroundTruth[currentRally._backendId]}
+              isLabelingMode={isLabelingActions}
+              onUpdateLabel={(frame, action) => updateActionLabel(currentRally._backendId!, frame, action)}
+              onDeleteLabel={(frame) => removeActionLabel(currentRally._backendId!, frame)}
             />
           )}
+          {/* Action labeling keyboard handler */}
+          {isLabelingActions && <ActionLabelingMode videoRef={videoRef} />}
           {/* Transform wrapper - video frame callback updates, CSS transition smooths between frames */}
           <div
             ref={transformWrapperRef}

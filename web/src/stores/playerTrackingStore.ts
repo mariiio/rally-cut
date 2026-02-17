@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { trackPlayers, getPlayerTrack, swapPlayerTracks, saveCourtCalibration, deleteCourtCalibration, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData } from '@/services/api';
+import { trackPlayers, getPlayerTrack, swapPlayerTracks, saveCourtCalibration, deleteCourtCalibration, getActionGroundTruth, saveActionGroundTruth as apiSaveActionGroundTruth, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData, type ActionGroundTruthLabel } from '@/services/api';
 
 // Types for player tracking data (store format)
 export interface PlayerPosition {
@@ -70,6 +70,12 @@ interface PlayerTrackingState {
   isCalibrating: boolean;
   calibrations: Record<string, CourtCalibration>; // keyed by videoId
 
+  // Action labeling state
+  isLabelingActions: boolean;
+  actionGroundTruth: Record<string, ActionGroundTruthLabel[]>; // keyed by rallyId
+  actionGtDirty: Record<string, boolean>; // keyed by rallyId
+  actionGtSaving: Record<string, boolean>; // keyed by rallyId
+
   // Actions
   togglePlayerOverlay: () => void;
   toggleBallOverlay: () => void;
@@ -82,6 +88,14 @@ interface PlayerTrackingState {
   trackPlayersForRally: (rallyId: string, videoId: string, fallbackFps?: number) => Promise<void>;
   loadPlayerTrack: (rallyId: string, fallbackFps?: number, forceRefresh?: boolean) => Promise<boolean>;
   swapTracks: (rallyId: string, trackA: number, trackB: number, fromFrame: number, fallbackFps?: number) => Promise<void>;
+
+  // Action labeling actions
+  setIsLabelingActions: (value: boolean) => void;
+  addActionLabel: (rallyId: string, label: ActionGroundTruthLabel) => void;
+  removeActionLabel: (rallyId: string, frame: number) => void;
+  updateActionLabel: (rallyId: string, frame: number, action: ActionGroundTruthLabel['action']) => void;
+  loadActionGroundTruth: (rallyId: string) => Promise<void>;
+  saveActionGroundTruth: (rallyId: string) => Promise<void>;
 }
 
 /**
@@ -179,6 +193,10 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
       selectedTrackId: null,
       isCalibrating: false,
       calibrations: {},
+      isLabelingActions: false,
+      actionGroundTruth: {},
+      actionGtDirty: {},
+      actionGtSaving: {},
 
       togglePlayerOverlay: () => {
         set((state) => ({ showPlayerOverlay: !state.showPlayerOverlay }));
@@ -329,6 +347,76 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
           await get().loadPlayerTrack(rallyId, fallbackFps, true);
         } catch (error) {
           console.error('[PlayerTrackingStore] Failed to swap tracks:', error);
+          throw error;
+        }
+      },
+
+      // Action labeling
+      setIsLabelingActions: (value: boolean) => {
+        set({ isLabelingActions: value });
+      },
+
+      addActionLabel: (rallyId: string, label: ActionGroundTruthLabel) => {
+        set((state) => {
+          const existing = state.actionGroundTruth[rallyId] ?? [];
+          // Replace if same frame exists, otherwise add
+          const filtered = existing.filter(l => l.frame !== label.frame);
+          const updated = [...filtered, label].sort((a, b) => a.frame - b.frame);
+          return {
+            actionGroundTruth: { ...state.actionGroundTruth, [rallyId]: updated },
+            actionGtDirty: { ...state.actionGtDirty, [rallyId]: true },
+          };
+        });
+      },
+
+      removeActionLabel: (rallyId: string, frame: number) => {
+        set((state) => {
+          const existing = state.actionGroundTruth[rallyId] ?? [];
+          const updated = existing.filter(l => l.frame !== frame);
+          return {
+            actionGroundTruth: { ...state.actionGroundTruth, [rallyId]: updated },
+            actionGtDirty: { ...state.actionGtDirty, [rallyId]: true },
+          };
+        });
+      },
+
+      updateActionLabel: (rallyId: string, frame: number, action: ActionGroundTruthLabel['action']) => {
+        set((state) => {
+          const existing = state.actionGroundTruth[rallyId] ?? [];
+          const updated = existing.map(l => l.frame === frame ? { ...l, action } : l);
+          return {
+            actionGroundTruth: { ...state.actionGroundTruth, [rallyId]: updated },
+            actionGtDirty: { ...state.actionGtDirty, [rallyId]: true },
+          };
+        });
+      },
+
+      loadActionGroundTruth: async (rallyId: string) => {
+        try {
+          const result = await getActionGroundTruth(rallyId);
+          set((state) => ({
+            actionGroundTruth: { ...state.actionGroundTruth, [rallyId]: result.labels },
+            actionGtDirty: { ...state.actionGtDirty, [rallyId]: false },
+          }));
+        } catch (error) {
+          console.error('[PlayerTrackingStore] Failed to load action GT:', error);
+        }
+      },
+
+      saveActionGroundTruth: async (rallyId: string) => {
+        const state = get();
+        const labels = state.actionGroundTruth[rallyId] ?? [];
+
+        set((s) => ({ actionGtSaving: { ...s.actionGtSaving, [rallyId]: true } }));
+        try {
+          await apiSaveActionGroundTruth(rallyId, labels);
+          set((s) => ({
+            actionGtDirty: { ...s.actionGtDirty, [rallyId]: false },
+            actionGtSaving: { ...s.actionGtSaving, [rallyId]: false },
+          }));
+        } catch (error) {
+          console.error('[PlayerTrackingStore] Failed to save action GT:', error);
+          set((s) => ({ actionGtSaving: { ...s.actionGtSaving, [rallyId]: false } }));
           throw error;
         }
       },

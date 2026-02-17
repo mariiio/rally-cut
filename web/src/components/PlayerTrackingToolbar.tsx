@@ -12,6 +12,8 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import SaveIcon from '@mui/icons-material/Save';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
+import LabelIcon from '@mui/icons-material/Label';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
@@ -65,9 +67,18 @@ export function PlayerTrackingToolbar() {
     showBallOverlay,
     toggleBallOverlay,
     swapTracks,
+    isLabelingActions,
+    setIsLabelingActions,
+    actionGroundTruth,
+    actionGtDirty,
+    actionGtSaving,
+    loadActionGroundTruth,
+    saveActionGroundTruth,
+    removeActionLabel,
   } = usePlayerTrackingStore();
 
   const currentTime = usePlayerStore((state) => state.currentTime);
+  const seek = usePlayerStore((state) => state.seek);
 
   // Get backend rally ID from selected rally
   const selectedRally = rallies.find((r) => r.id === selectedRallyId);
@@ -88,6 +99,13 @@ export function PlayerTrackingToolbar() {
       loadPlayerTrack(backendRallyId, fps);
     }
   }, [backendRallyId, fps, loadPlayerTrack]);
+
+  // Load action ground truth when tracking data is available
+  useEffect(() => {
+    if (backendRallyId && hasTrackingData) {
+      loadActionGroundTruth(backendRallyId);
+    }
+  }, [backendRallyId, hasTrackingData, loadActionGroundTruth]);
 
   // Check Label Studio status when tracking data is available
   useEffect(() => {
@@ -239,6 +257,38 @@ export function PlayerTrackingToolbar() {
 
   const showTrackingTools = hasTrackingData && !isCalibrating;
 
+  const handleToggleActionLabeling = () => {
+    setIsLabelingActions(!isLabelingActions);
+  };
+
+  const handleSeekToLabel = (frame: number) => {
+    if (!selectedRally || !trackData) return;
+    const rallyDuration = selectedRally.end_time - selectedRally.start_time;
+    const maxFrame = Math.max(1, trackData.frameCount - 1);
+    const time = selectedRally.start_time + (frame / maxFrame) * rallyDuration;
+    seek(time);
+  };
+
+  const handleDeleteLabel = (frame: number) => {
+    if (!backendRallyId) return;
+    removeActionLabel(backendRallyId, frame);
+  };
+
+  const handleSaveActionGt = async () => {
+    if (!backendRallyId) return;
+    try {
+      await saveActionGroundTruth(backendRallyId);
+    } catch (error) {
+      console.error('Failed to save action GT:', error);
+      alert(error instanceof Error ? error.message : 'Failed to save action ground truth');
+    }
+  };
+
+  const gtLabels = backendRallyId ? actionGroundTruth[backendRallyId] : undefined;
+  const gtCount = gtLabels?.length ?? 0;
+  const isDirty = backendRallyId ? actionGtDirty[backendRallyId] : false;
+  const isSaving = backendRallyId ? actionGtSaving[backendRallyId] : false;
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', py: 0.75, px: 1 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
@@ -304,6 +354,34 @@ export function PlayerTrackingToolbar() {
                   <SportsVolleyballIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
+            )}
+          </>
+        )}
+
+        {/* ── Action Labeling ── */}
+        {showTrackingTools && hasBallPositions && (
+          <>
+            <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
+            <Button
+              size="small"
+              variant={isLabelingActions ? 'contained' : 'outlined'}
+              startIcon={<LabelIcon />}
+              onClick={handleToggleActionLabeling}
+              color={isLabelingActions ? 'warning' : 'primary'}
+            >
+              {isLabelingActions ? 'Labeling...' : 'Label Actions'}
+            </Button>
+            {gtCount > 0 && (
+              <Button
+                size="small"
+                variant={isDirty ? 'contained' : 'outlined'}
+                startIcon={isSaving ? <CircularProgress size={14} /> : <SaveIcon />}
+                onClick={handleSaveActionGt}
+                disabled={isSaving || !isDirty}
+                color={isDirty ? 'primary' : 'success'}
+              >
+                {isSaving ? 'Saving...' : isDirty ? `Save GT (${gtCount})` : `GT Saved (${gtCount})`}
+              </Button>
             )}
           </>
         )}
@@ -405,6 +483,70 @@ export function PlayerTrackingToolbar() {
           <Typography variant="caption" sx={{ color: 'text.secondary', ml: 1 }}>
             ({(trackData.actions as ActionsData).numContacts} contacts)
           </Typography>
+        </Box>
+      )}
+
+      {/* Action Labeling Shortcut Legend */}
+      {isLabelingActions && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.75, flexWrap: 'wrap' }}>
+          <Typography variant="caption" sx={{ color: 'warning.main', fontWeight: 'bold' }}>
+            Keys:
+          </Typography>
+          {[
+            { key: 'S', label: 'Serve', color: '#4CAF50' },
+            { key: 'R', label: 'Receive', color: '#2196F3' },
+            { key: 'T', label: 'Set', color: '#FFC107' },
+            { key: 'A', label: 'Attack', color: '#f44336' },
+            { key: 'B', label: 'Block', color: '#9C27B0' },
+            { key: 'D', label: 'Dig', color: '#FF9800' },
+          ].map(({ key, label, color }) => (
+            <Chip
+              key={key}
+              label={`${key} = ${label}`}
+              size="small"
+              sx={{
+                bgcolor: color,
+                color: 'white',
+                fontSize: '0.65rem',
+                height: 20,
+                fontWeight: 'bold',
+                '& .MuiChip-label': { px: 0.5 },
+              }}
+            />
+          ))}
+          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+            , . = step frame | ESC = exit
+          </Typography>
+        </Box>
+      )}
+
+      {/* GT Label List */}
+      {isLabelingActions && gtLabels && gtLabels.length > 0 && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5, flexWrap: 'wrap' }}>
+          <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 'bold', mr: 0.5 }}>
+            GT Labels:
+          </Typography>
+          {gtLabels.map((label) => (
+            <Box key={label.frame} sx={{ display: 'flex', alignItems: 'center' }}>
+              <Chip
+                label={`${formatPhase(label.action)} f${label.frame}`}
+                size="small"
+                onClick={() => handleSeekToLabel(label.frame)}
+                onDelete={() => handleDeleteLabel(label.frame)}
+                deleteIcon={<DeleteOutlineIcon sx={{ fontSize: '14px !important' }} />}
+                sx={{
+                  bgcolor: ACTION_COLORS[label.action] || ACTION_COLORS.unknown,
+                  color: 'white',
+                  fontSize: '0.65rem',
+                  height: 22,
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  '& .MuiChip-label': { px: 0.5 },
+                  '& .MuiChip-deleteIcon': { color: 'rgba(255,255,255,0.7)', '&:hover': { color: 'white' } },
+                }}
+              />
+            </Box>
+          ))}
         </Box>
       )}
 
