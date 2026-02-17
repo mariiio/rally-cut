@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np  # noqa: E402
 
+from rallycut.tracking.action_classifier import classify_rally_actions  # noqa: E402
 from rallycut.tracking.ball_tracker import BallPosition as BallPos  # noqa: E402
 from rallycut.tracking.contact_detector import (
     _CONFIDENCE_THRESHOLD,
@@ -178,7 +179,7 @@ def nearest_player(gt_frame: int, player_positions: list[PlayerPos], ball_x: flo
     best_id = -1
     best_dist = float("inf")
     for p in player_positions:
-        if abs(p.frame_number - gt_frame) > 3:
+        if abs(p.frame_number - gt_frame) > 5:
             continue
         px = p.x
         py = p.y - p.height * 0.25
@@ -300,8 +301,8 @@ def main() -> None:
             player_positions=player_positions,
             config=cfg,
             net_y=rally.court_split_y,
+            frame_count=rally.frame_count or None,
         )
-        from rallycut.tracking.action_classifier import classify_rally_actions
         rally_actions = classify_rally_actions(contacts, rally.rally_id)
         pred_action_dicts = [a.to_dict() for a in rally_actions.actions]
 

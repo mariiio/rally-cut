@@ -537,6 +537,7 @@ def track_players(
             ball_positions=ball_positions,
             player_positions=result.positions,
             net_y=result.court_split_y,
+            frame_count=result.frame_count or None,
         )
         rally_actions = classify_rally_actions(contact_seq)
 
