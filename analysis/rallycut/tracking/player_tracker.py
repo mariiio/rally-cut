@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from rallycut.court.calibration import CourtCalibrator
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.player_filter import PlayerFilterConfig
+    from rallycut.tracking.quality_report import TrackingQualityReport
 
 logger = logging.getLogger(__name__)
 
@@ -321,6 +322,9 @@ class PlayerTrackingResult:
     # Raw positions before filtering (for parameter tuning)
     raw_positions: list[PlayerPosition] = field(default_factory=list)
 
+    # Quality report (set when filter_enabled=True and court_roi is set)
+    quality_report: TrackingQualityReport | None = None
+
     @property
     def avg_players_per_frame(self) -> float:
         """Average number of players detected per frame."""
@@ -383,6 +387,10 @@ class PlayerTrackingResult:
         # Raw positions before filtering (for parameter tuning)
         if self.raw_positions:
             result["rawPositions"] = [p.to_dict() for p in self.raw_positions]
+
+        # Quality report
+        if self.quality_report is not None:
+            result["qualityReport"] = self.quality_report.to_dict()
 
         return result
 
@@ -939,6 +947,17 @@ class PlayerTracker:
             frame_idx = start_frame
             frames_processed = 0
 
+            # Color histogram store for post-hoc track repair
+            color_store = None
+            histogram_stride = 3  # Extract every 3rd processed frame
+            if filter_enabled and self.court_roi is not None:
+                from rallycut.tracking.color_repair import (
+                    ColorHistogramStore,
+                    extract_shorts_histogram,
+                )
+
+                color_store = ColorHistogramStore()
+
             while frame_idx < end_frame:
                 ret, frame = cap.read()
                 if not ret:
@@ -992,6 +1011,24 @@ class PlayerTracker:
                             )
 
                         positions.extend(frame_positions)
+
+                        # Extract color histograms for post-hoc repair
+                        if (
+                            color_store is not None
+                            and frames_processed % histogram_stride == 0
+                        ):
+                            for p in frame_positions:
+                                if p.track_id >= 0:
+                                    hist = extract_shorts_histogram(
+                                        frame,  # Original BGR, NOT masked
+                                        (p.x, p.y, p.width, p.height),
+                                        video_width,
+                                        video_height,
+                                    )
+                                    if hist is not None:
+                                        color_store.add(
+                                            p.track_id, p.frame_number, hist
+                                        )
                     except (IndexError, RuntimeError, ValueError) as e:
                         # Handle any errors from YOLO/ByteTrack internals
                         logger.debug(f"Frame {frame_idx} tracking failed: {e}")
@@ -1029,6 +1066,10 @@ class PlayerTracker:
             ]
 
             # Apply court player filtering if enabled (per-frame with track stability)
+            num_jump_splits = 0
+            num_color_splits = 0
+            num_swap_fixes = 0
+
             if filter_enabled:
                 from rallycut.tracking.player_filter import (
                     PlayerFilter,
@@ -1043,7 +1084,30 @@ class PlayerTracker:
                 # Step 0: Split tracks at large position jumps (detects ID switches)
                 # Only when ROI masking is active (avoids regression on default pipeline)
                 if self.court_roi is not None:
-                    positions, num_splits = split_tracks_at_jumps(positions)
+                    split_info: list[tuple[int, int, int]] = []
+                    positions, num_jump_splits = split_tracks_at_jumps(
+                        positions, split_info_out=split_info
+                    )
+                    # Rekey color store for jump splits
+                    if color_store is not None:
+                        for old_id, new_id, split_frame in split_info:
+                            color_store.rekey(old_id, new_id, split_frame)
+
+                # Step 0b: Color-based track splitting
+                if color_store is not None and color_store.has_data():
+                    from rallycut.tracking.color_repair import (
+                        detect_and_fix_swaps,
+                        split_tracks_by_color,
+                    )
+
+                    positions, num_color_splits = split_tracks_by_color(
+                        positions, color_store
+                    )
+
+                    # Step 0c: Track convergence/swap detection
+                    positions, num_swap_fixes = detect_and_fix_swaps(
+                        positions, color_store
+                    )
 
                 # Step 1: Stabilize track IDs before filtering
                 # This merges tracks that represent the same player
@@ -1086,6 +1150,37 @@ class PlayerTracker:
                     f"using {filter_method}"
                 )
 
+            # Step 5: Compute quality report
+            quality_report = None
+            if filter_enabled and self.court_roi is not None:
+                from rallycut.tracking.quality_report import compute_quality_report
+
+                ball_det_rate = 0.0
+                ball_xy: list[tuple[float, float]] | None = None
+                if ball_positions:
+                    confident_balls = [
+                        bp for bp in ball_positions
+                        if bp.confidence >= 0.3
+                        and not (bp.x == 0.0 and bp.y == 0.0)
+                    ]
+                    ball_det_rate = min(
+                        len(confident_balls) / max(total_frames_in_range, 1), 1.0
+                    )
+                    ball_xy = [(bp.x, bp.y) for bp in confident_balls]
+
+                quality_report = compute_quality_report(
+                    positions=positions,
+                    raw_positions=raw_positions,
+                    frame_count=total_frames_in_range,
+                    video_fps=fps,
+                    primary_track_ids=primary_track_ids,
+                    ball_detection_rate=ball_det_rate,
+                    ball_positions_xy=ball_xy,
+                    id_switch_count=num_jump_splits,
+                    color_split_count=num_color_splits,
+                    swap_fix_count=num_swap_fixes,
+                )
+
             processing_time_ms = (time.time() - start_time) * 1000
             effective_fps = frames_processed / (processing_time_ms / 1000) if processing_time_ms > 0 else 0
             logger.info(
@@ -1105,6 +1200,7 @@ class PlayerTracker:
                 primary_track_ids=primary_track_ids,
                 filter_method=filter_method,
                 raw_positions=raw_positions,
+                quality_report=quality_report,
             )
 
         finally:
