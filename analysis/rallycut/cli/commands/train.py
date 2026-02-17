@@ -885,6 +885,48 @@ def info(
     console.print(dist_table)
 
 
+def _export_court_calibrations(
+    video_ids: list[str],
+) -> dict[str, Any]:
+    """Export court calibration data from DB for the given video IDs.
+
+    Returns:
+        Dict mapping video_id -> parsed court_calibration JSON.
+    """
+    from rallycut.evaluation.db import get_connection
+
+    if not video_ids:
+        return {}
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, court_calibration_json
+                FROM videos
+                WHERE id = ANY(%s)
+                  AND court_calibration_json IS NOT NULL
+                  AND deleted_at IS NULL
+                """,
+                (video_ids,),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    result: dict[str, Any] = {}
+    for row in rows:
+        video_id = str(row[0])
+        cal_json = row[1]
+        # psycopg may auto-parse JSON columns
+        if isinstance(cal_json, str):
+            cal_json = json.loads(cal_json)
+        result[video_id] = cal_json
+
+    return result
+
+
 def _export_tracking_ground_truth(
     video_content_hashes: set[str],
 ) -> dict[str, Any] | None:
@@ -1029,7 +1071,7 @@ def export_dataset(
     # Download/link videos
     rprint("[bold]Resolving videos...[/bold]")
     resolver = VideoResolver()
-    video_info_list: list[dict[str, str | int]] = []
+    video_info_list: list[dict[str, Any]] = []
 
     with Progress(console=console) as progress:
         task = progress.add_task("Processing videos...", total=len(videos))
@@ -1066,6 +1108,19 @@ def export_dataset(
 
     rprint(f"Processed [green]{len(video_info_list)}[/green] videos")
     rprint()
+
+    # Enrich video entries with court calibration data
+    video_ids = [str(v["video_id"]) for v in video_info_list]
+    court_cals = _export_court_calibrations(video_ids)
+    cal_count = 0
+    for video_info in video_info_list:
+        cal = court_cals.get(str(video_info["video_id"]))
+        if cal is not None:
+            video_info["court_calibration"] = cal
+            cal_count += 1
+    if cal_count:
+        rprint(f"Court calibrations: [green]{cal_count}[/green] videos")
+        rprint()
 
     # Generate manifest.json
     total_duration_ms = sum(int(v["duration_ms"]) for v in video_info_list)
