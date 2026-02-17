@@ -1,10 +1,11 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
-import { Alert, AlertTitle, IconButton } from '@mui/material';
+import { Alert, AlertTitle, IconButton, Box, Chip } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import type { Match } from '@/types/rally';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
+import type { QualityReport } from '@/services/api';
 
 interface VideoInsightsBannerProps {
   currentMatch: Match | null;
@@ -16,6 +17,12 @@ function isDismissed(videoId: string): boolean {
   } catch {
     return false;
   }
+}
+
+function scoreColor(score: number): string {
+  if (score >= 0.7) return '#4CAF50';
+  if (score >= 0.4) return '#FF9800';
+  return '#f44336';
 }
 
 export function VideoInsightsBanner({ currentMatch }: VideoInsightsBannerProps) {
@@ -30,8 +37,9 @@ export function VideoInsightsBanner({ currentMatch }: VideoInsightsBannerProps) 
   const playerTracks = usePlayerTrackingStore((s) => s.playerTracks);
   const calibrations = usePlayerTrackingStore((s) => s.calibrations);
 
-  const messages = useMemo(() => {
+  const { messages, qualityScore } = useMemo(() => {
     const msgs: string[] = [];
+    let worstScore: number | null = null;
 
     // Video characteristics messages
     const chars = currentMatch?.characteristicsJson;
@@ -40,7 +48,6 @@ export function VideoInsightsBanner({ currentMatch }: VideoInsightsBannerProps) 
         msgs.push('Far camera angle — player tracking may be less accurate for distant players');
       }
       if (chars.cameraDistance?.category === 'close' || chars.cameraDistance?.category === 'medium') {
-        // Medium/close cameras have worse ball tracking (38.7% vs 92.1% for far)
         msgs.push('Close camera angle — ball tracking may be less accurate when the ball leaves the frame');
       }
       if (chars.sceneComplexity?.category === 'complex') {
@@ -51,21 +58,32 @@ export function VideoInsightsBanner({ currentMatch }: VideoInsightsBannerProps) 
     // Quality report messages from tracked rallies
     if (currentMatch && videoId) {
       const hasCalibration = !!calibrations[videoId];
+      const seen = new Set<string>();
 
       for (const rally of currentMatch.rallies) {
         const backendId = rally._backendId;
         if (!backendId) continue;
-        const qr = playerTracks[backendId]?.tracksJson?.qualityReport;
+        const qr: QualityReport | undefined = playerTracks[backendId]?.tracksJson?.qualityReport;
         if (!qr) continue;
 
-        if (qr.calibrationRecommended && !hasCalibration) {
-          msgs.push('Label court corners for this video — tracking detected many background objects that calibration would filter out');
-          break; // Only show once
+        // Track worst score
+        if (worstScore === null || qr.trackabilityScore < worstScore) {
+          worstScore = qr.trackabilityScore;
+        }
+
+        // Deduplicate suggestions across rallies
+        for (const s of qr.suggestions) {
+          // Skip calibration suggestion if already calibrated
+          if (s.includes('Label court corners') && hasCalibration) continue;
+          if (!seen.has(s)) {
+            seen.add(s);
+            msgs.push(s);
+          }
         }
       }
     }
 
-    return msgs;
+    return { messages: msgs, qualityScore: worstScore };
   }, [currentMatch, videoId, playerTracks, calibrations]);
 
   if (!currentMatch || dismissed || messages.length === 0) return null;
@@ -89,7 +107,23 @@ export function VideoInsightsBanner({ currentMatch }: VideoInsightsBannerProps) 
         </IconButton>
       }
     >
-      <AlertTitle>Video Insights</AlertTitle>
+      <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
+        <AlertTitle sx={{ mb: 0 }}>Video Insights</AlertTitle>
+        {qualityScore !== null && (
+          <Chip
+            label={`Tracking: ${Math.round(qualityScore * 100)}%`}
+            size="small"
+            sx={{
+              bgcolor: scoreColor(qualityScore),
+              color: 'white',
+              fontSize: '0.7rem',
+              height: 20,
+              fontWeight: 'bold',
+              '& .MuiChip-label': { px: 0.75 },
+            }}
+          />
+        )}
+      </Box>
       {messages.map((msg, i) => (
         <div key={i}>{msg}</div>
       ))}
