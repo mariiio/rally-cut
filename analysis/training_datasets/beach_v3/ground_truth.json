@@ -119,7 +119,7 @@
       },
       {
         "start_ms": 38538,
-        "end_ms": 45111
+        "end_ms": 44111
       },
       {
         "start_ms": 55189,
@@ -127,7 +127,7 @@
       },
       {
         "start_ms": 94060,
-        "end_ms": 111446
+        "end_ms": 110946
       },
       {
         "start_ms": 151718,
@@ -190,6 +190,84 @@
       {
         "start_ms": 277802,
         "end_ms": 285500
+      }
+    ]
+  },
+  {
+    "video_id": "313c6c95-e586-4585-bfce-a2d293d96815",
+    "filename": "meme.mp4",
+    "rallies": [
+      {
+        "start_ms": 9666,
+        "end_ms": 18166
+      },
+      {
+        "start_ms": 22466,
+        "end_ms": 31533
+      },
+      {
+        "start_ms": 43800,
+        "end_ms": 57133
+      },
+      {
+        "start_ms": 66200,
+        "end_ms": 75700
+      },
+      {
+        "start_ms": 80066,
+        "end_ms": 88766
+      },
+      {
+        "start_ms": 113133,
+        "end_ms": 123866
+      },
+      {
+        "start_ms": 135533,
+        "end_ms": 145733
+      },
+      {
+        "start_ms": 157933,
+        "end_ms": 167133
+      },
+      {
+        "start_ms": 175000,
+        "end_ms": 180766
+      },
+      {
+        "start_ms": 189933,
+        "end_ms": 200633
+      },
+      {
+        "start_ms": 221933,
+        "end_ms": 229933
+      },
+      {
+        "start_ms": 241133,
+        "end_ms": 252800
+      },
+      {
+        "start_ms": 265666,
+        "end_ms": 281000
+      },
+      {
+        "start_ms": 303166,
+        "end_ms": 308433
+      },
+      {
+        "start_ms": 317933,
+        "end_ms": 329133
+      },
+      {
+        "start_ms": 339133,
+        "end_ms": 345633
+      },
+      {
+        "start_ms": 351000,
+        "end_ms": 360633
+      },
+      {
+        "start_ms": 367829,
+        "end_ms": 373329
       }
     ]
   },
@@ -328,6 +406,32 @@
     ]
   },
   {
+    "video_id": "5c641cfe-2a98-44b3-816c-e093d700baef",
+    "filename": "Micah_Nate vs Nick_Paul Game 3 - Nathan Gali (1080p, h264).mp4",
+    "rallies": [
+      {
+        "start_ms": 10733,
+        "end_ms": 19666
+      },
+      {
+        "start_ms": 61933,
+        "end_ms": 71933
+      },
+      {
+        "start_ms": 88600,
+        "end_ms": 97600
+      },
+      {
+        "start_ms": 108866,
+        "end_ms": 118833
+      },
+      {
+        "start_ms": 137666,
+        "end_ms": 152366
+      }
+    ]
+  },
+  {
     "video_id": "70ab9d7f-8cc4-48cb-892a-1c36793cac72",
     "filename": "IMG_1887.MOV",
     "rallies": [
@@ -428,48 +532,48 @@
     "filename": "match.mp4",
     "rallies": [
       {
-        "start_ms": 15552,
-        "end_ms": 24583
+        "start_ms": 19552,
+        "end_ms": 29083
       },
       {
-        "start_ms": 40313,
-        "end_ms": 65352
+        "start_ms": 44313,
+        "end_ms": 69852
       },
       {
-        "start_ms": 92085,
-        "end_ms": 96085
+        "start_ms": 96085,
+        "end_ms": 99585
       },
       {
-        "start_ms": 107013,
-        "end_ms": 114180
+        "start_ms": 110513,
+        "end_ms": 118180
       },
       {
-        "start_ms": 129761,
-        "end_ms": 137476
+        "start_ms": 133261,
+        "end_ms": 141976
       },
       {
-        "start_ms": 151789,
-        "end_ms": 161096
+        "start_ms": 156289,
+        "end_ms": 165596
       },
       {
-        "start_ms": 176377,
-        "end_ms": 187534
+        "start_ms": 180377,
+        "end_ms": 192534
       },
       {
-        "start_ms": 202884,
-        "end_ms": 210317
+        "start_ms": 206884,
+        "end_ms": 214817
       },
       {
-        "start_ms": 225610,
-        "end_ms": 233909
+        "start_ms": 229610,
+        "end_ms": 238409
       },
       {
-        "start_ms": 247302,
-        "end_ms": 264047
+        "start_ms": 251802,
+        "end_ms": 268547
       },
       {
-        "start_ms": 280720,
-        "end_ms": 298512
+        "start_ms": 285220,
+        "end_ms": 301609
       }
     ]
   },
@@ -598,6 +702,10 @@
       {
         "start_ms": 150150,
         "end_ms": 157994
+      },
+      {
+        "start_ms": 170212,
+        "end_ms": 176712
       }
     ]
   },
@@ -606,12 +714,8 @@
     "filename": "natch.mp4",
     "rallies": [
       {
-        "start_ms": 47045,
-        "end_ms": 55869
-      },
-      {
         "start_ms": 76760,
-        "end_ms": 85260
+        "end_ms": 87260
       },
       {
         "start_ms": 120033,
@@ -690,6 +794,32 @@
       {
         "start_ms": 231365,
         "end_ms": 235034
+      }
+    ]
+  },
+  {
+    "video_id": "cb3b68f0-74df-4ab3-9e14-e76ac62ecb2d",
+    "filename": "Newport Beach Games 10_12_25 Paul_Nate vs Colin_Tim - Nathan Gali (1080p, h264).mp4",
+    "rallies": [
+      {
+        "start_ms": 16065,
+        "end_ms": 38366
+      },
+      {
+        "start_ms": 60866,
+        "end_ms": 74066
+      },
+      {
+        "start_ms": 108866,
+        "end_ms": 118000
+      },
+      {
+        "start_ms": 130166,
+        "end_ms": 140333
+      },
+      {
+        "start_ms": 165400,
+        "end_ms": 171400
       }
     ]
   },

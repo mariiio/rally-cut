@@ -33,6 +33,7 @@ from rallycut.tracking.player_tracker import (
     PlayerTracker,
     PlayerTrackingResult,
     compute_court_roi_from_ball,
+    compute_court_roi_from_calibration,
 )
 
 console = Console()
@@ -366,6 +367,7 @@ def track_players(
         help=(
             'Court ROI polygon: "default" (conservative rectangle), '
             '"adaptive" (from ball trajectory), '
+            '"calibration" (from court calibration corners), '
             'or JSON array of {x,y} points (normalized 0-1). '
             'Masks regions outside the polygon to prevent background tracks.'
         ),
@@ -421,6 +423,7 @@ def track_players(
     # Parse explicit court ROI (--court-roi flag)
     court_roi: list[tuple[float, float]] | None = None
     adaptive_roi_requested = False
+    calibration_roi_requested = False
     if court_roi_str is not None:
         if court_roi_str.lower() == "default":
             court_roi = DEFAULT_COURT_ROI
@@ -429,6 +432,8 @@ def track_players(
         elif court_roi_str.lower() == "adaptive":
             # Deferred — computed after ball tracking below
             adaptive_roi_requested = True
+        elif court_roi_str.lower() == "calibration":
+            calibration_roi_requested = True
         else:
             import json as json_mod
             try:
@@ -495,10 +500,38 @@ def track_players(
                 f"[dim]Ball detection rate: {ball_result.detection_rate * 100:.1f}%[/dim]"
             )
 
-    # Court ROI is only used when explicitly requested via --court-roi.
-    # Auto-ROI was removed because ball trajectory is an unreliable proxy for
-    # court bounds — it can clip near-side players and disrupt BoT-SORT's
-    # feature extraction. Color repair handles ID switches without ROI masking.
+    # Compute calibration ROI if requested or auto-detect from calibration
+    if calibration_roi_requested or (calibrator is not None and court_roi_str is None):
+        if calibrator is not None:
+            cal_roi, cal_msg = compute_court_roi_from_calibration(calibrator)
+            if cal_roi is not None:
+                court_roi = cal_roi
+                if not quiet:
+                    xs = [p[0] for p in cal_roi]
+                    ys = [p[1] for p in cal_roi]
+                    console.print(
+                        f"[dim]Court ROI: calibration rectangle "
+                        f"(x: {min(xs):.2f}-{max(xs):.2f}, "
+                        f"y: {min(ys):.2f}-{max(ys):.2f})[/dim]"
+                    )
+                    if cal_msg:
+                        console.print(f"[yellow]  {cal_msg}[/yellow]")
+            else:
+                if not quiet:
+                    console.print(f"[yellow]  Calibration ROI failed: {cal_msg}[/yellow]")
+                if calibration_roi_requested:
+                    court_roi = DEFAULT_COURT_ROI
+                    if not quiet:
+                        console.print("[dim]Court ROI: falling back to default rectangle[/dim]")
+        elif calibration_roi_requested:
+            console.print(
+                "[yellow]Warning: --court-roi calibration requires --calibration[/yellow]"
+            )
+
+    # Adaptive ROI (from ball) is only used when explicitly requested via
+    # --court-roi adaptive, because ball trajectory is an unreliable proxy
+    # for court bounds. Calibration ROI is auto-applied when --calibration
+    # is provided (reliable, derived from labeled court corners).
     if adaptive_roi_requested:
         if ball_positions:
             adaptive_roi, quality_msg = compute_court_roi_from_ball(ball_positions)
@@ -579,6 +612,7 @@ def track_players(
             ball_positions=ball_positions,
             filter_enabled=filter_court,
             filter_config=filter_config,
+            court_calibrator=calibrator,
         )
     else:
         with Progress(
@@ -602,6 +636,7 @@ def track_players(
                 ball_positions=ball_positions,
                 filter_enabled=filter_court,
                 filter_config=filter_config,
+                court_calibrator=calibrator,
             )
 
     # Include ball positions in result for trajectory overlay

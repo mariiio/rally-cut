@@ -56,6 +56,107 @@ _ADAPTIVE_ROI_MIN_CONFIDENCE = 0.30  # Minimum ball confidence to include
 _ADAPTIVE_ROI_MIN_AREA = 0.04  # Reject ROI covering less than 4% of frame (bad tracking)
 
 
+def compute_court_roi_from_calibration(
+    calibrator: CourtCalibrator,
+    x_margin: float = 0.05,
+    near_margin: float = 0.10,
+    far_margin: float = 0.50,
+) -> tuple[list[tuple[float, float]] | None, str]:
+    """Compute court ROI rectangle from calibration homography.
+
+    Projects the 4 court corners to image space to determine the court's
+    vertical extent, then builds a rectangle with image-space margins.
+
+    Uses a rectangle (not trapezoid) because:
+    - Perspective compresses the far side, making court-space margins
+      useless for Y expansion (4m moves 0.02 in image Y)
+    - The trapezoid's slanted edges clip far-court players who are
+      well outside the narrow far-court width in image space
+    - Near-side corners already extend beyond frame edges for most
+      beach volleyball camera angles
+
+    The calibration's value is knowing the court's Y range in the image
+    (vs ball trajectory which is an unreliable proxy).
+
+    Args:
+        calibrator: Calibrated CourtCalibrator with homography.
+        x_margin: Margin on left/right as fraction of frame (default 5%).
+        near_margin: Margin below near baseline as fraction of frame (default 10%).
+        far_margin: Margin above far baseline as fraction of frame (default 50%).
+            Large because low-angle cameras show far-court players well above
+            the court line in the image.
+
+    Returns:
+        Tuple of (roi_polygon, quality_message):
+        - roi_polygon: List of 4 (x, y) points (clockwise rectangle), or None
+          if calibrator is not calibrated or homography is degenerate.
+        - quality_message: Human-readable quality assessment string.
+    """
+    if not calibrator.is_calibrated:
+        return None, "Calibrator not calibrated"
+
+    from rallycut.court.calibration import COURT_LENGTH, COURT_WIDTH
+
+    # Project 4 court corners (no margins) to image space.
+    # Camera is behind near baseline, so court (0,0) = near-left (high Y
+    # in image, bottom of frame), court (8,16) = far-right (low Y, top).
+    court_corners = [
+        (0.0, 0.0),                        # near-left
+        (COURT_WIDTH, 0.0),                 # near-right
+        (COURT_WIDTH, COURT_LENGTH),        # far-right
+        (0.0, COURT_LENGTH),                # far-left
+    ]
+
+    image_pts: list[tuple[float, float]] = []
+    for cx, cy in court_corners:
+        try:
+            ix, iy = calibrator.court_to_image((cx, cy), 1, 1)
+        except (RuntimeError, ValueError, np.linalg.LinAlgError):
+            return None, "Failed to project court corners (degenerate homography)"
+        image_pts.append((ix, iy))
+
+    # Identify near side (high Y) and far side (low Y)
+    near_avg_y = (image_pts[0][1] + image_pts[1][1]) / 2
+    far_avg_y = (image_pts[2][1] + image_pts[3][1]) / 2
+
+    # Sanity check: near side should have higher Y than far side in image
+    if near_avg_y < far_avg_y:
+        return None, (
+            f"Court orientation unexpected: near baseline Y={near_avg_y:.2f} "
+            f"< far baseline Y={far_avg_y:.2f}. "
+            "Check calibration corner order."
+        )
+
+    # Build bounding rectangle with image-space margins.
+    # far_margin is intentionally large (50%) because low-angle cameras
+    # show far-court players well above the court line in the image.
+    # For typical calibrations (far_avg_y ≈ 0.55), this gives roi_y_min ≈ 0.05,
+    # covering nearly the full frame height. The ROI's main filtering value
+    # is on the X axis and below-court (near side).
+    all_x = [p[0] for p in image_pts]
+    roi_x_min = max(0.0, min(all_x) - x_margin)
+    roi_x_max = min(1.0, max(all_x) + x_margin)
+    roi_y_min = max(0.0, far_avg_y - far_margin)
+    roi_y_max = min(1.0, near_avg_y + near_margin)
+
+    roi_points: list[tuple[float, float]] = [
+        (roi_x_min, roi_y_min),  # top-left
+        (roi_x_max, roi_y_min),  # top-right
+        (roi_x_max, roi_y_max),  # bottom-right
+        (roi_x_min, roi_y_max),  # bottom-left
+    ]
+
+    quality_msg = ""
+    court_height = near_avg_y - far_avg_y
+    if court_height < 0.15:
+        quality_msg = (
+            f"Court covers only {court_height * 100:.0f}% of frame height. "
+            "Far-court players may be too small for reliable detection."
+        )
+
+    return roi_points, quality_msg
+
+
 def compute_court_roi_from_ball(
     ball_positions: list[BallPosition],
     x_margin: float = 0.08,
