@@ -61,6 +61,9 @@ class ContactDetectionConfig:
     # Warmup filter: skip candidates in the first N frames (ball tracking warmup)
     warmup_skip_frames: int = 20  # Skip first ~0.7s (all GT serves at frame 42+)
 
+    # Minimum velocity for any candidate (floor for inflection/reversal candidates)
+    min_candidate_velocity: float = 0.005  # Below this, direction change is likely noise
+
     # Court position
     baseline_y_near: float = 0.82  # Near baseline Y threshold
     baseline_y_far: float = 0.18  # Far baseline Y threshold
@@ -632,6 +635,10 @@ def detect_contacts(
         else:
             track_id = -1
             player_dist = float("inf")
+
+        # Velocity floor: skip very low velocity candidates (tracking noise)
+        if velocity < cfg.min_candidate_velocity:
+            continue
 
         # Validate contact using compound gates to reduce false positives.
         # Tier 1: Strong signal — high velocity + direction change (definitive)
