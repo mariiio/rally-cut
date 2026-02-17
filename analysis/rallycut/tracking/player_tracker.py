@@ -33,6 +33,174 @@ DEFAULT_CONFIDENCE = 0.15  # Lower threshold for detection (tuned via grid searc
 DEFAULT_IOU = 0.45  # NMS IoU threshold
 DEFAULT_IMGSZ = 1280  # Inference resolution (1280 = +8pp far-court recall vs 640, 2x slower)
 
+# Default court ROI polygon (conservative rectangle for behind-baseline cameras)
+# Excludes edges where wall drawings, spectators, equipment may appear
+# Polygon as list of (x, y) normalized 0-1 coordinates, clockwise
+DEFAULT_COURT_ROI: list[tuple[float, float]] = [
+    (0.05, 0.10),  # top-left
+    (0.95, 0.10),  # top-right
+    (0.95, 0.95),  # bottom-right
+    (0.05, 0.95),  # bottom-left
+]
+
+# Maximum detections per frame passed to post-tracking pipeline
+# More than 4 (court players) to maintain tracker continuity, but caps noise.
+# Set to 8 (was 6) to avoid discarding real far-court players in crowded scenes
+# where spectators within the ROI have higher confidence.
+MAX_DETECTIONS_PER_FRAME = 8
+
+# Adaptive ROI parameters
+_ADAPTIVE_ROI_MIN_POINTS = 20  # Minimum confident ball detections for adaptive ROI
+_ADAPTIVE_ROI_MIN_CONFIDENCE = 0.30  # Minimum ball confidence to include
+_ADAPTIVE_ROI_MIN_AREA = 0.04  # Reject ROI covering less than 4% of frame (bad tracking)
+
+
+def compute_court_roi_from_ball(
+    ball_positions: list[BallPosition],
+    x_margin: float = 0.08,
+    y_margin_top: float = 0.05,
+    y_margin_bottom: float = 0.12,
+    percentile_low: float = 3.0,
+    percentile_high: float = 97.0,
+    max_roi_area: float = 0.75,
+    min_roi_width: float = 0.80,
+    min_roi_height: float = 0.65,
+) -> tuple[list[tuple[float, float]] | None, str]:
+    """Compute a tight court ROI polygon from ball trajectory positions.
+
+    The ball stays on or near the court during play, so its trajectory
+    naturally defines the playing area. Uses percentile-based bounds
+    (not min/max) to be robust to outlier ball detections, then expands
+    asymmetrically to cover player positions:
+    - Horizontally: players stand at/outside sidelines, ball often central
+    - Top (far court): far-side players slightly above ball trajectory
+    - Bottom (near court): near-side players well below ball trajectory
+
+    A minimum ROI width/height is enforced to prevent clipping the court
+    when the ball trajectory covers only part of the playing area (e.g.,
+    one-sided rallies where the ball stays on the left half).
+
+    Args:
+        ball_positions: Ball tracking results (normalized 0-1 coordinates).
+        x_margin: Absolute margin to add on left/right (default 8%).
+        y_margin_top: Absolute margin to add above (default 5%).
+        y_margin_bottom: Absolute margin to add below (default 12%).
+        percentile_low: Lower percentile for bounds (default 3rd).
+        percentile_high: Upper percentile for bounds (default 97th).
+        max_roi_area: Maximum ROI area as fraction of frame. If exceeded,
+            returns None (ball trajectory too spread for useful ROI).
+        min_roi_width: Minimum ROI width as fraction of frame (default 80%).
+            Prevents one-sided ball trajectories from clipping the court.
+        min_roi_height: Minimum ROI height as fraction of frame (default 65%).
+            Ensures far- and near-court players are included.
+
+    Returns:
+        Tuple of (roi_polygon, quality_message):
+        - roi_polygon: List of 4 (x, y) points (clockwise rectangle), or None
+          if insufficient ball data or ROI too large/small.
+        - quality_message: Human-readable quality assessment string.
+          Empty string if ROI is good. Contains warning if quality is marginal.
+    """
+    # Filter to confident detections with actual positions
+    points = [
+        (bp.x, bp.y)
+        for bp in ball_positions
+        if bp.confidence >= _ADAPTIVE_ROI_MIN_CONFIDENCE
+        and not (bp.x == 0.0 and bp.y == 0.0)
+    ]
+
+    if len(points) < _ADAPTIVE_ROI_MIN_POINTS:
+        return None, (
+            f"Only {len(points)} confident ball detections "
+            f"(need {_ADAPTIVE_ROI_MIN_POINTS}). "
+            "Use --court-roi to specify the court area manually."
+        )
+
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+
+    # Use percentile-based bounds instead of min/max to exclude outlier
+    # ball detections (false positives at frame edges, etc.)
+    xs_arr = np.array(xs)
+    ys_arr = np.array(ys)
+    ball_x_min = float(np.percentile(xs_arr, percentile_low))
+    ball_x_max = float(np.percentile(xs_arr, percentile_high))
+    ball_y_min = float(np.percentile(ys_arr, percentile_low))
+    ball_y_max = float(np.percentile(ys_arr, percentile_high))
+
+    # Expand bounding box to cover player positions
+    roi_x_min = max(0.0, ball_x_min - x_margin)
+    roi_x_max = min(1.0, ball_x_max + x_margin)
+    roi_y_min = max(0.0, ball_y_min - y_margin_top)
+    roi_y_max = min(1.0, ball_y_max + y_margin_bottom)
+
+    # Quality check: raw ball trajectory too small BEFORE min-dimension expansion.
+    # If the ball is stuck in one spot, the trajectory is useless even if we
+    # expand the ROI to minimum dimensions (it would be centered on the wrong spot).
+    ball_coverage = (ball_x_max - ball_x_min) * (ball_y_max - ball_y_min)
+    if ball_coverage < _ADAPTIVE_ROI_MIN_AREA:
+        return None, (
+            f"Ball trajectory covers only {ball_coverage * 100:.1f}% of frame "
+            "(likely poor ball tracking). "
+            "Use --court-roi to specify the court area manually."
+        )
+
+    # Enforce minimum ROI dimensions by expanding symmetrically around
+    # the ball trajectory center. This prevents one-sided ball trajectories
+    # from clipping players on the other side of the court.
+    roi_width = roi_x_max - roi_x_min
+    if roi_width < min_roi_width:
+        center_x = (roi_x_min + roi_x_max) / 2
+        half_w = min_roi_width / 2
+        roi_x_min = max(0.0, center_x - half_w)
+        roi_x_max = min(1.0, roi_x_min + min_roi_width)
+        # Re-adjust if clamped at right edge
+        if roi_x_max - roi_x_min < min_roi_width:
+            roi_x_min = max(0.0, roi_x_max - min_roi_width)
+
+    roi_height = roi_y_max - roi_y_min
+    if roi_height < min_roi_height:
+        center_y = (roi_y_min + roi_y_max) / 2
+        half_h = min_roi_height / 2
+        roi_y_min = max(0.0, center_y - half_h)
+        roi_y_max = min(1.0, roi_y_min + min_roi_height)
+        if roi_y_max - roi_y_min < min_roi_height:
+            roi_y_min = max(0.0, roi_y_max - min_roi_height)
+
+    # Quality check: ROI too large (ball spread across full frame)
+    roi_area = (roi_x_max - roi_x_min) * (roi_y_max - roi_y_min)
+    if roi_area > max_roi_area:
+        return None, (
+            f"Ball trajectory spans {roi_area * 100:.0f}% of frame "
+            "(too spread for useful court masking). "
+            "Use --court-roi to specify the court area manually, "
+            "or use --calibration for precise court boundaries."
+        )
+
+    roi = [
+        (roi_x_min, roi_y_min),  # top-left
+        (roi_x_max, roi_y_min),  # top-right
+        (roi_x_max, roi_y_max),  # bottom-right
+        (roi_x_min, roi_y_max),  # bottom-left
+    ]
+
+    # Quality assessment (ball_coverage computed before min-dimension expansion)
+    quality_msg = ""
+    if ball_coverage < 0.02:
+        quality_msg = (
+            f"Ball trajectory is narrow ({ball_coverage * 100:.1f}% of frame). "
+            "Adaptive ROI may be inaccurate. "
+            "Consider using --court-roi for better results."
+        )
+    elif len(points) < 50:
+        quality_msg = (
+            f"Limited ball detections ({len(points)} points). "
+            "Adaptive ROI is approximate. "
+            "Consider using --court-roi for precise court masking."
+        )
+
+    return roi, quality_msg
+
 # Available YOLO model sizes (larger = more accurate but slower)
 # Benchmark on beach volleyball (8.8s rally):
 #   yolov8n: 23 FPS, 88.0% F1, 82.4% recall (default - best speed/accuracy)
@@ -339,6 +507,7 @@ class PlayerTracker:
         with_reid: bool = True,
         appearance_thresh: float | None = None,
         imgsz: int = DEFAULT_IMGSZ,
+        court_roi: list[tuple[float, float]] | None = None,
     ):
         """
         Initialize player tracker.
@@ -363,6 +532,12 @@ class PlayerTracker:
             imgsz: Inference resolution. Higher values improve small/far object
                   detection at the cost of speed. 1280 (default, best tradeoff),
                   640 (faster, lower far-court recall), 1920 (native resolution).
+            court_roi: Court ROI polygon as list of (x, y) normalized 0-1
+                      coordinates. Regions outside this polygon are masked
+                      before detection, preventing tracks from forming on
+                      background objects (wall drawings, spectators, etc.).
+                      Use DEFAULT_COURT_ROI for a conservative rectangle.
+                      None disables ROI masking.
         """
         self.model_path = model_path
         self.confidence = confidence
@@ -373,6 +548,7 @@ class PlayerTracker:
         self.with_reid = with_reid
         self.appearance_thresh = appearance_thresh
         self.imgsz = imgsz
+        self.court_roi = court_roi
         self._model: Any = None
         self._custom_tracker_config: Path | None = None
 
@@ -603,6 +779,76 @@ class PlayerTracker:
 
         return filtered
 
+    def _apply_roi_mask(
+        self,
+        frame: np.ndarray,
+        roi: list[tuple[float, float]],
+    ) -> np.ndarray:
+        """Apply ROI mask to frame, blacking out regions outside the polygon.
+
+        This prevents YOLO from detecting persons outside the court area,
+        which prevents BoT-SORT from forming tracks on background objects
+        (wall drawings, spectators, etc.).
+
+        Args:
+            frame: BGR image.
+            roi: Polygon as list of (x, y) normalized 0-1 coordinates.
+
+        Returns:
+            Masked frame with regions outside ROI blacked out.
+        """
+        h, w = frame.shape[:2]
+        pts = np.array(
+            [(int(x * w), int(y * h)) for x, y in roi],
+            dtype=np.int32,
+        )
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillPoly(mask, [pts], (255,))
+        return cv2.bitwise_and(frame, frame, mask=mask)
+
+    @staticmethod
+    def _filter_detections(
+        positions: list[PlayerPosition],
+        max_per_frame: int = MAX_DETECTIONS_PER_FRAME,
+    ) -> list[PlayerPosition]:
+        """Apply sport-aware detection filters to reduce noise.
+
+        Filters:
+        1. Aspect ratio: persons are taller than wide (height > width)
+        2. Zone-dependent minimum size: far-court (low Y) players are smaller,
+           near-court (high Y) players must be bigger
+        3. Detection count cap: keep top detections by confidence
+
+        Args:
+            positions: Decoded detections for a single frame.
+            max_per_frame: Maximum detections to keep per frame.
+
+        Returns:
+            Filtered positions.
+        """
+        filtered = []
+        for p in positions:
+            # Aspect ratio: reject clearly non-person shapes (very wide)
+            # Lenient threshold: allows crouching/diving players (width up to 1.5x height)
+            if p.width > 1.5 * p.height:
+                continue
+
+            # Zone-dependent minimum area:
+            # Far-court players (low Y) are smaller in the frame
+            # Linear scaling: min_area = 0.0005 at top to 0.003 at bottom
+            min_area = 0.0005 + 0.0025 * p.y
+            if p.width * p.height < min_area:
+                continue
+
+            filtered.append(p)
+
+        # Cap detections per frame to reduce tracker noise
+        if len(filtered) > max_per_frame:
+            filtered.sort(key=lambda p: p.confidence, reverse=True)
+            filtered = filtered[:max_per_frame]
+
+        return filtered
+
     def track_video(
         self,
         video_path: Path | str,
@@ -709,11 +955,18 @@ class PlayerTracker:
                     if self.preprocessing == PREPROCESSING_CLAHE:
                         processed_frame = apply_clahe_preprocessing(frame)
 
+                    # Apply ROI mask to prevent tracks on background objects
+                    frame_to_track = processed_frame
+                    if self.court_roi is not None:
+                        frame_to_track = self._apply_roi_mask(
+                            processed_frame, self.court_roi
+                        )
+
                     # Run YOLO with ByteTrack
                     # persist=True enables tracking across frames
                     try:
                         results = model.track(
-                            processed_frame,
+                            frame_to_track,
                             persist=True,
                             tracker=str(self._get_tracker_config()),
                             conf=self.confidence,
@@ -727,6 +980,10 @@ class PlayerTracker:
                         frame_positions = self._decode_results(
                             results, frame_idx, video_width, video_height
                         )
+
+                        # Sport-aware detection filters (only when ROI masking is active)
+                        if self.court_roi is not None:
+                            frame_positions = self._filter_detections(frame_positions)
 
                         # Filter off-court detections if calibrator available
                         if court_calibrator is not None and court_calibrator.is_calibrated:
@@ -776,11 +1033,17 @@ class PlayerTracker:
                 from rallycut.tracking.player_filter import (
                     PlayerFilter,
                     PlayerFilterConfig,
+                    split_tracks_at_jumps,
                     stabilize_track_ids,
                 )
 
                 # Get config (or create default)
                 config = filter_config or PlayerFilterConfig()
+
+                # Step 0: Split tracks at large position jumps (detects ID switches)
+                # Only when ROI masking is active (avoids regression on default pipeline)
+                if self.court_roi is not None:
+                    positions, num_splits = split_tracks_at_jumps(positions)
 
                 # Step 1: Stabilize track IDs before filtering
                 # This merges tracks that represent the same player
@@ -879,9 +1142,16 @@ class PlayerTracker:
                 if self.preprocessing == PREPROCESSING_CLAHE:
                     processed_frame = apply_clahe_preprocessing(frame)
 
+                # Apply ROI mask to prevent tracks on background objects
+                frame_to_track = processed_frame
+                if self.court_roi is not None:
+                    frame_to_track = self._apply_roi_mask(
+                        processed_frame, self.court_roi
+                    )
+
                 # Run YOLO with ByteTrack
                 results = model.track(
-                    processed_frame,
+                    frame_to_track,
                     persist=True,
                     tracker=str(self._get_tracker_config()),
                     conf=self.confidence,
@@ -895,6 +1165,10 @@ class PlayerTracker:
                 frame_positions = self._decode_results(
                     results, frame_idx, video_width, video_height
                 )
+
+                # Sport-aware detection filters (only when ROI masking is active)
+                if self.court_roi is not None:
+                    frame_positions = self._filter_detections(frame_positions)
             except (IndexError, RuntimeError, ValueError) as e:
                 # Handle any errors from YOLO/ByteTrack internals
                 logger.debug(f"Frame {frame_idx} tracking failed: {e}")
