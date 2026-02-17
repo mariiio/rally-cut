@@ -12,6 +12,7 @@ from rallycut.tracking.contact_detector import (
     _filter_noise_spikes,
     _find_inflection_candidates,
     _find_nearest_player,
+    _find_velocity_reversal_candidates,
     _merge_candidates,
     _smooth_signal,
     detect_contacts,
@@ -140,10 +141,11 @@ class TestFindNearestPlayer:
 
     def test_finds_closest_player(self) -> None:
         """Attributes contact to nearest player."""
-        # Note: _find_nearest_player uses bottom-center of bbox (y + height/2)
+        # _find_nearest_player uses upper-quarter of bbox (y - height*0.25)
+        # for volleyball contact height (arms/torso)
         players = [
             _pp(10, 1, 0.3, 0.7),  # Far from ball
-            _pp(10, 2, 0.51, 0.51),  # Close to ball (bottom-center at y=0.51+0.075=0.585)
+            _pp(10, 2, 0.51, 0.51),  # Close to ball (upper-quarter at y=0.51-0.15*0.25=0.4725)
         ]
         track_id, dist = _find_nearest_player(10, 0.5, 0.5, players)
         assert track_id == 2
@@ -339,6 +341,49 @@ class TestMergeCandidates:
         assert result == [10, 25, 40]
 
 
+class TestFindVelocityReversalCandidates:
+    """Tests for velocity reversal detection."""
+
+    def test_detects_reversal(self) -> None:
+        """Velocity reversal (dot product < 0) is detected."""
+        # Frame 1: moving right (+vx), frame 2: moving left (-vx) = reversal
+        velocities = {
+            1: (0.02, 0.02, 0.0),
+            2: (0.02, 0.02, 0.0),
+            3: (0.02, -0.02, 0.0),  # Reversal here
+            4: (0.02, -0.02, 0.0),
+        }
+        frames = [1, 2, 3, 4]
+        result = _find_velocity_reversal_candidates(velocities, frames, min_distance_frames=2)
+        assert 3 in result
+
+    def test_no_reversal_in_straight_line(self) -> None:
+        """Constant velocity direction produces no reversals."""
+        velocities = {i: (0.02, 0.02, 0.0) for i in range(10)}
+        frames = list(range(10))
+        result = _find_velocity_reversal_candidates(velocities, frames, min_distance_frames=5)
+        assert result == []
+
+    def test_min_distance_enforced(self) -> None:
+        """Two close reversals keep only the strongest."""
+        velocities = {
+            1: (0.02, 0.02, 0.0),
+            2: (0.02, -0.01, 0.0),   # Weak reversal
+            3: (0.02, -0.02, 0.0),
+            4: (0.02, 0.02, 0.0),    # Stronger reversal
+            5: (0.02, 0.02, 0.0),
+        }
+        frames = [1, 2, 3, 4, 5]
+        result = _find_velocity_reversal_candidates(velocities, frames, min_distance_frames=8)
+        assert len(result) <= 1
+
+    def test_too_few_frames(self) -> None:
+        """Fewer than 3 frames returns empty."""
+        velocities = {1: (0.02, 0.02, 0.0), 2: (0.02, -0.02, 0.0)}
+        result = _find_velocity_reversal_candidates(velocities, [1, 2], min_distance_frames=5)
+        assert result == []
+
+
 class TestEstimateNetPosition:
     """Tests for net position estimation."""
 
@@ -404,7 +449,13 @@ class TestDetectContacts:
         for i in range(15):
             positions.append(_bp(31 + i, 0.28 + i * 0.012, 0.5 + i * 0.003, conf=0.9))
 
-        result = detect_contacts(positions, config=config)
+        # Players near the reversal points for compound validation
+        players = [
+            _pp(16, 1, 0.5, 0.42),   # Near phase 2 start
+            _pp(31, 2, 0.28, 0.52),   # Near phase 3 start
+        ]
+
+        result = detect_contacts(positions, player_positions=players, config=config)
         # Should detect contacts at the reversal/acceleration points
         assert result.num_contacts >= 1
 
@@ -431,7 +482,10 @@ class TestDetectContacts:
                 y = 0.425 + (i - 15) * 0.005
             positions.append(_bp(i, x, y, conf=0.9))
 
-        result = detect_contacts(positions, config=config)
+        # Player near the direction change for compound validation
+        players = [_pp(15, 1, 0.375, 0.43)]
+
+        result = detect_contacts(positions, player_positions=players, config=config)
         # Should detect a contact near the direction change at frame 15
         # The inflection detection should catch this even though velocity is low
         inflection_contacts = [
