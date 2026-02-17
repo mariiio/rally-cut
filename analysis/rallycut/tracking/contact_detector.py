@@ -40,7 +40,7 @@ class ContactDetectionConfig:
 
     # Direction change thresholds
     min_direction_change_deg: float = 30.0  # Min angle change to confirm contact
-    direction_check_frames: int = 5  # Frames before/after to check direction
+    direction_check_frames: int = 8  # Frames before/after to check direction
 
     # Inflection detection
     enable_inflection_detection: bool = True
@@ -57,6 +57,9 @@ class ContactDetectionConfig:
 
     # High-velocity contacts (lenient validation)
     high_velocity_threshold: float = 0.025  # Auto-accept above this velocity
+
+    # Warmup filter: skip candidates in the first N frames (ball tracking warmup)
+    warmup_skip_frames: int = 20  # Skip first ~0.7s (all GT serves at frame 42+)
 
     # Court position
     baseline_y_near: float = 0.82  # Near baseline Y threshold
@@ -233,14 +236,16 @@ def _find_nearest_player(
     ball_y: float,
     player_positions: list[PlayerPosition],
     search_frames: int = 3,
-) -> tuple[int, float]:
+) -> tuple[int, float, float]:
     """Find nearest player to ball at given frame.
 
     Returns:
-        (track_id, distance). track_id=-1 if no player found.
+        (track_id, distance, player_center_y). track_id=-1 if no player found.
+        player_center_y is the bbox center Y (for court side determination).
     """
     best_track_id = -1
     best_distance = float("inf")
+    best_player_y = 0.5
 
     for p in player_positions:
         if abs(p.frame_number - frame) > search_frames:
@@ -255,8 +260,9 @@ def _find_nearest_player(
         if dist < best_distance:
             best_distance = dist
             best_track_id = p.track_id
+            best_player_y = p.y  # bbox center Y for court side
 
-    return best_track_id, best_distance
+    return best_track_id, best_distance, best_player_y
 
 
 def _filter_noise_spikes(
@@ -595,6 +601,10 @@ def detect_contacts(
     contacts: list[Contact] = []
 
     for frame in candidate_frames:
+        # Skip warmup period (ball tracking produces false detections early)
+        if frame - first_frame < cfg.warmup_skip_frames:
+            continue
+
         # Get velocity (may be 0 for inflection-only candidates)
         velocity = velocity_lookup.get(frame, 0.0)
 
@@ -615,7 +625,7 @@ def detect_contacts(
 
         # Find nearest player
         if player_positions:
-            track_id, player_dist = _find_nearest_player(
+            track_id, player_dist, _player_y = _find_nearest_player(
                 frame, ball.x, ball.y, player_positions,
                 search_frames=cfg.player_search_frames,
             )
@@ -625,20 +635,23 @@ def detect_contacts(
 
         # Validate contact using compound gates to reduce false positives.
         # Tier 1: Strong signal — high velocity + direction change (definitive)
-        # Tier 2: Player confirmed — player nearby + trajectory signal
+        # Tier 2: High velocity + player nearby (serves/spikes without direction
+        #         change, e.g. when ball tracking has gaps around the contact)
+        # Tier 3: Player confirmed — player nearby + trajectory signal
         has_player = player_dist <= cfg.player_contact_radius
         has_direction_change = direction_change >= cfg.min_direction_change_deg
         is_high_velocity = velocity >= cfg.high_velocity_threshold
         is_strong = is_high_velocity and has_direction_change
+        is_fast_with_player = is_high_velocity and has_player
         is_player_confirmed = has_player and (
             has_direction_change or velocity >= cfg.min_peak_velocity
         )
-        is_validated = is_strong or is_player_confirmed
+        is_validated = is_strong or is_fast_with_player or is_player_confirmed
 
         if not is_validated:
             continue
 
-        # Determine court side
+        # Determine court side from ball position relative to net
         if ball.y >= cfg.baseline_y_near:
             court_side = "near"
         elif ball.y <= cfg.baseline_y_far:

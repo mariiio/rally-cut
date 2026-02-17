@@ -162,7 +162,6 @@ class ActionClassifier:
             RallyActions with classified actions.
         """
         contacts = contact_sequence.contacts
-        net_y = contact_sequence.net_y
         start_frame = contact_sequence.rally_start_frame
 
         if not contacts:
@@ -174,6 +173,8 @@ class ActionClassifier:
 
         actions: list[ClassifiedAction] = []
         serve_detected = False
+        serve_side: str | None = None  # Court side of the serve
+        receive_detected = False  # Whether receive has been classified
         current_side: str | None = None  # Side with possession
         contact_count_on_side = 0
         last_action_type: ActionType | None = None
@@ -181,10 +182,6 @@ class ActionClassifier:
         for i, contact in enumerate(contacts):
             action_type = ActionType.UNKNOWN
             confidence = self.config.low_confidence
-
-            ball_crossed_net = self._ball_crossed_net(
-                contact, contacts[i - 1] if i > 0 else None, net_y
-            )
 
             # Check for block (must be at net, immediately after opponent's attack)
             if (
@@ -210,16 +207,7 @@ class ActionClassifier:
                 last_action_type = action_type
                 continue
 
-            # Handle possession changes
-            if ball_crossed_net or current_side is None:
-                if current_side is not None:
-                    # Ball crossed net — new side gets possession
-                    current_side = contact.court_side
-                    contact_count_on_side = 0
-                else:
-                    current_side = contact.court_side
-
-            # If contact is on different side than expected, possession changed
+            # Handle possession changes: reset count on court side switch
             if contact.court_side != current_side:
                 current_side = contact.court_side
                 contact_count_on_side = 0
@@ -229,7 +217,6 @@ class ActionClassifier:
             # Rule-based classification
             if not serve_detected:
                 if i == serve_index:
-                    # This is the serve contact (either in window or fallback)
                     is_in_window = (
                         (contact.frame - start_frame) < self.config.serve_window_frames
                     )
@@ -239,32 +226,37 @@ class ActionClassifier:
                         else self.config.medium_confidence
                     )
                     serve_detected = True
+                    serve_side = contact.court_side
                     current_side = contact.court_side
                     contact_count_on_side = 1
                 else:
                     action_type = ActionType.UNKNOWN
                     confidence = self.config.low_confidence
 
+            elif (
+                not receive_detected
+                and serve_side is not None
+                and contact.court_side != serve_side
+            ):
+                # First contact on the opposite side from serve = receive.
+                # Robust to FP contacts between serve and receive.
+                action_type = ActionType.RECEIVE
+                confidence = self.config.high_confidence
+                receive_detected = True
+                contact_count_on_side = 1
+
             elif contact_count_on_side == 1:
-                # First contact on this side after serve or net crossing
-                if last_action_type == ActionType.SERVE:
-                    action_type = ActionType.RECEIVE
-                    confidence = self.config.high_confidence
-                else:
-                    action_type = ActionType.DIG
-                    confidence = self.config.medium_confidence
+                # First contact on this side (after initial receive)
+                action_type = ActionType.DIG
+                confidence = self.config.medium_confidence
 
             elif contact_count_on_side == 2:
-                # Second contact = set
                 action_type = ActionType.SET
                 confidence = self.config.high_confidence
 
             elif contact_count_on_side >= 3:
-                # Third contact = spike/attack
                 action_type = ActionType.SPIKE
                 confidence = self.config.high_confidence
-                # After spike, expect net crossing
-                # Don't reset here — let net crossing detection handle it
 
             actions.append(ClassifiedAction(
                 action_type=action_type,
@@ -322,22 +314,6 @@ class ActionClassifier:
             return 0
 
         return -1
-
-    def _ball_crossed_net(
-        self,
-        current: Contact,
-        previous: Contact | None,
-        net_y: float,
-    ) -> bool:
-        """Check if ball crossed the net between two contacts."""
-        if previous is None:
-            return False
-
-        # Ball crosses net when it passes from one side to the other
-        prev_above_net = previous.ball_y < net_y
-        curr_above_net = current.ball_y < net_y
-
-        return prev_above_net != curr_above_net
 
 
 def classify_rally_actions(
