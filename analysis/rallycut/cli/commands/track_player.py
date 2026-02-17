@@ -364,8 +364,9 @@ def track_players(
         None,
         "--court-roi",
         help=(
-            'Court ROI polygon as JSON array of {x,y} points (normalized 0-1), '
-            'or "default" for conservative rectangle. '
+            'Court ROI polygon: "default" (conservative rectangle), '
+            '"adaptive" (from ball trajectory), '
+            'or JSON array of {x,y} points (normalized 0-1). '
             'Masks regions outside the polygon to prevent background tracks.'
         ),
     ),
@@ -419,13 +420,15 @@ def track_players(
 
     # Parse explicit court ROI (--court-roi flag)
     court_roi: list[tuple[float, float]] | None = None
-    explicit_roi = False
+    adaptive_roi_requested = False
     if court_roi_str is not None:
-        explicit_roi = True
         if court_roi_str.lower() == "default":
             court_roi = DEFAULT_COURT_ROI
             if not quiet:
                 console.print("[dim]Court ROI: default conservative rectangle[/dim]")
+        elif court_roi_str.lower() == "adaptive":
+            # Deferred — computed after ball tracking below
+            adaptive_roi_requested = True
         else:
             import json as json_mod
             try:
@@ -436,10 +439,8 @@ def track_players(
                         console.print(f"[dim]Court ROI: {len(court_roi)}-point polygon[/dim]")
                 else:
                     console.print("[yellow]Warning: Court ROI must be 3+ points, ignoring[/yellow]")
-                    explicit_roi = False
             except (json_mod.JSONDecodeError, KeyError, TypeError) as e:
                 console.print(f"[yellow]Warning: Invalid court ROI JSON: {e}[/yellow]")
-                explicit_roi = False
 
     # Default output path
     if output is None:
@@ -494,8 +495,11 @@ def track_players(
                 f"[dim]Ball detection rate: {ball_result.detection_rate * 100:.1f}%[/dim]"
             )
 
-    # Compute court ROI: adaptive from ball trajectory, or fallback to default
-    if not explicit_roi and filter_court:
+    # Court ROI is only used when explicitly requested via --court-roi.
+    # Auto-ROI was removed because ball trajectory is an unreliable proxy for
+    # court bounds — it can clip near-side players and disrupt BoT-SORT's
+    # feature extraction. Color repair handles ID switches without ROI masking.
+    if adaptive_roi_requested:
         if ball_positions:
             adaptive_roi, quality_msg = compute_court_roi_from_ball(ball_positions)
             if adaptive_roi is not None:
@@ -517,6 +521,8 @@ def track_players(
                     console.print("[dim]Court ROI: falling back to default rectangle[/dim]")
         else:
             court_roi = DEFAULT_COURT_ROI
+            if not quiet:
+                console.print("[dim]Court ROI: no ball data, using default rectangle[/dim]")
 
     # Create filter config with optional overrides (beach volleyball only for now)
     filter_config = None
