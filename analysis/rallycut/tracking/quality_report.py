@@ -40,6 +40,10 @@ class TrackingQualityReport:
     color_split_count: int = 0  # From split_tracks_by_color
     swap_fix_count: int = 0  # From detect_and_fix_swaps
 
+    # Distractor detection
+    unique_raw_track_count: int = 0  # Unique tracks before filtering
+    calibration_recommended: bool = False  # True if calibration would likely help
+
     # Overall score
     trackability_score: float = 0.0  # 0-1 composite score
     suggestions: list[str] = field(default_factory=list)
@@ -57,6 +61,8 @@ class TrackingQualityReport:
             "idSwitchCount": self.id_switch_count,
             "colorSplitCount": self.color_split_count,
             "swapFixCount": self.swap_fix_count,
+            "uniqueRawTrackCount": self.unique_raw_track_count,
+            "calibrationRecommended": self.calibration_recommended,
             "trackabilityScore": self.trackability_score,
             "suggestions": self.suggestions,
         }
@@ -74,6 +80,7 @@ def compute_quality_report(
     color_split_count: int = 0,
     swap_fix_count: int = 0,
     expected_players: int = 4,
+    has_court_calibration: bool = False,
 ) -> TrackingQualityReport:
     """Compute a tracking quality report from tracking results.
 
@@ -121,6 +128,12 @@ def compute_quality_report(
             report.avg_detections_per_frame = (
                 sum(frames_with_detections.values()) / len(frames_with_detections)
             )
+
+    # Unique raw track count (before filtering)
+    unique_raw_tracks: set[int] = set()
+    if raw_positions:
+        unique_raw_tracks = {p.track_id for p in raw_positions if p.track_id >= 0}
+        report.unique_raw_track_count = len(unique_raw_tracks)
 
     # Track lifespan statistics (from raw positions)
     if raw_positions:
@@ -213,6 +226,19 @@ def compute_quality_report(
         suggestions.append(
             f"Only {report.primary_track_count} primary tracks found "
             f"(expected {expected_players})"
+        )
+
+    # Calibration recommendation: many raw tracks or high ID switches
+    # suggest background distractors that court ROI masking would fix
+    excess_tracks = report.unique_raw_track_count > expected_players * 2
+    high_switches = total_switches > 3
+    if not has_court_calibration and (excess_tracks or high_switches):
+        report.calibration_recommended = True
+        suggestions.append(
+            f"Label court corners for this video — "
+            f"{report.unique_raw_track_count} raw tracks detected "
+            f"(expected ~{expected_players}), calibration ROI would "
+            f"filter background distractors"
         )
 
     report.suggestions = suggestions
