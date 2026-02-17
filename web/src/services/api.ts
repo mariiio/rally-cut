@@ -1825,6 +1825,23 @@ export interface ActionsData {
   actions: ActionInfo[];
 }
 
+export interface QualityReport {
+  ballDetectionRate: number;
+  ballTrajectorySpread: number;
+  avgDetectionsPerFrame: number;
+  primaryTrackCount: number;
+  trackCreationRate: number;
+  trackDestructionRate: number;
+  avgTrackLifespanFrames: number;
+  idSwitchCount: number;
+  colorSplitCount: number;
+  swapFixCount: number;
+  uniqueRawTrackCount: number;
+  calibrationRecommended: boolean;
+  trackabilityScore: number;
+  suggestions: string[];
+}
+
 export interface TrackPlayersResponse {
   status: 'completed' | 'failed';
   frameCount?: number;
@@ -1844,6 +1861,7 @@ export interface TrackPlayersResponse {
   // Contact detection and action classification
   contacts?: ContactsData;
   actions?: ActionsData;
+  qualityReport?: QualityReport;
 }
 
 export interface GetPlayerTrackResponse {
@@ -1860,6 +1878,7 @@ export interface GetPlayerTrackResponse {
   ballPositions?: BallPosition[];
   contacts?: ContactsData;
   actions?: ActionsData;
+  qualityReport?: QualityReport;
   error?: string;
 }
 

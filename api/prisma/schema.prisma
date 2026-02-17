@@ -311,6 +311,7 @@ model PlayerTrack {
   groundTruthTaskId         Int?              @map("ground_truth_task_id")
   groundTruthSyncedAt       DateTime?         @map("ground_truth_synced_at") @db.Timestamptz(6)
   actionGroundTruthJson     Json?             @map("action_ground_truth_json")
+  qualityReportJson         Json?             @map("quality_report_json")
   rally               Rally             @relation(fields: [rallyId], references: [id], onDelete: Cascade)
 
   @@index([rallyId])

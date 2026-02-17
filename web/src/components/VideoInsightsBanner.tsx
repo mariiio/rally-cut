@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { Alert, AlertTitle, IconButton } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import type { Match } from '@/types/rally';
+import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 
 interface VideoInsightsBannerProps {
   currentMatch: Match | null;
@@ -26,23 +27,46 @@ export function VideoInsightsBanner({ currentMatch }: VideoInsightsBannerProps) 
     setDismissed(videoId ? isDismissed(videoId) : false);
   }, [videoId]);
 
-  const messages = useMemo(() => {
-    const chars = currentMatch?.characteristicsJson;
-    if (!chars) return [];
+  const playerTracks = usePlayerTrackingStore((s) => s.playerTracks);
+  const calibrations = usePlayerTrackingStore((s) => s.calibrations);
 
+  const messages = useMemo(() => {
     const msgs: string[] = [];
-    if (chars.cameraDistance?.category === 'far') {
-      msgs.push('Far camera angle — player tracking may be less accurate for distant players');
+
+    // Video characteristics messages
+    const chars = currentMatch?.characteristicsJson;
+    if (chars) {
+      if (chars.cameraDistance?.category === 'far') {
+        msgs.push('Far camera angle — player tracking may be less accurate for distant players');
+      }
+      if (chars.cameraDistance?.category === 'close' || chars.cameraDistance?.category === 'medium') {
+        // Medium/close cameras have worse ball tracking (38.7% vs 92.1% for far)
+        msgs.push('Close camera angle — ball tracking may be less accurate when the ball leaves the frame');
+      }
+      if (chars.sceneComplexity?.category === 'complex') {
+        msgs.push('Crowded scene detected — some spectators may appear in tracking results');
+      }
     }
-    if (chars.cameraDistance?.category === 'close' || chars.cameraDistance?.category === 'medium') {
-      // Medium/close cameras have worse ball tracking (38.7% vs 92.1% for far)
-      msgs.push('Close camera angle — ball tracking may be less accurate when the ball leaves the frame');
+
+    // Quality report messages from tracked rallies
+    if (currentMatch && videoId) {
+      const hasCalibration = !!calibrations[videoId];
+
+      for (const rally of currentMatch.rallies) {
+        const backendId = rally._backendId;
+        if (!backendId) continue;
+        const qr = playerTracks[backendId]?.tracksJson?.qualityReport;
+        if (!qr) continue;
+
+        if (qr.calibrationRecommended && !hasCalibration) {
+          msgs.push('Label court corners for this video — tracking detected many background objects that calibration would filter out');
+          break; // Only show once
+        }
+      }
     }
-    if (chars.sceneComplexity?.category === 'complex') {
-      msgs.push('Crowded scene detected — some spectators may appear in tracking results');
-    }
+
     return msgs;
-  }, [currentMatch?.characteristicsJson]);
+  }, [currentMatch, videoId, playerTracks, calibrations]);
 
   if (!currentMatch || dismissed || messages.length === 0) return null;
 
