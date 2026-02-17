@@ -33,18 +33,18 @@ class ContactDetectionConfig:
     """Configuration for trajectory-based contact detection."""
 
     # Velocity peak detection
-    min_peak_velocity: float = 0.012  # Min velocity for a contact peak
-    min_peak_prominence: float = 0.006  # Min prominence above neighbors
+    min_peak_velocity: float = 0.008  # Min velocity for a contact peak
+    min_peak_prominence: float = 0.003  # Min prominence above neighbors
     smoothing_window: int = 5  # Frames for velocity smoothing
     min_peak_distance_frames: int = 12  # Min frames between contacts (~0.4s @ 30fps)
 
     # Direction change thresholds
-    min_direction_change_deg: float = 30.0  # Min angle change to confirm contact
+    min_direction_change_deg: float = 20.0  # Min angle change to confirm contact
     direction_check_frames: int = 5  # Frames before/after to check direction
 
     # Inflection detection
     enable_inflection_detection: bool = True
-    min_inflection_angle_deg: float = 25.0  # Min angle for inflection candidate
+    min_inflection_angle_deg: float = 15.0  # Min angle for inflection candidate
     inflection_check_frames: int = 5  # Frames before/after for inflection check
 
     # Noise spike filter
@@ -52,7 +52,7 @@ class ContactDetectionConfig:
     noise_spike_max_jump: float = 0.20  # Max distance to predecessor/successor
 
     # Player proximity
-    player_contact_radius: float = 0.15  # Max distance (normalized) for attribution
+    player_contact_radius: float = 0.12  # Max distance (normalized) for attribution
     player_search_frames: int = 3  # Search ±N frames for nearby player
 
     # High-velocity contacts (lenient validation)
@@ -246,9 +246,9 @@ def _find_nearest_player(
         if abs(p.frame_number - frame) > search_frames:
             continue
 
-        # Use bottom-center of bbox (feet position approximation)
+        # Use upper-quarter of bbox (torso/arms where volleyball contacts happen)
         player_x = p.x
-        player_y = p.y + p.height / 2
+        player_y = p.y - p.height * 0.25
 
         dist = math.sqrt((ball_x - player_x) ** 2 + (ball_y - player_y) ** 2)
 
@@ -344,6 +344,67 @@ def _find_inflection_candidates(
         if frame - selected[-1] >= min_distance_frames:
             selected.append(frame)
         elif angle > angle_by_frame[selected[-1]]:
+            selected[-1] = frame
+
+    return selected
+
+
+def _find_velocity_reversal_candidates(
+    velocities: dict[int, tuple[float, float, float]],
+    frames: list[int],
+    min_distance_frames: int,
+) -> list[int]:
+    """Find frames where ball velocity reverses direction.
+
+    A real contact reverses the ball's velocity direction. This catches contacts
+    that velocity peaks miss (e.g., a dig that barely changes speed but reverses
+    direction).
+
+    Returns:
+        Sorted list of candidate frame numbers where velocity reverses.
+    """
+    if len(frames) < 3:
+        return []
+
+    reversal_frames: list[tuple[int, float]] = []
+
+    for i in range(1, len(frames)):
+        prev_frame = frames[i - 1]
+        curr_frame = frames[i]
+
+        if curr_frame - prev_frame > 5:
+            continue
+
+        prev_vel = velocities.get(prev_frame)
+        curr_vel = velocities.get(curr_frame)
+        if prev_vel is None or curr_vel is None:
+            continue
+
+        _, prev_vx, prev_vy = prev_vel
+        _, curr_vx, curr_vy = curr_vel
+
+        # Dot product of consecutive velocity vectors
+        dot = prev_vx * curr_vx + prev_vy * curr_vy
+        if dot < 0:
+            # Magnitude of the reversal (more negative = sharper reversal)
+            reversal_frames.append((curr_frame, -dot))
+
+    if not reversal_frames:
+        return []
+
+    # Enforce min distance: keep strongest reversal when close
+    reversal_frames.sort(key=lambda x: x[0])
+    selected: list[int] = []
+    strength_by_frame = dict(reversal_frames)
+
+    for frame, strength in reversal_frames:
+        if not selected:
+            selected.append(frame)
+            continue
+
+        if frame - selected[-1] >= min_distance_frames:
+            selected.append(frame)
+        elif strength > strength_by_frame[selected[-1]]:
             selected[-1] = frame
 
     return selected
@@ -497,7 +558,7 @@ def detect_contacts(
     }
     first_frame = frames[0]
 
-    # Step 5: Find inflection candidates
+    # Step 5a: Find inflection candidates
     inflection_frames: list[int] = []
     if cfg.enable_inflection_detection:
         confident_frames = sorted(ball_by_frame.keys())
@@ -509,9 +570,20 @@ def detect_contacts(
             min_distance_frames=cfg.min_peak_distance_frames,
         )
 
-    # Step 6: Merge candidates
+    # Step 5b: Find velocity reversal candidates
+    reversal_frames = _find_velocity_reversal_candidates(
+        velocities, frames, cfg.min_peak_distance_frames
+    )
+
+    # Step 6: Merge all candidates.
+    # Priority: velocity peaks > inflections > reversals.
+    # _merge_candidates keeps the first arg's frames, adding second arg's only
+    # if no existing candidate is within min_distance_frames.
+    inflection_and_reversal = _merge_candidates(
+        inflection_frames, reversal_frames, cfg.min_peak_distance_frames
+    )
     candidate_frames = _merge_candidates(
-        velocity_peak_frames, inflection_frames, cfg.min_peak_distance_frames
+        velocity_peak_frames, inflection_and_reversal, cfg.min_peak_distance_frames
     )
 
     if not candidate_frames:
@@ -551,11 +623,17 @@ def detect_contacts(
             track_id = -1
             player_dist = float("inf")
 
-        # Validate contact
+        # Validate contact using compound gates to reduce false positives.
+        # Tier 1: Strong signal — high velocity + direction change (definitive)
+        # Tier 2: Player confirmed — player nearby + trajectory signal
         has_player = player_dist <= cfg.player_contact_radius
         has_direction_change = direction_change >= cfg.min_direction_change_deg
         is_high_velocity = velocity >= cfg.high_velocity_threshold
-        is_validated = has_player or has_direction_change or is_high_velocity
+        is_strong = is_high_velocity and has_direction_change
+        is_player_confirmed = has_player and (
+            has_direction_change or velocity >= cfg.min_peak_velocity
+        )
+        is_validated = is_strong or is_player_confirmed
 
         if not is_validated:
             continue
