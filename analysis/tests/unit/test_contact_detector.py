@@ -160,7 +160,7 @@ class TestFindNearestPlayer:
     def test_respects_frame_window(self) -> None:
         """Players outside search window are ignored."""
         players = [_pp(100, 1, 0.5, 0.5)]  # Far from frame 10
-        track_id, dist, _ = _find_nearest_player(10, 0.5, 0.5, players, search_frames=3)
+        track_id, dist, _ = _find_nearest_player(10, 0.5, 0.5, players, search_frames=5)
         assert track_id == -1
 
 
@@ -536,6 +536,69 @@ class TestDetectContacts:
 
         result = detect_contacts(positions, config=config, net_y=0.45)
         assert result.net_y == 0.45
+
+    def test_frame_count_suppresses_post_rally(self) -> None:
+        """Candidates beyond frame_count are suppressed."""
+        config = ContactDetectionConfig(
+            min_peak_velocity=0.005,
+            min_peak_prominence=0.002,
+            enable_noise_filter=False,
+        )
+
+        # Trajectory with reversals at frame 15 and frame 35
+        positions = []
+        for i in range(50):
+            if i < 15:
+                positions.append(_bp(i, 0.2 + i * 0.02, 0.6, conf=0.9))
+            elif i < 35:
+                positions.append(_bp(i, 0.5 - (i - 15) * 0.015, 0.6, conf=0.9))
+            else:
+                positions.append(_bp(i, 0.2 + (i - 35) * 0.02, 0.6, conf=0.9))
+
+        players = [
+            _pp(15, 1, 0.5, 0.65),
+            _pp(35, 2, 0.2, 0.65),
+        ]
+
+        # Without frame_count: both contacts detected
+        result_all = detect_contacts(positions, players, config)
+        all_frames = {c.frame for c in result_all.contacts}
+
+        # With frame_count=30: frame 35 should be suppressed
+        result_limited = detect_contacts(positions, players, config, frame_count=30)
+        limited_frames = {c.frame for c in result_limited.contacts}
+
+        # The contact near frame 35 should be gone
+        post_rally = [f for f in all_frames if f > 30]
+        assert len(post_rally) > 0, "Need a contact after frame 30 for this test"
+        for f in post_rally:
+            assert f not in limited_frames
+
+    def test_court_side_uses_net_y(self) -> None:
+        """Court side is determined purely by net_y, not baseline thresholds."""
+        # With net_y=0.60, ball at y=0.85 should be "near" (above net)
+        # and ball at y=0.15 should be "far" (below net)
+        config = ContactDetectionConfig(
+            min_peak_velocity=0.005,
+            min_peak_prominence=0.002,
+            enable_noise_filter=False,
+        )
+
+        # Create trajectory on far side (y=0.15, well below any net_y)
+        positions = []
+        for i in range(30):
+            if i < 15:
+                positions.append(_bp(i, 0.2 + i * 0.02, 0.15, conf=0.9))
+            else:
+                positions.append(_bp(i, 0.5 - (i - 15) * 0.02, 0.15, conf=0.9))
+
+        players = [_pp(15, 1, 0.5, 0.20)]
+
+        result = detect_contacts(positions, players, config, net_y=0.50)
+        far_contacts = [c for c in result.contacts if c.court_side == "far"]
+        # All contacts at y=0.15 should be "far" with net_y=0.50
+        for c in result.contacts:
+            assert c.court_side == "far"
 
     def test_court_side_classification(self) -> None:
         """Contacts are classified as near/far based on ball Y."""

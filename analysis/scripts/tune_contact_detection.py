@@ -93,6 +93,7 @@ def evaluate_config(
             player_positions=player_positions,
             config=config,
             net_y=rally.court_split_y,
+            frame_count=rally.frame_count or None,
         )
 
         rally_actions = classify_rally_actions(contacts, rally.rally_id)

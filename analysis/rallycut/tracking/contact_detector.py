@@ -53,18 +53,18 @@ class ContactDetectionConfig:
 
     # Player proximity
     player_contact_radius: float = 0.15  # Max distance (normalized) for attribution
-    player_search_frames: int = 3  # Search ±N frames for nearby player
+    player_search_frames: int = 5  # Search ±N frames for nearby player
 
     # High-velocity contacts (lenient validation)
     high_velocity_threshold: float = 0.025  # Auto-accept above this velocity
 
     # Warmup filter: skip candidates in the first N frames (ball tracking warmup)
-    warmup_skip_frames: int = 20  # Skip first ~0.7s (all GT serves at frame 42+)
+    warmup_skip_frames: int = 10  # Skip first ~0.33s of ball tracking (avoid warmup noise)
 
     # Minimum velocity for any candidate (floor for inflection/reversal candidates)
     min_candidate_velocity: float = 0.005  # Below this, direction change is likely noise
 
-    # Court position
+    # Court position (baselines used by ball_features.py serve detection)
     baseline_y_near: float = 0.82  # Near baseline Y threshold
     baseline_y_far: float = 0.18  # Far baseline Y threshold
     serve_window_frames: int = 60  # Serve must occur in first N frames (~2s)
@@ -113,6 +113,7 @@ class ContactSequence:
     contacts: list[Contact] = field(default_factory=list)
     net_y: float = 0.50  # Estimated net Y position
     rally_start_frame: int = 0
+    ball_positions: list[BallPosition] = field(default_factory=list)
 
     @property
     def num_contacts(self) -> int:
@@ -238,7 +239,7 @@ def _find_nearest_player(
     ball_x: float,
     ball_y: float,
     player_positions: list[PlayerPosition],
-    search_frames: int = 3,
+    search_frames: int = 5,
 ) -> tuple[int, float, float]:
     """Find nearest player to ball at given frame.
 
@@ -495,6 +496,7 @@ def detect_contacts(
     player_positions: list[PlayerPosition] | None = None,
     config: ContactDetectionConfig | None = None,
     net_y: float | None = None,
+    frame_count: int | None = None,
 ) -> ContactSequence:
     """Detect ball contacts from trajectory inflection points and velocity peaks.
 
@@ -514,6 +516,8 @@ def detect_contacts(
         net_y: Explicit net Y position override. If provided, skips auto-estimation.
             Pass court_split_y from player tracking for more reliable court side
             classification.
+        frame_count: Total rally frames. If provided, candidates beyond this frame
+            are suppressed (post-rally ball pickup/warmdown).
 
     Returns:
         ContactSequence with all detected contacts.
@@ -608,6 +612,10 @@ def detect_contacts(
         if frame - first_frame < cfg.warmup_skip_frames:
             continue
 
+        # Skip post-rally candidates (ball pickup, warmdown)
+        if frame_count is not None and frame_count > 0 and frame > frame_count:
+            continue
+
         # Get velocity (may be 0 for inflection-only candidates)
         velocity = velocity_lookup.get(frame, 0.0)
 
@@ -659,14 +667,7 @@ def detect_contacts(
             continue
 
         # Determine court side from ball position relative to net
-        if ball.y >= cfg.baseline_y_near:
-            court_side = "near"
-        elif ball.y <= cfg.baseline_y_far:
-            court_side = "far"
-        elif ball.y < estimated_net_y:
-            court_side = "far"
-        else:
-            court_side = "near"
+        court_side = "far" if ball.y < estimated_net_y else "near"
 
         # Check if at net
         net_zone = 0.08  # ±8% of screen around net
@@ -692,8 +693,14 @@ def detect_contacts(
         f"{len(candidate_frames)} candidates, net_y={estimated_net_y:.3f})"
     )
 
+    # Pass confident ball positions for net-crossing detection in action classifier
+    confident_positions = [
+        bp for bp in ball_positions if bp.confidence >= _CONFIDENCE_THRESHOLD
+    ]
+
     return ContactSequence(
         contacts=contacts,
         net_y=estimated_net_y,
         rally_start_frame=first_frame,
+        ball_positions=confident_positions,
     )

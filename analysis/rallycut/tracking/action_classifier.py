@@ -18,9 +18,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rallycut.tracking.contact_detector import Contact, ContactSequence
+
+if TYPE_CHECKING:
+    from rallycut.tracking.ball_tracker import BallPosition
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +127,73 @@ class ActionClassifierConfig:
     low_confidence: float = 0.5  # Confidence when classification is uncertain
 
 
+def _ball_crossed_net(
+    ball_positions: list[BallPosition],
+    from_frame: int,
+    to_frame: int,
+    net_y: float,
+    min_frames_per_side: int = 2,
+) -> bool:
+    """Check if ball Y crossed net_y between two frames.
+
+    Requires the ball to be on one side for min_frames_per_side frames,
+    then the other side for min_frames_per_side frames, to avoid noise.
+
+    Args:
+        ball_positions: Sorted list of confident ball positions.
+        from_frame: Start of frame range (exclusive).
+        to_frame: End of frame range (exclusive).
+        net_y: Net Y position.
+        min_frames_per_side: Min frames on each side to confirm crossing.
+
+    Returns:
+        True if ball crossed net between from_frame and to_frame.
+    """
+    positions_in_range = [
+        bp for bp in ball_positions
+        if from_frame < bp.frame_number < to_frame
+    ]
+    if len(positions_in_range) < min_frames_per_side * 2:
+        return False
+
+    # Count consecutive frames on each side from start and end
+    near_from_start = 0
+    far_from_start = 0
+    for bp in positions_in_range:
+        if bp.y >= net_y:
+            if far_from_start == 0:
+                near_from_start += 1
+            else:
+                break
+        else:
+            if near_from_start == 0:
+                far_from_start += 1
+            else:
+                break
+
+    near_from_end = 0
+    far_from_end = 0
+    for bp in reversed(positions_in_range):
+        if bp.y >= net_y:
+            if far_from_end == 0:
+                near_from_end += 1
+            else:
+                break
+        else:
+            if near_from_end == 0:
+                far_from_end += 1
+            else:
+                break
+
+    # Crossing: started on one side, ended on the other
+    started_near = near_from_start >= min_frames_per_side
+    started_far = far_from_start >= min_frames_per_side
+    ended_near = near_from_end >= min_frames_per_side
+    ended_far = far_from_end >= min_frames_per_side
+
+    return (started_near and ended_far) or (started_far and ended_near)
+
+
 class ActionClassifier:
     """Rule-based volleyball action classifier.
 
@@ -169,7 +239,9 @@ class ActionClassifier:
 
         # Determine which contact is the serve (may be outside window if
         # ball tracking starts late — common with VballNet warmup).
-        serve_index = self._find_serve_index(contacts, start_frame)
+        serve_index = self._find_serve_index(
+            contacts, start_frame, contact_sequence.net_y,
+        )
 
         actions: list[ClassifiedAction] = []
         serve_detected = False
@@ -207,8 +279,21 @@ class ActionClassifier:
                 last_action_type = action_type
                 continue
 
-            # Handle possession changes: reset count on court side switch
-            if contact.court_side != current_side:
+            # Handle possession changes: check ball trajectory crossing,
+            # then fall back to per-contact court_side comparison.
+            crossed_net = False
+            if (
+                contact_sequence.ball_positions
+                and i > 0
+                and current_side is not None
+            ):
+                crossed_net = _ball_crossed_net(
+                    contact_sequence.ball_positions,
+                    from_frame=contacts[i - 1].frame,
+                    to_frame=contact.frame,
+                    net_y=contact_sequence.net_y,
+                )
+            if crossed_net or contact.court_side != current_side:
                 current_side = contact.court_side
                 contact_count_on_side = 0
 
@@ -282,6 +367,7 @@ class ActionClassifier:
         self,
         contacts: list[Contact],
         start_frame: int,
+        net_y: float = 0.5,
     ) -> int:
         """Find which contact is the serve.
 
@@ -296,11 +382,16 @@ class ActionClassifier:
         """
         window = self.config.serve_window_frames
 
+        # Dynamic baselines: scale proportionally to net_y so they adapt
+        # to camera angles. Coefficients calibrated to match 0.82/0.18 at net_y=0.5.
+        baseline_near = net_y + (1.0 - net_y) * 0.64
+        baseline_far = net_y * 0.36
+
         # Pass 1: strict serve detection within window
         for i, c in enumerate(contacts):
             if (c.frame - start_frame) >= window:
                 break
-            is_at_baseline = c.ball_y >= 0.82 or c.ball_y <= 0.18
+            is_at_baseline = c.ball_y >= baseline_near or c.ball_y <= baseline_far
             if is_at_baseline or c.velocity >= self.config.serve_min_velocity:
                 return i
 

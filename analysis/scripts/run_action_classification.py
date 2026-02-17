@@ -93,11 +93,17 @@ def run_pipeline(
         )
 
         # Step 1: Contact detection
+        rally_frame_count = (
+            rally.predictions.frame_count
+            if rally.predictions and rally.predictions.frame_count
+            else None
+        )
         contact_seq = detect_contacts(
             ball_positions=ball_positions,
             player_positions=player_positions if player_positions else None,
             config=config,
             net_y=court_split_y,
+            frame_count=rally_frame_count,
         )
 
         # Step 2: Action classification

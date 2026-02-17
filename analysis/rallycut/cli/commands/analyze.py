@@ -104,6 +104,7 @@ def classify_actions(
         ball_positions=ball_positions,
         player_positions=player_positions if player_positions else None,
         net_y=court_split_y,
+        frame_count=data.get("frameCount"),
     )
 
     if not quiet:
@@ -254,6 +255,7 @@ def rank_highlights(
         court_split_y = data.get("courtSplitY")
         contact_seq = detect_contacts(
             ball_positions, player_positions or None, net_y=court_split_y,
+            frame_count=data.get("frameCount"),
         )
         rally_actions = classify_rally_actions(contact_seq, rally_id=rally_id)
 
