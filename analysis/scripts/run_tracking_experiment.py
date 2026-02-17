@@ -55,6 +55,9 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
         print("No rallies found!")
         return {}
 
+    # Resolve court ROI mode
+    court_roi_mode = getattr(args, "court_roi", "none")
+
     # Create tracker with experiment settings
     tracker_kwargs: dict[str, Any] = {
         "yolo_model": args.yolo_model,
@@ -63,6 +66,11 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
         "preprocessing": args.preprocessing,
     }
 
+    if court_roi_mode == "default":
+        from rallycut.tracking.player_tracker import DEFAULT_COURT_ROI
+
+        tracker_kwargs["court_roi"] = DEFAULT_COURT_ROI
+
     # ReID overrides
     if args.appearance_thresh is not None:
         tracker_kwargs["appearance_thresh"] = args.appearance_thresh
@@ -70,6 +78,8 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
         tracker_kwargs["with_reid"] = True
 
     print(f"Tracker config: {tracker_kwargs}")
+    if court_roi_mode != "none":
+        print(f"Court ROI: {court_roi_mode}")
     tracker = PlayerTracker(**tracker_kwargs)
 
     # Track each rally and evaluate
@@ -90,6 +100,30 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
         # Run tracking
         track_start = time.time()
         try:
+            # For adaptive ROI, run ball tracking first
+            ball_positions = None
+            if court_roi_mode == "adaptive":
+                from rallycut.tracking import create_ball_tracker
+                from rallycut.tracking.player_tracker import (
+                    DEFAULT_COURT_ROI,
+                    compute_court_roi_from_ball,
+                )
+
+                ball_tracker = create_ball_tracker()
+                ball_result = ball_tracker.track_video(
+                    video_path, start_ms=rally.start_ms, end_ms=rally.end_ms,
+                )
+                ball_positions = ball_result.positions
+                adaptive_roi, quality_msg = compute_court_roi_from_ball(ball_positions)
+                roi = adaptive_roi if adaptive_roi is not None else DEFAULT_COURT_ROI
+                tracker.court_roi = roi
+                xs = [p[0] for p in roi]
+                ys = [p[1] for p in roi]
+                print(
+                    f"ROI x:{min(xs):.2f}-{max(xs):.2f} y:{min(ys):.2f}-{max(ys):.2f} ",
+                    end="", flush=True,
+                )
+
             result = tracker.track_video(
                 video_path=video_path,
                 start_ms=rally.start_ms,
@@ -97,6 +131,7 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
                 stride=1,
                 filter_enabled=True,
                 filter_config=PlayerFilterConfig(),
+                ball_positions=ball_positions,
             )
 
             # Offset frame numbers to rally-relative (0-based) to match GT
@@ -235,6 +270,12 @@ def main() -> None:
     parser.add_argument("--confidence", type=float, default=0.15, help="Detection confidence")
     parser.add_argument("--preprocessing", default="none", help="Preprocessing (none/clahe)")
     parser.add_argument("--iou-threshold", type=float, default=0.5, help="Eval IoU threshold")
+
+    # Court ROI
+    parser.add_argument(
+        "--court-roi", default="none", choices=["none", "default", "adaptive"],
+        help="Court ROI mode: none (no masking), default (fixed rectangle), adaptive (from ball)",
+    )
 
     # Optional overrides
     parser.add_argument("--with-reid", action="store_true", help="Enable BoT-SORT ReID")
