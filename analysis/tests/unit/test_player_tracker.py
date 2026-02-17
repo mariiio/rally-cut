@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from rallycut.court.calibration import CourtCalibrator
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.player_tracker import (
     DEFAULT_COURT_ROI,
     compute_court_roi_from_ball,
+    compute_court_roi_from_calibration,
 )
 
 
@@ -233,3 +235,155 @@ class TestComputeCourtRoiFromBall:
         roi_width = max(xs) - min(xs)
         # Without min width enforcement, ROI should be ~0.36 (0.2 ball span + 0.16 margin)
         assert roi_width < 0.50
+
+
+def _make_calibrator(
+    image_corners: list[tuple[float, float]],
+) -> CourtCalibrator:
+    """Create a calibrated CourtCalibrator from 4 image-space corners.
+
+    Corner order matches compute_court_roi_from_calibration's projection:
+    [0] → court (0, 0)   = near-left
+    [1] → court (8, 0)   = near-right
+    [2] → court (8, 16)  = far-right
+    [3] → court (0, 16)  = far-left
+    """
+    calibrator = CourtCalibrator()
+    calibrator.calibrate(image_corners)
+    return calibrator
+
+
+class TestComputeCourtRoiFromCalibration:
+    """Tests for calibration-based court ROI."""
+
+    # Typical beach volleyball camera: near baseline at y=0.85, far at y=0.40,
+    # with perspective narrowing toward far court.
+    TYPICAL_CORNERS = [
+        (0.10, 0.85),  # near-left (BL)
+        (0.90, 0.85),  # near-right (BR)
+        (0.35, 0.40),  # far-right (TR)
+        (0.15, 0.40),  # far-left (TL)
+    ]
+
+    def test_returns_roi_for_calibrated(self) -> None:
+        """Should return a 4-point rectangle for a calibrated court."""
+        cal = _make_calibrator(self.TYPICAL_CORNERS)
+        roi, msg = compute_court_roi_from_calibration(cal)
+        assert roi is not None
+        assert len(roi) == 4
+
+    def test_returns_none_for_uncalibrated(self) -> None:
+        """Should return None when calibrator has no homography."""
+        cal = CourtCalibrator()
+        roi, msg = compute_court_roi_from_calibration(cal)
+        assert roi is None
+        assert "not calibrated" in msg.lower()
+
+    def test_roi_is_rectangle(self) -> None:
+        """ROI should be a rectangle (4 points, aligned edges)."""
+        cal = _make_calibrator(self.TYPICAL_CORNERS)
+        roi, _ = compute_court_roi_from_calibration(cal)
+        assert roi is not None
+
+        # Rectangle: TL and BL share x, TR and BR share x, etc.
+        tl, tr, br, bl = roi
+        assert abs(tl[0] - bl[0]) < 1e-6  # left edge aligned
+        assert abs(tr[0] - br[0]) < 1e-6  # right edge aligned
+        assert abs(tl[1] - tr[1]) < 1e-6  # top edge aligned
+        assert abs(bl[1] - br[1]) < 1e-6  # bottom edge aligned
+
+    def test_roi_clamped_to_frame(self) -> None:
+        """All ROI coordinates should be in [0, 1]."""
+        cal = _make_calibrator(self.TYPICAL_CORNERS)
+        roi, _ = compute_court_roi_from_calibration(cal)
+        assert roi is not None
+        for x, y in roi:
+            assert 0.0 <= x <= 1.0
+            assert 0.0 <= y <= 1.0
+
+    def test_margins_expand_roi(self) -> None:
+        """ROI should extend beyond projected court corners due to margins."""
+        cal = _make_calibrator(self.TYPICAL_CORNERS)
+        roi, _ = compute_court_roi_from_calibration(cal)
+        assert roi is not None
+
+        xs = [p[0] for p in roi]
+        ys = [p[1] for p in roi]
+
+        # Near-court corners are at x=0.10 and x=0.90
+        # With 5% x_margin, ROI should extend to ~0.05 and ~0.95
+        assert min(xs) < 0.10
+        assert max(xs) > 0.90
+
+        # Near baseline at y=0.85, with 10% near_margin -> y_max ~0.95
+        assert max(ys) > 0.85
+
+    def test_far_margin_generous(self) -> None:
+        """Far margin should be large (default 50%) to cover far-court players."""
+        cal = _make_calibrator(self.TYPICAL_CORNERS)
+        roi, _ = compute_court_roi_from_calibration(cal)
+        assert roi is not None
+
+        ys = [p[1] for p in roi]
+        # Far baseline at y=0.40, with 50% far_margin -> y_min = max(0, 0.40-0.50) = 0.0
+        assert min(ys) == 0.0
+
+    def test_custom_margins(self) -> None:
+        """Custom margins should be respected."""
+        cal = _make_calibrator(self.TYPICAL_CORNERS)
+        roi_default, _ = compute_court_roi_from_calibration(cal)
+        roi_tight, _ = compute_court_roi_from_calibration(
+            cal, x_margin=0.01, near_margin=0.02, far_margin=0.05
+        )
+        assert roi_default is not None
+        assert roi_tight is not None
+
+        # Tight margins should produce a smaller ROI
+        def roi_area(r: list[tuple[float, float]]) -> float:
+            xs = [p[0] for p in r]
+            ys = [p[1] for p in r]
+            return (max(xs) - min(xs)) * (max(ys) - min(ys))
+
+        assert roi_area(roi_tight) < roi_area(roi_default)
+
+    def test_rejects_inverted_court(self) -> None:
+        """Should return None when near baseline has lower Y than far baseline."""
+        # Swap near and far sides: near at top (low Y), far at bottom (high Y)
+        inverted = [
+            (0.10, 0.15),  # near-left at top
+            (0.90, 0.15),  # near-right at top
+            (0.65, 0.60),  # far-right at bottom
+            (0.35, 0.60),  # far-left at bottom
+        ]
+        cal = _make_calibrator(inverted)
+        roi, msg = compute_court_roi_from_calibration(cal)
+        assert roi is None
+        assert "orientation" in msg.lower() or "unexpected" in msg.lower()
+
+    def test_quality_warning_for_small_court(self) -> None:
+        """Should warn when court covers little vertical space."""
+        # Court compressed into a tiny band: near y=0.55, far y=0.45
+        compressed = [
+            (0.10, 0.55),  # near-left
+            (0.90, 0.55),  # near-right
+            (0.40, 0.45),  # far-right
+            (0.20, 0.45),  # far-left
+        ]
+        cal = _make_calibrator(compressed)
+        roi, msg = compute_court_roi_from_calibration(cal)
+        assert roi is not None
+        assert "covers only" in msg.lower()
+
+    def test_overhead_camera(self) -> None:
+        """Near-overhead camera with minimal perspective should still produce ROI."""
+        # Nearly symmetric: near and far have similar widths
+        overhead = [
+            (0.15, 0.80),  # near-left
+            (0.85, 0.80),  # near-right
+            (0.20, 0.20),  # far-right
+            (0.80, 0.20),  # far-left (note: wider than typical perspective)
+        ]
+        cal = _make_calibrator(overhead)
+        roi, _ = compute_court_roi_from_calibration(cal)
+        assert roi is not None
+        assert len(roi) == 4
