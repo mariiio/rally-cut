@@ -6,7 +6,7 @@ court coordinates (in meters).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -278,3 +278,136 @@ class CourtCalibrator:
             interior_margin <= x <= COURT_WIDTH - interior_margin
             and interior_margin <= y <= COURT_LENGTH - interior_margin
         )
+
+
+@dataclass
+class VideoCalibrationInsights:
+    """Video quality insights derived from court calibration geometry.
+
+    Flags problematic videos (extreme perspective, small court area) without
+    running tracking. Useful for pre-screening videos before investing in
+    full tracking runs.
+    """
+
+    court_area_fraction: float  # Court area as fraction of frame (0-1)
+    perspective_ratio: float  # far-court width / near-court width (1.0 = overhead)
+    camera_elevation: str  # "low" (<0.3), "medium" (0.3-0.6), "high" (>0.6)
+    near_court_y_range: tuple[float, float]  # Image Y range of near half-court
+    far_court_y_range: tuple[float, float]  # Image Y range of far half-court
+    warnings: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "court_area_fraction": self.court_area_fraction,
+            "perspective_ratio": self.perspective_ratio,
+            "camera_elevation": self.camera_elevation,
+            "near_court_y_range": list(self.near_court_y_range),
+            "far_court_y_range": list(self.far_court_y_range),
+            "warnings": self.warnings,
+        }
+
+
+def compute_calibration_insights(
+    calibrator: CourtCalibrator,
+) -> VideoCalibrationInsights | None:
+    """Analyze calibration geometry to flag problematic videos.
+
+    Uses the homography to project court corners to image space and compute
+    geometric properties (area, perspective ratio, elevation) that predict
+    tracking difficulty.
+
+    Args:
+        calibrator: Calibrated CourtCalibrator with homography.
+
+    Returns:
+        VideoCalibrationInsights, or None if calibrator is not calibrated.
+    """
+    if not calibrator.is_calibrated:
+        return None
+
+    # Project court corners to image space (normalized 0-1 via width=1, height=1).
+    # Order: near-left, near-right, far-right, far-left (same as
+    # compute_court_roi_from_calibration in player_tracker.py).
+    court_corners = [
+        (0.0, 0.0),                        # near-left
+        (COURT_WIDTH, 0.0),                 # near-right
+        (COURT_WIDTH, COURT_LENGTH),        # far-right
+        (0.0, COURT_LENGTH),                # far-left
+    ]
+
+    image_corners: list[tuple[float, float]] = []
+    for cx, cy in court_corners:
+        try:
+            ix, iy = calibrator.court_to_image((cx, cy), 1, 1)
+            image_corners.append((ix, iy))
+        except (RuntimeError, ValueError, np.linalg.LinAlgError):
+            return None
+
+    # Court area via Shoelace formula on normalized image coordinates.
+    # Since coords are in [0,1] range, the Shoelace result directly gives
+    # the fraction of frame area occupied by the court.
+    n = len(image_corners)
+    area = 0.0
+    for i in range(n):
+        j = (i + 1) % n
+        area += image_corners[i][0] * image_corners[j][1]
+        area -= image_corners[j][0] * image_corners[i][1]
+    court_area_fraction = abs(area) / 2.0
+
+    # Perspective ratio: far-court width / near-court width
+    # near-court = corners 0-1 (court y=0), far-court = corners 2-3 (court y=16)
+    near_width = abs(image_corners[1][0] - image_corners[0][0])
+    far_width = abs(image_corners[2][0] - image_corners[3][0])
+    perspective_ratio = far_width / near_width if near_width > 0 else 0.0
+
+    # Camera elevation from perspective ratio
+    if perspective_ratio < 0.3:
+        camera_elevation = "low"
+    elif perspective_ratio < 0.6:
+        camera_elevation = "medium"
+    else:
+        camera_elevation = "high"
+
+    # Y ranges for near and far half-courts
+    # Project net line (y=COURT_LENGTH/2) to image
+    try:
+        net_left = calibrator.court_to_image((0.0, COURT_LENGTH / 2), 1, 1)
+        net_right = calibrator.court_to_image((COURT_WIDTH, COURT_LENGTH / 2), 1, 1)
+        net_y = (net_left[1] + net_right[1]) / 2
+    except (RuntimeError, ValueError, np.linalg.LinAlgError):
+        net_y = 0.5
+
+    near_ys = [image_corners[0][1], image_corners[1][1]]
+    far_ys = [image_corners[2][1], image_corners[3][1]]
+    far_court_y_range = (min(far_ys), net_y)
+    near_court_y_range = (net_y, max(near_ys))
+
+    # Generate warnings
+    warnings: list[str] = []
+    if court_area_fraction < 0.15:
+        warnings.append(
+            f"Court covers only {court_area_fraction * 100:.0f}% of frame "
+            "-- far-court players may be too small"
+        )
+    if perspective_ratio < 0.25:
+        warnings.append(
+            "Extreme perspective -- consider elevating camera"
+        )
+    if perspective_ratio > 0.85:
+        warnings.append(
+            "Near-overhead camera -- net interactions may cause more occlusions"
+        )
+    near_height = near_court_y_range[1] - near_court_y_range[0]
+    if near_height < 0.15:
+        warnings.append(
+            "Near-court compressed -- camera may be too far back"
+        )
+
+    return VideoCalibrationInsights(
+        court_area_fraction=court_area_fraction,
+        perspective_ratio=perspective_ratio,
+        camera_elevation=camera_elevation,
+        near_court_y_range=near_court_y_range,
+        far_court_y_range=far_court_y_range,
+        warnings=warnings,
+    )

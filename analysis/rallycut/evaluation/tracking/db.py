@@ -37,6 +37,8 @@ class TrackingEvaluationRally:
     raw_positions: list[PlayerPosition] | None = None
     # Video characteristics (brightness, camera distance, scene complexity)
     video_characteristics: dict[str, Any] | None = None
+    # Court calibration corners from Video.courtCalibrationJson
+    court_calibration_json: list[dict[str, float]] | None = None
 
 
 def _parse_ground_truth(
@@ -184,7 +186,8 @@ def load_labeled_rallies(
             pt.court_split_y,
             pt.primary_track_ids,
             pt.ball_positions_json,
-            v.characteristics_json
+            v.characteristics_json,
+            v.court_calibration_json
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
         JOIN videos v ON v.id = r.video_id
@@ -219,6 +222,7 @@ def load_labeled_rallies(
                     primary_track_ids,
                     ball_positions_json,
                     characteristics_json,
+                    court_calibration_json,
                 ) = row
 
                 # Calculate frame offset to convert GT absolute frames to rally-relative
@@ -270,6 +274,9 @@ def load_labeled_rallies(
                         for p in raw_json
                     ]
 
+                # Parse court calibration JSON
+                cal_json = cast(list[dict[str, float]] | None, court_calibration_json)
+
                 results.append(
                     TrackingEvaluationRally(
                         rally_id=str(rally_id_val),
@@ -285,6 +292,7 @@ def load_labeled_rallies(
                         video_characteristics=cast(
                             dict[str, Any] | None, characteristics_json
                         ),
+                        court_calibration_json=cal_json,
                     )
                 )
 
@@ -427,3 +435,38 @@ def load_rallies_for_video(video_id: str) -> list[RallyTrackData]:
 
     logger.info(f"Loaded {len(results)} tracked rallies for video {video_id}")
     return results
+
+
+def load_court_calibration(video_id: str) -> list[dict[str, float]] | None:
+    """Load court calibration corners for a video.
+
+    Args:
+        video_id: The video ID from the database.
+
+    Returns:
+        List of 4 {x, y} corner dicts (normalized to frame dimensions,
+        may be outside [0,1] for wide-angle cameras), or None if not calibrated.
+    """
+    query = """
+        SELECT court_calibration_json
+        FROM videos
+        WHERE id = %s
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, [video_id])
+            row = cur.fetchone()
+
+            if row is None or row[0] is None:
+                return None
+
+            cal_json = cast(list[dict[str, float]], row[0])
+            if not isinstance(cal_json, list) or len(cal_json) != 4:
+                logger.warning(
+                    f"Video {video_id} has invalid court_calibration_json "
+                    f"(expected 4 corners, got {type(cal_json)})"
+                )
+                return None
+
+            return cal_json

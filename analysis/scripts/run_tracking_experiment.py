@@ -32,6 +32,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+# Cache for full-match ball positions (video_id -> positions)
+_full_match_ball_cache: dict[str, list[Any]] = {}
+
 
 def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
     """Run tracking experiment on all labeled rallies."""
@@ -100,8 +103,12 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
         # Run tracking
         track_start = time.time()
         try:
-            # For adaptive ROI, run ball tracking first
+            # Reset per-rally state (tracker is reused across rallies)
             ball_positions = None
+            court_calibrator = None
+            if court_roi_mode not in ("default", "none"):
+                tracker.court_roi = None
+
             if court_roi_mode == "adaptive":
                 from rallycut.tracking import create_ball_tracker
                 from rallycut.tracking.player_tracker import (
@@ -114,7 +121,35 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
                     video_path, start_ms=rally.start_ms, end_ms=rally.end_ms,
                 )
                 ball_positions = ball_result.positions
-                adaptive_roi, quality_msg = compute_court_roi_from_ball(ball_positions)
+
+                # Full-match ball aggregation: use ball from all rallies in video
+                if args.full_match_ball:
+                    from rallycut.tracking.ball_tracker import BallPosition
+
+                    all_video_rallies = [
+                        r for r in rallies if r.video_id == rally.video_id
+                    ]
+                    if len(all_video_rallies) > 1 and rally == all_video_rallies[0]:
+                        # Run ball tracking for all rallies in this video
+                        all_ball: list[BallPosition] = list(ball_positions)
+                        for other in all_video_rallies[1:]:
+                            other_result = ball_tracker.track_video(
+                                video_path,
+                                start_ms=other.start_ms,
+                                end_ms=other.end_ms,
+                            )
+                            all_ball.extend(other_result.positions)
+                        # Cache for other rallies in same video
+                        _full_match_ball_cache[rally.video_id] = all_ball
+                        ball_for_roi = all_ball
+                    elif rally.video_id in _full_match_ball_cache:
+                        ball_for_roi = _full_match_ball_cache[rally.video_id]
+                    else:
+                        ball_for_roi = ball_positions
+                    adaptive_roi, quality_msg = compute_court_roi_from_ball(ball_for_roi)
+                else:
+                    adaptive_roi, quality_msg = compute_court_roi_from_ball(ball_positions)
+
                 roi = adaptive_roi if adaptive_roi is not None else DEFAULT_COURT_ROI
                 tracker.court_roi = roi
                 xs = [p[0] for p in roi]
@@ -123,6 +158,36 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
                     f"ROI x:{min(xs):.2f}-{max(xs):.2f} y:{min(ys):.2f}-{max(ys):.2f} ",
                     end="", flush=True,
                 )
+            elif court_roi_mode == "calibration":
+                from rallycut.court.calibration import CourtCalibrator
+                from rallycut.tracking.player_tracker import (
+                    DEFAULT_COURT_ROI,
+                    compute_court_roi_from_calibration,
+                )
+
+                if rally.court_calibration_json:
+                    calibrator = CourtCalibrator()
+                    image_corners = [
+                        (c["x"], c["y"]) for c in rally.court_calibration_json
+                    ]
+                    calibrator.calibrate(image_corners)
+                    court_calibrator = calibrator
+
+                    cal_roi, cal_msg = compute_court_roi_from_calibration(calibrator)
+                    if cal_roi is not None:
+                        tracker.court_roi = cal_roi
+                        xs = [p[0] for p in cal_roi]
+                        ys = [p[1] for p in cal_roi]
+                        print(
+                            f"ROI x:{min(xs):.2f}-{max(xs):.2f} y:{min(ys):.2f}-{max(ys):.2f} ",
+                            end="", flush=True,
+                        )
+                    else:
+                        print(f"CAL ROI FAIL ({cal_msg}) ", end="", flush=True)
+                        tracker.court_roi = DEFAULT_COURT_ROI
+                else:
+                    print("NO CAL ", end="", flush=True)
+                    tracker.court_roi = None
 
             result = tracker.track_video(
                 video_path=video_path,
@@ -132,6 +197,7 @@ def run_experiment(args: argparse.Namespace) -> dict[str, Any]:
                 filter_enabled=True,
                 filter_config=PlayerFilterConfig(),
                 ball_positions=ball_positions,
+                court_calibrator=court_calibrator,
             )
 
             # Offset frame numbers to rally-relative (0-based) to match GT
@@ -273,8 +339,15 @@ def main() -> None:
 
     # Court ROI
     parser.add_argument(
-        "--court-roi", default="none", choices=["none", "default", "adaptive"],
-        help="Court ROI mode: none (no masking), default (fixed rectangle), adaptive (from ball)",
+        "--court-roi", default="none",
+        choices=["none", "default", "adaptive", "calibration"],
+        help="Court ROI mode: none, default (fixed rectangle), adaptive (from ball), calibration (from court corners)",
+    )
+
+    # Full-match ball aggregation for adaptive ROI
+    parser.add_argument(
+        "--full-match-ball", action="store_true",
+        help="Aggregate ball positions across all rallies in a video for adaptive ROI",
     )
 
     # Optional overrides

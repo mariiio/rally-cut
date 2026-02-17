@@ -124,10 +124,30 @@ def run_tracking(
         from rallycut.tracking.player_tracker import PlayerTracker
 
         # Parse calibration if provided
-        calibration_data = None
+        calibrator = None
         if calibration_json:
-            calibration_data = json.loads(calibration_json)
-            print(f"[LOCAL] Using calibration: courtType={calibration_data.get('courtType')}")
+            try:
+                calibration_data = json.loads(calibration_json)
+                # Handle both {"corners": [...]} and bare [...] formats
+                if isinstance(calibration_data, list):
+                    corners = calibration_data
+                elif isinstance(calibration_data, dict):
+                    corners = calibration_data.get("corners", [])
+                    print(f"[LOCAL] Using calibration: courtType={calibration_data.get('courtType')}")
+                else:
+                    corners = []
+
+                if isinstance(corners, list) and len(corners) == 4:
+                    from rallycut.court.calibration import CourtCalibrator
+
+                    calibrator = CourtCalibrator()
+                    image_corners = [(c["x"], c["y"]) for c in corners]
+                    calibrator.calibrate(image_corners)
+                    print("[LOCAL] Court calibrator initialized from corners")
+                else:
+                    print(f"[LOCAL] Invalid calibration corners (expected 4, got {len(corners)})")
+            except (json.JSONDecodeError, KeyError, TypeError) as e:
+                print(f"[LOCAL] Failed to parse calibration JSON: {e}")
         else:
             print("[LOCAL] No calibration data provided")
 
@@ -158,8 +178,20 @@ def run_tracking(
         print(f"[LOCAL] Rally: {rally_id}")
         print(f"[LOCAL] Time range: {start_ms}ms - {end_ms}ms")
 
+        # Compute calibration ROI if calibrator available
+        court_roi = None
+        if calibrator is not None:
+            from rallycut.tracking.player_tracker import compute_court_roi_from_calibration
+
+            cal_roi, cal_msg = compute_court_roi_from_calibration(calibrator)
+            if cal_roi is not None:
+                court_roi = cal_roi
+                print("[LOCAL] Using calibration ROI")
+            elif cal_msg:
+                print(f"[LOCAL] Calibration ROI failed: {cal_msg}")
+
         # Create tracker with tuned confidence threshold
-        tracker = PlayerTracker(confidence=0.15)
+        tracker = PlayerTracker(confidence=0.15, court_roi=court_roi)
 
         # Import filter config for beach volleyball
         from rallycut.tracking.player_filter import PlayerFilterConfig
@@ -185,6 +217,7 @@ def run_tracking(
             ball_positions=ball_positions,
             filter_enabled=True,
             filter_config=filter_config,
+            court_calibrator=calibrator,
         )
 
         processing_time_ms = (time.time() - start_time) * 1000

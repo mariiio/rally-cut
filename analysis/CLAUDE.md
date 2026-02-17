@@ -315,6 +315,11 @@ uv run rallycut track-players video.mp4 --tracker bytetrack
 # Tune filter parameters for edge cases
 uv run rallycut track-players video.mp4 --min-bbox-area 0.002 --min-bbox-height 0.06
 
+# Use court calibration for ROI masking + off-court filtering
+uv run rallycut track-players video.mp4 --calibration '[{"x":0.1,"y":0.8},{"x":0.9,"y":0.8},{"x":0.7,"y":0.5},{"x":0.3,"y":0.5}]'
+# Explicit calibration ROI (also available: default, adaptive)
+uv run rallycut track-players video.mp4 --calibration '...' --court-roi calibration
+
 # Compare YOLO model sizes
 uv run rallycut evaluate-tracking compare-yolo-models --all
 ```
