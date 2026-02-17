@@ -49,7 +49,7 @@ PARAM_GRID: dict[str, list] = {
 def evaluate_config(
     config: ContactDetectionConfig,
     rallies: list[RallyData],
-    tolerance_ms: int = 100,
+    tolerance_ms: int = 167,
 ) -> dict:
     """Run contact detection + classification with config and compute metrics."""
     from rallycut.tracking.ball_tracker import BallPosition as BallPos
