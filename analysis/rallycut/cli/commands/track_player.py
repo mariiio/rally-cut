@@ -20,6 +20,7 @@ from rallycut.tracking.ball_tracker import (
 )
 from rallycut.tracking.player_filter import PlayerFilterConfig
 from rallycut.tracking.player_tracker import (
+    DEFAULT_COURT_ROI,
     DEFAULT_IMGSZ,
     DEFAULT_TRACKER,
     DEFAULT_YOLO_MODEL,
@@ -31,6 +32,7 @@ from rallycut.tracking.player_tracker import (
     PlayerPosition,
     PlayerTracker,
     PlayerTrackingResult,
+    compute_court_roi_from_ball,
 )
 
 console = Console()
@@ -56,6 +58,7 @@ def render_debug_overlay(
     ball_positions: list[BallPosition] | None,
     split_y: float | None,
     primary_tracks: set[int],
+    court_roi: list[tuple[float, float]] | None = None,
 ) -> np.ndarray:
     """Render debug overlay showing two-team split and player positions.
 
@@ -69,12 +72,25 @@ def render_debug_overlay(
         ball_positions: All ball positions (for drawing trajectory).
         split_y: Y-coordinate that splits near/far teams (0-1 normalized).
         primary_tracks: Set of primary (stable) track IDs.
+        court_roi: Optional court ROI polygon for visualization.
 
     Returns:
         Frame with overlay drawn.
     """
     height, width = frame.shape[:2]
     overlay = frame.copy()
+
+    # Draw court ROI polygon
+    if court_roi is not None:
+        roi_pts = np.array(
+            [(int(x * width), int(y * height)) for x, y in court_roi],
+            dtype=np.int32,
+        )
+        cv2.polylines(overlay, [roi_pts], isClosed=True, color=(128, 128, 128), thickness=2)
+        cv2.putText(
+            overlay, "ROI", (roi_pts[0][0] + 5, roi_pts[0][1] + 20),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 1
+        )
 
     # Draw court split line (horizontal)
     if split_y is not None:
@@ -163,6 +179,7 @@ def create_debug_video(
     end_ms: int | None = None,
     stride: int = 1,
     progress_callback: Callable[[float], None] | None = None,
+    court_roi: list[tuple[float, float]] | None = None,
 ) -> None:
     """Create debug video with two-team overlay.
 
@@ -177,6 +194,7 @@ def create_debug_video(
         end_ms: End time in ms.
         stride: Frame stride used during tracking.
         progress_callback: Progress callback function.
+        court_roi: Optional court ROI polygon for visualization.
     """
     # Group positions by frame
     positions_by_frame: dict[int, list[PlayerPosition]] = {}
@@ -221,6 +239,7 @@ def create_debug_video(
                     ball_positions,
                     split_y,
                     primary_tracks,
+                    court_roi=court_roi,
                 )
                 out.write(overlay_frame)
                 frames_written += 1
@@ -340,6 +359,16 @@ def track_players(
         "--imgsz",
         help="Inference resolution. 1280 = best tradeoff (default), 640 = faster, 1920 = native.",
     ),
+    # Court ROI for background filtering
+    court_roi_str: str | None = typer.Option(
+        None,
+        "--court-roi",
+        help=(
+            'Court ROI polygon as JSON array of {x,y} points (normalized 0-1), '
+            'or "default" for conservative rectangle. '
+            'Masks regions outside the polygon to prevent background tracks.'
+        ),
+    ),
     # Action classification
     actions: bool = typer.Option(
         False,
@@ -387,6 +416,30 @@ def track_players(
                 console.print("[yellow]Warning: Calibration must be 4 corners, ignoring[/yellow]")
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             console.print(f"[yellow]Warning: Invalid calibration JSON: {e}[/yellow]")
+
+    # Parse explicit court ROI (--court-roi flag)
+    court_roi: list[tuple[float, float]] | None = None
+    explicit_roi = False
+    if court_roi_str is not None:
+        explicit_roi = True
+        if court_roi_str.lower() == "default":
+            court_roi = DEFAULT_COURT_ROI
+            if not quiet:
+                console.print("[dim]Court ROI: default conservative rectangle[/dim]")
+        else:
+            import json as json_mod
+            try:
+                roi_data = json_mod.loads(court_roi_str)
+                if isinstance(roi_data, list) and len(roi_data) >= 3:
+                    court_roi = [(p["x"], p["y"]) for p in roi_data]
+                    if not quiet:
+                        console.print(f"[dim]Court ROI: {len(court_roi)}-point polygon[/dim]")
+                else:
+                    console.print("[yellow]Warning: Court ROI must be 3+ points, ignoring[/yellow]")
+                    explicit_roi = False
+            except (json_mod.JSONDecodeError, KeyError, TypeError) as e:
+                console.print(f"[yellow]Warning: Invalid court ROI JSON: {e}[/yellow]")
+                explicit_roi = False
 
     # Default output path
     if output is None:
@@ -441,6 +494,30 @@ def track_players(
                 f"[dim]Ball detection rate: {ball_result.detection_rate * 100:.1f}%[/dim]"
             )
 
+    # Compute court ROI: adaptive from ball trajectory, or fallback to default
+    if not explicit_roi and filter_court:
+        if ball_positions:
+            adaptive_roi, quality_msg = compute_court_roi_from_ball(ball_positions)
+            if adaptive_roi is not None:
+                court_roi = adaptive_roi
+                if not quiet:
+                    xs = [p[0] for p in adaptive_roi]
+                    ys = [p[1] for p in adaptive_roi]
+                    console.print(
+                        f"[dim]Court ROI: adaptive from ball trajectory "
+                        f"(x: {min(xs):.2f}-{max(xs):.2f}, "
+                        f"y: {min(ys):.2f}-{max(ys):.2f})[/dim]"
+                    )
+                    if quality_msg:
+                        console.print(f"[yellow]  {quality_msg}[/yellow]")
+            else:
+                court_roi = DEFAULT_COURT_ROI
+                if not quiet:
+                    console.print(f"[yellow]  {quality_msg}[/yellow]")
+                    console.print("[dim]Court ROI: falling back to default rectangle[/dim]")
+        else:
+            court_roi = DEFAULT_COURT_ROI
+
     # Create filter config with optional overrides (beach volleyball only for now)
     filter_config = None
     if filter_court:
@@ -483,6 +560,7 @@ def track_players(
         tracker=tracker,
         yolo_model=yolo_model,
         imgsz=imgsz,
+        court_roi=court_roi,
     )
 
     # Track with progress
@@ -605,6 +683,7 @@ def track_players(
                 start_ms,
                 end_ms,
                 stride,
+                court_roi=court_roi,
             )
         else:
             with Progress(
@@ -630,6 +709,7 @@ def track_players(
                     end_ms,
                     stride,
                     update_video_progress,
+                    court_roi=court_roi,
                 )
 
         if not quiet:
