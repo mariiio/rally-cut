@@ -49,7 +49,7 @@ PARAM_GRID: dict[str, list] = {
 def evaluate_config(
     config: ContactDetectionConfig,
     rallies: list[RallyData],
-    tolerance: int = 3,
+    tolerance_ms: int = 100,
 ) -> dict:
     """Run contact detection + classification with config and compute metrics."""
     from rallycut.tracking.ball_tracker import BallPosition as BallPos
@@ -98,8 +98,11 @@ def evaluate_config(
         rally_actions = classify_rally_actions(contacts, rally.rally_id)
         pred_actions = [a.to_dict() for a in rally_actions.actions]
 
+        # FPS-adaptive tolerance
+        tolerance_frames = max(1, round(rally.fps * tolerance_ms / 1000))
+
         matches, unmatched = match_contacts(
-            rally.gt_labels, pred_actions, tolerance=tolerance
+            rally.gt_labels, pred_actions, tolerance=tolerance_frames
         )
         all_matches.extend(matches)
         all_unmatched.extend(unmatched)
@@ -124,7 +127,7 @@ def main() -> None:
         description="Tune contact detection parameters via grid search"
     )
     parser.add_argument("--rally", type=str, help="Specific rally ID")
-    parser.add_argument("--tolerance", type=int, default=3, help="Frame tolerance (default: 3)")
+    parser.add_argument("--tolerance-ms", type=int, default=100, help="Time tolerance in ms (default: 100)")
     parser.add_argument("-o", "--output", help="Save results to JSON file")
     args = parser.parse_args()
 
@@ -161,7 +164,7 @@ def main() -> None:
             overrides = dict(zip(param_names, combo))
             config = ContactDetectionConfig(**overrides)
 
-            metrics = evaluate_config(config, rallies_with_data, args.tolerance)
+            metrics = evaluate_config(config, rallies_with_data, args.tolerance_ms)
             result = {
                 "config": overrides,
                 "config_desc": describe_config_diff(config),
@@ -246,7 +249,7 @@ def main() -> None:
         output = {
             "grid": PARAM_GRID,
             "total_configs": total,
-            "tolerance": args.tolerance,
+            "tolerance": args.tolerance_ms,
             "num_rallies": len(rallies_with_data),
             "results": results[:50],  # Top 50
             "pareto": pareto,

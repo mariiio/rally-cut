@@ -12,8 +12,8 @@ runs contact detection + action classification on each rally, and computes:
 Usage:
     cd analysis
     uv run python scripts/eval_action_detection.py
-    uv run python scripts/eval_action_detection.py --tolerance 5   # ±5 frame window
-    uv run python scripts/eval_action_detection.py --rally <id>    # Specific rally
+    uv run python scripts/eval_action_detection.py --tolerance-ms 150  # ±150ms window
+    uv run python scripts/eval_action_detection.py --rally <id>        # Specific rally
     uv run python scripts/eval_action_detection.py --redetect --config '{"min_peak_velocity": 0.008}'
 """
 
@@ -285,7 +285,7 @@ def build_confusion_matrix(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate action detection vs ground truth")
     parser.add_argument("--rally", type=str, help="Specific rally ID to evaluate")
-    parser.add_argument("--tolerance", type=int, default=3, help="Frame tolerance for matching (default: 3)")
+    parser.add_argument("--tolerance-ms", type=int, default=100, help="Time tolerance in ms for matching (default: 100)")
     parser.add_argument("--redetect", action="store_true", help="Re-run contact detection instead of using stored results")
     parser.add_argument("--config", type=str, help="JSON config overrides for ContactDetectionConfig (implies --redetect)")
     args = parser.parse_args()
@@ -375,10 +375,13 @@ def main() -> None:
             # Use stored actions
             pred_actions = rally.actions_json.get("actions", [])
 
+        # FPS-adaptive tolerance: convert ms to frames for this rally
+        tolerance_frames = max(1, round(rally.fps * args.tolerance_ms / 1000))
+
         matches, unmatched = match_contacts(
             rally.gt_labels,
             pred_actions,
-            tolerance=args.tolerance,
+            tolerance=tolerance_frames,
         )
 
         metrics = compute_metrics(matches, unmatched)

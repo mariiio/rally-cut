@@ -52,7 +52,7 @@ class ContactDetectionConfig:
     noise_spike_max_jump: float = 0.20  # Max distance to predecessor/successor
 
     # Player proximity
-    player_contact_radius: float = 0.12  # Max distance (normalized) for attribution
+    player_contact_radius: float = 0.13  # Max distance (normalized) for attribution
     player_search_frames: int = 3  # Search ±N frames for nearby player
 
     # High-velocity contacts (lenient validation)
