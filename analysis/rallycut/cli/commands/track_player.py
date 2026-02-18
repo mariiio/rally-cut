@@ -360,6 +360,17 @@ def track_players(
         "--imgsz",
         help="Inference resolution. 1280 = best tradeoff (default), 640 = faster, 1920 = native.",
     ),
+    # ReID model override
+    reid_model: str | None = typer.Option(
+        None,
+        "--reid-model",
+        help=(
+            'ReID model for BoT-SORT: "auto" (YOLO backbone, default), '
+            '"yolo11n-cls.pt" (ImageNet classification features), '
+            '"yolo11s-cls.pt" (larger classification model). '
+            "Default YOLO backbone works best for beach volleyball."
+        ),
+    ),
     # Court ROI for background filtering
     court_roi_str: str | None = typer.Option(
         None,
@@ -599,6 +610,7 @@ def track_players(
         tracker=tracker,
         yolo_model=yolo_model,
         imgsz=imgsz,
+        reid_model=reid_model,
         court_roi=court_roi,
     )
 

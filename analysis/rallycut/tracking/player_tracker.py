@@ -622,6 +622,7 @@ class PlayerTracker:
         yolo_model: str = DEFAULT_YOLO_MODEL,
         with_reid: bool = True,
         appearance_thresh: float | None = None,
+        reid_model: str | None = None,
         imgsz: int = DEFAULT_IMGSZ,
         court_roi: list[tuple[float, float]] | None = None,
     ):
@@ -645,6 +646,12 @@ class PlayerTracker:
                       Enabled by default (reduces ID switches by ~40-60%).
             appearance_thresh: Override BoT-SORT appearance threshold for ReID.
                               If None, uses value from config YAML.
+            reid_model: Override ReID model for BoT-SORT. Options:
+                       - None: use config YAML default ("auto" = YOLO backbone features)
+                       - "auto": use YOLO backbone features (no separate model)
+                       - "yolo11n-cls.pt": YOLO11 nano classification model
+                       - "yolo11s-cls.pt": YOLO11 small classification model
+                       - Any YOLO-compatible model path for ReID embeddings
             imgsz: Inference resolution. Higher values improve small/far object
                   detection at the cost of speed. 1280 (default, best tradeoff),
                   640 (faster, lower far-court recall), 1920 (native resolution).
@@ -663,6 +670,7 @@ class PlayerTracker:
         self.yolo_model = yolo_model
         self.with_reid = with_reid
         self.appearance_thresh = appearance_thresh
+        self.reid_model = reid_model
         self.imgsz = imgsz
         self.court_roi = court_roi
         self._model: Any = None
@@ -672,17 +680,22 @@ class PlayerTracker:
         """Get the tracker config file path based on selected tracker.
 
         The YAML config has with_reid and model set by default. Only creates
-        a modified config if appearance_thresh or with_reid=False is explicitly set.
+        a modified config if appearance_thresh, with_reid=False, or reid_model
+        is explicitly set.
         """
         if self._custom_tracker_config is not None:
             return self._custom_tracker_config
 
         base_config = BOTSORT_CONFIG if self.tracker == TRACKER_BOTSORT else BYTETRACK_CONFIG
 
-        # Only override if appearance_thresh is explicitly set or ReID is disabled
+        # Only override if appearance_thresh, reid_model is explicitly set, or ReID is disabled
         needs_override = (
             self.tracker == TRACKER_BOTSORT
-            and (self.appearance_thresh is not None or not self.with_reid)
+            and (
+                self.appearance_thresh is not None
+                or not self.with_reid
+                or self.reid_model is not None
+            )
         )
         if needs_override:
             import tempfile
@@ -698,6 +711,9 @@ class PlayerTracker:
             if self.appearance_thresh is not None:
                 config["appearance_thresh"] = self.appearance_thresh
                 logger.info(f"Overriding appearance_thresh to {self.appearance_thresh}")
+            if self.reid_model is not None:
+                config["model"] = self.reid_model
+                logger.info(f"Overriding ReID model to {self.reid_model}")
 
             # Write to temp file (persists for tracker lifetime)
             tmp = tempfile.NamedTemporaryFile(
@@ -1177,6 +1193,7 @@ class PlayerTracker:
             num_jump_splits = 0
             num_color_splits = 0
             num_swap_fixes = 0
+            num_appearance_links = 0
 
             if filter_enabled:
                 from rallycut.tracking.player_filter import (
@@ -1212,6 +1229,16 @@ class PlayerTracker:
 
                     # Step 0c: Track convergence/swap detection
                     positions, num_swap_fixes = detect_and_fix_swaps(
+                        positions, color_store
+                    )
+
+                    # Step 0d: Appearance-based tracklet linking (GTA-Link inspired)
+                    # Reconnects fragments using color histogram similarity
+                    from rallycut.tracking.tracklet_link import (
+                        link_tracklets_by_appearance,
+                    )
+
+                    positions, num_appearance_links = link_tracklets_by_appearance(
                         positions, color_store
                     )
 
@@ -1285,6 +1312,7 @@ class PlayerTracker:
                     id_switch_count=num_jump_splits,
                     color_split_count=num_color_splits,
                     swap_fix_count=num_swap_fixes,
+                    appearance_link_count=num_appearance_links,
                     has_court_calibration=court_calibrator is not None,
                 )
 
