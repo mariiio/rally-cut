@@ -1836,6 +1836,7 @@ export interface QualityReport {
   idSwitchCount: number;
   colorSplitCount: number;
   swapFixCount: number;
+  appearanceLinkCount: number;
   uniqueRawTrackCount: number;
   calibrationRecommended: boolean;
   trackabilityScore: number;

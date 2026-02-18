@@ -39,6 +39,7 @@ class TrackingQualityReport:
     id_switch_count: int = 0  # From split_tracks_at_jumps
     color_split_count: int = 0  # From split_tracks_by_color
     swap_fix_count: int = 0  # From detect_and_fix_swaps
+    appearance_link_count: int = 0  # From link_tracklets_by_appearance
 
     # Distractor detection
     unique_raw_track_count: int = 0  # Unique tracks before filtering
@@ -61,6 +62,7 @@ class TrackingQualityReport:
             "idSwitchCount": self.id_switch_count,
             "colorSplitCount": self.color_split_count,
             "swapFixCount": self.swap_fix_count,
+            "appearanceLinkCount": self.appearance_link_count,
             "uniqueRawTrackCount": self.unique_raw_track_count,
             "calibrationRecommended": self.calibration_recommended,
             "trackabilityScore": self.trackability_score,
@@ -79,6 +81,7 @@ def compute_quality_report(
     id_switch_count: int = 0,
     color_split_count: int = 0,
     swap_fix_count: int = 0,
+    appearance_link_count: int = 0,
     expected_players: int = 4,
     has_court_calibration: bool = False,
 ) -> TrackingQualityReport:
@@ -95,6 +98,7 @@ def compute_quality_report(
         id_switch_count: Number of jump-based track splits.
         color_split_count: Number of color-based splits.
         swap_fix_count: Number of swap fixes.
+        appearance_link_count: Number of tracklet appearance-based merges.
         expected_players: Expected number of court players.
 
     Returns:
@@ -106,6 +110,7 @@ def compute_quality_report(
     report.id_switch_count = id_switch_count
     report.color_split_count = color_split_count
     report.swap_fix_count = swap_fix_count
+    report.appearance_link_count = appearance_link_count
 
     duration_sec = frame_count / video_fps if video_fps > 0 else 0.0
 
