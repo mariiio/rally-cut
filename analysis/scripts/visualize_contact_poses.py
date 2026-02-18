@@ -838,6 +838,54 @@ def _print_temporal_stats(temporal_data: list[TemporalPoseData]) -> None:
         )
     console.print(fp_table)
 
+    # Threshold analysis: for each action, show FP removed vs TP lost at various cutoffs
+    console.print("\n[bold underline]Threshold Analysis (suppress contact if feature < threshold)[/bold underline]")
+
+    for feature_name, getter in [
+        ("arm_angle_range", lambda t: t.arm_angle_range),
+        ("max_arm_angle_rate", lambda t: t.max_arm_angle_rate),
+        ("arm_angle_std", lambda t: t.arm_angle_std),
+    ]:
+        console.print(f"\n  [bold]{feature_name}[/bold]\n")
+
+        # Per-action and all-actions
+        for action_filter in [None, "spike", "serve", "set"]:
+            label = action_filter or "all"
+            tp_vals = [getter(t) for t in tp if getter(t) is not None
+                       and (action_filter is None or t.action == action_filter)]
+            fp_vals = [getter(t) for t in fp if getter(t) is not None
+                       and (action_filter is None or t.action == action_filter)]
+
+            if not tp_vals or not fp_vals:
+                continue
+
+            thresh_table = Table(title=f"{label} (TP={len(tp_vals)}, FP={len(fp_vals)})")
+            thresh_table.add_column("Threshold", justify="right")
+            thresh_table.add_column("FP removed", justify="right")
+            thresh_table.add_column("TP lost", justify="right")
+            thresh_table.add_column("Net gain", justify="right")
+            thresh_table.add_column("Precision", justify="right")
+
+            thresholds = [5, 8, 10, 15, 20, 30]
+            for t in thresholds:
+                fp_removed = sum(1 for v in fp_vals if v < t)
+                tp_lost = sum(1 for v in tp_vals if v < t)
+                net = fp_removed - tp_lost
+                remaining_tp = len(tp_vals) - tp_lost
+                remaining_fp = len(fp_vals) - fp_removed
+                prec = remaining_tp / max(1, remaining_tp + remaining_fp)
+                style = "green" if net > 0 and tp_lost == 0 else (
+                    "yellow" if net > 0 else "dim"
+                )
+                thresh_table.add_row(
+                    f"< {t}",
+                    f"{fp_removed}/{len(fp_vals)}",
+                    f"{tp_lost}/{len(tp_vals)}",
+                    f"[{style}]{net:+d}[/{style}]",
+                    f"{prec:.0%}",
+                )
+            console.print(thresh_table)
+
 
 def _print_pose_stats(pose_data: list[PoseData]) -> None:
     """Print aggregate pose statistics comparing TP vs FP."""
