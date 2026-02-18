@@ -20,6 +20,19 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class TrackedRally:
+    """A rally with player tracks (minimal metadata, no GT required)."""
+
+    rally_id: str
+    video_id: str
+    start_ms: int
+    end_ms: int
+    video_fps: float = 30.0
+    video_width: int = 1920
+    video_height: int = 1080
+
+
+@dataclass
 class TrackingEvaluationRally:
     """A rally with ground truth and predictions for evaluation."""
 
@@ -434,6 +447,78 @@ def load_rallies_for_video(video_id: str) -> list[RallyTrackData]:
                 )
 
     logger.info(f"Loaded {len(results)} tracked rallies for video {video_id}")
+    return results
+
+
+def load_all_tracked_rallies(
+    video_id: str | None = None,
+) -> list[TrackedRally]:
+    """Load ALL rallies that have player tracks (not just those with GT).
+
+    Returns minimal metadata for each rally — useful for pseudo-label
+    generation and ensemble caching beyond the 9 ball-GT rallies.
+
+    Args:
+        video_id: Filter by video ID (optional).
+
+    Returns:
+        List of TrackedRally with video metadata.
+    """
+    where_clauses = ["pt.positions_json IS NOT NULL"]
+    params: list[str] = []
+
+    if video_id:
+        where_clauses.append("r.video_id = %s")
+        params.append(video_id)
+
+    where_sql = " AND ".join(where_clauses)
+
+    query = f"""
+        SELECT
+            r.id as rally_id,
+            r.video_id,
+            r.start_ms,
+            r.end_ms,
+            v.fps as video_fps,
+            v.width as video_width,
+            v.height as video_height
+        FROM rallies r
+        JOIN player_tracks pt ON pt.rally_id = r.id
+        JOIN videos v ON v.id = r.video_id
+        WHERE {where_sql}
+        ORDER BY r.video_id, r.start_ms
+    """
+
+    results: list[TrackedRally] = []
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+            for row in rows:
+                (
+                    rally_id_val,
+                    video_id_val,
+                    start_ms,
+                    end_ms,
+                    video_fps,
+                    video_width,
+                    video_height,
+                ) = row
+                results.append(
+                    TrackedRally(
+                        rally_id=str(rally_id_val),
+                        video_id=str(video_id_val),
+                        start_ms=cast(int, start_ms),
+                        end_ms=cast(int, end_ms),
+                        video_fps=cast(float, video_fps) if video_fps else 30.0,
+                        video_width=cast(int, video_width) if video_width else 1920,
+                        video_height=cast(int, video_height) if video_height else 1080,
+                    )
+                )
+
+    logger.info(f"Loaded {len(results)} tracked rallies")
     return results
 
 

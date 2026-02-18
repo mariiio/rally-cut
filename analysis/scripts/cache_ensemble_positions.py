@@ -1,8 +1,11 @@
-"""Cache merged WASB+VballNet ensemble raw positions for all GT rallies.
+"""Cache merged WASB+VballNet ensemble raw positions.
 
 Downloads videos, runs both WASB and VballNet inference (unfiltered),
 merges with WASB-primary strategy, applies WASB frame offset correction,
 and stores merged positions in BallRawCache.
+
+By default caches only ball-GT rallies. Use --all-tracked to cache
+all rallies with player tracks (for pseudo-label training).
 
 Source tagging via motion_energy field:
   - motion_energy >= 1.0 = WASB source
@@ -11,6 +14,7 @@ Source tagging via motion_energy field:
 Usage:
     cd analysis
     uv run python scripts/cache_ensemble_positions.py
+    uv run python scripts/cache_ensemble_positions.py --all-tracked
     uv run python scripts/cache_ensemble_positions.py --device mps
     uv run python scripts/cache_ensemble_positions.py --clear
 """
@@ -27,7 +31,9 @@ from eval_wasb import run_wasb_inference
 from rallycut.evaluation.tracking.ball_grid_search import BallRawCache, CachedBallData
 from rallycut.evaluation.tracking.ball_metrics import find_optimal_frame_offset
 from rallycut.evaluation.tracking.db import (
+    TrackedRally,
     get_video_path,
+    load_all_tracked_rallies,
     load_labeled_rallies,
 )
 from rallycut.tracking.ball_filter import BallFilterConfig, BallTemporalFilter
@@ -99,6 +105,11 @@ def main() -> None:
     )
     parser.add_argument("--vballnet-model", default="v2", help="VballNet model (default: v2)")
     parser.add_argument("--video", "-v", help="Filter to specific video ID")
+    parser.add_argument(
+        "--all-tracked",
+        action="store_true",
+        help="Cache all rallies with player tracks (not just ball GT rallies)",
+    )
     parser.add_argument("--clear", action="store_true", help="Clear cache before running")
     args = parser.parse_args()
 
@@ -120,28 +131,61 @@ def main() -> None:
 
     logger.info(f"WASB threshold: {args.wasb_threshold}, Device: {args.device}")
 
-    # Load GT rallies
-    rallies = load_labeled_rallies(video_id=args.video)
-    if not rallies:
-        logger.error("No rallies found with ball GT")
-        sys.exit(1)
+    # Load rallies — either all tracked or just ball GT
+    if args.all_tracked:
+        all_tracked = load_all_tracked_rallies(video_id=args.video)
+        if not all_tracked:
+            logger.error("No tracked rallies found")
+            sys.exit(1)
+        logger.info(f"Found {len(all_tracked)} tracked rallies (--all-tracked)")
 
-    logger.info(f"Found {len(rallies)} rallies with ball GT")
+        # Build set of rally IDs that have ball GT (for offset detection)
+        gt_rallies = load_labeled_rallies(video_id=args.video)
+        gt_rally_map = {r.rally_id: r for r in gt_rallies}
+        logger.info(f"  ({len(gt_rally_map)} have ball GT for offset detection)")
+
+        # Convert to uniform interface: list of TrackedRally with optional GT
+        rallies_with_gt: list[tuple[TrackedRally, bool]] = []
+        for r in all_tracked:
+            has_gt = r.rally_id in gt_rally_map
+            rallies_with_gt.append((r, has_gt))
+    else:
+        gt_rallies = load_labeled_rallies(video_id=args.video)
+        if not gt_rallies:
+            logger.error("No rallies found with ball GT")
+            sys.exit(1)
+        logger.info(f"Found {len(gt_rallies)} rallies with ball GT")
+        gt_rally_map = {r.rally_id: r for r in gt_rallies}
+        rallies_with_gt = [
+            (
+                TrackedRally(
+                    rally_id=r.rally_id,
+                    video_id=r.video_id,
+                    start_ms=r.start_ms,
+                    end_ms=r.end_ms,
+                    video_fps=r.video_fps,
+                    video_width=r.video_width,
+                    video_height=r.video_height,
+                ),
+                True,
+            )
+            for r in gt_rallies
+        ]
 
     # Also load VballNet raw cache for fallback positions
     vnet_raw_cache = BallRawCache()
 
     # Group rallies by video
-    rallies_by_video: dict[str, list] = {}
-    for rally in rallies:
-        rallies_by_video.setdefault(rally.video_id, []).append(rally)
+    rallies_by_video: dict[str, list[tuple[TrackedRally, bool]]] = {}
+    for rally, has_gt in rallies_with_gt:
+        rallies_by_video.setdefault(rally.video_id, []).append((rally, has_gt))
 
     vnet_tracker = BallTracker(model=args.vballnet_model)
     cached_count = 0
     skipped_count = 0
 
     for video_id, video_rallies in rallies_by_video.items():
-        uncached = [r for r in video_rallies if not cache.has(r.rally_id)]
+        uncached = [(r, gt) for r, gt in video_rallies if not cache.has(r.rally_id)]
         if not uncached:
             logger.info(
                 f"Video {video_id[:8]}...: all {len(video_rallies)} rallies cached, skipping"
@@ -156,7 +200,7 @@ def main() -> None:
             logger.error(f"  Could not download video {video_id}")
             continue
 
-        for rally in uncached:
+        for rally, has_gt in uncached:
             if cache.has(rally.rally_id):
                 skipped_count += 1
                 continue
@@ -164,6 +208,7 @@ def main() -> None:
             logger.info(
                 f"  Rally {rally.rally_id[:8]}...: "
                 f"tracking {rally.start_ms}ms-{rally.end_ms}ms..."
+                f"{'' if has_gt else ' (no GT)'}"
             )
 
             # --- WASB inference ---
@@ -176,13 +221,17 @@ def main() -> None:
                 threshold=args.wasb_threshold,
             )
 
-            # Find optimal WASB frame offset
-            wasb_offset, _ = find_optimal_frame_offset(
-                rally.ground_truth.positions,
-                wasb_raw,
-                rally.video_width,
-                rally.video_height,
-            )
+            # Find optimal WASB frame offset (only if GT available)
+            if has_gt and rally.rally_id in gt_rally_map:
+                gt_rally = gt_rally_map[rally.rally_id]
+                wasb_offset, _ = find_optimal_frame_offset(
+                    gt_rally.ground_truth.positions,
+                    wasb_raw,
+                    rally.video_width,
+                    rally.video_height,
+                )
+            else:
+                wasb_offset = 0
 
             # Apply offset to WASB
             if wasb_offset > 0:

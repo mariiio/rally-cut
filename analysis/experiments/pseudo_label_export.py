@@ -1,20 +1,28 @@
-"""Export VballNet detections as pseudo-labels for TrackNet training.
+"""Export ball detections as pseudo-labels for TrackNet training.
 
-Converts cached VballNet ball positions into TrackNet CSV format,
-applying confidence and motion energy filters to keep only high-quality
-pseudo-labels. Also exports gold GT labels in the same format.
+Converts cached ball positions (VballNet or ensemble) into TrackNet CSV
+format, applying confidence and motion energy filters to keep only
+high-quality pseudo-labels. Gold GT labels override where available.
+
+Supports two cache sources:
+  --cache-type vballnet  (default) VballNet-only raw positions
+  --cache-type ensemble  WASB+VballNet ensemble positions (higher quality)
+
+Use --all-tracked to export all rallies with player tracks (not just
+the 9 with ball GT). Ensemble pseudo-labels for these rallies are the
+key input for TrackNet R3 training.
 
 Output format (TrackNet CSV):
     Frame,Visibility,X,Y
     0,1,423,287       # visible ball at (423, 287)
     1,0,0,0           # ball not visible / out of frame
-    2,2,0,0           # ball occluded
 
 Usage:
     python -m experiments.pseudo_label_export \
-        --output-dir pseudo_labels/ \
-        --min-confidence 0.3 \
-        --min-motion-energy 0.02
+        --output-dir pseudo_labels_r3/ \
+        --cache-type ensemble \
+        --all-tracked \
+        --extract-frames
 """
 
 from __future__ import annotations
@@ -65,15 +73,20 @@ class ExportStats:
         }
 
 
+ENSEMBLE_CACHE_DIR = Path.home() / ".cache" / "rallycut" / "ensemble_grid_search"
+
+
 def export_pseudo_labels(
     output_dir: Path,
     config: PseudoLabelConfig | None = None,
     include_gold: bool = True,
     video_ids: list[str] | None = None,
+    cache_type: str = "vballnet",
+    all_tracked: bool = False,
 ) -> ExportStats:
-    """Export VballNet detections as TrackNet training data.
+    """Export ball detections as TrackNet training data.
 
-    Reads from BallRawCache (raw VballNet positions with motion_energy),
+    Reads from BallRawCache (raw positions with motion_energy),
     applies quality filters, and writes TrackNet CSV files (one per rally).
     Gold GT labels are included where available and overwrite pseudo-labels.
 
@@ -82,40 +95,74 @@ def export_pseudo_labels(
         config: Export configuration.
         include_gold: Whether to include gold GT labels.
         video_ids: Specific video IDs to export (default: all with ball GT).
+        cache_type: "vballnet" (default) or "ensemble" for ensemble cache.
+        all_tracked: Load all rallies with player tracks, not just ball GT.
 
     Returns:
         ExportStats with counts of exported frames.
     """
     from rallycut.evaluation.tracking.ball_grid_search import BallRawCache
-    from rallycut.evaluation.tracking.db import load_labeled_rallies
+    from rallycut.evaluation.tracking.db import (
+        load_all_tracked_rallies,
+        load_labeled_rallies,
+    )
 
     cfg = config or PseudoLabelConfig()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     stats = ExportStats()
-    ball_cache = BallRawCache()
 
-    # Load rallies for GT labels and rally metadata
-    rallies = load_labeled_rallies()
-    if video_ids:
-        rallies = [r for r in rallies if r.video_id in video_ids]
+    # Select cache based on cache_type
+    if cache_type == "ensemble":
+        ball_cache = BallRawCache(cache_dir=ENSEMBLE_CACHE_DIR)
+        logger.info(f"Using ensemble cache: {ENSEMBLE_CACHE_DIR}")
+    else:
+        ball_cache = BallRawCache()
 
-    for rally in rallies:
-        # Read raw VballNet positions from cache (before filtering)
-        cached = ball_cache.get(rally.rally_id)
+    # Load rallies — either all tracked or just ball GT
+    if all_tracked:
+        tracked = load_all_tracked_rallies()
+        if video_ids:
+            tracked = [r for r in tracked if r.video_id in video_ids]
+
+        # Load GT rallies for gold label overlay
+        gt_rallies = load_labeled_rallies()
+        gt_map = {r.rally_id: r for r in gt_rallies}
+
+        # Build unified rally list: (rally_id, video_id, start_ms, end_ms, gt_or_none)
+        rally_list: list[tuple[str, str, int, int, Any]] = [
+            (r.rally_id, r.video_id, r.start_ms, r.end_ms, gt_map.get(r.rally_id))
+            for r in tracked
+        ]
+        logger.info(
+            f"Loading {len(rally_list)} tracked rallies "
+            f"({len(gt_map)} have ball GT)"
+        )
+    else:
+        gt_rallies = load_labeled_rallies()
+        if video_ids:
+            gt_rallies = [r for r in gt_rallies if r.video_id in video_ids]
+        rally_list = [
+            (r.rally_id, r.video_id, r.start_ms, r.end_ms, r)
+            for r in gt_rallies
+        ]
+
+    for rally_id, video_id, start_ms, end_ms, gt_rally in rally_list:
+        # Read raw ball positions from cache
+        cached = ball_cache.get(rally_id)
         if cached is None:
             logger.warning(
-                f"No raw ball cache for rally {rally.rally_id[:8]}. "
-                "Run `evaluate-tracking tune-ball-filter --all --cache-only` first."
+                f"No {cache_type} cache for rally {rally_id[:8]}. "
+                f"Run cache script first."
             )
             continue
 
         ball_positions = cached.raw_ball_positions
         if not ball_positions:
-            logger.warning(f"Empty raw ball cache for rally {rally.rally_id[:8]}")
+            logger.warning(f"Empty {cache_type} cache for rally {rally_id[:8]}")
             continue
 
-        # Build frame -> position mapping from raw VballNet output
+        # Build frame -> position mapping from raw output
         frame_data: dict[int, dict[str, Any]] = {}
         max_frame = 0
 
@@ -123,12 +170,13 @@ def export_pseudo_labels(
             frame = bp.frame_number
             max_frame = max(max_frame, frame)
 
-            # Skip VballNet zero-confidence placeholders (0.5, 0.5 at conf=0.0)
+            # Skip zero-confidence placeholders
             if bp.confidence < cfg.min_confidence:
                 stats.filtered_low_confidence += 1
                 continue
 
             # Filter stationary false positives (low motion energy = player position)
+            # For ensemble: WASB positions have motion_energy=1.0, always pass
             if bp.motion_energy < cfg.min_motion_energy:
                 stats.filtered_low_motion += 1
                 continue
@@ -141,9 +189,9 @@ def export_pseudo_labels(
             stats.visible_frames += 1
 
         # Include gold GT labels (overwrite pseudo-labels where available)
-        if include_gold and rally.ground_truth:
+        if include_gold and gt_rally is not None and gt_rally.ground_truth:
             gt_ball = [
-                p for p in rally.ground_truth.positions if p.label == "ball"
+                p for p in gt_rally.ground_truth.positions if p.label == "ball"
             ]
             for gt_pos in gt_ball:
                 x_norm = max(0.0, min(gt_pos.x, 1.0))
@@ -158,7 +206,7 @@ def export_pseudo_labels(
                 stats.gold_label_frames += 1
 
         # Write TrackNetV2 CSV (frame_num, visible, x, y — normalized coords)
-        csv_path = output_dir / f"{rally.rally_id}.csv"
+        csv_path = output_dir / f"{rally_id}.csv"
         with open(csv_path, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["frame_num", "visible", "x", "y"])
@@ -176,9 +224,10 @@ def export_pseudo_labels(
         visible_count = sum(
             1 for d in frame_data.values() if d.get("visibility") == 1
         )
+        gt_tag = " (has GT)" if gt_rally is not None else ""
         logger.info(
-            f"Exported {rally.rally_id[:8]}: "
-            f"{visible_count} visible / {max_frame + 1} total frames → {csv_path}"
+            f"Exported {rally_id[:8]}: "
+            f"{visible_count} visible / {max_frame + 1} total frames{gt_tag} → {csv_path}"
         )
 
     logger.info(
@@ -256,6 +305,7 @@ def extract_frames(
     output_dir: Path,
     config: PseudoLabelConfig | None = None,
     video_ids: list[str] | None = None,
+    all_tracked: bool = False,
 ) -> int:
     """Extract video frames as JPEGs for TrackNetV2 training.
 
@@ -266,6 +316,7 @@ def extract_frames(
         output_dir: Root output directory.
         config: Export configuration (uses tracknet_width/height for resize).
         video_ids: Specific video IDs to process.
+        all_tracked: Extract frames for all tracked rallies, not just ball GT.
 
     Returns:
         Number of frames extracted.
@@ -276,57 +327,85 @@ def extract_frames(
         logger.error("opencv-python required for frame extraction: pip install opencv-python")
         return 0
 
-    from rallycut.evaluation.tracking.db import get_video_path, load_labeled_rallies
+    from rallycut.evaluation.tracking.db import (
+        get_video_path,
+        load_all_tracked_rallies,
+        load_labeled_rallies,
+    )
 
     cfg = config or PseudoLabelConfig()
     images_dir = output_dir / "images"
 
-    rallies = load_labeled_rallies()
-    if video_ids:
-        rallies = [r for r in rallies if r.video_id in video_ids]
+    # Load rallies
+    if all_tracked:
+        tracked = load_all_tracked_rallies()
+        if video_ids:
+            tracked = [r for r in tracked if r.video_id in video_ids]
+        rally_list = [
+            (r.rally_id, r.video_id, r.start_ms, r.end_ms) for r in tracked
+        ]
+    else:
+        gt_rallies = load_labeled_rallies()
+        if video_ids:
+            gt_rallies = [r for r in gt_rallies if r.video_id in video_ids]
+        rally_list = [
+            (r.rally_id, r.video_id, r.start_ms, r.end_ms) for r in gt_rallies
+        ]
 
     total_frames = 0
 
-    for rally in rallies:
-        video_path = get_video_path(rally.video_id)
+    # Group by video to avoid re-downloading
+    by_video: dict[str, list[tuple[str, int, int]]] = {}
+    for rally_id, video_id, start_ms, end_ms in rally_list:
+        by_video.setdefault(video_id, []).append((rally_id, start_ms, end_ms))
+
+    for video_id, video_rallies in by_video.items():
+        video_path = get_video_path(video_id)
         if video_path is None:
-            logger.warning(f"Video not found for rally {rally.rally_id[:8]}")
+            logger.warning(f"Video not found: {video_id[:8]}")
             continue
 
-        rally_dir = images_dir / rally.rally_id
-        rally_dir.mkdir(parents=True, exist_ok=True)
+        for rally_id, start_ms, end_ms in video_rallies:
+            rally_dir = images_dir / rally_id
+            if rally_dir.exists() and any(rally_dir.iterdir()):
+                logger.info(f"Skipping {rally_id[:8]}: frames already extracted")
+                # Count existing frames
+                total_frames += len(list(rally_dir.glob("*.jpg")))
+                continue
 
-        cap = cv2.VideoCapture(str(video_path))
-        if not cap.isOpened():
-            logger.warning(f"Cannot open video: {video_path}")
-            continue
+            rally_dir.mkdir(parents=True, exist_ok=True)
 
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        start_frame = int(rally.start_ms / 1000.0 * fps)
-        end_frame = int(rally.end_ms / 1000.0 * fps)
+            cap = cv2.VideoCapture(str(video_path))
+            if not cap.isOpened():
+                logger.warning(f"Cannot open video: {video_path}")
+                continue
 
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            start_frame = int(start_ms / 1000.0 * fps)
+            end_frame = int(end_ms / 1000.0 * fps)
 
-        frame_idx = 0
-        while cap.get(cv2.CAP_PROP_POS_FRAMES) <= end_frame:
-            ret, frame = cap.read()
-            if not ret:
-                break
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
-            # Resize to TrackNet dimensions
-            resized = cv2.resize(
-                frame, (cfg.tracknet_width, cfg.tracknet_height)
+            frame_idx = 0
+            while cap.get(cv2.CAP_PROP_POS_FRAMES) <= end_frame:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                # Resize to TrackNet dimensions
+                resized = cv2.resize(
+                    frame, (cfg.tracknet_width, cfg.tracknet_height)
+                )
+
+                frame_path = rally_dir / f"{frame_idx}.jpg"
+                cv2.imwrite(str(frame_path), resized)
+                frame_idx += 1
+
+            cap.release()
+            total_frames += frame_idx
+            logger.info(
+                f"Extracted {frame_idx} frames for rally {rally_id[:8]}"
             )
-
-            frame_path = rally_dir / f"{frame_idx}.jpg"
-            cv2.imwrite(str(frame_path), resized)
-            frame_idx += 1
-
-        cap.release()
-        total_frames += frame_idx
-        logger.info(
-            f"Extracted {frame_idx} frames for rally {rally.rally_id[:8]}"
-        )
 
     return total_frames
 
@@ -342,6 +421,17 @@ if __name__ == "__main__":
     parser.add_argument("--min-motion-energy", type=float, default=0.02)
     parser.add_argument("--gold-only", action="store_true", help="Export only gold GT labels")
     parser.add_argument(
+        "--cache-type",
+        choices=["vballnet", "ensemble"],
+        default="vballnet",
+        help="Ball position cache to use (default: vballnet)",
+    )
+    parser.add_argument(
+        "--all-tracked",
+        action="store_true",
+        help="Export all tracked rallies, not just ball GT rallies",
+    )
+    parser.add_argument(
         "--extract-frames", action="store_true",
         help="Extract video frames as JPEGs for training",
     )
@@ -355,10 +445,17 @@ if __name__ == "__main__":
     if args.gold_only:
         stats = export_gold_only(args.output_dir, config)
     else:
-        stats = export_pseudo_labels(args.output_dir, config)
+        stats = export_pseudo_labels(
+            args.output_dir,
+            config,
+            cache_type=args.cache_type,
+            all_tracked=args.all_tracked,
+        )
 
     print(f"\nExport stats: {stats.to_dict()}")
 
     if args.extract_frames:
-        num_frames = extract_frames(args.output_dir, config)
+        num_frames = extract_frames(
+            args.output_dir, config, all_tracked=args.all_tracked
+        )
         print(f"\nExtracted {num_frames} frames")
