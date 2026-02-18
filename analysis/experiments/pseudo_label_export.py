@@ -1,25 +1,25 @@
-"""Export ball detections as pseudo-labels for TrackNet training.
+"""Export ball detections as pseudo-labels for WASB fine-tuning.
 
-Converts cached ball positions (VballNet or ensemble) into TrackNet CSV
-format, applying confidence and motion energy filters to keep only
-high-quality pseudo-labels. Gold GT labels override where available.
+Converts cached ball positions (VballNet or ensemble) into CSV format,
+applying confidence and motion energy filters to keep only high-quality
+pseudo-labels. Gold GT labels override where available.
 
 Supports two cache sources:
   --cache-type vballnet  (default) VballNet-only raw positions
   --cache-type ensemble  WASB+VballNet ensemble positions (higher quality)
 
 Use --all-tracked to export all rallies with player tracks (not just
-the 9 with ball GT). Ensemble pseudo-labels for these rallies are the
-key input for TrackNet R3 training.
+the 9 with ball GT). Ensemble pseudo-labels are the key input for
+WASB fine-tuning on beach volleyball.
 
-Output format (TrackNet CSV):
+Output format (CSV):
     Frame,Visibility,X,Y
-    0,1,423,287       # visible ball at (423, 287)
+    0,1,0.423,0.287   # visible ball at normalized (0.423, 0.287)
     1,0,0,0           # ball not visible / out of frame
 
 Usage:
     python -m experiments.pseudo_label_export \
-        --output-dir pseudo_labels_r3/ \
+        --output-dir experiments/wasb_pseudo_labels/ \
         --cache-type ensemble \
         --all-tracked \
         --extract-frames
@@ -45,10 +45,9 @@ class PseudoLabelConfig:
     require_post_filter_pass: bool = True
     video_width: int = 1920
     video_height: int = 1080
-    # TrackNetV2 uses normalized coordinates (0-1) in its CSV labels
-    # and frame images resized to 512x288 for training
-    tracknet_width: int = 512
-    tracknet_height: int = 288
+    # Output frame dimensions for extracted training images
+    frame_width: int = 512
+    frame_height: int = 288
 
 
 @dataclass
@@ -84,10 +83,10 @@ def export_pseudo_labels(
     cache_type: str = "vballnet",
     all_tracked: bool = False,
 ) -> ExportStats:
-    """Export ball detections as TrackNet training data.
+    """Export ball detections as pseudo-label training data.
 
     Reads from BallRawCache (raw positions with motion_energy),
-    applies quality filters, and writes TrackNet CSV files (one per rally).
+    applies quality filters, and writes CSV files (one per rally).
     Gold GT labels are included where available and overwrite pseudo-labels.
 
     Args:
@@ -181,7 +180,7 @@ def export_pseudo_labels(
                 stats.filtered_low_motion += 1
                 continue
 
-            # Store normalized coordinates (0-1) — TrackNetV2 expects this
+            # Store normalized coordinates (0-1)
             x_norm = max(0.0, min(bp.x, 1.0))
             y_norm = max(0.0, min(bp.y, 1.0))
 
@@ -205,7 +204,7 @@ def export_pseudo_labels(
                 }
                 stats.gold_label_frames += 1
 
-        # Write TrackNetV2 CSV (frame_num, visible, x, y — normalized coords)
+        # Write CSV (frame_num, visible, x, y — normalized coords)
         csv_path = output_dir / f"{rally_id}.csv"
         with open(csv_path, "w", newline="") as f:
             writer = csv.writer(f)
@@ -244,7 +243,7 @@ def export_gold_only(
     config: PseudoLabelConfig | None = None,
     video_ids: list[str] | None = None,
 ) -> ExportStats:
-    """Export only gold GT labels in TrackNet CSV format.
+    """Export only gold GT labels in CSV format.
 
     Useful for fine-tuning evaluation or as a validation set.
 
@@ -307,14 +306,14 @@ def extract_frames(
     video_ids: list[str] | None = None,
     all_tracked: bool = False,
 ) -> int:
-    """Extract video frames as JPEGs for TrackNetV2 training.
+    """Extract video frames as JPEGs for training.
 
     Creates directory structure:
         output_dir/images/{rally_id}/0.jpg, 1.jpg, ...
 
     Args:
         output_dir: Root output directory.
-        config: Export configuration (uses tracknet_width/height for resize).
+        config: Export configuration (uses frame_width/height for resize).
         video_ids: Specific video IDs to process.
         all_tracked: Extract frames for all tracked rallies, not just ball GT.
 
@@ -392,9 +391,9 @@ def extract_frames(
                 if not ret:
                     break
 
-                # Resize to TrackNet dimensions
+                # Resize to training dimensions
                 resized = cv2.resize(
-                    frame, (cfg.tracknet_width, cfg.tracknet_height)
+                    frame, (cfg.frame_width, cfg.frame_height)
                 )
 
                 frame_path = rally_dir / f"{frame_idx}.jpg"
@@ -415,7 +414,7 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO)
 
-    parser = argparse.ArgumentParser(description="Export pseudo-labels for TrackNet training")
+    parser = argparse.ArgumentParser(description="Export pseudo-labels for ball model training")
     parser.add_argument("--output-dir", type=Path, default=Path("pseudo_labels"))
     parser.add_argument("--min-confidence", type=float, default=0.3)
     parser.add_argument("--min-motion-energy", type=float, default=0.02)

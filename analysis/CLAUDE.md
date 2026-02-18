@@ -79,12 +79,16 @@ uv run rallycut train list-remote                     # List datasets backed up 
 # - Checkpoints saved every 100 steps (~5 min max loss)
 # - Resumes from latest checkpoint automatically
 
-# TrackNet ball tracker training (fine-tune on beach volleyball)
-uv run rallycut train tracknet-modal --upload       # Upload training data to Modal
-uv run rallycut train tracknet-modal --epochs 30 --fresh  # Train on A10G GPU (~$1.10/hr)
-uv run rallycut train tracknet-modal --download     # Download best.pt + last.pt
-uv run python scripts/eval_tracknet.py              # Evaluate TrackNet vs VballNet
-uv run rallycut train tracknet-modal --cleanup      # Delete from Modal volume
+# WASB HRNet fine-tuning (improve ball detection on beach volleyball)
+uv run python -m experiments.pseudo_label_export \
+    --output-dir experiments/wasb_pseudo_labels \
+    --cache-type ensemble --all-tracked --extract-frames  # Export pseudo-labels
+uv run rallycut train wasb-modal --upload           # Upload data + pretrained weights to Modal
+uv run rallycut train wasb-modal --epochs 30 --fresh  # Train on A10G GPU (~$1.10/hr)
+uv run rallycut train wasb-modal --download         # Download fine-tuned model (auto-deletes ONNX)
+uv run python scripts/eval_wasb.py                  # Evaluate WASB solo
+uv run python scripts/eval_ensemble.py              # Evaluate ensemble
+uv run rallycut train wasb-modal --cleanup          # Delete from Modal volume
 
 # Temporal model training (DEPRECATED - use TemporalMaxer instead)
 # uv run rallycut train temporal --model v1 --epochs 50
