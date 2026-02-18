@@ -33,8 +33,8 @@ from rallycut.evaluation.tracking.ball_grid_search import (
     evaluate_ball_config,
 )
 from rallycut.evaluation.tracking.ball_param_grid import (
-    BALL_ENSEMBLE_GRID,
     describe_ball_config_diff,
+    get_ball_grid,
 )
 from rallycut.evaluation.tracking.db import load_labeled_rallies
 from rallycut.labeling.ground_truth import GroundTruthPosition
@@ -216,12 +216,16 @@ def run_ablation(
 
 def run_grid_search(
     rallies: list[tuple[CachedBallData, list[GroundTruthPosition]]],
+    grid_name: str = "ensemble",
 ) -> dict:
-    """Run grid search over ensemble-specific parameter grid."""
+    """Run grid search over parameter grid."""
     from rallycut.evaluation.tracking.ball_param_grid import ball_grid_size
 
-    grid_size = ball_grid_size(BALL_ENSEMBLE_GRID)
-    console.print(f"\n[bold]Phase B: Grid Search ({grid_size} configs)[/bold]\n")
+    grid = get_ball_grid(grid_name)
+    grid_size = ball_grid_size(grid)
+    console.print(
+        f"\n[bold]Phase B: Grid Search ({grid_size} configs, grid={grid_name})[/bold]\n"
+    )
 
     from rich.progress import Progress
 
@@ -233,7 +237,7 @@ def run_grid_search(
 
         result = ball_grid_search(
             rallies=rallies,
-            param_grid=BALL_ENSEMBLE_GRID,
+            param_grid=grid,
             progress_callback=_cb,
         )
 
@@ -277,10 +281,15 @@ def run_grid_search(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Tune ball filter for WASB+VballNet ensemble"
+        description="Tune ball filter for WASB-only or ensemble output"
     )
     parser.add_argument(
         "--grid", action="store_true", help="Run grid search after ablation"
+    )
+    parser.add_argument(
+        "--grid-name",
+        default="ensemble",
+        help="Grid to use for search (ensemble, wasb, outlier, etc.)",
     )
     parser.add_argument(
         "-o", "--output", help="Save results to JSON file"
@@ -332,7 +341,7 @@ def main() -> None:
     # Phase B: Grid search (optional)
     grid_results = None
     if args.grid:
-        grid_results = run_grid_search(rallies)
+        grid_results = run_grid_search(rallies, grid_name=args.grid_name)
 
     # Save results
     if args.output:

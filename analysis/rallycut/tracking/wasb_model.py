@@ -826,7 +826,7 @@ class WASBBallTracker:
 
         Same interface as BallTracker.track_video().
         """
-        from rallycut.tracking.ball_filter import BallFilterConfig, BallTemporalFilter
+        from rallycut.tracking.ball_filter import BallTemporalFilter
         from rallycut.tracking.ball_tracker import BallPosition, BallTrackingResult
 
         start_time = time.time()
@@ -999,7 +999,12 @@ class WASBBallTracker:
             if enable_filtering:
                 if preserve_raw:
                     raw_positions = positions.copy()
-                config = filter_config or BallFilterConfig()
+                if filter_config is not None:
+                    config = filter_config
+                else:
+                    from rallycut.tracking.ball_filter import get_wasb_filter_config
+
+                    config = get_wasb_filter_config()
                 temporal_filter = BallTemporalFilter(config)
                 positions = temporal_filter.filter_batch(positions)
 

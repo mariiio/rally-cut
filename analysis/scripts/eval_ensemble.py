@@ -1,16 +1,15 @@
-"""Evaluate WASB+VballNet ensemble for ball tracking.
+"""Evaluate WASB ball tracking, with optional VballNet comparison.
 
-Combines WASB (high precision, lower recall) with VballNet (high recall, lower
-precision) to get the best of both models.
+Modes:
+  --wasb-only (recommended): Evaluate fine-tuned WASB with tuned filter.
+  default: Evaluate WASB+VballNet ensemble with source-aware filter.
 
-Strategies:
-  1. wasb-primary: Use WASB where available, VballNet as fallback
-  2. wasb-only: WASB raw (baseline comparison)
-  3. vballnet-only: VballNet filtered (baseline comparison)
+Both modes show VballNet and raw WASB baselines for comparison.
 
 Usage:
     cd analysis
-    uv run python scripts/eval_ensemble.py
+    uv run python scripts/eval_ensemble.py --wasb-only           # WASB-only (default model)
+    uv run python scripts/eval_ensemble.py                       # Ensemble (legacy)
     uv run python scripts/eval_ensemble.py --device mps          # Use Apple GPU
     uv run python scripts/eval_ensemble.py --wasb-threshold 0.3  # Lower WASB threshold
 """
@@ -104,15 +103,21 @@ def merge_wasb_primary(
 
 def apply_light_filter(
     positions: list[BallPosition],
+    wasb_only: bool = False,
 ) -> list[BallPosition]:
-    """Apply ensemble-optimized filter to merged positions.
+    """Apply optimized filter to ball positions.
 
-    Uses get_ensemble_filter_config() which is tuned to not hurt
-    the ensemble's 79.4% unfiltered baseline.
+    Args:
+        positions: Raw ball positions to filter.
+        wasb_only: If True, use WASB-only config (lighter, no blip removal).
+                   If False, use ensemble config (source-aware).
     """
-    from rallycut.tracking.ball_filter import get_ensemble_filter_config
+    from rallycut.tracking.ball_filter import (
+        get_ensemble_filter_config,
+        get_wasb_filter_config,
+    )
 
-    config = get_ensemble_filter_config()
+    config = get_wasb_filter_config() if wasb_only else get_ensemble_filter_config()
     return apply_ball_filter_config(positions, config)
 
 
@@ -126,6 +131,9 @@ def main() -> None:
     parser.add_argument(
         "--no-filter", action="store_true", help="Skip filter pipeline on ensemble output"
     )
+    parser.add_argument(
+        "--wasb-only", action="store_true", help="Evaluate WASB-only (no VballNet fallback)"
+    )
     args = parser.parse_args()
 
     # Load models
@@ -136,7 +144,16 @@ def main() -> None:
         return
 
     console.print(f"WASB threshold: {args.wasb_threshold}, Device: {args.device}")
-    console.print(f"Ensemble filter: {'disabled' if args.no_filter else 'light (tuned for ensemble)'}")
+    if args.wasb_only:
+        console.print("Mode: WASB-only (no VballNet fallback)")
+        console.print(
+            f"Filter: {'disabled' if args.no_filter else 'tuned for WASB-only'}"
+        )
+    else:
+        console.print("Mode: Ensemble (WASB + VballNet)")
+        console.print(
+            f"Filter: {'disabled' if args.no_filter else 'tuned for ensemble'}"
+        )
     print()
 
     # Load rallies
@@ -167,7 +184,7 @@ def main() -> None:
         rally_label = rally.rally_id[:8]
         console.print(f"[bold]Rally {rally_label}[/bold] (video {rally.video_id[:8]})")
 
-        # --- VballNet baseline (filtered) ---
+        # --- VballNet baseline (filtered, for comparison) ---
         cached = raw_cache.get(rally.rally_id)
         if cached is not None:
             vnet_raw = cached.raw_ball_positions
@@ -176,8 +193,10 @@ def main() -> None:
             vnet_raw = rally.predictions.ball_positions
             vnet_filtered = vnet_raw  # Already filtered from DB
         else:
-            console.print("  [yellow]No VballNet predictions, skipping[/yellow]")
-            continue
+            if not args.wasb_only:
+                console.print("  [yellow]No VballNet predictions, skipping[/yellow]")
+                continue
+            vnet_filtered = []
 
         vnet_metrics = evaluate_ball_tracking(
             ground_truth=rally.ground_truth.positions,
@@ -243,13 +262,25 @@ def main() -> None:
         }))
 
         # --- Ensemble: WASB primary + VballNet fallback ---
-        ensemble_merged = merge_wasb_primary(wasb_shifted, vnet_filtered)
+        if args.wasb_only:
+            # WASB-only: tag all positions as WASB source
+            ensemble_merged = [
+                BallPosition(
+                    frame_number=p.frame_number, x=p.x, y=p.y,
+                    confidence=p.confidence, motion_energy=1.0,
+                )
+                for p in wasb_shifted if p.confidence > 0
+            ]
+        else:
+            ensemble_merged = merge_wasb_primary(wasb_shifted, vnet_filtered)
 
-        # Apply light filter (or no filter)
+        # Apply filter (or no filter)
         if args.no_filter:
             ensemble_final = ensemble_merged
         else:
-            ensemble_final = apply_light_filter(ensemble_merged)
+            ensemble_final = apply_light_filter(
+                ensemble_merged, wasb_only=args.wasb_only
+            )
 
         # Find optimal offset for ensemble (may differ slightly)
         ens_offset, _ = find_optimal_frame_offset(

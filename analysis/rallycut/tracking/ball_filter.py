@@ -153,6 +153,48 @@ def get_ensemble_filter_config() -> BallFilterConfig:
     )
 
 
+def get_wasb_filter_config() -> BallFilterConfig:
+    """Get optimized BallFilterConfig for fine-tuned WASB-only output.
+
+    The fine-tuned WASB model produces clean positions that don't need
+    aggressive filtering. Grid search on 9 GT rallies (Feb 2026):
+    - Unfiltered: 90.3% match, 36.9px error
+    - Optimal: 90.9% match, 23.4px error
+    - Key: blip removal HURTS (-1.1%), oscillation ZERO, light filter wins
+
+    Compared to old ensemble (WASB+VballNet, source-aware filter):
+    - Old: 86.2% match, 29.9px error
+    - New: 90.9% match, 23.4px error (+4.7pp match, -6.5px error)
+    """
+    return BallFilterConfig(
+        # No source distinction (all positions are WASB)
+        ensemble_source_aware=False,
+        # Segment pruning (removes false segments at boundaries)
+        enable_segment_pruning=True,
+        segment_jump_threshold=0.20,
+        min_segment_frames=8,
+        min_output_confidence=0.05,
+        # No motion energy filter (WASB doesn't produce motion_energy values)
+        enable_motion_energy_filter=False,
+        # Stationarity: off (grid search: neutral with fine-tuned WASB)
+        enable_stationarity_filter=False,
+        # Exit ghost removal
+        enable_exit_ghost_removal=True,
+        exit_edge_zone=0.10,
+        exit_approach_frames=3,
+        # Oscillation DISABLED — zero effect
+        enable_oscillation_pruning=False,
+        # Outlier removal (runs after segment pruning, safe)
+        enable_outlier_removal=True,
+        # Blip removal DISABLED — WASB doesn't produce VballNet-style blips,
+        # enabling it kills real positions (-1.1% match)
+        enable_blip_removal=False,
+        # Interpolation with shorter gap (WASB precision benefits from tighter fill)
+        enable_interpolation=True,
+        max_interpolation_gap=5,
+    )
+
+
 class BallTemporalFilter:
     """Ball tracking temporal filter with multi-stage post-processing pipeline.
 

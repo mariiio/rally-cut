@@ -368,21 +368,21 @@ Multiple ball tracking models are available via the `model` parameter:
 
 | Model | ID | Match Rate | Error | Speed | Recommendation |
 |-------|-----|------------|-------|-------|----------------|
-| **Ensemble** | `ensemble` (default) | **82.5%** | 28.2px | 33 FPS (ONNX+CoreML) | **Default** - best accuracy |
-| **WASB HRNet** | `wasb` | 67.5% | 51.9px | 33 FPS (ONNX+CoreML) | High precision, lower recall |
+| **WASB HRNet** | `wasb` (default) | **86.4%** | 29.2px | 33 FPS (ONNX+CoreML) | **Default** - best accuracy, fine-tuned on beach volleyball |
+| **Ensemble** | `ensemble` | 86.2% | 29.9px | 33 FPS (ONNX+CoreML) | Legacy — WASB+VballNet, marginal benefit |
 | **VballNetV2** | `v2` | 41.7% | 92.7px | 100 FPS (CPU) | Fastest, ONNX-only |
 | **VballNetFastV1** | `fast` | ~40% | ~95px | 280 FPS (CPU) | Speed priority (3.6x faster) |
 
-WASB (BMVC 2023) is an HRNet pretrained on indoor volleyball. The ensemble uses WASB as primary (high precision) with VballNet as fallback (high recall). WASB uses ONNX+CoreML on Apple Silicon (auto-exported from PyTorch on first use); VballNet uses ONNX.
+WASB (BMVC 2023) is an HRNet fine-tuned on beach volleyball pseudo-labels. Uses ONNX+CoreML on Apple Silicon (auto-exported from PyTorch on first use). VballNet contributes <1% of frames in the ensemble, so WASB-only is now the default.
 
 ```python
 from rallycut.tracking import create_ball_tracker
 
-# Default: ensemble (best accuracy - 82.5% match rate)
+# Default: WASB (best accuracy - 86.4% match rate)
 tracker = create_ball_tracker()
 
-# WASB only (high precision, 67.5% match rate)
-tracker = create_ball_tracker("wasb")
+# Ensemble (WASB + VballNet fallback, legacy)
+tracker = create_ball_tracker("ensemble")
 
 # VballNet only (fastest, 41.7% match rate)
 tracker = create_ball_tracker("v2")
@@ -390,8 +390,8 @@ tracker = create_ball_tracker("v2")
 
 CLI support:
 ```bash
-rallycut track-players video.mp4                          # Default ensemble
-rallycut track-players video.mp4 --ball-model wasb        # WASB only
+rallycut track-players video.mp4                          # Default WASB
+rallycut track-players video.mp4 --ball-model ensemble    # WASB + VballNet fallback
 rallycut track-players video.mp4 --ball-model v2          # VballNet only (fastest)
 rallycut evaluate-tracking compare-ball-models --all      # Compare all variants
 ```
