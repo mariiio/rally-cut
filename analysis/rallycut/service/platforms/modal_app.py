@@ -138,7 +138,7 @@ def detect_rallies(
 
 
 @app.function(image=image)
-@modal.web_endpoint(method="GET", docs=True)
+@modal.fastapi_endpoint(method="GET", docs=True)
 def health() -> dict:
     """Health check endpoint."""
     return {"status": "healthy", "service": "rallycut-detection"}
@@ -152,7 +152,7 @@ def health() -> dict:
     memory=16384,
     secrets=[modal.Secret.from_name("aws-credentials")],
 )
-@modal.web_endpoint(method="POST", docs=True)
+@modal.fastapi_endpoint(method="POST", docs=True)
 def detect(request: dict) -> dict:
     """
     Web endpoint for detection requests from the API.
