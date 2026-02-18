@@ -1,15 +1,15 @@
-"""Modal deployment for TrackNet ball tracking fine-tuning.
+"""Modal deployment for WASB HRNet ball tracking fine-tuning.
 
-Trains a TrackNetV2 model on pseudo-labeled ball positions (from VballNet)
-and gold ground truth labels. Uses A10G GPU on Modal with mixed precision.
+Fine-tunes WASB HRNet on ensemble pseudo-labels (from WASB+VballNet ensemble)
+to improve ball detection on beach volleyball. Uses A10G GPU on Modal.
 
 Data must be uploaded to Modal volume first:
-    rallycut train tracknet-modal --upload
+    rallycut train wasb-modal --upload
 
 Then train:
-    modal run rallycut/training/modal_tracknet.py --epochs 30
+    modal run rallycut/training/modal_wasb.py --epochs 30
 
-Training is preemption-resilient: checkpoints are saved every 5 epochs
+Training is preemption-resilient: checkpoints are saved every 3 epochs
 and training auto-resumes from the latest checkpoint on retry.
 """
 
@@ -17,9 +17,8 @@ from __future__ import annotations
 
 import modal
 
-app = modal.App("rallycut-tracknet")
+app = modal.App("rallycut-wasb")
 
-# Lighter image than VideoMAE training — no transformers/accelerate needed
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg", "libgl1-mesa-glx", "libglib2.0-0")
@@ -29,7 +28,6 @@ image = (
         "opencv-python-headless>=4.8.0",
         "numpy>=1.24.0",
         "tqdm>=4.65.0",
-        # Required by rallycut package init chain (config.py imports)
         "pyyaml>=6.0.0",
         "pydantic>=2.0.0",
         "pydantic-settings>=2.0.0",
@@ -40,7 +38,6 @@ image = (
     .add_local_dir("rallycut", "/app/rallycut")
 )
 
-# Reuse the same volume as VideoMAE training
 training_volume = modal.Volume.from_name("rallycut-training", create_if_missing=True)
 
 
@@ -58,20 +55,20 @@ training_volume = modal.Volume.from_name("rallycut-training", create_if_missing=
 )
 def train_model(
     epochs: int = 30,
-    batch_size: int = 16,
+    batch_size: int = 8,
     val_ratio: float = 0.2,
-    data_dir: str = "/data/tracknet_data",
-    output_dir: str = "/data/models/tracknet",
+    data_dir: str = "/data/wasb_data",
+    output_dir: str = "/data/models/wasb",
     fresh: bool = False,
 ) -> dict:
-    """Train TrackNet on Modal A10G GPU.
+    """Train WASB HRNet on Modal A10G GPU.
 
     Scans data_dir for available rallies (CSV + images), splits by rally
-    into train/val, and trains the model.
+    into train/val, and fine-tunes the model.
 
     Args:
         epochs: Number of training epochs.
-        batch_size: Batch size (A10G 24GB VRAM supports 16-32 for TrackNet).
+        batch_size: Batch size (A10G 24GB VRAM supports 8-16 for WASB).
         val_ratio: Fraction of rallies held out for validation.
         data_dir: Path to training data on volume.
         output_dir: Path to save model on volume.
@@ -88,9 +85,9 @@ def train_model(
 
     sys.path.insert(0, "/app")
 
-    from rallycut.training.tracknet import TrackNetConfig, train_tracknet
+    from rallycut.training.wasb import WASBConfig, train_wasb
 
-    print("Starting TrackNet training on Modal A10G GPU")
+    print("Starting WASB HRNet training on Modal A10G GPU")
     print(f"  Epochs: {epochs}")
     print(f"  Batch size: {batch_size}")
     print(f"  Val ratio: {val_ratio}")
@@ -100,11 +97,10 @@ def train_model(
     data_path = Path(data_dir)
     output_path = Path(output_dir)
 
-    # Check data exists
     if not data_path.exists():
         raise ValueError(
             f"Training data not found at {data_dir}. "
-            "Upload with: rallycut train tracknet-modal --upload"
+            "Upload with: rallycut train wasb-modal --upload"
         )
 
     # Discover available rallies (must have both CSV and images)
@@ -113,7 +109,7 @@ def train_model(
     for csv_file in csv_files:
         rally_id = csv_file.stem
         if rally_id.endswith("_gold"):
-            continue  # Skip gold-only CSVs
+            continue
         img_dir = data_path / "images" / rally_id
         if img_dir.exists() and any(img_dir.iterdir()):
             rally_ids.append(rally_id)
@@ -149,7 +145,6 @@ def train_model(
         ckpt_latest = output_path / "checkpoint" / "ckpt_latest.pt"
         if ckpt_latest.exists():
             resume_checkpoint = ckpt_latest
-            # Find epoch from latest checkpoint
             checkpoints = list((output_path / "checkpoint").glob("ckpt_[0-9]*.pt"))
             if checkpoints:
                 latest = max(
@@ -160,22 +155,29 @@ def train_model(
                 )
                 print(f"  Resuming from checkpoint: {latest.name}")
 
-    config = TrackNetConfig(
+    # Find pretrained weights
+    pretrained_path = Path("/data/pretrained/wasb_volleyball_best.pth.tar")
+    if pretrained_path.exists() and not resume_checkpoint:
+        print(f"  Pretrained weights: {pretrained_path}")
+    else:
+        pretrained_path = None  # type: ignore[assignment]
+
+    config = WASBConfig(
         epochs=epochs,
         batch_size=batch_size,
         num_workers=4,
     )
 
-    result = train_tracknet(
+    result = train_wasb(
         data_dir=data_path,
         output_dir=output_path,
         config=config,
         train_rally_ids=train_ids,
         val_rally_ids=val_ids,
         resume_checkpoint=resume_checkpoint,
+        pretrained_weights=pretrained_path,
     )
 
-    # Commit volume to persist results
     training_volume.commit()
 
     return {
@@ -186,6 +188,7 @@ def train_model(
         "precision": result.precision,
         "recall": result.recall,
         "f1": result.f1,
+        "accuracy": result.accuracy,
         "train_rallies": len(train_ids),
         "val_rallies": len(val_ids),
     }
@@ -194,28 +197,29 @@ def train_model(
 @app.local_entrypoint()
 def main(
     epochs: int = 30,
-    batch_size: int = 16,
+    batch_size: int = 8,
     val_ratio: float = 0.2,
     download: bool = False,
     fresh: bool = False,
 ) -> None:
-    """Train TrackNet on Modal GPU.
+    """Train WASB HRNet on Modal GPU.
 
     Workflow:
-        1. Export pseudo-labels: python -m experiments.pseudo_label_export --extract-frames
-        2. Upload: rallycut train tracknet-modal --upload
-        3. Train: modal run rallycut/training/modal_tracknet.py --epochs 30
-        4. Download: modal run rallycut/training/modal_tracknet.py --download
+        1. Export pseudo-labels:
+           python -m experiments.pseudo_label_export --cache-type ensemble --all-tracked --extract-frames
+        2. Upload: rallycut train wasb-modal --upload
+        3. Train: modal run rallycut/training/modal_wasb.py --epochs 30
+        4. Download: rallycut train wasb-modal --download
     """
     import json
 
     if download:
         print("Download trained model with:")
-        print("  modal volume get rallycut-training models/tracknet/best.pt weights/tracknet/")
-        print("  modal volume get rallycut-training models/tracknet/last.pt weights/tracknet/")
+        print("  modal volume get rallycut-training models/wasb/best.pt weights/wasb/")
+        print("  modal volume get rallycut-training models/wasb/last.pt weights/wasb/")
         return
 
-    print("Starting TrackNet training on Modal...")
+    print("Starting WASB HRNet training on Modal...")
     print(f"  Epochs: {epochs}")
     print(f"  Batch size: {batch_size}")
     print(f"  Val ratio: {val_ratio}")

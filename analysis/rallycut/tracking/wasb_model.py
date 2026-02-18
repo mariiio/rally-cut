@@ -526,18 +526,24 @@ class HRNet(nn.Module):
 
 
 def load_wasb_model(weights_path: Path | str | None = None, device: str = "cpu") -> HRNet:
-    """Load WASB HRNet model with pretrained volleyball weights.
+    """Load WASB HRNet model with pretrained or fine-tuned weights.
 
     Args:
-        weights_path: Path to wasb_volleyball_best.pth.tar checkpoint.
-            If None, looks in weights/wasb/ directory.
+        weights_path: Path to checkpoint (.pth.tar with model_state_dict key).
+            If None, looks in weights/wasb/ for wasb_finetuned.pth.tar first,
+            then falls back to wasb_volleyball_best.pth.tar.
         device: Device to load model on.
 
     Returns:
         Loaded HRNet model in eval mode.
     """
     if weights_path is None:
-        weights_path = WEIGHTS_DIR / "wasb_volleyball_best.pth.tar"
+        finetuned = WEIGHTS_DIR / "wasb_finetuned.pth.tar"
+        if finetuned.exists():
+            weights_path = finetuned
+            logger.info("Using fine-tuned WASB weights")
+        else:
+            weights_path = WEIGHTS_DIR / "wasb_volleyball_best.pth.tar"
 
     weights_path = Path(weights_path)
     if not weights_path.exists():

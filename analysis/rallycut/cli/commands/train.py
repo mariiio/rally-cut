@@ -696,56 +696,64 @@ def modal(
     subprocess.run(cmd)
 
 
-@app.command("tracknet-modal")
-def tracknet_modal(
+@app.command("wasb-modal")
+def wasb_modal(
     epochs: int = typer.Option(30, "--epochs", "-e", help="Number of training epochs"),
-    batch_size: int = typer.Option(16, "--batch-size", "-b", help="Batch size (16-32 for T4 GPU)"),
+    batch_size: int = typer.Option(8, "--batch-size", "-b", help="Batch size (8-16 for A10G GPU)"),
     upload: bool = typer.Option(
-        False, "--upload", help="Upload pseudo-labels + frames to Modal volume"
+        False, "--upload", help="Upload pseudo-labels + frames + pretrained weights to Modal"
     ),
     download: bool = typer.Option(
-        False, "--download", help="Download trained TrackNet model from Modal"
+        False, "--download", help="Download fine-tuned WASB model from Modal"
     ),
     cleanup: bool = typer.Option(
-        False, "--cleanup", help="Delete TrackNet data/models from Modal volume"
+        False, "--cleanup", help="Delete WASB data/models from Modal volume"
     ),
     fresh: bool = typer.Option(
         False, "--fresh", help="Start fresh training, ignoring existing checkpoints"
     ),
     data_dir: Path = typer.Option(
-        Path("experiments/pseudo_labels"),
+        Path("experiments/wasb_pseudo_labels"),
         "--data-dir",
         "-d",
         help="Local directory with pseudo-labels and frames",
     ),
 ) -> None:
-    """Train TrackNet ball tracker on Modal GPU (T4 - ~$0.59/hr).
+    """Fine-tune WASB HRNet ball tracker on Modal GPU (A10G - ~$1.10/hr).
 
     Workflow:
-        1. Export pseudo-labels and frames locally:
-           cd analysis && uv run python -m experiments.pseudo_label_export --extract-frames
+        1. Export ensemble pseudo-labels and frames locally:
+           uv run python -m experiments.pseudo_label_export \\
+               --output-dir experiments/wasb_pseudo_labels \\
+               --cache-type ensemble --all-tracked --extract-frames
 
         2. Upload to Modal:
-           rallycut train tracknet-modal --upload
+           rallycut train wasb-modal --upload
 
-        3. Train on T4 GPU:
-           rallycut train tracknet-modal --epochs 30
+        3. Train on A10G GPU:
+           rallycut train wasb-modal --epochs 30 --fresh
 
-        4. Download trained model:
-           rallycut train tracknet-modal --download
+        4. Download fine-tuned model (auto-deletes ONNX for re-export):
+           rallycut train wasb-modal --download
 
-        5. Clean up Modal storage:
-           rallycut train tracknet-modal --cleanup
+        5. Evaluate:
+           uv run python scripts/eval_wasb.py
+           uv run python scripts/eval_ensemble.py
+
+        6. Clean up Modal storage:
+           rallycut train wasb-modal --cleanup
     """
     import subprocess
 
     if upload:
-        rprint("[bold]Uploading TrackNet training data to Modal...[/bold]")
+        rprint("[bold]Uploading WASB training data to Modal...[/bold]")
         if not data_dir.exists():
             rprint(f"[red]Data directory not found: {data_dir}[/red]")
             rprint(
                 "Run pseudo-label export first:\n"
-                "  [cyan]uv run python -m experiments.pseudo_label_export --extract-frames[/cyan]"
+                "  [cyan]uv run python -m experiments.pseudo_label_export "
+                "--output-dir experiments/wasb_pseudo_labels "
+                "--cache-type ensemble --all-tracked --extract-frames[/cyan]"
             )
             raise typer.Exit(1)
 
@@ -759,44 +767,87 @@ def tracknet_modal(
 
         rprint(f"  CSVs: {csv_count}, Image dirs: {len(img_dirs)}")
 
+        # Upload training data
         cmd = [
             "python3", "-m", "modal", "volume", "put", "-f",
-            "rallycut-training", str(data_dir) + "/", "tracknet_data/",
+            "rallycut-training", str(data_dir) + "/", "wasb_data/",
         ]
         rprint(f"Running: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0:
-            rprint("[green]TrackNet training data uploaded![/green]")
-            rprint()
-            rprint("Next: [cyan]rallycut train tracknet-modal --epochs 30[/cyan]")
-        else:
+        if result.returncode != 0:
             rprint(f"[red]Upload failed: {result.stderr}[/red]")
+            return
+
+        rprint("[green]WASB training data uploaded![/green]")
+
+        # Upload pretrained WASB weights
+        pretrained = Path("weights/wasb/wasb_volleyball_best.pth.tar")
+        if pretrained.exists():
+            cmd_pt = [
+                "python3", "-m", "modal", "volume", "put", "-f",
+                "rallycut-training", str(pretrained),
+                "pretrained/wasb_volleyball_best.pth.tar",
+            ]
+            rprint("Uploading pretrained WASB weights...")
+            pt_result = subprocess.run(cmd_pt, capture_output=True, text=True)
+            if pt_result.returncode == 0:
+                rprint("[green]Pretrained weights uploaded![/green]")
+            else:
+                rprint("[yellow]Pretrained weights upload failed (training will start from scratch)[/yellow]")
+        else:
+            rprint(f"[yellow]Pretrained weights not found at {pretrained}[/yellow]")
+
+        rprint()
+        rprint("Next: [cyan]rallycut train wasb-modal --epochs 30 --fresh[/cyan]")
         return
 
     if download:
-        rprint("[bold]Downloading TrackNet model from Modal...[/bold]")
-        output = Path("weights/tracknet")
+        rprint("[bold]Downloading fine-tuned WASB model from Modal...[/bold]")
+        output = Path("weights/wasb")
         output.mkdir(parents=True, exist_ok=True)
 
-        for filename in ["best.pt", "last.pt"]:
+        # Download best.pt as wasb_finetuned.pth.tar (checkpoint dict with model_state_dict key)
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
             cmd = [
                 "python3", "-m", "modal", "volume", "get", "--force",
-                "rallycut-training", f"models/tracknet/{filename}", str(output) + "/",
+                "rallycut-training", "models/wasb/best.pt", tmp_dir + "/",
             ]
-            rprint(f"Downloading {filename}...")
+            rprint("Downloading best.pt...")
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0:
-                rprint(f"[green]{filename} downloaded[/green]")
-            else:
-                rprint(f"[yellow]{filename} not found or download failed[/yellow]")
+                # Convert state_dict to checkpoint format matching load_wasb_model()
+                import torch
 
-        rprint(f"\n[green]Model saved to {output}[/green]")
+                src = Path(tmp_dir) / "best.pt"
+                state_dict = torch.load(src, map_location="cpu", weights_only=True)
+                checkpoint = {"model_state_dict": state_dict}
+                dst = output / "wasb_finetuned.pth.tar"
+                torch.save(checkpoint, dst)
+                rprint(f"[green]Saved fine-tuned model to {dst}[/green]")
+            else:
+                rprint(f"[red]Download failed: {result.stderr}[/red]")
+                return
+
+        # Delete ONNX files to force re-export with new weights
+        for onnx_file in output.glob("*.onnx*"):
+            onnx_file.unlink()
+            rprint(f"[yellow]Deleted {onnx_file.name} (will re-export on next inference)[/yellow]")
+
+        rprint()
+        rprint("[green]Download complete![/green]")
+        rprint("Evaluate with:")
+        rprint("  [cyan]uv run python scripts/eval_wasb.py[/cyan]")
+        rprint("  [cyan]uv run python scripts/eval_ensemble.py[/cyan]")
+        rprint()
+        rprint("To revert to original weights, delete weights/wasb/wasb_finetuned.pth.tar")
         return
 
     if cleanup:
-        rprint("[bold]Cleaning up TrackNet data from Modal...[/bold]")
+        rprint("[bold]Cleaning up WASB data from Modal...[/bold]")
 
-        for folder in ["tracknet_data/", "models/tracknet/"]:
+        for folder in ["wasb_data/", "models/wasb/"]:
             cmd = [
                 "python3", "-m", "modal", "volume", "rm",
                 "rallycut-training", folder, "-r",
@@ -811,7 +862,7 @@ def tracknet_modal(
         return
 
     # Run training on Modal
-    rprint("[bold]Starting TrackNet training on Modal T4 GPU...[/bold]")
+    rprint("[bold]Starting WASB HRNet training on Modal A10G GPU...[/bold]")
     rprint(f"  Epochs: {epochs}, Batch size: {batch_size}")
     if fresh:
         rprint("[yellow]  Fresh training: ignoring existing checkpoints[/yellow]")
@@ -821,7 +872,7 @@ def tracknet_modal(
         "python3", "-m", "modal",
         "run",
         "--detach",
-        "rallycut/training/modal_tracknet.py",
+        "rallycut/training/modal_wasb.py",
         "--epochs", str(epochs),
         "--batch-size", str(batch_size),
     ]
