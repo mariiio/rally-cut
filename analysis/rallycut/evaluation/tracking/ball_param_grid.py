@@ -56,12 +56,31 @@ BALL_ENSEMBLE_GRID: dict[str, list[float | int | bool]] = {
 }
 
 
+# WASB-only filter tuning grid (1152 combinations)
+# For fine-tuned WASB without VballNet fallback. All positions are WASB source,
+# so source_aware=False (otherwise it disables most filter stages).
+# Includes stationarity filter (catches WASB player lock-on) and exit_approach_frames.
+BALL_WASB_GRID: dict[str, list[float | int | bool]] = {
+    "ensemble_source_aware": [False],  # Locked: all positions are WASB, no source distinction
+    "enable_stationarity_filter": [True, False],
+    "min_segment_frames": [5, 8, 12],
+    "segment_jump_threshold": [0.15, 0.20, 0.25],
+    "blip_max_deviation": [0.10, 0.15],
+    "max_interpolation_gap": [5, 10],
+    "exit_approach_frames": [3, 4],
+    "enable_blip_removal": [True, False],
+    "enable_outlier_removal": [True, False],
+    "enable_oscillation_pruning": [True, False],
+}
+
+
 # All available grids
 BALL_AVAILABLE_GRIDS: dict[str, dict[str, list[Any]]] = {
     "outlier": BALL_OUTLIER_GRID,
     "segment-pruning": BALL_SEGMENT_PRUNING_GRID,
     "oscillation": BALL_OSCILLATION_GRID,
     "ensemble": BALL_ENSEMBLE_GRID,
+    "wasb": BALL_WASB_GRID,
 }
 
 
@@ -118,7 +137,7 @@ def get_ball_grid(name: str) -> dict[str, list[Any]]:
     """Get a parameter grid by name.
 
     Args:
-        name: Grid name (outlier, segment-pruning, oscillation, ensemble).
+        name: Grid name (outlier, segment-pruning, oscillation, ensemble, wasb).
 
     Returns:
         Grid dict.

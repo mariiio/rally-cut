@@ -111,6 +111,11 @@ def main() -> None:
         help="Cache all rallies with player tracks (not just ball GT rallies)",
     )
     parser.add_argument("--clear", action="store_true", help="Clear cache before running")
+    parser.add_argument(
+        "--wasb-only",
+        action="store_true",
+        help="Cache WASB positions only (skip VballNet inference)",
+    )
     args = parser.parse_args()
 
     cache = BallRawCache(cache_dir=ENSEMBLE_CACHE_DIR)
@@ -180,7 +185,9 @@ def main() -> None:
     for rally, has_gt in rallies_with_gt:
         rallies_by_video.setdefault(rally.video_id, []).append((rally, has_gt))
 
-    vnet_tracker = BallTracker(model=args.vballnet_model)
+    vnet_tracker = None if args.wasb_only else BallTracker(model=args.vballnet_model)
+    if args.wasb_only:
+        logger.info("WASB-only mode: skipping VballNet inference")
     cached_count = 0
     skipped_count = 0
 
@@ -250,63 +257,81 @@ def main() -> None:
                 wasb_shifted = wasb_raw
                 logger.info(f"    WASB: {len(wasb_raw)} detections, no offset")
 
-            # --- VballNet inference ---
-            # Try to use cached raw VballNet positions first
-            vnet_cached = vnet_raw_cache.get(rally.rally_id)
-            if vnet_cached is not None:
-                vnet_raw = vnet_cached.raw_ball_positions
-                logger.info(f"    VballNet: {len(vnet_raw)} positions (from cache)")
-            else:
-                vnet_result = vnet_tracker.track_video(
-                    video_path,
-                    start_ms=rally.start_ms,
-                    end_ms=rally.end_ms,
-                    enable_filtering=False,
-                )
-                # Convert to rally-relative frame numbers
-                if vnet_result.positions:
-                    first_frame = min(p.frame_number for p in vnet_result.positions)
-                else:
-                    first_frame = 0
-                vnet_raw = [
+            # --- VballNet inference (skip if WASB-only) ---
+            if args.wasb_only:
+                # Tag all WASB positions as source=WASB
+                merged = [
                     BallPosition(
-                        frame_number=p.frame_number - first_frame,
+                        frame_number=p.frame_number,
                         x=p.x,
                         y=p.y,
                         confidence=p.confidence,
-                        motion_energy=p.motion_energy,
+                        motion_energy=1.0,
                     )
-                    for p in vnet_result.positions
+                    for p in wasb_shifted
+                    if p.confidence > 0
                 ]
-                logger.info(f"    VballNet: {len(vnet_raw)} positions (fresh inference)")
+            else:
+                # Try to use cached raw VballNet positions first
+                vnet_cached = vnet_raw_cache.get(rally.rally_id)
+                if vnet_cached is not None:
+                    vnet_raw = vnet_cached.raw_ball_positions
+                    logger.info(f"    VballNet: {len(vnet_raw)} positions (from cache)")
+                else:
+                    assert vnet_tracker is not None
+                    vnet_result = vnet_tracker.track_video(
+                        video_path,
+                        start_ms=rally.start_ms,
+                        end_ms=rally.end_ms,
+                        enable_filtering=False,
+                    )
+                    # Convert to rally-relative frame numbers
+                    if vnet_result.positions:
+                        first_frame = min(p.frame_number for p in vnet_result.positions)
+                    else:
+                        first_frame = 0
+                    vnet_raw = [
+                        BallPosition(
+                            frame_number=p.frame_number - first_frame,
+                            x=p.x,
+                            y=p.y,
+                            confidence=p.confidence,
+                            motion_energy=p.motion_energy,
+                        )
+                        for p in vnet_result.positions
+                    ]
+                    logger.info(f"    VballNet: {len(vnet_raw)} positions (fresh inference)")
 
-            # --- Pre-filter VballNet: remove stationary false positives ---
-            # VballNet detects players as ball with low motion energy. These would
-            # become fallback positions where WASB has no detection. Motion energy
-            # filter zeroes their confidence so they're excluded from the merge.
-            vnet_prefilter = BallFilterConfig(
-                enable_motion_energy_filter=True,
-                enable_segment_pruning=False,
-                enable_oscillation_pruning=False,
-                enable_exit_ghost_removal=False,
-                enable_outlier_removal=False,
-                enable_blip_removal=False,
-                enable_interpolation=False,
-            )
-            vnet_filtered = BallTemporalFilter(vnet_prefilter).filter_batch(vnet_raw)
-            me_removed = sum(1 for p in vnet_raw if p.confidence > 0) - sum(
-                1 for p in vnet_filtered if p.confidence > 0
-            )
-            if me_removed > 0:
-                logger.info(f"    VballNet pre-filter: removed {me_removed} low-energy FPs")
+                # --- Pre-filter VballNet: remove stationary false positives ---
+                vnet_prefilter = BallFilterConfig(
+                    enable_motion_energy_filter=True,
+                    enable_segment_pruning=False,
+                    enable_oscillation_pruning=False,
+                    enable_exit_ghost_removal=False,
+                    enable_outlier_removal=False,
+                    enable_blip_removal=False,
+                    enable_interpolation=False,
+                )
+                vnet_filtered = BallTemporalFilter(vnet_prefilter).filter_batch(vnet_raw)
+                me_removed = sum(1 for p in vnet_raw if p.confidence > 0) - sum(
+                    1 for p in vnet_filtered if p.confidence > 0
+                )
+                if me_removed > 0:
+                    logger.info(
+                        f"    VballNet pre-filter: removed {me_removed} low-energy FPs"
+                    )
 
-            # --- Merge ---
-            merged = merge_wasb_primary(wasb_shifted, vnet_filtered)
+                # --- Merge ---
+                merged = merge_wasb_primary(wasb_shifted, vnet_filtered)
             wasb_count = sum(1 for p in merged if p.motion_energy >= 1.0)
-            vnet_count = sum(1 for p in merged if p.motion_energy < 1.0)
-            logger.info(
-                f"    Merged: {wasb_count} WASB + {vnet_count} VballNet = {len(merged)} total"
-            )
+            vnet_count = len(merged) - wasb_count
+            if vnet_count > 0:
+                logger.info(
+                    f"    Merged: {wasb_count} WASB + {vnet_count} VballNet"
+                    f" = {len(merged)} total"
+                )
+            else:
+                logger.info(f"    Cached: {wasb_count} WASB positions")
 
             # Cache merged positions
             cached_data = CachedBallData(

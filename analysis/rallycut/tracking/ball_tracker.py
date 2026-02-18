@@ -34,9 +34,9 @@ BALL_MODELS: dict[str, tuple[str, int, int]] = {
     "fast": ("VballNetFastV1_seq9_grayscale_233_h288_w512.onnx", 288, 512),
 }
 
-# Default ball tracking model. Ensemble (WASB+VballNet) is best accuracy (82.5% match).
-# VballNet v2 alone is fastest (100 FPS) but only 41.7% match rate.
-DEFAULT_BALL_MODEL = "ensemble"
+# Default ball tracking model. Fine-tuned WASB HRNet (86.4% match, 29.2px error).
+# Ensemble (WASB+VballNet) still available but VballNet adds <1% of frames.
+DEFAULT_BALL_MODEL = "wasb"
 
 # VballNet-specific constants (used by BallTracker ONNX class only)
 _DEFAULT_VBALLNET = "v2"
