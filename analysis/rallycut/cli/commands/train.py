@@ -696,6 +696,106 @@ def modal(
     subprocess.run(cmd)
 
 
+@app.command("wasb-local")
+def wasb_local(
+    data_dir: Path = typer.Option(
+        Path("experiments/wasb_pseudo_labels"),
+        "--data-dir",
+        "-d",
+        help="Local directory with pseudo-labels and frames",
+    ),
+    epochs: int = typer.Option(2, "--epochs", "-e", help="Number of epochs (default: 2)"),
+    max_rallies: int = typer.Option(5, "--max-rallies", "-n", help="Max rallies to use"),
+    batch_size: int = typer.Option(4, "--batch-size", "-b", help="Batch size"),
+) -> None:
+    """Smoke test WASB training locally before uploading to Modal.
+
+    Runs 2 epochs on a small subset of rallies using CPU/MPS to verify:
+    - Data loading works (CSVs, images, augmentations)
+    - Loss values are reasonable (not NaN, not exploding)
+    - Val metrics are sensible (model learns something)
+
+    If this works, proceed with wasb-modal for full GPU training.
+    """
+    import random
+
+    from rallycut.training.wasb import WASBConfig, train_wasb
+
+    if not data_dir.exists():
+        rprint(f"[red]Data directory not found: {data_dir}[/red]")
+        rprint(
+            "Export pseudo-labels first:\n"
+            "  [cyan]uv run python -m experiments.pseudo_label_export "
+            "--output-dir experiments/wasb_pseudo_labels "
+            "--cache-type ensemble --all-tracked --extract-frames[/cyan]"
+        )
+        raise typer.Exit(1)
+
+    # Discover rallies
+    csv_files = sorted(data_dir.glob("*.csv"))
+    rally_ids = []
+    for csv_file in csv_files:
+        rally_id = csv_file.stem
+        if rally_id.endswith("_gold"):
+            continue
+        img_dir = data_dir / "images" / rally_id
+        if img_dir.exists() and any(img_dir.iterdir()):
+            rally_ids.append(rally_id)
+
+    if not rally_ids:
+        rprint(f"[red]No valid rally data found in {data_dir}[/red]")
+        raise typer.Exit(1)
+
+    # Subsample for smoke test
+    random.seed(42)
+    random.shuffle(rally_ids)
+    rally_ids = rally_ids[:max_rallies]
+    split = max(1, int(len(rally_ids) * 0.8))
+    train_ids = rally_ids[:split]
+    val_ids = rally_ids[split:] if split < len(rally_ids) else rally_ids[-1:]
+
+    rprint("[bold]WASB local smoke test[/bold]")
+    rprint(f"  Rallies: {len(train_ids)} train, {len(val_ids)} val (from {max_rallies} max)")
+    rprint(f"  Epochs: {epochs}, Batch size: {batch_size}")
+    rprint()
+
+    # Find pretrained weights
+    pretrained = Path("weights/wasb/wasb_volleyball_best.pth.tar")
+    if not pretrained.exists():
+        pretrained = None  # type: ignore[assignment]
+        rprint("[yellow]No pretrained weights found — training from scratch[/yellow]")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config = WASBConfig(
+            epochs=epochs,
+            batch_size=batch_size,
+            num_workers=0,  # Simpler for local testing
+            early_stop_patience=2,
+        )
+
+        result = train_wasb(
+            data_dir=data_dir,
+            output_dir=Path(tmp_dir),
+            config=config,
+            train_rally_ids=train_ids,
+            val_rally_ids=val_ids,
+            pretrained_weights=pretrained,
+        )
+
+    rprint()
+    rprint("[bold]Smoke test results:[/bold]")
+    rprint(f"  Best epoch: {result.best_epoch}")
+    rprint(f"  Best val loss: {result.best_val_loss:.4f}")
+    rprint(f"  F1: {result.f1:.3f}  P: {result.precision:.3f}  R: {result.recall:.3f}")
+    rprint()
+    if result.f1 > 0:
+        rprint("[green]Looks good — model is learning. Proceed with wasb-modal.[/green]")
+    else:
+        rprint("[yellow]Warning: F1=0 after smoke test. Check data quality before Modal training.[/yellow]")
+
+
 @app.command("wasb-modal")
 def wasb_modal(
     epochs: int = typer.Option(30, "--epochs", "-e", help="Number of training epochs"),

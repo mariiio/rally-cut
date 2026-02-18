@@ -52,6 +52,9 @@ class WASBConfig:
     num_workers: int = 4
     save_every: int = 1
     checkpoint_every: int = 3
+    # Early stopping: stop if val F1 stays at 0 for this many epochs after
+    # initially being > 0 (detects val collapse like TrackNet R1)
+    early_stop_patience: int = 5
     # Augmentation
     aug_color_jitter: float = 0.1
     aug_hflip_prob: float = 0.5
@@ -426,6 +429,9 @@ def train_wasb(
     best_epoch = start_epoch
     avg_val_loss = float("inf")
     val_metrics: dict[str, float] = {}
+    # Early stopping state: detect val F1 collapse
+    val_ever_positive = False
+    val_zero_streak = 0
 
     for epoch in range(start_epoch, config.epochs):
         # ── Train ──
@@ -442,14 +448,26 @@ def train_wasb(
                 output = model(x_batch)
                 y_pred_logits = output[0]  # dict[int, Tensor] → scale 0
                 loss = wbce_loss(y_pred_logits, y_batch)
+
+            loss_val = loss.item()
+            if not np.isfinite(loss_val):
+                print(f"\n  FATAL: NaN/Inf loss at epoch {epoch + 1}, batch {train_batches + 1}")
+                print("  Stopping training. Check data quality and learning rate.")
+                # Save current state for debugging
+                torch.save(model.state_dict(), output_dir / "crashed.pt")
+                raise RuntimeError(
+                    f"Training diverged: loss={loss_val} at epoch {epoch + 1}. "
+                    "Saved crashed.pt for debugging."
+                )
+
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
             scaler.update()
-            train_loss += loss.item()
+            train_loss += loss_val
             train_batches += 1
-            pbar.set_postfix(loss=f"{loss.item():.4f}")
+            pbar.set_postfix(loss=f"{loss_val:.4f}")
 
         scheduler.step()
         avg_train_loss = train_loss / max(train_batches, 1)
@@ -491,6 +509,20 @@ def train_wasb(
                 "f1": f1,
                 "accuracy": accuracy,
             }
+
+            # Early stopping: detect val F1 collapse
+            if f1 > 0.01:
+                val_ever_positive = True
+                val_zero_streak = 0
+            elif val_ever_positive:
+                val_zero_streak += 1
+                if val_zero_streak >= config.early_stop_patience:
+                    print(
+                        f"\n  EARLY STOP: Val F1 collapsed to 0 for "
+                        f"{val_zero_streak} consecutive epochs after being positive."
+                    )
+                    print("  This indicates overfitting — stopping to save compute.")
+                    break
 
         lr = scheduler.get_last_lr()[0]
         msg = (
