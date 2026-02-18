@@ -49,5 +49,5 @@ API_BASE_URL=https://api.rallycut.app
 
 - ARM64 architecture (20% cheaper)
 - 1024 MB memory (minimum for FFmpeg)
-- S3 lifecycle: exports auto-delete after 1 day
+- S3 lifecycle: exports auto-delete after 30 days (see `scripts/setup-aws-guardrails.sh`)
 - CloudWatch logs: 14-day retention

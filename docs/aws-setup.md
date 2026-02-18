@@ -36,19 +36,12 @@ aws s3api put-bucket-cors --bucket ${BUCKET_NAME} --cors-configuration '{
   ]
 }'
 
-# Set lifecycle policy to delete objects after 30 days
-aws s3api put-bucket-lifecycle-configuration --bucket ${BUCKET_NAME} --lifecycle-configuration '{
-  "Rules": [
-    {
-      "ID": "DeleteAfter30Days",
-      "Status": "Enabled",
-      "Filter": {"Prefix": ""},
-      "Expiration": {"Days": 30}
-    }
-  ]
-}'
+# Set lifecycle policy (prefix-based — see Cost Guardrails below)
+# Run after bucket creation:
+#   ./scripts/setup-aws-guardrails.sh ${ENV} your@email.com
 
-echo "S3 bucket ${BUCKET_NAME} created with 30-day lifecycle policy"
+echo "S3 bucket ${BUCKET_NAME} created"
+echo "Run ./scripts/setup-aws-guardrails.sh to configure lifecycle + cost alerts"
 ```
 
 ## 2. Create CloudFront Distribution
@@ -260,6 +253,36 @@ curl -I https://d123456789.cloudfront.net/videos/test.mp4
 | `AWS_ACCESS_KEY_ID` | From IAM user creation |
 | `AWS_SECRET_ACCESS_KEY` | From IAM user creation |
 
+## Cost Guardrails
+
+Run the guardrails script after initial setup to prevent surprise bills:
+
+```bash
+./scripts/setup-aws-guardrails.sh dev your@email.com 10
+```
+
+This configures:
+
+| Guardrail | What it does |
+|-----------|--------------|
+| **AWS Budget** | $10/month with email alerts at 50%, 80%, and 100% forecasted |
+| **Lambda concurrency** | Export: 2, Optimize: 3 (prevents runaway invocations) |
+| **S3 lifecycle** | `exports/` deleted at 30d, `videos/` tiered at 30d, incomplete uploads aborted at 3d |
+| **CloudWatch alarms** | Duration (p99 > 80% timeout) and error (>3 in 5min) alerts per Lambda |
+
+**S3 lifecycle details:**
+
+| Prefix | Transition | Expiration | Rationale |
+|--------|-----------|------------|-----------|
+| `exports/` | Standard-IA at 7d | Delete at 30d | Regenerable from source videos |
+| `videos/` | Intelligent-Tiering at 30d | None (app manages via `cleanupExpiredContent()`) | Paid user content — never auto-delete |
+| `analysis/` | Standard-IA at 7d | None | Small files, infrequent access |
+| *(all)* | — | Abort incomplete multipart at 3d | Prevents orphaned upload parts |
+
+**Modal:** Set spending limit manually at [modal.com/settings](https://modal.com/settings) → Usage/Billing.
+
+The script is idempotent — safe to re-run with different parameters.
+
 ## Cost Estimate (MVP)
 
 | Service | Usage | Monthly Cost |
@@ -267,5 +290,3 @@ curl -I https://d123456789.cloudfront.net/videos/test.mp4
 | S3 | ~10GB storage | ~$0.25 |
 | CloudFront | ~10GB transfer | ~$0.85 |
 | **Total** | | **~$1.10/mo** |
-
-The 30-day lifecycle policy keeps storage costs minimal.
