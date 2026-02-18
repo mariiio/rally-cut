@@ -451,10 +451,32 @@ if __name__ == "__main__":
             all_tracked=args.all_tracked,
         )
 
-    print(f"\nExport stats: {stats.to_dict()}")
+    # Print detailed export summary
+    csv_count = len(list(args.output_dir.glob("*.csv")))
+    vis_pct = 100 * stats.visible_frames / max(stats.total_frames, 1)
+    gold_pct = 100 * stats.gold_label_frames / max(stats.visible_frames, 1)
+    print(f"\n{'=' * 50}")
+    print("Export Summary")
+    print(f"{'=' * 50}")
+    print(f"  Rallies exported:  {csv_count}")
+    print(f"  Total frames:      {stats.total_frames:,}")
+    print(f"  Visible (ball):    {stats.visible_frames:,} ({vis_pct:.1f}%)")
+    print(f"  Gold GT labels:    {stats.gold_label_frames:,} ({gold_pct:.1f}% of visible)")
+    print(f"  Filtered (conf):   {stats.filtered_low_confidence:,}")
+    print(f"  Filtered (motion): {stats.filtered_low_motion:,}")
+    print(f"  Filtered (post):   {stats.filtered_post_filter:,}")
+
+    if vis_pct < 20:
+        print(f"\n  WARNING: Only {vis_pct:.0f}% visible — check cache quality")
+    elif vis_pct > 80:
+        print(f"\n  WARNING: {vis_pct:.0f}% visible is unusually high — check for false positives")
 
     if args.extract_frames:
         num_frames = extract_frames(
             args.output_dir, config, all_tracked=args.all_tracked
         )
-        print(f"\nExtracted {num_frames} frames")
+        # Estimate disk usage (~15KB per 512x288 JPEG)
+        est_mb = num_frames * 15 / 1024
+        print(f"\n  Extracted frames:  {num_frames:,} (~{est_mb:.0f} MB)")
+
+    print()
