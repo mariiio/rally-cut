@@ -95,25 +95,22 @@ EXPORT_FN="rallycut-video-export-${STAGE}"
 OPTIMIZE_FN="rallycut-video-optimize-${STAGE}"
 
 # put-function-concurrency is inherently idempotent
-if aws lambda get-function --function-name "$EXPORT_FN" --region "$REGION" >/dev/null 2>&1; then
-  aws lambda put-function-concurrency \
-    --function-name "$EXPORT_FN" \
-    --reserved-concurrent-executions 2 \
-    --region "$REGION" >/dev/null
-  echo "   ✅ ${EXPORT_FN}: reserved concurrency = 2"
-else
-  echo "   ⏭️  ${EXPORT_FN}: function not found, skipping"
-fi
-
-if aws lambda get-function --function-name "$OPTIMIZE_FN" --region "$REGION" >/dev/null 2>&1; then
-  aws lambda put-function-concurrency \
-    --function-name "$OPTIMIZE_FN" \
-    --reserved-concurrent-executions 3 \
-    --region "$REGION" >/dev/null
-  echo "   ✅ ${OPTIMIZE_FN}: reserved concurrency = 3"
-else
-  echo "   ⏭️  ${OPTIMIZE_FN}: function not found, skipping"
-fi
+# Accounts with default concurrency limit (10) cannot reserve — requires 10 unreserved minimum
+set_concurrency() {
+  local fn_name=$1 limit=$2
+  if ! aws lambda get-function --function-name "$fn_name" --region "$REGION" >/dev/null 2>&1; then
+    echo "   ⏭️  ${fn_name}: function not found, skipping"
+  elif aws lambda put-function-concurrency \
+    --function-name "$fn_name" \
+    --reserved-concurrent-executions "$limit" \
+    --region "$REGION" >/dev/null 2>&1; then
+    echo "   ✅ ${fn_name}: reserved concurrency = ${limit}"
+  else
+    echo "   ⚠️  ${fn_name}: could not set concurrency (account limit too low, request increase via AWS Support)"
+  fi
+}
+set_concurrency "$EXPORT_FN" 2
+set_concurrency "$OPTIMIZE_FN" 3
 
 # ─── Section C: S3 Lifecycle Policy ──────────────────────────
 
@@ -133,9 +130,6 @@ aws s3api put-bucket-lifecycle-configuration \
       "ID": "ExportsCleanup",
       "Status": "Enabled",
       "Filter": {"Prefix": "exports/"},
-      "Transitions": [
-        {"Days": 7, "StorageClass": "STANDARD_IA"}
-      ],
       "Expiration": {"Days": 30}
     },
     {
@@ -151,7 +145,7 @@ aws s3api put-bucket-lifecycle-configuration \
       "Status": "Enabled",
       "Filter": {"Prefix": "analysis/"},
       "Transitions": [
-        {"Days": 7, "StorageClass": "STANDARD_IA"}
+        {"Days": 30, "StorageClass": "STANDARD_IA"}
       ]
     },
     {
@@ -163,9 +157,9 @@ aws s3api put-bucket-lifecycle-configuration \
   ]
 }'
 
-echo "   ✅ exports/: Standard-IA at 7d, delete at 30d"
+echo "   ✅ exports/: delete at 30d"
 echo "   ✅ videos/: Intelligent-Tiering at 30d (app manages retention)"
-echo "   ✅ analysis/: Standard-IA at 7d"
+echo "   ✅ analysis/: Standard-IA at 30d"
 echo "   ✅ Abort incomplete multipart uploads after 3d"
 
 fi  # bucket exists

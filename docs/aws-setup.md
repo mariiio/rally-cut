@@ -274,9 +274,9 @@ This configures:
 
 | Prefix | Transition | Expiration | Rationale |
 |--------|-----------|------------|-----------|
-| `exports/` | Standard-IA at 7d | Delete at 30d | Regenerable from source videos |
+| `exports/` | — | Delete at 30d | Regenerable from source videos |
 | `videos/` | Intelligent-Tiering at 30d | None (app manages via `cleanupExpiredContent()`) | Paid user content — never auto-delete |
-| `analysis/` | Standard-IA at 7d | None | Small files, infrequent access |
+| `analysis/` | Standard-IA at 30d | None | Small files, infrequent access |
 | *(all)* | — | Abort incomplete multipart at 3d | Prevents orphaned upload parts |
 
 **Modal:** Set spending limit manually at [modal.com/settings](https://modal.com/settings) → Usage/Billing.
