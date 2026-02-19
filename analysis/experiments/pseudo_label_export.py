@@ -82,6 +82,7 @@ def export_pseudo_labels(
     video_ids: list[str] | None = None,
     cache_type: str = "vballnet",
     all_tracked: bool = False,
+    all_rallies: bool = False,
 ) -> ExportStats:
     """Export ball detections as pseudo-label training data.
 
@@ -102,6 +103,7 @@ def export_pseudo_labels(
     """
     from rallycut.evaluation.tracking.ball_grid_search import BallRawCache
     from rallycut.evaluation.tracking.db import (
+        load_all_rallies as _load_all_rallies,
         load_all_tracked_rallies,
         load_labeled_rallies,
     )
@@ -118,17 +120,31 @@ def export_pseudo_labels(
     else:
         ball_cache = BallRawCache()
 
-    # Load rallies — either all tracked or just ball GT
-    if all_tracked:
+    # Load rallies — all rallies, all tracked, or just ball GT
+    if all_rallies:
+        loaded = _load_all_rallies()
+        if video_ids:
+            loaded = [r for r in loaded if r.video_id in video_ids]
+
+        gt_rallies = load_labeled_rallies()
+        gt_map = {r.rally_id: r for r in gt_rallies}
+
+        rally_list: list[tuple[str, str, int, int, Any]] = [
+            (r.rally_id, r.video_id, r.start_ms, r.end_ms, gt_map.get(r.rally_id))
+            for r in loaded
+        ]
+        logger.info(
+            f"Loading {len(rally_list)} rallies (all) "
+            f"({len(gt_map)} have ball GT)"
+        )
+    elif all_tracked:
         tracked = load_all_tracked_rallies()
         if video_ids:
             tracked = [r for r in tracked if r.video_id in video_ids]
 
-        # Load GT rallies for gold label overlay
         gt_rallies = load_labeled_rallies()
         gt_map = {r.rally_id: r for r in gt_rallies}
 
-        # Build unified rally list: (rally_id, video_id, start_ms, end_ms, gt_or_none)
         rally_list: list[tuple[str, str, int, int, Any]] = [
             (r.rally_id, r.video_id, r.start_ms, r.end_ms, gt_map.get(r.rally_id))
             for r in tracked
@@ -305,6 +321,7 @@ def extract_frames(
     config: PseudoLabelConfig | None = None,
     video_ids: list[str] | None = None,
     all_tracked: bool = False,
+    all_rallies: bool = False,
 ) -> int:
     """Extract video frames as JPEGs for training.
 
@@ -328,6 +345,7 @@ def extract_frames(
 
     from rallycut.evaluation.tracking.db import (
         get_video_path,
+        load_all_rallies as _load_all_rallies,
         load_all_tracked_rallies,
         load_labeled_rallies,
     )
@@ -336,7 +354,14 @@ def extract_frames(
     images_dir = output_dir / "images"
 
     # Load rallies
-    if all_tracked:
+    if all_rallies:
+        loaded = _load_all_rallies()
+        if video_ids:
+            loaded = [r for r in loaded if r.video_id in video_ids]
+        rally_list = [
+            (r.rally_id, r.video_id, r.start_ms, r.end_ms) for r in loaded
+        ]
+    elif all_tracked:
         tracked = load_all_tracked_rallies()
         if video_ids:
             tracked = [r for r in tracked if r.video_id in video_ids]
@@ -431,6 +456,11 @@ if __name__ == "__main__":
         help="Export all tracked rallies, not just ball GT rallies",
     )
     parser.add_argument(
+        "--all-rallies",
+        action="store_true",
+        help="Export ALL rallies in DB (no player tracks required)",
+    )
+    parser.add_argument(
         "--extract-frames", action="store_true",
         help="Extract video frames as JPEGs for training",
     )
@@ -449,6 +479,7 @@ if __name__ == "__main__":
             config,
             cache_type=args.cache_type,
             all_tracked=args.all_tracked,
+            all_rallies=args.all_rallies,
         )
 
     # Print detailed export summary
@@ -473,7 +504,9 @@ if __name__ == "__main__":
 
     if args.extract_frames:
         num_frames = extract_frames(
-            args.output_dir, config, all_tracked=args.all_tracked
+            args.output_dir, config,
+            all_tracked=args.all_tracked,
+            all_rallies=args.all_rallies,
         )
         # Estimate disk usage (~15KB per 512x288 JPEG)
         est_mb = num_frames * 15 / 1024

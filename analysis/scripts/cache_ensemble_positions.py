@@ -33,6 +33,7 @@ from rallycut.evaluation.tracking.ball_metrics import find_optimal_frame_offset
 from rallycut.evaluation.tracking.db import (
     TrackedRally,
     get_video_path,
+    load_all_rallies,
     load_all_tracked_rallies,
     load_labeled_rallies,
 )
@@ -110,6 +111,11 @@ def main() -> None:
         action="store_true",
         help="Cache all rallies with player tracks (not just ball GT rallies)",
     )
+    parser.add_argument(
+        "--all-rallies",
+        action="store_true",
+        help="Cache ALL rallies in DB (no player tracks required)",
+    )
     parser.add_argument("--clear", action="store_true", help="Clear cache before running")
     parser.add_argument(
         "--wasb-only",
@@ -136,20 +142,33 @@ def main() -> None:
 
     logger.info(f"WASB threshold: {args.wasb_threshold}, Device: {args.device}")
 
-    # Load rallies — either all tracked or just ball GT
-    if args.all_tracked:
+    # Load rallies — all rallies, all tracked, or just ball GT
+    if args.all_rallies:
+        all_rallies = load_all_rallies(video_id=args.video)
+        if not all_rallies:
+            logger.error("No rallies found in database")
+            sys.exit(1)
+        logger.info(f"Found {len(all_rallies)} rallies (--all-rallies)")
+
+        gt_rallies = load_labeled_rallies(video_id=args.video)
+        gt_rally_map = {r.rally_id: r for r in gt_rallies}
+        logger.info(f"  ({len(gt_rally_map)} have ball GT for offset detection)")
+
+        rallies_with_gt: list[tuple[TrackedRally, bool]] = []
+        for r in all_rallies:
+            has_gt = r.rally_id in gt_rally_map
+            rallies_with_gt.append((r, has_gt))
+    elif args.all_tracked:
         all_tracked = load_all_tracked_rallies(video_id=args.video)
         if not all_tracked:
             logger.error("No tracked rallies found")
             sys.exit(1)
         logger.info(f"Found {len(all_tracked)} tracked rallies (--all-tracked)")
 
-        # Build set of rally IDs that have ball GT (for offset detection)
         gt_rallies = load_labeled_rallies(video_id=args.video)
         gt_rally_map = {r.rally_id: r for r in gt_rallies}
         logger.info(f"  ({len(gt_rally_map)} have ball GT for offset detection)")
 
-        # Convert to uniform interface: list of TrackedRally with optional GT
         rallies_with_gt: list[tuple[TrackedRally, bool]] = []
         for r in all_tracked:
             has_gt = r.rally_id in gt_rally_map

@@ -522,6 +522,75 @@ def load_all_tracked_rallies(
     return results
 
 
+def load_all_rallies(
+    video_id: str | None = None,
+) -> list[TrackedRally]:
+    """Load ALL rallies from the database, regardless of player tracking status.
+
+    Like load_all_tracked_rallies() but without requiring player tracks.
+    Useful for generating ball tracking pseudo-labels from all detected rallies.
+
+    Args:
+        video_id: Filter by video ID (optional).
+
+    Returns:
+        List of TrackedRally with video metadata.
+    """
+    params: list[str] = []
+    where_sql = ""
+
+    if video_id:
+        where_sql = "WHERE r.video_id = %s"
+        params.append(video_id)
+
+    query = f"""
+        SELECT
+            r.id as rally_id,
+            r.video_id,
+            r.start_ms,
+            r.end_ms,
+            v.fps as video_fps,
+            v.width as video_width,
+            v.height as video_height
+        FROM rallies r
+        JOIN videos v ON v.id = r.video_id
+        {where_sql}
+        ORDER BY r.video_id, r.start_ms
+    """
+
+    results: list[TrackedRally] = []
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+            for row in rows:
+                (
+                    rally_id_val,
+                    video_id_val,
+                    start_ms,
+                    end_ms,
+                    video_fps,
+                    video_width,
+                    video_height,
+                ) = row
+                results.append(
+                    TrackedRally(
+                        rally_id=str(rally_id_val),
+                        video_id=str(video_id_val),
+                        start_ms=cast(int, start_ms),
+                        end_ms=cast(int, end_ms),
+                        video_fps=cast(float, video_fps) if video_fps else 30.0,
+                        video_width=cast(int, video_width) if video_width else 1920,
+                        video_height=cast(int, video_height) if video_height else 1080,
+                    )
+                )
+
+    logger.info(f"Loaded {len(results)} rallies (all)")
+    return results
+
+
 def load_court_calibration(video_id: str) -> list[dict[str, float]] | None:
     """Load court calibration corners for a video.
 
