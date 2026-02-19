@@ -127,6 +127,7 @@ def link_tracklets_by_appearance(
     max_spatial_displacement: float = DEFAULT_MAX_SPATIAL_DISPLACEMENT,
     min_track_frames: int = DEFAULT_MIN_TRACK_FRAMES,
     target_track_count: int | None = 4,
+    team_assignments: dict[int, int] | None = None,
 ) -> tuple[list[PlayerPosition], int]:
     """Link fragmented tracklets using appearance similarity.
 
@@ -143,6 +144,9 @@ def link_tracklets_by_appearance(
         min_track_frames: Minimum frames in a track to participate in linking.
         target_track_count: Stop merging when this many tracks remain.
             Set to None for no target (merge until threshold exceeded).
+        team_assignments: Optional team classification (track_id -> team).
+            Blocks cross-team merges (a player's fragment should only
+            reconnect with tracks from the same team).
 
     Returns:
         Tuple of (modified positions, number of merges performed).
@@ -189,6 +193,15 @@ def link_tracklets_by_appearance(
     for i in range(n):
         for j in range(i + 1, n):
             tid_i, tid_j = hist_ids[i], hist_ids[j]
+
+            # Block cross-team merges
+            if team_assignments:
+                team_i = team_assignments.get(tid_i)
+                team_j = team_assignments.get(tid_j)
+                if team_i is not None and team_j is not None and team_i != team_j:
+                    dist_matrix[i, j] = 1.0
+                    dist_matrix[j, i] = 1.0
+                    continue
 
             # Temporal overlap check: can never merge overlapping tracks
             if _tracks_overlap_temporally(tracks[tid_i]["frames"], tracks[tid_j]["frames"]):

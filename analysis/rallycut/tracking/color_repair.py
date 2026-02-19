@@ -415,6 +415,7 @@ def detect_and_fix_swaps(
     swap_cost_ratio: float = DEFAULT_SWAP_COST_RATIO,
     min_template_histograms: int = 5,
     max_post_histograms: int = 15,
+    team_assignments: dict[int, int] | None = None,
 ) -> tuple[list[PlayerPosition], int]:
     """Detect and fix track ID swaps during convergence periods.
 
@@ -433,6 +434,9 @@ def detect_and_fix_swaps(
         swap_cost_ratio: Swap must be this much cheaper (0.7 = 30% better).
         min_template_histograms: Minimum histograms for a valid template.
         max_post_histograms: Maximum post-convergence histograms to check.
+        team_assignments: Optional team classification (track_id -> team).
+            Blocks same-team swap fixes (swaps only happen between opposing
+            teams at the net).
 
     Returns:
         Tuple of (positions, number of swaps fixed).
@@ -490,6 +494,14 @@ def detect_and_fix_swaps(
             cv2.compareHist(template_a, mean_post_b, cv2.HISTCMP_BHATTACHARYYA)
             + cv2.compareHist(template_b, mean_post_a, cv2.HISTCMP_BHATTACHARYYA)
         )
+
+        # Block same-team swaps (swaps only happen between opposing teams
+        # at the net — same-team "swaps" are false positives)
+        if team_assignments:
+            team_a = team_assignments.get(track_a)
+            team_b = team_assignments.get(track_b)
+            if team_a is not None and team_b is not None and team_a == team_b:
+                continue
 
         if swapped_cost < swap_cost_ratio * normal_cost:
             # Swap IDs from end_frame onward

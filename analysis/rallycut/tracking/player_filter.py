@@ -716,6 +716,54 @@ def identify_teams_by_court_side(
     return near_team, far_team
 
 
+def classify_teams(
+    positions: list[PlayerPosition],
+    court_split_y: float,
+    window_frames: int = 60,
+) -> dict[int, int]:
+    """Classify each track into team 0 (near) or team 1 (far).
+
+    Uses median Y position of the first window_frames per track.
+    At rally start, teams are physically separated (serving team at
+    baseline/net, receiving team behind opposite baseline), so early
+    frames provide clean team anchoring.
+
+    Args:
+        positions: All player positions across frames.
+        court_split_y: Y-coordinate that splits near/far court (0-1).
+        window_frames: Number of initial frames to use per track.
+
+    Returns:
+        Dict mapping track_id -> team (0=near, 1=far).
+    """
+    # Group positions by track_id, sorted by frame
+    track_positions: dict[int, list[PlayerPosition]] = {}
+    for p in positions:
+        if p.track_id < 0:
+            continue
+        if p.track_id not in track_positions:
+            track_positions[p.track_id] = []
+        track_positions[p.track_id].append(p)
+
+    team_assignments: dict[int, int] = {}
+
+    for track_id, track_pos in track_positions.items():
+        track_pos.sort(key=lambda p: p.frame_number)
+        # Use first window_frames positions
+        early = track_pos[:window_frames]
+        median_y = float(np.median([p.y for p in early]))
+        # Near team (closer to camera) has higher Y values
+        team_assignments[track_id] = 0 if median_y > court_split_y else 1
+
+    logger.debug(
+        f"Team classification (split_y={court_split_y:.3f}): "
+        f"near={sum(1 for t in team_assignments.values() if t == 0)}, "
+        f"far={sum(1 for t in team_assignments.values() if t == 1)}"
+    )
+
+    return team_assignments
+
+
 def _find_net_from_bbox_clustering(
     player_positions: list[PlayerPosition],
     players_per_team: int = 2,
@@ -1073,6 +1121,7 @@ def compute_track_stats(
 def stabilize_track_ids(
     positions: list[PlayerPosition],
     config: PlayerFilterConfig,
+    team_assignments: dict[int, int] | None = None,
 ) -> tuple[list[PlayerPosition], dict[int, int]]:
     """
     Stabilize track IDs by merging tracks that represent the same player.
@@ -1090,10 +1139,13 @@ def stabilize_track_ids(
     Args:
         positions: All player positions (will be modified in place).
         config: Filter configuration with merge thresholds.
+        team_assignments: Optional team classification (track_id -> team).
+            Blocks cross-team merges (a fragment should only merge into
+            a track from the same team).
 
     Returns:
         Tuple of (modified positions, id_mapping dict).
-        The id_mapping maps old_id -> new_id for merged tracks.
+        The id_mapping maps merged_id -> canonical_id for merged tracks.
     """
     if not config.stabilize_track_ids or not positions:
         return positions, {}
@@ -1159,6 +1211,14 @@ def stabilize_track_ids(
                 canonical_id = id_mapping[old_id]
             else:
                 canonical_id = old_id
+
+            # Block cross-team merges (structurally impossible in volleyball)
+            if team_assignments:
+                new_team = team_assignments.get(new_id)
+                canon_team = team_assignments.get(canonical_id)
+                if new_team is not None and canon_team is not None:
+                    if new_team != canon_team:
+                        continue
 
             # Use old_info (the track being compared) for position/frame checks
             # This enables chain merging: if 41->1 and 99 starts near where 41 ended,

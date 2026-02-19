@@ -430,6 +430,9 @@ class PlayerTrackingResult:
     # Raw positions before filtering (for parameter tuning)
     raw_positions: list[PlayerPosition] = field(default_factory=list)
 
+    # Team classification (track_id → team 0=near/1=far)
+    team_assignments: dict[int, int] = field(default_factory=dict)
+
     # Quality report (set when filter_enabled=True and court_roi is set)
     quality_report: TrackingQualityReport | None = None
 
@@ -500,6 +503,12 @@ class PlayerTrackingResult:
         if self.quality_report is not None:
             result["qualityReport"] = self.quality_report.to_dict()
 
+        # Team assignments
+        if self.team_assignments:
+            result["teamAssignments"] = {
+                str(k): v for k, v in self.team_assignments.items()
+            }
+
         return result
 
     def to_json(
@@ -552,6 +561,10 @@ class PlayerTrackingResult:
             for p in data.get("rawPositions", [])
         ]
 
+        # Deserialize team assignments (JSON keys are strings)
+        raw_teams = data.get("teamAssignments", {})
+        team_assignments = {int(k): v for k, v in raw_teams.items()}
+
         return cls(
             positions=positions,
             frame_count=data.get("frameCount", 0),
@@ -563,6 +576,7 @@ class PlayerTrackingResult:
             court_split_y=data.get("courtSplitY"),
             primary_track_ids=data.get("primaryTrackIds", []),
             raw_positions=raw_positions,
+            team_assignments=team_assignments,
         )
 
     def to_api_format(self) -> dict:
@@ -1195,10 +1209,15 @@ class PlayerTracker:
             num_swap_fixes = 0
             num_appearance_links = 0
 
+            # Team classification (populated during filtering)
+            team_assignments: dict[int, int] = {}
+
             if filter_enabled:
                 from rallycut.tracking.player_filter import (
                     PlayerFilter,
                     PlayerFilterConfig,
+                    classify_teams,
+                    compute_court_split,
                     split_tracks_at_jumps,
                     stabilize_track_ids,
                 )
@@ -1227,9 +1246,19 @@ class PlayerTracker:
                         positions, color_store
                     )
 
+                    # Classify teams using early-frame Y positions
+                    preliminary_split_y = compute_court_split(
+                        ball_positions or [], config, player_positions=positions
+                    )
+                    if preliminary_split_y is not None:
+                        team_assignments = classify_teams(
+                            positions, preliminary_split_y
+                        )
+
                     # Step 0c: Track convergence/swap detection
                     positions, num_swap_fixes = detect_and_fix_swaps(
-                        positions, color_store
+                        positions, color_store,
+                        team_assignments=team_assignments,
                     )
 
                     # Step 0d: Appearance-based tracklet linking (GTA-Link inspired)
@@ -1239,12 +1268,21 @@ class PlayerTracker:
                     )
 
                     positions, num_appearance_links = link_tracklets_by_appearance(
-                        positions, color_store
+                        positions, color_store,
+                        team_assignments=team_assignments,
                     )
 
                 # Step 1: Stabilize track IDs before filtering
                 # This merges tracks that represent the same player
-                positions, id_mapping = stabilize_track_ids(positions, config)
+                positions, id_mapping = stabilize_track_ids(
+                    positions, config, team_assignments=team_assignments
+                )
+
+                # Remap team assignments after track merging
+                # id_mapping: merged_id -> canonical_id
+                if team_assignments and id_mapping:
+                    for merged_id in id_mapping:
+                        team_assignments.pop(merged_id, None)
 
                 player_filter = PlayerFilter(
                     ball_positions=ball_positions,
@@ -1336,6 +1374,7 @@ class PlayerTracker:
                 filter_method=filter_method,
                 raw_positions=raw_positions,
                 quality_report=quality_report,
+                team_assignments=team_assignments,
             )
 
         finally:
