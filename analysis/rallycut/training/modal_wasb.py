@@ -56,6 +56,7 @@ training_volume = modal.Volume.from_name("rallycut-training", create_if_missing=
 def train_model(
     epochs: int = 30,
     batch_size: int = 8,
+    learning_rate: float = 0.001,
     val_ratio: float = 0.2,
     data_dir: str = "/data/wasb_data",
     output_dir: str = "/data/models/wasb",
@@ -97,6 +98,20 @@ def train_model(
     data_path = Path(data_dir)
     output_path = Path(output_dir)
 
+    # Extract tarball if data dir doesn't exist but tarball does
+    tarball = Path("/data/wasb_data.tar.gz")
+    if not data_path.exists() and tarball.exists():
+        import tarfile
+
+        print(f"Extracting {tarball} → /data/ ...")
+        with tarfile.open(tarball, "r:gz") as tar:
+            tar.extractall("/data/")
+        # Tarball contains wasb_pseudo_labels/ — rename to wasb_data/
+        extracted = Path("/data/wasb_pseudo_labels")
+        if extracted.exists() and not data_path.exists():
+            extracted.rename(data_path)
+        print(f"  Extracted to {data_path}")
+
     if not data_path.exists():
         raise ValueError(
             f"Training data not found at {data_dir}. "
@@ -108,10 +123,10 @@ def train_model(
     rally_ids: list[str] = []
     for csv_file in csv_files:
         rally_id = csv_file.stem
-        if rally_id.endswith("_gold"):
+        if rally_id.endswith("_gold") or rally_id.startswith("._"):
             continue
         img_dir = data_path / "images" / rally_id
-        if img_dir.exists() and any(img_dir.iterdir()):
+        if img_dir.is_dir() and any(img_dir.iterdir()):
             rally_ids.append(rally_id)
 
     if not rally_ids:
@@ -122,15 +137,33 @@ def train_model(
 
     print(f"  Found {len(rally_ids)} rallies with labels + images")
 
-    # Split into train/val by rally
-    random.seed(42)
-    random.shuffle(rally_ids)
-    split_idx = max(1, int(len(rally_ids) * (1 - val_ratio)))
-    train_ids = rally_ids[:split_idx]
-    val_ids = rally_ids[split_idx:] if split_idx < len(rally_ids) else []
+    # Rallies with real ball GT — force into validation to prevent
+    # eval contamination (pseudo-labels include gold GT overrides)
+    GT_RALLY_IDS = {
+        "1bfcbc4f-64be-44e9-bc5a-1d20b78cca2e",
+        "fb8fd612-ce32-444d-8c58-82774c79cae7",
+        "73581b32-8207-42bb-9af7-12491fdbe65c",
+        "1f87460b-62d4-4af8-a106-f0a9c3d40d03",
+        "c3b31af2-41ba-49f3-9f18-917a4fd9d924",
+        "9dbe457a-af4c-463f-9a8d-eeb115384599",
+        "0af554b5-11cc-4404-aebe-d40cadf21d95",
+        "bd77efd1-612c-431d-8ead-c5be87fd0262",
+        "0d84f858-afad-4cdc-9f72-e88b4137c313",
+        "87ce7bff-2dd3-434e-829c-365e0c53cfcb",
+    }
 
-    print(f"  Train: {len(train_ids)} rallies")
-    print(f"  Val: {len(val_ids)} rallies")
+    # Split: GT rallies → val, remaining → random 85/15 train/val
+    gt_ids = [r for r in rally_ids if r in GT_RALLY_IDS]
+    non_gt_ids = [r for r in rally_ids if r not in GT_RALLY_IDS]
+
+    random.seed(42)
+    random.shuffle(non_gt_ids)
+    extra_val_count = max(0, int(len(non_gt_ids) * val_ratio) - len(gt_ids))
+    train_ids = non_gt_ids[: len(non_gt_ids) - extra_val_count]
+    val_ids = gt_ids + non_gt_ids[len(non_gt_ids) - extra_val_count :]
+
+    print(f"  Train: {len(train_ids)} rallies (no GT)")
+    print(f"  Val: {len(val_ids)} rallies ({len(gt_ids)} with ball GT)")
 
     # Handle checkpoints
     resume_checkpoint = None
@@ -165,6 +198,7 @@ def train_model(
     config = WASBConfig(
         epochs=epochs,
         batch_size=batch_size,
+        learning_rate=learning_rate,
         num_workers=4,
     )
 
@@ -198,6 +232,7 @@ def train_model(
 def main(
     epochs: int = 30,
     batch_size: int = 8,
+    learning_rate: float = 0.001,
     val_ratio: float = 0.2,
     download: bool = False,
     fresh: bool = False,
@@ -229,6 +264,7 @@ def main(
     result = train_model.remote(
         epochs=epochs,
         batch_size=batch_size,
+        learning_rate=learning_rate,
         val_ratio=val_ratio,
         fresh=fresh,
     )

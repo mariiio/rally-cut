@@ -800,6 +800,7 @@ def wasb_local(
 def wasb_modal(
     epochs: int = typer.Option(30, "--epochs", "-e", help="Number of training epochs"),
     batch_size: int = typer.Option(8, "--batch-size", "-b", help="Batch size (8-16 for A10G GPU)"),
+    learning_rate: float = typer.Option(0.001, "--lr", help="Learning rate (use 0.0003 for continued fine-tuning)"),
     upload: bool = typer.Option(
         False, "--upload", help="Upload pseudo-labels + frames + pretrained weights to Modal"
     ),
@@ -880,22 +881,30 @@ def wasb_modal(
 
         rprint("[green]WASB training data uploaded![/green]")
 
-        # Upload pretrained WASB weights
-        pretrained = Path("weights/wasb/wasb_volleyball_best.pth.tar")
-        if pretrained.exists():
+        # Upload WASB weights (prefer fine-tuned over original pretrained)
+        finetuned = Path("weights/wasb/wasb_finetuned.pth.tar")
+        original = Path("weights/wasb/wasb_volleyball_best.pth.tar")
+        if finetuned.exists():
+            pretrained = finetuned
+            rprint(f"Uploading fine-tuned WASB weights ({pretrained.name})...")
+        elif original.exists():
+            pretrained = original
+            rprint(f"Uploading original pretrained weights ({pretrained.name})...")
+        else:
+            pretrained = None
+            rprint("[yellow]No WASB weights found — training will start from scratch[/yellow]")
+
+        if pretrained is not None:
             cmd_pt = [
                 "python3", "-m", "modal", "volume", "put", "-f",
                 "rallycut-training", str(pretrained),
                 "pretrained/wasb_volleyball_best.pth.tar",
             ]
-            rprint("Uploading pretrained WASB weights...")
             pt_result = subprocess.run(cmd_pt, capture_output=True, text=True)
             if pt_result.returncode == 0:
-                rprint("[green]Pretrained weights uploaded![/green]")
+                rprint(f"[green]Weights uploaded ({pretrained.name})![/green]")
             else:
-                rprint("[yellow]Pretrained weights upload failed (training will start from scratch)[/yellow]")
-        else:
-            rprint(f"[yellow]Pretrained weights not found at {pretrained}[/yellow]")
+                rprint("[yellow]Weights upload failed (training will start from scratch)[/yellow]")
 
         rprint()
         rprint("Next: [cyan]rallycut train wasb-modal --epochs 30 --fresh[/cyan]")
@@ -963,7 +972,7 @@ def wasb_modal(
 
     # Run training on Modal
     rprint("[bold]Starting WASB HRNet training on Modal A10G GPU...[/bold]")
-    rprint(f"  Epochs: {epochs}, Batch size: {batch_size}")
+    rprint(f"  Epochs: {epochs}, Batch size: {batch_size}, LR: {learning_rate}")
     if fresh:
         rprint("[yellow]  Fresh training: ignoring existing checkpoints[/yellow]")
     rprint()
@@ -975,6 +984,7 @@ def wasb_modal(
         "rallycut/training/modal_wasb.py",
         "--epochs", str(epochs),
         "--batch-size", str(batch_size),
+        "--learning-rate", str(learning_rate),
     ]
     if fresh:
         cmd.append("--fresh")
