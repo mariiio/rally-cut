@@ -757,6 +757,71 @@ class CourtDetector:
 
     # ── Stage 5: Geometric Court Model Fitting ───────────────────────────
 
+    def _mirror_missing_sideline(
+        self,
+        identified: dict[str, tuple[DetectedLine, list[tuple[float, float, float, float]]]],
+    ) -> tuple[dict[str, tuple[DetectedLine, list[tuple[float, float, float, float]]]], bool]:
+        """Mirror a missing sideline about the far baseline midpoint.
+
+        When only one sideline is detected (left or right) and a far baseline
+        exists, creates a synthetic sideline by reflecting X-coordinates across
+        the baseline midpoint (Y stays the same to preserve convergence geometry).
+
+        Returns:
+            Tuple of (identified_with_mirror, was_mirrored). The dict is a new copy
+            with the synthetic sideline added if mirroring was applied.
+        """
+        far_bl_entry = identified.get("far_baseline")
+        left_sl_entry = identified.get("left_sideline")
+        right_sl_entry = identified.get("right_sideline")
+
+        if far_bl_entry is None:
+            return identified, False
+
+        has_left = left_sl_entry is not None
+        has_right = right_sl_entry is not None
+
+        # Only mirror when exactly one sideline exists
+        if has_left == has_right:  # both or neither
+            return identified, False
+
+        far_bl = far_bl_entry[0]
+        bl_mid_x = (far_bl.p1[0] + far_bl.p2[0]) / 2.0
+
+        result = dict(identified)
+
+        if has_left and not has_right:
+            assert left_sl_entry is not None
+            left_sl = left_sl_entry[0]
+            # Mirror X across baseline midpoint, keep Y (preserves convergence)
+            p1 = (2 * bl_mid_x - left_sl.p1[0], left_sl.p1[1])
+            p2 = (2 * bl_mid_x - left_sl.p2[0], left_sl.p2[1])
+            synthetic = DetectedLine(
+                label="right_sideline",
+                p1=p1, p2=p2,
+                support=0,
+                angle_deg=left_sl.angle_deg,
+            )
+            segs = [(p1[0], p1[1], p2[0], p2[1])]
+            result["right_sideline"] = (synthetic, segs)
+            logger.info("Mirrored left sideline → synthetic right sideline")
+        else:
+            assert right_sl_entry is not None
+            right_sl = right_sl_entry[0]
+            p1 = (2 * bl_mid_x - right_sl.p1[0], right_sl.p1[1])
+            p2 = (2 * bl_mid_x - right_sl.p2[0], right_sl.p2[1])
+            synthetic = DetectedLine(
+                label="left_sideline",
+                p1=p1, p2=p2,
+                support=0,
+                angle_deg=right_sl.angle_deg,
+            )
+            segs = [(p1[0], p1[1], p2[0], p2[1])]
+            result["left_sideline"] = (synthetic, segs)
+            logger.info("Mirrored right sideline → synthetic left sideline")
+
+        return result, True
+
     def _fit_court_model(
         self,
         identified: dict[str, tuple[DetectedLine, list[tuple[float, float, float, float]]]],
@@ -769,27 +834,56 @@ class CourtDetector:
         2. Single-shot homography from ≥4 correspondences (RANSAC)
         3. VP-augmented homography (2-3 correspondences + harmonic conjugate)
         4. Legacy fallback (line intersection + aspect ratio)
+
+        If only one sideline is detected, mirrors it for temporal consensus
+        frame-matching only. Single-shot homography and VP augmentation use
+        real correspondences exclusively (mirrored points produce invalid
+        geometry for off-center cameras).
         """
+        # Apply sideline mirroring if only one sideline detected.
+        # The mirrored dict is used ONLY for temporal consensus (frame segment
+        # matching reference). For single-shot homography/VP augmentation, we use
+        # real correspondences only — mirrored points/lines produce invalid
+        # geometry for off-center cameras where the detected baseline midpoint
+        # is not the perspective center of the court.
+        identified_with_mirror, mirrored = self._mirror_missing_sideline(identified)
+
         detected_lines = [dl for dl, _ in identified.values()]
 
-        # Collect correspondences from identified lines
+        # Always use real correspondences for the n_corr gate
         correspondences = collect_court_correspondences(identified)
         n_corr = len(correspondences)
         logger.info(f"Court correspondences: {n_corr} from identified lines")
 
+        mirror_suffix = "_mirrored" if mirrored else ""
+        mirror_warnings: list[str] = []
+        if mirrored:
+            if "right_sideline" not in identified:
+                mirror_warnings.append("Right sideline mirrored from left")
+            else:
+                mirror_warnings.append("Left sideline mirrored from right")
+
         # Strategy 1: Temporal consensus from per-frame homographies
+        # Uses identified_with_mirror so per-frame segment matching can find
+        # segments on the mirrored side. Per-frame correspondences come from
+        # real matched segments (not the synthetic line), so geometry is valid.
         if (
             self.config.enable_temporal_consensus
             and all_segments is not None
             and n_corr >= 2
         ):
             result = self._fit_via_temporal_consensus(
-                identified, all_segments, detected_lines,
+                identified_with_mirror, all_segments, detected_lines,
+                identified_real=identified,
             )
             if result is not None:
+                result.warnings.extend(mirror_warnings)
+                if mirrored:
+                    result.fitting_method += mirror_suffix
+                    result.confidence *= 0.9
                 return result
 
-        # Strategy 2: Single-shot homography with ≥4 correspondences
+        # Strategy 2: Single-shot homography with ≥4 real correspondences
         if n_corr >= 4:
             result = self._fit_via_homography(
                 correspondences, detected_lines, identified,
@@ -1004,13 +1098,26 @@ class CourtDetector:
         identified: dict[str, tuple[DetectedLine, list[tuple[float, float, float, float]]]],
         all_segments: list[list[tuple[float, float, float, float]]],
         detected_lines: list[DetectedLine],
+        identified_real: dict[
+            str, tuple[DetectedLine, list[tuple[float, float, float, float]]]
+        ]
+        | None = None,
     ) -> CourtDetectionResult | None:
         """Estimate court corners via temporal consensus of per-frame homographies.
 
         For each sampled frame, match segments to identified lines, compute
         per-frame correspondences, estimate per-frame homography, project
         court corners. Take median of corners across frames (robust to outliers).
+
+        Args:
+            identified: Lines for frame segment matching (may include mirrored sideline).
+            all_segments: Per-frame raw segments from Hough detection.
+            detected_lines: Detected lines for the result object.
+            identified_real: Original unmirrored lines for reprojection error and
+                confidence computation. Falls back to ``identified`` if not provided.
         """
+        if identified_real is None:
+            identified_real = identified
         per_frame_corners: list[list[tuple[float, float]]] = []
 
         for frame_segs in all_segments:
@@ -1146,13 +1253,13 @@ class CourtDetector:
         except cv2.error:
             H_final = None
 
-        correspondences = collect_court_correspondences(identified)
+        correspondences = collect_court_correspondences(identified_real)
         reproj_error = 0.0
         if H_final is not None and correspondences:
             reproj_error = self._compute_reprojection_error(H_final, correspondences)
 
         confidence = self._compute_confidence(
-            identified, "temporal_consensus", valid,
+            identified_real, "temporal_consensus", valid,
             reprojection_error=reproj_error,
         )
 
@@ -1216,7 +1323,11 @@ class CourtDetector:
         if right_sl:
             far_right = line_intersection(far_bl.p1, far_bl.p2, right_sl.p1, right_sl.p2)
 
-        # If only one sideline, mirror using far baseline midpoint
+        # If only one sideline, mirror using far baseline midpoint.
+        # Note: far corner points are mirrored in BOTH X and Y (the far baseline
+        # may be tilted), while synthetic sideline endpoints mirror X-only to
+        # preserve convergence. This differs from _mirror_missing_sideline()
+        # which only mirrors sideline endpoints (used for temporal consensus).
         if far_left and not far_right:
             warnings.append("Right sideline not detected, mirroring from left")
             bl_mid_x = (far_bl.p1[0] + far_bl.p2[0]) / 2.0
