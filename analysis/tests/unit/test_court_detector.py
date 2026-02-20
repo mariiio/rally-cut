@@ -771,3 +771,133 @@ class TestResultBackwardCompat:
         assert result.fitting_method == "legacy"
         assert result.n_correspondences == 0
         assert result.reprojection_error == 0.0
+
+
+# ── Sideline Mirroring Tests ────────────────────────────────────────────
+
+
+class TestSidelineMirroring:
+    """Test sideline mirroring for homography path."""
+
+    def _make_identified(
+        self,
+        *,
+        far_bl: bool = True,
+        left_sl: bool = False,
+        right_sl: bool = False,
+        center_ln: bool = False,
+    ) -> dict:
+        from rallycut.court.detector import DetectedLine
+
+        identified: dict = {}
+        if far_bl:
+            dl = DetectedLine("far_baseline", (0.30, 0.35), (0.70, 0.35), 20, 0.0)
+            identified["far_baseline"] = (dl, [(0.30, 0.35, 0.70, 0.35)])
+        if left_sl:
+            dl = DetectedLine("left_sideline", (0.30, 0.35), (0.05, 0.85), 15, 55.0)
+            identified["left_sideline"] = (dl, [(0.30, 0.35, 0.05, 0.85)])
+        if right_sl:
+            dl = DetectedLine("right_sideline", (0.70, 0.35), (0.95, 0.85), 15, 55.0)
+            identified["right_sideline"] = (dl, [(0.70, 0.35, 0.95, 0.85)])
+        if center_ln:
+            dl = DetectedLine("center_line", (0.175, 0.60), (0.825, 0.60), 12, 0.0)
+            identified["center_line"] = (dl, [(0.175, 0.60, 0.825, 0.60)])
+        return identified
+
+    def test_mirror_left_to_right(self) -> None:
+        """Single left sideline → creates synthetic right sideline."""
+        from rallycut.court.detector import CourtDetector
+
+        detector = CourtDetector()
+        identified = self._make_identified(far_bl=True, left_sl=True)
+        result, mirrored = detector._mirror_missing_sideline(identified)
+
+        assert mirrored is True
+        assert "right_sideline" in result
+        assert "left_sideline" in result
+        # Original left sideline should be preserved
+        assert result["left_sideline"] is identified["left_sideline"]
+        # Synthetic right should be mirrored about baseline midpoint (0.5)
+        syn = result["right_sideline"][0]
+        assert syn.label == "right_sideline"
+        # Left sl p1 x=0.30, mirror about 0.50 → 0.70
+        assert abs(syn.p1[0] - 0.70) < 1e-6
+        # Y should be preserved
+        assert abs(syn.p1[1] - 0.35) < 1e-6
+
+    def test_mirror_right_to_left(self) -> None:
+        """Single right sideline → creates synthetic left sideline."""
+        from rallycut.court.detector import CourtDetector
+
+        detector = CourtDetector()
+        identified = self._make_identified(far_bl=True, right_sl=True)
+        result, mirrored = detector._mirror_missing_sideline(identified)
+
+        assert mirrored is True
+        assert "left_sideline" in result
+        assert "right_sideline" in result
+        # Synthetic left should be mirrored about baseline midpoint (0.5)
+        syn = result["left_sideline"][0]
+        assert syn.label == "left_sideline"
+        # Right sl p1 x=0.70, mirror about 0.50 → 0.30
+        assert abs(syn.p1[0] - 0.30) < 1e-6
+        assert abs(syn.p1[1] - 0.35) < 1e-6
+
+    def test_no_mirror_when_both_exist(self) -> None:
+        """Two sidelines → no mirroring needed."""
+        from rallycut.court.detector import CourtDetector
+
+        detector = CourtDetector()
+        identified = self._make_identified(far_bl=True, left_sl=True, right_sl=True)
+        result, mirrored = detector._mirror_missing_sideline(identified)
+
+        assert mirrored is False
+        assert result is identified  # Same object returned
+
+    def test_no_mirror_without_baseline(self) -> None:
+        """Missing far baseline → no mirroring possible."""
+        from rallycut.court.detector import CourtDetector
+
+        detector = CourtDetector()
+        identified = self._make_identified(far_bl=False, left_sl=True)
+        result, mirrored = detector._mirror_missing_sideline(identified)
+
+        assert mirrored is False
+        assert "right_sideline" not in result
+
+    def test_mirrored_correspondences(self) -> None:
+        """Mirrored identified dict produces 4 correspondences for temporal consensus."""
+        from rallycut.court.detector import CourtDetector
+        from rallycut.court.line_geometry import collect_court_correspondences
+
+        detector = CourtDetector()
+        identified = self._make_identified(
+            far_bl=True, left_sl=True, center_ln=True,
+        )
+        # Without mirroring: far_bl×left_sl + center×left_sl = 2 correspondences
+        real_corrs = collect_court_correspondences(identified)
+        assert len(real_corrs) == 2
+
+        # Line-level mirroring adds right_sl → 4 correspondences
+        # (used by temporal consensus for per-frame segment matching)
+        mirrored_dict, was_mirrored = detector._mirror_missing_sideline(identified)
+        assert was_mirrored
+        mirrored_corrs = collect_court_correspondences(mirrored_dict)
+        assert len(mirrored_corrs) == 4
+
+    def test_three_lines_falls_to_legacy(self) -> None:
+        """3 lines with mirroring: only 2 real correspondences → falls to legacy."""
+        from rallycut.court.detector import CourtDetectionConfig, CourtDetector
+
+        detector = CourtDetector(CourtDetectionConfig(enable_temporal_consensus=False))
+        identified = self._make_identified(
+            far_bl=True, left_sl=True, center_ln=True,
+        )
+        result = detector._fit_court_model(identified)
+
+        # 2 real correspondences < 4 needed for homography → legacy fallback
+        assert len(result.corners) == 4
+        assert result.confidence > 0
+        assert result.fitting_method == "legacy"
+        # Legacy still gets the mirroring warning from its own path
+        assert any("mirror" in w.lower() for w in result.warnings)
