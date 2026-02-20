@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from rallycut.tracking.court_identity import SwapDecision
     from rallycut.tracking.player_filter import PlayerFilterConfig
     from rallycut.tracking.quality_report import TrackingQualityReport
+    from rallycut.tracking.team_aware_tracker import TeamAwareConfig
 
 logger = logging.getLogger(__name__)
 
@@ -1051,6 +1052,7 @@ class PlayerTracker:
         filter_enabled: bool = False,
         filter_config: PlayerFilterConfig | None = None,
         court_calibrator: CourtCalibrator | None = None,
+        team_aware_config: TeamAwareConfig | None = None,
     ) -> PlayerTrackingResult:
         """
         Track players in a video segment.
@@ -1067,6 +1069,9 @@ class PlayerTracker:
             court_calibrator: Optional calibrated court calibrator. When provided,
                             detections outside court bounds are filtered immediately
                             after YOLO inference, preventing off-court tracks.
+            team_aware_config: Optional team-aware tracking config. When enabled
+                             with calibration, adds a penalty to cross-team
+                             associations in BoT-SORT's cost matrix.
 
         Returns:
             PlayerTrackingResult with all detected positions.
@@ -1147,6 +1152,34 @@ class PlayerTracker:
                 color_store = ColorHistogramStore()
                 appearance_store = AppearanceDescriptorStore()
 
+            # Team-aware BoT-SORT setup (calibration trust gate)
+            team_tracker = None
+            team_patch_applied = False
+            if (
+                team_aware_config is not None
+                and team_aware_config.enabled
+                and court_calibrator is not None
+                and court_calibrator.is_calibrated
+            ):
+                from rallycut.tracking.team_aware_tracker import (
+                    TeamSideTracker,
+                    get_court_split_y_from_calibration,
+                    patch_tracker_with_team_awareness,
+                )
+
+                cal_split_y = get_court_split_y_from_calibration(court_calibrator)
+                if cal_split_y is not None:
+                    team_tracker = TeamSideTracker(
+                        court_split_y=cal_split_y,
+                        config=team_aware_config,
+                    )
+                    logger.info(
+                        "Team-aware tracking enabled (split_y=%.3f from calibration)",
+                        cal_split_y,
+                    )
+                else:
+                    logger.info("Team-aware tracking disabled: net projection failed")
+
             while frame_idx < end_frame:
                 ret, frame = cap.read()
                 if not ret:
@@ -1198,6 +1231,22 @@ class PlayerTracker:
                             frame_positions = self._filter_off_court(
                                 frame_positions, court_calibrator
                             )
+
+                        # Team-aware tracker: feed positions and apply patch
+                        if team_tracker is not None:
+                            team_tracker.update(frame_positions)
+                            if (
+                                not team_patch_applied
+                                and hasattr(model, "predictor")
+                                and hasattr(model.predictor, "trackers")
+                                and model.predictor.trackers
+                            ):
+                                patch_tracker_with_team_awareness(
+                                    model.predictor.trackers[0],
+                                    team_tracker,
+                                    video_height,
+                                )
+                                team_patch_applied = True
 
                         positions.extend(frame_positions)
 
