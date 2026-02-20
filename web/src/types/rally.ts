@@ -71,6 +71,14 @@ export interface VideoCharacteristics {
   brightness?: { mean: number; category: string };
   cameraDistance?: { avgBboxHeight: number; category: string };
   sceneComplexity?: { avgPeople: number; category: string };
+  courtDetection?: {
+    detected: boolean;
+    confidence: number;
+    linesFound: number;
+    cameraHeight: string;
+    lineVisibility: string;
+    recordingTips: string[];
+  };
   version: number;
 }
 

@@ -53,6 +53,14 @@ export function VideoInsightsBanner({ currentMatch }: VideoInsightsBannerProps) 
       if (chars.sceneComplexity?.category === 'complex') {
         msgs.push('Crowded scene detected — some spectators may appear in tracking results');
       }
+      if (chars.courtDetection) {
+        const cd = chars.courtDetection;
+        if (!cd.detected && cd.recordingTips.length > 0) {
+          msgs.push(`Court not detected — ${cd.recordingTips[0]}`);
+        } else if (cd.detected && cd.confidence < 0.5) {
+          msgs.push('Court partially detected (low confidence) — tracking accuracy may be reduced');
+        }
+      }
     }
 
     // Quality report messages from tracked rallies

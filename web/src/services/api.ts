@@ -1839,6 +1839,8 @@ export interface QualityReport {
   appearanceLinkCount: number;
   uniqueRawTrackCount: number;
   calibrationRecommended: boolean;
+  courtDetected: boolean;
+  courtConfidence: number;
   trackabilityScore: number;
   suggestions: string[];
 }

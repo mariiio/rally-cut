@@ -484,6 +484,7 @@ def track_players(
 
     # Auto-detect court when explicitly requested or when filtering is
     # enabled with no manual calibration and no explicit ROI mode.
+    court_insights = None
     if auto_detect_requested or (
         calibrator is None
         and filter_court
@@ -492,19 +493,29 @@ def track_players(
         and not calibration_roi_requested
         and court_roi_str is None
     ):
+        from rallycut.court.detector import CourtDetectionInsights
         from rallycut.tracking.player_tracker import auto_detect_court
 
         auto_cal, auto_result = auto_detect_court(video)
+
+        # Compute insights from detection result
+        court_insights = CourtDetectionInsights.from_result(auto_result)
+
         if auto_cal is not None:
             calibrator = auto_cal
             if not quiet:
                 console.print(
-                    f"[dim]Court auto-detected (confidence: {auto_result.confidence:.2f})[/dim]"
+                    f"[dim]Court Detection: {court_insights.lines_found} lines, "
+                    f"confidence {auto_result.confidence:.2f} "
+                    f"({court_insights.camera_height} camera, "
+                    f"{court_insights.line_visibility} visibility)[/dim]"
                 )
         else:
             if not quiet:
                 warn = auto_result.warnings[0] if auto_result.warnings else "low confidence"
                 console.print(f"[dim]Court auto-detection: {warn}[/dim]")
+                for tip in court_insights.recording_tips:
+                    console.print(f"[dim]  Tip: {tip}[/dim]")
             if auto_detect_requested:
                 court_roi = DEFAULT_COURT_ROI
                 if not quiet:
@@ -673,6 +684,7 @@ def track_players(
             filter_config=filter_config,
             court_calibrator=calibrator,
             team_aware_config=ta_config,
+            court_detection_insights=court_insights,
         )
     else:
         with Progress(
@@ -698,6 +710,7 @@ def track_players(
                 filter_config=filter_config,
                 court_calibrator=calibrator,
                 team_aware_config=ta_config,
+                court_detection_insights=court_insights,
             )
 
     # Include ball positions in result for trajectory overlay

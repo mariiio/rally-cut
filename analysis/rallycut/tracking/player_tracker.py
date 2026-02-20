@@ -21,6 +21,7 @@ import numpy as np
 
 if TYPE_CHECKING:
     from rallycut.court.calibration import CourtCalibrator
+    from rallycut.court.detector import CourtDetectionInsights
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.court_identity import SwapDecision
     from rallycut.tracking.player_filter import PlayerFilterConfig
@@ -1053,6 +1054,7 @@ class PlayerTracker:
         filter_config: PlayerFilterConfig | None = None,
         court_calibrator: CourtCalibrator | None = None,
         team_aware_config: TeamAwareConfig | None = None,
+        court_detection_insights: CourtDetectionInsights | None = None,
     ) -> PlayerTrackingResult:
         """
         Track players in a video segment.
@@ -1235,6 +1237,18 @@ class PlayerTracker:
                         # Team-aware tracker: feed positions and apply patch
                         if team_tracker is not None:
                             team_tracker.update(frame_positions)
+
+                            # Update net interaction freeze detector
+                            if (
+                                team_tracker.interaction_detector is not None
+                                and (team_tracker.is_active or team_tracker._freeze_active)
+                            ):
+                                team_tracker.interaction_detector.update(
+                                    frame_positions,
+                                    team_tracker.team_assignments,
+                                    frame_idx,
+                                )
+
                             if (
                                 not team_patch_applied
                                 and hasattr(model, "predictor")
@@ -1333,6 +1347,17 @@ class PlayerTracker:
             # Team classification (populated during filtering)
             team_assignments: dict[int, int] = {}
 
+            # Frozen interactions from team-aware tracker (for court identity scoring)
+            frozen_interactions = None
+            if (
+                team_tracker is not None
+                and team_tracker.interaction_detector is not None
+            ):
+                frozen_interactions = (
+                    team_tracker.interaction_detector
+                    .get_all_frozen_interactions()
+                )
+
             if filter_enabled:
                 from rallycut.tracking.player_filter import (
                     PlayerFilter,
@@ -1396,6 +1421,8 @@ class PlayerTracker:
                                 court_calibrator,
                                 video_width=video_width,
                                 video_height=video_height,
+                                color_store=color_store,
+                                frozen_interactions=frozen_interactions,
                             )
                         )
 
@@ -1507,6 +1534,8 @@ class PlayerTracker:
                                     court_calibrator,
                                     video_width=video_width,
                                     video_height=video_height,
+                                    color_store=color_store,
+                                    frozen_interactions=frozen_interactions,
                                 )
                             )
                             if post_swaps > 0:
@@ -1571,6 +1600,7 @@ class PlayerTracker:
                     court_identity_interactions=len(court_decisions),
                     court_identity_swaps=num_court_swaps,
                     uncertain_identity_count=len(uncertain_windows),
+                    court_detection_insights=court_detection_insights,
                 )
 
             processing_time_ms = (time.time() - start_time) * 1000

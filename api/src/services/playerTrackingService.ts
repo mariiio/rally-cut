@@ -13,6 +13,7 @@ import { fileURLToPath } from 'url';
 
 import { env } from '../config/env.js';
 import { generateDownloadUrl } from '../lib/s3.js';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errorHandler.js';
 
@@ -183,8 +184,20 @@ interface QualityReport {
   swapFixCount: number;
   uniqueRawTrackCount: number;
   calibrationRecommended: boolean;
+  courtDetected: boolean;
+  courtConfidence: number;
   trackabilityScore: number;
   suggestions: string[];
+}
+
+interface CourtDetectionInsights {
+  detected: boolean;
+  confidence: number;
+  linesFound: number;
+  cameraHeight: string;
+  lineVisibility: string;
+  fittingMethod: string;
+  recordingTips: string[];
 }
 
 interface PlayerTrackerOutput {
@@ -202,6 +215,7 @@ interface PlayerTrackerOutput {
   contacts?: ContactsData;
   actions?: ActionsData;
   qualityReport?: QualityReport;
+  courtDetection?: CourtDetectionInsights;
 }
 
 /**
@@ -759,21 +773,26 @@ export async function trackPlayersForRally(
         category: (avgPeople > 6 ? 'complex' : 'simple') as 'simple' | 'complex',
       };
 
+      // Court detection insights
+      const courtDetection = trackerResult.courtDetection;
+
       // Merge with existing characteristicsJson (preserving brightness from Phase 1)
       const video = await prisma.video.findUnique({
         where: { id: videoId },
         select: { characteristicsJson: true },
       });
       const existing = (video?.characteristicsJson as Record<string, unknown>) ?? {};
+      const characteristics = {
+        ...existing,
+        ...(cameraDistance && { cameraDistance }),
+        sceneComplexity,
+        ...(courtDetection && { courtDetection }),
+        version: 1,
+      };
       await prisma.video.update({
         where: { id: videoId },
         data: {
-          characteristicsJson: {
-            ...existing,
-            ...(cameraDistance && { cameraDistance }),
-            sceneComplexity,
-            version: 1,
-          },
+          characteristicsJson: characteristics as unknown as Prisma.InputJsonValue,
         },
       });
       console.log(`[PLAYER_TRACK] Updated video characteristics for ${videoId}`);

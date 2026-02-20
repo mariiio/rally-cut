@@ -10,10 +10,14 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from rallycut.tracking.player_tracker import PlayerPosition
+
+if TYPE_CHECKING:
+    from rallycut.court.detector import CourtDetectionInsights
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +49,10 @@ class TrackingQualityReport:
     unique_raw_track_count: int = 0  # Unique tracks before filtering
     calibration_recommended: bool = False  # True if calibration would likely help
 
+    # Court detection
+    court_detected: bool = True  # default True = no court detection was attempted
+    court_confidence: float = 0.0
+
     # Court identity resolution
     court_identity_interactions: int = 0  # Net interactions detected
     court_identity_swaps: int = 0  # Swaps applied by court identity
@@ -70,6 +78,8 @@ class TrackingQualityReport:
             "appearanceLinkCount": self.appearance_link_count,
             "uniqueRawTrackCount": self.unique_raw_track_count,
             "calibrationRecommended": self.calibration_recommended,
+            "courtDetected": self.court_detected,
+            "courtConfidence": self.court_confidence,
             "courtIdentityInteractions": self.court_identity_interactions,
             "courtIdentitySwaps": self.court_identity_swaps,
             "uncertainIdentityCount": self.uncertain_identity_count,
@@ -95,6 +105,7 @@ def compute_quality_report(
     court_identity_interactions: int = 0,
     court_identity_swaps: int = 0,
     uncertain_identity_count: int = 0,
+    court_detection_insights: CourtDetectionInsights | None = None,
 ) -> TrackingQualityReport:
     """Compute a tracking quality report from tracking results.
 
@@ -259,6 +270,16 @@ def compute_quality_report(
             f"(expected ~{expected_players}), calibration ROI would "
             f"filter background distractors"
         )
+
+    # Court detection insights
+    if court_detection_insights is not None:
+        report.court_detected = court_detection_insights.detected
+        report.court_confidence = court_detection_insights.confidence
+        if not court_detection_insights.detected:
+            report.calibration_recommended = True
+            for tip in court_detection_insights.recording_tips:
+                if tip not in suggestions:
+                    suggestions.append(tip)
 
     report.suggestions = suggestions
 

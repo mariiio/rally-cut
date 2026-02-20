@@ -131,6 +131,99 @@ class CourtDetectionResult:
         return self.corners
 
 
+@dataclass
+class CourtDetectionInsights:
+    """Structured diagnostics for court detection quality.
+
+    Identifies poor conditions and provides actionable recording tips.
+    """
+
+    detected: bool  # conf >= threshold and 4 corners
+    confidence: float  # 0-1
+    lines_found: int  # 0-4
+    camera_height: str  # "elevated" | "moderate" | "low" | "unknown"
+    line_visibility: str  # "good" | "partial" | "none"
+    fitting_method: str
+    recording_tips: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "detected": self.detected,
+            "confidence": round(self.confidence, 3),
+            "linesFound": self.lines_found,
+            "cameraHeight": self.camera_height,
+            "lineVisibility": self.line_visibility,
+            "fittingMethod": self.fitting_method,
+            "recordingTips": self.recording_tips,
+        }
+
+    @staticmethod
+    def from_result(
+        result: CourtDetectionResult,
+        confidence_threshold: float = 0.4,
+        brightness_mean: float | None = None,
+    ) -> CourtDetectionInsights:
+        """Derive insights from a detection result."""
+        detected = len(result.corners) == 4 and result.confidence >= confidence_threshold
+        lines_found = len(result.detected_lines)
+
+        # Camera height: infer from far baseline Y position
+        camera_height = "unknown"
+        for dl in result.detected_lines:
+            if dl.label == "far_baseline":
+                mid_y = (dl.p1[1] + dl.p2[1]) / 2.0
+                if mid_y < 0.25:
+                    camera_height = "elevated"
+                elif mid_y > 0.40:
+                    camera_height = "low"
+                else:
+                    camera_height = "moderate"
+                break
+
+        # Line visibility
+        if lines_found >= 3:
+            line_visibility = "good"
+        elif lines_found >= 1:
+            line_visibility = "partial"
+        else:
+            line_visibility = "none"
+
+        # Recording tips (conditional, up to 3)
+        tips: list[str] = []
+        if line_visibility == "none":
+            tips.append(
+                "Court boundary lines were not detected. For best results, use thick, "
+                "brightly colored court lines (tape or painted) rather than thin ropes or wires."
+            )
+        elif line_visibility == "partial":
+            tips.append(
+                f"Only {lines_found} of 4 court lines were detected. "
+                "Try positioning the camera so all four boundary lines are clearly visible."
+            )
+
+        if camera_height == "low" or (camera_height == "unknown" and line_visibility == "none"):
+            tips.append(
+                "Recording from a higher vantage point (bleachers or a tall tripod at 2-3m) "
+                "helps the system see court lines more clearly."
+            )
+
+        if brightness_mean is not None and brightness_mean > 200:
+            tips.append(
+                "Very bright conditions may wash out court line visibility. "
+                "Try positioning the camera so the sun is behind or to the side."
+            )
+
+        return CourtDetectionInsights(
+            detected=detected,
+            confidence=result.confidence,
+            lines_found=lines_found,
+            camera_height=camera_height,
+            line_visibility=line_visibility,
+            fitting_method=result.fitting_method,
+            recording_tips=tips[:3],
+        )
+
+
 class CourtDetector:
     """Automatic court detector for beach volleyball videos."""
 
