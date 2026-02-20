@@ -41,8 +41,7 @@ class TeamAwareConfig:
 
     # Net interaction freeze (Tier 1: preventive identity preservation)
     enable_freeze: bool = True
-    freeze_iou_threshold: float = 0.0      # Any bbox overlap triggers freeze
-    freeze_proximity: float = 0.12         # Or center distance < this (normalized)
+    freeze_proximity: float = 0.12         # Center distance < this triggers freeze (normalized)
     freeze_net_band: float = 0.10          # Both tracks must be within this of split_y
     freeze_penalty: float = 1e6            # Hard barrier in cost matrix
     freeze_cooldown_frames: int = 10       # Keep freeze N frames after overlap ends
