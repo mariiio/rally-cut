@@ -212,8 +212,11 @@ def main() -> None:
     evaluated = 0
 
     # Header
-    print(f"{'Video':>12s}  {'MCD':>7s}  {'MCD px':>7s}  {'IoU':>5s}  {'Reproj':>7s}  {'Conf':>5s}  {'Lines':>5s}  Warnings")
-    print("-" * 90)
+    print(
+        f"{'Video':>12s}  {'MCD':>7s}  {'MCD px':>7s}  {'IoU':>5s}  {'Reproj':>7s}  "
+        f"{'Conf':>5s}  {'Lines':>5s}  {'Method':>12s}  {'Corr':>4s}  {'RpErr':>6s}  Warnings"
+    )
+    print("-" * 120)
 
     for video_info in videos:
         vid_id = video_info["video_id"]
@@ -237,6 +240,9 @@ def main() -> None:
         # Compute metrics
         detected = result.corners
         lines_found = len(result.detected_lines)
+        fitting_method = getattr(result, "fitting_method", "legacy")
+        n_correspondences = getattr(result, "n_correspondences", 0)
+        reproj_err = getattr(result, "reprojection_error", 0.0)
 
         if detected and len(detected) == 4:
             mcd = mean_corner_distance(detected, gt_corners)
@@ -260,6 +266,9 @@ def main() -> None:
                 f"{reproj_str:>7s}  "
                 f"{result.confidence:.3f}  "
                 f"{lines_found:>5d}  "
+                f"{fitting_method:>12s}  "
+                f"{n_correspondences:>4d}  "
+                f"{reproj_err:>6.4f}  "
                 f"{warn_str}"
             )
 
@@ -277,6 +286,9 @@ def main() -> None:
                 "reprojection_error_m": reproj,
                 "confidence": result.confidence,
                 "lines_found": lines_found,
+                "fitting_method": fitting_method,
+                "n_correspondences": n_correspondences,
+                "reproj_error": reproj_err,
                 "success": is_success,
                 "warnings": result.warnings,
                 "detected_corners": detected,
@@ -287,6 +299,7 @@ def main() -> None:
                 f"{vid_id[:12]:>12s}  {'FAIL':>7s}  "
                 f"conf={result.confidence:.3f}  "
                 f"lines={lines_found}  "
+                f"method={fitting_method}  "
                 f"{'; '.join(result.warnings[:2])}"
             )
             results.append({
@@ -295,6 +308,7 @@ def main() -> None:
                 "iou": None,
                 "confidence": result.confidence,
                 "lines_found": lines_found,
+                "fitting_method": fitting_method,
                 "success": False,
                 "warnings": result.warnings,
             })
@@ -314,7 +328,7 @@ def main() -> None:
                 cap.release()
 
     # Summary
-    print("-" * 90)
+    print("-" * 120)
     if evaluated > 0:
         avg_mcd = total_mcd / evaluated
         avg_iou = total_iou / evaluated
@@ -323,6 +337,11 @@ def main() -> None:
         print(f"  Mean MCD:      {avg_mcd:.4f} (norm)")
         print(f"  Mean IoU:      {avg_iou:.3f}")
         print(f"  Success Rate:  {success_count}/{evaluated} ({rate:.1f}%)")
+
+        # Method distribution
+        from collections import Counter
+        methods = Counter(r.get("fitting_method", "unknown") for r in results)
+        print(f"  Fitting methods: {dict(methods)}")
     else:
         print("\nNo videos evaluated.")
 

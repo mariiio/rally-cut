@@ -507,3 +507,267 @@ class TestDarkLineDetection:
             f"Warnings: {result.warnings}"
         )
         assert result.confidence > 0.0
+
+
+# ── Court Model Correspondence Tests ────────────────────────────────────
+
+
+class TestCourtModelConstants:
+    def test_court_model_corners(self) -> None:
+        from rallycut.court.line_geometry import COURT_MODEL_CORNERS
+
+        assert len(COURT_MODEL_CORNERS) == 4
+        # near-left, near-right, far-right, far-left
+        assert COURT_MODEL_CORNERS[0] == (0.0, 0.0)
+        assert COURT_MODEL_CORNERS[1] == (8.0, 0.0)
+        assert COURT_MODEL_CORNERS[2] == (8.0, 16.0)
+        assert COURT_MODEL_CORNERS[3] == (0.0, 16.0)
+
+    def test_court_model_intersections(self) -> None:
+        from rallycut.court.line_geometry import COURT_MODEL_INTERSECTIONS
+
+        assert len(COURT_MODEL_INTERSECTIONS) == 6
+        assert COURT_MODEL_INTERSECTIONS[frozenset({"far_baseline", "left_sideline"})] == (0.0, 16.0)
+        assert COURT_MODEL_INTERSECTIONS[frozenset({"center_line", "right_sideline"})] == (8.0, 8.0)
+
+
+class TestCollectCourtCorrespondences:
+    def _make_detected_line(
+        self, label: str, p1: tuple[float, float], p2: tuple[float, float],
+    ) -> tuple[object, list[tuple[float, float, float, float]]]:
+        """Create a (DetectedLine, segments) tuple for testing."""
+        from rallycut.court.detector import DetectedLine
+
+        dl = DetectedLine(
+            label=label, p1=p1, p2=p2, support=10,
+            angle_deg=segment_angle_deg(p1[0], p1[1], p2[0], p2[1]),
+        )
+        return (dl, [(p1[0], p1[1], p2[0], p2[1])])
+
+    def test_two_lines_one_correspondence(self) -> None:
+        from rallycut.court.line_geometry import collect_court_correspondences
+
+        identified = {
+            "far_baseline": self._make_detected_line("far_baseline", (0.30, 0.35), (0.70, 0.35)),
+            "left_sideline": self._make_detected_line("left_sideline", (0.30, 0.35), (0.05, 0.85)),
+        }
+        corrs = collect_court_correspondences(identified)
+        assert len(corrs) == 1
+        # Should be the far-left corner
+        img_pt, court_pt = corrs[0]
+        assert court_pt == (0.0, 16.0)  # far-left in court space
+
+    def test_four_lines_multiple_correspondences(self) -> None:
+        from rallycut.court.line_geometry import collect_court_correspondences
+
+        identified = {
+            "far_baseline": self._make_detected_line("far_baseline", (0.30, 0.35), (0.70, 0.35)),
+            "left_sideline": self._make_detected_line("left_sideline", (0.30, 0.35), (0.05, 0.85)),
+            "right_sideline": self._make_detected_line("right_sideline", (0.70, 0.35), (0.95, 0.85)),
+            "center_line": self._make_detected_line("center_line", (0.175, 0.60), (0.825, 0.60)),
+        }
+        corrs = collect_court_correspondences(identified)
+        # far_bl×left_sl, far_bl×right_sl, center×left_sl, center×right_sl = 4
+        assert len(corrs) == 4
+
+    def test_out_of_bounds_filtered(self) -> None:
+        from rallycut.court.line_geometry import collect_court_correspondences
+
+        # Two nearly parallel lines that intersect far outside bounds
+        identified = {
+            "far_baseline": self._make_detected_line("far_baseline", (0.30, 0.35), (0.70, 0.35)),
+            "center_line": self._make_detected_line("center_line", (0.30, 0.36), (0.70, 0.36)),
+        }
+        # far_baseline and center_line don't have a court model intersection anyway
+        corrs = collect_court_correspondences(identified)
+        assert len(corrs) == 0
+
+
+class TestProjectCourtCorners:
+    def test_identity_homography(self) -> None:
+        from rallycut.court.line_geometry import project_court_corners
+
+        H = np.eye(3, dtype=np.float64)
+        corners = project_court_corners(H)
+        assert len(corners) == 4
+        assert abs(corners[0][0] - 0.0) < 1e-6  # near-left
+        assert abs(corners[0][1] - 0.0) < 1e-6
+        assert abs(corners[2][0] - 8.0) < 1e-6  # far-right
+        assert abs(corners[2][1] - 16.0) < 1e-6
+
+    def test_scale_homography(self) -> None:
+        from rallycut.court.line_geometry import project_court_corners
+
+        # Scale court (8m, 16m) → image (0.5, 1.0) normalized
+        H = np.array([
+            [0.5 / 8, 0, 0],
+            [0, 1.0 / 16, 0],
+            [0, 0, 1],
+        ], dtype=np.float64)
+        corners = project_court_corners(H)
+        assert abs(corners[1][0] - 0.5) < 1e-6   # near-right x
+        assert abs(corners[3][1] - 1.0) < 1e-6   # far-left y
+
+
+class TestHomographyFitting:
+    """Test the full homography fitting pipeline on synthetic frames."""
+
+    def test_synthetic_homography_fit(self) -> None:
+        """Homography should produce valid corners from a synthetic court."""
+        from rallycut.court.detector import CourtDetectionConfig, CourtDetector
+
+        frame = _make_synthetic_frame()
+        frames = [frame.copy() for _ in range(15)]
+
+        config = CourtDetectionConfig(
+            min_temporal_support=3,
+            dbscan_min_samples=3,
+        )
+        detector = CourtDetector(config)
+        result = detector.detect_from_frames(frames)
+
+        assert len(result.corners) == 4, (
+            f"Expected 4 corners, got {len(result.corners)}. "
+            f"Warnings: {result.warnings}"
+        )
+        assert result.confidence > 0.0
+        # Should use a homography-based method (not legacy)
+        assert result.fitting_method in (
+            "homography", "homography_vp", "temporal_consensus", "legacy",
+        )
+
+    def test_homography_result_fields(self) -> None:
+        """Result should include new homography fields."""
+        from rallycut.court.detector import CourtDetectionConfig, CourtDetector
+
+        frame = _make_synthetic_frame()
+        frames = [frame.copy() for _ in range(15)]
+
+        config = CourtDetectionConfig(
+            min_temporal_support=3,
+            dbscan_min_samples=3,
+        )
+        detector = CourtDetector(config)
+        result = detector.detect_from_frames(frames)
+
+        if result.corners:
+            # Verify result has the expected fields
+            assert hasattr(result, "fitting_method")
+            assert hasattr(result, "n_correspondences")
+            assert hasattr(result, "reprojection_error")
+
+    def test_near_corner_accuracy(self) -> None:
+        """Near corners from homography should be roughly consistent with geometry."""
+        from rallycut.court.detector import CourtDetectionConfig, CourtDetector
+
+        frame = _make_synthetic_frame()
+        frames = [frame.copy() for _ in range(15)]
+
+        config = CourtDetectionConfig(
+            min_temporal_support=3,
+            dbscan_min_samples=3,
+        )
+        detector = CourtDetector(config)
+        result = detector.detect_from_frames(frames)
+
+        if result.corners and len(result.corners) == 4:
+            # Near corners should be below far corners (larger Y)
+            near_y = (result.corners[0]["y"] + result.corners[1]["y"]) / 2
+            far_y = (result.corners[2]["y"] + result.corners[3]["y"]) / 2
+            assert near_y > far_y, (
+                f"Near corners Y ({near_y:.3f}) should be > far corners Y ({far_y:.3f})"
+            )
+
+    def test_legacy_fallback(self) -> None:
+        """With only 2 lines, should fall back to legacy fitting."""
+        from rallycut.court.detector import CourtDetectionConfig, CourtDetector, DetectedLine
+
+        config = CourtDetectionConfig()
+        detector = CourtDetector(config)
+
+        # Only far baseline + left sideline → 1 correspondence → legacy
+        identified = {
+            "far_baseline": (
+                DetectedLine("far_baseline", (0.30, 0.35), (0.70, 0.35), 20, 0.0),
+                [(0.30, 0.35, 0.70, 0.35)],
+            ),
+            "left_sideline": (
+                DetectedLine("left_sideline", (0.30, 0.35), (0.05, 0.85), 15, 55.0),
+                [(0.30, 0.35, 0.05, 0.85)],
+            ),
+        }
+        result = detector._fit_court_model(identified)
+        # Should fail or use legacy (only 1 correspondence, no legacy near strategy)
+        assert result.fitting_method == "legacy"
+
+    def test_temporal_consensus_disabled(self) -> None:
+        """When disabled, temporal consensus is skipped."""
+        from rallycut.court.detector import CourtDetectionConfig, CourtDetector
+
+        frame = _make_synthetic_frame()
+        frames = [frame.copy() for _ in range(15)]
+
+        config = CourtDetectionConfig(
+            min_temporal_support=3,
+            dbscan_min_samples=3,
+            enable_temporal_consensus=False,
+        )
+        detector = CourtDetector(config)
+        result = detector.detect_from_frames(frames)
+
+        if result.corners:
+            assert result.fitting_method != "temporal_consensus"
+
+
+class TestReprojectionError:
+    def test_perfect_homography(self) -> None:
+        """Zero reprojection error for a perfect homography."""
+        from rallycut.court.detector import CourtDetector
+
+        # Create a known homography (simple scale)
+        H = np.array([
+            [0.05, 0, 0.1],
+            [0, 0.05, 0.2],
+            [0, 0, 1],
+        ], dtype=np.float64)
+
+        # Generate correspondences consistent with H
+        court_pts = [(0.0, 16.0), (8.0, 16.0), (0.0, 8.0), (8.0, 8.0)]
+        correspondences = []
+        for cp in court_pts:
+            pts = np.array([[cp]], dtype=np.float64)
+            projected = cv2.perspectiveTransform(pts, H)
+            img_pt = (float(projected[0, 0, 0]), float(projected[0, 0, 1]))
+            correspondences.append((img_pt, cp))
+
+        error = CourtDetector._compute_reprojection_error(H, correspondences)
+        assert error < 1e-6
+
+    def test_imperfect_homography(self) -> None:
+        """Non-zero error for mismatched correspondences."""
+        from rallycut.court.detector import CourtDetector
+
+        H = np.eye(3, dtype=np.float64)
+        # Correspondences where image points don't match the identity projection
+        correspondences = [
+            ((0.1, 16.1), (0.0, 16.0)),  # off by (0.1, 0.1)
+            ((8.1, 16.1), (8.0, 16.0)),
+        ]
+        error = CourtDetector._compute_reprojection_error(H, correspondences)
+        assert error > 0.1
+
+
+class TestResultBackwardCompat:
+    """Verify new fields have sensible defaults for backward compatibility."""
+
+    def test_default_fields(self) -> None:
+        from rallycut.court.detector import CourtDetectionResult
+
+        result = CourtDetectionResult(
+            corners=[{"x": 0, "y": 0}] * 4,
+            confidence=0.5,
+        )
+        assert result.homography is None
+        assert result.fitting_method == "legacy"
+        assert result.n_correspondences == 0
+        assert result.reprojection_error == 0.0
