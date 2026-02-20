@@ -137,7 +137,7 @@ class TemporalMaxerInference:
                 rally_start = t
             elif predictions[i] == 0 and in_rally:
                 in_rally = False
-                end_t = t + window_length
+                end_t = t - window_duration + window_length
                 raw_segments.append((rally_start, end_t))
 
         if in_rally:

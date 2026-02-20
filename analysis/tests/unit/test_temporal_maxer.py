@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 
+from rallycut.temporal.temporal_maxer.inference import TemporalMaxerInference
 from rallycut.temporal.temporal_maxer.model import TemporalMaxer, TemporalMaxerConfig
 from rallycut.temporal.temporal_maxer.training import (
     VideoSequenceDataset,
@@ -134,3 +136,129 @@ class TestCollation:
     def test_collate_empty(self) -> None:
         features, labels, mask = collate_video_sequences([])
         assert features.shape[0] == 0
+
+
+def _make_inference() -> TemporalMaxerInference:
+    """Create a TemporalMaxerInference without loading a model."""
+    obj = object.__new__(TemporalMaxerInference)
+    obj.device = torch.device("cpu")
+    obj.model = None  # type: ignore[assignment]
+    return obj
+
+
+class TestPredictionsToSegments:
+    """Tests for _predictions_to_segments segment extraction logic."""
+
+    def test_single_rally_end_time(self) -> None:
+        """End time should be end of last rally window, not first non-rally window."""
+        inf = _make_inference()
+        # stride=48, fps=30 → window_duration=1.6s, window_length=16/30≈0.533s
+        window_duration = 48 / 30  # 1.6s
+        window_length = 16 / 30  # 0.533s
+
+        # Windows 2,3,4 are rally (indices 2-4), rest are non-rally
+        predictions = np.array([0, 0, 1, 1, 1, 0, 0, 0])
+        probs = np.ones(8) * 0.9
+
+        segments = inf._predictions_to_segments(
+            predictions, probs, window_duration, window_length,
+            min_duration=0.0, max_gap=0.0, max_duration=999.0,
+        )
+
+        assert len(segments) == 1
+        start, end = segments[0]
+        # Start = window 2 * 1.6 = 3.2s
+        assert start == pytest.approx(2 * window_duration)
+        # End = window 4 * 1.6 + 0.533 = 6.933s (last rally window end)
+        expected_end = 4 * window_duration + window_length
+        assert end == pytest.approx(expected_end)
+        # NOT 5 * 1.6 + 0.533 (which would be the old buggy value)
+        buggy_end = 5 * window_duration + window_length
+        assert end < buggy_end
+
+    def test_rally_at_end_of_video(self) -> None:
+        """Rally extending to last window uses (n-1)*window_duration + window_length."""
+        inf = _make_inference()
+        window_duration = 1.6
+        window_length = 0.533
+
+        # Last 3 windows are rally
+        predictions = np.array([0, 0, 1, 1, 1])
+        probs = np.ones(5) * 0.9
+
+        segments = inf._predictions_to_segments(
+            predictions, probs, window_duration, window_length,
+            min_duration=0.0, max_gap=0.0, max_duration=999.0,
+        )
+
+        assert len(segments) == 1
+        start, end = segments[0]
+        assert start == pytest.approx(2 * window_duration)
+        # n=5, last window index=4: end = 4 * 1.6 + 0.533
+        assert end == pytest.approx(4 * window_duration + window_length)
+
+    def test_gap_filling(self) -> None:
+        """Two rallies separated by gap <= max_gap should merge."""
+        inf = _make_inference()
+        window_duration = 1.0
+        window_length = 0.5
+
+        # Two rallies with 1 non-rally window between them
+        predictions = np.array([1, 1, 0, 1, 1])
+        probs = np.ones(5) * 0.9
+
+        # max_gap=1.5 should merge (gap = start of second rally - end of first)
+        segments = inf._predictions_to_segments(
+            predictions, probs, window_duration, window_length,
+            min_duration=0.0, max_gap=2.0, max_duration=999.0,
+        )
+        assert len(segments) == 1
+
+        # max_gap=0.0 should keep separate
+        segments = inf._predictions_to_segments(
+            predictions, probs, window_duration, window_length,
+            min_duration=0.0, max_gap=0.0, max_duration=999.0,
+        )
+        assert len(segments) == 2
+
+    def test_short_segment_removal(self) -> None:
+        """Segments shorter than min_duration should be removed."""
+        inf = _make_inference()
+        window_duration = 1.0
+        window_length = 0.5
+
+        # Single rally window → duration = window_length = 0.5s
+        predictions = np.array([0, 1, 0, 0])
+        probs = np.ones(4) * 0.9
+
+        # min_duration=1.0 should remove it
+        segments = inf._predictions_to_segments(
+            predictions, probs, window_duration, window_length,
+            min_duration=1.0, max_gap=0.0, max_duration=999.0,
+        )
+        assert len(segments) == 0
+
+        # min_duration=0.0 should keep it
+        segments = inf._predictions_to_segments(
+            predictions, probs, window_duration, window_length,
+            min_duration=0.0, max_gap=0.0, max_duration=999.0,
+        )
+        assert len(segments) == 1
+
+    def test_empty_predictions(self) -> None:
+        """Empty input should return empty segments."""
+        inf = _make_inference()
+        segments = inf._predictions_to_segments(
+            np.array([]), np.array([]), 1.0, 0.5, 0.0, 0.0, 999.0,
+        )
+        assert segments == []
+
+    def test_no_rally_windows(self) -> None:
+        """All non-rally predictions should return empty segments."""
+        inf = _make_inference()
+        predictions = np.array([0, 0, 0, 0])
+        probs = np.ones(4) * 0.1
+        segments = inf._predictions_to_segments(
+            predictions, probs, 1.0, 0.5, 0.0, 0.0, 999.0,
+        )
+        assert segments == []
