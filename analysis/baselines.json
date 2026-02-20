@@ -47,7 +47,8 @@
 
   "player_detection": {
     "yolov8n_640": { "f1": 74.1, "far_recall": 55.3, "fps": 15.3 },
-    "yolov8n_1280": { "f1": 79.4, "far_recall": 63.5, "fps": 7.7, "recommended": true },
+    "yolov8n_1280": { "f1": 79.4, "far_recall": 63.5, "fps": 7.7 },
+    "yolo11s_1280": { "f1": 92.5, "hota": 91.3, "far_recall": 96.3, "mid_recall": 99.1, "fps": 6.1, "recommended": true },
     "yolo11m_1280": { "far_recall": 89.4, "mid_recall": 74.4, "fps": 2.4 }
   },
 

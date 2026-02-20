@@ -1775,7 +1775,7 @@ def compare_yolo_models(
         str | None,
         typer.Option(
             "--models", "-m",
-            help="Comma-separated list of models to test (default: yolov8n,yolov8s,yolov8m)",
+            help="Comma-separated list of models to test (default: yolov8n,yolo11s,yolo11m)",
         ),
     ] = None,
 ) -> None:
@@ -1822,8 +1822,8 @@ def compare_yolo_models(
                 console.print(f"[red]Error:[/red] Unknown model '{m}'. Available: {', '.join(YOLO_MODELS.keys())}")
                 raise typer.Exit(1)
     else:
-        # Default: test nano, small, medium (skip large for speed)
-        model_ids = ["yolov8n", "yolov8s", "yolov8m"]
+        # Default: test nano, small (default), medium
+        model_ids = ["yolov8n", "yolo11s", "yolo11m"]
 
     # Load rallies from database
     console.print("[bold]Loading labeled rallies from database...[/bold]")
