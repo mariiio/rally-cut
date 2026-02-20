@@ -22,6 +22,7 @@ import numpy as np
 if TYPE_CHECKING:
     from rallycut.court.calibration import CourtCalibrator
     from rallycut.tracking.ball_tracker import BallPosition
+    from rallycut.tracking.court_identity import SwapDecision
     from rallycut.tracking.player_filter import PlayerFilterConfig
     from rallycut.tracking.quality_report import TrackingQualityReport
 
@@ -224,7 +225,7 @@ def compute_court_roi_from_ball(
         ball_positions: Ball tracking results (normalized 0-1 coordinates).
         x_margin: Absolute margin to add on left/right (default 8%).
         y_margin_top: Absolute margin to add above (default 5%).
-        y_margin_bottom: Absolute margin to add below (default 12%).
+        y_margin_bottom: Absolute margin to add below (default 20%).
         percentile_low: Lower percentile for bounds (default 3rd).
         percentile_high: Upper percentile for bounds (default 97th).
         max_roi_area: Maximum ROI area as fraction of frame. If exceeded,
@@ -1257,7 +1258,7 @@ class PlayerTracker:
             primary_track_ids: list[int] = []
             filter_method: str | None = None
             uncertain_windows: list[tuple[int, int, set[int]]] = []
-            court_decisions: list[Any] = []  # SwapDecision when court identity runs
+            court_decisions: list[SwapDecision] = []
 
             # Save raw positions before filtering (for parameter tuning)
             raw_positions = [
@@ -1301,10 +1302,13 @@ class PlayerTracker:
                 positions, num_jump_splits = split_tracks_at_jumps(
                     positions, split_info_out=split_info
                 )
-                # Rekey color store for jump splits
+                # Rekey stores for jump splits
                 if color_store is not None:
                     for old_id, new_id, split_frame in split_info:
                         color_store.rekey(old_id, new_id, split_frame)
+                if appearance_store is not None:
+                    for old_id, new_id, split_frame in split_info:
+                        appearance_store.rekey(old_id, new_id, split_frame)
 
                 # Step 0b: Color-based track splitting
                 if color_store is not None and color_store.has_data():
@@ -1361,7 +1365,7 @@ class PlayerTracker:
                         positions, color_store,
                         team_assignments=team_assignments,
                     )
-                    num_swap_fixes += num_court_swaps
+                    # Note: court swaps tracked separately in num_court_swaps
 
                     # Step 0e: Appearance-based tracklet linking (GTA-Link inspired)
                     # Reconnects fragments using color histogram similarity
@@ -1464,14 +1468,25 @@ class PlayerTracker:
                                     f"{post_swaps} additional swaps"
                                 )
                             court_decisions.extend(post_decisions)
+                            # Collect uncertain windows, deduplicating
+                            # with Step 0c (same interactions may be
+                            # re-detected on filtered data)
+                            existing = {
+                                (s, e) for s, e, _ in uncertain_windows
+                            }
                             for d in post_decisions:
                                 if not d.confident:
-                                    uncertain_windows.append((
+                                    key = (
                                         d.interaction.start_frame,
                                         d.interaction.end_frame,
-                                        {d.interaction.track_a,
-                                         d.interaction.track_b},
-                                    ))
+                                    )
+                                    if key not in existing:
+                                        uncertain_windows.append((
+                                            d.interaction.start_frame,
+                                            d.interaction.end_frame,
+                                            {d.interaction.track_a,
+                                             d.interaction.track_b},
+                                        ))
 
             # Step 5: Compute quality report
             quality_report = None
