@@ -1,15 +1,43 @@
 """Geometric utilities for line detection and court fitting.
 
 Functions for line intersection, vanishing point computation,
-harmonic conjugate (projective midpoint), and parametric line
-representations used by the court detector.
+harmonic conjugate (projective midpoint), parametric line
+representations, and court model mapping used by the court detector.
 """
 
 from __future__ import annotations
 
 import math
+from typing import Any, Mapping
 
+import cv2
 import numpy as np
+
+# ── Beach Volleyball Court Model ────────────────────────────────────────
+# Court dimensions: 8m wide × 16m long (8m per side).
+# Court-space coordinates: origin at top-left corner (0,0),
+# x-axis along width (0→8), y-axis along length (0→16).
+# Lines: far_baseline (y=16), near_baseline (y=0),
+#         left_sideline (x=0), right_sideline (x=8),
+#         center_line (y=8).
+
+COURT_MODEL_CORNERS: list[tuple[float, float]] = [
+    (0.0, 0.0),   # near-left
+    (8.0, 0.0),   # near-right
+    (8.0, 16.0),  # far-right
+    (0.0, 16.0),  # far-left
+]
+
+# Map each pair of court line labels to their known court-space intersection.
+# Only includes intersections that exist on the real court.
+COURT_MODEL_INTERSECTIONS: dict[frozenset[str], tuple[float, float]] = {
+    frozenset({"far_baseline", "left_sideline"}): (0.0, 16.0),    # far-left
+    frozenset({"far_baseline", "right_sideline"}): (8.0, 16.0),   # far-right
+    frozenset({"near_baseline", "left_sideline"}): (0.0, 0.0),    # near-left
+    frozenset({"near_baseline", "right_sideline"}): (8.0, 0.0),   # near-right
+    frozenset({"center_line", "left_sideline"}): (0.0, 8.0),      # center-left
+    frozenset({"center_line", "right_sideline"}): (8.0, 8.0),     # center-right
+}
 
 
 def line_intersection(
@@ -290,3 +318,77 @@ def segments_to_median_line(
     p2 = (px + max_t * dx, py + max_t * dy)
 
     return (p1, p2)
+
+
+# ── Court Model Correspondence Functions ─────────────────────────────────
+
+
+def collect_court_correspondences(
+    identified_lines: Mapping[str, Any],
+    bounds: tuple[float, float, float, float] = (-1.0, -1.0, 2.0, 3.0),
+) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    """Collect image↔court point correspondences from identified court lines.
+
+    For each pair of identified lines that have a known court-space intersection
+    in COURT_MODEL_INTERSECTIONS, compute their image-space intersection and
+    pair it with the court-space coordinate.
+
+    Args:
+        identified_lines: Dict mapping line labels to (DetectedLine, segments) tuples.
+            DetectedLine must have .p1 and .p2 attributes.
+        bounds: (min_x, min_y, max_x, max_y) filter for image-space intersections.
+            Wide bounds allow off-screen near corners (common in beach volleyball
+            where near baseline is below the frame).
+
+    Returns:
+        List of (image_point, court_point) pairs.
+    """
+    min_x, min_y, max_x, max_y = bounds
+    correspondences: list[tuple[tuple[float, float], tuple[float, float]]] = []
+
+    labels = list(identified_lines.keys())
+    for i in range(len(labels)):
+        for j in range(i + 1, len(labels)):
+            key = frozenset({labels[i], labels[j]})
+            court_pt = COURT_MODEL_INTERSECTIONS.get(key)
+            if court_pt is None:
+                continue
+
+            line_a = identified_lines[labels[i]]
+            line_b = identified_lines[labels[j]]
+            # Extract DetectedLine (first element of the tuple)
+            dl_a = line_a[0] if isinstance(line_a, tuple) else line_a
+            dl_b = line_b[0] if isinstance(line_b, tuple) else line_b
+
+            img_pt = line_intersection(dl_a.p1, dl_a.p2, dl_b.p1, dl_b.p2)
+            if img_pt is None:
+                continue
+
+            # Filter out intersections far outside the frame
+            if not (min_x <= img_pt[0] <= max_x and min_y <= img_pt[1] <= max_y):
+                continue
+
+            correspondences.append((img_pt, court_pt))
+
+    return correspondences
+
+
+def project_court_corners(
+    h_court_to_image: np.ndarray,
+    court_corners: list[tuple[float, float]] | None = None,
+) -> list[tuple[float, float]]:
+    """Project court-space corners through a homography to image space.
+
+    Args:
+        h_court_to_image: 3×3 homography mapping court coords → image coords.
+        court_corners: Court corners in court space. Defaults to COURT_MODEL_CORNERS.
+
+    Returns:
+        List of 4 image-space points (x, y) in same order as input corners.
+    """
+    if court_corners is None:
+        court_corners = COURT_MODEL_CORNERS
+
+    pts = np.array(court_corners, dtype=np.float64).reshape(-1, 1, 2)
+    projected = cv2.perspectiveTransform(pts, h_court_to_image)
+    return [(float(p[0][0]), float(p[0][1])) for p in projected]

@@ -21,16 +21,25 @@ import numpy as np
 
 from rallycut.court.calibration import COURT_LENGTH, COURT_WIDTH
 from rallycut.court.line_geometry import (
+    COURT_MODEL_CORNERS,
+    COURT_MODEL_INTERSECTIONS,
+    collect_court_correspondences,
     compute_vanishing_point,
     cross2d,
     harmonic_conjugate,
     line_intersection,
+    project_court_corners,
     segment_angle_deg,
     segment_to_rho_theta,
     segments_to_median_line,
 )
 
 logger = logging.getLogger(__name__)
+
+# Bounds for filtering court line intersections in normalized image space.
+# Wide bounds allow off-screen near corners (common in beach volleyball
+# where near baseline is below the frame).
+_CORRESPONDENCE_BOUNDS = (-1.0, -1.0, 2.0, 3.0)
 
 
 @dataclass
@@ -81,6 +90,8 @@ class CourtDetectionConfig:
 
     # Stage 5: Geometric fitting
     aspect_ratio: float = COURT_LENGTH / COURT_WIDTH  # 2.0 for beach volleyball
+    homography_ransac_threshold: float = 0.02  # RANSAC reprojection threshold (normalized)
+    enable_temporal_consensus: bool = True  # Use per-frame homography consensus
 
     # Stage 6: Confidence
     confidence_auto_accept: float = 0.7
@@ -106,6 +117,10 @@ class CourtDetectionResult:
     confidence: float  # 0-1 quality score
     detected_lines: list[DetectedLine] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    homography: np.ndarray | None = field(default=None, repr=False)
+    fitting_method: str = "legacy"
+    n_correspondences: int = 0
+    reprojection_error: float = 0.0
 
     @property
     def is_valid(self) -> bool:
@@ -198,7 +213,7 @@ class CourtDetector:
                 )
 
             # Stage 5: Fit court model
-            result = self._fit_court_model(identified)
+            result = self._fit_court_model(identified, all_segments=all_segments)
 
             return result
 
@@ -244,7 +259,7 @@ class CourtDetector:
                 warnings=["Could not identify enough court lines"],
             )
 
-        return self._fit_court_model(identified)
+        return self._fit_court_model(identified, all_segments=all_segments)
 
     def sample_frames(
         self,
@@ -745,8 +760,444 @@ class CourtDetector:
     def _fit_court_model(
         self,
         identified: dict[str, tuple[DetectedLine, list[tuple[float, float, float, float]]]],
+        all_segments: list[list[tuple[float, float, float, float]]] | None = None,
     ) -> CourtDetectionResult:
-        """Fit 4-corner court model from identified lines."""
+        """Fit 4-corner court model from identified lines.
+
+        Tries strategies in order:
+        1. Temporal consensus (per-frame homographies → median corners)
+        2. Single-shot homography from ≥4 correspondences (RANSAC)
+        3. VP-augmented homography (2-3 correspondences + harmonic conjugate)
+        4. Legacy fallback (line intersection + aspect ratio)
+        """
+        detected_lines = [dl for dl, _ in identified.values()]
+
+        # Collect correspondences from identified lines
+        correspondences = collect_court_correspondences(identified)
+        n_corr = len(correspondences)
+        logger.info(f"Court correspondences: {n_corr} from identified lines")
+
+        # Strategy 1: Temporal consensus from per-frame homographies
+        if (
+            self.config.enable_temporal_consensus
+            and all_segments is not None
+            and n_corr >= 2
+        ):
+            result = self._fit_via_temporal_consensus(
+                identified, all_segments, detected_lines,
+            )
+            if result is not None:
+                return result
+
+        # Strategy 2: Single-shot homography with ≥4 correspondences
+        if n_corr >= 4:
+            result = self._fit_via_homography(
+                correspondences, detected_lines, identified,
+            )
+            if result is not None:
+                return result
+
+        # Strategy 3: VP augmentation to reach ≥4 correspondences
+        if 2 <= n_corr <= 3:
+            result = self._fit_with_vp_augmentation(
+                correspondences, identified, detected_lines,
+            )
+            if result is not None:
+                return result
+
+        # Strategy 4: Legacy fallback
+        logger.info("Falling back to legacy court model fitting")
+        return self._fit_court_model_legacy(identified)
+
+    def _fit_via_homography(
+        self,
+        correspondences: list[tuple[tuple[float, float], tuple[float, float]]],
+        detected_lines: list[DetectedLine],
+        identified: dict[str, tuple[DetectedLine, list[tuple[float, float, float, float]]]],
+        warnings: list[str] | None = None,
+        fitting_method: str = "homography",
+    ) -> CourtDetectionResult | None:
+        """Fit court corners via homography from ≥4 correspondences.
+
+        Returns CourtDetectionResult on success, None on failure.
+        """
+        if len(correspondences) < 4:
+            return None
+
+        if warnings is None:
+            warnings = []
+
+        img_pts = np.array(
+            [c[0] for c in correspondences], dtype=np.float64,
+        )
+        court_pts = np.array(
+            [c[1] for c in correspondences], dtype=np.float64,
+        )
+
+        # findHomography: court_pts → img_pts (H maps court→image)
+        method = cv2.RANSAC if len(correspondences) > 4 else 0
+        try:
+            H, _mask = cv2.findHomography(
+                court_pts.reshape(-1, 1, 2),
+                img_pts.reshape(-1, 1, 2),
+                method,
+                ransacReprojThreshold=self.config.homography_ransac_threshold,
+            )
+        except cv2.error:
+            logger.warning("cv2.findHomography failed")
+            return None
+
+        if H is None:
+            logger.warning("Homography estimation returned None")
+            return None
+
+        # Project court corners to image
+        # COURT_MODEL_CORNERS order: near-left, near-right, far-right, far-left
+        img_corners = project_court_corners(H)
+
+        # Validate quadrilateral
+        near_left, near_right, far_right, far_left = img_corners
+        valid, validation_warnings = self._validate_quadrilateral(
+            far_left, far_right, near_right, near_left,
+        )
+        warnings.extend(validation_warnings)
+
+        if not valid:
+            logger.info(f"Homography ({fitting_method}): invalid quadrilateral")
+            return None
+
+        # Compute reprojection error
+        reproj_error = self._compute_reprojection_error(H, correspondences)
+
+        # Build corners in DB format: near-left, near-right, far-right, far-left
+        corners = [
+            {"x": near_left[0], "y": near_left[1]},
+            {"x": near_right[0], "y": near_right[1]},
+            {"x": far_right[0], "y": far_right[1]},
+            {"x": far_left[0], "y": far_left[1]},
+        ]
+
+        confidence = self._compute_confidence(
+            identified, fitting_method, valid,
+            reprojection_error=reproj_error,
+        )
+
+        logger.info(
+            f"Homography fit ({fitting_method}): {len(correspondences)} correspondences, "
+            f"reproj_error={reproj_error:.4f}, confidence={confidence:.3f}"
+        )
+
+        return CourtDetectionResult(
+            corners=corners,
+            confidence=confidence,
+            detected_lines=detected_lines,
+            warnings=warnings,
+            homography=H,
+            fitting_method=fitting_method,
+            n_correspondences=len(correspondences),
+            reprojection_error=reproj_error,
+        )
+
+    def _fit_with_vp_augmentation(
+        self,
+        correspondences: list[tuple[tuple[float, float], tuple[float, float]]],
+        identified: dict[str, tuple[DetectedLine, list[tuple[float, float, float, float]]]],
+        detected_lines: list[DetectedLine],
+    ) -> CourtDetectionResult | None:
+        """Augment 2-3 correspondences using vanishing point + harmonic conjugate.
+
+        When far_baseline + 2 sidelines exist but center/near baselines are missing,
+        we only have 2 correspondences (far corners). Use the VP to synthesize
+        near corner correspondences via harmonic conjugate when center line is present.
+        """
+        warnings: list[str] = []
+
+        left_sl = identified.get("left_sideline", (None, None))[0]
+        right_sl = identified.get("right_sideline", (None, None))[0]
+        center_ln = identified.get("center_line", (None, None))[0]
+        far_bl = identified.get("far_baseline", (None, None))[0]
+
+        if not (left_sl and right_sl and center_ln and far_bl):
+            return None
+
+        # Compute VP from sidelines
+        sideline_lines: list[tuple[tuple[float, float], tuple[float, float]]] = [
+            (left_sl.p1, left_sl.p2),
+            (right_sl.p1, right_sl.p2),
+        ]
+        vp = compute_vanishing_point(sideline_lines)
+        if vp is None:
+            return None
+
+        # Augment: synthesize near corners via harmonic conjugate
+        augmented = list(correspondences)
+
+        # Find far corners from correspondences
+        far_left = line_intersection(far_bl.p1, far_bl.p2, left_sl.p1, left_sl.p2)
+        far_right = line_intersection(far_bl.p1, far_bl.p2, right_sl.p1, right_sl.p2)
+        center_left = line_intersection(center_ln.p1, center_ln.p2, left_sl.p1, left_sl.p2)
+        center_right = line_intersection(center_ln.p1, center_ln.p2, right_sl.p1, right_sl.p2)
+
+        if far_left and center_left:
+            near_left = harmonic_conjugate(far_left, center_left, vp)
+            # near-left in court space is (0, 0)
+            augmented.append((near_left, (0.0, 0.0)))
+
+        if far_right and center_right:
+            near_right = harmonic_conjugate(far_right, center_right, vp)
+            # near-right in court space is (8, 0)
+            augmented.append((near_right, (8.0, 0.0)))
+
+        if len(augmented) < 4:
+            return None
+
+        warnings.append("Near corners augmented via VP + harmonic conjugate")
+        return self._fit_via_homography(
+            augmented, detected_lines, identified,
+            warnings=warnings, fitting_method="homography_vp",
+        )
+
+    # ── Phase 2: Temporal Consensus ──────────────────────────────────────
+
+    def _match_frame_segments_to_lines(
+        self,
+        frame_segments: list[tuple[float, float, float, float]],
+        identified: dict[str, tuple[DetectedLine, list[tuple[float, float, float, float]]]],
+    ) -> dict[str, tuple[tuple[float, float], tuple[float, float]]]:
+        """Match per-frame segments to identified court lines by rho-theta proximity.
+
+        Returns dict mapping line label → best-matching segment endpoints for this frame.
+        """
+        matched: dict[str, tuple[tuple[float, float], tuple[float, float]]] = {}
+
+        for label, (dl, _raw_segs) in identified.items():
+            ref_rho, ref_theta = segment_to_rho_theta(
+                dl.p1[0], dl.p1[1], dl.p2[0], dl.p2[1],
+            )
+
+            best_dist = float("inf")
+            best_seg: tuple[float, float, float, float] | None = None
+
+            for seg in frame_segments:
+                seg_rho, seg_theta = segment_to_rho_theta(*seg)
+                # Distance in (rho, theta) space
+                d_rho = abs(seg_rho - ref_rho)
+                d_theta = abs(seg_theta - ref_theta)
+                # Handle theta wrap-around
+                if d_theta > math.pi:
+                    d_theta = 2 * math.pi - d_theta
+                dist = math.sqrt(d_rho ** 2 + (d_theta * self.config.theta_scale) ** 2)
+
+                if dist < best_dist and dist < self.config.dbscan_eps * 2:
+                    best_dist = dist
+                    best_seg = seg
+
+            if best_seg is not None:
+                p1 = (best_seg[0], best_seg[1])
+                p2 = (best_seg[2], best_seg[3])
+                matched[label] = (p1, p2)
+
+        return matched
+
+    def _fit_via_temporal_consensus(
+        self,
+        identified: dict[str, tuple[DetectedLine, list[tuple[float, float, float, float]]]],
+        all_segments: list[list[tuple[float, float, float, float]]],
+        detected_lines: list[DetectedLine],
+    ) -> CourtDetectionResult | None:
+        """Estimate court corners via temporal consensus of per-frame homographies.
+
+        For each sampled frame, match segments to identified lines, compute
+        per-frame correspondences, estimate per-frame homography, project
+        court corners. Take median of corners across frames (robust to outliers).
+        """
+        per_frame_corners: list[list[tuple[float, float]]] = []
+
+        for frame_segs in all_segments:
+            if not frame_segs:
+                continue
+
+            # Match this frame's segments to identified lines
+            matched = self._match_frame_segments_to_lines(frame_segs, identified)
+            if len(matched) < 2:
+                continue
+
+            # Compute per-frame correspondences from matched line intersections
+            frame_correspondences: list[tuple[tuple[float, float], tuple[float, float]]] = []
+            labels = list(matched.keys())
+            for i in range(len(labels)):
+                for j in range(i + 1, len(labels)):
+                    key = frozenset({labels[i], labels[j]})
+                    court_pt = COURT_MODEL_INTERSECTIONS.get(key)
+                    if court_pt is None:
+                        continue
+
+                    p1a, p2a = matched[labels[i]]
+                    p1b, p2b = matched[labels[j]]
+                    img_pt = line_intersection(p1a, p2a, p1b, p2b)
+                    if img_pt is None:
+                        continue
+                    bmin_x, bmin_y, bmax_x, bmax_y = _CORRESPONDENCE_BOUNDS
+                    if not (bmin_x <= img_pt[0] <= bmax_x and bmin_y <= img_pt[1] <= bmax_y):
+                        continue
+
+                    frame_correspondences.append((img_pt, court_pt))
+
+            if len(frame_correspondences) < 4:
+                continue
+
+            # Estimate per-frame homography
+            img_pts = np.array(
+                [c[0] for c in frame_correspondences], dtype=np.float64,
+            )
+            court_pts = np.array(
+                [c[1] for c in frame_correspondences], dtype=np.float64,
+            )
+
+            method = cv2.RANSAC if len(frame_correspondences) > 4 else 0
+            try:
+                H, _mask = cv2.findHomography(
+                    court_pts.reshape(-1, 1, 2),
+                    img_pts.reshape(-1, 1, 2),
+                    method,
+                    ransacReprojThreshold=self.config.homography_ransac_threshold,
+                )
+            except cv2.error:
+                continue
+
+            if H is None:
+                continue
+
+            # Normalize so H[2,2] = 1
+            if abs(H[2, 2]) > 1e-10:
+                H = H / H[2, 2]
+
+            # Project court corners
+            corners = project_court_corners(H)
+
+            # Basic sanity: far side above near side
+            near_left, near_right, far_right, far_left = corners
+            far_mid_y = (far_left[1] + far_right[1]) / 2
+            near_mid_y = (near_left[1] + near_right[1]) / 2
+            if far_mid_y > near_mid_y:
+                continue  # Reject this frame's estimate
+
+            per_frame_corners.append(corners)
+
+        if len(per_frame_corners) < 5:
+            logger.info(
+                f"Temporal consensus: only {len(per_frame_corners)} valid frames "
+                f"(need ≥5), skipping"
+            )
+            return None
+
+        # Take median of corners across frames
+        corners_array = np.array(per_frame_corners, dtype=np.float64)  # (N, 4, 2)
+        median_corners = np.median(corners_array, axis=0)  # (4, 2)
+
+        # Reject outlier frames (> 2σ from median)
+        dists = np.sqrt(
+            np.sum((corners_array - median_corners[np.newaxis]) ** 2, axis=(1, 2))
+        )
+        sigma = np.std(dists)
+        if sigma > 1e-6:
+            inlier_mask = dists < 2 * sigma
+            if np.sum(inlier_mask) >= 5:
+                median_corners = np.median(corners_array[inlier_mask], axis=0)
+                n_outliers = len(per_frame_corners) - int(np.sum(inlier_mask))
+                logger.info(
+                    f"Temporal consensus: {n_outliers} outlier frames rejected"
+                )
+
+        # Extract corners
+        near_left = (float(median_corners[0, 0]), float(median_corners[0, 1]))
+        near_right = (float(median_corners[1, 0]), float(median_corners[1, 1]))
+        far_right = (float(median_corners[2, 0]), float(median_corners[2, 1]))
+        far_left = (float(median_corners[3, 0]), float(median_corners[3, 1]))
+
+        # Validate
+        valid, validation_warnings = self._validate_quadrilateral(
+            far_left, far_right, near_right, near_left,
+        )
+        if not valid:
+            logger.info("Temporal consensus: invalid quadrilateral, skipping")
+            return None
+
+        warnings = [f"Temporal consensus from {len(per_frame_corners)} frames"]
+        warnings.extend(validation_warnings)
+
+        corners_dict = [
+            {"x": near_left[0], "y": near_left[1]},
+            {"x": near_right[0], "y": near_right[1]},
+            {"x": far_right[0], "y": far_right[1]},
+            {"x": far_left[0], "y": far_left[1]},
+        ]
+
+        # Compute reprojection error from consensus homography
+        # Fit a final homography from the consensus corners
+        consensus_img = np.array(
+            [near_left, near_right, far_right, far_left], dtype=np.float64,
+        ).reshape(-1, 1, 2)
+        consensus_court = np.array(
+            COURT_MODEL_CORNERS, dtype=np.float64,
+        ).reshape(-1, 1, 2)
+        try:
+            H_final, _ = cv2.findHomography(consensus_court, consensus_img, 0)
+        except cv2.error:
+            H_final = None
+
+        correspondences = collect_court_correspondences(identified)
+        reproj_error = 0.0
+        if H_final is not None and correspondences:
+            reproj_error = self._compute_reprojection_error(H_final, correspondences)
+
+        confidence = self._compute_confidence(
+            identified, "temporal_consensus", valid,
+            reprojection_error=reproj_error,
+        )
+
+        logger.info(
+            f"Temporal consensus: {len(per_frame_corners)} frames, "
+            f"reproj_error={reproj_error:.4f}, confidence={confidence:.3f}"
+        )
+
+        return CourtDetectionResult(
+            corners=corners_dict,
+            confidence=confidence,
+            detected_lines=detected_lines,
+            warnings=warnings,
+            homography=H_final,
+            fitting_method="temporal_consensus",
+            n_correspondences=len(correspondences),
+            reprojection_error=reproj_error,
+        )
+
+    @staticmethod
+    def _compute_reprojection_error(
+        H: np.ndarray,
+        correspondences: list[tuple[tuple[float, float], tuple[float, float]]],
+    ) -> float:
+        """Mean reprojection error: project court pts through H, compare to image pts."""
+        if not correspondences:
+            return float("inf")
+
+        court_pts = np.array(
+            [c[1] for c in correspondences], dtype=np.float64,
+        ).reshape(-1, 1, 2)
+        img_pts_actual = np.array(
+            [c[0] for c in correspondences], dtype=np.float64,
+        )
+
+        projected = cv2.perspectiveTransform(court_pts, H).reshape(-1, 2)
+
+        errors = np.sqrt(np.sum((projected - img_pts_actual) ** 2, axis=1))
+        return float(np.mean(errors))
+
+    def _fit_court_model_legacy(
+        self,
+        identified: dict[str, tuple[DetectedLine, list[tuple[float, float, float, float]]]],
+    ) -> CourtDetectionResult:
+        """Legacy court model fitting via line intersections + near-corner heuristics."""
         warnings: list[str] = []
         detected_lines = [dl for dl, _ in identified.values()]
 
@@ -852,14 +1303,6 @@ class CourtDetector:
         if near_method == "none" and left_sl and right_sl:
             vp = line_intersection(left_sl.p1, left_sl.p2, right_sl.p1, right_sl.p2)
             if vp:
-                # Use aspect ratio: the court is 1:2, so near corners are
-                # at distance 2x from far baseline as measured along sidelines.
-                # We use the parametric position along each sideline:
-                # far corner is at t=0, vanishing point at t=1.
-                # For the aspect ratio to hold, we need to find t_near such that
-                # the court length/width ratio is correct.
-
-                # Along left sideline
                 dx_l = vp[0] - far_left[0]
                 dy_l = vp[1] - far_left[1]
                 far_baseline_len = math.sqrt(
@@ -868,14 +1311,8 @@ class CourtDetector:
                 )
 
                 if far_baseline_len > 0.01:
-                    # The far baseline width in image corresponds to 8m.
-                    # Court length is 16m. Due to perspective, we estimate
-                    # near corners by extrapolating sidelines away from VP.
-                    # Use negative t (opposite direction from VP).
-                    # Heuristic: near corner is at t_near = -(far_baseline_len * aspect_ratio) / sideline_length
                     sl_len_l = math.sqrt(dx_l ** 2 + dy_l ** 2)
                     if sl_len_l > 0.01:
-                        # Scale factor based on perspective
                         t_near_l = -(far_baseline_len * self.config.aspect_ratio) / sl_len_l
                         near_left = (far_left[0] + t_near_l * dx_l, far_left[1] + t_near_l * dy_l)
 
@@ -921,6 +1358,7 @@ class CourtDetector:
             confidence=confidence,
             detected_lines=detected_lines,
             warnings=warnings,
+            fitting_method="legacy",
         )
 
     def _validate_quadrilateral(
@@ -974,18 +1412,19 @@ class CourtDetector:
     def _compute_confidence(
         self,
         identified: dict[str, tuple[DetectedLine, list[tuple[float, float, float, float]]]],
-        near_method: str,
+        fitting_method: str,
         geometry_valid: bool,
+        reprojection_error: float = 0.0,
     ) -> float:
         """Compute confidence score 0-1."""
-        # Lines detected (weight 0.30)
+        # Lines detected (weight 0.25)
         expected_lines = {"far_baseline", "left_sideline", "right_sideline", "center_line"}
         lines_found = sum(1 for k in expected_lines if k in identified)
         if "near_baseline" in identified:
             lines_found = min(4, lines_found + 1)
         line_score = lines_found / 4.0
 
-        # Temporal support (weight 0.25)
+        # Temporal support (weight 0.20)
         supports = [dl.support for dl, _ in identified.values()]
         max_support = self.config.n_sample_frames
         median_support = float(np.median(supports)) if supports else 0.0
@@ -993,27 +1432,39 @@ class CourtDetector:
 
         # Geometric consistency (weight 0.25)
         geo_score = 1.0 if geometry_valid else 0.3
-        if near_method == "near_baseline":
+        if fitting_method == "homography":
             geo_score *= 1.0
-        elif near_method == "harmonic_conjugate":
+        elif fitting_method in ("homography_vp", "temporal_consensus"):
+            geo_score *= 0.90
+        elif fitting_method == "near_baseline":
+            geo_score *= 1.0
+        elif fitting_method == "harmonic_conjugate":
             geo_score *= 0.85
-        elif near_method == "aspect_ratio":
+        elif fitting_method == "aspect_ratio":
             geo_score *= 0.5
 
-        # Far baseline coverage (weight 0.20)
+        # Far baseline coverage (weight 0.15)
         far_bl = identified.get("far_baseline")
         if far_bl:
             p1, p2 = far_bl[0].p1, far_bl[0].p2
             bl_len = math.sqrt((p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2)
-            coverage_score = min(1.0, bl_len / 0.5)  # Expect baseline ~50% of frame width
+            coverage_score = min(1.0, bl_len / 0.5)
         else:
             coverage_score = 0.0
 
+        # Reprojection accuracy (weight 0.15) — only for homography-based methods
+        if fitting_method in ("homography", "homography_vp", "temporal_consensus"):
+            # Good reproj error < 0.01 (1% of frame), bad > 0.05
+            reproj_score = max(0.0, 1.0 - reprojection_error / 0.05)
+        else:
+            reproj_score = 0.5  # neutral for legacy methods
+
         confidence = (
-            0.30 * line_score
-            + 0.25 * support_score
+            0.25 * line_score
+            + 0.20 * support_score
             + 0.25 * geo_score
-            + 0.20 * coverage_score
+            + 0.15 * coverage_score
+            + 0.15 * reproj_score
         )
 
         return round(min(1.0, max(0.0, confidence)), 3)
