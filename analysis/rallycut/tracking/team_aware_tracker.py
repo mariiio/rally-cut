@@ -40,11 +40,15 @@ class TeamAwareConfig:
     min_clearance_from_split: float = 0.05  # Each team's median must be >= this from split_y
 
     # Net interaction freeze (Tier 1: preventive identity preservation)
-    enable_freeze: bool = True
-    freeze_proximity: float = 0.12         # Center distance < this triggers freeze (normalized)
+    # Disabled by default — single-frame and short overlaps during normal net
+    # play can cause track fragmentation. Needs more work on duration gating
+    # and scoring before enabling. See retrack_labeled_rallies.py results.
+    enable_freeze: bool = False
+    freeze_proximity: float = 0.08         # Center distance < this triggers freeze (normalized)
     freeze_net_band: float = 0.10          # Both tracks must be within this of split_y
     freeze_penalty: float = 1e6            # Hard barrier in cost matrix
     freeze_cooldown_frames: int = 10       # Keep freeze N frames after overlap ends
+    freeze_min_duration: int = 3           # Min consecutive overlap frames before penalty fires
     freeze_min_team_separation: float = 0.05   # Relaxed vs 0.08 for soft penalty
     freeze_min_clearance: float = 0.03         # Relaxed vs 0.05 for soft penalty
 
@@ -194,9 +198,17 @@ class NetInteractionDetector:
         return False
 
     def get_frozen_pairs(self) -> set[tuple[int, int]]:
-        """Return currently frozen (track_a, track_b) pairs."""
+        """Return currently frozen pairs that have met the minimum duration gate.
+
+        Only returns pairs that have been overlapping for >= freeze_min_duration
+        frames. This prevents single-frame bbox overlaps from injecting 1e6
+        cost spikes into BoT-SORT, which would fragment tracks and create IDsw.
+        """
+        min_dur = self.config.freeze_min_duration
         return {
-            (f.track_a, f.track_b) for f in self._active_freezes.values()
+            (f.track_a, f.track_b)
+            for f in self._active_freezes.values()
+            if (f.last_overlap_frame - f.start_frame) >= min_dur - 1
         }
 
     def get_all_frozen_interactions(self) -> list[ActiveFreeze]:
