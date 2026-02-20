@@ -452,24 +452,58 @@ class TestNetInteractionFreeze:
         return tracker
 
     def test_freeze_activates_on_cross_team_overlap_near_net(self) -> None:
-        """Cross-team bbox overlap near the net should activate a freeze."""
+        """Cross-team bbox overlap near the net should activate a freeze after min_duration."""
         tracker = self._make_tracker_with_freeze(split_y=0.50)
         assert tracker.interaction_detector is not None
 
         # Both tracks near the net (within freeze_net_band=0.10 of split_y=0.50)
-        # and close enough (dist < freeze_proximity=0.12)
+        # and close enough (dist < freeze_proximity=0.08)
         positions = [
             FakePositionWithBbox(track_id=1, y=0.52, x=0.50),  # near team, at net
             FakePositionWithBbox(track_id=2, y=0.48, x=0.50),  # far team, at net
         ]
+
+        # Single frame: freeze internally tracked but NOT yet in get_frozen_pairs
+        # (needs freeze_min_duration=3 consecutive frames)
         tracker.interaction_detector.update(
             positions, tracker.team_assignments, frame_num=100
+        )
+        assert len(tracker.interaction_detector.get_frozen_pairs()) == 0
+
+        # After min_duration frames of overlap, freeze becomes active
+        tracker.interaction_detector.update(
+            positions, tracker.team_assignments, frame_num=101
+        )
+        tracker.interaction_detector.update(
+            positions, tracker.team_assignments, frame_num=102
         )
 
         frozen = tracker.interaction_detector.get_frozen_pairs()
         assert len(frozen) == 1
         pair = next(iter(frozen))
         assert set(pair) == {1, 2}
+
+    def test_single_frame_overlap_not_frozen(self) -> None:
+        """Single-frame bbox overlap should NOT produce a frozen pair (min_duration gate)."""
+        tracker = self._make_tracker_with_freeze(split_y=0.50)
+        detector = tracker.interaction_detector
+        assert detector is not None
+
+        overlap = [
+            FakePositionWithBbox(track_id=1, y=0.52, x=0.50),
+            FakePositionWithBbox(track_id=2, y=0.48, x=0.50),
+        ]
+        separated = [
+            FakePositionWithBbox(track_id=1, y=0.70, x=0.50),
+            FakePositionWithBbox(track_id=2, y=0.30, x=0.50),
+        ]
+
+        # One frame of overlap, then separate
+        detector.update(overlap, tracker.team_assignments, frame_num=100)
+        detector.update(separated, tracker.team_assignments, frame_num=101)
+
+        # Single-frame overlap: internally tracked but not in get_frozen_pairs
+        assert len(detector.get_frozen_pairs()) == 0
 
     def test_freeze_ignored_away_from_net(self) -> None:
         """Cross-team overlap far from net should NOT trigger freeze."""
@@ -521,12 +555,13 @@ class TestNetInteractionFreeze:
         detector = tracker.interaction_detector
         assert detector is not None
 
-        # Activate freeze
+        # Activate freeze (need 3 consecutive frames to pass min_duration gate)
         overlap_positions = [
             FakePositionWithBbox(track_id=1, y=0.52, x=0.50),
             FakePositionWithBbox(track_id=2, y=0.48, x=0.50),
         ]
-        detector.update(overlap_positions, tracker.team_assignments, frame_num=100)
+        for f in range(100, 103):
+            detector.update(overlap_positions, tracker.team_assignments, frame_num=f)
         assert len(detector.get_frozen_pairs()) == 1
 
         # Tracks separate (no overlap)
@@ -536,12 +571,12 @@ class TestNetInteractionFreeze:
         ]
 
         # During cooldown: freeze should still be active
-        for f in range(101, 106):
+        for f in range(103, 108):
             detector.update(separated_positions, tracker.team_assignments, frame_num=f)
             assert len(detector.get_frozen_pairs()) == 1, f"Should be frozen at frame {f}"
 
         # After cooldown: freeze should expire
-        detector.update(separated_positions, tracker.team_assignments, frame_num=111)
+        detector.update(separated_positions, tracker.team_assignments, frame_num=114)
         assert len(detector.get_frozen_pairs()) == 0
 
     def test_freeze_penalty_in_matrix(self) -> None:
@@ -551,11 +586,13 @@ class TestNetInteractionFreeze:
         assert detector is not None
 
         # Activate freeze on tracks 1 (near) and 2 (far)
+        # Need min_duration=3 consecutive frames
         overlap_positions = [
             FakePositionWithBbox(track_id=1, y=0.52, x=0.50),
             FakePositionWithBbox(track_id=2, y=0.48, x=0.50),
         ]
-        detector.update(overlap_positions, tracker.team_assignments, frame_num=100)
+        for f in range(100, 103):
+            detector.update(overlap_positions, tracker.team_assignments, frame_num=f)
 
         # Track 1 (near), Track 2 (far)
         tracks = [
@@ -601,12 +638,13 @@ class TestNetInteractionFreeze:
         detector = tracker.interaction_detector
         assert detector is not None
 
-        # Activate freeze between tracks 1 and 2
+        # Activate freeze between tracks 1 and 2 (need 3 consecutive frames)
         overlap_positions = [
             FakePositionWithBbox(track_id=1, y=0.52, x=0.50),
             FakePositionWithBbox(track_id=2, y=0.48, x=0.50),
         ]
-        detector.update(overlap_positions, tracker.team_assignments, frame_num=100)
+        for f in range(100, 103):
+            detector.update(overlap_positions, tracker.team_assignments, frame_num=f)
 
         # Track 3 (near team) with detections on both sides
         tracks = [FakeSTrack(track_id=3, tlwh=(0, 600, 50, 100))]
@@ -660,19 +698,20 @@ class TestNetInteractionFreeze:
         detector = tracker.interaction_detector
         assert detector is not None
 
-        # Activate freeze
+        # Activate freeze (3 consecutive frames for min_duration)
         overlap = [
             FakePositionWithBbox(track_id=1, y=0.52, x=0.50),
             FakePositionWithBbox(track_id=2, y=0.48, x=0.50),
         ]
-        detector.update(overlap, tracker.team_assignments, frame_num=100)
+        for f in range(100, 103):
+            detector.update(overlap, tracker.team_assignments, frame_num=f)
 
         # Separate and let cooldown expire
         separated = [
             FakePositionWithBbox(track_id=1, y=0.70, x=0.50),
             FakePositionWithBbox(track_id=2, y=0.30, x=0.50),
         ]
-        for f in range(101, 104):
+        for f in range(103, 106):
             detector.update(separated, tracker.team_assignments, frame_num=f)
 
         assert len(detector.get_frozen_pairs()) == 0  # Active: expired
