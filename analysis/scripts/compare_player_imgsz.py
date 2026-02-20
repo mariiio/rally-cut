@@ -47,6 +47,11 @@ VARIANTS: dict[str, dict[str, Any]] = {
         "imgsz": 1280,
         "description": "Nano model at 2x resolution",
     },
+    "yolo11s_1280": {
+        "yolo_model": "yolo11s",
+        "imgsz": 1280,
+        "description": "YOLO11 Small at 2x resolution",
+    },
     "yolo11m_1280": {
         "yolo_model": "yolo11m",
         "imgsz": 1280,

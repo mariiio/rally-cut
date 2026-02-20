@@ -1,10 +1,10 @@
 """
-Player tracking using YOLOv8 + BoT-SORT for volleyball videos.
+Player tracking using YOLO + BoT-SORT for volleyball videos.
 
-Uses YOLOv8 for person detection with BoT-SORT for temporal tracking.
+Uses YOLO for person detection with BoT-SORT for temporal tracking.
 BoT-SORT adds camera motion compensation on top of ByteTrack, reducing ID switches.
-Default model is yolov8n (nano) for best speed/accuracy tradeoff (~23 FPS, 88% F1).
-Use --yolo-model yolov8m for best accuracy at 3x slower speed.
+Default model is yolo11s (small) at 1280px for best accuracy/speed tradeoff
+(92.5% F1, 91.3% HOTA, 6.1 FPS, 96.3% far-court recall).
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Model configuration
-MODEL_NAME = "yolov8n.pt"  # YOLOv8 nano - fastest with good accuracy (88% F1)
+MODEL_NAME = "yolo11s.pt"  # YOLO11 small - best accuracy/speed tradeoff (92.5% F1, 6.1 FPS)
 PERSON_CLASS_ID = 0  # COCO class ID for person
 DEFAULT_CONFIDENCE = 0.15  # Lower threshold for detection (tuned via grid search)
 DEFAULT_IOU = 0.45  # NMS IoU threshold
@@ -352,22 +352,22 @@ def compute_court_roi_from_ball(
     return roi, quality_msg
 
 # Available YOLO model sizes (larger = more accurate but slower)
-# Benchmark on beach volleyball (8.8s rally):
-#   yolov8n: 23 FPS, 88.0% F1, 82.4% recall (default - best speed/accuracy)
-#   yolov8s: 15 FPS, 83.8% F1, 78.7% recall
-#   yolov8m:  7 FPS, 89.2% F1, 86.4% recall (best accuracy, 3x slower)
-#   yolov8l:  5 FPS, 88.4% F1, 85.5% recall (no benefit over medium)
+# Benchmark on beach volleyball (10 labeled rallies, imgsz=1280):
+#   yolo11s:  6.1 FPS, 92.5% F1, 91.3% HOTA (default - best accuracy/speed)
+#   yolov8n:  7.7 FPS, 79.4% F1, 80.3% HOTA (faster, lower far-court recall)
+#   yolo11m:  2.4 FPS, 77.0% F1, 82.4% HOTA (mid-recall regression)
+#   yolov8m:  7.0 FPS, 89.2% F1 (imgsz=640 benchmark)
 YOLO_MODELS = {
-    "yolov8n": "yolov8n.pt",  # Nano: 3.2M params, fastest (default)
+    "yolov8n": "yolov8n.pt",  # Nano: 3.2M params, fastest
     "yolov8s": "yolov8s.pt",  # Small: 11.2M params
-    "yolov8m": "yolov8m.pt",  # Medium: 25.9M params, best accuracy
+    "yolov8m": "yolov8m.pt",  # Medium: 25.9M params
     "yolov8l": "yolov8l.pt",  # Large: 43.7M params
     "yolo11n": "yolo11n.pt",  # YOLO11 Nano: 2.6M params
-    "yolo11s": "yolo11s.pt",  # YOLO11 Small: 9.4M params
+    "yolo11s": "yolo11s.pt",  # YOLO11 Small: 9.4M params (default)
     "yolo11m": "yolo11m.pt",  # YOLO11 Medium: 20.1M params
     "yolo11l": "yolo11l.pt",  # YOLO11 Large: 25.3M params
 }
-DEFAULT_YOLO_MODEL = "yolov8n"
+DEFAULT_YOLO_MODEL = "yolo11s"
 
 # Tracker configs for better tracking stability
 BYTETRACK_CONFIG = Path(__file__).parent / "bytetrack_volleyball.yaml"
@@ -701,7 +701,7 @@ class PlayerTracker:
             tracker: Tracking algorithm. Options:
                     - "bytetrack": ByteTrack (motion-based)
                     - "botsort": BoT-SORT (adds camera motion compensation, default)
-            yolo_model: YOLO model size (default: yolov8n). Options:
+            yolo_model: YOLO model size (default: yolo11s). Options:
                        yolov8n/s/m/l and yolo11n/s/m/l.
             with_reid: Enable BoT-SORT ReID for appearance-based re-identification.
                       Enabled by default (reduces ID switches by ~40-60%).

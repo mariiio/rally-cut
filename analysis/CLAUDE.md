@@ -280,19 +280,15 @@ API triggers Modal via webhook. Results posted back on completion.
 
 ## Player Tracking
 
-Uses YOLOv8 for person detection with BoT-SORT for temporal tracking. BoT-SORT with ReID (enabled by default) reduces ID switches when players cross paths. GMC (camera motion compensation) is disabled for fixed tripod cameras.
+Uses YOLO for person detection with BoT-SORT for temporal tracking. BoT-SORT with ReID (enabled by default) reduces ID switches when players cross paths. GMC (camera motion compensation) is disabled for fixed tripod cameras.
 
-**YOLO Model Options:**
-| Model | FPS | F1 | Recall | Use Case |
-|-------|-----|-----|--------|----------|
-| **yolov8n** | 23 | 88.0% | 82.4% | Default - best speed/accuracy tradeoff |
-| yolov8s | 15 | 83.8% | 78.7% | - |
-| yolov8m | 7 | 89.2% | 86.4% | Best accuracy (3x slower) |
-| yolov8l | 5 | 88.4% | 85.5% | No benefit over medium |
-| yolo11n | 23 | 88.5% | 83.1% | Marginal +0.9pp HOTA over yolov8n |
-| yolo11s | 14 | 89.0% | 84.2% | Best overall metrics, 1.6x slower |
-| yolo11m | 7 | - | - | Untested |
-| yolo11l | 5 | - | - | Untested |
+**YOLO Model Options (imgsz=1280):**
+| Model | FPS | F1 | HOTA | Far Recall | Use Case |
+|-------|-----|-----|------|------------|----------|
+| **yolo11s** | 6.1 | 92.5% | 91.3% | 96.3% | Default - best accuracy/speed tradeoff |
+| yolov8n | 7.7 | 79.4% | 80.3% | 63.5% | Faster, lower far-court recall |
+| yolo11m | 2.4 | 77.0% | 82.4% | 89.4% | Mid-recall regression, slow |
+| yolov8n@640 | 15.3 | 74.1% | 79.2% | 55.3% | Fastest, lowest accuracy |
 
 **Tracker Options:**
 | Tracker | ID | Strengths | Use Case |
@@ -307,11 +303,11 @@ Uses YOLOv8 for person detection with BoT-SORT for temporal tracking. BoT-SORT w
 | CLAHE | `clahe` | Contrast enhancement via LAB color space | High-contrast sand backgrounds (tested, not beneficial) |
 
 ```bash
-# Default tracking (yolov8n + BoT-SORT)
+# Default tracking (yolo11s + BoT-SORT)
 uv run rallycut track-players video.mp4
 
-# Use medium model for best accuracy (3x slower)
-uv run rallycut track-players video.mp4 --yolo-model yolov8m
+# Use nano model for faster tracking (lower accuracy)
+uv run rallycut track-players video.mp4 --yolo-model yolov8n
 
 # Use ByteTrack instead of BoT-SORT
 uv run rallycut track-players video.mp4 --tracker bytetrack
