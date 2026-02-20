@@ -20,6 +20,7 @@ Architecture:
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -29,6 +30,11 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 from rallycut.tracking.ball_features import ServerDetectionResult, detect_server
+from rallycut.tracking.identity_anchor import (
+    ServeAnchor,
+    ServiceOrderState,
+    detect_serve_anchor,
+)
 from rallycut.tracking.player_features import (
     PlayerAppearanceProfile,
     TrackAppearanceStats,
@@ -63,6 +69,9 @@ class MatchPlayerState:
     # Track to player ID assignments for current rally
     # track_id -> player_id
     current_assignments: dict[int, int] = field(default_factory=dict)
+
+    # Service order tracking for alternation prediction
+    service_order: ServiceOrderState = field(default_factory=ServiceOrderState)
 
     def initialize_players(self) -> None:
         """Initialize 4 player profiles for beach volleyball."""
@@ -154,7 +163,7 @@ class MatchPlayerTracker:
         rally_index = self.rally_count
         self.rally_count += 1
 
-        # Step 1: Identify server (if ball data available)
+        # Step 1: Identify server using both methods
         server_result: ServerDetectionResult | None = None
         if ball_positions and player_positions:
             server_result = detect_server(
@@ -162,6 +171,29 @@ class MatchPlayerTracker:
                 rally_start_frame=0,
                 calibrator=self.calibrator,
             )
+
+        # Step 1b: Position-based serve anchor (higher recall)
+        serve_anchor: ServeAnchor | None = None
+        if player_positions:
+            # Build team assignments from court_split_y
+            team_for_anchor: dict[int, int] = {}
+            if court_split_y is not None:
+                track_ys: dict[int, list[float]] = defaultdict(list)
+                for p in player_positions:
+                    if p.track_id >= 0:
+                        track_ys[p.track_id].append(p.y)
+                for tid, ys in track_ys.items():
+                    avg_y = float(np.mean(ys))
+                    team_for_anchor[tid] = 0 if avg_y > court_split_y else 1
+
+            if team_for_anchor:
+                serve_anchor = detect_serve_anchor(
+                    player_positions,
+                    team_for_anchor,
+                    ball_positions=ball_positions,
+                    calibrator=self.calibrator,
+                    serve_window_frames=30,
+                )
 
         # Step 2: Split tracks by team (near/far court), keep top 2 per side
         near_tracks, far_tracks = self._split_tracks_by_court(
@@ -191,12 +223,23 @@ class MatchPlayerTracker:
         # Step 6: Update player profiles with new appearance data
         self._update_profiles(track_stats, track_to_player)
 
-        # Step 7: Record server if detected
+        # Step 7: Record server if detected (use serve_anchor as fallback)
         server_player_id = None
         if server_result and server_result.track_id >= 0:
             server_player_id = track_to_player.get(server_result.track_id)
-            if server_player_id:
-                self.state.serve_player_history.append(server_player_id)
+        elif serve_anchor and serve_anchor.server_track_id >= 0:
+            server_player_id = track_to_player.get(serve_anchor.server_track_id)
+
+        if server_player_id:
+            self.state.serve_player_history.append(server_player_id)
+            # Track service order for alternation prediction
+            server_team = self.state.current_side_assignment.get(
+                server_player_id, -1
+            )
+            if server_team >= 0 and serve_anchor:
+                self.state.service_order.record_serve(
+                    rally_index, server_team, serve_anchor.server_track_id
+                )
 
         # Store current assignments
         self.state.current_assignments = track_to_player
