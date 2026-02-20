@@ -2,13 +2,14 @@
 
 Downloads video files, runs full tracking (YOLO + BoT-SORT + post-processing
 with court identity resolution), evaluates against GT, and compares with
-the stored DB baseline. Does NOT save results to DB.
+the stored DB baseline.
 
 Usage:
     uv run python scripts/retrack_labeled_rallies.py
     uv run python scripts/retrack_labeled_rallies.py --rally <rally-id>
     uv run python scripts/retrack_labeled_rallies.py --stride 2  # faster (skip frames)
     uv run python scripts/retrack_labeled_rallies.py --dry-run   # just check video availability
+    uv run python scripts/retrack_labeled_rallies.py --save      # save new predictions to DB
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from rallycut.evaluation.tracking.db import (
     TrackingEvaluationRally,
     get_video_path,
     load_labeled_rallies,
+    save_predictions,
 )
 from rallycut.evaluation.tracking.metrics import (
     TrackingEvaluationResult,
@@ -78,6 +80,9 @@ def _adjust_frame_numbers(
     for pos in result.positions:
         pos.frame_number = pos.frame_number - start_frame
 
+    for pos in result.raw_positions:
+        pos.frame_number = pos.frame_number - start_frame
+
     if result.ball_positions:
         for bp in result.ball_positions:
             bp.frame_number = bp.frame_number - start_frame
@@ -127,6 +132,10 @@ def main() -> None:
         help="Frame stride (1=all, 2=every other frame for 60fps videos)",
     )
     parser.add_argument("--dry-run", action="store_true", help="Just check video availability")
+    parser.add_argument(
+        "--save", action="store_true",
+        help="Save new predictions to DB (overwrites stored predictions)",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -218,12 +227,17 @@ def main() -> None:
         delta_hota = nm["HOTA"] - bm["HOTA"]
         delta_idsw = nm["IDsw"] - bm["IDsw"]
 
+        saved = ""
+        if args.save:
+            save_predictions(rally.rally_id, new_predictions, elapsed * 1000)
+            saved = " [SAVED]"
+
         print(
             f"{rally_short:<14} "
             f"{bm['HOTA']:>8.1f}% {nm['HOTA']:>8.1f}% {delta_hota:>+6.1f}% "
             f"{bm['IDsw']:>9} {nm['IDsw']:>9} {delta_idsw:>+7d} "
             f"{bm['F1']:>7.1f}% {nm['F1']:>7.1f}% "
-            f"{elapsed:>5.1f}s"
+            f"{elapsed:>5.1f}s{saved}"
         )
 
         base_hota = baseline_result.hota_metrics.hota if baseline_result.hota_metrics else 0.0

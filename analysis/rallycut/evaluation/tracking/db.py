@@ -591,6 +591,77 @@ def load_all_rallies(
     return results
 
 
+def save_predictions(
+    rally_id: str,
+    result: PlayerTrackingResult,
+    processing_time_ms: float = 0.0,
+) -> None:
+    """Save re-tracked predictions to the player_tracks table.
+
+    Updates positions, ball positions, primary track IDs, and metadata.
+    Preserves ground_truth_json and other non-prediction fields.
+
+    Args:
+        rally_id: The rally ID to update.
+        result: The new tracking result.
+        processing_time_ms: Time taken for re-tracking.
+    """
+    import json
+
+    positions_json = json.dumps([p.to_dict() for p in result.positions])
+    raw_positions_json = json.dumps(
+        [p.to_dict() for p in result.raw_positions]
+    ) if result.raw_positions else None
+    ball_positions_json = json.dumps(
+        [bp.to_dict() for bp in result.ball_positions]
+    ) if result.ball_positions else None
+    primary_track_ids = json.dumps(result.primary_track_ids)
+    quality_report_json = json.dumps(
+        result.quality_report.to_dict()
+    ) if result.quality_report else None
+
+    query = """
+        UPDATE player_tracks SET
+            positions_json = %s::jsonb,
+            raw_positions_json = %s::jsonb,
+            ball_positions_json = %s::jsonb,
+            primary_track_ids = %s::jsonb,
+            court_split_y = %s,
+            frame_count = %s,
+            fps = %s,
+            model_version = %s,
+            processing_time_ms = %s,
+            quality_report_json = %s::jsonb,
+            completed_at = NOW()
+        WHERE rally_id = %s
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, [
+                positions_json,
+                raw_positions_json,
+                ball_positions_json,
+                primary_track_ids,
+                result.court_split_y,
+                result.frame_count,
+                result.video_fps,
+                result.model_version,
+                int(processing_time_ms),
+                quality_report_json,
+                rally_id,
+            ])
+            if cur.rowcount == 0:
+                raise ValueError(f"No player_tracks row found for rally {rally_id}")
+        conn.commit()
+
+    logger.info(
+        f"Saved predictions for rally {rally_id}: "
+        f"{len(result.positions)} positions, "
+        f"{len(result.ball_positions)} ball positions"
+    )
+
+
 def load_court_calibration(video_id: str) -> list[dict[str, float]] | None:
     """Load court calibration corners for a video.
 
