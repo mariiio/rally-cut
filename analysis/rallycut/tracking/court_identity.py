@@ -26,8 +26,10 @@ from rallycut.court.calibration import COURT_LENGTH, CourtCalibrator
 from rallycut.tracking.player_tracker import PlayerPosition
 
 if TYPE_CHECKING:
+    from rallycut.tracking.color_repair import ColorHistogramStore
     from rallycut.tracking.contact_detector import ContactSequence
     from rallycut.tracking.identity_anchor import ServeAnchor
+    from rallycut.tracking.team_aware_tracker import ActiveFreeze
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +49,10 @@ class CourtIdentityConfig:
     pre_interaction_window: int = 5  # frames before interaction for motion continuity
 
     # Hypothesis scoring weights
-    weight_side_of_net: float = 0.45
-    weight_motion_smoothness: float = 0.35
-    weight_bbox_size: float = 0.20
+    weight_side_of_net: float = 0.40
+    weight_motion_smoothness: float = 0.25
+    weight_bbox_size: float = 0.15
+    weight_color: float = 0.20
 
     # Decision thresholds
     confidence_margin: float = 0.15  # swap score must exceed no-swap by this much
@@ -95,6 +98,7 @@ class IdentityHypothesis:
     side_of_net_score: float = 0.0
     motion_smoothness_score: float = 0.0
     bbox_size_score: float = 0.0
+    color_score: float = 0.0  # Color histogram consistency
     grammar_score: float = 0.0  # Phase 3: touch grammar
     serve_anchor_score: float = 0.0  # Phase 2: serve anchoring
 
@@ -135,6 +139,8 @@ class CourtIdentityResolver:
         team_assignments: dict[int, int],
         contact_sequence: ContactSequence | None = None,
         serve_anchor: ServeAnchor | None = None,
+        color_store: ColorHistogramStore | None = None,
+        frozen_interactions: list[ActiveFreeze] | None = None,
     ) -> tuple[list[PlayerPosition], list[SwapDecision]]:
         """Run court-plane identity resolution.
 
@@ -143,6 +149,9 @@ class CourtIdentityResolver:
             team_assignments: track_id -> team (0=near, 1=far).
             contact_sequence: Optional contact sequence for grammar scoring.
             serve_anchor: Optional serve anchor for identity anchoring.
+            color_store: Optional color histogram store for appearance scoring.
+            frozen_interactions: Optional list of freeze periods from in-tracker
+                detector. Used to add no-swap bonus for freeze-protected interactions.
 
         Returns:
             Tuple of (positions, list of swap decisions made).
@@ -157,9 +166,21 @@ class CourtIdentityResolver:
         # Step 1: Project all positions to court coordinates
         court_tracks = self._build_court_tracks(positions)
 
+        # Compute effective net Y from actual team positions in court space.
+        # The hardcoded NET_Y=8.0 assumes a specific calibration convention
+        # (near baseline at court_y=0, far baseline at court_y=16). Many
+        # calibrations project both teams to the same side of 8.0m due to
+        # corner ordering differences. The midpoint between team medians
+        # is a robust estimate of the net position regardless of convention.
+        effective_net_y = self._estimate_effective_net_y(
+            court_tracks, team_assignments
+        )
+        if effective_net_y is None:
+            return positions, []
+
         # Step 2: Detect net interactions
         interactions = self._detect_net_interactions(
-            court_tracks, team_assignments
+            court_tracks, team_assignments, effective_net_y
         )
 
         if not interactions:
@@ -179,8 +200,11 @@ class CourtIdentityResolver:
         for interaction in interactions:
             decision = self._score_interaction(
                 interaction, court_tracks, image_positions, team_assignments,
+                effective_net_y=effective_net_y,
                 contact_sequence=contact_sequence,
                 serve_anchor=serve_anchor,
+                color_store=color_store,
+                frozen_interactions=frozen_interactions,
             )
             decisions.append(decision)
 
@@ -278,7 +302,7 @@ class CourtIdentityResolver:
         """Validate team separation using court-space projection.
 
         Returns True if teams are well-separated in court space,
-        False if they project to the same side (broken homography),
+        False if projections are unreliable or teams overlap,
         None if projection fails.
         """
         try:
@@ -293,28 +317,77 @@ class CourtIdentityResolver:
 
         court_sep = abs(near_court[1] - far_court[1])
 
-        # Verify teams project to opposite sides of net with >2m gap.
-        # "Near" in image space may correspond to either side of court
-        # depending on camera position, so just check they're on different sides.
-        on_opposite_sides = (
-            (near_court[1] < NET_Y and far_court[1] > NET_Y)
-            or (near_court[1] > NET_Y and far_court[1] < NET_Y)
-        )
+        # Reject wildly extrapolated projections (> 3x court length from origin).
+        # These indicate the homography is unreliable in this image region.
+        max_reasonable = COURT_LENGTH * 3  # 48m
+        if abs(near_court[1]) > max_reasonable or abs(far_court[1]) > max_reasonable:
+            logger.info(
+                f"Court identity: court-space projection unreliable "
+                f"(near_court_y={near_court[1]:.1f}, "
+                f"far_court_y={far_court[1]:.1f})"
+            )
+            return False
 
-        if on_opposite_sides and court_sep > 2.0:
+        # Teams must be well-separated in court space (> 4m = quarter court).
+        # On a 16m court, same-side players are at most ~8m apart.
+        # This check is convention-agnostic: doesn't require teams to be on
+        # opposite sides of the hardcoded NET_Y=8.0m, since many calibrations
+        # project both teams to the same side due to corner ordering.
+        if court_sep > 4.0:
             logger.info(
                 f"Court identity: court-space validation passed "
                 f"(image sep={abs(near_median_y - far_median_y):.3f}, "
-                f"court sep={court_sep:.1f}m)"
+                f"court sep={court_sep:.1f}m, near_court_y={near_court[1]:.1f}, "
+                f"far_court_y={far_court[1]:.1f})"
             )
             return True
 
         logger.info(
-            f"Court identity: court-space validation failed — teams not on "
-            f"opposite sides (near_court_y={near_court[1]:.1f}, "
+            f"Court identity: court-space validation failed — insufficient "
+            f"court separation (near_court_y={near_court[1]:.1f}, "
             f"far_court_y={far_court[1]:.1f}, court sep={court_sep:.1f}m)"
         )
         return False
+
+    def _estimate_effective_net_y(
+        self,
+        court_tracks: dict[int, CourtTrack],
+        team_assignments: dict[int, int],
+    ) -> float | None:
+        """Estimate the net Y position in court space from actual team positions.
+
+        Many calibrations don't follow the standard convention (near=0, far=16),
+        so the hardcoded NET_Y=8.0 is unreliable. Instead, compute the midpoint
+        between the two teams' median court_y positions.
+
+        Returns effective net Y, or None if insufficient data.
+        """
+        near_ys: list[float] = []
+        far_ys: list[float] = []
+
+        for tid, ct in court_tracks.items():
+            team = team_assignments.get(tid, -1)
+            if team < 0 or not ct.positions:
+                continue
+            median_cy = float(np.median([cy for _, cy in ct.positions.values()]))
+            if team == 0:
+                near_ys.append(median_cy)
+            else:
+                far_ys.append(median_cy)
+
+        if not near_ys or not far_ys:
+            return None
+
+        near_median = float(np.median(near_ys))
+        far_median = float(np.median(far_ys))
+        effective_net_y = (near_median + far_median) / 2.0
+
+        logger.debug(
+            f"Effective net_y={effective_net_y:.1f}m "
+            f"(near={near_median:.1f}m, far={far_median:.1f}m, "
+            f"hardcoded NET_Y={NET_Y:.1f}m)"
+        )
+        return effective_net_y
 
     def _build_court_tracks(
         self,
@@ -349,10 +422,12 @@ class CourtIdentityResolver:
         self,
         court_tracks: dict[int, CourtTrack],
         team_assignments: dict[int, int],
+        effective_net_y: float | None = None,
     ) -> list[NetInteraction]:
         """Detect windows where cross-team tracks are both near the net."""
         interactions: list[NetInteraction] = []
         net_dist = self.config.net_approach_distance
+        net_y = effective_net_y if effective_net_y is not None else NET_Y
 
         # Get cross-team pairs
         near_tracks = [
@@ -385,8 +460,8 @@ class CourtIdentityResolver:
                     near_pos = near_ct.positions[frame]
                     far_pos = far_ct.positions[frame]
 
-                    near_at_net = abs(near_pos[1] - NET_Y) < net_dist
-                    far_at_net = abs(far_pos[1] - NET_Y) < net_dist
+                    near_at_net = abs(near_pos[1] - net_y) < net_dist
+                    far_at_net = abs(far_pos[1] - net_y) < net_dist
 
                     if near_at_net and far_at_net:
                         if streak_start is None:
@@ -434,8 +509,11 @@ class CourtIdentityResolver:
         court_tracks: dict[int, CourtTrack],
         image_positions: dict[int, dict[int, PlayerPosition]],
         team_assignments: dict[int, int],
+        effective_net_y: float = NET_Y,
         contact_sequence: ContactSequence | None = None,
         serve_anchor: ServeAnchor | None = None,
+        color_store: ColorHistogramStore | None = None,
+        frozen_interactions: list[ActiveFreeze] | None = None,
     ) -> SwapDecision:
         """Score swap vs no-swap hypotheses for one interaction."""
         cfg = self.config
@@ -455,7 +533,7 @@ class CourtIdentityResolver:
         if ct_a and ct_b:
             no_swap.side_of_net_score, swap.side_of_net_score = (
                 self._score_side_of_net(
-                    interaction, ct_a, ct_b, team_assignments
+                    interaction, ct_a, ct_b, team_assignments, effective_net_y
                 )
             )
 
@@ -473,7 +551,13 @@ class CourtIdentityResolver:
                 self._score_bbox_size(interaction, img_a, img_b, team_assignments)
             )
 
-        # --- Component 4: Touch grammar (Phase 3) ---
+        # --- Component 4: Color histogram consistency ---
+        if color_store is not None and color_store.has_data():
+            no_swap.color_score, swap.color_score = (
+                self._score_color_consistency(interaction, color_store)
+            )
+
+        # --- Component 5: Touch grammar (Phase 3) ---
         if contact_sequence and len(contact_sequence.contacts) >= 2:
             from rallycut.tracking.touch_grammar import score_swap_hypothesis
 
@@ -482,7 +566,7 @@ class CourtIdentityResolver:
                 track_a, track_b, interaction.end_frame,
             )
 
-        # --- Component 5: Serve anchor consistency (Phase 2) ---
+        # --- Component 6: Serve anchor consistency (Phase 2) ---
         if serve_anchor and serve_anchor.confidence > 0.5:
             no_swap.serve_anchor_score, swap.serve_anchor_score = (
                 self._score_serve_anchor(
@@ -491,6 +575,9 @@ class CourtIdentityResolver:
             )
 
         # Compute weighted totals (weights auto-adjust for available components)
+        weight_color = cfg.weight_color if (
+            color_store is not None and color_store.has_data()
+        ) else 0.0
         weight_grammar = 0.10 if contact_sequence else 0.0
         weight_serve = 0.05 if serve_anchor else 0.0
         # Re-normalize base weights to sum to 1.0
@@ -498,6 +585,7 @@ class CourtIdentityResolver:
             cfg.weight_side_of_net
             + cfg.weight_motion_smoothness
             + cfg.weight_bbox_size
+            + weight_color
         )
         total_weight = base_weight_sum + weight_grammar + weight_serve
         scale = 1.0 / total_weight if total_weight > 0 else 1.0
@@ -506,6 +594,7 @@ class CourtIdentityResolver:
             cfg.weight_side_of_net * no_swap.side_of_net_score
             + cfg.weight_motion_smoothness * no_swap.motion_smoothness_score
             + cfg.weight_bbox_size * no_swap.bbox_size_score
+            + weight_color * no_swap.color_score
             + weight_grammar * no_swap.grammar_score
             + weight_serve * no_swap.serve_anchor_score
         )
@@ -513,9 +602,23 @@ class CourtIdentityResolver:
             cfg.weight_side_of_net * swap.side_of_net_score
             + cfg.weight_motion_smoothness * swap.motion_smoothness_score
             + cfg.weight_bbox_size * swap.bbox_size_score
+            + weight_color * swap.color_score
             + weight_grammar * swap.grammar_score
             + weight_serve * swap.serve_anchor_score
         )
+
+        # Freeze metadata bonus: if the in-tracker freeze was active for this
+        # interaction, identities were preserved during overlap → small no-swap bonus
+        if frozen_interactions:
+            freeze_bonus = self._compute_freeze_bonus(
+                interaction, frozen_interactions
+            )
+            if freeze_bonus > 0:
+                no_swap_total += freeze_bonus
+                logger.debug(
+                    f"  Freeze bonus +{freeze_bonus:.2f} for "
+                    f"{track_a}<->{track_b}"
+                )
 
         should_swap = swap_total > no_swap_total + cfg.confidence_margin
         confident = abs(swap_total - no_swap_total) >= cfg.confidence_margin
@@ -525,6 +628,7 @@ class CourtIdentityResolver:
             f"side={no_swap.side_of_net_score:.2f}/{swap.side_of_net_score:.2f} "
             f"motion={no_swap.motion_smoothness_score:.2f}/{swap.motion_smoothness_score:.2f} "
             f"bbox={no_swap.bbox_size_score:.2f}/{swap.bbox_size_score:.2f} "
+            f"color={no_swap.color_score:.2f}/{swap.color_score:.2f} "
             f"-> no_swap={no_swap_total:.3f} swap={swap_total:.3f} "
             f"{'SWAP' if should_swap else 'keep'}"
         )
@@ -543,6 +647,7 @@ class CourtIdentityResolver:
         ct_a: CourtTrack,
         ct_b: CourtTrack,
         team_assignments: dict[int, int],
+        effective_net_y: float = NET_Y,
     ) -> tuple[float, float]:
         """Score side-of-net consistency for no-swap vs swap.
 
@@ -563,11 +668,11 @@ class CourtIdentityResolver:
         for frame in range(end + 1, window_end + 1):
             if frame in ct_a.positions:
                 pos = ct_a.positions[frame]
-                if abs(pos[1] - NET_Y) > dead_zone:
+                if abs(pos[1] - effective_net_y) > dead_zone:
                     a_positions.append(pos)
             if frame in ct_b.positions:
                 pos = ct_b.positions[frame]
-                if abs(pos[1] - NET_Y) > dead_zone:
+                if abs(pos[1] - effective_net_y) > dead_zone:
                     b_positions.append(pos)
 
         if (
@@ -578,21 +683,22 @@ class CourtIdentityResolver:
             return 0.5, 0.5
 
         # For no-swap: track_a should be on team_a's side, track_b on team_b's
-        # Near team (0) → court_y < NET_Y, Far team (1) → court_y > NET_Y
+        # Near team (0) → court_y < effective_net_y
+        # Far team (1) → court_y > effective_net_y
         a_correct_noswap = self._fraction_on_correct_side(
-            a_positions, team_a, dead_zone
+            a_positions, team_a, dead_zone, effective_net_y
         )
         b_correct_noswap = self._fraction_on_correct_side(
-            b_positions, team_b, dead_zone
+            b_positions, team_b, dead_zone, effective_net_y
         )
         no_swap_score = (a_correct_noswap + b_correct_noswap) / 2.0
 
         # For swap: track_a would be team_b's side, track_b would be team_a's
         a_correct_swap = self._fraction_on_correct_side(
-            a_positions, team_b, dead_zone
+            a_positions, team_b, dead_zone, effective_net_y
         )
         b_correct_swap = self._fraction_on_correct_side(
-            b_positions, team_a, dead_zone
+            b_positions, team_a, dead_zone, effective_net_y
         )
         swap_score = (a_correct_swap + b_correct_swap) / 2.0
 
@@ -603,6 +709,7 @@ class CourtIdentityResolver:
         positions: list[tuple[float, float]],
         team: int,
         dead_zone: float,
+        net_y: float = NET_Y,
     ) -> float:
         """What fraction of positions are on the expected side of net."""
         if not positions:
@@ -611,13 +718,13 @@ class CourtIdentityResolver:
         correct = 0
         total = 0
         for _, cy in positions:
-            dist_to_net = cy - NET_Y
+            dist_to_net = cy - net_y
             if abs(dist_to_net) <= dead_zone:
                 continue  # Skip positions in dead zone
             total += 1
-            if team == 0 and dist_to_net < 0:  # Near team → court_y < NET_Y
+            if team == 0 and dist_to_net < 0:  # Near team → court_y < net_y
                 correct += 1
-            elif team == 1 and dist_to_net > 0:  # Far team → court_y > NET_Y
+            elif team == 1 and dist_to_net > 0:  # Far team → court_y > net_y
                 correct += 1
 
         return correct / total if total > 0 else 0.5
@@ -801,6 +908,129 @@ class CourtIdentityResolver:
             return 0.2, 0.8
 
     @staticmethod
+    def _score_color_consistency(
+        interaction: NetInteraction,
+        color_store: ColorHistogramStore,
+        pre_window: int = 30,
+        post_window: int = 30,
+        min_histograms: int = 3,
+    ) -> tuple[float, float]:
+        """Score color histogram consistency for no-swap vs swap.
+
+        Compares pre-interaction color templates with post-interaction histograms
+        for both normal and swapped assignments. Uses Bhattacharyya distance.
+
+        Returns (no_swap_score, swap_score) each in [0, 1].
+        """
+        track_a = interaction.track_a
+        track_b = interaction.track_b
+        start = interaction.start_frame
+        end = interaction.end_frame
+
+        # Get pre-interaction histograms for each track
+        pre_a = [
+            hist for fn, hist
+            in color_store.get_track_histograms(track_a)
+            if start - pre_window <= fn < start
+        ]
+        pre_b = [
+            hist for fn, hist
+            in color_store.get_track_histograms(track_b)
+            if start - pre_window <= fn < start
+        ]
+
+        # Get post-interaction histograms for each track
+        post_a = [
+            hist for fn, hist
+            in color_store.get_track_histograms(track_a)
+            if end < fn <= end + post_window
+        ]
+        post_b = [
+            hist for fn, hist
+            in color_store.get_track_histograms(track_b)
+            if end < fn <= end + post_window
+        ]
+
+        if (
+            len(pre_a) < min_histograms
+            or len(pre_b) < min_histograms
+            or len(post_a) < min_histograms
+            or len(post_b) < min_histograms
+        ):
+            return 0.5, 0.5
+
+        # Compute mean templates
+        template_a = np.mean(pre_a, axis=0).astype(np.float32)
+        template_b = np.mean(pre_b, axis=0).astype(np.float32)
+        post_mean_a = np.mean(post_a, axis=0).astype(np.float32)
+        post_mean_b = np.mean(post_b, axis=0).astype(np.float32)
+
+        # Normalize for Bhattacharyya
+        for arr in [template_a, template_b, post_mean_a, post_mean_b]:
+            total = arr.sum()
+            if total > 0:
+                arr /= total
+
+        import cv2
+
+        # No-swap: pre_a matches post_a, pre_b matches post_b
+        dist_noswap_a = cv2.compareHist(
+            template_a, post_mean_a, cv2.HISTCMP_BHATTACHARYYA
+        )
+        dist_noswap_b = cv2.compareHist(
+            template_b, post_mean_b, cv2.HISTCMP_BHATTACHARYYA
+        )
+        noswap_dist = (dist_noswap_a + dist_noswap_b) / 2.0
+
+        # Swap: pre_a matches post_b, pre_b matches post_a
+        dist_swap_a = cv2.compareHist(
+            template_a, post_mean_b, cv2.HISTCMP_BHATTACHARYYA
+        )
+        dist_swap_b = cv2.compareHist(
+            template_b, post_mean_a, cv2.HISTCMP_BHATTACHARYYA
+        )
+        swap_dist = (dist_swap_a + dist_swap_b) / 2.0
+
+        # Convert Bhattacharyya distance to score (lower = better = higher score)
+        # Bhattacharyya range is [0, 1], typical same-person distance: 0.1-0.4
+        no_swap_score = max(0.0, 1.0 - noswap_dist)
+        swap_score = max(0.0, 1.0 - swap_dist)
+
+        logger.debug(
+            f"  Color: noswap_dist={noswap_dist:.3f} swap_dist={swap_dist:.3f} "
+            f"-> scores {no_swap_score:.2f}/{swap_score:.2f}"
+        )
+
+        return no_swap_score, swap_score
+
+    @staticmethod
+    def _compute_freeze_bonus(
+        interaction: NetInteraction,
+        frozen_interactions: list[ActiveFreeze],
+        bonus: float = 0.10,
+    ) -> float:
+        """Check if the in-tracker freeze was active for this interaction.
+
+        When the freeze was active, BoT-SORT was prevented from swapping,
+        so the current assignment is more likely correct → no-swap bonus.
+
+        Returns bonus value if freeze overlaps, 0.0 otherwise.
+        """
+        for freeze in frozen_interactions:
+            # Check if freeze overlaps with this court-space interaction
+            a_match = {interaction.track_a, interaction.track_b}
+            f_match = {freeze.track_a, freeze.track_b}
+            if a_match != f_match:
+                continue
+
+            # Check temporal overlap
+            if (freeze.start_frame <= interaction.end_frame
+                    and freeze.last_overlap_frame >= interaction.start_frame):
+                return bonus
+
+        return 0.0
+
+    @staticmethod
     def _get_positions_in_range(
         ct: CourtTrack,
         start: int,
@@ -866,6 +1096,8 @@ def resolve_court_identity(
     config: CourtIdentityConfig | None = None,
     contact_sequence: ContactSequence | None = None,
     serve_anchor: ServeAnchor | None = None,
+    color_store: ColorHistogramStore | None = None,
+    frozen_interactions: list[ActiveFreeze] | None = None,
 ) -> tuple[list[PlayerPosition], int, list[SwapDecision]]:
     """Convenience function for court-plane identity resolution.
 
@@ -878,6 +1110,8 @@ def resolve_court_identity(
         config: Optional configuration overrides.
         contact_sequence: Optional contacts for grammar scoring.
         serve_anchor: Optional serve anchor for identity anchoring.
+        color_store: Optional color histogram store for appearance scoring.
+        frozen_interactions: Optional freeze metadata from in-tracker detector.
 
     Returns:
         Tuple of (positions, num_swaps, decisions).
@@ -896,6 +1130,8 @@ def resolve_court_identity(
         positions, team_assignments,
         contact_sequence=contact_sequence,
         serve_anchor=serve_anchor,
+        color_store=color_store,
+        frozen_interactions=frozen_interactions,
     )
     num_swaps = sum(1 for d in decisions if d.should_swap and d.confident)
 

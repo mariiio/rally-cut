@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from rallycut.court.calibration import CourtCalibrator
+from rallycut.tracking.color_repair import ColorHistogramStore
 from rallycut.tracking.court_identity import (
     CourtIdentityConfig,
     CourtIdentityResolver,
@@ -11,6 +14,7 @@ from rallycut.tracking.court_identity import (
     resolve_court_identity,
 )
 from rallycut.tracking.player_tracker import PlayerPosition
+from rallycut.tracking.team_aware_tracker import ActiveFreeze
 
 
 def _make_positions(
@@ -457,3 +461,147 @@ class TestCourtSpaceValidation:
             positions, {1: 0, 2: 1}
         )
         assert result is False
+
+
+def _make_histogram(seed: int, bins: int = 128) -> np.ndarray:
+    """Create a deterministic histogram for testing (16x8 HS = 128 bins)."""
+    rng = np.random.RandomState(seed)
+    hist = rng.rand(bins).astype(np.float32)
+    hist /= hist.sum()  # Normalize
+    return hist
+
+
+class TestColorScoring:
+    """Tests for color histogram consistency scoring."""
+
+    def test_color_scoring_matching_colors(self) -> None:
+        """Same color pre/post should prefer no-swap."""
+        store = ColorHistogramStore()
+        interaction = NetInteraction(track_a=1, track_b=2, start_frame=50, end_frame=60)
+
+        # Track 1: distinct "red" histogram (seed=10)
+        # Track 2: distinct "blue" histogram (seed=20)
+        hist_a = _make_histogram(10)
+        hist_b = _make_histogram(20)
+
+        # Pre-interaction (frames 20-49): each track has its own color
+        for f in range(20, 50):
+            store.add(1, f, hist_a.copy())
+            store.add(2, f, hist_b.copy())
+
+        # Post-interaction (frames 61-90): colors unchanged (no swap happened)
+        for f in range(61, 91):
+            store.add(1, f, hist_a.copy())
+            store.add(2, f, hist_b.copy())
+
+        no_swap, swap = CourtIdentityResolver._score_color_consistency(
+            interaction, store
+        )
+        # No-swap should score higher (pre_a matches post_a, pre_b matches post_b)
+        assert no_swap > swap
+
+    def test_color_scoring_swapped_colors(self) -> None:
+        """Swapped colors post-interaction should prefer swap."""
+        store = ColorHistogramStore()
+        interaction = NetInteraction(track_a=1, track_b=2, start_frame=50, end_frame=60)
+
+        hist_a = _make_histogram(10)
+        hist_b = _make_histogram(20)
+
+        # Pre-interaction: track 1 has hist_a, track 2 has hist_b
+        for f in range(20, 50):
+            store.add(1, f, hist_a.copy())
+            store.add(2, f, hist_b.copy())
+
+        # Post-interaction: colors SWAPPED (track 1 now has hist_b, track 2 has hist_a)
+        for f in range(61, 91):
+            store.add(1, f, hist_b.copy())
+            store.add(2, f, hist_a.copy())
+
+        no_swap, swap = CourtIdentityResolver._score_color_consistency(
+            interaction, store
+        )
+        # Swap should score higher (pre_a matches post_b, pre_b matches post_a)
+        assert swap > no_swap
+
+    def test_color_scoring_no_data_neutral(self) -> None:
+        """Insufficient histogram data should return neutral scores."""
+        store = ColorHistogramStore()
+        interaction = NetInteraction(track_a=1, track_b=2, start_frame=50, end_frame=60)
+
+        # Only add 1 histogram per track (below min_histograms=3)
+        store.add(1, 45, _make_histogram(10))
+        store.add(2, 45, _make_histogram(20))
+
+        no_swap, swap = CourtIdentityResolver._score_color_consistency(
+            interaction, store
+        )
+        assert no_swap == 0.5
+        assert swap == 0.5
+
+    def test_color_scoring_empty_store_neutral(self) -> None:
+        """Empty store should return neutral via the has_data check."""
+        store = ColorHistogramStore()
+        interaction = NetInteraction(track_a=1, track_b=2, start_frame=50, end_frame=60)
+
+        # The store has no data at all
+        assert not store.has_data()
+
+        # When called directly, insufficient histograms → neutral
+        no_swap, swap = CourtIdentityResolver._score_color_consistency(
+            interaction, store
+        )
+        assert no_swap == 0.5
+        assert swap == 0.5
+
+
+class TestFreezeBonusScoring:
+    """Tests for freeze metadata bonus in court identity scoring."""
+
+    def test_freeze_bonus_matching_interaction(self) -> None:
+        """Freeze overlapping the interaction should return bonus."""
+        interaction = NetInteraction(track_a=1, track_b=2, start_frame=50, end_frame=60)
+        frozen = [
+            ActiveFreeze(track_a=1, track_b=2, start_frame=45, last_overlap_frame=55),
+        ]
+
+        bonus = CourtIdentityResolver._compute_freeze_bonus(interaction, frozen)
+        assert bonus == 0.10
+
+    def test_freeze_bonus_no_overlap(self) -> None:
+        """Freeze that doesn't overlap temporally should return 0."""
+        interaction = NetInteraction(track_a=1, track_b=2, start_frame=50, end_frame=60)
+        frozen = [
+            ActiveFreeze(track_a=1, track_b=2, start_frame=10, last_overlap_frame=20),
+        ]
+
+        bonus = CourtIdentityResolver._compute_freeze_bonus(interaction, frozen)
+        assert bonus == 0.0
+
+    def test_freeze_bonus_different_tracks(self) -> None:
+        """Freeze for different track pair should return 0."""
+        interaction = NetInteraction(track_a=1, track_b=2, start_frame=50, end_frame=60)
+        frozen = [
+            ActiveFreeze(track_a=3, track_b=4, start_frame=45, last_overlap_frame=55),
+        ]
+
+        bonus = CourtIdentityResolver._compute_freeze_bonus(interaction, frozen)
+        assert bonus == 0.0
+
+    def test_freeze_bonus_empty_list(self) -> None:
+        """Empty frozen_interactions should return 0."""
+        interaction = NetInteraction(track_a=1, track_b=2, start_frame=50, end_frame=60)
+
+        bonus = CourtIdentityResolver._compute_freeze_bonus(interaction, [])
+        assert bonus == 0.0
+
+    def test_freeze_bonus_reversed_track_order(self) -> None:
+        """Freeze should match regardless of track_a/track_b order."""
+        interaction = NetInteraction(track_a=1, track_b=2, start_frame=50, end_frame=60)
+        # Freeze has tracks in reversed order
+        frozen = [
+            ActiveFreeze(track_a=2, track_b=1, start_frame=45, last_overlap_frame=55),
+        ]
+
+        bonus = CourtIdentityResolver._compute_freeze_bonus(interaction, frozen)
+        assert bonus == 0.10
