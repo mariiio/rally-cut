@@ -178,6 +178,16 @@ def run_tracking(
         print(f"[LOCAL] Rally: {rally_id}")
         print(f"[LOCAL] Time range: {start_ms}ms - {end_ms}ms")
 
+        # Auto-detect court if no manual calibration provided
+        if calibrator is None:
+            from rallycut.tracking.player_tracker import auto_detect_court
+
+            calibrator, auto_result = auto_detect_court(local_video_path)
+            if calibrator is not None:
+                print(f"[LOCAL] Court auto-detected (confidence: {auto_result.confidence:.2f})")
+            else:
+                print("[LOCAL] Court auto-detection: no confident result")
+
         # Compute calibration ROI if calibrator available
         court_roi = None
         if calibrator is not None:

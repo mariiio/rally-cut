@@ -153,6 +153,10 @@ def main() -> None:
     parser.add_argument("--debug", action="store_true", help="Save debug images")
     parser.add_argument("-o", "--output", type=str, help="Output JSON path")
     parser.add_argument("--video-id", type=str, help="Evaluate single video")
+    parser.add_argument(
+        "--config", type=str,
+        help='Config overrides as JSON, e.g. \'{"dbscan_eps": 0.05, "min_temporal_support": 4}\'',
+    )
     args = parser.parse_args()
 
     from rallycut.court.detector import CourtDetectionConfig, CourtDetector
@@ -195,7 +199,11 @@ def main() -> None:
     if args.debug:
         debug_dir.mkdir(exist_ok=True)
 
-    detector = CourtDetector(CourtDetectionConfig())
+    config_overrides: dict[str, Any] = {}
+    if args.config:
+        config_overrides = json.loads(args.config)
+        print(f"Config overrides: {config_overrides}\n")
+    detector = CourtDetector(CourtDetectionConfig(**config_overrides))
 
     results: list[dict[str, Any]] = []
     success_count = 0

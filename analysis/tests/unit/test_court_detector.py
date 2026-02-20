@@ -406,3 +406,104 @@ class TestSandColorEstimation:
         detector = CourtDetector()
         segs = detector._detect_lines_single_frame(frame)
         assert isinstance(segs, list)
+
+
+def _make_dark_line_frame(
+    width: int = 960,
+    height: int = 540,
+    sand_brightness: int = 180,
+    line_brightness: int = 40,
+) -> np.ndarray:
+    """Create a synthetic frame with dark lines on bright sand background.
+
+    Simulates courts using black/dark rope boundaries instead of white lines.
+    """
+    frame = np.full((height, width, 3), sand_brightness, dtype=np.uint8)
+
+    # Add slight color variation to simulate sand
+    frame[:, :, 0] = np.clip(frame[:, :, 0].astype(int) - 10, 0, 255).astype(np.uint8)
+    frame[:, :, 2] = np.clip(frame[:, :, 2].astype(int) + 10, 0, 255).astype(np.uint8)
+
+    dark = (line_brightness, line_brightness, line_brightness)
+    line_thickness = 3
+
+    # Far baseline: y=0.35, x from 0.30 to 0.70
+    y_far = int(0.35 * height)
+    x_far_l = int(0.30 * width)
+    x_far_r = int(0.70 * width)
+    cv2.line(frame, (x_far_l, y_far), (x_far_r, y_far), dark, line_thickness)
+
+    # Left sideline: from (0.30, 0.35) to (0.05, 0.85)
+    x_near_l = int(0.05 * width)
+    y_near = int(0.85 * height)
+    cv2.line(frame, (x_far_l, y_far), (x_near_l, y_near), dark, line_thickness)
+
+    # Right sideline: from (0.70, 0.35) to (0.95, 0.85)
+    x_near_r = int(0.95 * width)
+    cv2.line(frame, (x_far_r, y_far), (x_near_r, y_near), dark, line_thickness)
+
+    # Center line
+    y_center = int(0.60 * height)
+    t = (0.60 - 0.35) / (0.85 - 0.35)
+    x_center_l = int(x_far_l + t * (x_near_l - x_far_l))
+    x_center_r = int(x_far_r + t * (x_near_r - x_far_r))
+    cv2.line(frame, (x_center_l, y_center), (x_center_r, y_center), dark, line_thickness)
+
+    return frame
+
+
+class TestDarkLineDetection:
+    """Test dark line detection on synthetic frames."""
+
+    def test_detect_dark_lines(self) -> None:
+        """Dark lines should be detected when enable_dark_detection=True."""
+        from rallycut.court.detector import CourtDetectionConfig, CourtDetector
+
+        frame = _make_dark_line_frame()
+        config = CourtDetectionConfig(
+            min_temporal_support=1,
+            dbscan_min_samples=1,
+            enable_dark_detection=True,
+        )
+        detector = CourtDetector(config)
+        segments = detector._detect_lines_single_frame(frame)
+        assert len(segments) >= 2, f"Expected >=2 dark line segments, got {len(segments)}"
+
+    def test_dark_lines_disabled(self) -> None:
+        """No dark lines detected when enable_dark_detection=False."""
+        from rallycut.court.detector import CourtDetectionConfig, CourtDetector
+
+        frame = _make_dark_line_frame()
+        config = CourtDetectionConfig(
+            enable_dark_detection=False,
+            enable_blue_detection=False,
+        )
+        detector = CourtDetector(config)
+        segments = detector._detect_lines_single_frame(frame)
+        # With only white line detection, dark lines should not be found
+        assert len(segments) == 0, f"Expected 0 segments with dark detection off, got {len(segments)}"
+
+    def test_full_detection_dark_lines(self) -> None:
+        """Full pipeline should detect court corners from dark lines."""
+        from rallycut.court.detector import CourtDetectionConfig, CourtDetector
+
+        frame = _make_dark_line_frame()
+        frames = [frame.copy() for _ in range(15)]
+
+        config = CourtDetectionConfig(
+            min_temporal_support=3,
+            dbscan_min_samples=3,
+            enable_dark_detection=True,
+        )
+        detector = CourtDetector(config)
+        result = detector.detect_from_frames(frames)
+
+        assert len(result.detected_lines) >= 1, (
+            f"Expected >=1 detected lines from dark court, got {len(result.detected_lines)}. "
+            f"Warnings: {result.warnings}"
+        )
+        assert len(result.corners) == 4, (
+            f"Expected 4 corners from dark court, got {len(result.corners)}. "
+            f"Warnings: {result.warnings}"
+        )
+        assert result.confidence > 0.0
