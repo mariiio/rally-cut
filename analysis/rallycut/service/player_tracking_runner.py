@@ -179,14 +179,19 @@ def run_tracking(
         print(f"[LOCAL] Time range: {start_ms}ms - {end_ms}ms")
 
         # Auto-detect court if no manual calibration provided
+        court_insights = None
         if calibrator is None:
+            from rallycut.court.detector import CourtDetectionInsights
             from rallycut.tracking.player_tracker import auto_detect_court
 
             calibrator, auto_result = auto_detect_court(local_video_path)
+            court_insights = CourtDetectionInsights.from_result(auto_result)
             if calibrator is not None:
                 print(f"[LOCAL] Court auto-detected (confidence: {auto_result.confidence:.2f})")
             else:
                 print("[LOCAL] Court auto-detection: no confident result")
+                for tip in court_insights.recording_tips:
+                    print(f"[LOCAL]   Tip: {tip}")
 
         # Compute calibration ROI if calibrator available
         court_roi = None
@@ -228,12 +233,13 @@ def run_tracking(
             filter_enabled=True,
             filter_config=filter_config,
             court_calibrator=calibrator,
+            court_detection_insights=court_insights,
         )
 
         processing_time_ms = (time.time() - start_time) * 1000
 
         # Build webhook payload
-        webhook_payload = {
+        webhook_payload: dict = {
             "job_id": job_id,
             "status": "completed",
             "tracks_json": result.to_dict(),
@@ -242,6 +248,8 @@ def run_tracking(
             "processing_time_ms": round(processing_time_ms),
             "model_version": result.model_version,
         }
+        if court_insights is not None:
+            webhook_payload["courtDetection"] = court_insights.to_dict()
 
         print(f"[LOCAL] Tracking complete: {result.unique_track_count} players, {result.frame_count} frames")
         print(f"[LOCAL] Processing time: {processing_time_ms/1000:.1f}s")

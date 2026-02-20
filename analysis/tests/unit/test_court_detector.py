@@ -901,3 +901,140 @@ class TestSidelineMirroring:
         assert result.fitting_method == "legacy"
         # Legacy still gets the mirroring warning from its own path
         assert any("mirror" in w.lower() for w in result.warnings)
+
+
+# ── Court Detection Insights Tests ─────────────────────────────────────
+
+
+class TestCourtDetectionInsights:
+    """Test CourtDetectionInsights derivation and serialization."""
+
+    def test_insights_from_good_result(self) -> None:
+        """4 lines, high confidence → detected=True, no tips."""
+        from rallycut.court.detector import (
+            CourtDetectionInsights,
+            CourtDetectionResult,
+            DetectedLine,
+        )
+
+        result = CourtDetectionResult(
+            corners=[{"x": 0.1, "y": 0.9}, {"x": 0.9, "y": 0.9},
+                     {"x": 0.75, "y": 0.3}, {"x": 0.25, "y": 0.3}],
+            confidence=0.85,
+            detected_lines=[
+                DetectedLine("far_baseline", (0.25, 0.30), (0.75, 0.30), 20, 0.0),
+                DetectedLine("left_sideline", (0.25, 0.30), (0.05, 0.85), 15, 55.0),
+                DetectedLine("right_sideline", (0.75, 0.30), (0.95, 0.85), 15, 55.0),
+                DetectedLine("center_line", (0.15, 0.60), (0.85, 0.60), 12, 0.0),
+            ],
+            fitting_method="temporal_consensus",
+        )
+        insights = CourtDetectionInsights.from_result(result)
+
+        assert insights.detected is True
+        assert insights.confidence == 0.85
+        assert insights.lines_found == 4
+        assert insights.line_visibility == "good"
+        assert insights.camera_height == "moderate"
+        assert insights.recording_tips == []
+
+    def test_insights_from_failed_result(self) -> None:
+        """0 lines → detected=False, has recording tips."""
+        from rallycut.court.detector import CourtDetectionInsights, CourtDetectionResult
+
+        result = CourtDetectionResult(
+            corners=[],
+            confidence=0.0,
+            detected_lines=[],
+            warnings=["No lines detected"],
+            fitting_method="legacy",
+        )
+        insights = CourtDetectionInsights.from_result(result)
+
+        assert insights.detected is False
+        assert insights.lines_found == 0
+        assert insights.line_visibility == "none"
+        assert insights.camera_height == "unknown"
+        assert len(insights.recording_tips) >= 1
+        # Should have both "lines not detected" and "higher vantage" tips
+        assert any("not detected" in tip for tip in insights.recording_tips)
+        assert any("higher vantage" in tip for tip in insights.recording_tips)
+
+    def test_insights_camera_height_from_baseline_y(self) -> None:
+        """Far baseline at various Y positions → correct camera_height."""
+        from rallycut.court.detector import (
+            CourtDetectionInsights,
+            CourtDetectionResult,
+            DetectedLine,
+        )
+
+        # Elevated: far baseline at y=0.20
+        result_elevated = CourtDetectionResult(
+            corners=[{"x": 0, "y": 0}] * 4,
+            confidence=0.7,
+            detected_lines=[
+                DetectedLine("far_baseline", (0.2, 0.20), (0.8, 0.20), 20, 0.0),
+            ],
+            fitting_method="legacy",
+        )
+        assert CourtDetectionInsights.from_result(result_elevated).camera_height == "elevated"
+
+        # Low: far baseline at y=0.50
+        result_low = CourtDetectionResult(
+            corners=[{"x": 0, "y": 0}] * 4,
+            confidence=0.5,
+            detected_lines=[
+                DetectedLine("far_baseline", (0.2, 0.50), (0.8, 0.50), 20, 0.0),
+            ],
+            fitting_method="legacy",
+        )
+        assert CourtDetectionInsights.from_result(result_low).camera_height == "low"
+
+        # Moderate: far baseline at y=0.32
+        result_moderate = CourtDetectionResult(
+            corners=[{"x": 0, "y": 0}] * 4,
+            confidence=0.6,
+            detected_lines=[
+                DetectedLine("far_baseline", (0.2, 0.32), (0.8, 0.32), 20, 0.0),
+            ],
+            fitting_method="legacy",
+        )
+        assert CourtDetectionInsights.from_result(result_moderate).camera_height == "moderate"
+
+    def test_insights_brightness_tip(self) -> None:
+        """Brightness > 200 → includes brightness tip."""
+        from rallycut.court.detector import CourtDetectionInsights, CourtDetectionResult
+
+        result = CourtDetectionResult(
+            corners=[],
+            confidence=0.0,
+            detected_lines=[],
+            fitting_method="legacy",
+        )
+        insights = CourtDetectionInsights.from_result(result, brightness_mean=210.0)
+        assert any("wash out" in tip.lower() for tip in insights.recording_tips)
+
+        # No brightness tip when below threshold
+        insights_normal = CourtDetectionInsights.from_result(result, brightness_mean=150.0)
+        assert not any("wash out" in tip.lower() for tip in insights_normal.recording_tips)
+
+    def test_insights_to_dict(self) -> None:
+        """Serialization produces expected keys and types."""
+        from rallycut.court.detector import CourtDetectionInsights, CourtDetectionResult
+
+        result = CourtDetectionResult(
+            corners=[{"x": 0, "y": 0}] * 4,
+            confidence=0.62,
+            detected_lines=[],
+            fitting_method="homography",
+        )
+        insights = CourtDetectionInsights.from_result(result)
+        d = insights.to_dict()
+
+        assert d["detected"] is True
+        assert d["confidence"] == 0.62
+        assert d["linesFound"] == 0
+        assert isinstance(d["cameraHeight"], str)
+        assert isinstance(d["lineVisibility"], str)
+        assert d["fittingMethod"] == "homography"
+        assert isinstance(d["recordingTips"], list)
