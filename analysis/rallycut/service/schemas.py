@@ -103,7 +103,7 @@ class DetectionConfig(BaseModel):
         default=True, description="Use 480p proxy for faster ML analysis"
     )
     stride: int = Field(
-        default=32, ge=1, description="Frame sampling interval for analysis"
+        default=24, ge=1, description="Frame sampling interval for analysis"
     )
 
 
