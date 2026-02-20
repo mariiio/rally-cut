@@ -4,22 +4,15 @@ Extends the existing single-region shorts histogram to 3 body regions:
 - Head/hair (top 15% of bbox): most discriminative — hair color/style varies
 - Upper body (15-45% of bbox): captures jersey/top differences
 - Shorts (60-100% of bbox): existing proven signal
-
-Also provides calibration-based height estimation.
 """
 
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
-
-if TYPE_CHECKING:
-    from rallycut.court.calibration import CourtCalibrator
 
 logger = logging.getLogger(__name__)
 
@@ -43,21 +36,11 @@ class MultiRegionDescriptor:
     shorts: np.ndarray | None = None
 
 
-@dataclass
-class HeightEstimate:
-    """Player height estimated from calibration."""
-
-    height_meters: float = 0.0
-    num_samples: int = 0
-    confidence: float = 0.0
-
-
 class AppearanceDescriptorStore:
     """Stores per-frame multi-region descriptors keyed by (track_id, frame)."""
 
     def __init__(self) -> None:
         self._descriptors: dict[tuple[int, int], MultiRegionDescriptor] = {}
-        self._height_samples: dict[int, list[float]] = defaultdict(list)
 
     def add(
         self,
@@ -91,28 +74,6 @@ class AppearanceDescriptorStore:
     def has_data(self) -> bool:
         """Check if any descriptors are stored."""
         return len(self._descriptors) > 0
-
-    def add_height_sample(self, track_id: int, height_m: float) -> None:
-        """Add a height measurement for a track."""
-        if 1.4 < height_m < 2.3:  # Sanity bounds
-            self._height_samples[track_id].append(height_m)
-
-    def get_height_estimate(self, track_id: int) -> HeightEstimate:
-        """Get trimmed mean height estimate for a track."""
-        samples = self._height_samples.get(track_id, [])
-        if len(samples) < 5:
-            return HeightEstimate()
-
-        # Trimmed mean: remove top/bottom 10%
-        arr = np.array(sorted(samples))
-        trim = max(1, len(arr) // 10)
-        trimmed = arr[trim:-trim] if trim < len(arr) // 2 else arr
-
-        return HeightEstimate(
-            height_meters=float(np.mean(trimmed)),
-            num_samples=len(samples),
-            confidence=min(1.0, len(samples) / 50.0),
-        )
 
     def rekey(self, old_id: int, new_id: int, from_frame: int) -> None:
         """Rekey descriptors after track ID change (split/merge)."""
@@ -259,50 +220,6 @@ def compute_track_mean_descriptor(
         mean_desc.shorts = _mean_histogram(shorts)
 
     return mean_desc
-
-
-def estimate_player_height_meters(
-    foot_point: tuple[float, float],
-    head_point: tuple[float, float],
-    calibrator: CourtCalibrator,
-    video_width: int,
-    video_height: int,
-) -> float | None:
-    """Estimate player height in meters using court calibration.
-
-    Projects foot and head points through homography and computes
-    the court-plane distance.
-
-    Args:
-        foot_point: Foot position in normalized image coordinates.
-        head_point: Head position in normalized image coordinates.
-        calibrator: Calibrated court calibrator.
-        video_width: Video width in pixels.
-        video_height: Video height in pixels.
-
-    Returns:
-        Estimated height in meters, or None if projection fails.
-    """
-    try:
-        foot_court = calibrator.image_to_court(
-            foot_point, video_width, video_height
-        )
-        head_court = calibrator.image_to_court(
-            head_point, video_width, video_height
-        )
-    except (RuntimeError, ValueError) as e:
-        logger.debug("Height projection failed: %s", e)
-        return None
-
-    # Euclidean distance in court space
-    dx = foot_court[0] - head_court[0]
-    dy = foot_court[1] - head_court[1]
-    height = float((dx ** 2 + dy ** 2) ** 0.5)
-
-    # Sanity check
-    if 1.4 < height < 2.3:
-        return height
-    return None
 
 
 def _mean_histogram(histograms: list[np.ndarray]) -> np.ndarray:

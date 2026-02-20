@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from rallycut.tracking.contact_detector import Contact, ContactSequence
-    from rallycut.tracking.identity_anchor import ServeAnchor
 
 logger = logging.getLogger(__name__)
 
@@ -54,15 +53,12 @@ class GrammarScore:
 def score_contact_grammar(
     contact_sequence: ContactSequence,
     team_assignments: dict[int, int],
-    serve_anchor: ServeAnchor | None = None,
 ) -> GrammarScore:
     """Score the plausibility of a contact sequence under volleyball rules.
 
     Args:
         contact_sequence: Detected contacts with player attributions.
         team_assignments: track_id -> team (0=near, 1=far).
-        serve_anchor: Optional serve anchor (reserved for future
-            service-order consistency check).
 
     Returns:
         GrammarScore with violation counts.
@@ -119,7 +115,6 @@ def score_swap_hypothesis(
     track_a: int,
     track_b: int,
     swap_from_frame: int,
-    serve_anchor: ServeAnchor | None = None,
 ) -> tuple[float, float]:
     """Score grammar plausibility for no-swap vs swap hypotheses.
 
@@ -129,8 +124,6 @@ def score_swap_hypothesis(
         track_a: First track in the swap pair.
         track_b: Second track in the swap pair.
         swap_from_frame: Frame from which swap would apply.
-        serve_anchor: Optional serve anchor (passed through to
-            score_contact_grammar).
 
     Returns:
         (no_swap_score, swap_score) each in [0, 1].
@@ -141,7 +134,7 @@ def score_swap_hypothesis(
 
     # Score with current assignments (no swap)
     no_swap_score = score_contact_grammar(
-        contact_sequence, team_assignments, serve_anchor
+        contact_sequence, team_assignments
     )
 
     # Score with swapped assignments
@@ -173,7 +166,7 @@ def score_swap_hypothesis(
     )
 
     swap_grammar = score_contact_grammar(
-        swapped_seq, swapped_assignments, serve_anchor
+        swapped_seq, swapped_assignments
     )
 
     return no_swap_score.plausibility, swap_grammar.plausibility

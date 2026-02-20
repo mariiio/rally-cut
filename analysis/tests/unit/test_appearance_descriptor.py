@@ -79,25 +79,6 @@ class TestAppearanceDescriptorStore:
         store.add(1, 0, _make_descriptor())
         assert store.has_data()
 
-    def test_height_estimate(self) -> None:
-        store = AppearanceDescriptorStore()
-        for _ in range(20):
-            store.add_height_sample(1, 1.85)
-        for _ in range(3):
-            store.add_height_sample(1, 2.5)  # Out of bounds, rejected
-
-        est = store.get_height_estimate(1)
-        assert est.num_samples == 20
-        assert abs(est.height_meters - 1.85) < 0.01
-
-    def test_height_estimate_insufficient(self) -> None:
-        store = AppearanceDescriptorStore()
-        store.add_height_sample(1, 1.80)
-        store.add_height_sample(1, 1.82)
-
-        est = store.get_height_estimate(1)
-        assert est.num_samples == 0  # Not enough samples
-
     def test_rekey(self) -> None:
         store = AppearanceDescriptorStore()
         store.add(1, 5, _make_descriptor(head_peak=1))

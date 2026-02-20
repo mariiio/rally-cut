@@ -408,7 +408,6 @@ class CourtIdentityResolver:
             no_swap.grammar_score, swap.grammar_score = score_swap_hypothesis(
                 contact_sequence, team_assignments,
                 track_a, track_b, interaction.end_frame,
-                serve_anchor=serve_anchor,
             )
 
         # --- Component 5: Serve anchor consistency (Phase 2) ---
