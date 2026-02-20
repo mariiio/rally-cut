@@ -301,17 +301,17 @@ class TestResolveCourtIdentity:
             positions, 1, 2, 5, team_assignments
         )
 
-        # Before frame 5: unchanged
-        before = [p for p in positions if p.frame_number < 5]
-        for p in before:
-            assert p.track_id in (1, 2)
+        # Before frame 5: unchanged (5 each)
+        before_1 = [p for p in positions if p.frame_number < 5 and p.track_id == 1]
+        before_2 = [p for p in positions if p.frame_number < 5 and p.track_id == 2]
+        assert len(before_1) == 5
+        assert len(before_2) == 5
 
-        # From frame 5: swapped
+        # From frame 5: track IDs swapped (original track 1 → now track 2, etc.)
         after_1 = [p for p in positions if p.frame_number >= 5 and p.track_id == 1]
         after_2 = [p for p in positions if p.frame_number >= 5 and p.track_id == 2]
-        # Track IDs should have been swapped for frames >= 5
-        assert len(after_1) > 0  # Some positions now have swapped IDs
-        assert len(after_2) > 0
+        assert len(after_1) == 5  # Originally track 2, now swapped to 1
+        assert len(after_2) == 5  # Originally track 1, now swapped to 2
 
 
 class TestFractionOnCorrectSide:
@@ -344,3 +344,116 @@ class TestFractionOnCorrectSide:
             [], team=0, dead_zone=0.5
         )
         assert result == 0.5
+
+
+class TestAbsoluteFrameNumbers:
+    """Verify court identity works with absolute video frame numbers."""
+
+    def test_team_separation_with_absolute_frames(self) -> None:
+        """Frame numbers starting at e.g. 900 should not break separation check.
+
+        Regression test for the bug where _teams_sufficiently_separated
+        used hardcoded frame_number > 60 instead of relative frame offset,
+        causing it to always return False for absolute frame numbers.
+        """
+        calibrator = _make_calibrator()
+        config = CourtIdentityConfig(min_team_separation=0.05)
+        resolver = CourtIdentityResolver(
+            calibrator, config, video_width=1920, video_height=1080
+        )
+
+        # Absolute frame numbers: 900-1000 (not rally-relative 0-100)
+        positions = (
+            _make_positions(1, range(900, 1000), x=0.5, y=0.75)  # near
+            + _make_positions(2, range(900, 1000), x=0.5, y=0.35)  # far
+        )
+        team_assignments = {1: 0, 2: 1}
+
+        result = resolver._teams_sufficiently_separated(
+            positions, team_assignments
+        )
+        assert result is True
+
+    def test_team_separation_fails_with_zero_based_only(self) -> None:
+        """Same data at frame 0 should also work (no regression)."""
+        calibrator = _make_calibrator()
+        config = CourtIdentityConfig(min_team_separation=0.05)
+        resolver = CourtIdentityResolver(
+            calibrator, config, video_width=1920, video_height=1080
+        )
+
+        positions = (
+            _make_positions(1, range(0, 100), x=0.5, y=0.75)
+            + _make_positions(2, range(0, 100), x=0.5, y=0.35)
+        )
+        team_assignments = {1: 0, 2: 1}
+
+        result = resolver._teams_sufficiently_separated(
+            positions, team_assignments
+        )
+        assert result is True
+
+
+class TestCourtSpaceValidation:
+    """Tests for _check_court_space_separation fallback."""
+
+    def test_opposite_sides_passes(self) -> None:
+        """Teams on opposite sides of net should pass validation."""
+        calibrator = _make_calibrator()
+        config = CourtIdentityConfig()
+        resolver = CourtIdentityResolver(
+            calibrator, config, video_width=1920, video_height=1080
+        )
+
+        # near_y=0.75 should project to near-court (y < 8)
+        # far_y=0.35 should project to far-court (y > 8)
+        result = resolver._check_court_space_separation(0.75, 0.35)
+        assert result is True
+
+    def test_same_side_fails(self) -> None:
+        """Teams on same side of net should fail validation."""
+        calibrator = _make_calibrator()
+        config = CourtIdentityConfig()
+        resolver = CourtIdentityResolver(
+            calibrator, config, video_width=1920, video_height=1080
+        )
+
+        # Both very close in image Y (both project to same court side)
+        result = resolver._check_court_space_separation(0.72, 0.68)
+        # Both should project to near-side, failing the opposite-sides check
+        assert result is False
+
+    def test_borderline_separation_uses_court_space(self) -> None:
+        """Image separation between 0.03 and min_team_separation uses fallback."""
+        calibrator = _make_calibrator()
+        config = CourtIdentityConfig(min_team_separation=0.08)
+        resolver = CourtIdentityResolver(
+            calibrator, config, video_width=1920, video_height=1080
+        )
+
+        # Image sep = 0.40 (well above threshold) → True from image space alone
+        positions_clear = (
+            _make_positions(1, range(0, 50), x=0.5, y=0.75)
+            + _make_positions(2, range(0, 50), x=0.5, y=0.35)
+        )
+        assert resolver._teams_sufficiently_separated(
+            positions_clear, {1: 0, 2: 1}
+        ) is True
+
+    def test_uncalibrated_skips_court_space(self) -> None:
+        """Without calibration, court-space fallback is not attempted."""
+        calibrator = CourtCalibrator()  # Not calibrated
+        config = CourtIdentityConfig(min_team_separation=0.08)
+        resolver = CourtIdentityResolver(
+            calibrator, config, video_width=1920, video_height=1080
+        )
+
+        # Image sep = 0.05 (between 0.03 and 0.08) but no calibration
+        positions = (
+            _make_positions(1, range(0, 50), x=0.5, y=0.55)
+            + _make_positions(2, range(0, 50), x=0.5, y=0.50)
+        )
+        result = resolver._teams_sufficiently_separated(
+            positions, {1: 0, 2: 1}
+        )
+        assert result is False
