@@ -474,6 +474,12 @@ class PlayerTrackingResult:
     # Quality report (set when filter_enabled=True and court_roi is set)
     quality_report: TrackingQualityReport | None = None
 
+    # Uncertain identity windows from court-plane resolution
+    # Each tuple: (start_frame, end_frame, set of affected track IDs)
+    uncertain_identity_windows: list[tuple[int, int, set[int]]] = field(
+        default_factory=list
+    )
+
     @property
     def avg_players_per_frame(self) -> float:
         """Average number of players detected per frame."""
@@ -1125,14 +1131,20 @@ class PlayerTracker:
 
             # Color histogram store for post-hoc track repair
             color_store = None
+            appearance_store = None
             histogram_stride = 3  # Extract every 3rd processed frame
             if filter_enabled:
+                from rallycut.tracking.appearance_descriptor import (
+                    AppearanceDescriptorStore,
+                    extract_multi_region_descriptor,
+                )
                 from rallycut.tracking.color_repair import (
                     ColorHistogramStore,
                     extract_shorts_histogram,
                 )
 
                 color_store = ColorHistogramStore()
+                appearance_store = AppearanceDescriptorStore()
 
             while frame_idx < end_frame:
                 ret, frame = cap.read()
@@ -1205,6 +1217,24 @@ class PlayerTracker:
                                         color_store.add(
                                             p.track_id, p.frame_number, hist
                                         )
+
+                        # Extract multi-region appearance descriptors
+                        if (
+                            appearance_store is not None
+                            and frames_processed % histogram_stride == 0
+                        ):
+                            for p in frame_positions:
+                                if p.track_id >= 0:
+                                    desc = extract_multi_region_descriptor(
+                                        frame,
+                                        (p.x, p.y, p.width, p.height),
+                                        video_width,
+                                        video_height,
+                                    )
+                                    if desc is not None:
+                                        appearance_store.add(
+                                            p.track_id, p.frame_number, desc
+                                        )
                     except (IndexError, RuntimeError, ValueError) as e:
                         # Handle any errors from YOLO/ByteTrack internals
                         logger.debug(f"Frame {frame_idx} tracking failed: {e}")
@@ -1226,6 +1256,8 @@ class PlayerTracker:
             court_split_y: float | None = None
             primary_track_ids: list[int] = []
             filter_method: str | None = None
+            uncertain_windows: list[tuple[int, int, set[int]]] = []
+            court_decisions: list[Any] = []  # SwapDecision when court identity runs
 
             # Save raw positions before filtering (for parameter tuning)
             raw_positions = [
@@ -1246,6 +1278,7 @@ class PlayerTracker:
             num_color_splits = 0
             num_swap_fixes = 0
             num_appearance_links = 0
+            num_court_swaps = 0
 
             # Team classification (populated during filtering)
             team_assignments: dict[int, int] = {}
@@ -1293,13 +1326,44 @@ class PlayerTracker:
                             positions, preliminary_split_y
                         )
 
-                    # Step 0c: Track convergence/swap detection
+                    # Step 0c: Court-plane identity resolution (when calibrated)
+                    if (
+                        court_calibrator is not None
+                        and court_calibrator.is_calibrated
+                        and team_assignments
+                    ):
+                        from rallycut.tracking.court_identity import (
+                            resolve_court_identity,
+                        )
+
+                        positions, num_court_swaps, court_decisions = (
+                            resolve_court_identity(
+                                positions,
+                                team_assignments,
+                                court_calibrator,
+                                video_width=video_width,
+                                video_height=video_height,
+                            )
+                        )
+
+                    # Collect uncertain identity windows from court decisions
+                    for decision in court_decisions:
+                        if not decision.confident:
+                            uncertain_windows.append((
+                                decision.interaction.start_frame,
+                                decision.interaction.end_frame,
+                                {decision.interaction.track_a,
+                                 decision.interaction.track_b},
+                            ))
+
+                    # Step 0d: Color-based swap detection (fallback/complement)
                     positions, num_swap_fixes = detect_and_fix_swaps(
                         positions, color_store,
                         team_assignments=team_assignments,
                     )
+                    num_swap_fixes += num_court_swaps
 
-                    # Step 0d: Appearance-based tracklet linking (GTA-Link inspired)
+                    # Step 0e: Appearance-based tracklet linking (GTA-Link inspired)
                     # Reconnects fragments using color histogram similarity
                     from rallycut.tracking.tracklet_link import (
                         link_tracklets_by_appearance,
@@ -1308,6 +1372,7 @@ class PlayerTracker:
                     positions, num_appearance_links = link_tracklets_by_appearance(
                         positions, color_store,
                         team_assignments=team_assignments,
+                        appearance_store=appearance_store,
                     )
 
                 # Step 1: Stabilize track IDs before filtering
@@ -1390,6 +1455,9 @@ class PlayerTracker:
                     swap_fix_count=num_swap_fixes,
                     appearance_link_count=num_appearance_links,
                     has_court_calibration=court_calibrator is not None,
+                    court_identity_interactions=len(court_decisions),
+                    court_identity_swaps=num_court_swaps,
+                    uncertain_identity_count=len(uncertain_windows),
                 )
 
             processing_time_ms = (time.time() - start_time) * 1000
@@ -1413,6 +1481,7 @@ class PlayerTracker:
                 raw_positions=raw_positions,
                 quality_report=quality_report,
                 team_assignments=team_assignments,
+                uncertain_identity_windows=uncertain_windows,
             )
 
         finally:

@@ -30,6 +30,7 @@ import numpy as np
 from rallycut.tracking.player_tracker import PlayerPosition
 
 if TYPE_CHECKING:
+    from rallycut.tracking.appearance_descriptor import AppearanceDescriptorStore
     from rallycut.tracking.color_repair import ColorHistogramStore
 
 logger = logging.getLogger(__name__)
@@ -128,6 +129,7 @@ def link_tracklets_by_appearance(
     min_track_frames: int = DEFAULT_MIN_TRACK_FRAMES,
     target_track_count: int | None = 4,
     team_assignments: dict[int, int] | None = None,
+    appearance_store: AppearanceDescriptorStore | None = None,
 ) -> tuple[list[PlayerPosition], int]:
     """Link fragmented tracklets using appearance similarity.
 
@@ -231,8 +233,25 @@ def link_tracklets_by_appearance(
                 dist_matrix[j, i] = 1.0
                 continue
 
-            # Appearance distance
+            # Appearance distance (composite when multi-region available)
             dist = _bhattacharyya_distance(avg_hists[tid_i], avg_hists[tid_j])
+
+            if appearance_store is not None and appearance_store.has_data():
+                from rallycut.tracking.appearance_descriptor import (
+                    compute_multi_region_distance,
+                    compute_track_mean_descriptor,
+                )
+
+                desc_i = compute_track_mean_descriptor(appearance_store, tid_i)
+                desc_j = compute_track_mean_descriptor(appearance_store, tid_j)
+                if (
+                    desc_i.shorts is not None
+                    and desc_j.shorts is not None
+                ):
+                    multi_dist = compute_multi_region_distance(desc_i, desc_j)
+                    # Blend: 40% shorts-only, 60% multi-region
+                    dist = 0.4 * dist + 0.6 * multi_dist
+
             dist_matrix[i, j] = dist
             dist_matrix[j, i] = dist
 

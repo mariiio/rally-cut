@@ -45,6 +45,11 @@ class TrackingQualityReport:
     unique_raw_track_count: int = 0  # Unique tracks before filtering
     calibration_recommended: bool = False  # True if calibration would likely help
 
+    # Court identity resolution
+    court_identity_interactions: int = 0  # Net interactions detected
+    court_identity_swaps: int = 0  # Swaps applied by court identity
+    uncertain_identity_count: int = 0  # Ambiguous interactions
+
     # Overall score
     trackability_score: float = 0.0  # 0-1 composite score
     suggestions: list[str] = field(default_factory=list)
@@ -65,6 +70,9 @@ class TrackingQualityReport:
             "appearanceLinkCount": self.appearance_link_count,
             "uniqueRawTrackCount": self.unique_raw_track_count,
             "calibrationRecommended": self.calibration_recommended,
+            "courtIdentityInteractions": self.court_identity_interactions,
+            "courtIdentitySwaps": self.court_identity_swaps,
+            "uncertainIdentityCount": self.uncertain_identity_count,
             "trackabilityScore": self.trackability_score,
             "suggestions": self.suggestions,
         }
@@ -84,6 +92,9 @@ def compute_quality_report(
     appearance_link_count: int = 0,
     expected_players: int = 4,
     has_court_calibration: bool = False,
+    court_identity_interactions: int = 0,
+    court_identity_swaps: int = 0,
+    uncertain_identity_count: int = 0,
 ) -> TrackingQualityReport:
     """Compute a tracking quality report from tracking results.
 
@@ -111,6 +122,9 @@ def compute_quality_report(
     report.color_split_count = color_split_count
     report.swap_fix_count = swap_fix_count
     report.appearance_link_count = appearance_link_count
+    report.court_identity_interactions = court_identity_interactions
+    report.court_identity_swaps = court_identity_swaps
+    report.uncertain_identity_count = uncertain_identity_count
 
     duration_sec = frame_count / video_fps if video_fps > 0 else 0.0
 
