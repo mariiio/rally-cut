@@ -13,7 +13,7 @@ Volleyball video analysis CLI. Uses ML (VideoMAE) to detect game states and remo
 ```bash
 # Core commands (TemporalMaxer is default when model+features exist)
 uv run rallycut cut <video.mp4>                 # Auto-selects best pipeline
-uv run rallycut cut <video.mp4> --temporal-maxer # Force TemporalMaxer (75% LOO F1)
+uv run rallycut cut <video.mp4> --temporal-maxer # Force TemporalMaxer (83% LOO F1)
 uv run rallycut cut <video.mp4> --binary-head   # Force binary head (84% F1 at IoU=0.4)
 uv run rallycut cut <video.mp4> --heuristics    # Force heuristics (57% F1)
 uv run rallycut cut <video.mp4> --model beach   # Use beach volleyball model
@@ -93,7 +93,7 @@ uv run rallycut train wasb-modal --cleanup          # Delete from Modal volume
 # Temporal model training (DEPRECATED - use TemporalMaxer instead)
 # uv run rallycut train temporal --model v1 --epochs 50
 
-# TemporalMaxer training (recommended - 75% LOO F1 at IoU=0.4)
+# TemporalMaxer training (recommended - 83% LOO F1 at IoU=0.4)
 uv run rallycut train export-dataset --name beach_v3  # Export labeled data
 uv run rallycut train extract-features --stride 48    # Extract VideoMAE features
 uv run rallycut train temporal-maxer --epochs 50      # Train TemporalMaxer TAS model
@@ -104,7 +104,7 @@ uv run rallycut train binary-head --epochs 50         # Train binary head classi
 
 # Evaluation
 uv run rallycut evaluate                              # Evaluate (auto-selects TemporalMaxer > binary head)
-uv run rallycut evaluate --temporal-maxer             # Force TemporalMaxer (75% LOO F1)
+uv run rallycut evaluate --temporal-maxer             # Force TemporalMaxer (83% LOO F1)
 uv run rallycut evaluate --binary-head                # Force binary head evaluation (84% F1 at IoU=0.4)
 uv run rallycut evaluate --heuristics                 # Force heuristics evaluation (57% F1)
 uv run rallycut evaluate --model beach --iou 0.5      # Evaluate beach model
@@ -216,12 +216,12 @@ Four detection pipelines are available, with TemporalMaxer as the recommended de
 
 | Pipeline | F1 (IoU=0.5) | F1 (IoU=0.4) | Overmerge | Command |
 |----------|--------------|--------------|-----------|---------|
-| TemporalMaxer (default) | 71.6% (LOO) | 75.0% (LOO) | 0% | `rallycut cut video.mp4 --temporal-maxer` |
+| TemporalMaxer (default) | 78.2% (LOO) | 83.4% (LOO) | 0% | `rallycut cut video.mp4 --temporal-maxer` |
 | Binary Head + Decoder | ~78% | 84% | 0% | `rallycut cut video.mp4 --binary-head` |
 | Heuristics (fallback) | 57% | - | ~10% | `rallycut cut video.mp4 --heuristics` |
 | Temporal (deprecated) | 65% | - | ~5% | `rallycut cut video.mp4 --experimental-temporal` |
 
-**Note:** IoU=0.4 better reflects detection accuracy when labeling marks serve toss start (model detects ~2s later when play begins). Binary head's 84% F1 is train-on-all (inflated); TemporalMaxer's 75% is honest LOO CV.
+**Note:** IoU=0.4 better reflects detection accuracy when labeling marks serve toss start (model detects ~2s later when play begins). Binary head's 84% F1 is train-on-all (inflated); TemporalMaxer's 83% is honest LOO CV.
 
 **Pipeline auto-selection:**
 1. If `--temporal-maxer` flag: use TemporalMaxer (auto-extracts features if not cached)

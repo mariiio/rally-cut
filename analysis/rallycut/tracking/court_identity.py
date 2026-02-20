@@ -209,17 +209,23 @@ class CourtIdentityResolver:
         positions: list[PlayerPosition],
         team_assignments: dict[int, int],
     ) -> bool:
-        """Check if near/far teams are far enough apart in image Y space.
+        """Check if near/far teams are far enough apart to run court identity.
 
-        When teams are very close (e.g., 0.03 gap), homography projection
-        is unreliable and court identity swaps produce false positives.
+        Uses image-space separation as the primary check, with court-space
+        validation as a fallback when calibration is available. Teams that
+        appear close in image Y (shallow camera angle) can still be well-
+        separated in court space (opposite sides of the 16m court).
         """
         near_ys: list[float] = []
         far_ys: list[float] = []
 
-        # Use first 60 frames (rally start) for stable team positions
+        # Use first 60 frames (relative to rally start) for stable positions.
+        # Frame numbers may be absolute video frames, not rally-relative.
+        min_frame = min((p.frame_number for p in positions), default=0)
+        frame_cutoff = min_frame + 60
+
         for p in positions:
-            if p.frame_number > 60:
+            if p.frame_number > frame_cutoff:
                 continue
             team = team_assignments.get(p.track_id, -1)
             if team == 0:
@@ -234,15 +240,81 @@ class CourtIdentityResolver:
         far_median = sorted(far_ys)[len(far_ys) // 2]
         separation = abs(near_median - far_median)
 
-        if separation < self.config.min_team_separation:
+        # Pass: image-space separation is sufficient
+        if separation >= self.config.min_team_separation:
+            return True
+
+        # Hard floor: teams truly overlapping in image space (< 3%)
+        if separation < 0.03:
             logger.info(
                 f"Court identity skipped: team separation {separation:.3f} "
-                f"< {self.config.min_team_separation} (near_y={near_median:.3f}, "
+                f"below hard floor 0.03 (near_y={near_median:.3f}, "
                 f"far_y={far_median:.3f})"
             )
             return False
 
-        return True
+        # Fallback: validate separation in court space using calibrator.
+        # Teams on opposite sides of the net are always >4m apart in court
+        # space, even when they appear close in image Y due to camera angle.
+        if self.calibrator.is_calibrated:
+            court_sep = self._check_court_space_separation(
+                near_median, far_median
+            )
+            if court_sep is not None:
+                return court_sep
+
+        logger.info(
+            f"Court identity skipped: team separation {separation:.3f} "
+            f"< {self.config.min_team_separation} (near_y={near_median:.3f}, "
+            f"far_y={far_median:.3f})"
+        )
+        return False
+
+    def _check_court_space_separation(
+        self,
+        near_median_y: float,
+        far_median_y: float,
+    ) -> bool | None:
+        """Validate team separation using court-space projection.
+
+        Returns True if teams are well-separated in court space,
+        False if they project to the same side (broken homography),
+        None if projection fails.
+        """
+        try:
+            near_court = self.calibrator.image_to_court(
+                (0.5, near_median_y), self.video_width, self.video_height
+            )
+            far_court = self.calibrator.image_to_court(
+                (0.5, far_median_y), self.video_width, self.video_height
+            )
+        except (RuntimeError, ValueError):
+            return None
+
+        court_sep = abs(near_court[1] - far_court[1])
+
+        # Verify teams project to opposite sides of net with >2m gap.
+        # "Near" in image space may correspond to either side of court
+        # depending on camera position, so just check they're on different sides.
+        on_opposite_sides = (
+            (near_court[1] < NET_Y and far_court[1] > NET_Y)
+            or (near_court[1] > NET_Y and far_court[1] < NET_Y)
+        )
+
+        if on_opposite_sides and court_sep > 2.0:
+            logger.info(
+                f"Court identity: court-space validation passed "
+                f"(image sep={abs(near_median_y - far_median_y):.3f}, "
+                f"court sep={court_sep:.1f}m)"
+            )
+            return True
+
+        logger.info(
+            f"Court identity: court-space validation failed — teams not on "
+            f"opposite sides (near_court_y={near_court[1]:.1f}, "
+            f"far_court_y={far_court[1]:.1f}, court sep={court_sep:.1f}m)"
+        )
+        return False
 
     def _build_court_tracks(
         self,

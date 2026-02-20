@@ -1424,6 +1424,55 @@ class PlayerTracker:
                     f"using {filter_method}"
                 )
 
+                # Step 4b: Post-filter court identity resolution
+                # Pre-filter court identity (Step 0c) runs on noisy data with many
+                # short tracks, making team separation appear smaller than it is.
+                # Re-running on clean 4-player data catches swaps that were missed.
+                if (
+                    court_calibrator is not None
+                    and court_calibrator.is_calibrated
+                    and len(primary_track_ids) >= 2
+                ):
+                    from rallycut.tracking.court_identity import (
+                        resolve_court_identity,
+                    )
+
+                    # Recompute team assignments from clean filtered positions
+                    post_split_y = compute_court_split(
+                        ball_positions or [], config,
+                        player_positions=positions,
+                    )
+                    if post_split_y is not None:
+                        post_team_assignments = classify_teams(
+                            positions, post_split_y
+                        )
+                        if post_team_assignments:
+                            positions, post_swaps, post_decisions = (
+                                resolve_court_identity(
+                                    positions,
+                                    post_team_assignments,
+                                    court_calibrator,
+                                    video_width=video_width,
+                                    video_height=video_height,
+                                )
+                            )
+                            if post_swaps > 0:
+                                num_court_swaps += post_swaps
+                                team_assignments = post_team_assignments
+                                logger.info(
+                                    f"Post-filter court identity: "
+                                    f"{post_swaps} additional swaps"
+                                )
+                            court_decisions.extend(post_decisions)
+                            for d in post_decisions:
+                                if not d.confident:
+                                    uncertain_windows.append((
+                                        d.interaction.start_frame,
+                                        d.interaction.end_frame,
+                                        {d.interaction.track_a,
+                                         d.interaction.track_b},
+                                    ))
+
             # Step 5: Compute quality report
             quality_report = None
             if filter_enabled:
