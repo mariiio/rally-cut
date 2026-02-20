@@ -157,6 +157,44 @@ def compute_court_roi_from_calibration(
     return roi_points, quality_msg
 
 
+def auto_detect_court(
+    video_path: Path | str,
+    confidence_threshold: float = 0.4,
+) -> tuple[CourtCalibrator | None, Any]:
+    """Auto-detect court corners from video and create calibrator if confident enough.
+
+    Safe to call on any video — returns (None, result) on failure without raising.
+
+    Args:
+        video_path: Path to the video file.
+        confidence_threshold: Minimum confidence to accept detection.
+
+    Returns:
+        Tuple of (calibrator, result):
+        - calibrator: CourtCalibrator if detection succeeded, None otherwise.
+        - result: CourtDetectionResult with detection details (or error info).
+    """
+    from rallycut.court.calibration import CourtCalibrator
+    from rallycut.court.detector import CourtDetectionResult, CourtDetector
+
+    try:
+        detector = CourtDetector()
+        result = detector.detect(video_path)
+    except (FileNotFoundError, RuntimeError) as e:
+        logger.warning(f"Court auto-detection failed: {e}")
+        return None, CourtDetectionResult(
+            corners=[], confidence=0.0, warnings=[str(e)],
+        )
+
+    if result.confidence >= confidence_threshold and len(result.corners) == 4:
+        calibrator = CourtCalibrator()
+        corners = [(c["x"], c["y"]) for c in result.corners]
+        calibrator.calibrate(corners)
+        return calibrator, result
+
+    return None, result
+
+
 def compute_court_roi_from_ball(
     ball_positions: list[BallPosition],
     x_margin: float = 0.08,

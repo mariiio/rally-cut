@@ -49,8 +49,8 @@ class CourtDetectionConfig:
     morph_open_size: int = 3
     morph_close_width: int = 7
     canny_low: int = 50
-    canny_high: int = 150
-    hough_threshold: int = 40
+    canny_high: int = 120  # grid search: 120 matches 150 (insensitive), lower is cleaner
+    hough_threshold: int = 50  # grid search: 50 > 40 (+0.08 IoU, fewer false segments)
     hough_min_length: int = 50
     hough_max_gap: int = 20
     min_segment_px: int = 30
@@ -61,6 +61,11 @@ class CourtDetectionConfig:
     blue_hue_max: int = 130
     blue_saturation_min: int = 50
     blue_value_min: int = 80
+    # Dark line detection (black/dark rope court boundaries)
+    enable_dark_detection: bool = True
+    dark_saturation_max: int = 40  # grid search: 40 > 50/60 (tighter = fewer shadow FPs)
+    dark_value_offset: int = 55  # grid search: 55 > 45/35 (darker relative to sand)
+    dark_value_min: int = 25  # grid search: 25 > 35/45 (include very dark ropes)
 
     # Stage 3: Temporal aggregation
     dbscan_eps: float = 0.03
@@ -241,6 +246,48 @@ class CourtDetector:
 
         return self._fit_court_model(identified)
 
+    def sample_frames(
+        self,
+        video_path: str | Path,
+        start_frame: int | None = None,
+        end_frame: int | None = None,
+    ) -> list[np.ndarray]:
+        """Sample frames from a video for court detection.
+
+        Public API for reuse by grid search scripts that need to cache
+        frames across multiple config evaluations.
+
+        Args:
+            video_path: Path to the video file.
+            start_frame: First frame (default: skip_seconds from start).
+            end_frame: Last frame (default: skip_seconds from end).
+
+        Returns:
+            List of BGR frames at working resolution.
+        """
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            return []
+
+        try:
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            orig_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            orig_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+            if total_frames <= 0 or fps <= 0:
+                return []
+
+            skip_frames = int(self.config.skip_seconds * fps)
+            if start_frame is None:
+                start_frame = skip_frames
+            if end_frame is None:
+                end_frame = max(start_frame + 1, total_frames - skip_frames)
+
+            return self._sample_frames(cap, start_frame, end_frame, orig_width, orig_height)
+        finally:
+            cap.release()
+
     # ── Stage 1: Frame Sampling ──────────────────────────────────────────
 
     def _sample_frames(
@@ -330,6 +377,17 @@ class CourtDetector:
                 & (hsv[:, :, 2] >= cfg.blue_value_min)
             ).astype(np.uint8) * 255
             line_mask = cv2.bitwise_or(line_mask, blue_mask)  # type: ignore[assignment]
+
+        # Dark line mask: black/dark rope court boundaries
+        # Dark ropes are desaturated (S < 50) and significantly darker than
+        # sand (V < sand_V - 45) but not pure shadow (V > 35).
+        if cfg.enable_dark_detection:
+            dark_mask = (
+                (hsv[:, :, 1] < cfg.dark_saturation_max)
+                & (hsv[:, :, 2] < sand_median_v - cfg.dark_value_offset)
+                & (hsv[:, :, 2] > cfg.dark_value_min)
+            ).astype(np.uint8) * 255
+            line_mask = cv2.bitwise_or(line_mask, dark_mask)  # type: ignore[assignment]
 
         # Morphological cleaning
         kernel_open = cv2.getStructuringElement(

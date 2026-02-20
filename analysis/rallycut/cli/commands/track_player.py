@@ -379,6 +379,7 @@ def track_players(
             'Court ROI polygon: "default" (conservative rectangle), '
             '"adaptive" (from ball trajectory), '
             '"calibration" (from court calibration corners), '
+            '"auto" (auto-detect court, fall back to default), '
             'or JSON array of {x,y} points (normalized 0-1). '
             'Masks regions outside the polygon to prevent background tracks.'
         ),
@@ -435,6 +436,7 @@ def track_players(
     court_roi: list[tuple[float, float]] | None = None
     adaptive_roi_requested = False
     calibration_roi_requested = False
+    auto_detect_requested = False
     if court_roi_str is not None:
         if court_roi_str.lower() == "default":
             court_roi = DEFAULT_COURT_ROI
@@ -445,6 +447,8 @@ def track_players(
             adaptive_roi_requested = True
         elif court_roi_str.lower() == "calibration":
             calibration_roi_requested = True
+        elif court_roi_str.lower() == "auto":
+            auto_detect_requested = True
         else:
             import json as json_mod
             try:
@@ -471,6 +475,34 @@ def track_players(
             console.print(f"[dim]Stride: {stride} (processing every {stride}th frame)[/dim]")
         if filter_court:
             console.print("[dim]Court player filtering: enabled (beach 2v2, max 4 players)[/dim]")
+
+    # Auto-detect court when explicitly requested or when filtering is
+    # enabled with no manual calibration and no explicit ROI mode.
+    if auto_detect_requested or (
+        calibrator is None
+        and filter_court
+        and court_roi is None
+        and not adaptive_roi_requested
+        and not calibration_roi_requested
+        and court_roi_str is None
+    ):
+        from rallycut.tracking.player_tracker import auto_detect_court
+
+        auto_cal, auto_result = auto_detect_court(video)
+        if auto_cal is not None:
+            calibrator = auto_cal
+            if not quiet:
+                console.print(
+                    f"[dim]Court auto-detected (confidence: {auto_result.confidence:.2f})[/dim]"
+                )
+        else:
+            if not quiet:
+                warn = auto_result.warnings[0] if auto_result.warnings else "low confidence"
+                console.print(f"[dim]Court auto-detection: {warn}[/dim]")
+            if auto_detect_requested:
+                court_roi = DEFAULT_COURT_ROI
+                if not quiet:
+                    console.print("[dim]Court ROI: falling back to default rectangle[/dim]")
 
     # Run ball tracking first if filtering enabled
     ball_positions: list[BallPosition] | None = None
