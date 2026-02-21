@@ -696,6 +696,30 @@ class ActionClassifier:
             ball_positions=ball_positions,
         )
 
+        # Classifier-assisted serve detection: when heuristic falls through to
+        # Pass 3 (first-contact fallback), check if the learned classifier can
+        # identify which early contact is actually the serve.
+        if serve_pass == 3 and classifier.is_trained:
+            window = self.config.serve_window_frames
+            for ci, c in enumerate(contacts[:min(3, len(contacts))]):
+                if (c.frame - start_frame) >= window:
+                    break
+                feat = extract_action_features(
+                    contact=c, index=ci, all_contacts=contacts,
+                    ball_positions=ball_positions,
+                    net_y=contact_sequence.net_y,
+                    rally_start_frame=start_frame,
+                )
+                pred_action, _conf = classifier.predict([feat])[0]
+                if pred_action == "serve":
+                    serve_index = ci
+                    serve_pass = 4  # Classifier-assisted
+                    logger.debug(
+                        "Classifier identified serve at contact %d (frame %d)",
+                        ci, c.frame,
+                    )
+                    break
+
         serve_detected = False
         serve_side: str | None = None
         receive_detected = False
@@ -752,6 +776,24 @@ class ActionClassifier:
                     # None (insufficient data) → keep as serve (conservative).
                     if toward_net is False:
                         is_phantom = True
+
+                # Classifier override: if the learned classifier says "serve",
+                # trust it over the trajectory-based phantom detection.
+                if is_phantom and classifier.is_trained:
+                    feat = extract_action_features(
+                        contact=contact, index=i, all_contacts=contacts,
+                        ball_positions=ball_positions,
+                        net_y=contact_sequence.net_y,
+                        rally_start_frame=start_frame,
+                    )
+                    pred_action, pred_conf = classifier.predict([feat])[0]
+                    if pred_action == "serve":
+                        is_phantom = False
+                        logger.debug(
+                            "Classifier overrides phantom serve at frame %d "
+                            "(conf=%.2f)",
+                            contact.frame, pred_conf,
+                        )
 
                 if not is_phantom:
                     actions.append(ClassifiedAction(
