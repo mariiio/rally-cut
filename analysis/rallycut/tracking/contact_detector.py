@@ -90,6 +90,10 @@ class ContactDetectionConfig:
     parabolic_min_residual: float = 0.015  # Min residual peak to flag breakpoint
     parabolic_min_prominence: float = 0.008  # Min prominence for residual peaks
 
+    # Player-proximity candidate refinement
+    enable_proximity_candidates: bool = True
+    proximity_search_window: int = 8  # Search ±N frames around each candidate
+
     # Court position (baselines used by ball_features.py serve detection)
     baseline_y_near: float = 0.82  # Near baseline Y threshold
     baseline_y_far: float = 0.18  # Far baseline Y threshold
@@ -799,6 +803,65 @@ def estimate_net_position(
     return (min(y_values) + max(y_values)) / 2
 
 
+def _find_proximity_frame(
+    frame: int,
+    ball_by_frame: dict[int, BallPosition],
+    player_positions: list[PlayerPosition],
+    search_window: int = 8,
+    player_search_frames: int = 3,
+    max_distance: float = 0.15,
+) -> int | None:
+    """Find frame of minimum player-ball distance within search window.
+
+    Trajectory-based candidates (velocity peaks, inflections) detect the EFFECT
+    of a contact, which lags by several frames. The actual contact occurs when
+    ball touches the player — the frame of minimum player-ball distance.
+
+    Returns:
+        Frame number with minimum distance, or None if no player within
+        max_distance in the search window.
+    """
+    best_frame = None
+    best_distance = max_distance
+
+    for offset in range(-search_window, search_window + 1):
+        f = frame + offset
+        ball = ball_by_frame.get(f)
+        if ball is None:
+            continue
+        _, dist, _ = _find_nearest_player(
+            f, ball.x, ball.y, player_positions,
+            search_frames=player_search_frames,
+        )
+        if dist < best_distance:
+            best_distance = dist
+            best_frame = f
+
+    return best_frame
+
+
+def _deduplicate_contacts(
+    contacts: list[Contact], min_distance: int
+) -> list[Contact]:
+    """Remove duplicate contacts within min_distance frames, keeping higher confidence."""
+    if not contacts:
+        return contacts
+
+    # Sort by confidence descending (keep best)
+    sorted_contacts = sorted(contacts, key=lambda c: c.confidence, reverse=True)
+    result: list[Contact] = []
+    used_frames: list[int] = []
+
+    for contact in sorted_contacts:
+        if any(abs(contact.frame - f) < min_distance for f in used_frames):
+            continue
+        result.append(contact)
+        used_frames.append(contact.frame)
+
+    # Return in frame order
+    return sorted(result, key=lambda c: c.frame)
+
+
 def detect_contacts(
     ball_positions: list[BallPosition],
     player_positions: list[PlayerPosition] | None = None,
@@ -948,6 +1011,29 @@ def detect_contacts(
     if not candidate_frames:
         return ContactSequence(net_y=estimated_net_y)
 
+    # Step 6b: Generate player-proximity candidates
+    # Trajectory-based candidates detect the EFFECT of a contact (velocity peak,
+    # inflection, etc.) which lags the actual contact by several frames. Proximity
+    # candidates are generated at the frame of minimum player-ball distance near
+    # each standard candidate — closer to the actual contact moment.
+    n_proximity = 0
+    if player_positions and cfg.enable_proximity_candidates:
+        candidate_set = set(candidate_frames)
+        proximity_frames: list[int] = []
+        for frame in candidate_frames:
+            prox = _find_proximity_frame(
+                frame, ball_by_frame, player_positions,
+                search_window=cfg.proximity_search_window,
+                player_search_frames=cfg.player_search_frames,
+                max_distance=cfg.player_contact_radius,
+            )
+            if prox is not None and prox != frame and prox not in candidate_set:
+                proximity_frames.append(prox)
+                candidate_set.add(prox)
+        if proximity_frames:
+            n_proximity = len(proximity_frames)
+            candidate_frames = sorted(candidate_set)
+
     # Build sets for source tracking (used by classifier features)
     velocity_peak_set = set(velocity_peak_frames)
     inflection_set = set(inflection_frames)
@@ -1088,13 +1174,20 @@ def detect_contacts(
             arc_fit_residual=arc_residual,
         ))
 
+    # Deduplicate contacts from proximity + standard candidates at similar frames
+    pre_dedup = len(contacts)
+    contacts = _deduplicate_contacts(contacts, cfg.min_peak_distance_frames)
+
     logger.info(
         f"Detected {len(contacts)} contacts "
         f"({len(velocity_peak_frames)} vel peaks + "
         f"{len(inflection_frames)} inflections + "
         f"{len(parabolic_frames)} parabolic + "
-        f"{len(net_crossing_frames)} net-cross → "
-        f"{len(candidate_frames)} candidates, net_y={estimated_net_y:.3f})"
+        f"{len(net_crossing_frames)} net-cross + "
+        f"{n_proximity} proximity → "
+        f"{len(candidate_frames)} candidates"
+        f"{f', {pre_dedup - len(contacts)} deduped' if pre_dedup > len(contacts) else ''}"
+        f", net_y={estimated_net_y:.3f})"
     )
 
     # Pass confident ball positions for net-crossing detection in action classifier

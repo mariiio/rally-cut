@@ -37,6 +37,7 @@ from rallycut.tracking.contact_detector import (
     _find_nearest_player,
     _find_net_crossing_candidates,
     _find_parabolic_breakpoints,
+    _find_proximity_frame,
     _find_velocity_reversal_candidates,
     _merge_candidates,
     _smooth_signal,
@@ -190,6 +191,20 @@ def extract_candidate_features(
             )
             for pp in rally.positions_json
         ]
+
+    # Generate player-proximity candidates (must match detect_contacts logic)
+    if player_positions and cfg.enable_proximity_candidates:
+        candidate_set = set(candidate_frames)
+        for frame in list(candidate_frames):
+            prox = _find_proximity_frame(
+                frame, ball_by_frame, player_positions,
+                search_window=cfg.proximity_search_window,
+                player_search_frames=cfg.player_search_frames,
+                max_distance=cfg.player_contact_radius,
+            )
+            if prox is not None and prox != frame and prox not in candidate_set:
+                candidate_set.add(prox)
+        candidate_frames = sorted(candidate_set)
 
     features_list: list[CandidateFeatures] = []
     valid_frames: list[int] = []
