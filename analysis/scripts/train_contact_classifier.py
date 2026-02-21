@@ -33,6 +33,7 @@ from rallycut.tracking.contact_detector import (
     _compute_trajectory_curvature,
     _compute_velocities,
     _filter_noise_spikes,
+    _find_deceleration_candidates,
     _find_inflection_candidates,
     _find_nearest_player,
     _find_net_crossing_candidates,
@@ -139,6 +140,17 @@ def extract_candidate_features(
         velocities, frames, cfg.min_peak_distance_frames
     )
 
+    # Deceleration candidates
+    deceleration_frames: list[int] = []
+    if cfg.enable_deceleration_detection:
+        deceleration_frames = _find_deceleration_candidates(
+            velocities, frames, smoothed,
+            cfg.min_peak_distance_frames,
+            min_speed_before=cfg.deceleration_min_speed_before,
+            min_speed_drop_ratio=cfg.deceleration_min_drop_ratio,
+            window=cfg.deceleration_window,
+        )
+
     # Parabolic breakpoints
     parabolic_frames, residual_by_frame = _find_parabolic_breakpoints(
         ball_by_frame, confident_frames,
@@ -154,15 +166,18 @@ def extract_candidate_features(
         ball_by_frame, confident_frames, estimated_net_y, cfg.min_peak_distance_frames
     )
 
-    # Merge all candidates
+    # Merge all candidates (must match detect_contacts merge order)
     inflection_and_reversal = _merge_candidates(
         inflection_frames, reversal_frames, cfg.min_peak_distance_frames
     )
     traditional = _merge_candidates(
         velocity_peak_frames, inflection_and_reversal, cfg.min_peak_distance_frames
     )
+    with_deceleration = _merge_candidates(
+        traditional, deceleration_frames, cfg.min_peak_distance_frames
+    )
     with_parabolic = _merge_candidates(
-        traditional, parabolic_frames, cfg.min_peak_distance_frames
+        with_deceleration, parabolic_frames, cfg.min_peak_distance_frames
     )
     candidate_frames = _merge_candidates(
         with_parabolic, net_crossing_frames, cfg.min_peak_distance_frames
@@ -172,6 +187,7 @@ def extract_candidate_features(
     velocity_peak_set = set(velocity_peak_frames)
     inflection_set = set(inflection_frames)
     parabolic_set = set(parabolic_frames)
+    deceleration_set = set(deceleration_frames)
 
     # Build velocity lookup
     velocity_lookup = dict(zip(frames, smoothed))
@@ -276,6 +292,7 @@ def extract_candidate_features(
             frames_since_last=frames_since_last,
             is_velocity_peak=frame in velocity_peak_set,
             is_inflection=frame in inflection_set,
+            is_deceleration=frame in deceleration_set,
             is_parabolic=frame in parabolic_set,
         )
 

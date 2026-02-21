@@ -806,8 +806,8 @@ class TestCandidateFeatures:
             is_parabolic=False,
         )
         arr = f.to_array()
-        assert arr.shape == (16,)
-        assert len(CandidateFeatures.feature_names()) == 16
+        assert arr.shape == (17,)
+        assert len(CandidateFeatures.feature_names()) == 17
 
     def test_infinite_player_distance_handled(self) -> None:
         """Infinite player distance maps to 1.0."""

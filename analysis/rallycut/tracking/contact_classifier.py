@@ -58,6 +58,7 @@ class CandidateFeatures:
     is_velocity_peak: bool
     is_inflection: bool
     is_parabolic: bool
+    is_deceleration: bool = False
 
     def to_array(self) -> np.ndarray:
         """Convert to numpy feature array for classifier input."""
@@ -79,6 +80,7 @@ class CandidateFeatures:
             float(self.is_velocity_peak),
             float(self.is_inflection),
             float(self.is_parabolic),
+            float(self.is_deceleration),
         ], dtype=np.float64)
 
     @staticmethod
@@ -100,6 +102,7 @@ class CandidateFeatures:
             "is_velocity_peak",
             "is_inflection",
             "is_parabolic",
+            "is_deceleration",
         ]
 
 
