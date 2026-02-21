@@ -347,14 +347,12 @@ class ActionTypeClassifier:
         self,
         x_train: np.ndarray,
         y: np.ndarray,
-        rally_ids: np.ndarray | None = None,
     ) -> dict[str, Any]:
         """Train the multiclass classifier on labeled data.
 
         Args:
             x_train: Feature matrix (n_samples, n_features).
             y: String class labels (e.g. "serve", "dig", ...).
-            rally_ids: Optional rally IDs for reporting.
 
         Returns:
             Dictionary of training metrics.
