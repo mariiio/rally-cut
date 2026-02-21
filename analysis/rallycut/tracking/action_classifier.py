@@ -501,27 +501,15 @@ class ActionClassifier:
                     # is actually the receive. Pass 1/2 serves are more reliable
                     # (arc crossing or baseline/velocity) so skip the check.
                     is_phantom = False
-                    if serve_pass == 3:
-                        if ball_positions:
-                            toward_net = _ball_moving_toward_net(
-                                ball_positions, contact.frame,
-                                contact.ball_y, contact_sequence.net_y,
-                            )
-                            if toward_net is False:
-                                is_phantom = True
-                            elif toward_net is None:
-                                # Insufficient ball data — use serve side
-                                # inference. If we can infer a serve side
-                                # different from this contact, treat as phantom.
-                                inferred = _infer_serve_side(
-                                    contact, ball_positions,
-                                    contact_sequence.net_y,
-                                )
-                                if (
-                                    inferred is not None
-                                    and inferred != contact.court_side
-                                ):
-                                    is_phantom = True
+                    if serve_pass == 3 and ball_positions:
+                        toward_net = _ball_moving_toward_net(
+                            ball_positions, contact.frame,
+                            contact.ball_y, contact_sequence.net_y,
+                        )
+                        # Only trigger phantom on confirmed False.
+                        # None (insufficient data) → keep as serve (conservative).
+                        if toward_net is False:
+                            is_phantom = True
 
                     if not is_phantom:
                         # Normal serve classification
@@ -701,24 +689,15 @@ class ActionClassifier:
             if not serve_detected and i == serve_index:
                 # Phantom serve check (same as rule-based)
                 is_phantom = False
-                if serve_pass == 3:
-                    if ball_positions:
-                        toward_net = _ball_moving_toward_net(
-                            ball_positions, contact.frame,
-                            contact.ball_y, contact_sequence.net_y,
-                        )
-                        if toward_net is False:
-                            is_phantom = True
-                        elif toward_net is None:
-                            inferred = _infer_serve_side(
-                                contact, ball_positions,
-                                contact_sequence.net_y,
-                            )
-                            if (
-                                inferred is not None
-                                and inferred != contact.court_side
-                            ):
-                                is_phantom = True
+                if serve_pass == 3 and ball_positions:
+                    toward_net = _ball_moving_toward_net(
+                        ball_positions, contact.frame,
+                        contact.ball_y, contact_sequence.net_y,
+                    )
+                    # Only trigger phantom on confirmed False.
+                    # None (insufficient data) → keep as serve (conservative).
+                    if toward_net is False:
+                        is_phantom = True
 
                 if not is_phantom:
                     actions.append(ClassifiedAction(
