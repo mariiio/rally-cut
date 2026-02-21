@@ -1,16 +1,22 @@
-"""Rule-based action classification for beach volleyball.
+"""Action classification for beach volleyball.
 
 Classifies detected ball contacts into volleyball actions
-(serve/receive/set/attack/block) using the contact sequence, court side,
-ball direction, and beach volleyball rules.
+(serve/receive/set/attack/block/dig) using either:
 
-Beach volleyball rules that constrain classification:
+1. **Learned classifier** (default): A trained GBM model predicts dig/set/attack
+   from trajectory features + sequence context. Serve, receive, and block stay
+   heuristic. Achieves ~87% action accuracy (up from ~48% rule-based).
+   Auto-loaded from weights/action_classifier/action_classifier.pkl.
+
+2. **Rule-based state machine** (fallback): Uses contact count per side
+   (dig=1st, set=2nd, attack=3rd) with net-crossing detection for side changes.
+   No labeled data required.
+
+Beach volleyball rules that constrain both modes:
 - 2v2, max 3 contacts per side
 - Strict sequence: serve → receive → set → attack
 - Blocks don't count as a contact (max 3 contacts after block)
 - Each rally starts with a serve from behind the baseline
-
-No labeled action data is required — classification is purely rule-based.
 """
 
 from __future__ import annotations
@@ -23,9 +29,28 @@ from typing import TYPE_CHECKING, Any
 from rallycut.tracking.contact_detector import Contact, ContactSequence
 
 if TYPE_CHECKING:
+    from rallycut.tracking.action_type_classifier import ActionTypeClassifier
     from rallycut.tracking.ball_tracker import BallPosition
 
 logger = logging.getLogger(__name__)
+
+# Cached default action type classifier (loaded once from disk on first use)
+_default_action_classifier_cache: dict[str, ActionTypeClassifier | None] = {}
+
+
+def _get_default_action_classifier() -> ActionTypeClassifier | None:
+    """Load and cache the default action type classifier from disk.
+
+    Returns None if no trained model exists at the default path.
+    """
+    if "default" not in _default_action_classifier_cache:
+        from rallycut.tracking.action_type_classifier import load_action_type_classifier
+
+        clf = load_action_type_classifier()
+        _default_action_classifier_cache["default"] = clf
+        if clf is not None:
+            logger.info("Auto-loaded action type classifier from default path")
+    return _default_action_classifier_cache["default"]
 
 
 class ActionType(str, Enum):
@@ -486,6 +511,204 @@ class ActionClassifier:
 
         return result
 
+    def classify_rally_learned(
+        self,
+        contact_sequence: ContactSequence,
+        classifier: ActionTypeClassifier,
+        rally_id: str = "",
+    ) -> RallyActions:
+        """Classify contacts using the learned action type classifier.
+
+        Serve detection uses existing 3-pass heuristic. Block detection
+        stays rule-based. All other contacts are classified by the model.
+
+        Args:
+            contact_sequence: Detected contacts from ContactDetector.
+            classifier: Trained ActionTypeClassifier.
+            rally_id: Optional rally identifier.
+
+        Returns:
+            RallyActions with classified actions.
+        """
+        from rallycut.tracking.action_type_classifier import extract_action_features
+
+        contacts = contact_sequence.contacts
+        start_frame = contact_sequence.rally_start_frame
+
+        if not contacts:
+            return RallyActions(rally_id=rally_id)
+
+        ball_positions = contact_sequence.ball_positions or None
+        actions: list[ClassifiedAction] = []
+
+        # Determine serve index using existing heuristic
+        serve_index, serve_pass = self._find_serve_index(
+            contacts, start_frame, contact_sequence.net_y,
+            ball_positions=ball_positions,
+        )
+
+        serve_detected = False
+        serve_side: str | None = None
+        receive_detected = False
+        last_action_type: ActionType | None = None
+
+        for i, contact in enumerate(contacts):
+            # Block detection (rule-based): at net + immediately after attack
+            if (
+                contact.is_at_net
+                and last_action_type == ActionType.ATTACK
+                and i > 0
+                and (contact.frame - contacts[i - 1].frame)
+                    <= self.config.block_max_frame_gap
+                and contact.court_side != contacts[i - 1].court_side
+            ):
+                actions.append(ClassifiedAction(
+                    action_type=ActionType.BLOCK,
+                    frame=contact.frame,
+                    ball_x=contact.ball_x,
+                    ball_y=contact.ball_y,
+                    velocity=contact.velocity,
+                    player_track_id=contact.player_track_id,
+                    court_side=contact.court_side,
+                    confidence=self.config.high_confidence,
+                ))
+                last_action_type = ActionType.BLOCK
+                continue
+
+            # Pre-serve contacts → UNKNOWN
+            if not serve_detected and i != serve_index:
+                actions.append(ClassifiedAction(
+                    action_type=ActionType.UNKNOWN,
+                    frame=contact.frame,
+                    ball_x=contact.ball_x,
+                    ball_y=contact.ball_y,
+                    velocity=contact.velocity,
+                    player_track_id=contact.player_track_id,
+                    court_side=contact.court_side,
+                    confidence=self.config.low_confidence,
+                ))
+                last_action_type = ActionType.UNKNOWN
+                continue
+
+            # Serve detection (heuristic)
+            if not serve_detected and i == serve_index:
+                # Phantom serve check (same as rule-based)
+                is_phantom = False
+                if serve_pass == 3 and ball_positions:
+                    toward_net = _ball_moving_toward_net(
+                        ball_positions, contact.frame,
+                        contact.ball_y, contact_sequence.net_y,
+                    )
+                    if toward_net is False:
+                        is_phantom = True
+
+                if not is_phantom:
+                    actions.append(ClassifiedAction(
+                        action_type=ActionType.SERVE,
+                        frame=contact.frame,
+                        ball_x=contact.ball_x,
+                        ball_y=contact.ball_y,
+                        velocity=contact.velocity,
+                        player_track_id=contact.player_track_id,
+                        court_side=contact.court_side,
+                        confidence=self.config.high_confidence,
+                    ))
+                    serve_detected = True
+                    serve_side = contact.court_side
+                    last_action_type = ActionType.SERVE
+                    continue
+                else:
+                    # Phantom serve → classify as receive
+                    actions.append(ClassifiedAction(
+                        action_type=ActionType.RECEIVE,
+                        frame=contact.frame,
+                        ball_x=contact.ball_x,
+                        ball_y=contact.ball_y,
+                        velocity=contact.velocity,
+                        player_track_id=contact.player_track_id,
+                        court_side=contact.court_side,
+                        confidence=self.config.medium_confidence,
+                    ))
+                    serve_detected = True
+                    receive_detected = True
+                    serve_side = (
+                        "far" if contact.court_side == "near" else "near"
+                    )
+                    last_action_type = ActionType.RECEIVE
+                    continue
+
+            # Receive: first contact on opposite side from serve.
+            # Uses receive_detected flag (not last_action_type) so FP contacts
+            # between serve and receive don't suppress heuristic receive detection.
+            crossed_net: bool | None = None
+            if not receive_detected and serve_side is not None and i > 0:
+                if ball_positions:
+                    crossed_net = _ball_crossed_net(
+                        ball_positions,
+                        contacts[i - 1].frame, contact.frame,
+                        contact_sequence.net_y,
+                    )
+                if contact.court_side != serve_side or crossed_net is True:
+                    actions.append(ClassifiedAction(
+                        action_type=ActionType.RECEIVE,
+                        frame=contact.frame,
+                        ball_x=contact.ball_x,
+                        ball_y=contact.ball_y,
+                        velocity=contact.velocity,
+                        player_track_id=contact.player_track_id,
+                        court_side=contact.court_side,
+                        confidence=self.config.high_confidence,
+                    ))
+                    receive_detected = True
+                    last_action_type = ActionType.RECEIVE
+                    continue
+
+            # All other contacts: use learned classifier
+            feat = extract_action_features(
+                contact=contact,
+                index=i,
+                all_contacts=contacts,
+                ball_positions=ball_positions,
+                net_y=contact_sequence.net_y,
+                rally_start_frame=start_frame,
+            )
+
+            predictions = classifier.predict([feat])
+            pred_action, pred_conf = predictions[0]
+
+            try:
+                action_type = ActionType(pred_action)
+            except ValueError:
+                action_type = ActionType.UNKNOWN
+
+            # Modulate with contact confidence
+            confidence = pred_conf
+            if contact.confidence > 0:
+                confidence = min(confidence, contact.confidence)
+
+            actions.append(ClassifiedAction(
+                action_type=action_type,
+                frame=contact.frame,
+                ball_x=contact.ball_x,
+                ball_y=contact.ball_y,
+                velocity=contact.velocity,
+                player_track_id=contact.player_track_id,
+                court_side=contact.court_side,
+                confidence=confidence,
+            ))
+            last_action_type = action_type
+
+        result = RallyActions(actions=actions, rally_id=rally_id)
+
+        if actions:
+            seq = [a.action_type.value for a in actions]
+            logger.info(
+                f"Rally {rally_id}: classified {len(actions)} actions "
+                f"(learned): {seq}"
+            )
+
+        return result
+
     def _find_serve_index(
         self,
         contacts: list[Contact],
@@ -568,16 +791,30 @@ def classify_rally_actions(
     contact_sequence: ContactSequence,
     rally_id: str = "",
     config: ActionClassifierConfig | None = None,
+    use_classifier: bool = True,
 ) -> RallyActions:
     """Convenience function to classify actions in a rally.
+
+    When use_classifier=True and a trained action type model exists on disk,
+    uses the learned classifier for dig/set/attack classification. Otherwise
+    falls back to the rule-based state machine.
 
     Args:
         contact_sequence: Contacts detected by ContactDetector.
         rally_id: Optional rally identifier.
         config: Optional classifier configuration.
+        use_classifier: Whether to auto-load and use the learned classifier.
 
     Returns:
         RallyActions with all classified actions.
     """
-    classifier = ActionClassifier(config)
-    return classifier.classify_rally(contact_sequence, rally_id)
+    action_classifier = ActionClassifier(config)
+
+    if use_classifier:
+        learned = _get_default_action_classifier()
+        if learned is not None and learned.is_trained:
+            return action_classifier.classify_rally_learned(
+                contact_sequence, learned, rally_id,
+            )
+
+    return action_classifier.classify_rally(contact_sequence, rally_id)
