@@ -4,7 +4,8 @@ Re-imports ground truth videos, rally annotations, and tracking ground truth
 from a local dataset directory into PostgreSQL, so the web editor can access
 them after a DB reset or fresh machine setup.
 
-Expected files: manifest.json, ground_truth.json, tracking_ground_truth.json (optional).
+Expected files: manifest.json, ground_truth.json, tracking_ground_truth.json (optional),
+action_ground_truth.json (optional).
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ class RestoreResult:
     videos_skipped: int = 0
     rallies_inserted: int = 0
     tracking_gt_restored: int = 0
+    action_gt_restored: int = 0
     session_created: str = ""
     errors: list[str] = field(default_factory=list)
 
@@ -311,6 +313,11 @@ def restore_dataset_to_db(
             if tracking_gt_path.exists():
                 _restore_tracking_gt(conn, tracking_gt_path, result)
 
+            # Restore action ground truth if available
+            action_gt_path = dataset_dir / "action_ground_truth.json"
+            if action_gt_path.exists():
+                _restore_action_gt(conn, action_gt_path, result)
+
     finally:
         conn.close()
 
@@ -375,6 +382,17 @@ def _preview_restore(
         rprint(
             f"  Would restore: [green]{tgt_stats.get('total_rallies_with_tracking_gt', 0)}[/green]"
             f" tracking GT annotations"
+        )
+
+    # Show action GT info if available
+    action_gt_path = dataset_dir / "action_ground_truth.json"
+    if action_gt_path.exists():
+        with open(action_gt_path) as f:
+            action_gt = json.load(f)
+        agt_stats = action_gt.get("stats", {})
+        rprint(
+            f"  Would restore: [green]{agt_stats.get('total_rallies_with_action_gt', 0)}[/green]"
+            f" action GT annotations"
         )
 
 
@@ -443,6 +461,82 @@ def _restore_tracking_gt(
         restored += 1
 
     result.tracking_gt_restored = restored
+
+
+def _restore_action_gt(
+    conn: psycopg.Connection[tuple[Any, ...]],
+    action_gt_path: Path,
+    result: RestoreResult,
+) -> None:
+    """Restore action ground truth from action_ground_truth.json.
+
+    For each entry, matches a rally by video content_hash + start_ms + end_ms,
+    then upserts action_ground_truth_json on player_tracks.
+    """
+    with open(action_gt_path) as f:
+        action_gt = json.load(f)
+
+    rallies = action_gt.get("rallies", [])
+    if not rallies:
+        return
+
+    restored = 0
+    for entry in rallies:
+        content_hash = entry["video_content_hash"]
+        start_ms = entry["rally_start_ms"]
+        end_ms = entry["rally_end_ms"]
+        gt_json = entry["action_ground_truth_json"]
+
+        with conn.cursor() as cur:
+            # Find rally by video content_hash + timing
+            cur.execute(
+                """
+                SELECT r.id
+                FROM rallies r
+                JOIN videos v ON v.id = r.video_id
+                WHERE v.content_hash = %s
+                  AND r.start_ms = %s
+                  AND r.end_ms = %s
+                  AND v.deleted_at IS NULL
+                LIMIT 1
+                """,
+                (content_hash, start_ms, end_ms),
+            )
+            row = cur.fetchone()
+
+        if row is None:
+            result.errors.append(
+                f"Action GT: no matching rally for {content_hash[:8]}... "
+                f"({start_ms}-{end_ms}ms)"
+            )
+            continue
+
+        rally_id = str(row[0])
+        gt_json_str = json.dumps(gt_json)
+
+        with conn.cursor() as cur:
+            # Update existing player_tracks row, or insert if none exists
+            cur.execute(
+                """
+                UPDATE player_tracks
+                SET action_ground_truth_json = %s::jsonb
+                WHERE rally_id = %s
+                """,
+                (gt_json_str, rally_id),
+            )
+            if cur.rowcount == 0:
+                # No player_tracks row exists — insert one
+                cur.execute(
+                    """
+                    INSERT INTO player_tracks (id, rally_id, status, action_ground_truth_json, created_at)
+                    VALUES (gen_random_uuid(), %s, 'COMPLETED', %s::jsonb, NOW())
+                    """,
+                    (rally_id, gt_json_str),
+                )
+
+        restored += 1
+
+    result.action_gt_restored = restored
 
 
 def _find_video_file(
