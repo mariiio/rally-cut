@@ -1168,6 +1168,86 @@ def _export_tracking_ground_truth(
     }
 
 
+def _export_action_ground_truth(
+    video_content_hashes: set[str],
+) -> dict[str, Any] | None:
+    """Export action ground truth (serve/receive/set/attack/dig/block labels) from DB.
+
+    Queries player_tracks where action_ground_truth_json IS NOT NULL, filtered to
+    videos in the current dataset. Returns a JSON-serializable dict or None
+    if no action GT exists.
+
+    Args:
+        video_content_hashes: Content hashes of videos in the dataset.
+
+    Returns:
+        Dict with rallies and stats, or None.
+    """
+    from rallycut.evaluation.db import get_connection
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    v.content_hash,
+                    r.start_ms,
+                    r.end_ms,
+                    pt.action_ground_truth_json,
+                    v.id as video_id
+                FROM player_tracks pt
+                JOIN rallies r ON r.id = pt.rally_id
+                JOIN videos v ON v.id = r.video_id
+                WHERE pt.action_ground_truth_json IS NOT NULL
+                  AND v.deleted_at IS NULL
+                ORDER BY v.content_hash, r.start_ms
+                """
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return None
+
+    rallies: list[dict[str, Any]] = []
+    video_ids_seen: set[str] = set()
+
+    for row in rows:
+        content_hash = str(row[0])
+        start_ms = row[1]
+        end_ms = row[2]
+        gt_json = row[3]
+        video_id = str(row[4])
+
+        if content_hash not in video_content_hashes:
+            continue
+
+        # gt_json may already be a list (psycopg auto-parses JSON)
+        gt_data = gt_json if isinstance(gt_json, (dict, list)) else json.loads(str(gt_json))
+
+        rallies.append({
+            "video_content_hash": content_hash,
+            "rally_start_ms": start_ms,
+            "rally_end_ms": end_ms,
+            "action_ground_truth_json": gt_data,
+        })
+
+        video_ids_seen.add(video_id)
+
+    if not rallies:
+        return None
+
+    return {
+        "rallies": rallies,
+        "stats": {
+            "total_rallies_with_action_gt": len(rallies),
+            "total_videos": len(video_ids_seen),
+        },
+    }
+
+
 @app.command("export-dataset")
 def export_dataset(
     name: str = typer.Option(
@@ -1335,6 +1415,18 @@ def export_dataset(
         rprint(f"Created [cyan]{tracking_gt_path}[/cyan]")
         rprint(
             f"  Tracking GT: [green]{tgt_stats['total_rallies_with_tracking_gt']}[/green] rallies"
+        )
+
+    # Export action ground truth (serve/receive/set/attack/dig/block labels)
+    action_gt = _export_action_ground_truth(content_hashes)
+    if action_gt:
+        action_gt_path = dataset_dir / "action_ground_truth.json"
+        with open(action_gt_path, "w") as f:
+            json.dump(action_gt, f, indent=2)
+        agt_stats = action_gt["stats"]
+        rprint(f"Created [cyan]{action_gt_path}[/cyan]")
+        rprint(
+            f"  Action GT: [green]{agt_stats['total_rallies_with_action_gt']}[/green] rallies"
         )
 
     # Summary
@@ -1562,6 +1654,8 @@ def restore(
     rprint(f"  Rallies inserted: [green]{result.rallies_inserted}[/green]")
     if result.tracking_gt_restored:
         rprint(f"  Tracking GT restored: [green]{result.tracking_gt_restored}[/green]")
+    if result.action_gt_restored:
+        rprint(f"  Action GT restored: [green]{result.action_gt_restored}[/green]")
     rprint(f"  Session: [cyan]{result.session_created}[/cyan]")
 
     if result.errors:

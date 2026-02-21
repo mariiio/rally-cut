@@ -11,6 +11,7 @@ S3 key structure:
         manifest.json
         ground_truth.json
         tracking_ground_truth.json  (optional)
+        action_ground_truth.json    (optional)
       videos/
         {content_hash}.mp4
 """
@@ -160,6 +161,9 @@ class DatasetBackup:
         tracking_gt_path = dataset_dir / "tracking_ground_truth.json"
         if tracking_gt_path.exists():
             metadata_files.append((tracking_gt_path, "tracking_ground_truth.json"))
+        action_gt_path = dataset_dir / "action_ground_truth.json"
+        if action_gt_path.exists():
+            metadata_files.append((action_gt_path, "action_ground_truth.json"))
 
         for path, filename in metadata_files:
             self.s3.upload_file(
@@ -270,6 +274,17 @@ class DatasetBackup:
                 self.bucket,
                 self._dataset_key(name, "tracking_ground_truth.json"),
                 str(tracking_gt_path),
+            )
+        except ClientError:
+            pass  # Not present in older datasets
+
+        # Download action ground truth (optional — older datasets may not have it)
+        try:
+            action_gt_path = dataset_dir / "action_ground_truth.json"
+            self.s3.download_file(
+                self.bucket,
+                self._dataset_key(name, "action_ground_truth.json"),
+                str(action_gt_path),
             )
         except ClientError:
             pass  # Not present in older datasets

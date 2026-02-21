@@ -24,6 +24,9 @@ weights/
 *.onnx
 training_datasets/
 
+# Database backups
+backups/
+
 # Cache
 .cache/
 *.cache

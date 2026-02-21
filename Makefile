@@ -2,7 +2,7 @@
 # Usage: make dev (starts everything with local services)
 
 .PHONY: dev dev-db dev-minio dev-api dev-web dev-runner dev-prod setup install migrate help
-.PHONY: stop logs clean minio-console reset-storage
+.PHONY: stop logs clean minio-console reset-storage backup-db
 
 # Default target
 help:
@@ -160,3 +160,10 @@ reset-storage:
 	@docker volume rm api_minio_data 2>/dev/null || true
 	@make dev-minio
 	@echo "Storage reset complete"
+
+# Database backup
+backup-db:
+	@mkdir -p backups
+	@echo "Dumping database to backups/rallycut_$$(date +%Y%m%d).dump..."
+	@docker exec rallycut-postgres pg_dump -U postgres -Fc rallycut > backups/rallycut_$$(date +%Y%m%d).dump
+	@echo "Database backup complete: backups/rallycut_$$(date +%Y%m%d).dump"

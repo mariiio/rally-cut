@@ -37,7 +37,6 @@ htmlcov/
 # Pseudo-labels and training frames (generated from database)
 experiments/pseudo_labels*/
 experiments/wasb_pseudo_labels/
-experiments/gold_labels/
 
 # Training data (generated, large)
 training_data/
