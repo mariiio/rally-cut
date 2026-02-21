@@ -190,6 +190,27 @@ class TestContactSequenceClassification:
 
         assert result.actions[4].action_type == ActionType.BLOCK
 
+    def test_block_counts_as_touch(self) -> None:
+        """Block counts as 1st touch in beach volleyball — next contact is set (2nd)."""
+        config = ActionClassifierConfig(block_max_frame_gap=10)
+        contacts = [
+            _contact(frame=5, ball_y=0.85, court_side="near"),     # Serve
+            _contact(frame=30, ball_y=0.3, court_side="far"),      # Receive
+            _contact(frame=45, ball_y=0.25, court_side="far"),     # Set
+            _contact(frame=55, ball_y=0.4, court_side="far"),      # Attack
+            _contact(frame=60, ball_y=0.48, court_side="near",     # Block (1st)
+                     is_at_net=True),
+            _contact(frame=70, ball_y=0.65, court_side="near"),    # Set (2nd)
+            _contact(frame=80, ball_y=0.6, court_side="near"),     # Attack (3rd)
+        ]
+        seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
+        classifier = ActionClassifier(config)
+        result = classifier.classify_rally(seq)
+
+        assert result.actions[4].action_type == ActionType.BLOCK
+        assert result.actions[5].action_type == ActionType.SET    # 2nd touch
+        assert result.actions[6].action_type == ActionType.ATTACK  # 3rd touch
+
     def test_block_not_detected_if_too_far_from_net(self) -> None:
         """Block requires is_at_net to be True."""
         contacts = [
@@ -279,15 +300,15 @@ class TestRallyActionsProperties:
         assert len(rally.actions_by_type(ActionType.ATTACK)) == 1
         assert len(rally.actions_by_type(ActionType.BLOCK)) == 0
 
-    def test_num_contacts_excludes_blocks(self) -> None:
-        """num_contacts counts all actions except blocks."""
+    def test_num_contacts_includes_blocks(self) -> None:
+        """num_contacts includes blocks (beach volleyball: block counts as a touch)."""
         actions = [
             ClassifiedAction(ActionType.SERVE, 5, 0.5, 0.8, 0.02, 1, "near", 0.9),
             ClassifiedAction(ActionType.RECEIVE, 30, 0.5, 0.3, 0.03, 2, "far", 0.8),
             ClassifiedAction(ActionType.BLOCK, 60, 0.5, 0.48, 0.04, 1, "near", 0.9),
         ]
         rally = RallyActions(actions=actions)
-        assert rally.num_contacts == 2  # Excludes block
+        assert rally.num_contacts == 3  # Block counts in beach volleyball
 
     def test_to_dict(self) -> None:
         """to_dict produces expected structure."""
