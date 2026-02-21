@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-STRIDE = 48
+STRIDE = 24
 
 
 def _compute_f1(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
@@ -43,6 +43,29 @@ def _compute_f1(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
     r = tp / (tp + fn) if (tp + fn) > 0 else 0.0
     f1 = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
     return p, r, f1
+
+
+def _segment_confidence(
+    seg_start: float,
+    seg_end: float,
+    window_probs: np.ndarray,
+    window_duration: float,
+) -> dict[str, float | int]:
+    """Compute confidence metrics for a segment from its window probabilities."""
+    start_idx = int(seg_start / window_duration)
+    end_idx = min(int(seg_end / window_duration) + 1, len(window_probs))
+    if end_idx <= start_idx:
+        end_idx = start_idx + 1
+    seg_probs = window_probs[start_idx:min(end_idx, len(window_probs))]
+    if len(seg_probs) == 0:
+        return {"avg_prob": 0.0, "max_prob": 0.0, "min_prob": 0.0, "median_prob": 0.0, "num_windows": 0}
+    return {
+        "avg_prob": float(np.mean(seg_probs)),
+        "max_prob": float(np.max(seg_probs)),
+        "min_prob": float(np.min(seg_probs)),
+        "median_prob": float(np.median(seg_probs)),
+        "num_windows": len(seg_probs),
+    }
 
 
 def _edge_to_edge_gap(
@@ -60,15 +83,19 @@ def run_inference_for_video(
     inference: TemporalMaxerInference,
     feature_cache: FeatureCache,
     video: EvaluationVideo,
-) -> list[tuple[float, float]] | None:
-    """Run TemporalMaxer inference on a single video's cached features."""
+) -> tuple[list[tuple[float, float]], np.ndarray, float] | None:
+    """Run TemporalMaxer inference on a single video's cached features.
+
+    Returns (segments, window_probs, window_duration) or None if no cache.
+    """
     cached_data = feature_cache.get(video.content_hash, STRIDE)
     if cached_data is None:
         return None
 
     features, metadata = cached_data
     result = inference.predict(features=features, fps=metadata.fps, stride=STRIDE)
-    return result.segments
+    window_duration = STRIDE / metadata.fps
+    return result.segments, result.window_probs, window_duration
 
 
 def print_overall(
@@ -208,6 +235,101 @@ def print_fn_details(
         print(f"{name:<25} {gt_range:>15} {duration:>8} {best_iou:>9}")
 
 
+def print_confidence_comparison(
+    all_tp_details: list[dict[str, Any]],
+    all_fp_details: list[dict[str, Any]],
+) -> None:
+    """Print side-by-side TP vs FP confidence distributions."""
+    tp_with_conf = [d for d in all_tp_details if "avg_prob" in d]
+    fp_with_conf = [d for d in all_fp_details if "avg_prob" in d]
+
+    if not tp_with_conf and not fp_with_conf:
+        return
+
+    print(f"\n{'=' * 70}")
+    print("TP vs FP CONFIDENCE COMPARISON")
+    print(f"{'=' * 70}")
+
+    for label, items in [("TP", tp_with_conf), ("FP", fp_with_conf)]:
+        if not items:
+            print(f"\n  {label}: no segments")
+            continue
+        avg_probs = np.array([d["avg_prob"] for d in items])
+        max_probs = np.array([d["max_prob"] for d in items])
+        durations = np.array([d.get("duration", d.get("pred_end", 0) - d.get("pred_start", 0)) for d in items])
+        num_windows = np.array([d.get("num_windows", 0) for d in items])
+
+        print(f"\n  {label} ({len(items)} segments):")
+        print(f"    avg_prob:  mean={avg_probs.mean():.3f}  median={np.median(avg_probs):.3f}  "
+              f"min={avg_probs.min():.3f}  max={avg_probs.max():.3f}  std={avg_probs.std():.3f}")
+        print(f"    max_prob:  mean={max_probs.mean():.3f}  median={np.median(max_probs):.3f}  "
+              f"min={max_probs.min():.3f}  max={max_probs.max():.3f}")
+        print(f"    duration:  mean={durations.mean():.1f}s  median={np.median(durations):.1f}s  "
+              f"min={durations.min():.1f}s  max={durations.max():.1f}s")
+        print(f"    windows:   mean={num_windows.mean():.1f}  median={np.median(num_windows):.0f}  "
+              f"min={num_windows.min()}  max={num_windows.max()}")
+
+    # Show per-segment detail for FPs (usually few)
+    if fp_with_conf:
+        print(f"\n  FP detail:")
+        header = f"    {'Video':<25} {'Range':>14} {'Dur':>5} {'AvgP':>5} {'MaxP':>5} {'MinP':>5} {'Win':>4}"
+        print(header)
+        for d in sorted(fp_with_conf, key=lambda x: x["avg_prob"]):
+            name = d["filename"][:24]
+            rng = f"{d['pred_start']:.1f}-{d['pred_end']:.1f}s"
+            dur = d["duration"]
+            print(
+                f"    {name:<25} {rng:>14} {dur:>4.1f}s "
+                f"{d['avg_prob']:>5.3f} {d['max_prob']:>5.3f} {d['min_prob']:>5.3f} {d['num_windows']:>4}"
+            )
+
+    # Threshold analysis: what avg_prob threshold would separate FPs from TPs?
+    if tp_with_conf and fp_with_conf:
+        print(f"\n  Threshold analysis (avg_prob):")
+        tp_avg = np.array([d["avg_prob"] for d in tp_with_conf])
+        fp_avg = np.array([d["avg_prob"] for d in fp_with_conf])
+        for thresh in [0.5, 0.6, 0.7, 0.8, 0.9]:
+            tp_removed = int(np.sum(tp_avg < thresh))
+            fp_removed = int(np.sum(fp_avg < thresh))
+            print(
+                f"    thresh={thresh:.1f}: removes {fp_removed}/{len(fp_avg)} FP, "
+                f"{tp_removed}/{len(tp_avg)} TP"
+            )
+
+
+def print_gt_duration_stats(
+    videos: list[Any],
+) -> None:
+    """Print GT rally duration distribution."""
+    all_durations: list[float] = []
+    for video in videos:
+        for r in video.ground_truth_rallies:
+            all_durations.append(r.end_seconds - r.start_seconds)
+
+    if not all_durations:
+        return
+
+    durations = np.array(all_durations)
+    print(f"\n{'=' * 70}")
+    print(f"GT RALLY DURATION DISTRIBUTION ({len(durations)} rallies)")
+    print(f"{'=' * 70}")
+    print(f"  Mean:   {durations.mean():.1f}s")
+    print(f"  Median: {np.median(durations):.1f}s")
+    print(f"  Std:    {durations.std():.1f}s")
+    print(f"  Min:    {durations.min():.1f}s")
+    print(f"  Max:    {durations.max():.1f}s")
+    print(f"  P10:    {np.percentile(durations, 10):.1f}s")
+    print(f"  P25:    {np.percentile(durations, 25):.1f}s")
+    print(f"  P75:    {np.percentile(durations, 75):.1f}s")
+    print(f"  P90:    {np.percentile(durations, 90):.1f}s")
+
+    # Short rally breakdown
+    short_counts = [(t, int(np.sum(durations < t))) for t in [3, 4, 5, 6, 8, 10]]
+    print(f"\n  Short rally counts:")
+    for t, c in short_counts:
+        print(f"    < {t:>2}s: {c:>3} ({c / len(durations):.1%})")
+
+
 def analyze(
     iou_threshold: float = 0.4,
     output_path: Path | None = None,
@@ -243,12 +365,13 @@ def analyze(
     skipped = 0
 
     for video in videos:
-        predictions = run_inference_for_video(inference, feature_cache, video)
-        if predictions is None:
+        result = run_inference_for_video(inference, feature_cache, video)
+        if result is None:
             print(f"  SKIP {video.filename}: no cached features")
             skipped += 1
             continue
 
+        predictions, window_probs, window_duration = result
         ground_truth = [(r.start_seconds, r.end_seconds) for r in video.ground_truth_rallies]
         matching = match_rallies(ground_truth, predictions, iou_threshold)
 
@@ -272,22 +395,26 @@ def analyze(
             "median_end_ms": float(np.median(end_errors)) if end_errors else None,
         })
 
-        # TP details
+        # TP details with confidence
         for m in matching.matches:
             gt_s, gt_e = ground_truth[m.ground_truth_idx]
             pred_s, pred_e = predictions[m.predicted_idx]
-            all_tp_details.append({
+            conf = _segment_confidence(pred_s, pred_e, window_probs, window_duration)
+            detail = {
                 "filename": video.filename,
                 "gt_start": gt_s,
                 "gt_end": gt_e,
                 "pred_start": pred_s,
                 "pred_end": pred_e,
+                "duration": pred_e - pred_s,
                 "start_error_ms": m.start_error_ms,
                 "end_error_ms": m.end_error_ms,
                 "iou": m.iou,
-            })
+            }
+            detail.update(conf)
+            all_tp_details.append(detail)
 
-        # FP details
+        # FP details with confidence
         for pred_idx in matching.unmatched_predictions:
             pred_s, pred_e = predictions[pred_idx]
             nearest_gap: float | None = None
@@ -295,13 +422,16 @@ def analyze(
                 gap = _edge_to_edge_gap(pred_s, pred_e, gt_s, gt_e)
                 if nearest_gap is None or gap < nearest_gap:
                     nearest_gap = gap
-            all_fp_details.append({
+            conf = _segment_confidence(pred_s, pred_e, window_probs, window_duration)
+            detail_fp = {
                 "filename": video.filename,
                 "pred_start": pred_s,
                 "pred_end": pred_e,
                 "duration": pred_e - pred_s,
                 "nearest_gt_gap": nearest_gap,
-            })
+            }
+            detail_fp.update(conf)
+            all_fp_details.append(detail_fp)
 
         # FN details
         for gt_idx in matching.unmatched_ground_truth:
@@ -328,14 +458,24 @@ def analyze(
     # Print report
     print_overall(all_matches, total_fp, total_fn, iou_threshold)
     print_boundary_errors(all_matches)
+    print_gt_duration_stats(videos)
     print_per_video_table(video_results)
+    print_confidence_comparison(all_tp_details, all_fp_details)
     print_tp_details(all_tp_details)
     print_fp_details(all_fp_details)
     print_fn_details(all_fn_details)
 
+    # GT duration stats
+    gt_durations = [
+        r.end_seconds - r.start_seconds
+        for v in videos
+        for r in v.ground_truth_rallies
+    ]
+
     # Build export data
     export_data: dict[str, Any] = {
         "iou_threshold": iou_threshold,
+        "stride": STRIDE,
         "num_videos": len(video_results),
         "tp": len(all_matches),
         "fp": total_fp,
@@ -345,6 +485,13 @@ def analyze(
             "start_median_ms": float(np.median([m.start_error_ms for m in all_matches])) if all_matches else None,
             "end_mean_ms": float(np.mean([m.end_error_ms for m in all_matches])) if all_matches else None,
             "end_median_ms": float(np.median([m.end_error_ms for m in all_matches])) if all_matches else None,
+        },
+        "gt_duration_stats": {
+            "count": len(gt_durations),
+            "mean": float(np.mean(gt_durations)) if gt_durations else None,
+            "median": float(np.median(gt_durations)) if gt_durations else None,
+            "min": float(np.min(gt_durations)) if gt_durations else None,
+            "max": float(np.max(gt_durations)) if gt_durations else None,
         },
         "per_video": video_results,
         "tp_details": all_tp_details,
