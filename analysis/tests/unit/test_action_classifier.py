@@ -93,7 +93,7 @@ class TestServeDetection:
         """First contact near baseline in serve window is classified as serve."""
         contacts = [_contact(frame=10, ball_y=0.85, court_side="near")]
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
         assert len(result.actions) == 1
         assert result.actions[0].action_type == ActionType.SERVE
 
@@ -101,7 +101,7 @@ class TestServeDetection:
         """First contact with high velocity in serve window is serve."""
         contacts = [_contact(frame=10, ball_y=0.6, velocity=0.025, court_side="near")]
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
         assert result.serve is not None
         assert result.serve.action_type == ActionType.SERVE
 
@@ -110,7 +110,7 @@ class TestServeDetection:
         config = ActionClassifierConfig(serve_fallback=False)
         contacts = [_contact(frame=100, ball_y=0.85, court_side="near")]
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
-        result = classify_rally_actions(seq, config=config)
+        result = classify_rally_actions(seq, config=config, use_classifier=False)
         # Outside 60-frame window with no fallback, should be UNKNOWN
         assert result.serve is None
 
@@ -118,7 +118,7 @@ class TestServeDetection:
         """First contact outside window is treated as serve with fallback."""
         contacts = [_contact(frame=100, ball_y=0.85, court_side="near")]
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
         # Fallback enabled by default: first contact becomes serve
         assert result.serve is not None
         assert result.serve.action_type == ActionType.SERVE
@@ -137,7 +137,7 @@ class TestContactSequenceClassification:
             _contact(frame=55, ball_y=0.35, court_side="far"),   # Attack (3rd contact)
         ]
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
 
         assert len(result.actions) == 4
         assert result.action_sequence == [
@@ -159,7 +159,7 @@ class TestContactSequenceClassification:
             _contact(frame=90, ball_y=0.65, court_side="near"),  # Attack
         ]
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
 
         assert len(result.actions) == 7
         assert result.actions[4].action_type == ActionType.DIG
@@ -194,7 +194,7 @@ class TestContactSequenceClassification:
                      is_at_net=False),
         ]
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
 
         # Should be DIG instead of BLOCK
         assert result.actions[4].action_type != ActionType.BLOCK
@@ -211,7 +211,7 @@ class TestPossessionTracking:
             _contact(frame=45, ball_y=0.25, court_side="far"),   # Set (far, 2nd)
         ]
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
 
         # Contact on far side after serve should reset to 1, so 2nd = set
         assert result.actions[1].action_type == ActionType.RECEIVE  # 1st on far
@@ -224,7 +224,7 @@ class TestEmptyInputs:
     def test_empty_contacts(self) -> None:
         """Empty contact sequence returns empty actions."""
         seq = ContactSequence()
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
         assert len(result.actions) == 0
         assert result.serve is None
         assert result.num_contacts == 0
@@ -233,7 +233,7 @@ class TestEmptyInputs:
         """Single contact at baseline is classified as serve."""
         contacts = [_contact(frame=5, ball_y=0.85, court_side="near")]
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
         assert len(result.actions) == 1
 
 
@@ -319,7 +319,7 @@ class TestNetCrossingPossession:
             contacts=contacts, net_y=0.5, rally_start_frame=0,
             ball_positions=ball_positions,
         )
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
         assert result.actions[4].action_type == ActionType.DIG  # 1st on near side
 
     def test_no_crossing_keeps_count(self) -> None:
@@ -342,7 +342,7 @@ class TestNetCrossingPossession:
             contacts=contacts, net_y=0.5, rally_start_frame=0,
             ball_positions=ball_positions,
         )
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
         assert result.actions[3].action_type == ActionType.ATTACK
         # 4th contact on same side triggers safety valve (max 3 in beach volleyball)
         assert result.actions[4].action_type == ActionType.DIG
@@ -362,7 +362,7 @@ class TestContactCap:
         ]
         # No ball_positions = fallback to court_side comparison
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
         assert result.actions[3].action_type == ActionType.ATTACK
         # Safety valve: 4th contact resets to 1 → DIG
         assert result.actions[4].action_type == ActionType.DIG
@@ -376,7 +376,7 @@ class TestContactCap:
             _contact(frame=55, ball_y=0.35, court_side="far"),
         ]
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
         assert result.actions[1].action_type == ActionType.RECEIVE
         assert result.actions[2].action_type == ActionType.SET
         assert result.actions[3].action_type == ActionType.ATTACK
@@ -391,7 +391,7 @@ class TestDynamicServeBaseline:
         #                  baseline_far  = 0.4 * 0.36 = 0.144
         contacts = [_contact(frame=10, ball_y=0.80, court_side="near")]
         seq = ContactSequence(contacts=contacts, net_y=0.4, rally_start_frame=0)
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
         assert result.serve is not None
 
     def test_far_baseline_adapts(self) -> None:
@@ -399,7 +399,7 @@ class TestDynamicServeBaseline:
         # With net_y=0.6: baseline_far = 0.6 * 0.36 = 0.216
         contacts = [_contact(frame=10, ball_y=0.20, court_side="far")]
         seq = ContactSequence(contacts=contacts, net_y=0.6, rally_start_frame=0)
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
         assert result.serve is not None
 
     def test_velocity_still_triggers_serve(self) -> None:
@@ -414,14 +414,14 @@ class TestDynamicServeBaseline:
             contacts=contacts, net_y=0.5, rally_start_frame=0,
             ball_positions=ball_positions,
         )
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
         assert result.serve is not None
 
     def test_velocity_without_trajectory_still_triggers_serve(self) -> None:
         """High-velocity contact without ball_positions falls back to velocity-only."""
         contacts = [_contact(frame=10, ball_y=0.55, velocity=0.025, court_side="near")]
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
         assert result.serve is not None
 
 
@@ -473,7 +473,7 @@ class TestPreServeIsolation:
             _contact(frame=30, ball_y=0.3, court_side="far"),   # Receive
         ]
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
 
         assert result.actions[0].action_type == ActionType.UNKNOWN
         assert result.actions[1].action_type == ActionType.SERVE
@@ -488,7 +488,7 @@ class TestPreServeIsolation:
             _contact(frame=45, ball_y=0.25, court_side="far"),   # Set (2nd on far)
         ]
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
 
         assert result.actions[0].action_type == ActionType.UNKNOWN
         assert result.actions[1].action_type == ActionType.SERVE
@@ -518,7 +518,7 @@ class TestServeReceiveDisambiguation:
             contacts=contacts, net_y=0.5, rally_start_frame=0,
             ball_positions=ball_positions,
         )
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
 
         # First contact at baseline should be serve
         assert result.actions[0].action_type == ActionType.SERVE
@@ -539,7 +539,7 @@ class TestServeReceiveDisambiguation:
             contacts=contacts, net_y=0.5, rally_start_frame=0,
             ball_positions=ball_positions,
         )
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
         assert result.actions[0].action_type == ActionType.SERVE
 
 
@@ -567,7 +567,7 @@ class TestTrajectoryPossession:
             contacts=contacts, net_y=0.5, rally_start_frame=0,
             ball_positions=ball_positions,
         )
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
 
         assert result.actions[0].action_type == ActionType.SERVE
         assert result.actions[1].action_type == ActionType.RECEIVE
@@ -600,7 +600,7 @@ class TestTrajectoryPossession:
             contacts=contacts, net_y=0.5, rally_start_frame=0,
             ball_positions=ball_positions,
         )
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
 
         # After 4 contacts on far, safety valve triggers for near contact
         assert result.actions[5].action_type == ActionType.DIG
@@ -616,7 +616,7 @@ class TestTrajectoryPossession:
         ]
         # No ball_positions — falls back to court_side comparison
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
 
         assert result.actions[4].action_type == ActionType.DIG
 
@@ -644,7 +644,7 @@ class TestNetCrossingReceiveFallback:
             contacts=contacts, net_y=0.5, rally_start_frame=0,
             ball_positions=ball_positions,
         )
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
 
         assert result.actions[0].action_type == ActionType.SERVE
         assert result.actions[1].action_type == ActionType.RECEIVE
@@ -672,7 +672,7 @@ class TestPhantomServe:
             contacts=contacts, net_y=0.5, rally_start_frame=0,
             ball_positions=ball_positions,
         )
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
 
         # Phantom serve: reclassified as receive
         assert result.actions[0].action_type == ActionType.RECEIVE
@@ -694,7 +694,7 @@ class TestPhantomServe:
             contacts=contacts, net_y=0.5, rally_start_frame=0,
             ball_positions=ball_positions,
         )
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
 
         # Pass 1 found the serve via arc — should stay as serve
         assert result.actions[0].action_type == ActionType.SERVE
@@ -716,7 +716,7 @@ class TestPhantomServe:
             contacts=contacts, net_y=0.5, rally_start_frame=0,
             ball_positions=ball_positions,
         )
-        result = classify_rally_actions(seq)
+        result = classify_rally_actions(seq, use_classifier=False)
 
         # Pass 2 found serve at baseline — should stay as serve regardless
         assert result.actions[0].action_type == ActionType.SERVE

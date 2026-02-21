@@ -289,7 +289,8 @@ def main() -> None:
     parser.add_argument("--redetect", action="store_true", help="Re-run contact detection instead of using stored results")
     parser.add_argument("--config", type=str, help="JSON config overrides for ContactDetectionConfig (implies --redetect)")
     parser.add_argument("--classifier", type=str, help="Path to trained contact classifier model (implies --redetect)")
-    parser.add_argument("--no-classifier", action="store_true", help="Disable auto-loading of trained classifier (force hand-tuned gates)")
+    parser.add_argument("--no-classifier", action="store_true", help="Disable auto-loading of trained contact classifier (force hand-tuned gates)")
+    parser.add_argument("--no-action-classifier", action="store_true", help="Disable learned action type classifier (force rule-based state machine)")
     args = parser.parse_args()
 
     # Build ContactDetectionConfig from overrides
@@ -381,7 +382,10 @@ def main() -> None:
                 use_classifier=not args.no_classifier,
             )
 
-            rally_actions = classify_rally_actions(contacts, rally.rally_id)
+            rally_actions = classify_rally_actions(
+                contacts, rally.rally_id,
+                use_classifier=not args.no_action_classifier,
+            )
             pred_actions = [a.to_dict() for a in rally_actions.actions]
         elif rally.actions_json:
             # Use stored actions
