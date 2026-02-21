@@ -15,7 +15,7 @@ Classifies detected ball contacts into volleyball actions
 Beach volleyball rules that constrain both modes:
 - 2v2, max 3 contacts per side
 - Strict sequence: serve → receive → set → attack
-- Blocks don't count as a contact (max 3 contacts after block)
+- Blocks count as a contact (unlike indoor volleyball)
 - Each rally starts with a serve from behind the baseline
 """
 
@@ -155,8 +155,8 @@ class RallyActions:
 
     @property
     def num_contacts(self) -> int:
-        """Total contacts (excluding blocks)."""
-        return sum(1 for a in self.actions if a.action_type != ActionType.BLOCK)
+        """Total contacts (blocks count as contacts in beach volleyball)."""
+        return sum(1 for a in self.actions if a.action_type != ActionType.UNKNOWN)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -485,6 +485,7 @@ class ActionClassifier:
     5. After ball crosses net, count resets:
        - DIG (1st contact) → SET (2nd) → ATTACK (3rd)
     6. BLOCK — contact at net immediately after opponent's attack
+       (counts as 1st touch on blocker's side in beach volleyball)
 
     The classifier uses a state machine that tracks:
     - Which side has possession
@@ -548,7 +549,9 @@ class ActionClassifier:
             ):
                 action_type = ActionType.BLOCK
                 confidence = self.config.high_confidence
-                # Block doesn't count as a contact for the 3-touch limit
+                # Block counts as 1st touch on blocker's side (beach volleyball)
+                current_side = contact.court_side
+                contact_count_on_side = 1
                 actions.append(ClassifiedAction(
                     action_type=action_type,
                     frame=contact.frame,
@@ -596,7 +599,7 @@ class ActionClassifier:
             elif contact.court_side != current_side:
                 if crossed_net is False:
                     # Confirmed no crossing — trust trajectory, keep counter.
-                    # Safety valve: beach volleyball max 3 touches + block.
+                    # Safety valve: beach volleyball max 3 touches per side.
                     if contact_count_on_side >= 4:
                         current_side = contact.court_side
                         contact_count_on_side = 0

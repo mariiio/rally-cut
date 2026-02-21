@@ -212,7 +212,7 @@ class TestComputeMatchStats:
         stats = compute_match_stats(actions, positions, video_fps=30.0)
 
         assert stats.total_rallies == 2
-        assert stats.total_contacts == 8  # 4 + (5-1 block) = 8
+        assert stats.total_contacts == 9  # 4 + 5 (block counts in beach volleyball)
 
         # Rally 2 has a block
         rally2 = stats.rally_stats[1]
