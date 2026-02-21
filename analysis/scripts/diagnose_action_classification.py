@@ -24,9 +24,8 @@ sys.path.insert(0, "scripts")
 from eval_action_detection import load_rallies_with_action_gt, match_contacts
 
 from rallycut.tracking.action_classifier import (
-    ActionClassifier,
-    ActionClassifierConfig,
     _ball_crossed_net,
+    classify_rally_actions,
 )
 from rallycut.tracking.contact_detector import detect_contacts
 
@@ -34,7 +33,11 @@ console = Console()
 
 
 def trace_classification(rally) -> list[dict]:
-    """Run contact detection and trace classification state machine."""
+    """Run contact detection and classification, annotating with diagnostic info.
+
+    Uses the real classifier for actions (no reimplementation drift) and
+    computes auxiliary diagnostic info (crossed_net, player_dist) for display.
+    """
     from rallycut.tracking.ball_tracker import BallPosition as BallPos
     from rallycut.tracking.contact_detector import _get_default_classifier
     from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
@@ -66,7 +69,7 @@ def trace_classification(rally) -> list[dict]:
         ]
 
     classifier = _get_default_classifier()
-    contacts = detect_contacts(
+    contact_seq = detect_contacts(
         ball_positions=ball_positions,
         player_positions=player_positions,
         net_y=rally.court_split_y,
@@ -74,27 +77,18 @@ def trace_classification(rally) -> list[dict]:
         classifier=classifier,
     )
 
-    # Trace through classification manually
-    net_y = contacts.net_y
-    bp_list = contacts.ball_positions
-    contact_list = contacts.contacts
+    # Use the real classifier — no reimplementation drift
+    result = classify_rally_actions(contact_seq, rally_id=rally.rally_id)
 
-    start_frame = contact_list[0].frame if contact_list else 0
-    ac = ActionClassifier()
-    serve_index, _serve_pass = ac._find_serve_index(
-        contact_list, start_frame, net_y, bp_list or None
-    )
+    # Build diagnostic trace with auxiliary info
+    net_y = contact_seq.net_y
+    bp_list = contact_seq.ball_positions
+    contact_list = contact_seq.contacts
 
     trace = []
-    serve_detected = False
-    receive_detected = False
-    serve_side = None
-    current_side = None
-    contact_count_on_side = 0
-
-    for i, contact in enumerate(contact_list):
+    for i, (contact, action) in enumerate(zip(contact_list, result.actions)):
         crossed_net = None
-        if bp_list and i > 0 and current_side is not None:
+        if bp_list and i > 0:
             crossed_net = _ball_crossed_net(
                 bp_list,
                 from_frame=contact_list[i - 1].frame,
@@ -102,77 +96,12 @@ def trace_classification(rally) -> list[dict]:
                 net_y=net_y,
             )
 
-        prev_side = current_side
-        prev_count = contact_count_on_side
-
-        # Pre-serve isolation
-        if not serve_detected and i != serve_index:
-            trace.append({
-                "i": i, "frame": contact.frame,
-                "ball_y": contact.ball_y, "court_side": contact.court_side,
-                "is_at_net": contact.is_at_net,
-                "crossed_net": crossed_net,
-                "contact_count": 0,
-                "action": "unknown", "reason": "pre-serve",
-                "current_side": current_side,
-            })
-            continue
-
-        # Possession tracking (mirrors action_classifier.py lines 349-376)
-        if crossed_net is True:
-            current_side = contact.court_side
-            contact_count_on_side = 0
-        elif contact.court_side != current_side:
-            if crossed_net is False:
-                if contact_count_on_side >= 4:
-                    current_side = contact.court_side
-                    contact_count_on_side = 0
-                # else: trust trajectory, no reset
-            else:
-                # None or first contact
-                current_side = contact.court_side
-                contact_count_on_side = 0
-
-        contact_count_on_side += 1
-
-        # Safety valve: beach volleyball max 3 touches per side
-        if contact_count_on_side > 3 and receive_detected:
-            contact_count_on_side = 1
-
-        # Classification
-        action = "unknown"
-        if not serve_detected:
-            if i == serve_index:
-                action = "serve"
-                serve_detected = True
-                serve_side = contact.court_side
-                current_side = contact.court_side
-                contact_count_on_side = 1
-        elif (
-            not receive_detected
-            and serve_side is not None
-            and (contact.court_side != serve_side or crossed_net is True)
-        ):
-            action = "receive"
-            receive_detected = True
-            current_side = contact.court_side
-            contact_count_on_side = 1
-        elif contact_count_on_side == 1:
-            action = "dig"
-        elif contact_count_on_side == 2:
-            action = "set"
-        elif contact_count_on_side >= 3:
-            action = "spike"
-
         trace.append({
             "i": i, "frame": contact.frame,
             "ball_y": contact.ball_y, "court_side": contact.court_side,
             "is_at_net": contact.is_at_net,
             "crossed_net": crossed_net,
-            "prev_side": prev_side, "prev_count": prev_count,
-            "contact_count": contact_count_on_side,
-            "action": action,
-            "current_side": current_side,
+            "action": action.action_type.value,
             "player_dist": contact.player_distance,
         })
 
@@ -242,15 +171,11 @@ def main() -> None:
                 at_net = "NET" if t.get("is_at_net") else "   "
                 pdist = t.get("player_dist", float("inf"))
                 pdist_str = f"{pdist:.3f}" if pdist < float("inf") else "  inf"
-                prev_side = t.get("prev_side", "?")
-                prev_cnt = t.get("prev_count", "?")
 
                 console.print(
                     f"  [{color}]f{m.gt_frame:4d} GT={gt_action:8s} → {pred_action:8s} "
                     f"| ball_y={t.get('ball_y', 0):.3f} side={t.get('court_side', '?'):4s} "
                     f"{at_net} cross={crossed_str} "
-                    f"cnt={t.get('contact_count', '?')} "
-                    f"(prev: {prev_side}/{prev_cnt}) "
                     f"pdist={pdist_str}"
                     f"[/{color}]"
                 )

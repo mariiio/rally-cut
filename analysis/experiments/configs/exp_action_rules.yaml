@@ -19,9 +19,8 @@ contact_detection:
 # Action classification rules
 classification:
   serve_window_frames: 60
-  serve_min_velocity: 0.015
+  serve_min_velocity: 0.025
   block_max_frame_gap: 8
-  block_net_zone: 0.08
 
 # Evaluation
 evaluation:
