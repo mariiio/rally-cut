@@ -5,7 +5,7 @@ Classifies detected ball contacts into volleyball actions
 
 1. **Learned classifier** (default): A trained GBM model predicts dig/set/attack
    from trajectory features + sequence context. Serve, receive, and block stay
-   heuristic. Achieves ~87% action accuracy (up from ~48% rule-based).
+   heuristic. Achieves ~92% action accuracy (up from ~48% rule-based).
    Auto-loaded from weights/action_classifier/action_classifier.pkl.
 
 2. **Rule-based state machine** (fallback): Uses contact count per side
@@ -320,6 +320,74 @@ def _serve_baselines(net_y: float) -> tuple[float, float]:
     return net_y + (1.0 - net_y) * 0.64, net_y * 0.36
 
 
+def _is_ball_on_serve_side(
+    ball_y: float,
+    court_side: str,
+    net_y: float,
+    margin: float = 0.05,
+) -> bool | None:
+    """Check if ball position is on the expected side for a serve.
+
+    A serve from the near side should have ball_y > net_y (near court);
+    a serve from the far side should have ball_y < net_y (far court).
+
+    Args:
+        ball_y: Ball Y position at the contact.
+        court_side: Court side of the serve ("near" or "far").
+        net_y: Net Y position.
+        margin: Dead zone around net_y where result is indeterminate.
+
+    Returns:
+        True if ball is on the correct side for a serve from court_side,
+        False if ball is clearly on the wrong side,
+        None if ball is near the net (indeterminate).
+    """
+    if court_side not in ("near", "far"):
+        return None
+
+    if court_side == "near":
+        if ball_y > net_y + margin:
+            return True
+        elif ball_y < net_y - margin:
+            return False
+    else:  # far
+        if ball_y < net_y - margin:
+            return True
+        elif ball_y > net_y + margin:
+            return False
+
+    return None  # Ball near the net — indeterminate
+
+
+def _ball_starts_on_contact_side(
+    ball_positions: list[BallPosition],
+    frame: int,
+    court_side: str,
+    net_y: float,
+    lookahead: int = 5,
+) -> bool | None:
+    """Check whether the ball starts on the contact's court side after a hit.
+
+    Averages ball Y over the first *lookahead* frames after *frame*. A serve
+    should show the ball on the server's side; a receive will show it on the
+    opposite side because the ball has already crossed.
+
+    Returns True/False, or None if there are no ball positions in the window.
+    """
+    positions = [
+        bp for bp in ball_positions
+        if frame < bp.frame_number <= frame + lookahead
+    ]
+    if not positions:
+        return None
+    avg_y = sum(bp.y for bp in positions) / len(positions)
+    if court_side == "near":
+        return avg_y >= net_y
+    elif court_side == "far":
+        return avg_y < net_y
+    return None
+
+
 def _infer_serve_side(
     first_contact: Contact,
     ball_positions: list[BallPosition] | None = None,
@@ -360,25 +428,40 @@ def _make_synthetic_serve(
     serve_side: str,
     first_contact_frame: int,
     net_y: float,
+    rally_start_frame: int | None = None,
 ) -> ClassifiedAction:
     """Create a synthetic serve action for a missed serve.
 
-    Places the serve ~1s before the first detected contact, at the
-    appropriate baseline position.
+    Places the serve at the rally start frame when available and
+    reasonably close to the first detected contact, otherwise ~1s
+    (30 frames) before the first contact.
 
     Args:
         serve_side: Court side of the serve ("near" or "far").
         first_contact_frame: Frame of the first detected contact.
         net_y: Net Y position.
+        rally_start_frame: Frame when the rally segment starts (from
+            detection). Used for more accurate serve placement.
 
     Returns:
         A synthetic ClassifiedAction for the serve.
     """
     baseline_near, baseline_far = _serve_baselines(net_y)
 
+    # Use rally_start_frame if available and within ~3s (90 frames) of
+    # first contact. Beyond that, the rally start may be unreliable.
+    if (
+        rally_start_frame is not None
+        and rally_start_frame < first_contact_frame
+        and (first_contact_frame - rally_start_frame) <= 90
+    ):
+        serve_frame = rally_start_frame
+    else:
+        serve_frame = max(0, first_contact_frame - 30)
+
     return ClassifiedAction(
         action_type=ActionType.SERVE,
-        frame=max(0, first_contact_frame - 30),
+        frame=serve_frame,
         ball_x=0.5,
         ball_y=baseline_near if serve_side == "near" else baseline_far,
         velocity=0.0,
@@ -551,6 +634,17 @@ class ActionClassifier:
                         if toward_net is False:
                             is_phantom = True
 
+                    # Court-side check for Pass 3 fallback: if ball is clearly
+                    # on the wrong side of the net for a serve from this court
+                    # side, it's likely a receive, not a serve.
+                    if not is_phantom and serve_pass == 3:
+                        on_serve_side = _is_ball_on_serve_side(
+                            contact.ball_y, contact.court_side,
+                            contact_sequence.net_y,
+                        )
+                        if on_serve_side is False:
+                            is_phantom = True
+
                     if not is_phantom:
                         # Normal serve classification
                         is_in_window = (
@@ -580,6 +674,7 @@ class ActionClassifier:
                         actions.append(_make_synthetic_serve(
                             serve_side, contact.frame,
                             contact_sequence.net_y,
+                            rally_start_frame=start_frame,
                         ))
                         action_type = ActionType.RECEIVE
                         confidence = self.config.medium_confidence
@@ -777,6 +872,15 @@ class ActionClassifier:
                     if toward_net is False:
                         is_phantom = True
 
+                # Court-side check for Pass 3 fallback
+                if not is_phantom and serve_pass == 3:
+                    on_serve_side = _is_ball_on_serve_side(
+                        contact.ball_y, contact.court_side,
+                        contact_sequence.net_y,
+                    )
+                    if on_serve_side is False:
+                        is_phantom = True
+
                 # Classifier override: if the learned classifier says "serve",
                 # trust it over the trajectory-based phantom detection.
                 if is_phantom and classifier.is_trained:
@@ -823,6 +927,7 @@ class ActionClassifier:
                     actions.append(_make_synthetic_serve(
                         serve_side, contact.frame,
                         contact_sequence.net_y,
+                        rally_start_frame=start_frame,
                     ))
                     actions.append(ClassifiedAction(
                         action_type=ActionType.RECEIVE,
@@ -962,6 +1067,20 @@ class ActionClassifier:
                     else c.frame + window
                 )
                 if _ball_crossed_net(ball_positions, c.frame, next_frame, net_y) is True:
+                    # Validate crossing direction: after a serve, the ball
+                    # should start on the server's court side. If the ball
+                    # immediately ends up on the opposite side, this contact
+                    # is likely a receive, not a serve.
+                    on_side = _ball_starts_on_contact_side(
+                        ball_positions, c.frame, c.court_side, net_y,
+                    )
+                    if on_side is False:
+                        logger.debug(
+                            "Skipping arc serve candidate at frame %d: "
+                            "ball starts on opposite side (side=%s, net_y=%.3f)",
+                            c.frame, c.court_side, net_y,
+                        )
+                        continue
                     logger.debug(
                         "Serve detected via arc crossing at frame %d (index %d)",
                         c.frame, i,
@@ -974,14 +1093,32 @@ class ActionClassifier:
                 break
             is_at_baseline = c.ball_y >= baseline_near or c.ball_y <= baseline_far
             if is_at_baseline:
+                # Verify ball moves toward net (a serve should).
+                # Only reject on confirmed False (away from net = receive).
+                # None (insufficient data) and True both accept as serve.
+                if ball_positions:
+                    toward = _ball_moving_toward_net(
+                        ball_positions, c.frame, c.ball_y, net_y,
+                    )
+                    if toward is False:
+                        continue  # Ball moving away from net — likely a receive
                 return i, 2
             if c.velocity >= self.config.serve_min_velocity:
                 # With ball trajectory, also require ball moving toward net
+                # AND ball starting on the contact's court side (rejects
+                # receives where the ball immediately crosses to the other
+                # side after a high-velocity contact).
                 if ball_positions:
-                    if _ball_moving_toward_net(
+                    if not _ball_moving_toward_net(
                         ball_positions, c.frame, c.ball_y, net_y,
                     ):
-                        return i, 2
+                        continue
+                    on_side = _ball_starts_on_contact_side(
+                        ball_positions, c.frame, c.court_side, net_y,
+                    )
+                    if on_side is False:
+                        continue
+                    return i, 2
                 else:
                     return i, 2
 
@@ -1001,6 +1138,7 @@ def repair_action_sequence(
     actions: list[ClassifiedAction],
     net_y: float = 0.5,
     ball_positions: list[BallPosition] | None = None,
+    rally_start_frame: int | None = None,
 ) -> list[ClassifiedAction]:
     """Repair volleyball-illegal action sequences.
 
@@ -1011,22 +1149,25 @@ def repair_action_sequence(
     Same-side rules only — cross-side sequences (e.g., dig on near → dig on
     far) are legal because each side's touch counter resets independently.
 
-    Repairs applied (all same-side only):
+    Repairs applied:
+    0. Non-synthetic serve with ball on wrong court side → reclassify as
+       receive and prepend a synthetic serve from the opposite side.
     1. Consecutive receives → second becomes set
     2. Consecutive digs → second becomes set
     3. Receive/dig directly followed by attack → attack becomes set
        (only when a subsequent action exists to serve as the actual attack)
 
-    Only repairs non-serve, non-block actions. Serve and block are
-    structurally reliable and should not be changed.
+    Only repairs non-block actions. Block is structurally reliable.
 
     Args:
         actions: Classified actions from classify_rally or classify_rally_learned.
-        net_y: Net Y position (unused currently, reserved for future).
+        net_y: Net Y position.
         ball_positions: Ball positions (unused currently, reserved for future).
+        rally_start_frame: Rally start frame for synthetic serve placement.
 
     Returns:
-        Repaired list of ClassifiedAction (same length, modified labels).
+        Repaired list of ClassifiedAction (possibly longer if synthetic
+        serve inserted).
     """
     if len(actions) < 2:
         return actions
@@ -1043,6 +1184,42 @@ def repair_action_sequence(
 
     if serve_idx is None:
         return repaired  # Can't repair without a serve anchor
+
+    # Rule 0: Non-synthetic serve with ball on wrong court side.
+    # If a real serve contact has ball clearly on the receiving side,
+    # it's a misclassified receive. Reclassify and prepend synthetic serve.
+    serve = repaired[serve_idx]
+    if not serve.is_synthetic:
+        on_serve_side = _is_ball_on_serve_side(
+            serve.ball_y, serve.court_side, net_y,
+        )
+        if on_serve_side is False:
+            opposite = "far" if serve.court_side == "near" else "near"
+            synthetic = _make_synthetic_serve(
+                opposite, serve.frame, net_y,
+                rally_start_frame=rally_start_frame,
+            )
+            # Reclassify the serve as receive
+            repaired[serve_idx] = ClassifiedAction(
+                action_type=ActionType.RECEIVE,
+                frame=serve.frame,
+                ball_x=serve.ball_x,
+                ball_y=serve.ball_y,
+                velocity=serve.velocity,
+                player_track_id=serve.player_track_id,
+                court_side=serve.court_side,
+                confidence=min(serve.confidence, 0.6),
+                is_synthetic=serve.is_synthetic,
+                team=serve.team,
+            )
+            # Insert synthetic serve before the receive
+            repaired.insert(serve_idx, synthetic)
+            logger.debug(
+                "Repair rule 0: serve at f%d on wrong court side "
+                "(%s, ball_y=%.2f, net_y=%.2f) → reclassified as receive, "
+                "synthetic serve prepended",
+                serve.frame, serve.court_side, serve.ball_y, net_y,
+            )
 
     # Walk through post-serve actions and fix illegal patterns
     i = serve_idx + 1
@@ -1176,6 +1353,7 @@ def classify_rally_actions(
                 result.actions,
                 net_y=contact_sequence.net_y,
                 ball_positions=contact_sequence.ball_positions,
+                rally_start_frame=contact_sequence.rally_start_frame,
             )
             return result
 
@@ -1187,5 +1365,6 @@ def classify_rally_actions(
         result.actions,
         net_y=contact_sequence.net_y,
         ball_positions=contact_sequence.ball_positions,
+        rally_start_frame=contact_sequence.rally_start_frame,
     )
     return result
