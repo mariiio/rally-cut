@@ -119,7 +119,6 @@ class ActionClassifierConfig:
 
     # Block detection
     block_max_frame_gap: int = 8  # Max frames between attack and block
-    block_net_zone: float = 0.08  # ±8% of screen around net
 
     # Confidence thresholds
     high_confidence: float = 0.9  # Confidence when rules match perfectly
@@ -200,7 +199,7 @@ def _ball_moving_toward_net(
     net_y: float,
     look_ahead_frames: int = 15,
     min_toward_ratio: float = 0.5,
-) -> bool:
+) -> bool | None:
     """Check whether ball moves toward net in the frames after a contact.
 
     Serves go toward the net; receives move laterally/up to a teammate.
@@ -563,6 +562,7 @@ class ActionClassifier:
             return 0, 3
 
         return -1, 0
+
 
 def classify_rally_actions(
     contact_sequence: ContactSequence,
