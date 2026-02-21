@@ -163,8 +163,9 @@ rallycut/
 │   ├── ground_truth.py      # GroundTruthPosition/Result data structures
 │   └── studio_client.py     # Label Studio API client
 ├── evaluation/      # Ground truth loading, metrics, parameter tuning
-├── service/         # Cloud detection (Modal deployment)
-│   ├── platforms/modal_app.py       # Modal GPU function
+├── service/         # Cloud services (Modal deployment)
+│   ├── platforms/modal_app.py       # Modal GPU detection function
+│   ├── platforms/modal_tracking.py  # Modal GPU batch tracking function
 │   └── player_tracking_runner.py    # Local player tracking subprocess
 lib/volleyball_ml/   # ML model wrappers (VideoMAE)
 tests/
@@ -261,16 +262,22 @@ Beach heuristics are tuned to be more discriminative (higher thresholds) to prev
 
 See `processing/cutter.py` and `core/config.py` for implementation.
 
-## Cloud Detection (Modal)
+## Cloud Services (Modal)
 
-Production ML runs on Modal GPUs. DetectionService automatically enables TemporalMaxer when
-`weights/temporal_maxer/best_temporal_maxer.pt` is present in the image (bundled via
-`modal_app.py`'s `.add_local_dir("weights", "/app/weights")`). Features are extracted inline
-on first detection and cached at `~/.cache/rallycut/features/` for subsequent runs.
+Production ML runs on Modal GPUs. Two separate Modal apps for independent deploys:
+
+**Detection** (`rallycut-detection`): TemporalMaxer rally detection. Auto-enabled when
+`weights/temporal_maxer/best_temporal_maxer.pt` is in the image.
+
+**Batch Tracking** (`rallycut-tracking`): GPU-accelerated player + ball tracking.
+Downloads video once, tracks all rallies on T4 GPU (~80 FPS vs 6 FPS local CPU).
+Sends per-rally webhooks for progressive results. Set `MODAL_TRACKING_URL` in API env
+to enable; falls back to local CPU when unset.
 
 ```bash
 # Deploy
-modal deploy rallycut/service/platforms/modal_app.py
+modal deploy rallycut/service/platforms/modal_app.py       # Detection
+modal deploy rallycut/service/platforms/modal_tracking.py  # Batch tracking
 
 # Local testing
 uv run python -m rallycut.service.local_runner

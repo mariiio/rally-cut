@@ -25,6 +25,8 @@ const envSchema = z.object({
   MODAL_WEBHOOK_SECRET: z.string(),
   // Optional for local development (uses local Python subprocess)
   MODAL_FUNCTION_URL: z.string().url().optional(),
+  // Optional: Modal GPU batch tracking (uses local CPU if not set)
+  MODAL_TRACKING_URL: z.string().url().optional(),
 
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
 
