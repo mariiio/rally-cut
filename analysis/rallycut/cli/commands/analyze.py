@@ -112,7 +112,15 @@ def classify_actions(
         console.print(f"  Net Y estimate: {contact_seq.net_y:.3f}")
 
     # Step 2: Action classification
-    rally_actions = classify_rally_actions(contact_seq)
+    # Load team assignments from tracking JSON if available
+    team_assignments_raw = data.get("teamAssignments", {})
+    team_assignments = (
+        {int(k): v for k, v in team_assignments_raw.items()}
+        if team_assignments_raw else None
+    )
+    rally_actions = classify_rally_actions(
+        contact_seq, team_assignments=team_assignments,
+    )
 
     if not quiet:
         console.print(f"  Actions classified: {len(rally_actions.actions)}")
@@ -257,7 +265,11 @@ def rank_highlights(
             ball_positions, player_positions or None, net_y=court_split_y,
             frame_count=data.get("frameCount"),
         )
-        rally_actions = classify_rally_actions(contact_seq, rally_id=rally_id)
+        ta_raw = data.get("teamAssignments", {})
+        ta = {int(k): v for k, v in ta_raw.items()} if ta_raw else None
+        rally_actions = classify_rally_actions(
+            contact_seq, rally_id=rally_id, team_assignments=ta,
+        )
 
         # Compute rally stats
         stats = compute_match_stats(

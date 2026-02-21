@@ -76,6 +76,7 @@ interface ActionInfo {
   playerTrackId: number;
   courtSide: string;
   confidence: number;
+  team: string;  // "A" (near court), "B" (far court), or "unknown"
 }
 
 interface ActionsData {
@@ -83,6 +84,8 @@ interface ActionsData {
   numContacts: number;
   actionSequence: string[];
   actions: ActionInfo[];
+  teamAssignments?: Record<string, string>;  // trackId → "A"|"B"
+  servingTeam?: string;  // "A" or "B"
 }
 
 export interface TrackPlayersResult {
@@ -384,7 +387,10 @@ async function runPlayerTracker(
             playerTrackId: a.playerTrackId,
             courtSide: a.courtSide,
             confidence: a.confidence,
+            team: a.team || 'unknown',
           })),
+          teamAssignments: result.actions.teamAssignments,
+          servingTeam: result.actions.servingTeam,
         } : undefined;
 
         console.log(`[PLAYER_TRACK] Output: frameCount=${frameCount}, detectionRate=${detectionRate.toFixed(2)}, avgPlayers=${avgPlayerCount.toFixed(1)}, tracks=${uniqueTrackCount}, positions=${positions.length}, rawPositions=${rawPositions?.length ?? 0}, ballPositions=${ballPositions?.length ?? 0}`);
@@ -738,6 +744,20 @@ export async function trackPlayersForRally(
         error: null,
       },
     });
+
+    // Auto-populate Rally.servingTeam from detected serve team
+    const detectedServingTeam = trackerResult.actions?.servingTeam;
+    if (detectedServingTeam === 'A' || detectedServingTeam === 'B') {
+      try {
+        await prisma.rally.update({
+          where: { id: rallyId },
+          data: { servingTeam: detectedServingTeam },
+        });
+        console.log(`[PLAYER_TRACK] Set servingTeam=${detectedServingTeam} for rally ${rallyId}`);
+      } catch (err) {
+        console.log(`[PLAYER_TRACK] Failed to update servingTeam:`, err);
+      }
+    }
 
     // Compute video characteristics from tracking data
     try {

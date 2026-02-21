@@ -78,6 +78,7 @@ class ClassifiedAction:
     court_side: str  # "near" or "far"
     confidence: float  # Classification confidence (0-1)
     is_synthetic: bool = False  # True for inferred actions (e.g. missed serve)
+    team: str = "unknown"  # "A" (near court), "B" (far court), or "unknown"
 
     def to_dict(self) -> dict[str, Any]:
         d = {
@@ -89,11 +90,28 @@ class ClassifiedAction:
             "playerTrackId": self.player_track_id,
             "courtSide": self.court_side,
             "confidence": self.confidence,
+            "team": self.team,
         }
         # Omitted when False for backward compatibility with existing stored data
         if self.is_synthetic:
             d["isSynthetic"] = True
         return d
+
+
+def _team_label(
+    player_track_id: int,
+    team_assignments: dict[int, int] | None,
+) -> str:
+    """Map a player track ID to a team label using team assignments.
+
+    Convention: team 0 (near court) = "A", team 1 (far court) = "B".
+    Matches existing Rally.servingTeam A/B enum in the database.
+    """
+    if team_assignments and player_track_id >= 0:
+        team_int = team_assignments.get(player_track_id)
+        if team_int is not None:
+            return "A" if team_int == 0 else "B"
+    return "unknown"
 
 
 @dataclass
@@ -102,6 +120,7 @@ class RallyActions:
 
     actions: list[ClassifiedAction] = field(default_factory=list)
     rally_id: str = ""
+    team_assignments: dict[int, int] = field(default_factory=dict)
 
     @property
     def serve(self) -> ClassifiedAction | None:
@@ -112,6 +131,12 @@ class RallyActions:
         return None
 
     @property
+    def serving_team(self) -> str | None:
+        """Get the team that served, or None if unknown."""
+        serve = self.serve
+        return serve.team if serve and serve.team != "unknown" else None
+
+    @property
     def action_sequence(self) -> list[ActionType]:
         """Get ordered action type sequence."""
         return [a.action_type for a in self.actions]
@@ -119,6 +144,10 @@ class RallyActions:
     def actions_by_player(self, track_id: int) -> list[ClassifiedAction]:
         """Get all actions for a specific player."""
         return [a for a in self.actions if a.player_track_id == track_id]
+
+    def actions_by_team(self, team: str) -> list[ClassifiedAction]:
+        """Get all actions for a specific team ("A" or "B")."""
+        return [a for a in self.actions if a.team == team]
 
     def actions_by_type(self, action_type: ActionType) -> list[ClassifiedAction]:
         """Get all actions of a specific type."""
@@ -130,12 +159,21 @@ class RallyActions:
         return sum(1 for a in self.actions if a.action_type != ActionType.BLOCK)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "rallyId": self.rally_id,
             "numContacts": self.num_contacts,
             "actionSequence": [a.value for a in self.action_sequence],
             "actions": [a.to_dict() for a in self.actions],
         }
+        if self.team_assignments:
+            d["teamAssignments"] = {
+                str(tid): ("A" if team == 0 else "B")
+                for tid, team in self.team_assignments.items()
+            }
+        serving = self.serving_team
+        if serving:
+            d["servingTeam"] = serving
+        return d
 
 
 @dataclass
@@ -378,12 +416,14 @@ class ActionClassifier:
         self,
         contact_sequence: ContactSequence,
         rally_id: str = "",
+        team_assignments: dict[int, int] | None = None,
     ) -> RallyActions:
         """Classify all contacts in a rally into action types.
 
         Args:
             contact_sequence: Detected contacts from ContactDetector.
             rally_id: Optional rally identifier.
+            team_assignments: Optional mapping of track_id → team (0=near/A, 1=far/B).
 
         Returns:
             RallyActions with classified actions.
@@ -598,7 +638,19 @@ class ActionClassifier:
             ))
             last_action_type = action_type
 
-        result = RallyActions(actions=actions, rally_id=rally_id)
+        # Stamp team labels on all actions
+        if team_assignments:
+            for action in actions:
+                if action.player_track_id >= 0:
+                    action.team = _team_label(action.player_track_id, team_assignments)
+                elif action.court_side in ("near", "far"):
+                    # Synthetic serves have player_track_id=-1; derive from court_side
+                    action.team = "A" if action.court_side == "near" else "B"
+
+        result = RallyActions(
+            actions=actions, rally_id=rally_id,
+            team_assignments=team_assignments or {},
+        )
 
         if actions:
             seq = [a.action_type.value for a in actions]
@@ -611,6 +663,7 @@ class ActionClassifier:
         contact_sequence: ContactSequence,
         classifier: ActionTypeClassifier,
         rally_id: str = "",
+        team_assignments: dict[int, int] | None = None,
     ) -> RallyActions:
         """Classify contacts using the learned action type classifier.
 
@@ -621,6 +674,7 @@ class ActionClassifier:
             contact_sequence: Detected contacts from ContactDetector.
             classifier: Trained ActionTypeClassifier.
             rally_id: Optional rally identifier.
+            team_assignments: Optional mapping of track_id → team (0=near/A, 1=far/B).
 
         Returns:
             RallyActions with classified actions.
@@ -804,7 +858,18 @@ class ActionClassifier:
             ))
             last_action_type = action_type
 
-        result = RallyActions(actions=actions, rally_id=rally_id)
+        # Stamp team labels on all actions
+        if team_assignments:
+            for action in actions:
+                if action.player_track_id >= 0:
+                    action.team = _team_label(action.player_track_id, team_assignments)
+                elif action.court_side in ("near", "far"):
+                    action.team = "A" if action.court_side == "near" else "B"
+
+        result = RallyActions(
+            actions=actions, rally_id=rally_id,
+            team_assignments=team_assignments or {},
+        )
 
         if actions:
             seq = [a.action_type.value for a in actions]
@@ -895,6 +960,7 @@ def classify_rally_actions(
     rally_id: str = "",
     config: ActionClassifierConfig | None = None,
     use_classifier: bool = True,
+    team_assignments: dict[int, int] | None = None,
 ) -> RallyActions:
     """Convenience function to classify actions in a rally.
 
@@ -907,6 +973,7 @@ def classify_rally_actions(
         rally_id: Optional rally identifier.
         config: Optional classifier configuration.
         use_classifier: Whether to auto-load and use the learned classifier.
+        team_assignments: Optional mapping of track_id → team (0=near/A, 1=far/B).
 
     Returns:
         RallyActions with all classified actions.
@@ -918,6 +985,10 @@ def classify_rally_actions(
         if learned is not None and learned.is_trained:
             return action_classifier.classify_rally_learned(
                 contact_sequence, learned, rally_id,
+                team_assignments=team_assignments,
             )
 
-    return action_classifier.classify_rally(contact_sequence, rally_id)
+    return action_classifier.classify_rally(
+        contact_sequence, rally_id,
+        team_assignments=team_assignments,
+    )
