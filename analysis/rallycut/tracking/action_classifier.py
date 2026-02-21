@@ -241,6 +241,7 @@ class ActionClassifier:
         # ball tracking starts late — common with VballNet warmup).
         serve_index = self._find_serve_index(
             contacts, start_frame, contact_sequence.net_y,
+            ball_positions=contact_sequence.ball_positions or None,
         )
 
         actions: list[ClassifiedAction] = []
@@ -343,6 +344,13 @@ class ActionClassifier:
                 action_type = ActionType.SPIKE
                 confidence = self.config.high_confidence
 
+            # Modulate action confidence with contact classifier confidence.
+            # If the contact was scored by a classifier (confidence > 0), blend
+            # it with the rule-based confidence so low-confidence contacts get
+            # lower action confidence.
+            if contact.confidence > 0:
+                confidence = min(confidence, contact.confidence)
+
             actions.append(ClassifiedAction(
                 action_type=action_type,
                 frame=contact.frame,
@@ -368,14 +376,15 @@ class ActionClassifier:
         contacts: list[Contact],
         start_frame: int,
         net_y: float = 0.5,
+        ball_positions: list[BallPosition] | None = None,
     ) -> int:
         """Find which contact is the serve.
 
-        First tries to find a serve within the serve window (baseline position
-        or high velocity). If none found and serve_fallback is enabled, treats
-        the first contact as the serve — ball tracking often starts late due to
-        VballNet warmup, so the first detected contact is typically the serve
-        or very close to it.
+        Uses three passes with decreasing strictness:
+        1. Arc-based: first contact in window whose subsequent trajectory crosses
+           the net (distinctive serve arc pattern).
+        2. Position/velocity: baseline position or high velocity (original heuristic).
+        3. Fallback: first contact is the serve.
 
         Returns:
             Index into contacts list, or -1 if no serve found.
@@ -387,7 +396,29 @@ class ActionClassifier:
         baseline_near = net_y + (1.0 - net_y) * 0.64
         baseline_far = net_y * 0.36
 
-        # Pass 1: strict serve detection within window
+        # Pass 1: Arc-based serve detection — check only the first 2 contacts
+        # (serve is always at the start of the rally). A serve initiates a
+        # trajectory that crosses the net. Limit to first 2 to avoid false
+        # positives from mid-rally spikes that also cross the net.
+        if ball_positions and len(contacts) >= 2:
+            max_arc_candidates = min(2, len(contacts))
+            for i in range(max_arc_candidates):
+                c = contacts[i]
+                if (c.frame - start_frame) >= window:
+                    break
+                # Check if ball crosses net between this and next contact
+                next_frame = (
+                    contacts[i + 1].frame if i + 1 < len(contacts)
+                    else c.frame + window
+                )
+                if _ball_crossed_net(ball_positions, c.frame, next_frame, net_y):
+                    logger.debug(
+                        "Serve detected via arc crossing at frame %d (index %d)",
+                        c.frame, i,
+                    )
+                    return i
+
+        # Pass 2: Position/velocity heuristic within window
         for i, c in enumerate(contacts):
             if (c.frame - start_frame) >= window:
                 break
@@ -395,7 +426,7 @@ class ActionClassifier:
             if is_at_baseline or c.velocity >= self.config.serve_min_velocity:
                 return i
 
-        # Pass 2: fallback — first contact is the serve
+        # Pass 3: fallback — first contact is the serve
         if self.config.serve_fallback and contacts:
             logger.info(
                 "No serve in %d-frame window, using first contact (frame %d) "

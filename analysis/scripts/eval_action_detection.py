@@ -288,6 +288,7 @@ def main() -> None:
     parser.add_argument("--tolerance-ms", type=int, default=167, help="Time tolerance in ms for matching (default: 167, ~5 frames at 30fps)")
     parser.add_argument("--redetect", action="store_true", help="Re-run contact detection instead of using stored results")
     parser.add_argument("--config", type=str, help="JSON config overrides for ContactDetectionConfig (implies --redetect)")
+    parser.add_argument("--classifier", type=str, help="Path to trained contact classifier model (implies --redetect)")
     args = parser.parse_args()
 
     # Build ContactDetectionConfig from overrides
@@ -303,6 +304,13 @@ def main() -> None:
         except TypeError as e:
             console.print(f"[red]Invalid config field: {e}[/red]")
             return
+
+    # Load classifier if specified
+    contact_classifier = None
+    if args.classifier:
+        from rallycut.tracking.contact_classifier import ContactClassifier
+        contact_classifier = ContactClassifier.load(args.classifier)
+        console.print(f"[bold]Using trained classifier: {args.classifier}[/bold]")
 
     rallies = load_rallies_with_action_gt(rally_id=args.rally)
 
@@ -331,7 +339,7 @@ def main() -> None:
         # Get predicted actions — either from stored data or re-detect
         pred_actions: list[dict] = []
 
-        if (args.redetect or contact_config) and rally.ball_positions_json:
+        if (args.redetect or contact_config or contact_classifier) and rally.ball_positions_json:
             # Re-run contact detection from ball/player positions
             from rallycut.tracking.ball_tracker import BallPosition as BallPos
             from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
@@ -368,6 +376,7 @@ def main() -> None:
                 config=contact_config,
                 net_y=rally.court_split_y,
                 frame_count=rally.frame_count or None,
+                classifier=contact_classifier,
             )
 
             rally_actions = classify_rally_actions(contacts, rally.rally_id)
