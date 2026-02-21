@@ -12,9 +12,12 @@ from rallycut.tracking.action_classifier import (
     RallyActions,
     _ball_crossed_net,
     _ball_moving_toward_net,
+    _ball_starts_on_contact_side,
     _infer_serve_side,
+    _is_ball_on_serve_side,
     _make_synthetic_serve,
     classify_rally_actions,
+    repair_action_sequence,
 )
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.contact_detector import Contact, ContactSequence
@@ -884,13 +887,28 @@ class TestSyntheticServe:
         assert _infer_serve_side(contact, ball_positions, net_y=0.5) == "far"
 
     def test_synthetic_serve_frame_placement(self) -> None:
-        """Synthetic serve is placed ~1s (30 frames) before first contact."""
-        serve = _make_synthetic_serve("near", 50, 0.5)
-        assert serve.frame == 20  # 50 - 30
+        """Synthetic serve uses rally_start_frame when available."""
+        # With rally_start_frame within 90 frames
+        serve = _make_synthetic_serve("near", 50, 0.5, rally_start_frame=10)
+        assert serve.frame == 10
+
+        # Without rally_start_frame, falls back to first_contact - 30
+        serve_no_start = _make_synthetic_serve("near", 50, 0.5)
+        assert serve_no_start.frame == 20  # 50 - 30
 
         # Don't go below 0
         serve_early = _make_synthetic_serve("near", 10, 0.5)
         assert serve_early.frame == 0
+
+    def test_synthetic_serve_ignores_distant_rally_start(self) -> None:
+        """Rally start >90 frames before first contact is ignored."""
+        serve = _make_synthetic_serve("near", 200, 0.5, rally_start_frame=50)
+        assert serve.frame == 170  # 200 - 30, ignores start_frame=50
+
+    def test_synthetic_serve_ignores_start_after_contact(self) -> None:
+        """Rally start after first contact is ignored."""
+        serve = _make_synthetic_serve("near", 50, 0.5, rally_start_frame=60)
+        assert serve.frame == 20  # 50 - 30
 
     def test_phantom_serve_injects_synthetic_learned_path(self) -> None:
         """classify_rally_learned also injects synthetic serve on phantom."""
@@ -923,3 +941,298 @@ class TestSyntheticServe:
         assert result.actions[1].is_synthetic is False
         # Remaining contacts go through the learned classifier
         assert len(result.actions) >= 3
+
+
+class TestIsBallOnServeSide:
+    """Tests for the _is_ball_on_serve_side helper."""
+
+    def test_near_side_serve_ball_on_near(self) -> None:
+        """Ball on near side (Y > net_y + margin) → True for near serve."""
+        assert _is_ball_on_serve_side(0.7, "near", 0.5) is True
+
+    def test_near_side_serve_ball_on_far(self) -> None:
+        """Ball on far side (Y < net_y - margin) → False for near serve."""
+        assert _is_ball_on_serve_side(0.3, "near", 0.5) is False
+
+    def test_far_side_serve_ball_on_far(self) -> None:
+        """Ball on far side → True for far serve."""
+        assert _is_ball_on_serve_side(0.3, "far", 0.5) is True
+
+    def test_far_side_serve_ball_on_near(self) -> None:
+        """Ball on near side → False for far serve."""
+        assert _is_ball_on_serve_side(0.7, "far", 0.5) is False
+
+    def test_ball_near_net_is_indeterminate(self) -> None:
+        """Ball within margin of net → None (indeterminate)."""
+        assert _is_ball_on_serve_side(0.52, "near", 0.5) is None
+        assert _is_ball_on_serve_side(0.48, "far", 0.5) is None
+
+    def test_unknown_court_side(self) -> None:
+        """Unknown court side → None."""
+        assert _is_ball_on_serve_side(0.7, "unknown", 0.5) is None
+
+
+class TestPass2BaselineTrajectoryGate:
+    """Tests for trajectory check on Pass 2 baseline serve detection."""
+
+    def test_baseline_contact_away_from_net_skipped(self) -> None:
+        """Baseline contact with ball moving away from net is not serve."""
+        # Contact at near baseline but ball moves away from net
+        contacts = [
+            _contact(frame=10, ball_y=0.85, court_side="near"),
+            _contact(frame=40, ball_y=0.6, court_side="near"),
+        ]
+        # Ball moves AWAY from net (near side, Y increasing = away)
+        ball_positions = [
+            _bp(11, 0.86), _bp(12, 0.87), _bp(13, 0.88),
+            _bp(14, 0.89), _bp(15, 0.90), _bp(16, 0.91),
+        ]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+            ball_positions=ball_positions,
+        )
+        classifier = ActionClassifier()
+        serve_idx, serve_pass = classifier._find_serve_index(
+            contacts, 0, 0.5, ball_positions=ball_positions,
+        )
+        # Pass 2 should skip the baseline contact; falls to pass 3
+        assert serve_pass == 3
+
+    def test_baseline_contact_toward_net_accepted(self) -> None:
+        """Baseline contact with ball moving toward net is serve."""
+        contacts = [
+            _contact(frame=10, ball_y=0.85, court_side="near"),
+            _contact(frame=40, ball_y=0.3, court_side="far"),
+        ]
+        # Ball moves toward net (near side, Y decreasing)
+        ball_positions = [
+            _bp(11, 0.83), _bp(12, 0.80), _bp(13, 0.76),
+            _bp(14, 0.72), _bp(15, 0.68), _bp(16, 0.64),
+        ]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+            ball_positions=ball_positions,
+        )
+        classifier = ActionClassifier()
+        serve_idx, serve_pass = classifier._find_serve_index(
+            contacts, 0, 0.5, ball_positions=ball_positions,
+        )
+        assert serve_pass == 2
+        assert serve_idx == 0
+
+    def test_baseline_contact_no_trajectory_accepted(self) -> None:
+        """Baseline contact without ball positions is accepted (conservative)."""
+        contacts = [
+            _contact(frame=10, ball_y=0.85, court_side="near"),
+        ]
+        classifier = ActionClassifier()
+        serve_idx, serve_pass = classifier._find_serve_index(
+            contacts, 0, 0.5, ball_positions=None,
+        )
+        assert serve_pass == 2
+        assert serve_idx == 0
+
+
+class TestBallStartsOnContactSide:
+    """Tests for _ball_starts_on_contact_side helper."""
+
+    def test_ball_on_near_side(self) -> None:
+        positions = [_bp(11, 0.6), _bp(12, 0.62), _bp(13, 0.58)]
+        assert _ball_starts_on_contact_side(positions, 10, "near", 0.5) is True
+
+    def test_ball_on_far_side_for_near_contact(self) -> None:
+        positions = [_bp(11, 0.40), _bp(12, 0.38), _bp(13, 0.42)]
+        assert _ball_starts_on_contact_side(positions, 10, "near", 0.5) is False
+
+    def test_ball_on_far_side_for_far_contact(self) -> None:
+        positions = [_bp(11, 0.35), _bp(12, 0.32), _bp(13, 0.38)]
+        assert _ball_starts_on_contact_side(positions, 10, "far", 0.5) is True
+
+    def test_no_positions_returns_none(self) -> None:
+        assert _ball_starts_on_contact_side([], 10, "near", 0.5) is None
+
+    def test_unknown_side_returns_none(self) -> None:
+        positions = [_bp(11, 0.6)]
+        assert _ball_starts_on_contact_side(positions, 10, "unknown", 0.5) is None
+
+
+class TestPass1ArcDirectionValidation:
+    """Tests for direction validation in Pass 1 (arc-based serve detection)."""
+
+    def test_arc_serve_rejected_when_ball_on_opposite_side(self) -> None:
+        """Arc crossing detected but ball starts on wrong side → skip."""
+        # Contact at far side (ball_y=0.3), next contact at near side
+        contacts = [
+            _contact(frame=97, ball_y=0.467, court_side="near"),
+            _contact(frame=146, ball_y=0.35, court_side="far"),
+        ]
+        # Ball crosses net between 97→146, but at frame 98-102 ball is
+        # already on far side (< net_y) — this is a receive, not a serve
+        ball_positions = [
+            _bp(95, 0.43), _bp(97, 0.467),
+            _bp(98, 0.45), _bp(99, 0.44), _bp(100, 0.42),
+            _bp(101, 0.40), _bp(102, 0.38),
+            # ball continues to far side, then comes back
+            _bp(120, 0.30), _bp(130, 0.35), _bp(140, 0.42),
+            _bp(145, 0.50), _bp(146, 0.55),
+        ]
+        classifier = ActionClassifier()
+        serve_idx, serve_pass = classifier._find_serve_index(
+            contacts, 80, 0.5, ball_positions=ball_positions,
+        )
+        # Pass 1 should skip contact 0 (ball on wrong side), fall to pass 3
+        assert serve_pass != 1
+
+    def test_arc_serve_accepted_when_ball_on_correct_side(self) -> None:
+        """Arc crossing detected with ball on correct side → accepted."""
+        contacts = [
+            _contact(frame=10, ball_y=0.7, court_side="near"),
+            _contact(frame=40, ball_y=0.3, court_side="far"),
+        ]
+        # Ball starts on near side (>0.5) then crosses to far side
+        ball_positions = [
+            _bp(11, 0.68), _bp(12, 0.65), _bp(13, 0.62),
+            _bp(14, 0.58), _bp(15, 0.55),
+            _bp(20, 0.48), _bp(25, 0.42), _bp(30, 0.35),
+        ]
+        classifier = ActionClassifier()
+        serve_idx, serve_pass = classifier._find_serve_index(
+            contacts, 0, 0.5, ball_positions=ball_positions,
+        )
+        assert serve_pass == 1
+        assert serve_idx == 0
+
+
+class TestPass2VelocityDirectionValidation:
+    """Tests for direction validation in Pass 2 velocity branch."""
+
+    def test_high_velocity_contact_rejected_when_ball_on_wrong_side(self) -> None:
+        """High velocity contact with ball on wrong side → skip."""
+        contacts = [
+            # High velocity, NOT at baseline, near side
+            _contact(frame=97, ball_y=0.60, velocity=0.05, court_side="near"),
+            _contact(frame=140, ball_y=0.35, court_side="far"),
+        ]
+        # Ball at f98-102 is on far side (< 0.5)
+        ball_positions = [
+            _bp(95, 0.55), _bp(97, 0.60),
+            _bp(98, 0.45), _bp(99, 0.43), _bp(100, 0.41),
+            _bp(101, 0.39), _bp(102, 0.37),
+        ]
+        classifier = ActionClassifier()
+        serve_idx, serve_pass = classifier._find_serve_index(
+            contacts, 80, 0.5, ball_positions=ball_positions,
+        )
+        # Should NOT be picked as serve via velocity (pass 2)
+        assert not (serve_pass == 2 and serve_idx == 0)
+
+    def test_high_velocity_contact_accepted_when_ball_on_correct_side(self) -> None:
+        """High velocity contact with ball on correct side → accepted."""
+        contacts = [
+            _contact(frame=10, ball_y=0.60, velocity=0.05, court_side="near"),
+            _contact(frame=40, ball_y=0.3, court_side="far"),
+        ]
+        # Ball starts on near side
+        ball_positions = [
+            _bp(11, 0.62), _bp(12, 0.60), _bp(13, 0.57),
+            _bp(14, 0.54), _bp(15, 0.51),
+        ]
+        classifier = ActionClassifier()
+        serve_idx, serve_pass = classifier._find_serve_index(
+            contacts, 0, 0.5, ball_positions=ball_positions,
+        )
+        assert serve_pass == 2
+        assert serve_idx == 0
+
+
+class TestPass3CourtSidePhantom:
+    """Tests for court-side phantom serve detection on Pass 3 fallback."""
+
+    def test_ball_on_wrong_side_triggers_phantom(self) -> None:
+        """Pass 3 contact with ball clearly on receiving side → phantom serve."""
+        # Contact on "near" side but ball_y=0.3 (far side of court)
+        contacts = [
+            _contact(frame=10, ball_y=0.3, velocity=0.010, court_side="near"),
+            _contact(frame=40, ball_y=0.35, court_side="far"),
+        ]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+        )
+        result = classify_rally_actions(seq, use_classifier=False)
+
+        # Should detect phantom and inject synthetic serve
+        assert result.actions[0].action_type == ActionType.SERVE
+        assert result.actions[0].is_synthetic is True
+        assert result.actions[1].action_type == ActionType.RECEIVE
+
+    def test_ball_on_correct_side_no_phantom(self) -> None:
+        """Pass 3 contact with ball on correct side → normal serve."""
+        contacts = [
+            _contact(frame=10, ball_y=0.7, velocity=0.010, court_side="near"),
+        ]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+        )
+        result = classify_rally_actions(seq, use_classifier=False)
+
+        assert result.actions[0].action_type == ActionType.SERVE
+        assert result.actions[0].is_synthetic is False
+
+
+class TestRepairWrongSideServe:
+    """Tests for repair rule 0: serve on wrong court side."""
+
+    def test_wrong_side_serve_repaired(self) -> None:
+        """Non-synthetic serve with ball on wrong side → reclassified as receive."""
+        actions = [
+            # Serve labeled "near" but ball_y=0.3 (far side)
+            ClassifiedAction(
+                ActionType.SERVE, 64, 0.5, 0.3, 0.02, 1, "near", 0.9,
+            ),
+            ClassifiedAction(
+                ActionType.SET, 80, 0.5, 0.35, 0.01, 2, "far", 0.8,
+            ),
+        ]
+        repaired = repair_action_sequence(actions, net_y=0.5, rally_start_frame=30)
+
+        # Synthetic serve prepended, original serve → receive
+        assert len(repaired) == 3
+        assert repaired[0].action_type == ActionType.SERVE
+        assert repaired[0].is_synthetic is True
+        assert repaired[0].court_side == "far"  # Opposite of original
+        assert repaired[0].frame == 30  # rally_start_frame
+        assert repaired[1].action_type == ActionType.RECEIVE
+        assert repaired[1].frame == 64
+
+    def test_correct_side_serve_not_repaired(self) -> None:
+        """Serve with ball on correct side is NOT repaired."""
+        actions = [
+            ClassifiedAction(
+                ActionType.SERVE, 10, 0.5, 0.85, 0.02, 1, "near", 0.9,
+            ),
+            ClassifiedAction(
+                ActionType.RECEIVE, 30, 0.5, 0.3, 0.01, 2, "far", 0.8,
+            ),
+        ]
+        repaired = repair_action_sequence(actions, net_y=0.5)
+
+        assert len(repaired) == 2
+        assert repaired[0].action_type == ActionType.SERVE
+        assert repaired[0].is_synthetic is False
+
+    def test_synthetic_serve_not_repaired(self) -> None:
+        """Synthetic serve is NOT touched by Rule 0 (already handled)."""
+        actions = [
+            ClassifiedAction(
+                ActionType.SERVE, 10, 0.5, 0.3, 0.0, -1, "near", 0.4,
+                is_synthetic=True,
+            ),
+            ClassifiedAction(
+                ActionType.RECEIVE, 40, 0.5, 0.35, 0.01, 2, "far", 0.8,
+            ),
+        ]
+        repaired = repair_action_sequence(actions, net_y=0.5)
+
+        assert len(repaired) == 2
+        assert repaired[0].action_type == ActionType.SERVE
+        assert repaired[0].is_synthetic is True
