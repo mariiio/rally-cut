@@ -431,7 +431,7 @@ class TestDetectContacts:
 
     def test_empty_input(self) -> None:
         """Empty ball positions returns empty sequence."""
-        result = detect_contacts([])
+        result = detect_contacts([], use_classifier=False)
         assert result.num_contacts == 0
 
     def test_detects_velocity_peaks(self) -> None:
@@ -461,7 +461,7 @@ class TestDetectContacts:
             _pp(31, 2, 0.28, 0.52),   # Near phase 3 start
         ]
 
-        result = detect_contacts(positions, player_positions=players, config=config)
+        result = detect_contacts(positions, player_positions=players, config=config, use_classifier=False)
         # Should detect contacts at the reversal/acceleration points
         assert result.num_contacts >= 1
 
@@ -492,7 +492,7 @@ class TestDetectContacts:
         # Player near the direction change for compound validation
         players = [_pp(25, 1, 0.40, 0.41)]
 
-        result = detect_contacts(positions, player_positions=players, config=config)
+        result = detect_contacts(positions, player_positions=players, config=config, use_classifier=False)
         # Should detect a contact near the direction change at frame 25
         inflection_contacts = [
             c for c in result.contacts if abs(c.frame - 25) <= 3
@@ -518,7 +518,7 @@ class TestDetectContacts:
             else:
                 positions.append(_bp(i, 0.3 + i * 0.01, 0.5, conf=0.9))
 
-        result = detect_contacts(positions, config=config)
+        result = detect_contacts(positions, config=config, use_classifier=False)
         # The spike at frame 10 should NOT produce a contact
         spike_contacts = [c for c in result.contacts if c.frame == 10]
         assert len(spike_contacts) == 0
@@ -540,7 +540,7 @@ class TestDetectContacts:
             else:
                 positions.append(_bp(i, 0.5 - (i - 15) * 0.02, 0.5, conf=0.9))
 
-        result = detect_contacts(positions, config=config, net_y=0.45)
+        result = detect_contacts(positions, config=config, net_y=0.45, use_classifier=False)
         assert result.net_y == 0.45
 
     def test_frame_count_suppresses_post_rally(self) -> None:
@@ -567,11 +567,11 @@ class TestDetectContacts:
         ]
 
         # Without frame_count: both contacts detected
-        result_all = detect_contacts(positions, players, config)
+        result_all = detect_contacts(positions, players, config, use_classifier=False)
         all_frames = {c.frame for c in result_all.contacts}
 
         # With frame_count=30: frame 35 should be suppressed
-        result_limited = detect_contacts(positions, players, config, frame_count=30)
+        result_limited = detect_contacts(positions, players, config, frame_count=30, use_classifier=False)
         limited_frames = {c.frame for c in result_limited.contacts}
 
         # The contact near frame 35 should be gone
@@ -600,7 +600,7 @@ class TestDetectContacts:
 
         players = [_pp(15, 1, 0.5, 0.20)]
 
-        result = detect_contacts(positions, players, config, net_y=0.50)
+        result = detect_contacts(positions, players, config, net_y=0.50, use_classifier=False)
         # All contacts at y=0.15 should be "far" with net_y=0.50
         for c in result.contacts:
             assert c.court_side == "far"
@@ -635,7 +635,7 @@ class TestDetectContacts:
             min_peak_velocity=0.005,
             min_peak_prominence=0.002,
         )
-        result = detect_contacts(positions, players, config)
+        result = detect_contacts(positions, players, config, use_classifier=False)
 
         # Any detected contact near frame 15 should be attributed to player 42
         for contact in result.contacts:
@@ -973,7 +973,7 @@ class TestDetectContactsWithNewFeatures:
                 positions.append(_bp(i, 0.5 - (i - 15) * 0.02, 0.6))
 
         players = [_pp(15, 1, 0.5, 0.65)]
-        result = detect_contacts(positions, players, cfg)
+        result = detect_contacts(positions, players, cfg, use_classifier=False)
         # Should still detect via velocity/inflection
         assert result.num_contacts >= 0  # May or may not detect depending on velocity
 
@@ -993,7 +993,7 @@ class TestDetectContactsWithNewFeatures:
                 positions.append(_bp(i, 0.5 - (i - 20) * 0.015, 0.6))
 
         players = [_pp(20, 1, 0.5, 0.65)]
-        result = detect_contacts(positions, players, cfg)
+        result = detect_contacts(positions, players, cfg, use_classifier=False)
 
         for c in result.contacts:
             assert hasattr(c, "arc_fit_residual")
@@ -1015,7 +1015,7 @@ class TestDetectContactsWithNewFeatures:
                 positions.append(_bp(i, 0.5 - (i - 15) * 0.02, 0.6))
 
         players = [_pp(15, 1, 0.5, 0.65)]
-        result = detect_contacts(positions, players, cfg)
+        result = detect_contacts(positions, players, cfg, use_classifier=False)
 
         for c in result.contacts:
             assert hasattr(c, "confidence")
