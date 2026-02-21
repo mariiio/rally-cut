@@ -27,11 +27,15 @@ from rallycut.tracking.contact_classifier import (
 )
 from rallycut.tracking.contact_detector import (
     ContactDetectionConfig,
+    _check_net_crossing,
+    _compute_acceleration,
     _compute_direction_change,
+    _compute_trajectory_curvature,
     _compute_velocities,
     _filter_noise_spikes,
     _find_inflection_candidates,
     _find_nearest_player,
+    _find_net_crossing_candidates,
     _find_parabolic_breakpoints,
     _find_velocity_reversal_candidates,
     _merge_candidates,
@@ -144,6 +148,11 @@ def extract_candidate_features(
         min_distance_frames=cfg.min_peak_distance_frames,
     )
 
+    # Net-crossing candidates
+    net_crossing_frames = _find_net_crossing_candidates(
+        ball_by_frame, confident_frames, estimated_net_y, cfg.min_peak_distance_frames
+    )
+
     # Merge all candidates
     inflection_and_reversal = _merge_candidates(
         inflection_frames, reversal_frames, cfg.min_peak_distance_frames
@@ -151,8 +160,11 @@ def extract_candidate_features(
     traditional = _merge_candidates(
         velocity_peak_frames, inflection_and_reversal, cfg.min_peak_distance_frames
     )
-    candidate_frames = _merge_candidates(
+    with_parabolic = _merge_candidates(
         traditional, parabolic_frames, cfg.min_peak_distance_frames
+    )
+    candidate_frames = _merge_candidates(
+        with_parabolic, net_crossing_frames, cfg.min_peak_distance_frames
     )
 
     # Build source sets
@@ -197,7 +209,7 @@ def extract_candidate_features(
         # Ball position
         ball = ball_by_frame.get(frame)
         if ball is None:
-            for offset in [-1, 1, -2, 2]:
+            for offset in [-1, 1, -2, 2, -3, 3]:
                 ball = ball_by_frame.get(frame + offset)
                 if ball is not None:
                     break
@@ -223,6 +235,13 @@ def extract_candidate_features(
         is_at_net = abs(ball.y - estimated_net_y) < net_zone
         arc_residual = residual_by_frame.get(frame, 0.0)
 
+        # New features
+        acceleration = _compute_acceleration(velocities, frame, window=3)
+        curvature = _compute_trajectory_curvature(ball_by_frame, frame, window=5)
+        is_net_cross = _check_net_crossing(
+            ball_by_frame, frame, estimated_net_y, window=5
+        )
+
         frames_since_last = frame - prev_frame if prev_frame > 0 else 0
 
         features = CandidateFeatures(
@@ -230,12 +249,15 @@ def extract_candidate_features(
             velocity=velocity,
             direction_change_deg=direction_change,
             arc_fit_residual=arc_residual,
+            acceleration=acceleration,
+            trajectory_curvature=curvature,
             player_distance=player_dist,
             has_player=has_player,
             ball_x=ball.x,
             ball_y=ball.y,
             ball_y_relative_net=ball.y - estimated_net_y,
             is_at_net=is_at_net,
+            is_net_crossing=is_net_cross,
             frames_since_last=frames_since_last,
             is_velocity_peak=frame in velocity_peak_set,
             is_inflection=frame in inflection_set,
@@ -278,6 +300,7 @@ def main() -> None:
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--output", type=str, default="weights/contact_classifier/contact_classifier.pkl")
     parser.add_argument("--tolerance", type=int, default=5, help="Frame tolerance for GT matching")
+    parser.add_argument("--positive-weight", type=float, default=1.0, help="Weight multiplier for positive samples (recall bias)")
     args = parser.parse_args()
 
     rallies = load_rallies_with_action_gt()
@@ -338,7 +361,7 @@ def main() -> None:
     classifier = ContactClassifier(threshold=args.threshold)
 
     # Train on all data
-    train_metrics = classifier.train(x_mat, y)
+    train_metrics = classifier.train(x_mat, y, positive_weight=args.positive_weight)
     console.print("\n[bold]Train-on-all:[/bold]")
     console.print(f"  F1: {train_metrics['train_f1']:.1%}")
     console.print(f"  Precision: {train_metrics['train_precision']:.1%}")
@@ -346,7 +369,7 @@ def main() -> None:
     console.print(f"  TP: {train_metrics['train_tp']}, FP: {train_metrics['train_fp']}, FN: {train_metrics['train_fn']}")
 
     # LOO CV
-    loo_metrics = classifier.loo_cv(x_mat, y, rally_ids)
+    loo_metrics = classifier.loo_cv(x_mat, y, rally_ids, positive_weight=args.positive_weight)
     console.print(f"\n[bold]Leave-One-Rally-Out CV ({loo_metrics['n_rallies']} folds):[/bold]")
     console.print(f"  F1: {loo_metrics['loo_f1']:.1%}")
     console.print(f"  Precision: {loo_metrics['loo_precision']:.1%}")
@@ -376,9 +399,9 @@ def main() -> None:
     best_f1 = 0.0
     best_threshold = args.threshold
 
-    for t in [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6]:
+    for t in [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50]:
         sweep_clf = ContactClassifier(threshold=t)
-        sweep_metrics = sweep_clf.loo_cv(x_mat, y, rally_ids)
+        sweep_metrics = sweep_clf.loo_cv(x_mat, y, rally_ids, positive_weight=args.positive_weight)
         f1 = sweep_metrics["loo_f1"]
         sweep_table.add_row(
             f"{t:.2f}",
@@ -395,7 +418,7 @@ def main() -> None:
 
     # Retrain with best threshold and save
     classifier = ContactClassifier(threshold=best_threshold)
-    classifier.train(x_mat, y)
+    classifier.train(x_mat, y, positive_weight=args.positive_weight)
     classifier.save(args.output)
     console.print(f"\n[green]Saved classifier to {args.output}[/green]")
 

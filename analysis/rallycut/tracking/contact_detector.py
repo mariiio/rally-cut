@@ -568,6 +568,166 @@ def _find_parabolic_breakpoints(
     return breakpoint_frames, residual_by_frame
 
 
+def _compute_acceleration(
+    velocities: dict[int, tuple[float, float, float]],
+    frame: int,
+    window: int = 3,
+) -> float:
+    """Compute acceleration (velocity change magnitude) near a frame.
+
+    Returns the maximum absolute speed change between consecutive frames
+    within ±window of the target frame. Contacts cause sudden speed changes.
+    """
+    nearby_frames = sorted(f for f in velocities if abs(f - frame) <= window)
+    if len(nearby_frames) < 2:
+        return 0.0
+
+    max_accel = 0.0
+    for i in range(1, len(nearby_frames)):
+        prev_f = nearby_frames[i - 1]
+        curr_f = nearby_frames[i]
+        gap = curr_f - prev_f
+        if gap <= 0 or gap > 5:
+            continue
+        speed_prev = velocities[prev_f][0]
+        speed_curr = velocities[curr_f][0]
+        accel = abs(speed_curr - speed_prev) / gap
+        if accel > max_accel:
+            max_accel = accel
+
+    return max_accel
+
+
+def _compute_trajectory_curvature(
+    ball_by_frame: dict[int, BallPosition],
+    frame: int,
+    window: int = 5,
+) -> float:
+    """Compute trajectory curvature (inverse radius) near a frame.
+
+    Uses three points: before, at, and after the candidate frame.
+    High curvature = sharp bend (contact). Low curvature = smooth arc (free flight).
+    Returns curvature as 1/radius, or 0.0 if not enough data.
+    """
+    before_frame = None
+    after_frame = None
+
+    for offset in range(1, window + 1):
+        if before_frame is None and (frame - offset) in ball_by_frame:
+            before_frame = frame - offset
+        if after_frame is None and (frame + offset) in ball_by_frame:
+            after_frame = frame + offset
+        if before_frame is not None and after_frame is not None:
+            break
+
+    if before_frame is None or after_frame is None:
+        return 0.0
+
+    bp_at = ball_by_frame.get(frame)
+    if bp_at is None:
+        return 0.0
+
+    bp_before = ball_by_frame[before_frame]
+    bp_after = ball_by_frame[after_frame]
+
+    # Menger curvature: 4*area / (|AB|*|BC|*|CA|)
+    ax, ay = bp_before.x, bp_before.y
+    bx, by = bp_at.x, bp_at.y
+    cx, cy = bp_after.x, bp_after.y
+
+    # Twice the signed area of triangle
+    twice_area = abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay))
+
+    ab = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+    bc = math.sqrt((cx - bx) ** 2 + (cy - by) ** 2)
+    ca = math.sqrt((ax - cx) ** 2 + (ay - cy) ** 2)
+
+    denom = ab * bc * ca
+    if denom < 1e-12:
+        return 0.0
+
+    return twice_area / denom
+
+
+def _check_net_crossing(
+    ball_by_frame: dict[int, BallPosition],
+    frame: int,
+    net_y: float,
+    window: int = 5,
+) -> bool:
+    """Check if the ball crosses net_y within ±window frames of the given frame."""
+    nearby = sorted(f for f in ball_by_frame if abs(f - frame) <= window)
+    if len(nearby) < 2:
+        return False
+
+    for i in range(1, len(nearby)):
+        prev_y = ball_by_frame[nearby[i - 1]].y
+        curr_y = ball_by_frame[nearby[i]].y
+        if (prev_y < net_y <= curr_y) or (curr_y < net_y <= prev_y):
+            return True
+
+    return False
+
+
+def _find_net_crossing_candidates(
+    ball_by_frame: dict[int, BallPosition],
+    confident_frames: list[int],
+    net_y: float,
+    min_distance_frames: int,
+) -> list[int]:
+    """Find candidates where ball crosses net Y position.
+
+    When the ball Y crosses net_y between consecutive confident frames,
+    a contact likely occurred (attack/serve crossing the net). The frame
+    just before the crossing is marked as a candidate.
+
+    Returns:
+        Sorted list of candidate frame numbers.
+    """
+    if len(confident_frames) < 2:
+        return []
+
+    crossing_frames: list[tuple[int, float]] = []
+
+    for i in range(1, len(confident_frames)):
+        prev_frame = confident_frames[i - 1]
+        curr_frame = confident_frames[i]
+
+        # Only consider consecutive-ish frames (skip large gaps)
+        if curr_frame - prev_frame > 5:
+            continue
+
+        prev_y = ball_by_frame[prev_frame].y
+        curr_y = ball_by_frame[curr_frame].y
+
+        # Check if net_y is crossed (ball goes from one side to the other)
+        if (prev_y < net_y <= curr_y) or (curr_y < net_y <= prev_y):
+            # Magnitude of crossing = distance traveled across net
+            crossing_mag = abs(curr_y - prev_y)
+            # Use the frame just before crossing
+            crossing_frames.append((prev_frame, crossing_mag))
+
+    if not crossing_frames:
+        return []
+
+    # Enforce min distance: keep strongest crossing when close
+    crossing_frames.sort(key=lambda x: x[0])
+    selected: list[int] = []
+    mag_by_frame = dict(crossing_frames)
+
+    for frame, mag in crossing_frames:
+        if not selected:
+            selected.append(frame)
+            continue
+
+        if frame - selected[-1] >= min_distance_frames:
+            selected.append(frame)
+        elif mag > mag_by_frame[selected[-1]]:
+            selected[-1] = frame
+
+    return selected
+
+
 def _merge_candidates(
     velocity_peak_frames: list[int],
     inflection_frames: list[int],
@@ -761,8 +921,13 @@ def detect_contacts(
             min_distance_frames=cfg.min_peak_distance_frames,
         )
 
+    # Step 5d: Find net-crossing candidates
+    net_crossing_frames = _find_net_crossing_candidates(
+        ball_by_frame, confident_frames, estimated_net_y, cfg.min_peak_distance_frames
+    )
+
     # Step 6: Merge all candidates.
-    # Priority: velocity peaks > inflections > reversals > parabolic.
+    # Priority: velocity peaks > inflections > reversals > parabolic > net-crossing.
     # _merge_candidates keeps the first arg's frames, adding second arg's only
     # if no existing candidate is within min_distance_frames.
     inflection_and_reversal = _merge_candidates(
@@ -772,8 +937,12 @@ def detect_contacts(
         velocity_peak_frames, inflection_and_reversal, cfg.min_peak_distance_frames
     )
     # Add parabolic breakpoints (catches soft touches missed by velocity/inflection)
-    candidate_frames = _merge_candidates(
+    with_parabolic = _merge_candidates(
         traditional_candidates, parabolic_frames, cfg.min_peak_distance_frames
+    )
+    # Add net-crossing candidates (lowest priority — fills gaps from other detectors)
+    candidate_frames = _merge_candidates(
+        with_parabolic, net_crossing_frames, cfg.min_peak_distance_frames
     )
 
     if not candidate_frames:
@@ -805,7 +974,7 @@ def detect_contacts(
         # Get ball position at candidate frame
         ball = ball_by_frame.get(frame)
         if ball is None:
-            for offset in [-1, 1, -2, 2]:
+            for offset in [-1, 1, -2, 2, -3, 3]:
                 ball = ball_by_frame.get(frame + offset)
                 if ball is not None:
                     break
@@ -842,6 +1011,13 @@ def detect_contacts(
         has_direction_change = direction_change >= cfg.min_direction_change_deg
         arc_residual = residual_by_frame.get(frame, 0.0)
 
+        # Compute new trajectory features
+        acceleration = _compute_acceleration(velocities, frame, window=3)
+        curvature = _compute_trajectory_curvature(ball_by_frame, frame, window=5)
+        is_net_cross = _check_net_crossing(
+            ball_by_frame, frame, estimated_net_y, window=5
+        )
+
         # Compute frames since last candidate (accepted or rejected).
         # Must match training script semantics (prev_frame tracks all candidates).
         frames_since_last = (
@@ -863,12 +1039,15 @@ def detect_contacts(
                 velocity=velocity,
                 direction_change_deg=direction_change,
                 arc_fit_residual=arc_residual,
+                acceleration=acceleration,
+                trajectory_curvature=curvature,
                 player_distance=player_dist,
                 has_player=has_player,
                 ball_x=ball.x,
                 ball_y=ball.y,
                 ball_y_relative_net=ball.y - estimated_net_y,
                 is_at_net=is_at_net,
+                is_net_crossing=is_net_cross,
                 frames_since_last=frames_since_last,
                 is_velocity_peak=is_vel_peak,
                 is_inflection=is_infl,
@@ -913,7 +1092,8 @@ def detect_contacts(
         f"Detected {len(contacts)} contacts "
         f"({len(velocity_peak_frames)} vel peaks + "
         f"{len(inflection_frames)} inflections + "
-        f"{len(parabolic_frames)} parabolic → "
+        f"{len(parabolic_frames)} parabolic + "
+        f"{len(net_crossing_frames)} net-cross → "
         f"{len(candidate_frames)} candidates, net_y={estimated_net_y:.3f})"
     )
 
