@@ -114,7 +114,7 @@ class ActionClassifierConfig:
 
     # Serve detection
     serve_window_frames: int = 60  # Serve must occur in first N frames (~2s @ 30fps)
-    serve_min_velocity: float = 0.015  # Min velocity for serve
+    serve_min_velocity: float = 0.025  # Min velocity for serve
     serve_fallback: bool = True  # Treat first contact as serve if none found in window
 
     # Block detection
@@ -133,7 +133,7 @@ def _ball_crossed_net(
     to_frame: int,
     net_y: float,
     min_frames_per_side: int = 2,
-) -> bool:
+) -> bool | None:
     """Check if ball Y crossed net_y between two frames.
 
     Requires the ball to be on one side for min_frames_per_side frames,
@@ -147,14 +147,15 @@ def _ball_crossed_net(
         min_frames_per_side: Min frames on each side to confirm crossing.
 
     Returns:
-        True if ball crossed net between from_frame and to_frame.
+        True if ball crossed net, False if confirmed no crossing,
+        None if insufficient data to determine.
     """
     positions_in_range = [
         bp for bp in ball_positions
         if from_frame < bp.frame_number < to_frame
     ]
     if len(positions_in_range) < min_frames_per_side * 2:
-        return False
+        return None
 
     # Count consecutive frames on each side from start and end
     near_from_start = 0
@@ -192,6 +193,54 @@ def _ball_crossed_net(
     ended_far = far_from_end >= min_frames_per_side
 
     return (started_near and ended_far) or (started_far and ended_near)
+
+
+def _ball_moving_toward_net(
+    ball_positions: list[BallPosition],
+    contact_frame: int,
+    ball_y: float,
+    net_y: float,
+    look_ahead_frames: int = 15,
+    min_toward_ratio: float = 0.5,
+) -> bool:
+    """Check whether ball moves toward net in the frames after a contact.
+
+    Serves go toward the net; receives move laterally/up to a teammate.
+
+    Args:
+        ball_positions: Sorted list of ball positions.
+        contact_frame: Frame of the contact.
+        ball_y: Ball Y at the contact.
+        net_y: Net Y position.
+        look_ahead_frames: Number of frames to look ahead.
+        min_toward_ratio: Minimum fraction of toward-net transitions.
+
+    Returns:
+        True if ball moves toward net in the look-ahead window.
+    """
+    positions = [
+        bp for bp in ball_positions
+        if contact_frame < bp.frame_number <= contact_frame + look_ahead_frames
+    ]
+    if len(positions) < 3:
+        return False
+
+    near_side = ball_y > net_y
+    toward_count = 0
+    total = 0
+    for j in range(1, len(positions)):
+        dy = positions[j].y - positions[j - 1].y
+        if abs(dy) < 0.001:
+            continue
+        total += 1
+        if near_side and dy < 0:  # Decreasing Y = toward net from near side
+            toward_count += 1
+        elif not near_side and dy > 0:  # Increasing Y = toward net from far side
+            toward_count += 1
+
+    if total == 0:
+        return False
+    return toward_count / total >= min_toward_ratio
 
 
 class ActionClassifier:
@@ -237,13 +286,6 @@ class ActionClassifier:
         if not contacts:
             return RallyActions(rally_id=rally_id)
 
-        # Determine which contact is the serve (may be outside window if
-        # ball tracking starts late — common with VballNet warmup).
-        serve_index = self._find_serve_index(
-            contacts, start_frame, contact_sequence.net_y,
-            ball_positions=contact_sequence.ball_positions or None,
-        )
-
         actions: list[ClassifiedAction] = []
         serve_detected = False
         serve_side: str | None = None  # Court side of the serve
@@ -251,6 +293,15 @@ class ActionClassifier:
         current_side: str | None = None  # Side with possession
         contact_count_on_side = 0
         last_action_type: ActionType | None = None
+
+        ball_positions = contact_sequence.ball_positions or None
+
+        # Determine which contact is the serve (may be outside window if
+        # ball tracking starts late — common with VballNet warmup).
+        serve_index = self._find_serve_index(
+            contacts, start_frame, contact_sequence.net_y,
+            ball_positions=ball_positions,
+        )
 
         for i, contact in enumerate(contacts):
             action_type = ActionType.UNKNOWN
@@ -280,23 +331,49 @@ class ActionClassifier:
                 last_action_type = action_type
                 continue
 
-            # Handle possession changes: check ball trajectory crossing,
-            # then fall back to per-contact court_side comparison.
-            crossed_net = False
-            if (
-                contact_sequence.ball_positions
-                and i > 0
-                and current_side is not None
-            ):
+            # Skip pre-serve contacts — don't let them corrupt possession state
+            if not serve_detected and i != serve_index:
+                actions.append(ClassifiedAction(
+                    action_type=ActionType.UNKNOWN,
+                    frame=contact.frame,
+                    ball_x=contact.ball_x,
+                    ball_y=contact.ball_y,
+                    velocity=contact.velocity,
+                    player_track_id=contact.player_track_id,
+                    court_side=contact.court_side,
+                    confidence=self.config.low_confidence,
+                ))
+                last_action_type = ActionType.UNKNOWN
+                continue
+
+            # Handle possession changes: check ball trajectory crossing.
+            # _ball_crossed_net returns True/False/None (tri-state):
+            #   True  = confirmed crossing → reset counter
+            #   False = confirmed no crossing → trust trajectory over court_side
+            #   None  = insufficient data → fall back to court_side comparison
+            crossed_net: bool | None = None
+            if ball_positions and i > 0 and current_side is not None:
                 crossed_net = _ball_crossed_net(
-                    contact_sequence.ball_positions,
+                    ball_positions,
                     from_frame=contacts[i - 1].frame,
                     to_frame=contact.frame,
                     net_y=contact_sequence.net_y,
                 )
-            if crossed_net or contact.court_side != current_side:
+            if crossed_net is True:
                 current_side = contact.court_side
                 contact_count_on_side = 0
+            elif contact.court_side != current_side:
+                if crossed_net is False:
+                    # Confirmed no crossing — trust trajectory, keep counter.
+                    # Safety valve: beach volleyball max 3 touches + block.
+                    if contact_count_on_side >= 4:
+                        current_side = contact.court_side
+                        contact_count_on_side = 0
+                else:
+                    # crossed_net is None (insufficient data or no ball_positions)
+                    # Fall back to court_side comparison
+                    current_side = contact.court_side
+                    contact_count_on_side = 0
 
             contact_count_on_side += 1
 
@@ -322,13 +399,16 @@ class ActionClassifier:
             elif (
                 not receive_detected
                 and serve_side is not None
-                and contact.court_side != serve_side
+                and (contact.court_side != serve_side or crossed_net is True)
             ):
                 # First contact on the opposite side from serve = receive.
+                # Also triggers if ball crossed net (even if court_side
+                # matches serve_side due to ball_y near net threshold).
                 # Robust to FP contacts between serve and receive.
                 action_type = ActionType.RECEIVE
                 confidence = self.config.high_confidence
                 receive_detected = True
+                current_side = contact.court_side
                 contact_count_on_side = 1
 
             elif contact_count_on_side == 1:
@@ -411,7 +491,7 @@ class ActionClassifier:
                     contacts[i + 1].frame if i + 1 < len(contacts)
                     else c.frame + window
                 )
-                if _ball_crossed_net(ball_positions, c.frame, next_frame, net_y):
+                if _ball_crossed_net(ball_positions, c.frame, next_frame, net_y) is True:
                     logger.debug(
                         "Serve detected via arc crossing at frame %d (index %d)",
                         c.frame, i,
@@ -423,8 +503,17 @@ class ActionClassifier:
             if (c.frame - start_frame) >= window:
                 break
             is_at_baseline = c.ball_y >= baseline_near or c.ball_y <= baseline_far
-            if is_at_baseline or c.velocity >= self.config.serve_min_velocity:
+            if is_at_baseline:
                 return i
+            if c.velocity >= self.config.serve_min_velocity:
+                # With ball trajectory, also require ball moving toward net
+                if ball_positions:
+                    if _ball_moving_toward_net(
+                        ball_positions, c.frame, c.ball_y, net_y,
+                    ):
+                        return i
+                else:
+                    return i
 
         # Pass 3: fallback — first contact is the serve
         if self.config.serve_fallback and contacts:
@@ -436,7 +525,6 @@ class ActionClassifier:
             return 0
 
         return -1
-
 
 def classify_rally_actions(
     contact_sequence: ContactSequence,

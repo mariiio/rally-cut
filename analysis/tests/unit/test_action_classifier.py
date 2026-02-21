@@ -9,6 +9,7 @@ from rallycut.tracking.action_classifier import (
     ClassifiedAction,
     RallyActions,
     _ball_crossed_net,
+    _ball_moving_toward_net,
     classify_rally_actions,
 )
 from rallycut.tracking.ball_tracker import BallPosition
@@ -71,9 +72,9 @@ class TestBallCrossedNet:
         assert not _ball_crossed_net(positions, from_frame=9, to_frame=15, net_y=0.5)
 
     def test_too_few_positions(self) -> None:
-        """Returns False with too few positions between contacts."""
+        """Returns None (insufficient data) with too few positions between contacts."""
         positions = [_bp(10, 0.7), _bp(11, 0.3)]
-        assert not _ball_crossed_net(positions, from_frame=9, to_frame=12, net_y=0.5)
+        assert _ball_crossed_net(positions, from_frame=9, to_frame=12, net_y=0.5) is None
 
     def test_noisy_single_frame_not_crossing(self) -> None:
         """Single-frame noise crossing net is not enough (needs min_frames_per_side)."""
@@ -400,8 +401,248 @@ class TestDynamicServeBaseline:
         assert result.serve is not None
 
     def test_velocity_still_triggers_serve(self) -> None:
-        """High-velocity contact in serve window is still detected as serve."""
+        """High-velocity contact with toward-net trajectory is detected as serve."""
+        contacts = [_contact(frame=10, ball_y=0.55, velocity=0.025, court_side="near")]
+        # Ball moving toward net (near side: Y decreasing toward 0.5)
+        ball_positions = [
+            _bp(11, 0.54), _bp(12, 0.53), _bp(13, 0.52),
+            _bp(14, 0.51), _bp(15, 0.50), _bp(16, 0.49),
+        ]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+            ball_positions=ball_positions,
+        )
+        result = classify_rally_actions(seq)
+        assert result.serve is not None
+
+    def test_velocity_without_trajectory_still_triggers_serve(self) -> None:
+        """High-velocity contact without ball_positions falls back to velocity-only."""
         contacts = [_contact(frame=10, ball_y=0.55, velocity=0.025, court_side="near")]
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
         result = classify_rally_actions(seq)
         assert result.serve is not None
+
+
+class TestBallMovingTowardNet:
+    """Tests for the _ball_moving_toward_net helper."""
+
+    def test_near_side_toward_net(self) -> None:
+        """Ball on near side (Y > net_y) moving toward net = decreasing Y."""
+        positions = [
+            _bp(11, 0.70), _bp(12, 0.68), _bp(13, 0.65),
+            _bp(14, 0.62), _bp(15, 0.58), _bp(16, 0.55),
+        ]
+        assert _ball_moving_toward_net(positions, contact_frame=10, ball_y=0.72, net_y=0.5)
+
+    def test_far_side_toward_net(self) -> None:
+        """Ball on far side (Y < net_y) moving toward net = increasing Y."""
+        positions = [
+            _bp(11, 0.30), _bp(12, 0.32), _bp(13, 0.35),
+            _bp(14, 0.38), _bp(15, 0.42), _bp(16, 0.45),
+        ]
+        assert _ball_moving_toward_net(positions, contact_frame=10, ball_y=0.28, net_y=0.5)
+
+    def test_lateral_movement_not_toward_net(self) -> None:
+        """Ball moving laterally (Y oscillating, not trending toward net)."""
+        positions = [
+            _bp(11, 0.70), _bp(12, 0.73), _bp(13, 0.70),
+            _bp(14, 0.73), _bp(15, 0.70), _bp(16, 0.73),
+        ]
+        assert not _ball_moving_toward_net(
+            positions, contact_frame=10, ball_y=0.70, net_y=0.5,
+        )
+
+    def test_insufficient_data(self) -> None:
+        """Returns False with fewer than 3 positions in the look-ahead window."""
+        positions = [_bp(11, 0.70), _bp(12, 0.65)]
+        assert not _ball_moving_toward_net(
+            positions, contact_frame=10, ball_y=0.72, net_y=0.5,
+        )
+
+
+class TestPreServeIsolation:
+    """Tests for pre-serve contact isolation from state machine."""
+
+    def test_pre_serve_contacts_are_unknown(self) -> None:
+        """Contacts before the serve are classified as UNKNOWN."""
+        contacts = [
+            _contact(frame=3, ball_y=0.5, velocity=0.005, court_side="far"),  # Pre-serve FP
+            _contact(frame=10, ball_y=0.85, court_side="near"),  # Actual serve
+            _contact(frame=30, ball_y=0.3, court_side="far"),   # Receive
+        ]
+        seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
+        result = classify_rally_actions(seq)
+
+        assert result.actions[0].action_type == ActionType.UNKNOWN
+        assert result.actions[1].action_type == ActionType.SERVE
+        assert result.actions[2].action_type == ActionType.RECEIVE
+
+    def test_pre_serve_contacts_dont_corrupt_possession(self) -> None:
+        """Pre-serve contacts on opposite side don't reset possession counter."""
+        contacts = [
+            _contact(frame=3, ball_y=0.5, velocity=0.005, court_side="far"),  # Pre-serve FP
+            _contact(frame=10, ball_y=0.85, court_side="near"),  # Serve
+            _contact(frame=30, ball_y=0.3, court_side="far"),    # Receive
+            _contact(frame=45, ball_y=0.25, court_side="far"),   # Set (2nd on far)
+        ]
+        seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
+        result = classify_rally_actions(seq)
+
+        assert result.actions[0].action_type == ActionType.UNKNOWN
+        assert result.actions[1].action_type == ActionType.SERVE
+        assert result.actions[2].action_type == ActionType.RECEIVE
+        # Without isolation, the far-side FP would have set current_side="far",
+        # and contact_count would be wrong
+        assert result.actions[3].action_type == ActionType.SET
+
+
+class TestServeReceiveDisambiguation:
+    """Tests for serve vs receive disambiguation using trajectory."""
+
+    def test_high_velocity_receive_not_classified_as_serve(self) -> None:
+        """High-velocity contact with lateral trajectory is NOT serve."""
+        contacts = [
+            _contact(frame=5, ball_y=0.85, court_side="near"),   # Serve (baseline)
+            # High-velocity contact on far side — could be confused as serve
+            # but ball goes laterally, not toward net
+            _contact(frame=30, ball_y=0.3, velocity=0.030, court_side="far"),
+        ]
+        # Ball moving laterally after frame 30 (not toward net)
+        ball_positions = [
+            _bp(31, 0.31), _bp(32, 0.32), _bp(33, 0.31),
+            _bp(34, 0.30), _bp(35, 0.31), _bp(36, 0.32),
+        ]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+            ball_positions=ball_positions,
+        )
+        result = classify_rally_actions(seq)
+
+        # First contact at baseline should be serve
+        assert result.actions[0].action_type == ActionType.SERVE
+        # Second contact should be receive, not serve
+        assert result.actions[1].action_type == ActionType.RECEIVE
+
+    def test_high_velocity_serve_with_toward_net_trajectory(self) -> None:
+        """High-velocity contact with toward-net trajectory IS serve."""
+        contacts = [
+            _contact(frame=10, ball_y=0.55, velocity=0.030, court_side="near"),
+        ]
+        # Ball moving toward net from near side (decreasing Y)
+        ball_positions = [
+            _bp(11, 0.54), _bp(12, 0.52), _bp(13, 0.50),
+            _bp(14, 0.48), _bp(15, 0.46), _bp(16, 0.44),
+        ]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+            ball_positions=ball_positions,
+        )
+        result = classify_rally_actions(seq)
+        assert result.actions[0].action_type == ActionType.SERVE
+
+
+class TestTrajectoryPossession:
+    """Tests for trajectory-authoritative possession tracking."""
+
+    def test_fp_near_net_doesnt_reset_counter_with_trajectory(self) -> None:
+        """FP contact near net with different court_side doesn't reset if no crossing."""
+        contacts = [
+            _contact(frame=5, ball_y=0.85, court_side="near"),   # Serve
+            _contact(frame=30, ball_y=0.3, court_side="far"),    # Receive
+            _contact(frame=45, ball_y=0.25, court_side="far"),   # Set (2nd)
+            # FP near net tagged as "near" side, but ball didn't cross net
+            _contact(frame=52, ball_y=0.48, court_side="near"),
+            _contact(frame=60, ball_y=0.35, court_side="far"),   # Should be spike (3rd+)
+        ]
+        # Ball stays on far side between contacts 45-60 (no crossing)
+        ball_positions = [
+            _bp(46, 0.28), _bp(47, 0.30), _bp(48, 0.33),
+            _bp(49, 0.36), _bp(50, 0.38), _bp(51, 0.40),
+            _bp(53, 0.42), _bp(54, 0.40), _bp(55, 0.38),
+            _bp(56, 0.36), _bp(57, 0.34), _bp(58, 0.32),
+        ]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+            ball_positions=ball_positions,
+        )
+        result = classify_rally_actions(seq)
+
+        assert result.actions[0].action_type == ActionType.SERVE
+        assert result.actions[1].action_type == ActionType.RECEIVE
+        assert result.actions[2].action_type == ActionType.SET
+        # FP at net: trajectory says no crossing, so counter keeps incrementing
+        # Contact 3 (index 3) is still on far side in the state machine's view
+        assert result.actions[3].action_type == ActionType.SPIKE
+        # Contact 4 (index 4) continues on far side
+        assert result.actions[4].action_type == ActionType.SPIKE
+
+    def test_safety_valve_at_4_contacts(self) -> None:
+        """After 4 contacts on same side with trajectory, force possession change."""
+        contacts = [
+            _contact(frame=5, ball_y=0.85, court_side="near"),   # Serve
+            _contact(frame=30, ball_y=0.3, court_side="far"),    # Receive (1st)
+            _contact(frame=40, ball_y=0.25, court_side="far"),   # Set (2nd)
+            _contact(frame=50, ball_y=0.35, court_side="far"),   # Spike (3rd)
+            _contact(frame=60, ball_y=0.30, court_side="far"),   # 4th on far
+            # 5th contact, court_side changes — safety valve should trigger
+            _contact(frame=75, ball_y=0.7, court_side="near"),
+        ]
+        # Ball stays on far side (no crossing detected by _ball_crossed_net)
+        ball_positions = [
+            _bp(31, 0.32), _bp(32, 0.30), _bp(33, 0.28),
+            _bp(41, 0.27), _bp(42, 0.30), _bp(43, 0.33),
+            _bp(51, 0.34), _bp(52, 0.32), _bp(53, 0.30),
+            _bp(61, 0.32), _bp(62, 0.34), _bp(63, 0.36),
+        ]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+            ball_positions=ball_positions,
+        )
+        result = classify_rally_actions(seq)
+
+        # After 4 contacts on far, safety valve triggers for near contact
+        assert result.actions[5].action_type == ActionType.DIG
+
+    def test_no_trajectory_falls_back_to_court_side(self) -> None:
+        """Without ball_positions, court_side comparison still works for possession."""
+        contacts = [
+            _contact(frame=5, ball_y=0.85, court_side="near"),   # Serve
+            _contact(frame=30, ball_y=0.3, court_side="far"),    # Receive
+            _contact(frame=45, ball_y=0.25, court_side="far"),   # Set
+            _contact(frame=55, ball_y=0.35, court_side="far"),   # Spike
+            _contact(frame=70, ball_y=0.7, court_side="near"),   # Dig
+        ]
+        # No ball_positions — falls back to court_side comparison
+        seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
+        result = classify_rally_actions(seq)
+
+        assert result.actions[4].action_type == ActionType.DIG
+
+
+class TestNetCrossingReceiveFallback:
+    """Tests for receive classification when ball crosses net."""
+
+    def test_receive_detected_via_net_crossing(self) -> None:
+        """Receive detected even if court_side matches serve_side, via net crossing."""
+        contacts = [
+            _contact(frame=5, ball_y=0.85, court_side="near"),   # Serve
+            # Contact right at net — court_side is "near" (same as serve) but
+            # ball actually crossed the net
+            _contact(frame=30, ball_y=0.52, court_side="near"),
+        ]
+        # Ball crosses from near to far between contacts
+        ball_positions = [
+            _bp(6, 0.80), _bp(7, 0.75), _bp(8, 0.70),   # Near side
+            _bp(10, 0.60), _bp(12, 0.55),
+            _bp(15, 0.50),
+            _bp(18, 0.45), _bp(20, 0.40), _bp(22, 0.35),  # Far side
+            _bp(25, 0.38), _bp(27, 0.42), _bp(29, 0.48),  # Comes back
+        ]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+            ball_positions=ball_positions,
+        )
+        result = classify_rally_actions(seq)
+
+        assert result.actions[0].action_type == ActionType.SERVE
+        assert result.actions[1].action_type == ActionType.RECEIVE
