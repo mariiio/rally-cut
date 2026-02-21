@@ -13,7 +13,6 @@ import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import KeyboardIcon from '@mui/icons-material/Keyboard';
 import StarIcon from '@mui/icons-material/Star';
-import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import CameraAltIcon from '@mui/icons-material/CameraAlt';
 import MergeTypeIcon from '@mui/icons-material/MergeType';
 import SpeedIcon from '@mui/icons-material/Speed';
@@ -31,9 +30,9 @@ import {
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useCameraStore } from '@/stores/cameraStore';
-import { useAuthStore } from '@/stores/authStore';
 import { formatTimeShort, formatTime } from '@/utils/timeFormat';
-import { triggerRallyDetection, getDetectionStatus } from '@/services/api';
+import { getDetectionStatus } from '@/services/api';
+import { AnalysisPipeline } from './AnalysisPipeline';
 
 // Custom effect for rally segments
 const effects: Record<string, TimelineEffect> = {
@@ -119,7 +118,6 @@ export function Timeline() {
     startRallyRecording,
     stopRallyRecording,
     cancelRallyRecording,
-    setMatchStatus,
   } = useEditorStore();
 
   // Check if rally editing is locked (after confirmation)
@@ -135,10 +133,6 @@ export function Timeline() {
   const removeKeyframe = useCameraStore((state) => state.removeKeyframe);
   const setCameraEdit = useCameraStore((state) => state.setCameraEdit);
   const applyCameraEdits = usePlayerStore((state) => state.applyCameraEdits);
-
-  // Auth state for gating detection
-  const promptSignIn = useAuthStore((state) => state.promptSignIn);
-  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
 
   // Get active match to access video status
   const activeMatch = getActiveMatch();
@@ -1230,34 +1224,6 @@ export function Timeline() {
     return () => stopPolling();
   }, [activeMatchId, activeMatch?.status, startPolling, stopPolling, reloadCurrentMatch]);
 
-  // Handle clicking the detect button - auto-selects beach model
-  const handleStartDetection = async () => {
-    if (!activeMatchId) return;
-
-    // Require authentication for rally detection
-    if (!isAuthenticated) {
-      promptSignIn('Create an account to use AI rally detection');
-      return;
-    }
-
-    setIsDetecting(true);
-    setDetectionStatus('Starting analysis...');
-    setDetectionProgress(0);
-    setDetectionError(null);
-
-    try {
-      await triggerRallyDetection(activeMatchId, 'beach');
-      // Detection started successfully - update match status in store so it persists across navigation
-      setMatchStatus(activeMatchId, 'DETECTING');
-      setDetectionStatus('Analyzing rallies...');
-      startPolling();
-    } catch (err) {
-      setIsDetecting(false);
-      setDetectionError(err instanceof Error ? err.message : 'Failed to start detection');
-      setDetectionStatus(null);
-    }
-  };
-
   return (
     <Box sx={{ bgcolor: 'background.paper', borderRadius: 1, overflow: 'hidden' }}>
       {/* Toolbar with playback controls */}
@@ -1299,7 +1265,7 @@ export function Timeline() {
             </Stack>
           )}
 
-          {/* Detection status or button */}
+          {/* Detection status or Analyze Match pipeline */}
           {isDetecting ? (
             <Stack direction="row" alignItems="center" spacing={1.5} sx={{
               bgcolor: 'action.hover',
@@ -1366,24 +1332,11 @@ export function Timeline() {
                 OK
               </Button>
             </Stack>
-          ) : videoDetectionStatus === 'DETECTED' || isLocked ? null : (
-            <Tooltip title="Use ML to automatically detect rallies in this video">
-              <Button
-                data-tutorial="detect-rallies"
-                size="small"
-                variant="outlined"
-                startIcon={<AutoFixHighIcon sx={{ fontSize: 16 }} />}
-                onClick={handleStartDetection}
-                disabled={!activeMatchId}
-                sx={{
-                  fontSize: 12,
-                  py: 0.25,
-                  textTransform: 'none',
-                }}
-              >
-                Detect Rallies
-              </Button>
-            </Tooltip>
+          ) : (
+            <AnalysisPipeline
+              hasRallies={videoDetectionStatus === 'DETECTED' || (rallies?.length ?? 0) > 0}
+              isLocked={isLocked}
+            />
           )}
         </Stack>
 

@@ -25,7 +25,9 @@ import { TutorialProvider, TutorialContext } from './tutorial';
 import { PlayerTrackingToolbar } from './PlayerTrackingToolbar';
 import { VideoInsightsBanner } from './VideoInsightsBanner';
 import { MatchStatsPanel } from './MatchStatsPanel';
+import { PlayerNamingDialog } from './PlayerNamingDialog';
 import { useEditorStore } from '@/stores/editorStore';
+import { useAnalysisStore } from '@/stores/analysisStore';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { designTokens } from '@/app/theme';
 
@@ -58,6 +60,7 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
     getActiveMatch,
     sessionError,
     userRole,
+    reloadCurrentMatch,
   } = useEditorStore();
 
   // Get current match for quality banner
@@ -68,6 +71,38 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
   const [showNamePromptModal, setShowNamePromptModal] = useState(false);
   const [pendingCreateHighlight, setPendingCreateHighlight] = useState(false);
+
+  // Analysis pipeline state
+  const showPlayerNaming = useAnalysisStore((s) => s.showPlayerNaming);
+  const setShowPlayerNaming = useAnalysisStore((s) => s.setShowPlayerNaming);
+  const analysisPipeline = useAnalysisStore((s) =>
+    currentMatch?.id ? s.getPipeline(currentMatch.id) : null,
+  );
+
+  // Reload match data when analysis pipeline transitions (detection → tracking, or → done)
+  // This ensures rallies appear in the timeline after detection completes
+  const prevPhaseRef = useRef(analysisPipeline?.phase);
+  useEffect(() => {
+    const prev = prevPhaseRef.current;
+    const curr = analysisPipeline?.phase;
+
+    // Detection just completed → rallies need to appear in timeline
+    if (prev === 'detecting' && (curr === 'tracking' || curr === 'done')) {
+      reloadCurrentMatch();
+    }
+
+    // Analysis fully done → reload to pick up tracking data + stats, auto-open stats tab
+    if (prev !== 'done' && curr === 'done') {
+      reloadCurrentMatch();
+      if (analysisPipeline?.ralliesFound && analysisPipeline.ralliesFound > 0) {
+        setLeftPanelTab('stats');
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: auto-open stats panel when analysis completes
+        setLeftPanelCollapsed(false);
+      }
+    }
+
+    prevPhaseRef.current = curr;
+  }, [analysisPipeline?.phase, analysisPipeline?.ralliesFound, setLeftPanelTab, reloadCurrentMatch]);
 
   // Keyboard shortcuts for undo/redo
   useEffect(() => {
@@ -461,6 +496,15 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
         }}
         onNameSet={handleNameSet}
       />
+
+      {/* Player Naming Dialog (after analysis completes) */}
+      {showPlayerNaming && (
+        <PlayerNamingDialog
+          open={true}
+          videoId={showPlayerNaming}
+          onClose={() => setShowPlayerNaming(null)}
+        />
+      )}
       </Box>
     </TutorialProvider>
   );

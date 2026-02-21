@@ -15,7 +15,7 @@ import {
   CircularProgress,
 } from '@mui/material';
 import type { MatchStats } from '@/services/api';
-import { getMatchStatsApi } from '@/services/api';
+import { getMatchStatsApi, getMatchAnalysis } from '@/services/api';
 import { useEditorStore } from '@/stores/editorStore';
 
 function pct(value: number): string {
@@ -101,7 +101,7 @@ function TeamStatsTable({ stats }: { stats: MatchStats }) {
   );
 }
 
-function PlayerStatsTable({ stats }: { stats: MatchStats }) {
+function PlayerStatsTable({ stats, playerNames }: { stats: MatchStats; playerNames: Record<string, string> }) {
   const players = stats.playerStats.filter((p) => p.totalActions > 0);
   if (players.length === 0) return null;
 
@@ -125,11 +125,13 @@ function PlayerStatsTable({ stats }: { stats: MatchStats }) {
             </TableRow>
           </TableHead>
           <TableBody>
-            {players.map((p) => (
+            {players.map((p) => {
+              const name = playerNames[String(p.trackId)];
+              return (
               <TableRow key={p.trackId}>
                 <TableCell>
                   <Chip
-                    label={`T${p.trackId}`}
+                    label={name || `T${p.trackId}`}
                     size="small"
                     color={p.team === 'A' ? 'primary' : p.team === 'B' ? 'secondary' : 'default'}
                     sx={{ height: 18, fontSize: '0.65rem' }}
@@ -145,7 +147,8 @@ function PlayerStatsTable({ stats }: { stats: MatchStats }) {
                   {p.attacks > 0 ? `${(p.attackEfficiency * 100).toFixed(0)}%` : '-'}
                 </TableCell>
               </TableRow>
-            ))}
+              );
+            })}
           </TableBody>
         </Table>
       </TableContainer>
@@ -206,6 +209,7 @@ function MatchOverview({ stats }: { stats: MatchStats }) {
 
 export function MatchStatsPanel() {
   const [stats, setStats] = useState<MatchStats | null>(null);
+  const [playerNames, setPlayerNames] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const activeMatchId = useEditorStore((s) => s.activeMatchId);
@@ -215,8 +219,14 @@ export function MatchStatsPanel() {
     setLoading(true);
     setError(null);
     try {
-      const result = await getMatchStatsApi(activeMatchId);
+      const [result, analysis] = await Promise.all([
+        getMatchStatsApi(activeMatchId),
+        getMatchAnalysis(activeMatchId).catch(() => null),
+      ]);
       setStats(result);
+      // Extract player names from matchAnalysisJson
+      const names = (analysis as Record<string, unknown> | null)?.playerNames as Record<string, string> | undefined;
+      setPlayerNames(names ?? {});
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load stats');
     } finally {
@@ -260,7 +270,7 @@ export function MatchStatsPanel() {
       <Divider sx={{ my: 1 }} />
       <TeamStatsTable stats={stats} />
       <Divider sx={{ my: 1 }} />
-      <PlayerStatsTable stats={stats} />
+      <PlayerStatsTable stats={stats} playerNames={playerNames} />
     </Box>
   );
 }

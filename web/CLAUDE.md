@@ -39,7 +39,9 @@ src/
 │   ├── PlayerOverlay # Player bounding box visualization
 │   ├── BallTrackOverlay # Ball trajectory visualization
 │   ├── OriginalQualityBanner # FREE tier upgrade prompt (7-day quality warning)
-│   └── VideoInsightsBanner # Auto-detected quality insights (camera distance, complex scene, calibration recommendation)
+│   ├── VideoInsightsBanner # Auto-detected quality insights (camera distance, complex scene, calibration recommendation)
+│   ├── AnalysisPipeline # "Analyze Match" button + progress UI (quality → detect → track → stats)
+│   └── PlayerNamingDialog # Post-tracking dialog to name players
 ├── stores/           # Zustand stores (see below)
 ├── services/
 │   ├── api.ts        # REST client
@@ -60,6 +62,7 @@ src/
 | `exportStore` | Export job tracking, download progress |
 | `tierStore` | Subscription tier, usage limits |
 | `playerTrackingStore` | Player/ball tracking data, court calibration, overlay visibility |
+| `analysisStore` | "Analyze Match" pipeline orchestration (quality → detect → track → stats), localStorage-persisted |
 
 ## Camera System
 

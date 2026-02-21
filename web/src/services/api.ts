@@ -2282,3 +2282,96 @@ export async function getMatchStatsApi(videoId: string): Promise<MatchStats | nu
   const data = await response.json();
   return data.status === 'not_available' ? null : data;
 }
+
+// ============================================================================
+// Analysis Pipeline
+// ============================================================================
+
+export interface QualityAssessmentResult {
+  quality: {
+    expectedQuality: number;
+    warnings: string[];
+    cameraDistance: string;
+    sceneComplexity: string;
+    resolution: { width: number; height: number };
+  };
+  courtDetection: {
+    detected: boolean;
+    confidence: number;
+    autoSaved: boolean;
+  };
+}
+
+export interface PipelineStatus {
+  quality: {
+    expectedQuality: number;
+    warnings: string[];
+    courtDetected: boolean;
+  } | null;
+  detection: {
+    status: string;
+    ralliesFound: number;
+  };
+  tracking: {
+    status: string;
+    completed: number;
+    total: number;
+    failed: number;
+  };
+  matchAnalysis: { available: boolean };
+  matchStats: { available: boolean };
+}
+
+/**
+ * Run quality assessment and court detection for a video.
+ */
+export async function assessQuality(videoId: string): Promise<QualityAssessmentResult> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/assess-quality`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Quality assessment failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Get unified analysis pipeline status.
+ */
+export async function getAnalysisPipelineStatus(videoId: string): Promise<PipelineStatus> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/analysis-pipeline-status`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get pipeline status: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Save player name assignments for a video.
+ */
+export async function savePlayerNamesApi(
+  videoId: string,
+  names: Record<string, string>,
+): Promise<{ success: boolean }> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/player-names`, {
+    method: 'PUT',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify({ names }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to save player names: ${response.status}`);
+  }
+
+  return response.json();
+}

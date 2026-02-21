@@ -136,6 +136,17 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
 - **Unified accept**: `GET /v1/share/:token` and `POST /v1/share/:token/accept` detect share type (session vs video)
 - **Permission checks**: `canAccessVideoRallies()` checks both direct video membership and session membership
 
+### Analysis Pipeline
+- `POST /v1/videos/:id/assess-quality` → quality check + court auto-detection (parallel CLI)
+  - Downloads video from S3 to temp file, runs `assess-quality` and `detect-court` CLI commands
+  - Auto-saves court calibration if confidence > 0.7
+  - Returns quality warnings + court detection result
+- `GET /v1/videos/:id/analysis-pipeline-status` → unified pipeline status (quality, detection, tracking, stats)
+- `PUT /v1/videos/:id/player-names` → save player name assignments
+  - Body: `{ names: Record<string, string> }` - track ID → name mapping
+  - Stored in `Video.matchAnalysisJson.playerNames`
+- **Service**: `qualityService.ts` handles quality assessment, court detection, pipeline status, player names
+
 ### Court Calibration
 - `PUT /v1/videos/:id/court-calibration` → save 4 corner points (persisted per video)
   - Body: `{ corners: [{x,y}]x4 }` - normalized coordinates (0-1)
