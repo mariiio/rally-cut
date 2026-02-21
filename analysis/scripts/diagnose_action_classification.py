@@ -135,6 +135,10 @@ def trace_classification(rally) -> list[dict]:
 
         contact_count_on_side += 1
 
+        # Safety valve: beach volleyball max 3 touches per side
+        if contact_count_on_side > 3 and receive_detected:
+            contact_count_on_side = 1
+
         # Classification
         action = "unknown"
         if not serve_detected:
