@@ -80,8 +80,9 @@ See `api/CLAUDE.md` for tier limits and enforcement. Config in `api/src/config/t
 
 1. **Upload**: web → api (presigned S3 URL) → S3
 2. **Detection**: api → Modal (GPU ML) → webhook → api → PostgreSQL
-3. **Edit**: web ↔ api (rally/highlight CRUD)
-4. **Export**: api → Lambda (FFmpeg) → S3 → web (download)
+3. **Tracking**: api → Modal (GPU YOLO+WASB) → per-rally webhooks → api → PostgreSQL (or local CPU fallback)
+4. **Edit**: web ↔ api (rally/highlight CRUD)
+5. **Export**: api → Lambda (FFmpeg) → S3 → web (download)
 
 ## See Also
 

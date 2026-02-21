@@ -17,6 +17,10 @@ import {
   updateConfirmationProgress,
 } from "../services/confirmationService.js";
 import { handleProcessingComplete } from "../services/processingService.js";
+import {
+  handleTrackingRallyComplete,
+  handleTrackingBatchComplete,
+} from "../services/modalTrackingService.js";
 
 const router = Router();
 
@@ -224,6 +228,56 @@ router.post(
   async (req, res, next) => {
     try {
       const result = await handleProcessingComplete(req.body);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================================
+// Batch Tracking Webhooks (Modal GPU Player Tracking)
+// ============================================================================
+
+const trackingRallyCompleteSchema = z.object({
+  batch_job_id: z.string().uuid(),
+  video_id: z.string().uuid(),
+  rally_id: z.string().uuid(),
+  status: z.enum(["completed", "failed"]),
+  tracking_data: z.record(z.unknown()).optional(),
+  error: z.string().optional(),
+});
+
+router.post(
+  "/v1/webhooks/tracking-rally-complete",
+  requireWebhookSecret,
+  validateRequest({ body: trackingRallyCompleteSchema }),
+  async (req, res, next) => {
+    try {
+      const result = await handleTrackingRallyComplete(req.body);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+const trackingBatchCompleteSchema = z.object({
+  batch_job_id: z.string().uuid(),
+  video_id: z.string().uuid(),
+  status: z.enum(["completed", "failed"]),
+  completed_rallies: z.number().int().nonnegative(),
+  failed_rallies: z.number().int().nonnegative(),
+  error: z.string().optional(),
+});
+
+router.post(
+  "/v1/webhooks/tracking-batch-complete",
+  requireWebhookSecret,
+  validateRequest({ body: trackingBatchCompleteSchema }),
+  async (req, res, next) => {
+    try {
+      const result = await handleTrackingBatchComplete(req.body);
       res.json(result);
     } catch (error) {
       next(error);

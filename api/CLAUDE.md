@@ -153,6 +153,11 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
   - Fixes YOLO+BoT-SORT ID switches when players overlap/cross paths
   - Only modifies `positionsJson` (filtered positions), not `rawPositionsJson`
 - After tracking completes, `Video.characteristicsJson` is updated with `cameraDistance` (median primary track bbox height) and `sceneComplexity` (avg people per frame), merged with existing brightness data
+- **Batch tracking**: `POST /v1/videos/:id/track-all-rallies` tracks all confirmed rallies
+  - If `MODAL_TRACKING_URL` is set: sends to Modal T4 GPU (~80 FPS, ~$0.02/batch)
+  - If not set: processes locally on CPU (~6 FPS, blocks API server)
+  - Modal path sends per-rally webhooks (`/v1/webhooks/tracking-rally-complete`) for progressive DB updates
+  - Batch completion webhook (`/v1/webhooks/tracking-batch-complete`) triggers match analysis
 
 ### Label Studio Integration (Ground Truth)
 - `GET /v1/rallies/:id/label-studio` → status (hasTrackingData, hasGroundTruth, taskId)
@@ -205,6 +210,7 @@ CORS_ORIGIN
 Optional (local dev uses fallbacks):
 ```
 S3_ENDPOINT=http://localhost:9000          # MinIO
+MODAL_TRACKING_URL                         # Omit for local CPU tracking
 EXPORT_LAMBDA_FUNCTION_NAME                # Omit for local FFmpeg
 PROCESSING_LAMBDA_FUNCTION_NAME            # Omit for local FFmpeg
 CLOUDFRONT_DOMAIN, CLOUDFRONT_KEY_PAIR_ID  # For signed URLs

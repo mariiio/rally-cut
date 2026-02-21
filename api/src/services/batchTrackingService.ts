@@ -12,6 +12,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 
+import { env } from '../config/env.js';
 import { prisma } from '../lib/prisma.js';
 import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errorHandler.js';
 import {
@@ -20,6 +21,7 @@ import {
   TEMP_DIR,
   type CalibrationCorner,
 } from './playerTrackingService.js';
+import { triggerModalBatchTracking } from './modalTrackingService.js';
 import { runMatchAnalysis } from './matchAnalysisService.js';
 
 /**
@@ -97,9 +99,21 @@ export async function trackAllRallies(
   }
 
   // Fire and forget — process in background
-  processBatchTracking(job.id, videoId, videoKey, video.rallies, calibrationCorners).catch(
-    async (error) => {
-      console.error(`[BATCH_TRACK] Fatal error in batch job ${job.id}:`, error);
+  if (env.MODAL_TRACKING_URL) {
+    // Modal GPU path: trigger remote batch tracking
+    console.log(`[BATCH_TRACK] Using Modal GPU for batch job ${job.id}`);
+    await prisma.batchTrackingJob.update({
+      where: { id: job.id },
+      data: { status: 'PROCESSING' },
+    });
+    triggerModalBatchTracking({
+      batchJobId: job.id,
+      videoId,
+      videoKey,
+      rallies: video.rallies.map((r) => ({ id: r.id, startMs: r.startMs, endMs: r.endMs })),
+      calibrationCorners,
+    }).catch(async (error) => {
+      console.error(`[BATCH_TRACK] Modal trigger failed for job ${job.id}:`, error);
       try {
         await prisma.batchTrackingJob.update({
           where: { id: job.id },
@@ -112,8 +126,27 @@ export async function trackAllRallies(
       } catch {
         // If even the DB update fails, we can't do anything
       }
-    }
-  );
+    });
+  } else {
+    // Local CPU path: existing processBatchTracking() unchanged
+    processBatchTracking(job.id, videoId, videoKey, video.rallies, calibrationCorners).catch(
+      async (error) => {
+        console.error(`[BATCH_TRACK] Fatal error in batch job ${job.id}:`, error);
+        try {
+          await prisma.batchTrackingJob.update({
+            where: { id: job.id },
+            data: {
+              status: 'FAILED',
+              completedAt: new Date(),
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+        } catch {
+          // If even the DB update fails, we can't do anything
+        }
+      }
+    );
+  }
 
   console.log(`[BATCH_TRACK] Started batch job ${job.id}: ${video.rallies.length} rallies for video ${videoId}`);
 
