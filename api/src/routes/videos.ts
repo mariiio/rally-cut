@@ -46,6 +46,7 @@ import {
 import { queueVideoProcessing } from "../services/processingService.js";
 import { trackAllRallies, getBatchTrackingStatus } from "../services/batchTrackingService.js";
 import { getMatchAnalysis, getMatchStats } from "../services/matchAnalysisService.js";
+import { assessVideoQuality, getAnalysisPipelineStatus, savePlayerNames } from "../services/qualityService.js";
 
 // Calibration corners can be outside 0-1 if dragged outside video bounds
 const calibrationCornerSchema = z.object({
@@ -714,6 +715,74 @@ router.get(
     try {
       const stats = await getMatchStats(req.params.id, req.userId!);
       res.json(stats ?? { status: 'not_available' });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================================
+// Analysis Pipeline Routes
+// ============================================================================
+
+/**
+ * POST /v1/videos/:id/assess-quality
+ * Run quality assessment + court auto-detection.
+ * Returns warnings + court detection result.
+ */
+router.post(
+  "/v1/videos/:id/assess-quality",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      const result = await assessVideoQuality(req.params.id, req.userId!);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /v1/videos/:id/analysis-pipeline-status
+ * Unified pipeline status by reading existing DB state.
+ */
+router.get(
+  "/v1/videos/:id/analysis-pipeline-status",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      const status = await getAnalysisPipelineStatus(req.params.id, req.userId!);
+      res.json(status);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PUT /v1/videos/:id/player-names
+ * Save player name assignments.
+ */
+router.put(
+  "/v1/videos/:id/player-names",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: z.object({
+      names: z.record(z.string(), z.string().max(100)),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const result = await savePlayerNames(req.params.id, req.userId!, req.body.names);
+      res.json(result);
     } catch (error) {
       next(error);
     }
