@@ -289,6 +289,7 @@ def main() -> None:
     parser.add_argument("--redetect", action="store_true", help="Re-run contact detection instead of using stored results")
     parser.add_argument("--config", type=str, help="JSON config overrides for ContactDetectionConfig (implies --redetect)")
     parser.add_argument("--classifier", type=str, help="Path to trained contact classifier model (implies --redetect)")
+    parser.add_argument("--no-classifier", action="store_true", help="Disable auto-loading of trained classifier (force hand-tuned gates)")
     args = parser.parse_args()
 
     # Build ContactDetectionConfig from overrides
@@ -377,6 +378,7 @@ def main() -> None:
                 net_y=rally.court_split_y,
                 frame_count=rally.frame_count or None,
                 classifier=contact_classifier,
+                use_classifier=not args.no_classifier,
             )
 
             rally_actions = classify_rally_actions(contacts, rally.rally_id)

@@ -28,6 +28,24 @@ logger = logging.getLogger(__name__)
 # VballNet confidence is bimodal: either 0.0 (no detection) or >=0.3 (confident).
 _CONFIDENCE_THRESHOLD = 0.3
 
+# Cached default classifier (loaded once from disk on first use)
+_default_classifier_cache: dict[str, ContactClassifier | None] = {}
+
+
+def _get_default_classifier() -> ContactClassifier | None:
+    """Load and cache the default contact classifier from disk.
+
+    Returns None if no trained model exists at the default path.
+    """
+    if "default" not in _default_classifier_cache:
+        from rallycut.tracking.contact_classifier import load_contact_classifier
+
+        clf = load_contact_classifier()
+        _default_classifier_cache["default"] = clf
+        if clf is not None:
+            logger.info("Auto-loaded contact classifier from default path")
+    return _default_classifier_cache["default"]
+
 
 @dataclass
 class ContactDetectionConfig:
@@ -628,6 +646,7 @@ def detect_contacts(
     net_y: float | None = None,
     frame_count: int | None = None,
     classifier: ContactClassifier | None = None,
+    use_classifier: bool = True,
 ) -> ContactSequence:
     """Detect ball contacts from trajectory inflection points and velocity peaks.
 
@@ -652,10 +671,16 @@ def detect_contacts(
             are suppressed (post-rally ball pickup/warmdown).
         classifier: Optional trained ContactClassifier. When provided, replaces the
             hand-tuned 3-tier validation gates with learned predictions.
+        use_classifier: When True (default) and no explicit classifier is provided,
+            auto-loads the default classifier from disk if available. Set to False
+            to force hand-tuned validation gates.
 
     Returns:
         ContactSequence with all detected contacts.
     """
+    # Auto-load classifier if not explicitly provided
+    if classifier is None and use_classifier:
+        classifier = _get_default_classifier()
     from scipy.signal import find_peaks
 
     cfg = config or ContactDetectionConfig()
