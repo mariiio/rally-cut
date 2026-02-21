@@ -33,8 +33,21 @@ from rallycut.temporal.temporal_maxer.training import (
 # Suppress noisy training/library logs
 logging.basicConfig(level=logging.WARNING)
 
-DEFAULT_STRIDE = 48
+DEFAULT_STRIDE = 24
 FEATURE_DIR = Path("training_data/features")
+
+
+@dataclass
+class FPDetail:
+    """Detail for a single false positive segment."""
+
+    video: str
+    start: float
+    end: float
+    duration: float
+    avg_prob: float
+    max_prob: float
+    num_windows: int
 
 
 @dataclass
@@ -57,6 +70,8 @@ class FoldResult:
     start_errors_ms: list[int] = field(default_factory=list)
     end_errors_ms: list[int] = field(default_factory=list)
     training_time_s: float = 0.0
+    # FP details (from IoU=0.4)
+    fp_details: list[FPDetail] = field(default_factory=list)
 
 
 def auto_detect_device() -> str:
@@ -105,6 +120,7 @@ def run_fold(
     cache: FeatureCache,
     device: str,
     stride: int = DEFAULT_STRIDE,
+    min_segment_confidence: float = 0.0,
 ) -> FoldResult:
     """Run a single LOO fold: train on N-1, evaluate on held-out."""
     print(
@@ -162,18 +178,43 @@ def run_fold(
         # Run inference on held-out video
         model_path = output_dir / "best_temporal_maxer.pt"
         inference = TemporalMaxerInference(model_path, device="cpu")
-        result = inference.predict(features=ho_features, fps=ho_fps, stride=stride)
+        result = inference.predict(
+            features=ho_features,
+            fps=ho_fps,
+            stride=stride,
+            min_segment_confidence=min_segment_confidence,
+        )
 
     # Match predictions against GT
     gt_segments = [
         (r.start_seconds, r.end_seconds) for r in held_out.ground_truth_rallies
     ]
     pred_segments = result.segments
+    window_duration = stride / ho_fps
 
     # Match at IoU=0.4
     match_04: MatchingResult = match_rallies(gt_segments, pred_segments, iou_threshold=0.4)
     # Match at IoU=0.5
     match_05: MatchingResult = match_rallies(gt_segments, pred_segments, iou_threshold=0.5)
+
+    # Collect FP details with confidence
+    fp_details: list[FPDetail] = []
+    for pred_idx in match_04.unmatched_predictions:
+        pred_s, pred_e = pred_segments[pred_idx]
+        start_idx = int(pred_s / window_duration)
+        end_idx = min(int(pred_e / window_duration) + 1, len(result.window_probs))
+        if end_idx <= start_idx:
+            end_idx = start_idx + 1
+        seg_probs = result.window_probs[start_idx:min(end_idx, len(result.window_probs))]
+        fp_details.append(FPDetail(
+            video=held_out.filename,
+            start=pred_s,
+            end=pred_e,
+            duration=pred_e - pred_s,
+            avg_prob=float(np.mean(seg_probs)) if len(seg_probs) > 0 else 0.0,
+            max_prob=float(np.max(seg_probs)) if len(seg_probs) > 0 else 0.0,
+            num_windows=len(seg_probs),
+        ))
 
     fold = FoldResult(
         video_id=held_out.id,
@@ -189,6 +230,7 @@ def run_fold(
         start_errors_ms=[m.start_error_ms for m in match_04.matches],
         end_errors_ms=[m.end_error_ms for m in match_04.matches],
         training_time_s=train_time,
+        fp_details=fp_details,
     )
 
     # Print fold summary
@@ -229,8 +271,13 @@ def main() -> None:
         "--stride", type=int, default=DEFAULT_STRIDE,
         help=f"Feature stride (default: {DEFAULT_STRIDE})",
     )
+    parser.add_argument(
+        "--min-confidence", type=float, default=0.0,
+        help="Min avg probability to keep a segment (0 = disabled)",
+    )
     args = parser.parse_args()
     stride = args.stride
+    min_confidence = args.min_confidence
 
     total_start = time.time()
 
@@ -242,6 +289,8 @@ def main() -> None:
     device = auto_detect_device()
     print(f"Device: {device}")
     print(f"Feature stride: {stride}")
+    if min_confidence > 0:
+        print(f"Min segment confidence: {min_confidence}")
     print(f"Feature directory: {FEATURE_DIR}")
     print()
 
@@ -275,7 +324,9 @@ def main() -> None:
     fold_results: list[FoldResult] = []
     for i, held_out in enumerate(videos):
         train_videos = [v for j, v in enumerate(videos) if j != i]
-        fold = run_fold(i + 1, n, held_out, train_videos, cache, device, stride)
+        fold = run_fold(
+            i + 1, n, held_out, train_videos, cache, device, stride, min_confidence,
+        )
         fold_results.append(fold)
 
     print("-" * 80)
@@ -343,9 +394,40 @@ def main() -> None:
         print(f"  F1:        {f1:.1%}")
         print()
 
+    # FP detail report
+    all_fp_details: list[FPDetail] = []
+    for fold in fold_results:
+        all_fp_details.extend(fold.fp_details)
+
+    if all_fp_details:
+        print("=" * 80)
+        print(f"FP DETAILS ({len(all_fp_details)} false positives, IoU=0.4)")
+        print("=" * 80)
+        print()
+
+        fp_avg_probs = np.array([fp.avg_prob for fp in all_fp_details])
+        fp_durations = np.array([fp.duration for fp in all_fp_details])
+        print(f"  avg_prob: mean={fp_avg_probs.mean():.3f}  median={np.median(fp_avg_probs):.3f}  "
+              f"min={fp_avg_probs.min():.3f}  max={fp_avg_probs.max():.3f}")
+        print(f"  duration: mean={fp_durations.mean():.1f}s  median={np.median(fp_durations):.1f}s  "
+              f"min={fp_durations.min():.1f}s  max={fp_durations.max():.1f}s")
+        print()
+
+        header = f"  {'Video':<30} {'Range':>14} {'Dur':>5} {'AvgP':>5} {'MaxP':>5} {'Win':>4}"
+        print(header)
+        print("  " + "-" * (len(header) - 2))
+        for fp in sorted(all_fp_details, key=lambda x: x.avg_prob):
+            name = fp.video[:29]
+            rng = f"{fp.start:.1f}-{fp.end:.1f}s"
+            print(
+                f"  {name:<30} {rng:>14} {fp.duration:>4.1f}s "
+                f"{fp.avg_prob:>5.3f} {fp.max_prob:>5.3f} {fp.num_windows:>4}"
+            )
+        print()
+
     # Boundary error statistics (from IoU=0.4 matches)
-    all_start_errors = []
-    all_end_errors = []
+    all_start_errors: list[int] = []
+    all_end_errors: list[int] = []
     for fold in fold_results:
         all_start_errors.extend(fold.start_errors_ms)
         all_end_errors.extend(fold.end_errors_ms)

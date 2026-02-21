@@ -1295,6 +1295,7 @@ class VideoCutter:
             features=features,
             fps=source_fps,
             stride=stride,
+            min_segment_confidence=0.6,
         )
 
         if progress_callback:

@@ -58,6 +58,7 @@ class TemporalMaxerInference:
         min_segment_duration: float = 1.0,
         max_gap_duration: float = 3.0,
         max_segment_duration: float = 60.0,
+        min_segment_confidence: float = 0.0,
     ) -> TemporalMaxerResult:
         """Run full-sequence inference and extract segments.
 
@@ -69,6 +70,8 @@ class TemporalMaxerInference:
             min_segment_duration: Minimum rally duration in seconds.
             max_gap_duration: Fill gaps shorter than this (seconds).
             max_segment_duration: Split segments longer than this (seconds).
+            min_segment_confidence: Minimum average probability to keep a segment.
+                0.0 disables confidence filtering (default).
 
         Returns:
             TemporalMaxerResult with segments and probabilities.
@@ -96,6 +99,7 @@ class TemporalMaxerInference:
             min_segment_duration,
             max_gap_duration,
             max_segment_duration,
+            min_segment_confidence,
         )
 
         return TemporalMaxerResult(
@@ -113,12 +117,14 @@ class TemporalMaxerInference:
         min_duration: float,
         max_gap: float,
         max_duration: float,
+        min_confidence: float = 0.0,
     ) -> list[tuple[float, float]]:
         """Convert window predictions to time segments with cleanup.
 
         Reuses cleanup logic patterns from deterministic_decoder.py:
         - Fill short gaps
         - Remove short segments
+        - Confidence filter (remove low-confidence segments)
         - Anti-overmerge (split at lowest probability point)
         """
         n = len(predictions)
@@ -159,6 +165,20 @@ class TemporalMaxerInference:
 
         # Remove short segments
         filtered = [(s, e) for s, e in filled if e - s >= min_duration]
+
+        # Confidence filter: remove segments with low average probability
+        if min_confidence > 0:
+            confident: list[tuple[float, float]] = []
+            for start, end in filtered:
+                start_idx = int(start / window_duration)
+                end_idx = min(int(end / window_duration) + 1, len(probs))
+                if end_idx <= start_idx:
+                    end_idx = start_idx + 1
+                seg_probs = probs[start_idx:min(end_idx, len(probs))]
+                avg_prob = float(np.mean(seg_probs)) if len(seg_probs) > 0 else 0.0
+                if avg_prob >= min_confidence:
+                    confident.append((start, end))
+            filtered = confident
 
         # Anti-overmerge: split segments > max_duration at lowest probability point
         final: list[tuple[float, float]] = []
