@@ -732,7 +732,10 @@ def track_players(
             net_y=result.court_split_y,
             frame_count=result.frame_count or None,
         )
-        rally_actions = classify_rally_actions(contact_seq)
+        rally_actions = classify_rally_actions(
+            contact_seq,
+            team_assignments=result.team_assignments,
+        )
 
         actions_data = {
             "contacts": contact_seq.to_dict(),

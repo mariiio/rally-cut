@@ -27,6 +27,7 @@ class PlayerStats:
     """Statistics for a single player across a match or set."""
 
     track_id: int
+    team: str = "unknown"  # "A" (near court), "B" (far court), or "unknown"
     # Action counts
     serves: int = 0
     receives: int = 0
@@ -54,6 +55,7 @@ class PlayerStats:
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
             "trackId": self.track_id,
+            "team": self.team,
             "serves": self.serves,
             "receives": self.receives,
             "sets": self.sets,
@@ -102,13 +104,74 @@ class RallyStats:
 
 
 @dataclass
+class TeamStats:
+    """Aggregated statistics for one team across a match."""
+
+    team: str  # "A" or "B"
+    player_ids: list[int] = field(default_factory=list)
+    serves: int = 0
+    receives: int = 0
+    sets: int = 0
+    attacks: int = 0
+    blocks: int = 0
+    digs: int = 0
+    points_won: int = 0
+    side_out_pct: float = 0.0  # % of receiving rallies won
+    serve_win_pct: float = 0.0  # % of serving rallies won
+
+    @property
+    def total_actions(self) -> int:
+        return self.serves + self.receives + self.sets + self.attacks + self.blocks + self.digs
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "team": self.team,
+            "playerIds": self.player_ids,
+            "serves": self.serves,
+            "receives": self.receives,
+            "sets": self.sets,
+            "attacks": self.attacks,
+            "blocks": self.blocks,
+            "digs": self.digs,
+            "totalActions": self.total_actions,
+            "pointsWon": self.points_won,
+            "sideOutPct": round(self.side_out_pct, 3),
+            "serveWinPct": round(self.serve_win_pct, 3),
+        }
+
+
+@dataclass
+class RallyScoreState:
+    """Score state after a rally, inferred from serve ownership changes."""
+
+    rally_id: str
+    score_a: int
+    score_b: int
+    serving_team: str  # "A" or "B"
+    point_winner: str  # "A", "B", or "unknown"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "rallyId": self.rally_id,
+            "scoreA": self.score_a,
+            "scoreB": self.score_b,
+            "servingTeam": self.serving_team,
+            "pointWinner": self.point_winner,
+        }
+
+
+@dataclass
 class MatchStats:
     """Aggregated statistics for a full match."""
 
     # Per-player stats
     player_stats: list[PlayerStats] = field(default_factory=list)
+    # Per-team stats
+    team_stats: list[TeamStats] = field(default_factory=list)
     # Per-rally stats
     rally_stats: list[RallyStats] = field(default_factory=list)
+    # Per-rally score progression
+    score_progression: list[RallyScoreState] = field(default_factory=list)
     # Match-level aggregates
     total_rallies: int = 0
     total_contacts: int = 0
@@ -116,13 +179,15 @@ class MatchStats:
     longest_rally_duration_s: float = 0.0
     avg_contacts_per_rally: float = 0.0
     side_out_rate: float = 0.0  # % of rallies won by receiving team
+    final_score_a: int = 0
+    final_score_b: int = 0
     # Video metadata
     video_fps: float = 30.0
     video_width: int = 1920
     video_height: int = 1080
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "totalRallies": self.total_rallies,
             "totalContacts": self.total_contacts,
             "avgRallyDurationS": round(self.avg_rally_duration_s, 2),
@@ -132,6 +197,13 @@ class MatchStats:
             "playerStats": [p.to_dict() for p in self.player_stats],
             "rallyStats": [r.to_dict() for r in self.rally_stats],
         }
+        if self.team_stats:
+            d["teamStats"] = [t.to_dict() for t in self.team_stats]
+        if self.score_progression:
+            d["scoreProgression"] = [s.to_dict() for s in self.score_progression]
+            d["finalScoreA"] = self.final_score_a
+            d["finalScoreB"] = self.final_score_b
+        return d
 
 
 def compute_player_movement(
@@ -234,6 +306,71 @@ def compute_position_heatmap(
     return grid.tolist()
 
 
+def compute_match_scores(
+    rally_actions_list: list[RallyActions],
+) -> list[RallyScoreState]:
+    """Compute running scores from serve ownership across consecutive rallies.
+
+    Volleyball rule: the winner of the previous rally serves next.
+    - If serving team changes between rallies → previous rally won by new server.
+    - If serving team stays the same → they scored (side-out failed).
+    - Last rally's winner is unknown (no next-rally info).
+
+    Args:
+        rally_actions_list: Classified actions for each rally (in match order).
+
+    Returns:
+        List of RallyScoreState with running scores.
+    """
+    scores: list[RallyScoreState] = []
+    score_a = 0
+    score_b = 0
+
+    # Extract serving team per rally
+    serving_teams: list[tuple[str, str]] = []  # (rally_id, serving_team)
+    for ra in rally_actions_list:
+        serving = ra.serving_team
+        if serving:
+            serving_teams.append((ra.rally_id, serving))
+
+    skipped = len(rally_actions_list) - len(serving_teams)
+    if skipped > 0:
+        logger.warning(
+            "Skipped %d/%d rallies with unknown serving team for score computation",
+            skipped, len(rally_actions_list),
+        )
+
+    if not serving_teams:
+        return scores
+
+    for i, (rally_id, serving) in enumerate(serving_teams):
+        point_winner = "unknown"
+
+        if i < len(serving_teams) - 1:
+            next_serving = serving_teams[i + 1][1]
+            if next_serving != serving:
+                # Server changed → new server won the previous point
+                point_winner = next_serving
+            else:
+                # Same server → they scored (side-out failed for opponent)
+                point_winner = serving
+
+        if point_winner == "A":
+            score_a += 1
+        elif point_winner == "B":
+            score_b += 1
+
+        scores.append(RallyScoreState(
+            rally_id=rally_id,
+            score_a=score_a,
+            score_b=score_b,
+            serving_team=serving,
+            point_winner=point_winner,
+        ))
+
+    return scores
+
+
 def compute_match_stats(
     rally_actions_list: list[RallyActions],
     player_positions: list[PlayerPosition],
@@ -283,9 +420,17 @@ def compute_match_stats(
         primary_tracks.add(track_id)
         all_track_ids.add(track_id)
 
+    # Build a merged team_assignments from all rallies
+    merged_team_assignments: dict[int, int] = {}
+    for ra in rally_actions_list:
+        merged_team_assignments.update(ra.team_assignments)
+
     # Compute per-player stats
     for track_id in sorted(all_track_ids):
-        player = PlayerStats(track_id=track_id)
+        # Derive team from merged assignments
+        team_int = merged_team_assignments.get(track_id)
+        team_label = "A" if team_int == 0 else "B" if team_int == 1 else "unknown"
+        player = PlayerStats(track_id=track_id, team=team_label)
 
         # Count actions
         for ra in rally_actions_list:
@@ -380,6 +525,62 @@ def compute_match_stats(
         stats.avg_rally_duration_s = float(np.mean(durations))
         stats.longest_rally_duration_s = max(durations)
         stats.avg_contacts_per_rally = stats.total_contacts / stats.total_rallies
+
+    # Compute per-team stats by aggregating player stats
+    for team_label in ("A", "B"):
+        team_players = [p for p in stats.player_stats if p.team == team_label]
+        if not team_players:
+            continue
+        ts = TeamStats(
+            team=team_label,
+            player_ids=[p.track_id for p in team_players],
+            serves=sum(p.serves for p in team_players),
+            receives=sum(p.receives for p in team_players),
+            sets=sum(p.sets for p in team_players),
+            attacks=sum(p.attacks for p in team_players),
+            blocks=sum(p.blocks for p in team_players),
+            digs=sum(p.digs for p in team_players),
+        )
+        stats.team_stats.append(ts)
+
+    # Compute score progression from serve ownership
+    score_progression = compute_match_scores(rally_actions_list)
+    stats.score_progression = score_progression
+    if score_progression:
+        last = score_progression[-1]
+        stats.final_score_a = last.score_a
+        stats.final_score_b = last.score_b
+
+        # Compute side-out rate and serve-win rate per team
+        for ts in stats.team_stats:
+            serving_rallies = [
+                s for s in score_progression if s.serving_team == ts.team
+            ]
+            receiving_rallies = [
+                s for s in score_progression if s.serving_team != ts.team
+            ]
+            serve_wins = sum(
+                1 for s in serving_rallies if s.point_winner == ts.team
+            )
+            side_outs = sum(
+                1 for s in receiving_rallies if s.point_winner == ts.team
+            )
+            ts.points_won = serve_wins + side_outs
+            if serving_rallies:
+                ts.serve_win_pct = serve_wins / len(serving_rallies)
+            if receiving_rallies:
+                ts.side_out_pct = side_outs / len(receiving_rallies)
+
+        # Overall side-out rate
+        total_with_winner = [
+            s for s in score_progression if s.point_winner != "unknown"
+        ]
+        if total_with_winner:
+            side_outs_total = sum(
+                1 for s in total_with_winner
+                if s.point_winner != s.serving_team
+            )
+            stats.side_out_rate = side_outs_total / len(total_with_winner)
 
     logger.info(
         f"Match stats: {stats.total_rallies} rallies, "
