@@ -1,8 +1,8 @@
 /**
- * Player tracking service for debug visualization.
+ * Player tracking service.
  *
- * Runs YOLOv8n + ByteTrack to detect and track players in rally segments.
- * Returns raw tracking data for frontend overlay visualization.
+ * Runs YOLO11s + BoT-SORT to detect and track players in rally segments.
+ * Supports both single-rally sync tracking and batch async processing.
  */
 
 import { spawn } from 'child_process';
@@ -23,8 +23,11 @@ const __dirname = path.dirname(__filename);
 // Temp directory for video segments
 const TEMP_DIR = path.join(os.tmpdir(), 'rallycut-player-tracking');
 
-// Max duration for synchronous processing (30 seconds)
+// Max duration for synchronous single-rally processing (30 seconds)
 const MAX_DURATION_MS = 30000;
+
+// Max duration for batch processing (60 seconds per rally — more lenient for batch)
+const MAX_BATCH_RALLY_DURATION_MS = 60000;
 
 // Position format for frontend overlay
 interface PlayerPosition {
@@ -433,6 +436,303 @@ async function runPlayerTracker(
 }
 
 /**
+ * Extract video segment from a LOCAL file (no S3 download — instant seek).
+ * Used by batch tracking to avoid re-downloading the full video per rally.
+ */
+export async function extractVideoSegmentFromLocal(
+  localVideoPath: string,
+  startSeconds: number,
+  durationSeconds: number,
+  outputPath: string
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-ss', startSeconds.toString(),
+      '-i', localVideoPath,
+      '-t', durationSeconds.toString(),
+      '-c:v', 'libx264',
+      '-preset', 'fast',
+      '-crf', '18',
+      '-an',
+      '-y',
+      outputPath,
+    ];
+
+    const ffmpeg = spawn('ffmpeg', args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stderr = '';
+    ffmpeg.stderr?.on('data', (data: Buffer) => {
+      stderr += data.toString();
+    });
+
+    ffmpeg.on('error', (error) => {
+      reject(new Error(`FFmpeg failed to start: ${error.message}`));
+    });
+
+    ffmpeg.on('exit', (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`FFmpeg exited with code ${code}: ${stderr.slice(-500)}`));
+      }
+    });
+  });
+}
+
+/**
+ * Save tracking results to the database.
+ * Shared by single-rally sync tracking and batch tracking.
+ */
+export async function saveTrackingResult(
+  rallyId: string,
+  videoId: string,
+  trackerResult: PlayerTrackerOutput,
+  processingTimeMs: number,
+): Promise<void> {
+  // Save to database
+  await prisma.playerTrack.upsert({
+    where: { rallyId },
+    create: {
+      rallyId,
+      status: 'COMPLETED',
+      frameCount: trackerResult.frameCount,
+      fps: trackerResult.fps,
+      detectionRate: trackerResult.detectionRate,
+      avgConfidence: trackerResult.avgConfidence,
+      avgPlayerCount: trackerResult.avgPlayerCount,
+      uniqueTrackCount: trackerResult.uniqueTrackCount,
+      courtSplitY: trackerResult.courtSplitY,
+      primaryTrackIds: trackerResult.primaryTrackIds as unknown as number[],
+      positionsJson: trackerResult.positions as unknown as object[],
+      rawPositionsJson: trackerResult.rawPositions as unknown as object[],
+      ballPositionsJson: trackerResult.ballPositions as unknown as object[],
+      contactsJson: trackerResult.contacts as unknown as object,
+      actionsJson: trackerResult.actions as unknown as object,
+      qualityReportJson: trackerResult.qualityReport as unknown as object,
+      processingTimeMs,
+      modelVersion: 'yolo11s',
+      completedAt: new Date(),
+    },
+    update: {
+      status: 'COMPLETED',
+      frameCount: trackerResult.frameCount,
+      fps: trackerResult.fps,
+      detectionRate: trackerResult.detectionRate,
+      avgConfidence: trackerResult.avgConfidence,
+      avgPlayerCount: trackerResult.avgPlayerCount,
+      uniqueTrackCount: trackerResult.uniqueTrackCount,
+      courtSplitY: trackerResult.courtSplitY,
+      primaryTrackIds: trackerResult.primaryTrackIds as unknown as number[],
+      positionsJson: trackerResult.positions as unknown as object[],
+      rawPositionsJson: trackerResult.rawPositions as unknown as object[],
+      ballPositionsJson: trackerResult.ballPositions as unknown as object[],
+      contactsJson: trackerResult.contacts as unknown as object,
+      actionsJson: trackerResult.actions as unknown as object,
+      qualityReportJson: trackerResult.qualityReport as unknown as object,
+      processingTimeMs,
+      modelVersion: 'yolo11s',
+      completedAt: new Date(),
+      error: null,
+    },
+  });
+
+  // Auto-populate Rally.servingTeam from detected serve team
+  const detectedServingTeam = trackerResult.actions?.servingTeam;
+  if (detectedServingTeam === 'A' || detectedServingTeam === 'B') {
+    try {
+      await prisma.rally.update({
+        where: { id: rallyId },
+        data: { servingTeam: detectedServingTeam },
+      });
+      console.log(`[PLAYER_TRACK] Set servingTeam=${detectedServingTeam} for rally ${rallyId}`);
+    } catch (err) {
+      console.log(`[PLAYER_TRACK] Failed to update servingTeam:`, err);
+    }
+  }
+
+  // Update video characteristics from first completed tracking
+  try {
+    const primaryIds = new Set(trackerResult.primaryTrackIds ?? []);
+    const heights = (trackerResult.positions as Array<{ trackId: number; height: number }>)
+      .filter(p => primaryIds.has(p.trackId))
+      .map(p => p.height);
+
+    let cameraDistance: { avgBboxHeight: number; category: 'close' | 'medium' | 'far' } | undefined;
+    if (heights.length > 0) {
+      const sorted = [...heights].sort((a, b) => a - b);
+      const avgBboxHeight = sorted[Math.floor(sorted.length / 2)];
+      const category = avgBboxHeight > 0.35 ? 'close' : avgBboxHeight < 0.20 ? 'far' : 'medium';
+      cameraDistance = { avgBboxHeight: Math.round(avgBboxHeight * 1000) / 1000, category };
+    }
+
+    const rawPositions = trackerResult.rawPositions ?? trackerResult.positions;
+    const rawFrameCounts: Record<number, number> = {};
+    for (const p of rawPositions as Array<{ frameNumber: number }>) {
+      rawFrameCounts[p.frameNumber] = (rawFrameCounts[p.frameNumber] ?? 0) + 1;
+    }
+    const rawFrameValues = Object.values(rawFrameCounts);
+    const avgPeople = rawFrameValues.length > 0
+      ? rawFrameValues.reduce((a, b) => a + b, 0) / rawFrameValues.length
+      : 0;
+    const sceneComplexity = {
+      avgPeople: Math.round(avgPeople * 10) / 10,
+      category: (avgPeople > 6 ? 'complex' : 'simple') as 'simple' | 'complex',
+    };
+
+    const courtDetection = trackerResult.courtDetection;
+
+    const video = await prisma.video.findUnique({
+      where: { id: videoId },
+      select: { characteristicsJson: true },
+    });
+    const existing = (video?.characteristicsJson as Record<string, unknown>) ?? {};
+    const characteristics = {
+      ...existing,
+      ...(cameraDistance && { cameraDistance }),
+      sceneComplexity,
+      ...(courtDetection && { courtDetection }),
+      version: 1,
+    };
+    await prisma.video.update({
+      where: { id: videoId },
+      data: {
+        characteristicsJson: characteristics as unknown as Prisma.InputJsonValue,
+      },
+    });
+    console.log(`[PLAYER_TRACK] Updated video characteristics for ${videoId}`);
+  } catch (err) {
+    console.log(`[PLAYER_TRACK] Failed to update video characteristics:`, err);
+  }
+}
+
+/**
+ * Track a single rally from a local video file.
+ * Used by batch tracking — skips S3 download, extracts segment locally.
+ */
+export async function trackRallyFromLocalVideo(
+  rallyId: string,
+  videoId: string,
+  localVideoPath: string,
+  startMs: number,
+  endMs: number,
+  calibrationCorners?: CalibrationCorner[],
+): Promise<TrackPlayersResult> {
+  const startTime = Date.now();
+  const durationMs = endMs - startMs;
+
+  if (durationMs > MAX_BATCH_RALLY_DURATION_MS) {
+    console.log(`[BATCH_TRACK] Skipping rally ${rallyId}: duration ${(durationMs / 1000).toFixed(1)}s exceeds limit`);
+    await prisma.playerTrack.upsert({
+      where: { rallyId },
+      create: { rallyId, status: 'FAILED', error: `Duration exceeds ${MAX_BATCH_RALLY_DURATION_MS / 1000}s limit` },
+      update: { status: 'FAILED', error: `Duration exceeds ${MAX_BATCH_RALLY_DURATION_MS / 1000}s limit` },
+    });
+    return { status: 'failed', error: `Duration exceeds limit` };
+  }
+
+  await fs.mkdir(TEMP_DIR, { recursive: true });
+  const segmentPath = path.join(TEMP_DIR, `rally_${rallyId}_segment.mp4`);
+  const outputPath = path.join(TEMP_DIR, `rally_${rallyId}_players.json`);
+
+  try {
+    // Mark as processing
+    await prisma.playerTrack.upsert({
+      where: { rallyId },
+      create: { rallyId, status: 'PROCESSING' },
+      update: { status: 'PROCESSING', error: null },
+    });
+
+    const startSeconds = startMs / 1000;
+    const durationSeconds = durationMs / 1000;
+
+    console.log(`[BATCH_TRACK] Extracting segment for rally ${rallyId}: ${startSeconds}s - ${endMs / 1000}s`);
+    await extractVideoSegmentFromLocal(localVideoPath, startSeconds, durationSeconds, segmentPath);
+
+    const trackerResult = await runPlayerTracker(segmentPath, outputPath, calibrationCorners);
+    const processingTimeMs = Date.now() - startTime;
+
+    await saveTrackingResult(rallyId, videoId, trackerResult, processingTimeMs);
+
+    console.log(`[BATCH_TRACK] Rally ${rallyId} completed in ${processingTimeMs}ms`);
+
+    return {
+      status: 'completed',
+      frameCount: trackerResult.frameCount,
+      fps: trackerResult.fps,
+      detectionRate: trackerResult.detectionRate,
+      avgConfidence: trackerResult.avgConfidence,
+      avgPlayerCount: trackerResult.avgPlayerCount,
+      uniqueTrackCount: trackerResult.uniqueTrackCount,
+      processingTimeMs,
+      courtSplitY: trackerResult.courtSplitY,
+      primaryTrackIds: trackerResult.primaryTrackIds,
+      positions: trackerResult.positions,
+      ballPositions: trackerResult.ballPositions,
+      contacts: trackerResult.contacts,
+      actions: trackerResult.actions,
+      qualityReport: trackerResult.qualityReport,
+    };
+  } catch (error) {
+    console.error(`[BATCH_TRACK] Rally ${rallyId} failed:`, error);
+    await prisma.playerTrack.upsert({
+      where: { rallyId },
+      create: { rallyId, status: 'FAILED', error: error instanceof Error ? error.message : String(error) },
+      update: { status: 'FAILED', error: error instanceof Error ? error.message : String(error) },
+    });
+    return { status: 'failed', error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    await fs.unlink(segmentPath).catch(() => {});
+    await fs.unlink(outputPath).catch(() => {});
+  }
+}
+
+/**
+ * Download a full video from S3 to a local path.
+ * Used by batch tracking to download once and extract segments locally.
+ */
+export async function downloadVideoToLocal(
+  s3Key: string,
+  localPath: string,
+): Promise<void> {
+  const videoUrl = await generateDownloadUrl(s3Key);
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-i', videoUrl,
+      '-c', 'copy',  // No re-encoding, just download
+      '-y',
+      localPath,
+    ];
+
+    const ffmpeg = spawn('ffmpeg', args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stderr = '';
+    ffmpeg.stderr?.on('data', (data: Buffer) => {
+      stderr += data.toString();
+    });
+
+    ffmpeg.on('error', (error) => {
+      reject(new Error(`FFmpeg download failed to start: ${error.message}`));
+    });
+
+    ffmpeg.on('exit', (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`FFmpeg download exited with code ${code}: ${stderr.slice(-500)}`));
+      }
+    });
+  });
+}
+
+// Re-export types and constants used by batch tracking service
+export { TEMP_DIR, MAX_BATCH_RALLY_DURATION_MS };
+export type { CalibrationCorner, PlayerTrackerOutput };
+
+/**
  * Get existing player tracking data for a rally.
  */
 export async function getPlayerTrack(
@@ -698,127 +998,8 @@ export async function trackPlayersForRally(
     const processingTimeMs = Date.now() - startTime;
     console.log(`[PLAYER_TRACK] Completed in ${processingTimeMs}ms`);
 
-    // Save to database (cast arrays to JSON for Prisma)
-    await prisma.playerTrack.upsert({
-      where: { rallyId },
-      create: {
-        rallyId,
-        status: 'COMPLETED',
-        frameCount: trackerResult.frameCount,
-        fps: trackerResult.fps,
-        detectionRate: trackerResult.detectionRate,
-        avgConfidence: trackerResult.avgConfidence,
-        avgPlayerCount: trackerResult.avgPlayerCount,
-        uniqueTrackCount: trackerResult.uniqueTrackCount,
-        courtSplitY: trackerResult.courtSplitY,
-        primaryTrackIds: trackerResult.primaryTrackIds as unknown as number[],
-        positionsJson: trackerResult.positions as unknown as object[],
-        rawPositionsJson: trackerResult.rawPositions as unknown as object[],
-        ballPositionsJson: trackerResult.ballPositions as unknown as object[],
-        contactsJson: trackerResult.contacts as unknown as object,
-        actionsJson: trackerResult.actions as unknown as object,
-        qualityReportJson: trackerResult.qualityReport as unknown as object,
-        processingTimeMs,
-        modelVersion: 'yolov8n',
-        completedAt: new Date(),
-      },
-      update: {
-        status: 'COMPLETED',
-        frameCount: trackerResult.frameCount,
-        fps: trackerResult.fps,
-        detectionRate: trackerResult.detectionRate,
-        avgConfidence: trackerResult.avgConfidence,
-        avgPlayerCount: trackerResult.avgPlayerCount,
-        uniqueTrackCount: trackerResult.uniqueTrackCount,
-        courtSplitY: trackerResult.courtSplitY,
-        primaryTrackIds: trackerResult.primaryTrackIds as unknown as number[],
-        positionsJson: trackerResult.positions as unknown as object[],
-        rawPositionsJson: trackerResult.rawPositions as unknown as object[],
-        ballPositionsJson: trackerResult.ballPositions as unknown as object[],
-        contactsJson: trackerResult.contacts as unknown as object,
-        actionsJson: trackerResult.actions as unknown as object,
-        qualityReportJson: trackerResult.qualityReport as unknown as object,
-        processingTimeMs,
-        modelVersion: 'yolov8n',
-        completedAt: new Date(),
-        error: null,
-      },
-    });
-
-    // Auto-populate Rally.servingTeam from detected serve team
-    const detectedServingTeam = trackerResult.actions?.servingTeam;
-    if (detectedServingTeam === 'A' || detectedServingTeam === 'B') {
-      try {
-        await prisma.rally.update({
-          where: { id: rallyId },
-          data: { servingTeam: detectedServingTeam },
-        });
-        console.log(`[PLAYER_TRACK] Set servingTeam=${detectedServingTeam} for rally ${rallyId}`);
-      } catch (err) {
-        console.log(`[PLAYER_TRACK] Failed to update servingTeam:`, err);
-      }
-    }
-
-    // Compute video characteristics from tracking data
-    try {
-      const videoId = rally.video.id;
-
-      // Camera distance from primary track bbox heights (normalized)
-      const primaryIds = new Set(trackerResult.primaryTrackIds ?? []);
-      const heights = (trackerResult.positions as Array<{ trackId: number; height: number }>)
-        .filter(p => primaryIds.has(p.trackId))
-        .map(p => p.height);
-
-      let cameraDistance: { avgBboxHeight: number; category: 'close' | 'medium' | 'far' } | undefined;
-      if (heights.length > 0) {
-        // Use median to resist jumping/crouching noise
-        const sorted = [...heights].sort((a, b) => a - b);
-        const avgBboxHeight = sorted[Math.floor(sorted.length / 2)];
-        const category = avgBboxHeight > 0.35 ? 'close' : avgBboxHeight < 0.20 ? 'far' : 'medium';
-        cameraDistance = { avgBboxHeight: Math.round(avgBboxHeight * 1000) / 1000, category };
-      }
-
-      // Scene complexity from raw (unfiltered) detections per frame
-      const rawPositions = trackerResult.rawPositions ?? trackerResult.positions;
-      const rawFrameCounts: Record<number, number> = {};
-      for (const p of rawPositions as Array<{ frameNumber: number }>) {
-        rawFrameCounts[p.frameNumber] = (rawFrameCounts[p.frameNumber] ?? 0) + 1;
-      }
-      const rawFrameValues = Object.values(rawFrameCounts);
-      const avgPeople = rawFrameValues.length > 0
-        ? rawFrameValues.reduce((a, b) => a + b, 0) / rawFrameValues.length
-        : 0;
-      const sceneComplexity = {
-        avgPeople: Math.round(avgPeople * 10) / 10,
-        category: (avgPeople > 6 ? 'complex' : 'simple') as 'simple' | 'complex',
-      };
-
-      // Court detection insights
-      const courtDetection = trackerResult.courtDetection;
-
-      // Merge with existing characteristicsJson (preserving brightness from Phase 1)
-      const video = await prisma.video.findUnique({
-        where: { id: videoId },
-        select: { characteristicsJson: true },
-      });
-      const existing = (video?.characteristicsJson as Record<string, unknown>) ?? {};
-      const characteristics = {
-        ...existing,
-        ...(cameraDistance && { cameraDistance }),
-        sceneComplexity,
-        ...(courtDetection && { courtDetection }),
-        version: 1,
-      };
-      await prisma.video.update({
-        where: { id: videoId },
-        data: {
-          characteristicsJson: characteristics as unknown as Prisma.InputJsonValue,
-        },
-      });
-      console.log(`[PLAYER_TRACK] Updated video characteristics for ${videoId}`);
-    } catch (err) {
-      console.log(`[PLAYER_TRACK] Failed to update video characteristics:`, err);
-    }
+    // Save to database and update video characteristics
+    await saveTrackingResult(rallyId, rally.video.id, trackerResult, processingTimeMs);
 
     return {
       status: 'completed',

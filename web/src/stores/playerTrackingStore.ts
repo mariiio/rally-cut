@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { trackPlayers, getPlayerTrack, swapPlayerTracks, saveCourtCalibration, deleteCourtCalibration, getActionGroundTruth, saveActionGroundTruth as apiSaveActionGroundTruth, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData, type ActionGroundTruthLabel, type QualityReport } from '@/services/api';
+import { trackPlayers, getPlayerTrack, swapPlayerTracks, saveCourtCalibration, deleteCourtCalibration, getActionGroundTruth, saveActionGroundTruth as apiSaveActionGroundTruth, trackAllRallies as apiTrackAllRallies, getBatchTrackingStatus as apiGetBatchTrackingStatus, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData, type ActionGroundTruthLabel, type QualityReport, type BatchTrackingStatus } from '@/services/api';
 
 // Types for player tracking data (store format)
 export interface PlayerPosition {
@@ -71,6 +71,10 @@ interface PlayerTrackingState {
   isCalibrating: boolean;
   calibrations: Record<string, CourtCalibration>; // keyed by videoId
 
+  // Batch tracking state
+  batchTracking: Record<string, BatchTrackingStatus>; // keyed by videoId
+  batchTrackingPolling: Record<string, boolean>; // keyed by videoId
+
   // Action labeling state
   isLabelingActions: boolean;
   actionGroundTruth: Record<string, ActionGroundTruthLabel[]>; // keyed by rallyId
@@ -89,6 +93,11 @@ interface PlayerTrackingState {
   trackPlayersForRally: (rallyId: string, videoId: string, fallbackFps?: number) => Promise<void>;
   loadPlayerTrack: (rallyId: string, fallbackFps?: number, forceRefresh?: boolean) => Promise<boolean>;
   swapTracks: (rallyId: string, trackA: number, trackB: number, fromFrame: number, fallbackFps?: number) => Promise<void>;
+
+  // Batch tracking actions
+  trackAllRalliesForVideo: (videoId: string) => Promise<void>;
+  pollBatchTrackingStatus: (videoId: string, fallbackFps?: number) => void;
+  stopPollingBatchTracking: (videoId: string) => void;
 
   // Action labeling actions
   setIsLabelingActions: (value: boolean) => void;
@@ -195,6 +204,8 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
       selectedTrackId: null,
       isCalibrating: false,
       calibrations: {},
+      batchTracking: {},
+      batchTrackingPolling: {},
       isLabelingActions: false,
       actionGroundTruth: {},
       actionGtDirty: {},
@@ -351,6 +362,100 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
           console.error('[PlayerTrackingStore] Failed to swap tracks:', error);
           throw error;
         }
+      },
+
+      // Batch tracking
+      trackAllRalliesForVideo: async (videoId: string) => {
+        try {
+          const result = await apiTrackAllRallies(videoId);
+          set((state) => ({
+            batchTracking: {
+              ...state.batchTracking,
+              [videoId]: {
+                status: 'pending',
+                jobId: result.jobId,
+                totalRallies: result.totalRallies,
+                completedRallies: 0,
+                failedRallies: 0,
+              },
+            },
+          }));
+          // Auto-start polling
+          get().pollBatchTrackingStatus(videoId);
+        } catch (error) {
+          console.error('[PlayerTrackingStore] Failed to start batch tracking:', error);
+          set((state) => ({
+            batchTracking: {
+              ...state.batchTracking,
+              [videoId]: {
+                status: 'failed',
+                error: error instanceof Error ? error.message : 'Failed to start',
+              },
+            },
+          }));
+        }
+      },
+
+      pollBatchTrackingStatus: (videoId: string, fallbackFps: number = 30) => {
+        // Don't start duplicate polls
+        if (get().batchTrackingPolling[videoId]) return;
+
+        set((state) => ({
+          batchTrackingPolling: { ...state.batchTrackingPolling, [videoId]: true },
+        }));
+
+        const poll = async () => {
+          if (!get().batchTrackingPolling[videoId]) return;
+
+          try {
+            const status = await apiGetBatchTrackingStatus(videoId);
+            const prevStatus = get().batchTracking[videoId];
+
+            set((state) => ({
+              batchTracking: { ...state.batchTracking, [videoId]: status },
+            }));
+
+            // Auto-load completed rally tracks
+            if (status.rallyStatuses) {
+              const prevCompleted = new Set(
+                prevStatus?.rallyStatuses
+                  ?.filter(r => r.status === 'COMPLETED')
+                  .map(r => r.rallyId) ?? []
+              );
+
+              for (const rs of status.rallyStatuses) {
+                if (rs.status === 'COMPLETED' && !prevCompleted.has(rs.rallyId)) {
+                  // New completion — load the track data
+                  get().loadPlayerTrack(rs.rallyId, fallbackFps, true);
+                }
+              }
+            }
+
+            // Continue polling if still active
+            if (status.status === 'pending' || status.status === 'processing') {
+              setTimeout(poll, 2000);
+            } else {
+              // Done — stop polling, auto-show overlays
+              set((state) => ({
+                batchTrackingPolling: { ...state.batchTrackingPolling, [videoId]: false },
+                showPlayerOverlay: true,
+                showBallOverlay: true,
+              }));
+            }
+          } catch (error) {
+            console.error('[PlayerTrackingStore] Batch status poll failed:', error);
+            if (!get().batchTrackingPolling[videoId]) return;
+            setTimeout(poll, 5000); // Retry after longer delay
+          }
+        };
+
+        poll();
+      },
+
+      stopPollingBatchTracking: (videoId: string) => {
+        set((state) => ({
+          batchTrackingPolling: { ...state.batchTrackingPolling, [videoId]: false },
+        }));
       },
 
       // Action labeling

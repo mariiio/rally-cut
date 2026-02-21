@@ -100,6 +100,17 @@ export async function generatePosterImmediate(
       console.log(`[POSTER] Failed to compute brightness for ${videoId}:`, err);
     }
 
+    // Run early quality assessment (YOLO on sample frames, ~2-3s)
+    let qualityAssessment: Record<string, unknown> | undefined;
+    try {
+      qualityAssessment = await runQualityAssessment(inputPath);
+      if (qualityAssessment) {
+        console.log(`[POSTER] Video ${videoId} quality: ${qualityAssessment.expectedQuality} (${(qualityAssessment.warnings as string[])?.length ?? 0} warnings)`);
+      }
+    } catch (err) {
+      console.log(`[POSTER] Failed to assess quality for ${videoId}:`, err);
+    }
+
     // Generate S3 key for poster
     const keyParts = s3Key.split("/");
     const filename = keyParts.pop()!;
@@ -135,6 +146,19 @@ export async function generatePosterImmediate(
     const posterData = await fs.readFile(posterPath);
     await uploadPoster(posterKey, posterData);
 
+    // Merge quality assessment into characteristics
+    let mergedCharacteristics = characteristicsJson as Record<string, unknown> | undefined;
+    if (qualityAssessment) {
+      mergedCharacteristics = {
+        ...(mergedCharacteristics ?? {}),
+        ...(qualityAssessment.cameraDistance && { cameraDistance: qualityAssessment.cameraDistance }),
+        ...(qualityAssessment.sceneComplexity && { sceneComplexity: qualityAssessment.sceneComplexity }),
+        expectedQuality: qualityAssessment.expectedQuality,
+        uploadWarnings: qualityAssessment.warnings,
+        version: 1,
+      };
+    }
+
     // Update database with poster and extracted metadata
     await prisma.video.update({
       where: { id: videoId },
@@ -144,7 +168,7 @@ export async function generatePosterImmediate(
         ...(fps !== null && { fps }),
         ...(width !== null && { width }),
         ...(height !== null && { height }),
-        ...(characteristicsJson && { characteristicsJson }),
+        ...(mergedCharacteristics && { characteristicsJson: mergedCharacteristics }),
       },
     });
 
@@ -842,6 +866,68 @@ function runFFprobe(args: string[]): Promise<string> {
         reject(new Error(`FFprobe exited with code ${code}: ${stderr.slice(-500)}`));
       }
     });
+  });
+}
+
+/**
+ * Run early quality assessment using YOLO on sample frames.
+ * Calls `rallycut assess-quality` CLI. Returns null if unavailable.
+ */
+async function runQualityAssessment(
+  videoPath: string
+): Promise<Record<string, unknown> | null> {
+  const analysisDir = path.resolve(
+    path.dirname(new URL(import.meta.url).pathname),
+    "../../../analysis"
+  );
+
+  return new Promise((resolve) => {
+    const args = [
+      "run",
+      "rallycut",
+      "assess-quality",
+      videoPath,
+      "--json",
+      "--quiet",
+    ];
+
+    const child = spawn("uv", args, {
+      cwd: analysisDir,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env },
+    });
+
+    let stdout = "";
+    child.stdout?.on("data", (data: Buffer) => {
+      stdout += data.toString();
+    });
+
+    child.on("error", () => {
+      resolve(null); // CLI not available — skip silently
+    });
+
+    child.on("exit", (code) => {
+      if (code !== 0) {
+        resolve(null);
+        return;
+      }
+      try {
+        const result = JSON.parse(stdout.trim());
+        resolve(result);
+      } catch {
+        resolve(null);
+      }
+    });
+
+    // Timeout after 30s — quality assessment shouldn't take longer
+    setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        // Ignore
+      }
+      resolve(null);
+    }, 30000);
   });
 }
 

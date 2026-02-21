@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import { Box, IconButton, Tooltip, Badge, Typography, Stack, Tabs, Tab } from '@mui/material';
 import ListAltIcon from '@mui/icons-material/ListAlt';
 import StarIcon from '@mui/icons-material/Star';
+import BarChartIcon from '@mui/icons-material/BarChart';
 import AddIcon from '@mui/icons-material/Add';
 import VideocamIcon from '@mui/icons-material/Videocam';
 import { VideoPlayer } from './VideoPlayer';
@@ -23,6 +24,7 @@ import { AccessRequestForm } from './AccessRequestForm';
 import { TutorialProvider, TutorialContext } from './tutorial';
 import { PlayerTrackingToolbar } from './PlayerTrackingToolbar';
 import { VideoInsightsBanner } from './VideoInsightsBanner';
+import { MatchStatsPanel } from './MatchStatsPanel';
 import { useEditorStore } from '@/stores/editorStore';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { designTokens } from '@/app/theme';
@@ -358,14 +360,23 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
                 iconPosition="start"
                 sx={{ minHeight: 36 }}
               />
+              <Tab
+                value="stats"
+                label="Stats"
+                icon={<BarChartIcon sx={{ fontSize: 16 }} />}
+                iconPosition="start"
+                sx={{ minHeight: 36 }}
+              />
             </Tabs>
           </Box>
           {/* Tab content */}
           <Box sx={{ flex: 1, overflow: 'hidden' }}>
             {leftPanelTab === 'rallies' ? (
               <RallyList />
-            ) : (
+            ) : leftPanelTab === 'highlights' ? (
               <HighlightsPanel />
+            ) : (
+              <MatchStatsPanel />
             )}
           </Box>
         </CollapsiblePanel>

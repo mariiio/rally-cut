@@ -150,8 +150,8 @@ interface EditorState {
   setShowAddVideoModal: (show: boolean) => void;
 
   // Left panel tab state
-  leftPanelTab: 'rallies' | 'highlights';
-  setLeftPanelTab: (tab: 'rallies' | 'highlights') => void;
+  leftPanelTab: 'rallies' | 'highlights' | 'stats';
+  setLeftPanelTab: (tab: 'rallies' | 'highlights' | 'stats') => void;
 
   // Expanded highlights in panel
   expandedHighlightIds: Set<string>;
@@ -307,7 +307,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   // Left panel tab state
   leftPanelTab: 'rallies',
-  setLeftPanelTab: (tab: 'rallies' | 'highlights') => set({ leftPanelTab: tab }),
+  setLeftPanelTab: (tab: 'rallies' | 'highlights' | 'stats') => set({ leftPanelTab: tab }),
 
   // Expanded highlights in panel
   expandedHighlightIds: new Set<string>(),

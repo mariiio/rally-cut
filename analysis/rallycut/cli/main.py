@@ -4,7 +4,9 @@ import typer
 from rich.console import Console
 
 from rallycut.cli.commands.analyze import app as analyze_app
+from rallycut.cli.commands.assess_quality import assess_quality as assess_quality_command
 from rallycut.cli.commands.compare_tracking import compare_tracking as compare_tracking_command
+from rallycut.cli.commands.compute_match_stats import compute_match_stats_cmd
 from rallycut.cli.commands.cut import cut as cut_command
 from rallycut.cli.commands.detect_court import detect_court as detect_court_command
 from rallycut.cli.commands.evaluate import app as evaluate_app
@@ -30,6 +32,8 @@ app.command(name="track-players")(track_players_command)
 app.command(name="compare-tracking")(compare_tracking_command)
 app.command(name="match-players")(match_players_command)
 app.command(name="detect-court")(detect_court_command)
+app.command(name="assess-quality")(assess_quality_command)
+app.command(name="compute-match-stats")(compute_match_stats_cmd)
 app.add_typer(evaluate_tracking_app, name="evaluate-tracking")
 app.add_typer(label_app, name="label")
 app.add_typer(evaluate_app, name="evaluate")

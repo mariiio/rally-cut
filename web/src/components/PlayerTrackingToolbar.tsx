@@ -2,8 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { Box, Button, IconButton, CircularProgress, Tooltip, Typography, Chip, Divider, Dialog, DialogTitle, DialogContent, DialogActions, TextField, FormControl, InputLabel, Select, MenuItem, FormControlLabel, Checkbox } from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
 import CropFreeIcon from '@mui/icons-material/CropFree';
 import PersonSearchIcon from '@mui/icons-material/PersonSearch';
+import PlaylistPlayIcon from '@mui/icons-material/PlaylistPlay';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import SportsVolleyballIcon from '@mui/icons-material/SportsVolleyball';
@@ -43,6 +45,7 @@ export function PlayerTrackingToolbar() {
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [importTaskId, setImportTaskId] = useState('');
   const [showSwapDialog, setShowSwapDialog] = useState(false);
+  const [calibrationPromptDismissed, setCalibrationPromptDismissed] = useState<Record<string, boolean>>({});
   const [swapTrackA, setSwapTrackA] = useState<number | ''>('');
   const [swapTrackB, setSwapTrackB] = useState<number | ''>('');
   const [swapFromCurrent, setSwapFromCurrent] = useState(true);
@@ -75,6 +78,9 @@ export function PlayerTrackingToolbar() {
     loadActionGroundTruth,
     saveActionGroundTruth,
     removeActionLabel,
+    batchTracking,
+    trackAllRalliesForVideo,
+    pollBatchTrackingStatus,
   } = usePlayerTrackingStore();
 
   const currentTime = usePlayerStore((state) => state.currentTime);
@@ -125,6 +131,15 @@ export function PlayerTrackingToolbar() {
     };
     checkLabelStudioStatus();
   }, [backendRallyId, hasTrackingData]);
+
+  // Resume polling on mount if batch was in progress
+  const batchStatus = activeMatchId ? batchTracking[activeMatchId] : undefined;
+  const isBatchActive = batchStatus?.status === 'pending' || batchStatus?.status === 'processing';
+  useEffect(() => {
+    if (activeMatchId && isBatchActive) {
+      pollBatchTrackingStatus(activeMatchId, fps);
+    }
+  }, [activeMatchId, isBatchActive, fps, pollBatchTrackingStatus]);
 
   // Don't show if no video loaded
   if (!activeMatchId) {
@@ -253,6 +268,11 @@ export function PlayerTrackingToolbar() {
     }
   };
 
+  const handleTrackAllRallies = async () => {
+    if (!activeMatchId) return;
+    await trackAllRalliesForVideo(activeMatchId);
+  };
+
   const hasBallPositions = !!trackData?.ballPositions?.length;
 
   const showTrackingTools = hasTrackingData && !isCalibrating;
@@ -314,7 +334,7 @@ export function PlayerTrackingToolbar() {
                     : <PersonSearchIcon />
                 }
                 onClick={handleTrackPlayers}
-                disabled={isTrackingRally || isLoadingTrackData}
+                disabled={isTrackingRally || isLoadingTrackData || isBatchActive}
               >
                 {isTrackingRally
                   ? 'Tracking...'
@@ -325,6 +345,27 @@ export function PlayerTrackingToolbar() {
                       : 'Track Players'}
               </Button>
             )}
+
+            <Tooltip title="Track all rallies in this video (batch processing)">
+              <span>
+                <Button
+                  size="small"
+                  variant={isBatchActive ? 'contained' : 'outlined'}
+                  startIcon={
+                    isBatchActive
+                      ? <CircularProgress size={16} />
+                      : <PlaylistPlayIcon />
+                  }
+                  onClick={handleTrackAllRallies}
+                  disabled={isBatchActive || isTrackingRally}
+                  color={isBatchActive ? 'warning' : 'primary'}
+                >
+                  {isBatchActive
+                    ? `Tracking ${batchStatus?.completedRallies ?? 0}/${batchStatus?.totalRallies ?? '?'}`
+                    : 'Track All'}
+                </Button>
+              </span>
+            </Tooltip>
           </>
         )}
 
@@ -450,6 +491,84 @@ export function PlayerTrackingToolbar() {
           </>
         )}
       </Box>
+
+      {/* Batch Tracking Status */}
+      {batchStatus && batchStatus.status !== 'idle' && (
+        <Box sx={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 0.75,
+          mt: 0.75,
+          px: 0.5,
+          py: 0.25,
+          borderRadius: 1,
+          bgcolor: batchStatus.status === 'failed' ? 'error.dark' : batchStatus.status === 'completed' ? 'success.dark' : 'action.hover',
+        }}>
+          {isBatchActive && <CircularProgress size={14} sx={{ color: 'warning.main' }} />}
+          <Typography variant="caption" sx={{ color: batchStatus.status === 'failed' || batchStatus.status === 'completed' ? 'white' : 'text.secondary' }}>
+            {batchStatus.status === 'completed'
+              ? `All ${batchStatus.totalRallies} rallies tracked${batchStatus.failedRallies ? ` (${batchStatus.failedRallies} failed)` : ''}`
+              : batchStatus.status === 'failed'
+                ? `Batch tracking failed: ${batchStatus.error ?? 'Unknown error'}`
+                : `Tracking rally ${(batchStatus.completedRallies ?? 0) + (batchStatus.failedRallies ?? 0) + 1} of ${batchStatus.totalRallies ?? '?'}...`}
+          </Typography>
+          {batchStatus.rallyStatuses && isBatchActive && (
+            <Box sx={{ display: 'flex', gap: 0.25, ml: 'auto' }}>
+              {batchStatus.rallyStatuses.map((rs) => (
+                <Box
+                  key={rs.rallyId}
+                  sx={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    bgcolor: rs.status === 'COMPLETED' ? 'success.main'
+                      : rs.status === 'FAILED' ? 'error.main'
+                      : rs.status === 'PROCESSING' ? 'warning.main'
+                      : 'action.disabled',
+                  }}
+                />
+              ))}
+            </Box>
+          )}
+        </Box>
+      )}
+
+      {/* Calibration Recommendation Prompt */}
+      {activeMatchId && !hasCalibration && !isCalibrating
+        && !calibrationPromptDismissed[activeMatchId]
+        && trackData?.qualityReport?.calibrationRecommended && (
+        <Box sx={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1,
+          mt: 0.75,
+          px: 1,
+          py: 0.5,
+          borderRadius: 1,
+          bgcolor: 'info.dark',
+          color: 'white',
+        }}>
+          <CropFreeIcon sx={{ fontSize: 16 }} />
+          <Typography variant="caption" sx={{ flex: 1 }}>
+            Court calibration recommended — improves tracking accuracy and enables real-world stats
+          </Typography>
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={handleStartCalibration}
+            sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', fontSize: '0.7rem', py: 0, minHeight: 24 }}
+          >
+            Calibrate
+          </Button>
+          <IconButton
+            size="small"
+            onClick={() => setCalibrationPromptDismissed((prev) => ({ ...prev, [activeMatchId!]: true }))}
+            sx={{ color: 'rgba(255,255,255,0.7)', p: 0.25 }}
+          >
+            <CloseIcon sx={{ fontSize: 14 }} />
+          </IconButton>
+        </Box>
+      )}
 
       {/* Action Sequence */}
       {showTrackingTools && trackData?.actions?.actions?.length && (

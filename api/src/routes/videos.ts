@@ -44,6 +44,8 @@ import {
   updateVideo,
 } from "../services/videoService.js";
 import { queueVideoProcessing } from "../services/processingService.js";
+import { trackAllRallies, getBatchTrackingStatus } from "../services/batchTrackingService.js";
+import { getMatchAnalysis, getMatchStats } from "../services/matchAnalysisService.js";
 
 // Calibration corners can be outside 0-1 if dragged outside video bounds
 const calibrationCornerSchema = z.object({
@@ -623,6 +625,95 @@ router.post(
     try {
       await queueVideoProcessing(req.params.id, req.userId!);
       res.json({ success: true, message: "Processing queued" });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================================
+// Batch Tracking Routes
+// ============================================================================
+
+/**
+ * POST /v1/videos/:id/track-all-rallies
+ * Track all rallies in a video. Returns 202 with job ID.
+ * Downloads video once, processes rallies sequentially in background.
+ */
+router.post(
+  "/v1/videos/:id/track-all-rallies",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      const result = await trackAllRallies(req.params.id, req.userId!);
+      res.status(202).json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /v1/videos/:id/batch-tracking-status
+ * Poll for batch tracking progress.
+ */
+router.get(
+  "/v1/videos/:id/batch-tracking-status",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      const status = await getBatchTrackingStatus(req.params.id, req.userId!);
+      res.json(status);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================================
+// Match Analysis Routes
+// ============================================================================
+
+/**
+ * GET /v1/videos/:id/match-analysis
+ * Get cross-rally player identity and match statistics.
+ */
+router.get(
+  "/v1/videos/:id/match-analysis",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      const analysis = await getMatchAnalysis(req.params.id, req.userId!);
+      res.json(analysis ?? { status: 'not_available' });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /v1/videos/:id/match-stats
+ * Get match statistics (kills, aces, efficiency, score progression).
+ */
+router.get(
+  "/v1/videos/:id/match-stats",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      const stats = await getMatchStats(req.params.id, req.userId!);
+      res.json(stats ?? { status: 'not_available' });
     } catch (error) {
       next(error);
     }

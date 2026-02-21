@@ -226,9 +226,12 @@ model Video {
   qualityDowngradedAt   DateTime?             @map("quality_downgraded_at")
   courtCalibrationJson  Json?                 @map("court_calibration_json")
   characteristicsJson   Json?                 @map("characteristics_json")
+  matchAnalysisJson     Json?                 @map("match_analysis_json")
+  matchStatsJson        Json?                 @map("match_stats_json")
   rallies               Rally[]
   confirmation          RallyConfirmation?
   detectionJobs         RallyDetectionJob[]
+  batchTrackingJobs     BatchTrackingJob[]
   sessionVideos         SessionVideo[]
   cameraSettings        VideoCameraSettings[]
   shares                VideoShare[]
@@ -463,6 +466,25 @@ model RallyConfirmation {
   @@map("rally_confirmations")
 }
 
+model BatchTrackingJob {
+  id               String              @id @default(uuid())
+  videoId          String              @map("video_id")
+  userId           String              @map("user_id")
+  status           BatchTrackingStatus @default(PENDING)
+  totalRallies     Int                 @map("total_rallies")
+  completedRallies Int                 @default(0) @map("completed_rallies")
+  failedRallies    Int                 @default(0) @map("failed_rallies")
+  currentRallyId   String?             @map("current_rally_id")
+  error            String?
+  createdAt        DateTime            @default(now()) @map("created_at")
+  completedAt      DateTime?           @map("completed_at")
+  video            Video               @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId])
+  @@index([status])
+  @@map("batch_tracking_jobs")
+}
+
 model Feedback {
   id        String       @id @default(uuid())
   userId    String?      @map("user_id")
@@ -572,6 +594,13 @@ enum ConfirmationStatus {
   PENDING
   PROCESSING
   CONFIRMED
+  FAILED
+}
+
+enum BatchTrackingStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
   FAILED
 }
 

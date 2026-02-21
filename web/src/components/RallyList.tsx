@@ -31,6 +31,7 @@ import ListItemText from '@mui/material/ListItemText';
 import AddIcon from '@mui/icons-material/Add';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
+import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { useExportStore } from '@/stores/exportStore';
 import { useTierStore } from '@/stores/tierStore';
 import { formatTime, formatDuration } from '@/utils/timeFormat';
@@ -62,6 +63,8 @@ export function RallyList() {
   const setShowAddVideoModal = useEditorStore((s) => s.setShowAddVideoModal);
   const singleVideoMode = useEditorStore((s) => s.singleVideoMode);
   const isPaidTier = useTierStore((state) => state.isPaidTier());
+  const playerTracks = usePlayerTrackingStore((s) => s.playerTracks);
+  const batchTracking = usePlayerTrackingStore((s) => s.batchTracking);
   const currentTime = usePlayerStore((s) => s.currentTime);
   const seek = usePlayerStore((s) => s.seek);
   const {
@@ -694,6 +697,53 @@ export function RallyList() {
                             )}
                           </Stack>
                         )}
+
+                        {/* Tracking status / quality indicator */}
+                        {rally._backendId && (() => {
+                          const track = playerTracks[rally._backendId!];
+                          const batchStatus = batchTracking[match.id];
+                          const isCurrentlyTracking = batchStatus?.currentRallyId === rally._backendId;
+                          const status = isCurrentlyTracking ? 'PROCESSING' : track?.status;
+                          if (!status) return null;
+
+                          // Show quality score badge if completed, otherwise status dot
+                          const qr = track?.tracksJson?.qualityReport;
+                          const score = qr?.trackabilityScore;
+                          const hasScore = status === 'COMPLETED' && score !== undefined;
+
+                          const qualityColor = hasScore
+                            ? score >= 0.7 ? 'success.main' : score >= 0.4 ? 'warning.main' : 'error.main'
+                            : status === 'COMPLETED' ? 'success.main'
+                            : status === 'PROCESSING' ? 'warning.main'
+                            : status === 'FAILED' ? 'error.main'
+                            : 'action.disabled';
+
+                          const tooltipText = hasScore
+                            ? `Quality: ${Math.round(score * 100)}%${qr?.suggestions?.length ? '\n' + qr.suggestions.join('\n') : ''}`
+                            : status === 'COMPLETED' ? 'Tracked'
+                            : status === 'PROCESSING' ? 'Tracking...'
+                            : status === 'FAILED' ? 'Tracking failed'
+                            : 'Pending';
+
+                          return (
+                            <Tooltip title={tooltipText}>
+                              <Box sx={{
+                                width: 6,
+                                height: 6,
+                                borderRadius: '50%',
+                                flexShrink: 0,
+                                bgcolor: qualityColor,
+                                ...(status === 'PROCESSING' && {
+                                  animation: 'pulse 1.5s ease-in-out infinite',
+                                  '@keyframes pulse': {
+                                    '0%, 100%': { opacity: 1 },
+                                    '50%': { opacity: 0.4 },
+                                  },
+                                }),
+                              }} />
+                            </Tooltip>
+                          );
+                        })()}
 
                         {/* More menu button */}
                         {match.s3Key && isActiveMatch && (

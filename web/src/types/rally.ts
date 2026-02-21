@@ -79,6 +79,8 @@ export interface VideoCharacteristics {
     lineVisibility: string;
     recordingTips: string[];
   };
+  expectedQuality?: number;
+  uploadWarnings?: string[];
   version: number;
 }
 
