@@ -325,6 +325,8 @@ def main() -> None:
 
     all_matches: list[MatchResult] = []
     all_unmatched: list[dict] = []
+    total_gt_serves = 0
+    serves_present = 0
 
     # Per-rally results table
     rally_table = Table(title="Per-Rally Contact Detection")
@@ -391,12 +393,25 @@ def main() -> None:
             # Use stored actions
             pred_actions = rally.actions_json.get("actions", [])
 
+        # Separate synthetic vs real predictions for metrics.
+        # Synthetic serves are game-state inferences with no real detection
+        # frame, so they should not participate in contact-level F1.
+        real_pred_actions = [a for a in pred_actions if not a.get("isSynthetic")]
+        # Includes synthetic serves — presence metric counts game-state inference
+        has_pred_serve = any(a.get("action") == "serve" for a in pred_actions)
+        has_gt_serve = any(gt.action == "serve" for gt in rally.gt_labels)
+
+        if has_gt_serve:
+            total_gt_serves += 1
+            if has_pred_serve:
+                serves_present += 1
+
         # FPS-adaptive tolerance: convert ms to frames for this rally
         tolerance_frames = max(1, round(rally.fps * args.tolerance_ms / 1000))
 
         matches, unmatched = match_contacts(
             rally.gt_labels,
-            pred_actions,
+            real_pred_actions,
             tolerance=tolerance_frames,
         )
 
@@ -433,6 +448,15 @@ def main() -> None:
         console.print(f"  [bold]Contact F1:        {agg_metrics['f1']:.1%}[/bold]")
         console.print(f"  [bold]Action Accuracy:   {agg_metrics['action_accuracy']:.1%}[/bold]")
         console.print(f"  Player Attribution: {agg_metrics['player_accuracy']:.1%}")
+
+        # Serve presence: does a serve action exist (real or synthetic)?
+        if total_gt_serves > 0:
+            serve_pct = serves_present / total_gt_serves
+            console.print(
+                f"  [bold]Serve Presence:    {serves_present}/{total_gt_serves} "
+                f"({serve_pct:.1%})[/bold]  "
+                f"[dim](includes synthetic)[/dim]"
+            )
 
         # Per-class table
         class_table = Table(title="\nPer-Action Metrics")

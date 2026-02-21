@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 from rallycut.tracking.action_classifier import (
     ActionClassifier,
     ActionClassifierConfig,
@@ -10,6 +12,8 @@ from rallycut.tracking.action_classifier import (
     RallyActions,
     _ball_crossed_net,
     _ball_moving_toward_net,
+    _infer_serve_side,
+    _make_synthetic_serve,
     classify_rally_actions,
 )
 from rallycut.tracking.ball_tracker import BallPosition
@@ -655,7 +659,7 @@ class TestPhantomServe:
 
     def test_pass3_fallback_with_no_toward_net_becomes_receive(self) -> None:
         """When Pass 3 fallback is used and ball doesn't move toward net,
-        the first contact is reclassified as receive (phantom serve)."""
+        a synthetic serve is prepended and the first contact becomes receive."""
         # Contact NOT at baseline, NOT high velocity → Pass 1 and 2 fail
         # Pass 3 picks it as first-contact fallback
         contacts = [
@@ -674,8 +678,10 @@ class TestPhantomServe:
         )
         result = classify_rally_actions(seq, use_classifier=False)
 
-        # Phantom serve: reclassified as receive
-        assert result.actions[0].action_type == ActionType.RECEIVE
+        # Phantom serve: synthetic serve prepended, first contact → receive
+        assert result.actions[0].action_type == ActionType.SERVE
+        assert result.actions[0].is_synthetic is True
+        assert result.actions[1].action_type == ActionType.RECEIVE
 
     def test_pass1_arc_serve_not_overridden_by_phantom(self) -> None:
         """When Pass 1 (arc crossing) finds the serve, phantom serve
@@ -720,3 +726,202 @@ class TestPhantomServe:
 
         # Pass 2 found serve at baseline — should stay as serve regardless
         assert result.actions[0].action_type == ActionType.SERVE
+
+
+class TestSyntheticServe:
+    """Tests for synthetic serve injection when serve is missed."""
+
+    def test_phantom_serve_injects_synthetic(self) -> None:
+        """Phantom serve detected → synthetic SERVE prepended, first contact → RECEIVE."""
+        # Pass 3 fallback: not at baseline, low velocity
+        contacts = [
+            _contact(frame=10, ball_y=0.4, velocity=0.010, court_side="far"),
+            _contact(frame=40, ball_y=0.35, court_side="far"),
+        ]
+        # Ball moves away from net (far side, Y decreasing = away from net)
+        ball_positions = [
+            _bp(11, 0.39), _bp(12, 0.37), _bp(13, 0.35),
+            _bp(14, 0.33), _bp(15, 0.32), _bp(16, 0.31),
+        ]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+            ball_positions=ball_positions,
+        )
+        result = classify_rally_actions(seq, use_classifier=False)
+
+        # Synthetic serve should be first action
+        assert result.actions[0].action_type == ActionType.SERVE
+        assert result.actions[0].is_synthetic is True
+        assert result.actions[0].confidence == 0.4
+        assert result.actions[0].player_track_id == -1
+        # Original contact becomes receive
+        assert result.actions[1].action_type == ActionType.RECEIVE
+        assert result.actions[1].is_synthetic is False
+
+    def test_real_serve_not_synthetic(self) -> None:
+        """Pass 1/2 serve → no synthetic, no is_synthetic flag."""
+        contacts = [_contact(frame=10, ball_y=0.85, court_side="near")]
+        seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
+        result = classify_rally_actions(seq, use_classifier=False)
+
+        assert result.actions[0].action_type == ActionType.SERVE
+        assert result.actions[0].is_synthetic is False
+
+    def test_synthetic_serve_has_correct_side(self) -> None:
+        """Synthetic serve side = opposite of first contact's court_side."""
+        contacts = [
+            _contact(frame=10, ball_y=0.4, velocity=0.010, court_side="far"),
+            _contact(frame=40, ball_y=0.35, court_side="far"),
+        ]
+        # Ball away from net
+        ball_positions = [
+            _bp(11, 0.39), _bp(12, 0.37), _bp(13, 0.35),
+            _bp(14, 0.33), _bp(15, 0.32), _bp(16, 0.31),
+        ]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+            ball_positions=ball_positions,
+        )
+        result = classify_rally_actions(seq, use_classifier=False)
+
+        # First contact is on far side → serve must be from near side
+        assert result.actions[0].court_side == "near"
+
+    def test_synthetic_serve_downstream_sequence(self) -> None:
+        """Full sequence SERVE(synthetic)→RECEIVE→SET→ATTACK works."""
+        contacts = [
+            _contact(frame=10, ball_y=0.4, velocity=0.010, court_side="far"),
+            _contact(frame=40, ball_y=0.35, court_side="far"),
+            _contact(frame=55, ball_y=0.38, court_side="far"),
+        ]
+        # Ball away from net
+        ball_positions = [
+            _bp(11, 0.39), _bp(12, 0.37), _bp(13, 0.35),
+            _bp(14, 0.33), _bp(15, 0.32), _bp(16, 0.31),
+        ]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+            ball_positions=ball_positions,
+        )
+        result = classify_rally_actions(seq, use_classifier=False)
+
+        assert result.action_sequence == [
+            ActionType.SERVE,    # synthetic
+            ActionType.RECEIVE,  # reclassified from first contact
+            ActionType.SET,      # 2nd on far
+            ActionType.ATTACK,   # 3rd on far
+        ]
+
+    def test_toward_net_none_with_receive_features(self) -> None:
+        """Insufficient ball data + inferred serve side ≠ contact → phantom."""
+        # Pass 3 fallback, only 2 ball positions after contact → toward_net=None
+        contacts = [
+            _contact(frame=10, ball_y=0.4, velocity=0.010, court_side="far"),
+            _contact(frame=40, ball_y=0.35, court_side="far"),
+        ]
+        # Only 2 positions → _ball_moving_toward_net returns None
+        ball_positions = [_bp(11, 0.39), _bp(12, 0.37)]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+            ball_positions=ball_positions,
+        )
+        result = classify_rally_actions(seq, use_classifier=False)
+
+        # _infer_serve_side sees court_side="far" → infers serve from "near"
+        # which ≠ contact's "far" → phantom triggered
+        assert result.actions[0].action_type == ActionType.SERVE
+        assert result.actions[0].is_synthetic is True
+        assert result.actions[1].action_type == ActionType.RECEIVE
+
+    def test_toward_net_none_same_side_keeps_serve(self) -> None:
+        """Insufficient ball data + inferred serve side == contact → normal serve."""
+        # Contact on near side, so _infer_serve_side returns "far" (opposite)
+        # which ≠ "near" → phantom. But if we force same-side, it should keep serve.
+        # This test uses no ball_positions at all (serve_pass=3, no ball data),
+        # so toward_net check is skipped entirely.
+        contacts = [
+            _contact(frame=10, ball_y=0.6, velocity=0.010, court_side="near"),
+        ]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+        )
+        result = classify_rally_actions(seq, use_classifier=False)
+
+        # No ball_positions → phantom check skipped → normal serve
+        assert result.actions[0].action_type == ActionType.SERVE
+        assert result.actions[0].is_synthetic is False
+
+    def test_synthetic_serve_to_dict(self) -> None:
+        """Synthetic serve includes isSynthetic in to_dict output."""
+        serve = _make_synthetic_serve("near", 30, 0.5)
+        d = serve.to_dict()
+        assert d["isSynthetic"] is True
+        assert d["action"] == "serve"
+        assert d["playerTrackId"] == -1
+
+    def test_real_serve_to_dict_no_synthetic_key(self) -> None:
+        """Non-synthetic action omits isSynthetic from to_dict output."""
+        action = ClassifiedAction(
+            ActionType.SERVE, 5, 0.5, 0.8, 0.02, 1, "near", 0.9,
+        )
+        d = action.to_dict()
+        assert "isSynthetic" not in d
+
+    def test_infer_serve_side_from_first_contact(self) -> None:
+        """_infer_serve_side returns opposite of first contact's court_side."""
+        contact = _contact(frame=10, court_side="far")
+        assert _infer_serve_side(contact) == "near"
+
+        contact2 = _contact(frame=10, court_side="near")
+        assert _infer_serve_side(contact2) == "far"
+
+    def test_infer_serve_side_court_side_takes_priority(self) -> None:
+        """court_side (Signal 1) takes priority over ball trajectory (Signal 2)."""
+        contact = _contact(frame=20, court_side="near")
+        # Ball trajectory suggests near side served, but court_side="near"
+        # → Signal 1 returns "far" (opposite) without consulting trajectory
+        ball_positions = [
+            _bp(5, 0.8), _bp(8, 0.7), _bp(12, 0.6),
+        ]
+        assert _infer_serve_side(contact, ball_positions, net_y=0.5) == "far"
+
+    def test_synthetic_serve_frame_placement(self) -> None:
+        """Synthetic serve is placed ~1s (30 frames) before first contact."""
+        serve = _make_synthetic_serve("near", 50, 0.5)
+        assert serve.frame == 20  # 50 - 30
+
+        # Don't go below 0
+        serve_early = _make_synthetic_serve("near", 10, 0.5)
+        assert serve_early.frame == 0
+
+    def test_phantom_serve_injects_synthetic_learned_path(self) -> None:
+        """classify_rally_learned also injects synthetic serve on phantom."""
+        contacts = [
+            _contact(frame=10, ball_y=0.4, velocity=0.010, court_side="far"),
+            _contact(frame=40, ball_y=0.35, court_side="far"),
+            _contact(frame=55, ball_y=0.38, court_side="far"),
+        ]
+        # Ball away from net → phantom serve
+        ball_positions = [
+            _bp(11, 0.39), _bp(12, 0.37), _bp(13, 0.35),
+            _bp(14, 0.33), _bp(15, 0.32), _bp(16, 0.31),
+        ]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+            ball_positions=ball_positions,
+        )
+
+        # Mock classifier — predict returns (action_str, confidence)
+        mock_clf = MagicMock()
+        mock_clf.predict.return_value = [("set", 0.8)]
+
+        classifier = ActionClassifier()
+        result = classifier.classify_rally_learned(seq, mock_clf, rally_id="test")
+
+        # Synthetic serve prepended, first contact → receive
+        assert result.actions[0].action_type == ActionType.SERVE
+        assert result.actions[0].is_synthetic is True
+        assert result.actions[1].action_type == ActionType.RECEIVE
+        assert result.actions[1].is_synthetic is False
+        # Remaining contacts go through the learned classifier
+        assert len(result.actions) >= 3

@@ -77,9 +77,10 @@ class ClassifiedAction:
     player_track_id: int  # -1 if unknown
     court_side: str  # "near" or "far"
     confidence: float  # Classification confidence (0-1)
+    is_synthetic: bool = False  # True for inferred actions (e.g. missed serve)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d = {
             "action": self.action_type.value,
             "frame": self.frame,
             "ballX": self.ball_x,
@@ -89,6 +90,10 @@ class ClassifiedAction:
             "courtSide": self.court_side,
             "confidence": self.confidence,
         }
+        # Omitted when False for backward compatibility with existing stored data
+        if self.is_synthetic:
+            d["isSynthetic"] = True
+        return d
 
 
 @dataclass
@@ -266,6 +271,86 @@ def _ball_moving_toward_net(
     return toward_count / total >= min_toward_ratio
 
 
+def _serve_baselines(net_y: float) -> tuple[float, float]:
+    """Compute dynamic serve baseline Y positions.
+
+    Baselines scale proportionally to net_y so they adapt to camera angles.
+    Coefficients calibrated to match 0.82/0.18 at net_y=0.5.
+
+    Returns (baseline_near, baseline_far).
+    """
+    return net_y + (1.0 - net_y) * 0.64, net_y * 0.36
+
+
+def _infer_serve_side(
+    first_contact: Contact,
+    ball_positions: list[BallPosition] | None = None,
+    net_y: float = 0.5,
+) -> str | None:
+    """Infer which side served when no serve contact was detected.
+
+    Two signals in priority order:
+    1. First contact's court_side → serve is from the opposite side
+       (if we see a receive, serve came from the other court).
+    2. Early ball trajectory → if ball moves near→far (decreasing Y toward
+       far baseline), near side served; far→near means far side served.
+
+    Returns "near", "far", or None if undecidable.
+    """
+    # Signal 1: opposite of first contact's court side (strongest)
+    if first_contact.court_side in ("near", "far"):
+        return "far" if first_contact.court_side == "near" else "near"
+
+    # Signal 2: early ball trajectory direction
+    if ball_positions:
+        early = [
+            bp for bp in ball_positions
+            if bp.frame_number <= first_contact.frame
+        ]
+        if len(early) >= 3:
+            first_y = early[0].y
+            last_y = early[-1].y
+            if first_y > net_y and last_y < first_y:
+                return "near"  # Ball started near, moved toward far
+            elif first_y < net_y and last_y > first_y:
+                return "far"  # Ball started far, moved toward near
+
+    return None
+
+
+def _make_synthetic_serve(
+    serve_side: str,
+    first_contact_frame: int,
+    net_y: float,
+) -> ClassifiedAction:
+    """Create a synthetic serve action for a missed serve.
+
+    Places the serve ~1s before the first detected contact, at the
+    appropriate baseline position.
+
+    Args:
+        serve_side: Court side of the serve ("near" or "far").
+        first_contact_frame: Frame of the first detected contact.
+        net_y: Net Y position.
+
+    Returns:
+        A synthetic ClassifiedAction for the serve.
+    """
+    baseline_near, baseline_far = _serve_baselines(net_y)
+
+    return ClassifiedAction(
+        action_type=ActionType.SERVE,
+        frame=max(0, first_contact_frame - 30),
+        ball_x=0.5,
+        ball_y=baseline_near if serve_side == "near" else baseline_far,
+        velocity=0.0,
+        player_track_id=-1,
+        court_side=serve_side,
+        confidence=0.4,
+        is_synthetic=True,
+    )
+
+
 class ActionClassifier:
     """Rule-based volleyball action classifier.
 
@@ -416,13 +501,27 @@ class ActionClassifier:
                     # is actually the receive. Pass 1/2 serves are more reliable
                     # (arc crossing or baseline/velocity) so skip the check.
                     is_phantom = False
-                    if serve_pass == 3 and ball_positions:
-                        toward_net = _ball_moving_toward_net(
-                            ball_positions, contact.frame,
-                            contact.ball_y, contact_sequence.net_y,
-                        )
-                        if toward_net is False:
-                            is_phantom = True
+                    if serve_pass == 3:
+                        if ball_positions:
+                            toward_net = _ball_moving_toward_net(
+                                ball_positions, contact.frame,
+                                contact.ball_y, contact_sequence.net_y,
+                            )
+                            if toward_net is False:
+                                is_phantom = True
+                            elif toward_net is None:
+                                # Insufficient ball data — use serve side
+                                # inference. If we can infer a serve side
+                                # different from this contact, treat as phantom.
+                                inferred = _infer_serve_side(
+                                    contact, ball_positions,
+                                    contact_sequence.net_y,
+                                )
+                                if (
+                                    inferred is not None
+                                    and inferred != contact.court_side
+                                ):
+                                    is_phantom = True
 
                     if not is_phantom:
                         # Normal serve classification
@@ -442,14 +541,22 @@ class ActionClassifier:
                     else:
                         # Phantom serve: real serve was missed, this is the
                         # receive. Infer serve came from the opposite side.
+                        serve_side = _infer_serve_side(
+                            contact, ball_positions,
+                            contact_sequence.net_y,
+                        ) or (
+                            "far" if contact.court_side == "near"
+                            else "near"
+                        )
+                        # Prepend synthetic serve action
+                        actions.append(_make_synthetic_serve(
+                            serve_side, contact.frame,
+                            contact_sequence.net_y,
+                        ))
                         action_type = ActionType.RECEIVE
                         confidence = self.config.medium_confidence
                         serve_detected = True
                         receive_detected = True
-                        # Infer serve side as opposite of this contact
-                        serve_side = (
-                            "far" if contact.court_side == "near" else "near"
-                        )
                         current_side = contact.court_side
                         contact_count_on_side = 1
                 else:
@@ -594,13 +701,24 @@ class ActionClassifier:
             if not serve_detected and i == serve_index:
                 # Phantom serve check (same as rule-based)
                 is_phantom = False
-                if serve_pass == 3 and ball_positions:
-                    toward_net = _ball_moving_toward_net(
-                        ball_positions, contact.frame,
-                        contact.ball_y, contact_sequence.net_y,
-                    )
-                    if toward_net is False:
-                        is_phantom = True
+                if serve_pass == 3:
+                    if ball_positions:
+                        toward_net = _ball_moving_toward_net(
+                            ball_positions, contact.frame,
+                            contact.ball_y, contact_sequence.net_y,
+                        )
+                        if toward_net is False:
+                            is_phantom = True
+                        elif toward_net is None:
+                            inferred = _infer_serve_side(
+                                contact, ball_positions,
+                                contact_sequence.net_y,
+                            )
+                            if (
+                                inferred is not None
+                                and inferred != contact.court_side
+                            ):
+                                is_phantom = True
 
                 if not is_phantom:
                     actions.append(ClassifiedAction(
@@ -618,7 +736,19 @@ class ActionClassifier:
                     last_action_type = ActionType.SERVE
                     continue
                 else:
-                    # Phantom serve → classify as receive
+                    # Phantom serve → inject synthetic serve + classify
+                    # this contact as receive
+                    serve_side = _infer_serve_side(
+                        contact, ball_positions,
+                        contact_sequence.net_y,
+                    ) or (
+                        "far" if contact.court_side == "near"
+                        else "near"
+                    )
+                    actions.append(_make_synthetic_serve(
+                        serve_side, contact.frame,
+                        contact_sequence.net_y,
+                    ))
                     actions.append(ClassifiedAction(
                         action_type=ActionType.RECEIVE,
                         frame=contact.frame,
@@ -631,9 +761,6 @@ class ActionClassifier:
                     ))
                     serve_detected = True
                     receive_detected = True
-                    serve_side = (
-                        "far" if contact.court_side == "near" else "near"
-                    )
                     last_action_type = ActionType.RECEIVE
                     continue
 
@@ -731,10 +858,7 @@ class ActionClassifier:
         """
         window = self.config.serve_window_frames
 
-        # Dynamic baselines: scale proportionally to net_y so they adapt
-        # to camera angles. Coefficients calibrated to match 0.82/0.18 at net_y=0.5.
-        baseline_near = net_y + (1.0 - net_y) * 0.64
-        baseline_far = net_y * 0.36
+        baseline_near, baseline_far = _serve_baselines(net_y)
 
         # Pass 1: Arc-based serve detection — check only the first 2 contacts
         # (serve is always at the start of the rally). A serve initiates a
