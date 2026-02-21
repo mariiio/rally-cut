@@ -849,7 +849,7 @@ def _print_temporal_stats(temporal_data: list[TemporalPoseData]) -> None:
         console.print(f"\n  [bold]{feature_name}[/bold]\n")
 
         # Per-action and all-actions
-        for action_filter in [None, "spike", "serve", "set"]:
+        for action_filter in [None, "attack", "serve", "set"]:
             label = action_filter or "all"
             tp_vals = [getter(t) for t in tp if getter(t) is not None
                        and (action_filter is None or t.action == action_filter)]

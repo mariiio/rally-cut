@@ -128,13 +128,13 @@ class TestServeDetection:
 class TestContactSequenceClassification:
     """Tests for full contact sequence classification."""
 
-    def test_serve_receive_set_spike_sequence(self) -> None:
-        """Standard serve → receive → set → spike sequence."""
+    def test_serve_receive_set_attack_sequence(self) -> None:
+        """Standard serve → receive → set → attack sequence."""
         contacts = [
             _contact(frame=5, ball_y=0.85, court_side="near"),   # Serve
             _contact(frame=30, ball_y=0.3, court_side="far"),    # Receive (opposite side)
             _contact(frame=45, ball_y=0.25, court_side="far"),   # Set (same side)
-            _contact(frame=55, ball_y=0.35, court_side="far"),   # Spike (3rd contact)
+            _contact(frame=55, ball_y=0.35, court_side="far"),   # Attack (3rd contact)
         ]
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
         result = classify_rally_actions(seq)
@@ -144,19 +144,19 @@ class TestContactSequenceClassification:
             ActionType.SERVE,
             ActionType.RECEIVE,
             ActionType.SET,
-            ActionType.SPIKE,
+            ActionType.ATTACK,
         ]
 
-    def test_serve_receive_dig_set_spike(self) -> None:
-        """After an attack, the other side digs → sets → spikes."""
+    def test_serve_receive_dig_set_attack(self) -> None:
+        """After an attack, the other side digs → sets → attacks."""
         contacts = [
             _contact(frame=5, ball_y=0.85, court_side="near"),   # Serve
             _contact(frame=30, ball_y=0.3, court_side="far"),    # Receive
             _contact(frame=45, ball_y=0.25, court_side="far"),   # Set
-            _contact(frame=55, ball_y=0.35, court_side="far"),   # Spike
+            _contact(frame=55, ball_y=0.35, court_side="far"),   # Attack
             _contact(frame=70, ball_y=0.7, court_side="near"),   # Dig (back to near)
             _contact(frame=80, ball_y=0.75, court_side="near"),  # Set
-            _contact(frame=90, ball_y=0.65, court_side="near"),  # Spike
+            _contact(frame=90, ball_y=0.65, court_side="near"),  # Attack
         ]
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
         result = classify_rally_actions(seq)
@@ -164,16 +164,16 @@ class TestContactSequenceClassification:
         assert len(result.actions) == 7
         assert result.actions[4].action_type == ActionType.DIG
         assert result.actions[5].action_type == ActionType.SET
-        assert result.actions[6].action_type == ActionType.SPIKE
+        assert result.actions[6].action_type == ActionType.ATTACK
 
     def test_block_detection(self) -> None:
-        """Block: contact at net immediately after opponent's spike."""
+        """Block: contact at net immediately after opponent's attack."""
         config = ActionClassifierConfig(block_max_frame_gap=10)
         contacts = [
             _contact(frame=5, ball_y=0.85, court_side="near"),     # Serve
             _contact(frame=30, ball_y=0.3, court_side="far"),      # Receive
             _contact(frame=45, ball_y=0.25, court_side="far"),     # Set
-            _contact(frame=55, ball_y=0.4, court_side="far"),      # Spike
+            _contact(frame=55, ball_y=0.4, court_side="far"),      # Attack
             _contact(frame=60, ball_y=0.48, court_side="near",     # Block
                      is_at_net=True),
         ]
@@ -189,7 +189,7 @@ class TestContactSequenceClassification:
             _contact(frame=5, ball_y=0.85, court_side="near"),     # Serve
             _contact(frame=30, ball_y=0.3, court_side="far"),      # Receive
             _contact(frame=45, ball_y=0.25, court_side="far"),     # Set
-            _contact(frame=55, ball_y=0.4, court_side="far"),      # Spike
+            _contact(frame=55, ball_y=0.4, court_side="far"),      # Attack
             _contact(frame=60, ball_y=0.7, court_side="near",      # NOT at net
                      is_at_net=False),
         ]
@@ -265,11 +265,11 @@ class TestRallyActionsProperties:
         """actions_by_type filters by action type."""
         actions = [
             ClassifiedAction(ActionType.SERVE, 5, 0.5, 0.8, 0.02, 1, "near", 0.9),
-            ClassifiedAction(ActionType.SPIKE, 55, 0.5, 0.4, 0.04, 2, "far", 0.8),
+            ClassifiedAction(ActionType.ATTACK, 55, 0.5, 0.4, 0.04, 2, "far", 0.8),
         ]
         rally = RallyActions(actions=actions)
         assert len(rally.actions_by_type(ActionType.SERVE)) == 1
-        assert len(rally.actions_by_type(ActionType.SPIKE)) == 1
+        assert len(rally.actions_by_type(ActionType.ATTACK)) == 1
         assert len(rally.actions_by_type(ActionType.BLOCK)) == 0
 
     def test_num_contacts_excludes_blocks(self) -> None:
@@ -305,7 +305,7 @@ class TestNetCrossingPossession:
             _contact(frame=5, ball_y=0.85, court_side="near"),   # Serve
             _contact(frame=30, ball_y=0.3, court_side="far"),    # Receive
             _contact(frame=45, ball_y=0.25, court_side="far"),   # Set
-            _contact(frame=55, ball_y=0.35, court_side="far"),   # Spike
+            _contact(frame=55, ball_y=0.35, court_side="far"),   # Attack
             _contact(frame=70, ball_y=0.7, court_side="near"),   # Dig
         ]
         # Ball positions showing crossing between frame 55 and 70
@@ -329,7 +329,7 @@ class TestNetCrossingPossession:
             _contact(frame=30, ball_y=0.3, court_side="far"),    # Receive
             _contact(frame=45, ball_y=0.35, court_side="far"),   # Set
             # FP contact on far side (no net crossing between)
-            _contact(frame=55, ball_y=0.38, court_side="far"),   # Spike (3rd)
+            _contact(frame=55, ball_y=0.38, court_side="far"),   # Attack (3rd)
             _contact(frame=65, ball_y=0.32, court_side="far"),   # DIG (4th, safety valve resets)
         ]
         # Ball staying on far side between contacts (no crossing)
@@ -343,7 +343,7 @@ class TestNetCrossingPossession:
             ball_positions=ball_positions,
         )
         result = classify_rally_actions(seq)
-        assert result.actions[3].action_type == ActionType.SPIKE
+        assert result.actions[3].action_type == ActionType.ATTACK
         # 4th contact on same side triggers safety valve (max 3 in beach volleyball)
         assert result.actions[4].action_type == ActionType.DIG
 
@@ -357,18 +357,18 @@ class TestContactCap:
             _contact(frame=5, ball_y=0.85, court_side="near"),   # Serve
             _contact(frame=30, ball_y=0.3, court_side="far"),    # Receive
             _contact(frame=45, ball_y=0.25, court_side="far"),   # Set
-            _contact(frame=55, ball_y=0.35, court_side="far"),   # Spike (3rd)
+            _contact(frame=55, ball_y=0.35, court_side="far"),   # Attack (3rd)
             _contact(frame=65, ball_y=0.32, court_side="far"),   # DIG (4th, reset)
         ]
         # No ball_positions = fallback to court_side comparison
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
         result = classify_rally_actions(seq)
-        assert result.actions[3].action_type == ActionType.SPIKE
+        assert result.actions[3].action_type == ActionType.ATTACK
         # Safety valve: 4th contact resets to 1 → DIG
         assert result.actions[4].action_type == ActionType.DIG
 
     def test_three_contacts_still_works(self) -> None:
-        """Normal 3-contact sequence (receive/set/spike) still classified correctly."""
+        """Normal 3-contact sequence (receive/set/attack) still classified correctly."""
         contacts = [
             _contact(frame=5, ball_y=0.85, court_side="near"),
             _contact(frame=30, ball_y=0.3, court_side="far"),
@@ -379,7 +379,7 @@ class TestContactCap:
         result = classify_rally_actions(seq)
         assert result.actions[1].action_type == ActionType.RECEIVE
         assert result.actions[2].action_type == ActionType.SET
-        assert result.actions[3].action_type == ActionType.SPIKE
+        assert result.actions[3].action_type == ActionType.ATTACK
 
 
 class TestDynamicServeBaseline:
@@ -554,7 +554,7 @@ class TestTrajectoryPossession:
             _contact(frame=45, ball_y=0.25, court_side="far"),   # Set (2nd)
             # FP near net tagged as "near" side, but ball didn't cross net
             _contact(frame=52, ball_y=0.48, court_side="near"),
-            _contact(frame=60, ball_y=0.35, court_side="far"),   # Should be spike (3rd+)
+            _contact(frame=60, ball_y=0.35, court_side="far"),   # Should be attack (3rd+)
         ]
         # Ball stays on far side between contacts 45-60 (no crossing)
         ball_positions = [
@@ -574,7 +574,7 @@ class TestTrajectoryPossession:
         assert result.actions[2].action_type == ActionType.SET
         # FP at net: trajectory says no crossing, so counter keeps incrementing
         # Contact 3 (index 3) is still on far side in the state machine's view
-        assert result.actions[3].action_type == ActionType.SPIKE
+        assert result.actions[3].action_type == ActionType.ATTACK
         # Contact 4 (index 4): safety valve resets at >3 contacts (beach max 3)
         assert result.actions[4].action_type == ActionType.DIG
 
@@ -584,7 +584,7 @@ class TestTrajectoryPossession:
             _contact(frame=5, ball_y=0.85, court_side="near"),   # Serve
             _contact(frame=30, ball_y=0.3, court_side="far"),    # Receive (1st)
             _contact(frame=40, ball_y=0.25, court_side="far"),   # Set (2nd)
-            _contact(frame=50, ball_y=0.35, court_side="far"),   # Spike (3rd)
+            _contact(frame=50, ball_y=0.35, court_side="far"),   # Attack (3rd)
             _contact(frame=60, ball_y=0.30, court_side="far"),   # 4th on far
             # 5th contact, court_side changes — safety valve should trigger
             _contact(frame=75, ball_y=0.7, court_side="near"),
@@ -611,7 +611,7 @@ class TestTrajectoryPossession:
             _contact(frame=5, ball_y=0.85, court_side="near"),   # Serve
             _contact(frame=30, ball_y=0.3, court_side="far"),    # Receive
             _contact(frame=45, ball_y=0.25, court_side="far"),   # Set
-            _contact(frame=55, ball_y=0.35, court_side="far"),   # Spike
+            _contact(frame=55, ball_y=0.35, court_side="far"),   # Attack
             _contact(frame=70, ball_y=0.7, court_side="near"),   # Dig
         ]
         # No ball_positions — falls back to court_side comparison

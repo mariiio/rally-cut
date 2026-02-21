@@ -49,16 +49,16 @@ class TestPlayerStats:
 
     def test_total_actions(self) -> None:
         """total_actions sums all action counts."""
-        ps = PlayerStats(track_id=1, serves=2, receives=3, sets=1, spikes=4, blocks=1, digs=2)
+        ps = PlayerStats(track_id=1, serves=2, receives=3, sets=1, attacks=4, blocks=1, digs=2)
         assert ps.total_actions == 13
 
     def test_to_dict(self) -> None:
         """to_dict produces expected keys."""
-        ps = PlayerStats(track_id=1, serves=2, spikes=3)
+        ps = PlayerStats(track_id=1, serves=2, attacks=3)
         d = ps.to_dict()
         assert d["trackId"] == 1
         assert d["serves"] == 2
-        assert d["spikes"] == 3
+        assert d["attacks"] == 3
         assert d["totalActions"] == 5
 
 
@@ -160,7 +160,7 @@ class TestComputeMatchStats:
                 _action(ActionType.SERVE, 5, player=1, court_side="near"),
                 _action(ActionType.RECEIVE, 30, player=3, court_side="far"),
                 _action(ActionType.SET, 45, player=4, court_side="far"),
-                _action(ActionType.SPIKE, 55, player=3, court_side="far", velocity=0.04),
+                _action(ActionType.ATTACK, 55, player=3, court_side="far", velocity=0.04),
             ],
             rally_id="rally-1",
         )
@@ -169,7 +169,7 @@ class TestComputeMatchStats:
                 _action(ActionType.SERVE, 5, player=3, court_side="far"),
                 _action(ActionType.RECEIVE, 25, player=2, court_side="near"),
                 _action(ActionType.SET, 35, player=1, court_side="near"),
-                _action(ActionType.SPIKE, 45, player=2, court_side="near", velocity=0.035),
+                _action(ActionType.ATTACK, 45, player=2, court_side="near", velocity=0.035),
                 _action(ActionType.BLOCK, 50, player=4, court_side="far"),
             ],
             rally_id="rally-2",
@@ -197,7 +197,7 @@ class TestComputeMatchStats:
         assert player_map[1].sets == 1
         assert player_map[3].serves == 1
         assert player_map[3].receives == 1
-        assert player_map[3].spikes == 1
+        assert player_map[3].attacks == 1
         assert player_map[4].blocks == 1
 
     def test_rally_stats(self) -> None:
@@ -263,7 +263,7 @@ class TestExtendedExchange:
                 _action(ActionType.SERVE, 5, player=1, court_side="near"),
                 _action(ActionType.RECEIVE, 30, player=3, court_side="far"),
                 _action(ActionType.SET, 45, player=4, court_side="far"),
-                _action(ActionType.SPIKE, 55, player=3, court_side="far"),
+                _action(ActionType.ATTACK, 55, player=3, court_side="far"),
             ],
             rally_id="r1",
         )]

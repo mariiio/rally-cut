@@ -68,7 +68,7 @@ interface ContactsData {
 
 // Action classification from contact sequence
 interface ActionInfo {
-  action: string;  // "serve", "receive", "set", "spike", "block", "dig", "unknown"
+  action: string;  // "serve", "receive", "set", "attack", "block", "dig", "unknown"
   frame: number;
   ballX: number;
   ballY: number;
@@ -539,7 +539,7 @@ export async function swapPlayerTracks(
 // Action ground truth label format
 interface ActionGroundTruthLabel {
   frame: number;
-  action: string;  // "serve", "receive", "set", "spike", "block", "dig"
+  action: string;  // "serve", "receive", "set", "attack", "block", "dig"
   playerTrackId: number;
   ballX?: number;
   ballY?: number;

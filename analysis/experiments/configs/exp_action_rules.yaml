@@ -1,6 +1,6 @@
 # Experiment 3: Rule-based action classification
-# Goal: Detect serve/receive/set/spike/block from ball trajectory + player positions
-# Expected: ~75-85% macro F1 (serves and spikes easiest; sets and blocks hardest)
+# Goal: Detect serve/receive/set/attack/block from ball trajectory + player positions
+# Expected: ~75-85% macro F1 (serves and attacks easiest; sets and blocks hardest)
 
 experiment:
   name: exp-action-rules
@@ -30,7 +30,7 @@ evaluation:
     - serve
     - receive
     - set
-    - spike
+    - attack
     - block
   metrics:
     - per_class_f1

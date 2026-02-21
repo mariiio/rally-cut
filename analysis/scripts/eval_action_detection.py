@@ -5,7 +5,7 @@ runs contact detection + action classification on each rally, and computes:
 - Contact recall: % of GT contacts detected (±tolerance frame window)
 - Contact precision: % of detected contacts matching a GT contact
 - Action accuracy: % of matched contacts correctly classified
-- Per-class F1: serve, receive, set, spike, block, dig
+- Per-class F1: serve, receive, set, attack, block, dig
 - Confusion matrix
 - Per-rally and aggregate tables
 
@@ -33,7 +33,7 @@ from rallycut.tracking.contact_detector import ContactDetectionConfig, detect_co
 
 console = Console()
 
-ACTION_TYPES = ["serve", "receive", "set", "spike", "block", "dig"]
+ACTION_TYPES = ["serve", "receive", "set", "attack", "block", "dig"]
 
 
 @dataclass
