@@ -812,8 +812,8 @@ class TestSyntheticServe:
             ActionType.ATTACK,   # 3rd on far
         ]
 
-    def test_toward_net_none_with_receive_features(self) -> None:
-        """Insufficient ball data + inferred serve side ≠ contact → phantom."""
+    def test_toward_net_none_keeps_serve(self) -> None:
+        """Insufficient ball data → conservative, keep as serve (no phantom)."""
         # Pass 3 fallback, only 2 ball positions after contact → toward_net=None
         contacts = [
             _contact(frame=10, ball_y=0.4, velocity=0.010, court_side="far"),
@@ -827,11 +827,9 @@ class TestSyntheticServe:
         )
         result = classify_rally_actions(seq, use_classifier=False)
 
-        # _infer_serve_side sees court_side="far" → infers serve from "near"
-        # which ≠ contact's "far" → phantom triggered
+        # toward_net=None → conservative, treat as normal serve
         assert result.actions[0].action_type == ActionType.SERVE
-        assert result.actions[0].is_synthetic is True
-        assert result.actions[1].action_type == ActionType.RECEIVE
+        assert result.actions[0].is_synthetic is False
 
     def test_toward_net_none_same_side_keeps_serve(self) -> None:
         """Insufficient ball data + inferred serve side == contact → normal serve."""
