@@ -2102,3 +2102,183 @@ export async function saveActionGroundTruth(
 
   return response.json();
 }
+
+// ============================================================================
+// Batch Tracking
+// ============================================================================
+
+export interface BatchTrackingResponse {
+  jobId: string;
+  totalRallies: number;
+}
+
+export interface BatchTrackingStatus {
+  status: 'idle' | 'pending' | 'processing' | 'completed' | 'failed';
+  jobId?: string;
+  totalRallies?: number;
+  completedRallies?: number;
+  failedRallies?: number;
+  currentRallyId?: string;
+  error?: string;
+  completedAt?: string;
+  rallyStatuses?: Array<{ rallyId: string; status: string }>;
+}
+
+/**
+ * Start batch tracking for all rallies in a video.
+ */
+export async function trackAllRallies(videoId: string): Promise<BatchTrackingResponse> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/track-all-rallies`, {
+    method: 'POST',
+    headers: getHeaders('application/json'),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to start batch tracking: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Get batch tracking status for a video.
+ */
+export async function getBatchTrackingStatus(videoId: string): Promise<BatchTrackingStatus> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/batch-tracking-status`, {
+    method: 'GET',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get batch tracking status: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// ============================================================================
+// Match Analysis
+// ============================================================================
+
+export interface MatchAnalysis {
+  videoId: string;
+  numRallies: number;
+  rallies: Array<{
+    rallyId: string;
+    rallyIndex: number;
+    startMs: number;
+    endMs: number;
+    trackToPlayer: Record<string, number>;
+    assignmentConfidence: number;
+    sideSwitchDetected: boolean;
+    serverPlayerId: number | null;
+  }>;
+}
+
+/**
+ * Get match analysis (cross-rally player identity) for a video.
+ */
+export async function getMatchAnalysis(videoId: string): Promise<MatchAnalysis | null> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/match-analysis`, {
+    method: 'GET',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get match analysis: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.status === 'not_available' ? null : data;
+}
+
+// ============================================================================
+// Match Statistics
+// ============================================================================
+
+export interface MatchStats {
+  totalRallies: number;
+  totalContacts: number;
+  avgRallyDurationS: number;
+  longestRallyDurationS: number;
+  avgContactsPerRally: number;
+  sideOutRate: number;
+  playerStats: Array<{
+    trackId: number;
+    team: string;
+    serves: number;
+    receives: number;
+    sets: number;
+    attacks: number;
+    blocks: number;
+    digs: number;
+    kills: number;
+    attackErrors: number;
+    aces: number;
+    serveErrors: number;
+    killPct: number;
+    attackEfficiency: number;
+    totalActions: number;
+    numFrames: number;
+    courtSide: string;
+  }>;
+  teamStats?: Array<{
+    team: string;
+    playerIds: number[];
+    serves: number;
+    receives: number;
+    sets: number;
+    attacks: number;
+    blocks: number;
+    digs: number;
+    kills: number;
+    attackErrors: number;
+    aces: number;
+    serveErrors: number;
+    killPct: number;
+    attackEfficiency: number;
+    totalActions: number;
+    pointsWon: number;
+    sideOutPct: number;
+    serveWinPct: number;
+  }>;
+  rallyStats: Array<{
+    rallyId: string;
+    durationSeconds: number;
+    numContacts: number;
+    actionSequence: string[];
+    terminalAction?: string;
+    pointWinner?: string;
+    servingSide: string;
+  }>;
+  scoreProgression?: Array<{
+    rallyId: string;
+    scoreA: number;
+    scoreB: number;
+    servingTeam: string;
+    pointWinner: string;
+  }>;
+  finalScoreA?: number;
+  finalScoreB?: number;
+}
+
+/**
+ * Get match statistics for a video.
+ */
+export async function getMatchStatsApi(videoId: string): Promise<MatchStats | null> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/match-stats`, {
+    method: 'GET',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get match stats: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.status === 'not_available' ? null : data;
+}

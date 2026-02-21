@@ -16,7 +16,7 @@ import numpy as np
 
 if TYPE_CHECKING:
     from rallycut.court.calibration import CourtCalibrator
-    from rallycut.tracking.action_classifier import RallyActions
+    from rallycut.tracking.action_classifier import ClassifiedAction, RallyActions
     from rallycut.tracking.player_tracker import PlayerPosition
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,11 @@ class PlayerStats:
     attacks: int = 0
     blocks: int = 0
     digs: int = 0
+    # Outcome counts (attributed from score progression)
+    kills: int = 0  # Attacks that won the point
+    attack_errors: int = 0  # Attacks that lost the point
+    aces: int = 0  # Serves that won the point (no receive)
+    serve_errors: int = 0  # Serves that lost the point
     # Movement
     total_distance_px: float = 0.0  # Total movement in pixels
     total_distance_m: float = 0.0  # Total movement in meters (if calibrated)
@@ -52,6 +57,16 @@ class PlayerStats:
     def total_actions(self) -> int:
         return self.serves + self.receives + self.sets + self.attacks + self.blocks + self.digs
 
+    @property
+    def kill_pct(self) -> float:
+        """Kill percentage: kills / attacks."""
+        return self.kills / self.attacks if self.attacks > 0 else 0.0
+
+    @property
+    def attack_efficiency(self) -> float:
+        """Attack efficiency: (kills - errors) / attacks."""
+        return (self.kills - self.attack_errors) / self.attacks if self.attacks > 0 else 0.0
+
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
             "trackId": self.track_id,
@@ -62,6 +77,12 @@ class PlayerStats:
             "attacks": self.attacks,
             "blocks": self.blocks,
             "digs": self.digs,
+            "kills": self.kills,
+            "attackErrors": self.attack_errors,
+            "aces": self.aces,
+            "serveErrors": self.serve_errors,
+            "killPct": round(self.kill_pct, 3),
+            "attackEfficiency": round(self.attack_efficiency, 3),
             "totalActions": self.total_actions,
             "totalDistancePx": round(self.total_distance_px, 1),
             "avgSpeedPxPerFrame": round(self.avg_speed_px_per_frame, 4),
@@ -88,9 +109,13 @@ class RallyStats:
     has_extended_exchange: bool  # 3+ contacts on a side
     max_rally_velocity: float  # Peak ball velocity during rally
     serving_side: str  # "near" or "far"
+    # Outcome attribution (populated when score progression is available)
+    terminal_action: str = "unknown"  # Last action type before point ends
+    terminal_player_track_id: int = -1  # Player who made the terminal action
+    point_winner: str = "unknown"  # "A", "B", or "unknown"
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "rallyId": self.rally_id,
             "durationFrames": self.duration_frames,
             "durationSeconds": round(self.duration_seconds, 2),
@@ -101,6 +126,12 @@ class RallyStats:
             "maxRallyVelocity": round(self.max_rally_velocity, 4),
             "servingSide": self.serving_side,
         }
+        if self.terminal_action != "unknown":
+            d["terminalAction"] = self.terminal_action
+            d["terminalPlayerTrackId"] = self.terminal_player_track_id
+        if self.point_winner != "unknown":
+            d["pointWinner"] = self.point_winner
+        return d
 
 
 @dataclass
@@ -115,6 +146,12 @@ class TeamStats:
     attacks: int = 0
     blocks: int = 0
     digs: int = 0
+    # Outcome counts (aggregated from players)
+    kills: int = 0
+    attack_errors: int = 0
+    aces: int = 0
+    serve_errors: int = 0
+    # Score metrics
     points_won: int = 0
     side_out_pct: float = 0.0  # % of receiving rallies won
     serve_win_pct: float = 0.0  # % of serving rallies won
@@ -122,6 +159,14 @@ class TeamStats:
     @property
     def total_actions(self) -> int:
         return self.serves + self.receives + self.sets + self.attacks + self.blocks + self.digs
+
+    @property
+    def kill_pct(self) -> float:
+        return self.kills / self.attacks if self.attacks > 0 else 0.0
+
+    @property
+    def attack_efficiency(self) -> float:
+        return (self.kills - self.attack_errors) / self.attacks if self.attacks > 0 else 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -133,6 +178,12 @@ class TeamStats:
             "attacks": self.attacks,
             "blocks": self.blocks,
             "digs": self.digs,
+            "kills": self.kills,
+            "attackErrors": self.attack_errors,
+            "aces": self.aces,
+            "serveErrors": self.serve_errors,
+            "killPct": round(self.kill_pct, 3),
+            "attackEfficiency": round(self.attack_efficiency, 3),
             "totalActions": self.total_actions,
             "pointsWon": self.points_won,
             "sideOutPct": round(self.side_out_pct, 3),
@@ -371,6 +422,64 @@ def compute_match_scores(
     return scores
 
 
+def _find_terminal_action(ra: RallyActions) -> ClassifiedAction | None:
+    """Find the terminal action in a rally (last non-UNKNOWN action).
+
+    The terminal action is the last contact before the rally ends — typically
+    an attack (kill or error), serve (ace or error), or block.
+    """
+    from rallycut.tracking.action_classifier import ActionType
+
+    for action in reversed(ra.actions):
+        if action.action_type not in (ActionType.UNKNOWN,):
+            return action
+    return None
+
+
+def _attribute_outcomes(
+    rally_stats: list[RallyStats],
+    rally_actions_map: dict[str, RallyActions],
+    player_stats_map: dict[int, PlayerStats],
+    team_assignments: dict[int, int],
+) -> None:
+    """Attribute kills, aces, and errors to individual players.
+
+    Logic:
+    - If terminal action is ATTACK and the attacker's team won → kill
+    - If terminal action is ATTACK and the attacker's team lost → attack error
+    - If terminal action is SERVE and the server's team won → ace
+    - If terminal action is SERVE and the server's team lost → serve error
+    """
+    for rs in rally_stats:
+        if rs.point_winner == "unknown" or rs.terminal_action == "unknown":
+            continue
+        if rs.terminal_player_track_id < 0:
+            continue
+
+        player = player_stats_map.get(rs.terminal_player_track_id)
+        if not player:
+            continue
+
+        # Determine terminal player's team
+        team_int = team_assignments.get(rs.terminal_player_track_id)
+        player_team = "A" if team_int == 0 else "B" if team_int == 1 else "unknown"
+        if player_team == "unknown":
+            continue
+
+        won = player_team == rs.point_winner
+
+        if rs.terminal_action == "attack":
+            if won:
+                player.kills += 1
+            else:
+                player.attack_errors += 1
+        elif rs.terminal_action == "serve":
+            if won:
+                player.aces += 1
+            else:
+                player.serve_errors += 1
+
+
 def compute_match_stats(
     rally_actions_list: list[RallyActions],
     player_positions: list[PlayerPosition],
@@ -408,7 +517,6 @@ def compute_match_stats(
                 all_track_ids.add(action.player_track_id)
 
     # Also add track IDs from player positions (may have players without actions)
-    primary_tracks = set()
     track_frame_counts: dict[int, int] = {}
     for p in player_positions:
         if p.track_id >= 0:
@@ -417,7 +525,6 @@ def compute_match_stats(
     # Keep top 4 tracks by frame count (beach volleyball = 4 players)
     sorted_tracks = sorted(track_frame_counts.items(), key=lambda x: -x[1])
     for track_id, _ in sorted_tracks[:4]:
-        primary_tracks.add(track_id)
         all_track_ids.add(track_id)
 
     # Build a merged team_assignments from all rallies
@@ -504,6 +611,11 @@ def compute_match_stats(
         serve = ra.serve
         serving_side = serve.court_side if serve else "unknown"
 
+        # Terminal action: last non-UNKNOWN action before the point ends
+        terminal = _find_terminal_action(ra)
+        terminal_action = terminal.action_type.value if terminal else "unknown"
+        terminal_player = terminal.player_track_id if terminal else -1
+
         stats.rally_stats.append(RallyStats(
             rally_id=ra.rally_id,
             duration_frames=duration_frames,
@@ -514,6 +626,8 @@ def compute_match_stats(
             has_extended_exchange=has_extended,
             max_rally_velocity=max_velocity,
             serving_side=serving_side,
+            terminal_action=terminal_action,
+            terminal_player_track_id=terminal_player,
         ))
 
     # Compute match-level aggregates
@@ -526,7 +640,38 @@ def compute_match_stats(
         stats.longest_rally_duration_s = max(durations)
         stats.avg_contacts_per_rally = stats.total_contacts / stats.total_rallies
 
-    # Compute per-team stats by aggregating player stats
+    # Compute score progression from serve ownership
+    score_progression = compute_match_scores(rally_actions_list)
+    stats.score_progression = score_progression
+
+    # Build rally_id → point_winner lookup and attribute outcomes to rally stats
+    point_winner_map: dict[str, str] = {}
+    if score_progression:
+        last = score_progression[-1]
+        stats.final_score_a = last.score_a
+        stats.final_score_b = last.score_b
+        for sp in score_progression:
+            point_winner_map[sp.rally_id] = sp.point_winner
+
+    # Populate point_winner on rally stats
+    for rs in stats.rally_stats:
+        rs.point_winner = point_winner_map.get(rs.rally_id, "unknown")
+
+    # Attribute outcomes to players: kills, aces, errors
+    # Build rally_id → RallyActions lookup
+    rally_actions_map: dict[str, RallyActions] = {
+        ra.rally_id: ra for ra in rally_actions_list
+    }
+    # Build player_stats lookup by track_id
+    player_stats_map: dict[int, PlayerStats] = {
+        p.track_id: p for p in stats.player_stats
+    }
+    _attribute_outcomes(
+        stats.rally_stats, rally_actions_map,
+        player_stats_map, merged_team_assignments,
+    )
+
+    # Compute per-team stats by aggregating player stats (after outcome attribution)
     for team_label in ("A", "B"):
         team_players = [p for p in stats.player_stats if p.team == team_label]
         if not team_players:
@@ -540,18 +685,15 @@ def compute_match_stats(
             attacks=sum(p.attacks for p in team_players),
             blocks=sum(p.blocks for p in team_players),
             digs=sum(p.digs for p in team_players),
+            kills=sum(p.kills for p in team_players),
+            attack_errors=sum(p.attack_errors for p in team_players),
+            aces=sum(p.aces for p in team_players),
+            serve_errors=sum(p.serve_errors for p in team_players),
         )
         stats.team_stats.append(ts)
 
-    # Compute score progression from serve ownership
-    score_progression = compute_match_scores(rally_actions_list)
-    stats.score_progression = score_progression
+    # Compute side-out rate and serve-win rate per team
     if score_progression:
-        last = score_progression[-1]
-        stats.final_score_a = last.score_a
-        stats.final_score_b = last.score_b
-
-        # Compute side-out rate and serve-win rate per team
         for ts in stats.team_stats:
             serving_rallies = [
                 s for s in score_progression if s.serving_team == ts.team

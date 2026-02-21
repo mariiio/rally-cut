@@ -44,14 +44,29 @@ export function VideoInsightsBanner({ currentMatch }: VideoInsightsBannerProps) 
     // Video characteristics messages
     const chars = currentMatch?.characteristicsJson;
     if (chars) {
-      if (chars.cameraDistance?.category === 'far') {
-        msgs.push('Far camera angle — player tracking may be less accurate for distant players');
+      // Upload-time warnings (from early quality assessment)
+      if (chars.uploadWarnings && Array.isArray(chars.uploadWarnings)) {
+        for (const w of chars.uploadWarnings as string[]) {
+          msgs.push(w);
+        }
       }
-      if (chars.cameraDistance?.category === 'close' || chars.cameraDistance?.category === 'medium') {
-        msgs.push('Close camera angle — ball tracking may be less accurate when the ball leaves the frame');
+
+      // Expected quality from upload assessment
+      if (typeof chars.expectedQuality === 'number' && worstScore === null) {
+        worstScore = chars.expectedQuality as number;
       }
-      if (chars.sceneComplexity?.category === 'complex') {
-        msgs.push('Crowded scene detected — some spectators may appear in tracking results');
+
+      // Only show tracking-specific insights if no upload warnings covered them
+      if (!chars.uploadWarnings?.length) {
+        if (chars.cameraDistance?.category === 'far') {
+          msgs.push('Far camera angle — player tracking may be less accurate for distant players');
+        }
+        if (chars.cameraDistance?.category === 'close' || chars.cameraDistance?.category === 'medium') {
+          msgs.push('Close camera angle — ball tracking may be less accurate when the ball leaves the frame');
+        }
+        if (chars.sceneComplexity?.category === 'complex') {
+          msgs.push('Crowded scene detected — some spectators may appear in tracking results');
+        }
       }
       if (chars.courtDetection) {
         const cd = chars.courtDetection;
