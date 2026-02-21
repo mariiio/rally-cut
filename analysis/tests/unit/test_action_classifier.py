@@ -455,11 +455,11 @@ class TestBallMovingTowardNet:
         )
 
     def test_insufficient_data(self) -> None:
-        """Returns False with fewer than 3 positions in the look-ahead window."""
+        """Returns None with fewer than 3 positions in the look-ahead window."""
         positions = [_bp(11, 0.70), _bp(12, 0.65)]
-        assert not _ball_moving_toward_net(
+        assert _ball_moving_toward_net(
             positions, contact_frame=10, ball_y=0.72, net_y=0.5,
-        )
+        ) is None
 
 
 class TestPreServeIsolation:
@@ -648,3 +648,75 @@ class TestNetCrossingReceiveFallback:
 
         assert result.actions[0].action_type == ActionType.SERVE
         assert result.actions[1].action_type == ActionType.RECEIVE
+
+
+class TestPhantomServe:
+    """Tests for phantom serve detection (missed serve → first contact is receive)."""
+
+    def test_pass3_fallback_with_no_toward_net_becomes_receive(self) -> None:
+        """When Pass 3 fallback is used and ball doesn't move toward net,
+        the first contact is reclassified as receive (phantom serve)."""
+        # Contact NOT at baseline, NOT high velocity → Pass 1 and 2 fail
+        # Pass 3 picks it as first-contact fallback
+        contacts = [
+            _contact(frame=10, ball_y=0.4, velocity=0.010, court_side="far"),
+            _contact(frame=40, ball_y=0.35, court_side="far"),
+        ]
+        # Ball moves AWAY from net (net at 0.5, far side = below)
+        # Toward net from far side = increasing Y. This ball decreases.
+        ball_positions = [
+            _bp(11, 0.39), _bp(12, 0.37), _bp(13, 0.35),
+            _bp(14, 0.33), _bp(15, 0.32), _bp(16, 0.31),
+        ]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+            ball_positions=ball_positions,
+        )
+        result = classify_rally_actions(seq)
+
+        # Phantom serve: reclassified as receive
+        assert result.actions[0].action_type == ActionType.RECEIVE
+
+    def test_pass1_arc_serve_not_overridden_by_phantom(self) -> None:
+        """When Pass 1 (arc crossing) finds the serve, phantom serve
+        does NOT trigger even if trajectory is ambiguous."""
+        contacts = [
+            _contact(frame=10, ball_y=0.7, velocity=0.010, court_side="near"),
+            _contact(frame=40, ball_y=0.3, court_side="far"),
+        ]
+        # Ball crosses net between contacts (Pass 1 arc detection triggers)
+        ball_positions = [
+            _bp(11, 0.68), _bp(12, 0.65), _bp(13, 0.60),
+            _bp(15, 0.55), _bp(17, 0.50),
+            _bp(20, 0.45), _bp(22, 0.40), _bp(25, 0.35),
+        ]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+            ball_positions=ball_positions,
+        )
+        result = classify_rally_actions(seq)
+
+        # Pass 1 found the serve via arc — should stay as serve
+        assert result.actions[0].action_type == ActionType.SERVE
+        assert result.actions[1].action_type == ActionType.RECEIVE
+
+    def test_pass2_baseline_serve_not_overridden_by_phantom(self) -> None:
+        """When Pass 2 (baseline position) finds the serve, phantom serve
+        does NOT trigger."""
+        contacts = [
+            _contact(frame=10, ball_y=0.85, velocity=0.010, court_side="near"),
+            _contact(frame=40, ball_y=0.3, court_side="far"),
+        ]
+        # Ball goes laterally after serve (doesn't move toward net immediately)
+        ball_positions = [
+            _bp(11, 0.84), _bp(12, 0.84), _bp(13, 0.85),
+            _bp(14, 0.84), _bp(15, 0.85), _bp(16, 0.84),
+        ]
+        seq = ContactSequence(
+            contacts=contacts, net_y=0.5, rally_start_frame=0,
+            ball_positions=ball_positions,
+        )
+        result = classify_rally_actions(seq)
+
+        # Pass 2 found serve at baseline — should stay as serve regardless
+        assert result.actions[0].action_type == ActionType.SERVE

@@ -214,14 +214,15 @@ def _ball_moving_toward_net(
         min_toward_ratio: Minimum fraction of toward-net transitions.
 
     Returns:
-        True if ball moves toward net in the look-ahead window.
+        True if ball moves toward net, False if confirmed not toward net,
+        None if insufficient data.
     """
     positions = [
         bp for bp in ball_positions
         if contact_frame < bp.frame_number <= contact_frame + look_ahead_frames
     ]
     if len(positions) < 3:
-        return False
+        return None
 
     near_side = ball_y > net_y
     toward_count = 0
@@ -237,7 +238,7 @@ def _ball_moving_toward_net(
             toward_count += 1
 
     if total == 0:
-        return False
+        return None
     return toward_count / total >= min_toward_ratio
 
 
@@ -296,7 +297,7 @@ class ActionClassifier:
 
         # Determine which contact is the serve (may be outside window if
         # ball tracking starts late — common with VballNet warmup).
-        serve_index = self._find_serve_index(
+        serve_index, serve_pass = self._find_serve_index(
             contacts, start_frame, contact_sequence.net_y,
             ball_positions=ball_positions,
         )
@@ -385,18 +386,48 @@ class ActionClassifier:
             # Rule-based classification
             if not serve_detected:
                 if i == serve_index:
-                    is_in_window = (
-                        (contact.frame - start_frame) < self.config.serve_window_frames
-                    )
-                    action_type = ActionType.SERVE
-                    confidence = (
-                        self.config.high_confidence if is_in_window
-                        else self.config.medium_confidence
-                    )
-                    serve_detected = True
-                    serve_side = contact.court_side
-                    current_side = contact.court_side
-                    contact_count_on_side = 1
+                    # For Pass 3 fallback serves (first-contact guess), verify
+                    # with trajectory: ball should move toward net after a serve.
+                    # If not, the real serve was likely missed and this contact
+                    # is actually the receive. Pass 1/2 serves are more reliable
+                    # (arc crossing or baseline/velocity) so skip the check.
+                    is_phantom = False
+                    if serve_pass == 3 and ball_positions:
+                        toward_net = _ball_moving_toward_net(
+                            ball_positions, contact.frame,
+                            contact.ball_y, contact_sequence.net_y,
+                        )
+                        if toward_net is False:
+                            is_phantom = True
+
+                    if not is_phantom:
+                        # Normal serve classification
+                        is_in_window = (
+                            (contact.frame - start_frame)
+                            < self.config.serve_window_frames
+                        )
+                        action_type = ActionType.SERVE
+                        confidence = (
+                            self.config.high_confidence if is_in_window
+                            else self.config.medium_confidence
+                        )
+                        serve_detected = True
+                        serve_side = contact.court_side
+                        current_side = contact.court_side
+                        contact_count_on_side = 1
+                    else:
+                        # Phantom serve: real serve was missed, this is the
+                        # receive. Infer serve came from the opposite side.
+                        action_type = ActionType.RECEIVE
+                        confidence = self.config.medium_confidence
+                        serve_detected = True
+                        receive_detected = True
+                        # Infer serve side as opposite of this contact
+                        serve_side = (
+                            "far" if contact.court_side == "near" else "near"
+                        )
+                        current_side = contact.court_side
+                        contact_count_on_side = 1
                 else:
                     action_type = ActionType.UNKNOWN
                     confidence = self.config.low_confidence
@@ -462,7 +493,7 @@ class ActionClassifier:
         start_frame: int,
         net_y: float = 0.5,
         ball_positions: list[BallPosition] | None = None,
-    ) -> int:
+    ) -> tuple[int, int]:
         """Find which contact is the serve.
 
         Uses three passes with decreasing strictness:
@@ -472,7 +503,9 @@ class ActionClassifier:
         3. Fallback: first contact is the serve.
 
         Returns:
-            Index into contacts list, or -1 if no serve found.
+            Tuple of (index into contacts list, pass number that found it).
+            Pass number: 1=arc, 2=position/velocity, 3=fallback, 0=not found.
+            Index is -1 if no serve found.
         """
         window = self.config.serve_window_frames
 
@@ -501,7 +534,7 @@ class ActionClassifier:
                         "Serve detected via arc crossing at frame %d (index %d)",
                         c.frame, i,
                     )
-                    return i
+                    return i, 1
 
         # Pass 2: Position/velocity heuristic within window
         for i, c in enumerate(contacts):
@@ -509,16 +542,16 @@ class ActionClassifier:
                 break
             is_at_baseline = c.ball_y >= baseline_near or c.ball_y <= baseline_far
             if is_at_baseline:
-                return i
+                return i, 2
             if c.velocity >= self.config.serve_min_velocity:
                 # With ball trajectory, also require ball moving toward net
                 if ball_positions:
                     if _ball_moving_toward_net(
                         ball_positions, c.frame, c.ball_y, net_y,
                     ):
-                        return i
+                        return i, 2
                 else:
-                    return i
+                    return i, 2
 
         # Pass 3: fallback — first contact is the serve
         if self.config.serve_fallback and contacts:
@@ -527,9 +560,9 @@ class ActionClassifier:
                 "as serve fallback",
                 window, contacts[0].frame,
             )
-            return 0
+            return 0, 3
 
-        return -1
+        return -1, 0
 
 def classify_rally_actions(
     contact_sequence: ContactSequence,

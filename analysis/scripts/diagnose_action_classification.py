@@ -81,7 +81,7 @@ def trace_classification(rally) -> list[dict]:
 
     start_frame = contact_list[0].frame if contact_list else 0
     ac = ActionClassifier()
-    serve_index = ac._find_serve_index(
+    serve_index, _serve_pass = ac._find_serve_index(
         contact_list, start_frame, net_y, bp_list or None
     )
 
