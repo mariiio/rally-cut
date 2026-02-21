@@ -997,6 +997,149 @@ class ActionClassifier:
         return -1, 0
 
 
+def repair_action_sequence(
+    actions: list[ClassifiedAction],
+    net_y: float = 0.5,
+    ball_positions: list[BallPosition] | None = None,
+) -> list[ClassifiedAction]:
+    """Repair volleyball-illegal action sequences.
+
+    Missed contacts cause cascade failures in the state machine: missing one
+    contact shifts ALL subsequent labels. This function detects and fixes
+    common illegal patterns using volleyball rules as constraints.
+
+    Same-side rules only — cross-side sequences (e.g., dig on near → dig on
+    far) are legal because each side's touch counter resets independently.
+
+    Repairs applied (all same-side only):
+    1. Consecutive receives → second becomes set
+    2. Consecutive digs → second becomes set
+    3. Receive/dig directly followed by attack → attack becomes set
+       (only when a subsequent action exists to serve as the actual attack)
+
+    Only repairs non-serve, non-block actions. Serve and block are
+    structurally reliable and should not be changed.
+
+    Args:
+        actions: Classified actions from classify_rally or classify_rally_learned.
+        net_y: Net Y position (unused currently, reserved for future).
+        ball_positions: Ball positions (unused currently, reserved for future).
+
+    Returns:
+        Repaired list of ClassifiedAction (same length, modified labels).
+    """
+    if len(actions) < 2:
+        return actions
+
+    # Work on a mutable copy
+    repaired = list(actions)
+
+    # Find the serve index
+    serve_idx: int | None = None
+    for i, a in enumerate(repaired):
+        if a.action_type == ActionType.SERVE:
+            serve_idx = i
+            break
+
+    if serve_idx is None:
+        return repaired  # Can't repair without a serve anchor
+
+    # Walk through post-serve actions and fix illegal patterns
+    i = serve_idx + 1
+    while i < len(repaired):
+        a = repaired[i]
+
+        # Skip blocks and unknowns — don't touch them
+        if a.action_type in (ActionType.BLOCK, ActionType.UNKNOWN):
+            i += 1
+            continue
+
+        # Look at previous non-block/non-unknown action
+        prev_idx: int | None = None
+        for j in range(i - 1, -1, -1):
+            if repaired[j].action_type not in (ActionType.BLOCK, ActionType.UNKNOWN):
+                prev_idx = j
+                break
+
+        if prev_idx is None:
+            i += 1
+            continue
+
+        prev = repaired[prev_idx]
+
+        # Only apply same-side rules when actions are on the same known court side.
+        # Cross-side sequences (e.g., dig on near → dig on far) are legal
+        # in volleyball — each side's touch counter resets independently.
+        # If either side is unknown/empty, skip repair to be conservative.
+        same_side = (
+            prev.court_side == a.court_side
+            and a.court_side in ("near", "far")
+        )
+
+        # Rule 1: Two consecutive receives or digs on same side → second is set
+        if (
+            same_side
+            and prev.action_type in (ActionType.RECEIVE, ActionType.DIG)
+            and a.action_type == prev.action_type
+        ):
+            repaired[i] = ClassifiedAction(
+                action_type=ActionType.SET,
+                frame=a.frame,
+                ball_x=a.ball_x,
+                ball_y=a.ball_y,
+                velocity=a.velocity,
+                player_track_id=a.player_track_id,
+                court_side=a.court_side,
+                confidence=min(a.confidence, 0.6),
+                is_synthetic=a.is_synthetic,
+                team=a.team,
+            )
+            logger.debug(
+                "Sequence repair: %s→%s at f%d→f%d, changed second to set",
+                prev.action_type.value, a.action_type.value,
+                prev.frame, a.frame,
+            )
+
+        # Rule 2: receive/dig directly followed by attack on same side
+        # with no set → reclassify the attack as set (if there's another
+        # action after)
+        elif (
+            same_side
+            and prev.action_type in (ActionType.RECEIVE, ActionType.DIG)
+            and a.action_type == ActionType.ATTACK
+        ):
+            # Check if there's a next action that could be the actual attack
+            next_idx: int | None = None
+            for k in range(i + 1, len(repaired)):
+                if repaired[k].action_type not in (ActionType.BLOCK, ActionType.UNKNOWN):
+                    next_idx = k
+                    break
+
+            if next_idx is not None:
+                repaired[i] = ClassifiedAction(
+                    action_type=ActionType.SET,
+                    frame=a.frame,
+                    ball_x=a.ball_x,
+                    ball_y=a.ball_y,
+                    velocity=a.velocity,
+                    player_track_id=a.player_track_id,
+                    court_side=a.court_side,
+                    confidence=min(a.confidence, 0.6),
+                    is_synthetic=a.is_synthetic,
+                    team=a.team,
+                )
+                logger.debug(
+                    "Sequence repair: %s→attack at f%d→f%d, "
+                    "changed attack to set (next action at f%d)",
+                    prev.action_type.value, prev.frame, a.frame,
+                    repaired[next_idx].frame,
+                )
+
+        i += 1
+
+    return repaired
+
+
 def classify_rally_actions(
     contact_sequence: ContactSequence,
     rally_id: str = "",
@@ -1025,12 +1168,24 @@ def classify_rally_actions(
     if use_classifier:
         learned = _get_default_action_classifier()
         if learned is not None and learned.is_trained:
-            return action_classifier.classify_rally_learned(
+            result = action_classifier.classify_rally_learned(
                 contact_sequence, learned, rally_id,
                 team_assignments=team_assignments,
             )
+            result.actions = repair_action_sequence(
+                result.actions,
+                net_y=contact_sequence.net_y,
+                ball_positions=contact_sequence.ball_positions,
+            )
+            return result
 
-    return action_classifier.classify_rally(
+    result = action_classifier.classify_rally(
         contact_sequence, rally_id,
         team_assignments=team_assignments,
     )
+    result.actions = repair_action_sequence(
+        result.actions,
+        net_y=contact_sequence.net_y,
+        ball_positions=contact_sequence.ball_positions,
+    )
+    return result

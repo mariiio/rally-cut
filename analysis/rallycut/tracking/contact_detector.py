@@ -90,6 +90,16 @@ class ContactDetectionConfig:
     parabolic_min_residual: float = 0.015  # Min residual peak to flag breakpoint
     parabolic_min_prominence: float = 0.008  # Min prominence for residual peaks
 
+    # Deceleration candidate detection (catches receives/digs)
+    enable_deceleration_detection: bool = True
+    deceleration_min_speed_before: float = 0.012  # Min incoming speed to qualify
+    deceleration_min_drop_ratio: float = 0.4  # Min speed drop ratio (40%)
+    deceleration_window: int = 5  # Frames before/after to check
+
+    # Post-serve receive candidate search
+    enable_post_serve_receive: bool = True
+    post_serve_search_window: int = 15  # ±N frames around net crossing for receive
+
     # Player-proximity candidate refinement
     enable_proximity_candidates: bool = True
     proximity_search_window: int = 8  # Search ±N frames around each candidate
@@ -454,6 +464,96 @@ def _find_velocity_reversal_candidates(
     return selected
 
 
+def _find_deceleration_candidates(
+    velocities: dict[int, tuple[float, float, float]],
+    frames: list[int],
+    smoothed_speeds: list[float],
+    min_distance_frames: int,
+    min_speed_before: float = 0.012,
+    min_speed_drop_ratio: float = 0.4,
+    window: int = 5,
+) -> list[int]:
+    """Find frames where ball speed drops sharply (deceleration contacts).
+
+    Receives and digs decelerate the ball — the player absorbs momentum.
+    Velocity peak detection misses these because the contact is a velocity
+    MINIMUM, not maximum. This function finds local speed minima preceded
+    by high speed (the incoming ball) as contact candidates.
+
+    Args:
+        velocities: Dict mapping frame_number to (speed, vx, vy).
+        frames: Sorted frame numbers with velocity data.
+        smoothed_speeds: Smoothed speed values aligned with frames.
+        min_distance_frames: Minimum frames between candidates.
+        min_speed_before: Minimum speed in the window before the candidate
+            to qualify as "incoming ball" (filters slow-ball noise).
+        min_speed_drop_ratio: Minimum ratio of speed drop (1 - min/max)
+            within the analysis window. 0.4 = speed must drop by ≥40%.
+        window: Frames before/after to check for speed context.
+
+    Returns:
+        Sorted list of candidate frame numbers where deceleration occurs.
+    """
+    if len(frames) < window * 2 + 1:
+        return []
+
+    decel_frames: list[tuple[int, float]] = []
+
+    for i in range(window, len(frames) - window):
+        curr_frame = frames[i]
+        curr_speed = smoothed_speeds[i]
+
+        # Look at speed in the window BEFORE this frame (i >= window guaranteed)
+        before_speeds = smoothed_speeds[i - window:i]
+        if not before_speeds:
+            continue
+
+        max_before = max(before_speeds)
+        if max_before < min_speed_before:
+            continue  # No fast incoming ball
+
+        drop_ratio = 1.0 - (curr_speed / max_before)
+        if drop_ratio < min_speed_drop_ratio:
+            continue  # Not enough deceleration
+
+        # Verify it's a local minimum: speed at this frame should be ≤ neighbors
+        after_speeds = smoothed_speeds[i + 1:min(len(smoothed_speeds), i + window + 1)]
+        if not after_speeds:
+            continue
+
+        # Must be lower than at least half the before and after neighbors
+        lower_than_before = sum(1 for s in before_speeds if curr_speed <= s)
+        lower_than_after = sum(1 for s in after_speeds if curr_speed <= s)
+        if lower_than_before < len(before_speeds) // 2:
+            continue
+        if lower_than_after < len(after_speeds) // 2:
+            continue
+
+        # Strength = magnitude of the speed drop
+        decel_strength = max_before - curr_speed
+        decel_frames.append((curr_frame, decel_strength))
+
+    if not decel_frames:
+        return []
+
+    # Enforce min distance: keep strongest deceleration when close
+    decel_frames.sort(key=lambda x: x[0])
+    selected: list[int] = []
+    strength_by_frame = dict(decel_frames)
+
+    for frame, strength in decel_frames:
+        if not selected:
+            selected.append(frame)
+            continue
+
+        if frame - selected[-1] >= min_distance_frames:
+            selected.append(frame)
+        elif strength > strength_by_frame[selected[-1]]:
+            selected[-1] = frame
+
+    return selected
+
+
 def _find_parabolic_breakpoints(
     ball_by_frame: dict[int, BallPosition],
     confident_frames: list[int],
@@ -732,6 +832,85 @@ def _find_net_crossing_candidates(
     return selected
 
 
+def _find_post_serve_receive_candidate(
+    ball_by_frame: dict[int, BallPosition],
+    confident_frames: list[int],
+    net_y: float,
+    serve_frame: int,
+    player_positions: list[PlayerPosition] | None,
+    search_window: int = 15,
+    player_search_frames: int = 5,
+    max_player_distance: float = 0.15,
+    max_frames_after_serve: int = 60,
+) -> int | None:
+    """Find a receive candidate by locating the net crossing after a serve.
+
+    After a serve, the ball crosses the net and the receiver contacts it.
+    This function finds where the ball Y crosses net_y after the serve,
+    then searches around that crossing point for the frame of minimum
+    player-ball distance — the actual receive moment.
+
+    Args:
+        ball_by_frame: Frame-indexed ball positions.
+        confident_frames: Sorted confident frame numbers.
+        net_y: Net Y position.
+        serve_frame: Frame of the detected serve.
+        player_positions: Player positions for proximity search.
+        search_window: ±frames around net crossing to search for player.
+        player_search_frames: Frames for player lookup.
+        max_player_distance: Max ball-player distance for a valid receive.
+        max_frames_after_serve: Max frames after serve to search for crossing.
+
+    Returns:
+        Frame number of the receive candidate, or None if not found.
+    """
+    # Find the first net crossing after the serve
+    crossing_frame: int | None = None
+    frames_after_serve = [
+        f for f in confident_frames
+        if serve_frame < f <= serve_frame + max_frames_after_serve
+    ]
+    if len(frames_after_serve) < 2:
+        return None
+
+    for i in range(1, len(frames_after_serve)):
+        prev_f = frames_after_serve[i - 1]
+        curr_f = frames_after_serve[i]
+        if curr_f - prev_f > 5:
+            continue
+        prev_y = ball_by_frame[prev_f].y
+        curr_y = ball_by_frame[curr_f].y
+        if (prev_y < net_y <= curr_y) or (curr_y < net_y <= prev_y):
+            crossing_frame = curr_f
+            break
+
+    if crossing_frame is None:
+        return None
+
+    # Require player positions for proximity validation
+    if not player_positions:
+        return None
+
+    best_frame: int | None = None
+    best_distance = max_player_distance
+
+    for offset in range(-search_window, search_window + 1):
+        f = crossing_frame + offset
+        ball = ball_by_frame.get(f)
+        if ball is None:
+            continue
+
+        _, dist, _ = _find_nearest_player(
+            f, ball.x, ball.y, player_positions,
+            search_frames=player_search_frames,
+        )
+        if dist < best_distance:
+            best_distance = dist
+            best_frame = f
+
+    return best_frame
+
+
 def _merge_candidates(
     velocity_peak_frames: list[int],
     inflection_frames: list[int],
@@ -970,7 +1149,20 @@ def detect_contacts(
         velocities, frames, cfg.min_peak_distance_frames
     )
 
-    # Step 5c: Find parabolic arc breakpoint candidates
+    # Step 5c: Find deceleration candidates (catches receives/digs)
+    deceleration_frames: list[int] = []
+    if cfg.enable_deceleration_detection:
+        deceleration_frames = _find_deceleration_candidates(
+            velocities,
+            frames,
+            smoothed,
+            cfg.min_peak_distance_frames,
+            min_speed_before=cfg.deceleration_min_speed_before,
+            min_speed_drop_ratio=cfg.deceleration_min_drop_ratio,
+            window=cfg.deceleration_window,
+        )
+
+    # Step 5d: Find parabolic arc breakpoint candidates
     parabolic_frames: list[int] = []
     residual_by_frame: dict[int, float] = {}
     if cfg.enable_parabolic_detection:
@@ -984,13 +1176,13 @@ def detect_contacts(
             min_distance_frames=cfg.min_peak_distance_frames,
         )
 
-    # Step 5d: Find net-crossing candidates
+    # Step 5e: Find net-crossing candidates
     net_crossing_frames = _find_net_crossing_candidates(
         ball_by_frame, confident_frames, estimated_net_y, cfg.min_peak_distance_frames
     )
 
     # Step 6: Merge all candidates.
-    # Priority: velocity peaks > inflections > reversals > parabolic > net-crossing.
+    # Priority: velocity peaks > inflections > reversals > deceleration > parabolic > net-crossing.
     # _merge_candidates keeps the first arg's frames, adding second arg's only
     # if no existing candidate is within min_distance_frames.
     inflection_and_reversal = _merge_candidates(
@@ -999,9 +1191,13 @@ def detect_contacts(
     traditional_candidates = _merge_candidates(
         velocity_peak_frames, inflection_and_reversal, cfg.min_peak_distance_frames
     )
+    # Add deceleration candidates (catches receives/digs that decelerate the ball)
+    with_deceleration = _merge_candidates(
+        traditional_candidates, deceleration_frames, cfg.min_peak_distance_frames
+    )
     # Add parabolic breakpoints (catches soft touches missed by velocity/inflection)
     with_parabolic = _merge_candidates(
-        traditional_candidates, parabolic_frames, cfg.min_peak_distance_frames
+        with_deceleration, parabolic_frames, cfg.min_peak_distance_frames
     )
     # Add net-crossing candidates (lowest priority — fills gaps from other detectors)
     candidate_frames = _merge_candidates(
@@ -1010,6 +1206,36 @@ def detect_contacts(
 
     if not candidate_frames:
         return ContactSequence(net_y=estimated_net_y)
+
+    # Step 6a2: Post-serve receive candidate search.
+    # After the serve, the ball crosses the net. Search around the crossing
+    # point for the nearest player-ball proximity — the receive moment.
+    # This structurally generates a receive candidate tied to the serve→receive
+    # transition, even when the receive doesn't produce a velocity peak.
+    n_post_serve = 0
+    if cfg.enable_post_serve_receive and player_positions:
+        # Identify likely serve: first candidate in the serve window
+        serve_frame: int | None = None
+        for f in candidate_frames:
+            if f - first_frame < cfg.serve_window_frames:
+                serve_frame = f
+                break
+        if serve_frame is not None:
+            receive_frame = _find_post_serve_receive_candidate(
+                ball_by_frame, confident_frames, estimated_net_y,
+                serve_frame, player_positions,
+                search_window=cfg.post_serve_search_window,
+                player_search_frames=cfg.player_search_frames,
+                max_player_distance=cfg.player_contact_radius,
+            )
+            if receive_frame is not None:
+                candidate_set_check = set(candidate_frames)
+                if receive_frame not in candidate_set_check and not any(
+                    abs(receive_frame - f) < cfg.min_peak_distance_frames
+                    for f in candidate_frames
+                ):
+                    candidate_frames = sorted(candidate_set_check | {receive_frame})
+                    n_post_serve = 1
 
     # Step 6b: Generate player-proximity candidates
     # Trajectory-based candidates detect the EFFECT of a contact (velocity peak,
@@ -1038,6 +1264,7 @@ def detect_contacts(
     velocity_peak_set = set(velocity_peak_frames)
     inflection_set = set(inflection_frames)
     parabolic_set = set(parabolic_frames)
+    deceleration_set = set(deceleration_frames)
 
     # Build velocity lookup for any frame
     velocity_lookup = dict(zip(frames, smoothed))
@@ -1115,6 +1342,7 @@ def detect_contacts(
         is_vel_peak = frame in velocity_peak_set
         is_infl = frame in inflection_set
         is_para = frame in parabolic_set
+        is_decel = frame in deceleration_set
 
         if classifier is not None and classifier.is_trained:
             # Phase 3: Use learned classifier
@@ -1138,6 +1366,7 @@ def detect_contacts(
                 is_velocity_peak=is_vel_peak,
                 is_inflection=is_infl,
                 is_parabolic=is_para,
+                is_deceleration=is_decel,
             )
             results = classifier.predict([features])
             is_validated, confidence = results[0]
@@ -1182,8 +1411,10 @@ def detect_contacts(
         f"Detected {len(contacts)} contacts "
         f"({len(velocity_peak_frames)} vel peaks + "
         f"{len(inflection_frames)} inflections + "
+        f"{len(deceleration_frames)} decel + "
         f"{len(parabolic_frames)} parabolic + "
         f"{len(net_crossing_frames)} net-cross + "
+        f"{n_post_serve} post-serve + "
         f"{n_proximity} proximity → "
         f"{len(candidate_frames)} candidates"
         f"{f', {pre_dedup - len(contacts)} deduped' if pre_dedup > len(contacts) else ''}"

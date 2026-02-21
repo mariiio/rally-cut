@@ -29,11 +29,13 @@ from rallycut.tracking.contact_detector import (
     _compute_direction_change,
     _compute_velocities,
     _filter_noise_spikes,
+    _find_deceleration_candidates,
     _find_inflection_candidates,
     _find_net_crossing_candidates,
     _find_parabolic_breakpoints,
     _find_velocity_reversal_candidates,
     _merge_candidates,
+    _smooth_signal,
     detect_contacts,
     estimate_net_position,
 )
@@ -118,14 +120,7 @@ def get_candidates_for_rally(
 
     speeds = [velocities[f][0] for f in frames]
 
-    # Smooth
-    window = cfg.smoothing_window
-    half_w = window // 2
-    smoothed = []
-    for i in range(len(speeds)):
-        start = max(0, i - half_w)
-        end = min(len(speeds), i + half_w + 1)
-        smoothed.append(sum(speeds[start:end]) / (end - start))
+    smoothed = _smooth_signal(speeds, cfg.smoothing_window)
 
     peak_indices, _ = sp_find_peaks(
         smoothed,
@@ -156,6 +151,17 @@ def get_candidates_for_rally(
         velocities, frames, cfg.min_peak_distance_frames
     )
 
+    # Deceleration candidates
+    deceleration_frames: list[int] = []
+    if cfg.enable_deceleration_detection:
+        deceleration_frames = _find_deceleration_candidates(
+            velocities, frames, smoothed,
+            cfg.min_peak_distance_frames,
+            min_speed_before=cfg.deceleration_min_speed_before,
+            min_speed_drop_ratio=cfg.deceleration_min_drop_ratio,
+            window=cfg.deceleration_window,
+        )
+
     # Parabolic breakpoints
     parabolic_frames: list[int] = []
     if cfg.enable_parabolic_detection:
@@ -181,8 +187,11 @@ def get_candidates_for_rally(
     traditional = _merge_candidates(
         velocity_peak_frames, inflection_and_reversal, cfg.min_peak_distance_frames
     )
+    with_deceleration = _merge_candidates(
+        traditional, deceleration_frames, cfg.min_peak_distance_frames
+    )
     with_parabolic = _merge_candidates(
-        traditional, parabolic_frames, cfg.min_peak_distance_frames
+        with_deceleration, parabolic_frames, cfg.min_peak_distance_frames
     )
     candidate_frames = _merge_candidates(
         with_parabolic, net_crossing_frames, cfg.min_peak_distance_frames
