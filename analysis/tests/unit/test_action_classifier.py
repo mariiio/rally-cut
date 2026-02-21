@@ -330,7 +330,7 @@ class TestNetCrossingPossession:
             _contact(frame=45, ball_y=0.35, court_side="far"),   # Set
             # FP contact on far side (no net crossing between)
             _contact(frame=55, ball_y=0.38, court_side="far"),   # Spike (3rd)
-            _contact(frame=65, ball_y=0.32, court_side="far"),   # Spike (4th, >= 3)
+            _contact(frame=65, ball_y=0.32, court_side="far"),   # DIG (4th, safety valve resets)
         ]
         # Ball staying on far side between contacts (no crossing)
         ball_positions = [
@@ -344,26 +344,28 @@ class TestNetCrossingPossession:
         )
         result = classify_rally_actions(seq)
         assert result.actions[3].action_type == ActionType.SPIKE
-        assert result.actions[4].action_type == ActionType.SPIKE
+        # 4th contact on same side triggers safety valve (max 3 in beach volleyball)
+        assert result.actions[4].action_type == ActionType.DIG
 
 
 class TestContactCap:
     """Tests for 3-contact-per-side cap."""
 
-    def test_fourth_contact_is_spike(self) -> None:
-        """Fourth contact on same side without crossing is still SPIKE (>= 3)."""
+    def test_fourth_contact_resets_to_dig(self) -> None:
+        """Fourth contact on same side triggers safety valve (beach max 3 touches)."""
         contacts = [
             _contact(frame=5, ball_y=0.85, court_side="near"),   # Serve
             _contact(frame=30, ball_y=0.3, court_side="far"),    # Receive
             _contact(frame=45, ball_y=0.25, court_side="far"),   # Set
             _contact(frame=55, ball_y=0.35, court_side="far"),   # Spike (3rd)
-            _contact(frame=65, ball_y=0.32, court_side="far"),   # Spike (4th, >= 3)
+            _contact(frame=65, ball_y=0.32, court_side="far"),   # DIG (4th, reset)
         ]
         # No ball_positions = fallback to court_side comparison
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
         result = classify_rally_actions(seq)
         assert result.actions[3].action_type == ActionType.SPIKE
-        assert result.actions[4].action_type == ActionType.SPIKE
+        # Safety valve: 4th contact resets to 1 → DIG
+        assert result.actions[4].action_type == ActionType.DIG
 
     def test_three_contacts_still_works(self) -> None:
         """Normal 3-contact sequence (receive/set/spike) still classified correctly."""
@@ -573,8 +575,8 @@ class TestTrajectoryPossession:
         # FP at net: trajectory says no crossing, so counter keeps incrementing
         # Contact 3 (index 3) is still on far side in the state machine's view
         assert result.actions[3].action_type == ActionType.SPIKE
-        # Contact 4 (index 4) continues on far side
-        assert result.actions[4].action_type == ActionType.SPIKE
+        # Contact 4 (index 4): safety valve resets at >3 contacts (beach max 3)
+        assert result.actions[4].action_type == ActionType.DIG
 
     def test_safety_valve_at_4_contacts(self) -> None:
         """After 4 contacts on same side with trajectory, force possession change."""
