@@ -19,6 +19,7 @@ import numpy as np
 
 if TYPE_CHECKING:
     from rallycut.tracking.ball_tracker import BallPosition
+    from rallycut.tracking.contact_classifier import ContactClassifier
     from rallycut.tracking.player_tracker import PlayerPosition
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,13 @@ class ContactDetectionConfig:
     # Minimum velocity for any candidate (floor for inflection/reversal candidates)
     min_candidate_velocity: float = 0.005  # Below this, direction change is likely noise
 
+    # Parabolic arc breakpoint detection
+    enable_parabolic_detection: bool = True
+    parabolic_window_frames: int = 12  # Sliding window size for parabolic fit
+    parabolic_stride: int = 3  # Window slide step
+    parabolic_min_residual: float = 0.015  # Min residual peak to flag breakpoint
+    parabolic_min_prominence: float = 0.008  # Min prominence for residual peaks
+
     # Court position (baselines used by ball_features.py serve detection)
     baseline_y_near: float = 0.82  # Near baseline Y threshold
     baseline_y_far: float = 0.18  # Far baseline Y threshold
@@ -90,6 +98,8 @@ class Contact:
 
     # Validation
     is_validated: bool = False  # True if contact passed validation checks
+    confidence: float = 0.0  # Classifier confidence (0-1), set by Phase 3 classifier
+    arc_fit_residual: float = 0.0  # Parabolic arc fit residual at this frame
 
     def to_dict(self) -> dict:
         return {
@@ -103,6 +113,8 @@ class Contact:
             "courtSide": self.court_side,
             "isAtNet": self.is_at_net,
             "isValidated": self.is_validated,
+            "confidence": self.confidence,
+            "arcFitResidual": self.arc_fit_residual,
         }
 
 
@@ -420,6 +432,124 @@ def _find_velocity_reversal_candidates(
     return selected
 
 
+def _find_parabolic_breakpoints(
+    ball_by_frame: dict[int, BallPosition],
+    confident_frames: list[int],
+    window_frames: int = 12,
+    stride: int = 3,
+    min_residual: float = 0.015,
+    min_prominence: float = 0.008,
+    min_distance_frames: int = 12,
+) -> tuple[list[int], dict[int, float]]:
+    """Find contact candidates by detecting transitions between parabolic arcs.
+
+    A volleyball in free flight follows a parabolic arc (gravity). Each contact
+    creates a transition between arcs. Fit parabolas to overlapping windows and
+    compute per-frame fitting residuals. Residual peaks indicate contacts.
+
+    Key insight: arc apexes (current FP source) lie ON the parabola and have
+    LOW residuals. Contacts BREAK the parabola and have HIGH residuals.
+
+    Args:
+        ball_by_frame: Ball positions indexed by frame number.
+        confident_frames: Sorted frame numbers with confident detections.
+        window_frames: Size of sliding window for parabolic fit.
+        stride: Step size for sliding window.
+        min_residual: Minimum residual to consider as breakpoint.
+        min_prominence: Minimum peak prominence.
+        min_distance_frames: Minimum distance between breakpoints.
+
+    Returns:
+        Tuple of (breakpoint_frames, residual_by_frame) where residual_by_frame
+        maps frame numbers to their arc fit residuals.
+    """
+    from scipy.signal import find_peaks
+
+    if len(confident_frames) < window_frames:
+        return [], {}
+
+    # Build arrays of (frame, x, y) for confident positions
+    frames_arr = np.array(confident_frames, dtype=np.float64)
+    x_arr = np.array([ball_by_frame[f].x for f in confident_frames])
+    y_arr = np.array([ball_by_frame[f].y for f in confident_frames])
+
+    # Per-frame residual accumulator (sum of residuals, count of windows)
+    residual_sum: dict[int, float] = {}
+    residual_count: dict[int, int] = {}
+
+    # Slide window across the trajectory
+    for start_idx in range(0, len(confident_frames) - window_frames + 1, stride):
+        end_idx = start_idx + window_frames
+        win_frames = frames_arr[start_idx:end_idx]
+        win_x = x_arr[start_idx:end_idx]
+        win_y = y_arr[start_idx:end_idx]
+
+        # Normalize frame numbers to [0, 1] for numerical stability
+        t = win_frames - win_frames[0]
+        t_range = t[-1]
+        if t_range < 1.0:
+            continue
+        t = t / t_range
+
+        # Fit degree-2 polynomial (parabola) to x(t) and y(t)
+        try:
+            px = np.polyfit(t, win_x, 2)
+            py = np.polyfit(t, win_y, 2)
+        except (np.linalg.LinAlgError, ValueError):
+            continue
+
+        # Compute residuals per frame
+        x_pred = np.polyval(px, t)
+        y_pred = np.polyval(py, t)
+        residuals = np.sqrt((win_x - x_pred) ** 2 + (win_y - y_pred) ** 2)
+
+        for i in range(window_frames):
+            frame = confident_frames[start_idx + i]
+            residual_sum[frame] = residual_sum.get(frame, 0.0) + float(residuals[i])
+            residual_count[frame] = residual_count.get(frame, 0) + 1
+
+    # Average residuals across all windows that included each frame
+    residual_by_frame: dict[int, float] = {}
+    for frame in confident_frames:
+        if frame in residual_sum and residual_count.get(frame, 0) > 0:
+            residual_by_frame[frame] = residual_sum[frame] / residual_count[frame]
+
+    if not residual_by_frame:
+        return [], {}
+
+    # Extract peaks from the residual signal
+    ordered_frames = sorted(residual_by_frame.keys())
+    residual_signal = [residual_by_frame[f] for f in ordered_frames]
+
+    if len(residual_signal) < 3:
+        return [], residual_by_frame
+
+    peak_indices, _ = find_peaks(
+        residual_signal,
+        height=min_residual,
+        prominence=min_prominence,
+        distance=max(1, min_distance_frames // stride),
+    )
+
+    breakpoint_frames = [ordered_frames[idx] for idx in peak_indices]
+
+    # Enforce min_distance_frames between breakpoints
+    if len(breakpoint_frames) > 1:
+        filtered = [breakpoint_frames[0]]
+        for frame in breakpoint_frames[1:]:
+            if frame - filtered[-1] >= min_distance_frames:
+                filtered.append(frame)
+            elif residual_by_frame.get(frame, 0) > residual_by_frame.get(filtered[-1], 0):
+                filtered[-1] = frame
+        breakpoint_frames = filtered
+
+    logger.debug(
+        f"Parabolic breakpoints: {len(breakpoint_frames)} from {len(confident_frames)} frames"
+    )
+
+    return breakpoint_frames, residual_by_frame
+
+
 def _merge_candidates(
     velocity_peak_frames: list[int],
     inflection_frames: list[int],
@@ -497,6 +627,7 @@ def detect_contacts(
     config: ContactDetectionConfig | None = None,
     net_y: float | None = None,
     frame_count: int | None = None,
+    classifier: ContactClassifier | None = None,
 ) -> ContactSequence:
     """Detect ball contacts from trajectory inflection points and velocity peaks.
 
@@ -506,8 +637,9 @@ def detect_contacts(
     3. Compute smoothed ball velocity signal
     4. Find velocity peak candidates (local maxima)
     5. Find inflection candidates (direction changes)
+    5c. Find parabolic arc breakpoint candidates
     6. Merge candidates (velocity peaks preferred)
-    7. Validate each candidate, attribute player, classify side
+    7. Validate each candidate (classifier or hand-tuned gates), attribute player
 
     Args:
         ball_positions: Ball tracking positions.
@@ -518,6 +650,8 @@ def detect_contacts(
             classification.
         frame_count: Total rally frames. If provided, candidates beyond this frame
             are suppressed (post-rally ball pickup/warmdown).
+        classifier: Optional trained ContactClassifier. When provided, replaces the
+            hand-tuned 3-tier validation gates with learned predictions.
 
     Returns:
         ContactSequence with all detected contacts.
@@ -572,9 +706,9 @@ def detect_contacts(
     first_frame = frames[0]
 
     # Step 5a: Find inflection candidates
+    confident_frames = sorted(ball_by_frame.keys())
     inflection_frames: list[int] = []
     if cfg.enable_inflection_detection:
-        confident_frames = sorted(ball_by_frame.keys())
         inflection_frames = _find_inflection_candidates(
             ball_by_frame,
             confident_frames,
@@ -588,19 +722,42 @@ def detect_contacts(
         velocities, frames, cfg.min_peak_distance_frames
     )
 
+    # Step 5c: Find parabolic arc breakpoint candidates
+    parabolic_frames: list[int] = []
+    residual_by_frame: dict[int, float] = {}
+    if cfg.enable_parabolic_detection:
+        parabolic_frames, residual_by_frame = _find_parabolic_breakpoints(
+            ball_by_frame,
+            confident_frames,
+            window_frames=cfg.parabolic_window_frames,
+            stride=cfg.parabolic_stride,
+            min_residual=cfg.parabolic_min_residual,
+            min_prominence=cfg.parabolic_min_prominence,
+            min_distance_frames=cfg.min_peak_distance_frames,
+        )
+
     # Step 6: Merge all candidates.
-    # Priority: velocity peaks > inflections > reversals.
+    # Priority: velocity peaks > inflections > reversals > parabolic.
     # _merge_candidates keeps the first arg's frames, adding second arg's only
     # if no existing candidate is within min_distance_frames.
     inflection_and_reversal = _merge_candidates(
         inflection_frames, reversal_frames, cfg.min_peak_distance_frames
     )
-    candidate_frames = _merge_candidates(
+    traditional_candidates = _merge_candidates(
         velocity_peak_frames, inflection_and_reversal, cfg.min_peak_distance_frames
+    )
+    # Add parabolic breakpoints (catches soft touches missed by velocity/inflection)
+    candidate_frames = _merge_candidates(
+        traditional_candidates, parabolic_frames, cfg.min_peak_distance_frames
     )
 
     if not candidate_frames:
         return ContactSequence(net_y=estimated_net_y)
+
+    # Build sets for source tracking (used by classifier features)
+    velocity_peak_set = set(velocity_peak_frames)
+    inflection_set = set(inflection_frames)
+    parabolic_set = set(parabolic_frames)
 
     # Build velocity lookup for any frame
     velocity_lookup = dict(zip(frames, smoothed))
@@ -648,30 +805,66 @@ def detect_contacts(
         if velocity < cfg.min_candidate_velocity:
             continue
 
-        # Validate contact using compound gates to reduce false positives.
-        # Tier 1: Strong signal — high velocity + direction change (definitive)
-        # Tier 2: High velocity + player nearby (serves/spikes without direction
-        #         change, e.g. when ball tracking has gaps around the contact)
-        # Tier 3: Player confirmed — player nearby + trajectory signal
-        has_player = player_dist <= cfg.player_contact_radius
-        has_direction_change = direction_change >= cfg.min_direction_change_deg
-        is_high_velocity = velocity >= cfg.high_velocity_threshold
-        is_strong = is_high_velocity and has_direction_change
-        is_fast_with_player = is_high_velocity and has_player
-        is_player_confirmed = has_player and (
-            has_direction_change or velocity >= cfg.min_peak_velocity
-        )
-        is_validated = is_strong or is_fast_with_player or is_player_confirmed
-
-        if not is_validated:
-            continue
-
         # Determine court side from ball position relative to net
         court_side = "far" if ball.y < estimated_net_y else "near"
 
         # Check if at net
         net_zone = 0.08  # ±8% of screen around net
         is_at_net = abs(ball.y - estimated_net_y) < net_zone
+
+        has_player = player_dist <= cfg.player_contact_radius
+        has_direction_change = direction_change >= cfg.min_direction_change_deg
+        arc_residual = residual_by_frame.get(frame, 0.0)
+
+        # Compute frames since last accepted candidate
+        frames_since_last = (
+            frame - contacts[-1].frame if contacts else 0
+        )
+
+        # Determine which source detected this candidate
+        is_vel_peak = frame in velocity_peak_set
+        is_infl = frame in inflection_set
+        is_para = frame in parabolic_set
+
+        if classifier is not None and classifier.is_trained:
+            # Phase 3: Use learned classifier
+            from rallycut.tracking.contact_classifier import CandidateFeatures
+
+            features = CandidateFeatures(
+                frame=frame,
+                velocity=velocity,
+                direction_change_deg=direction_change,
+                arc_fit_residual=arc_residual,
+                player_distance=player_dist,
+                has_player=has_player,
+                ball_x=ball.x,
+                ball_y=ball.y,
+                ball_y_relative_net=ball.y - estimated_net_y,
+                is_at_net=is_at_net,
+                frames_since_last=frames_since_last,
+                is_velocity_peak=is_vel_peak,
+                is_inflection=is_infl,
+                is_parabolic=is_para,
+            )
+            results = classifier.predict([features])
+            is_validated, confidence = results[0]
+        else:
+            # Fallback: Hand-tuned 3-tier validation gates
+            # Tier 1: Strong signal — high velocity + direction change (definitive)
+            # Tier 2: High velocity + player nearby (serves/spikes without direction
+            #         change, e.g. when ball tracking has gaps around the contact)
+            # Tier 3: Player confirmed — player nearby + trajectory signal
+            is_high_velocity = velocity >= cfg.high_velocity_threshold
+            is_strong = is_high_velocity and has_direction_change
+            is_fast_with_player = is_high_velocity and has_player
+            is_player_confirmed = has_player and (
+                has_direction_change or velocity >= cfg.min_peak_velocity
+            )
+            is_validated = is_strong or is_fast_with_player or is_player_confirmed
+            confidence = 0.0
+
+        if not is_validated:
+            continue
 
         contacts.append(Contact(
             frame=frame,
@@ -684,12 +877,15 @@ def detect_contacts(
             court_side=court_side,
             is_at_net=is_at_net,
             is_validated=is_validated,
+            confidence=confidence,
+            arc_fit_residual=arc_residual,
         ))
 
     logger.info(
         f"Detected {len(contacts)} contacts "
-        f"({len(velocity_peak_frames)} velocity peaks + "
-        f"{len(inflection_frames)} inflections → "
+        f"({len(velocity_peak_frames)} vel peaks + "
+        f"{len(inflection_frames)} inflections + "
+        f"{len(parabolic_frames)} parabolic → "
         f"{len(candidate_frames)} candidates, net_y={estimated_net_y:.3f})"
     )
 

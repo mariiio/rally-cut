@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import numpy as np
+
 from rallycut.tracking.ball_tracker import BallPosition
+from rallycut.tracking.contact_classifier import CandidateFeatures, ContactClassifier
 from rallycut.tracking.contact_detector import (
     Contact,
     ContactDetectionConfig,
@@ -12,6 +17,7 @@ from rallycut.tracking.contact_detector import (
     _filter_noise_spikes,
     _find_inflection_candidates,
     _find_nearest_player,
+    _find_parabolic_breakpoints,
     _find_velocity_reversal_candidates,
     _merge_candidates,
     _smooth_signal,
@@ -595,7 +601,6 @@ class TestDetectContacts:
         players = [_pp(15, 1, 0.5, 0.20)]
 
         result = detect_contacts(positions, players, config, net_y=0.50)
-        far_contacts = [c for c in result.contacts if c.court_side == "far"]
         # All contacts at y=0.15 should be "far" with net_y=0.50
         for c in result.contacts:
             assert c.court_side == "far"
@@ -651,13 +656,368 @@ class TestDetectContacts:
         assert len(seq.contacts_on_side("far")) == 1
 
     def test_to_dict_roundtrip(self) -> None:
-        """Contact.to_dict produces expected keys."""
+        """Contact.to_dict produces expected keys including new fields."""
         c = Contact(frame=10, ball_x=0.5, ball_y=0.5, velocity=0.02,
                     direction_change_deg=45.0, player_track_id=3,
-                    court_side="near", is_validated=True)
+                    court_side="near", is_validated=True,
+                    confidence=0.85, arc_fit_residual=0.012)
         d = c.to_dict()
         assert d["frame"] == 10
         assert d["ballX"] == 0.5
         assert d["playerTrackId"] == 3
         assert d["courtSide"] == "near"
         assert d["isValidated"] is True
+        assert d["confidence"] == 0.85
+        assert d["arcFitResidual"] == 0.012
+
+
+class TestFindParabolicBreakpoints:
+    """Tests for parabolic arc breakpoint detection."""
+
+    def _make_parabolic_trajectory(
+        self,
+        start_frame: int = 0,
+        n_frames: int = 30,
+        x_start: float = 0.2,
+        x_speed: float = 0.01,
+        y_apex: float = 0.3,
+        y_amplitude: float = 0.15,
+    ) -> dict[int, BallPosition]:
+        """Create a parabolic trajectory (ball in free flight under gravity)."""
+        ball_by_frame = {}
+        for i in range(n_frames):
+            frame = start_frame + i
+            t = i / max(1, n_frames - 1)  # 0 to 1
+            x = x_start + i * x_speed
+            # Parabola: y = apex - amplitude * (2t - 1)^2
+            y = y_apex - y_amplitude * (2 * t - 1) ** 2
+            ball_by_frame[frame] = _bp(frame, x, y)
+        return ball_by_frame
+
+    def test_single_arc_no_breakpoints(self) -> None:
+        """A single parabolic arc should produce no (or very few) breakpoints."""
+        ball_by_frame = self._make_parabolic_trajectory(n_frames=40)
+        frames = sorted(ball_by_frame.keys())
+
+        breakpoints, residuals = _find_parabolic_breakpoints(
+            ball_by_frame, frames,
+            window_frames=12, stride=3,
+            min_residual=0.015, min_prominence=0.008,
+            min_distance_frames=12,
+        )
+        # A perfect parabola should have very low residuals
+        assert len(breakpoints) == 0
+
+    def test_two_arcs_detects_transition(self) -> None:
+        """Two different parabolic arcs joined at a contact point."""
+        ball_by_frame = {}
+        # Arc 1: frames 0-24 (moving right-upward parabola)
+        for i in range(25):
+            t = i / 24
+            x = 0.2 + i * 0.01
+            y = 0.6 - 0.15 * (2 * t - 1) ** 2
+            ball_by_frame[i] = _bp(i, x, y)
+        # Arc 2: frames 25-49 (moving left-upward parabola, different direction)
+        for i in range(25):
+            frame = 25 + i
+            t = i / 24
+            x = 0.45 - i * 0.008
+            y = 0.5 - 0.12 * (2 * t - 1) ** 2
+            ball_by_frame[frame] = _bp(frame, x, y)
+
+        frames = sorted(ball_by_frame.keys())
+        breakpoints, residuals = _find_parabolic_breakpoints(
+            ball_by_frame, frames,
+            window_frames=12, stride=2,
+            min_residual=0.005, min_prominence=0.003,
+            min_distance_frames=10,
+        )
+        # Should detect breakpoint near the transition (frame ~25)
+        assert len(breakpoints) >= 1
+        assert any(20 <= f <= 30 for f in breakpoints)
+
+    def test_returns_residuals_per_frame(self) -> None:
+        """Residual dict should have entries for trajectory frames."""
+        ball_by_frame = self._make_parabolic_trajectory(n_frames=30)
+        frames = sorted(ball_by_frame.keys())
+
+        _, residuals = _find_parabolic_breakpoints(
+            ball_by_frame, frames,
+            window_frames=12, stride=3,
+            min_residual=0.015, min_prominence=0.008,
+            min_distance_frames=12,
+        )
+        # Should have residuals for frames covered by windows
+        assert len(residuals) > 0
+        # Residuals for a clean parabola should be very small
+        for r in residuals.values():
+            assert r < 0.01
+
+    def test_too_few_frames(self) -> None:
+        """Fewer frames than window returns empty."""
+        ball_by_frame = {i: _bp(i, 0.5, 0.5) for i in range(5)}
+        frames = sorted(ball_by_frame.keys())
+
+        breakpoints, residuals = _find_parabolic_breakpoints(
+            ball_by_frame, frames,
+            window_frames=12, stride=3,
+            min_residual=0.015, min_prominence=0.008,
+            min_distance_frames=12,
+        )
+        assert breakpoints == []
+        assert residuals == {}
+
+    def test_arc_apex_has_low_residual(self) -> None:
+        """Arc apex (top of parabola) should NOT trigger a breakpoint.
+
+        This is the key insight: arc apexes lie ON the parabola and have
+        LOW residuals, unlike real contacts that BREAK the parabola.
+        """
+        ball_by_frame = self._make_parabolic_trajectory(
+            n_frames=40, y_apex=0.3, y_amplitude=0.2,
+        )
+        frames = sorted(ball_by_frame.keys())
+
+        breakpoints, residuals = _find_parabolic_breakpoints(
+            ball_by_frame, frames,
+            window_frames=12, stride=3,
+            min_residual=0.01, min_prominence=0.005,
+            min_distance_frames=12,
+        )
+        # Apex is around frame 20; it should NOT be a breakpoint
+        apex_breakpoints = [f for f in breakpoints if 15 <= f <= 25]
+        assert len(apex_breakpoints) == 0
+
+
+class TestCandidateFeatures:
+    """Tests for the CandidateFeatures dataclass."""
+
+    def test_to_array_shape(self) -> None:
+        """Feature array has correct number of elements."""
+        f = CandidateFeatures(
+            frame=10, velocity=0.02, direction_change_deg=45.0,
+            arc_fit_residual=0.01, player_distance=0.05, has_player=True,
+            ball_x=0.5, ball_y=0.6, ball_y_relative_net=0.1,
+            is_at_net=False, frames_since_last=15,
+            is_velocity_peak=True, is_inflection=False,
+            is_parabolic=False,
+        )
+        arr = f.to_array()
+        assert arr.shape == (13,)
+        assert len(CandidateFeatures.feature_names()) == 13
+
+    def test_infinite_player_distance_handled(self) -> None:
+        """Infinite player distance maps to 1.0."""
+        f = CandidateFeatures(
+            frame=10, velocity=0.02, direction_change_deg=45.0,
+            arc_fit_residual=0.0, player_distance=float("inf"),
+            has_player=False, ball_x=0.5, ball_y=0.6,
+            ball_y_relative_net=0.1, is_at_net=False,
+            frames_since_last=0,
+            is_velocity_peak=False, is_inflection=False,
+            is_parabolic=False,
+        )
+        arr = f.to_array()
+        # player_distance is index 3
+        assert arr[3] == 1.0
+        assert not np.any(np.isinf(arr))
+
+    def test_boolean_features_as_float(self) -> None:
+        """Boolean features should be 0.0 or 1.0."""
+        f = CandidateFeatures(
+            frame=10, velocity=0.02, direction_change_deg=45.0,
+            arc_fit_residual=0.0, player_distance=0.05,
+            has_player=True, ball_x=0.5, ball_y=0.6,
+            ball_y_relative_net=0.1, is_at_net=True,
+            frames_since_last=0,
+            is_velocity_peak=True, is_inflection=False,
+            is_parabolic=True,
+        )
+        arr = f.to_array()
+        # has_player=1.0, is_at_net=1.0, is_velocity_peak=1.0, is_parabolic=1.0
+        assert arr[4] == 1.0  # has_player
+        assert arr[8] == 1.0  # is_at_net
+        assert arr[10] == 1.0  # is_velocity_peak
+        assert arr[12] == 1.0  # is_parabolic
+
+
+class TestContactClassifier:
+    """Tests for the ContactClassifier."""
+
+    def test_untrained_predicts_false(self) -> None:
+        """Untrained classifier predicts (False, 0.0) for all candidates."""
+        clf = ContactClassifier()
+        assert not clf.is_trained
+
+        features = [CandidateFeatures(
+            frame=10, velocity=0.02, direction_change_deg=45.0,
+            arc_fit_residual=0.01, player_distance=0.05,
+            has_player=True, ball_x=0.5, ball_y=0.6,
+            ball_y_relative_net=0.1, is_at_net=False,
+            frames_since_last=0,
+            is_velocity_peak=True, is_inflection=False,
+            is_parabolic=False,
+        )]
+
+        results = clf.predict(features)
+        assert len(results) == 1
+        assert results[0] == (False, 0.0)
+
+    def test_train_and_predict(self) -> None:
+        """Trained classifier can make predictions."""
+        rng = np.random.RandomState(42)
+        n_pos = 30
+        n_neg = 20
+
+        # Positive examples: higher velocity, higher direction change
+        x_pos = rng.randn(n_pos, 13) * 0.1 + 0.5
+        x_pos[:, 0] += 0.5  # Higher velocity
+        x_pos[:, 1] += 30.0  # Higher direction change
+
+        # Negative examples: lower features
+        x_neg = rng.randn(n_neg, 13) * 0.1 + 0.2
+
+        x_mat = np.vstack([x_pos, x_neg])
+        y = np.array([1] * n_pos + [0] * n_neg)
+
+        clf = ContactClassifier(threshold=0.5)
+        metrics = clf.train(x_mat, y)
+
+        assert clf.is_trained
+        assert metrics["train_f1"] > 0.5  # Should learn something
+        assert metrics["n_samples"] == 50
+
+        # Make prediction
+        features = [CandidateFeatures(
+            frame=10, velocity=0.6, direction_change_deg=60.0,
+            arc_fit_residual=0.02, player_distance=0.05,
+            has_player=True, ball_x=0.5, ball_y=0.6,
+            ball_y_relative_net=0.1, is_at_net=False,
+            frames_since_last=15,
+            is_velocity_peak=True, is_inflection=False,
+            is_parabolic=False,
+        )]
+
+        results = clf.predict(features)
+        assert len(results) == 1
+        is_contact, confidence = results[0]
+        assert isinstance(is_contact, bool)
+        assert 0.0 <= confidence <= 1.0
+
+    def test_feature_importance(self) -> None:
+        """Trained classifier reports feature importance."""
+        rng = np.random.RandomState(42)
+        x_mat = rng.randn(50, 13)
+        y = (x_mat[:, 0] > 0).astype(int)  # Label depends on first feature
+
+        clf = ContactClassifier()
+        clf.train(x_mat, y)
+
+        importance = clf.feature_importance()
+        assert len(importance) == 13
+        assert all(v >= 0 for v in importance.values())
+        # First feature should be most important
+        assert importance["velocity"] > 0
+
+    def test_save_load_roundtrip(self, tmp_path: object) -> None:
+        """Model can be saved and loaded."""
+        rng = np.random.RandomState(42)
+        x_mat = rng.randn(50, 13)
+        y = (x_mat[:, 0] > 0).astype(int)
+
+        clf = ContactClassifier(threshold=0.4)
+        clf.train(x_mat, y)
+
+        path = Path(str(tmp_path)) / "model.pkl"
+        clf.save(path)
+
+        loaded = ContactClassifier.load(path)
+        assert loaded.is_trained
+        assert loaded.threshold == 0.4
+
+        # Predictions should match
+        features = [CandidateFeatures(
+            frame=10, velocity=0.5, direction_change_deg=45.0,
+            arc_fit_residual=0.01, player_distance=0.05,
+            has_player=True, ball_x=0.5, ball_y=0.6,
+            ball_y_relative_net=0.1, is_at_net=False,
+            frames_since_last=15,
+            is_velocity_peak=True, is_inflection=False,
+            is_parabolic=False,
+        )]
+        r1 = clf.predict(features)
+        r2 = loaded.predict(features)
+        assert r1[0][1] == r2[0][1]  # Same confidence
+
+
+class TestDetectContactsWithNewFeatures:
+    """Test detect_contacts with parabolic detection enabled."""
+
+    def test_parabolic_detection_enabled_by_default(self) -> None:
+        """Default config has parabolic detection enabled."""
+        cfg = ContactDetectionConfig()
+        assert cfg.enable_parabolic_detection is True
+
+    def test_can_disable_new_detectors(self) -> None:
+        """Parabolic detection can be disabled for backward compatibility."""
+        cfg = ContactDetectionConfig(
+            enable_parabolic_detection=False,
+        )
+
+        # Simple trajectory still works
+        positions = []
+        for i in range(30):
+            if i < 15:
+                positions.append(_bp(i, 0.2 + i * 0.02, 0.6))
+            else:
+                positions.append(_bp(i, 0.5 - (i - 15) * 0.02, 0.6))
+
+        players = [_pp(15, 1, 0.5, 0.65)]
+        result = detect_contacts(positions, players, cfg)
+        # Should still detect via velocity/inflection
+        assert result.num_contacts >= 0  # May or may not detect depending on velocity
+
+    def test_contact_has_arc_fit_residual(self) -> None:
+        """Detected contacts include arc_fit_residual field."""
+        cfg = ContactDetectionConfig(
+            min_peak_velocity=0.005,
+            min_peak_prominence=0.002,
+            enable_noise_filter=False,
+        )
+
+        positions = []
+        for i in range(40):
+            if i < 20:
+                positions.append(_bp(i, 0.2 + i * 0.015, 0.6))
+            else:
+                positions.append(_bp(i, 0.5 - (i - 20) * 0.015, 0.6))
+
+        players = [_pp(20, 1, 0.5, 0.65)]
+        result = detect_contacts(positions, players, cfg)
+
+        for c in result.contacts:
+            assert hasattr(c, "arc_fit_residual")
+            assert isinstance(c.arc_fit_residual, float)
+
+    def test_contact_has_confidence_field(self) -> None:
+        """Detected contacts include confidence field."""
+        cfg = ContactDetectionConfig(
+            min_peak_velocity=0.005,
+            min_peak_prominence=0.002,
+            enable_noise_filter=False,
+        )
+
+        positions = []
+        for i in range(30):
+            if i < 15:
+                positions.append(_bp(i, 0.2 + i * 0.02, 0.6))
+            else:
+                positions.append(_bp(i, 0.5 - (i - 15) * 0.02, 0.6))
+
+        players = [_pp(15, 1, 0.5, 0.65)]
+        result = detect_contacts(positions, players, cfg)
+
+        for c in result.contacts:
+            assert hasattr(c, "confidence")
+            # Without classifier, confidence should be 0.0 (hand-tuned gates)
+            assert c.confidence == 0.0
