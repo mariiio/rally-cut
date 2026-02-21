@@ -796,49 +796,60 @@ class TestCandidateFeatures:
         """Feature array has correct number of elements."""
         f = CandidateFeatures(
             frame=10, velocity=0.02, direction_change_deg=45.0,
-            arc_fit_residual=0.01, player_distance=0.05, has_player=True,
+            arc_fit_residual=0.01, acceleration=0.005,
+            trajectory_curvature=0.1,
+            player_distance=0.05, has_player=True,
             ball_x=0.5, ball_y=0.6, ball_y_relative_net=0.1,
-            is_at_net=False, frames_since_last=15,
+            is_at_net=False, is_net_crossing=False,
+            frames_since_last=15,
             is_velocity_peak=True, is_inflection=False,
             is_parabolic=False,
         )
         arr = f.to_array()
-        assert arr.shape == (13,)
-        assert len(CandidateFeatures.feature_names()) == 13
+        assert arr.shape == (16,)
+        assert len(CandidateFeatures.feature_names()) == 16
 
     def test_infinite_player_distance_handled(self) -> None:
         """Infinite player distance maps to 1.0."""
         f = CandidateFeatures(
             frame=10, velocity=0.02, direction_change_deg=45.0,
-            arc_fit_residual=0.0, player_distance=float("inf"),
+            arc_fit_residual=0.0, acceleration=0.0,
+            trajectory_curvature=0.0,
+            player_distance=float("inf"),
             has_player=False, ball_x=0.5, ball_y=0.6,
             ball_y_relative_net=0.1, is_at_net=False,
+            is_net_crossing=False,
             frames_since_last=0,
             is_velocity_peak=False, is_inflection=False,
             is_parabolic=False,
         )
         arr = f.to_array()
-        # player_distance is index 3
-        assert arr[3] == 1.0
+        # player_distance is index 5
+        assert arr[5] == 1.0
         assert not np.any(np.isinf(arr))
 
     def test_boolean_features_as_float(self) -> None:
         """Boolean features should be 0.0 or 1.0."""
         f = CandidateFeatures(
             frame=10, velocity=0.02, direction_change_deg=45.0,
-            arc_fit_residual=0.0, player_distance=0.05,
+            arc_fit_residual=0.0, acceleration=0.0,
+            trajectory_curvature=0.0,
+            player_distance=0.05,
             has_player=True, ball_x=0.5, ball_y=0.6,
             ball_y_relative_net=0.1, is_at_net=True,
+            is_net_crossing=True,
             frames_since_last=0,
             is_velocity_peak=True, is_inflection=False,
             is_parabolic=True,
         )
         arr = f.to_array()
-        # has_player=1.0, is_at_net=1.0, is_velocity_peak=1.0, is_parabolic=1.0
-        assert arr[4] == 1.0  # has_player
-        assert arr[8] == 1.0  # is_at_net
-        assert arr[10] == 1.0  # is_velocity_peak
-        assert arr[12] == 1.0  # is_parabolic
+        # has_player=1.0, is_at_net=1.0, is_net_crossing=1.0,
+        # is_velocity_peak=1.0, is_parabolic=1.0
+        assert arr[6] == 1.0   # has_player
+        assert arr[10] == 1.0  # is_at_net
+        assert arr[11] == 1.0  # is_net_crossing
+        assert arr[13] == 1.0  # is_velocity_peak
+        assert arr[15] == 1.0  # is_parabolic
 
 
 class TestContactClassifier:
@@ -851,9 +862,12 @@ class TestContactClassifier:
 
         features = [CandidateFeatures(
             frame=10, velocity=0.02, direction_change_deg=45.0,
-            arc_fit_residual=0.01, player_distance=0.05,
+            arc_fit_residual=0.01, acceleration=0.005,
+            trajectory_curvature=0.1,
+            player_distance=0.05,
             has_player=True, ball_x=0.5, ball_y=0.6,
             ball_y_relative_net=0.1, is_at_net=False,
+            is_net_crossing=False,
             frames_since_last=0,
             is_velocity_peak=True, is_inflection=False,
             is_parabolic=False,
@@ -865,17 +879,18 @@ class TestContactClassifier:
 
     def test_train_and_predict(self) -> None:
         """Trained classifier can make predictions."""
+        n_features = len(CandidateFeatures.feature_names())
         rng = np.random.RandomState(42)
         n_pos = 30
         n_neg = 20
 
         # Positive examples: higher velocity, higher direction change
-        x_pos = rng.randn(n_pos, 13) * 0.1 + 0.5
+        x_pos = rng.randn(n_pos, n_features) * 0.1 + 0.5
         x_pos[:, 0] += 0.5  # Higher velocity
         x_pos[:, 1] += 30.0  # Higher direction change
 
         # Negative examples: lower features
-        x_neg = rng.randn(n_neg, 13) * 0.1 + 0.2
+        x_neg = rng.randn(n_neg, n_features) * 0.1 + 0.2
 
         x_mat = np.vstack([x_pos, x_neg])
         y = np.array([1] * n_pos + [0] * n_neg)
@@ -890,9 +905,12 @@ class TestContactClassifier:
         # Make prediction
         features = [CandidateFeatures(
             frame=10, velocity=0.6, direction_change_deg=60.0,
-            arc_fit_residual=0.02, player_distance=0.05,
+            arc_fit_residual=0.02, acceleration=0.01,
+            trajectory_curvature=0.2,
+            player_distance=0.05,
             has_player=True, ball_x=0.5, ball_y=0.6,
             ball_y_relative_net=0.1, is_at_net=False,
+            is_net_crossing=False,
             frames_since_last=15,
             is_velocity_peak=True, is_inflection=False,
             is_parabolic=False,
@@ -906,23 +924,25 @@ class TestContactClassifier:
 
     def test_feature_importance(self) -> None:
         """Trained classifier reports feature importance."""
+        n_features = len(CandidateFeatures.feature_names())
         rng = np.random.RandomState(42)
-        x_mat = rng.randn(50, 13)
+        x_mat = rng.randn(50, n_features)
         y = (x_mat[:, 0] > 0).astype(int)  # Label depends on first feature
 
         clf = ContactClassifier()
         clf.train(x_mat, y)
 
         importance = clf.feature_importance()
-        assert len(importance) == 13
+        assert len(importance) == n_features
         assert all(v >= 0 for v in importance.values())
         # First feature should be most important
         assert importance["velocity"] > 0
 
     def test_save_load_roundtrip(self, tmp_path: object) -> None:
         """Model can be saved and loaded."""
+        n_features = len(CandidateFeatures.feature_names())
         rng = np.random.RandomState(42)
-        x_mat = rng.randn(50, 13)
+        x_mat = rng.randn(50, n_features)
         y = (x_mat[:, 0] > 0).astype(int)
 
         clf = ContactClassifier(threshold=0.4)
@@ -938,9 +958,12 @@ class TestContactClassifier:
         # Predictions should match
         features = [CandidateFeatures(
             frame=10, velocity=0.5, direction_change_deg=45.0,
-            arc_fit_residual=0.01, player_distance=0.05,
+            arc_fit_residual=0.01, acceleration=0.005,
+            trajectory_curvature=0.1,
+            player_distance=0.05,
             has_player=True, ball_x=0.5, ball_y=0.6,
             ball_y_relative_net=0.1, is_at_net=False,
+            is_net_crossing=False,
             frames_since_last=15,
             is_velocity_peak=True, is_inflection=False,
             is_parabolic=False,

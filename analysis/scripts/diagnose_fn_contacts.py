@@ -30,9 +30,12 @@ from rallycut.tracking.contact_detector import (
     _compute_velocities,
     _filter_noise_spikes,
     _find_inflection_candidates,
+    _find_net_crossing_candidates,
+    _find_parabolic_breakpoints,
     _find_velocity_reversal_candidates,
     _merge_candidates,
     detect_contacts,
+    estimate_net_position,
 )
 from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
 from scripts.eval_action_detection import (
@@ -97,6 +100,7 @@ def compute_local_velocity(
 def get_candidates_for_rally(
     ball_positions: list[BallPos],
     cfg: ContactDetectionConfig,
+    net_y: float | None = None,
 ) -> list[int]:
     """Reproduce the candidate generation step from detect_contacts (no validation)."""
     from scipy.signal import find_peaks as sp_find_peaks
@@ -136,10 +140,10 @@ def get_candidates_for_rally(
         for bp in ball_positions
         if bp.confidence >= _CONFIDENCE_THRESHOLD
     }
+    confident_frames = sorted(ball_by_frame.keys())
 
     inflection_frames: list[int] = []
     if cfg.enable_inflection_detection:
-        confident_frames = sorted(ball_by_frame.keys())
         inflection_frames = _find_inflection_candidates(
             ball_by_frame,
             confident_frames,
@@ -152,11 +156,36 @@ def get_candidates_for_rally(
         velocities, frames, cfg.min_peak_distance_frames
     )
 
+    # Parabolic breakpoints
+    parabolic_frames: list[int] = []
+    if cfg.enable_parabolic_detection:
+        parabolic_frames, _ = _find_parabolic_breakpoints(
+            ball_by_frame,
+            confident_frames,
+            window_frames=cfg.parabolic_window_frames,
+            stride=cfg.parabolic_stride,
+            min_residual=cfg.parabolic_min_residual,
+            min_prominence=cfg.parabolic_min_prominence,
+            min_distance_frames=cfg.min_peak_distance_frames,
+        )
+
+    # Net-crossing candidates
+    estimated_net_y = net_y if net_y is not None else estimate_net_position(ball_positions)
+    net_crossing_frames = _find_net_crossing_candidates(
+        ball_by_frame, confident_frames, estimated_net_y, cfg.min_peak_distance_frames
+    )
+
     inflection_and_reversal = _merge_candidates(
         inflection_frames, reversal_frames, cfg.min_peak_distance_frames
     )
-    candidate_frames = _merge_candidates(
+    traditional = _merge_candidates(
         velocity_peak_frames, inflection_and_reversal, cfg.min_peak_distance_frames
+    )
+    with_parabolic = _merge_candidates(
+        traditional, parabolic_frames, cfg.min_peak_distance_frames
+    )
+    candidate_frames = _merge_candidates(
+        with_parabolic, net_crossing_frames, cfg.min_peak_distance_frames
     )
     return candidate_frames
 
@@ -313,7 +342,7 @@ def main() -> None:
         )
 
         # Get candidates (no validation) for this rally
-        candidate_frames = get_candidates_for_rally(ball_positions, cfg)
+        candidate_frames = get_candidates_for_rally(ball_positions, cfg, net_y=rally.court_split_y)
 
         # Build ball index (confident positions)
         if cfg.enable_noise_filter:

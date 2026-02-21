@@ -41,6 +41,8 @@ class CandidateFeatures:
     velocity: float  # Smoothed ball velocity magnitude
     direction_change_deg: float  # Trajectory direction change in degrees
     arc_fit_residual: float  # Parabolic arc fit residual (high = breaks parabola)
+    acceleration: float  # Velocity change (second derivative) near candidate
+    trajectory_curvature: float  # Curvature of ball path near candidate
     # Player features
     player_distance: float  # Distance to nearest player (inf if no player)
     has_player: bool  # Whether a player is within contact radius
@@ -49,6 +51,7 @@ class CandidateFeatures:
     ball_y: float  # Ball Y position (0-1)
     ball_y_relative_net: float  # Ball Y minus net_y (negative = far side)
     is_at_net: bool  # Whether ball is in net zone
+    is_net_crossing: bool  # Ball crosses net_y within ±5 frames
     # Temporal features
     frames_since_last: int  # Frames since previous candidate (0 if first)
     # Source flags
@@ -63,12 +66,15 @@ class CandidateFeatures:
             self.velocity,
             self.direction_change_deg,
             self.arc_fit_residual,
+            self.acceleration,
+            self.trajectory_curvature,
             player_dist,
             float(self.has_player),
             self.ball_x,
             self.ball_y,
             self.ball_y_relative_net,
             float(self.is_at_net),
+            float(self.is_net_crossing),
             self.frames_since_last,
             float(self.is_velocity_peak),
             float(self.is_inflection),
@@ -81,12 +87,15 @@ class CandidateFeatures:
             "velocity",
             "direction_change_deg",
             "arc_fit_residual",
+            "acceleration",
+            "trajectory_curvature",
             "player_distance",
             "has_player",
             "ball_x",
             "ball_y",
             "ball_y_relative_net",
             "is_at_net",
+            "is_net_crossing",
             "frames_since_last",
             "is_velocity_peak",
             "is_inflection",
@@ -136,6 +145,7 @@ class ContactClassifier:
         x_train: np.ndarray,
         y: np.ndarray,
         rally_ids: np.ndarray | None = None,
+        positive_weight: float = 1.0,
     ) -> dict[str, float]:
         """Train the classifier on labeled data.
 
@@ -143,6 +153,9 @@ class ContactClassifier:
             x_train: Feature matrix (n_samples, n_features).
             y: Binary labels (1=contact, 0=not contact).
             rally_ids: Optional rally IDs for LOO CV reporting.
+            positive_weight: Weight multiplier for positive samples.
+                Values > 1.0 penalize missed contacts more than false positives,
+                improving recall at the cost of precision.
 
         Returns:
             Dictionary of training metrics.
@@ -157,7 +170,8 @@ class ContactClassifier:
             subsample=0.8,
             random_state=42,
         )
-        self.model.fit(x_train, y)
+        sample_weights = np.where(y == 1, positive_weight, 1.0)
+        self.model.fit(x_train, y, sample_weight=sample_weights)
 
         # Training metrics
         train_proba = self.model.predict_proba(x_train)[:, 1]
@@ -188,6 +202,7 @@ class ContactClassifier:
         x_all: np.ndarray,
         y: np.ndarray,
         rally_ids: np.ndarray,
+        positive_weight: float = 1.0,
     ) -> dict[str, Any]:
         """Leave-one-rally-out cross-validation.
 
@@ -195,6 +210,7 @@ class ContactClassifier:
             x_all: Feature matrix.
             y: Binary labels.
             rally_ids: Rally ID per sample (for grouping folds).
+            positive_weight: Weight multiplier for positive samples.
 
         Returns:
             Dictionary with LOO CV metrics.
@@ -223,7 +239,8 @@ class ContactClassifier:
                 subsample=0.8,
                 random_state=42,
             )
-            model.fit(x_all[train_mask], y[train_mask])
+            train_weights = np.where(y[train_mask] == 1, positive_weight, 1.0)
+            model.fit(x_all[train_mask], y[train_mask], sample_weight=train_weights)
             probas = model.predict_proba(x_all[test_mask])[:, 1]
             all_probas[test_mask] = probas
             all_preds[test_mask] = (probas >= self.threshold).astype(float)
