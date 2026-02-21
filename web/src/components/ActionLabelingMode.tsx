@@ -10,7 +10,7 @@ const ACTION_KEYS: Record<string, ActionGroundTruthLabel['action']> = {
   s: 'serve',
   r: 'receive',
   t: 'set',
-  a: 'spike',
+  a: 'attack',
   b: 'block',
   d: 'dig',
 };

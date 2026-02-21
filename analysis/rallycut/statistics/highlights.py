@@ -229,7 +229,7 @@ class HighlightScorer:
         extra_side_changes = max(0, features.num_side_changes - 2)
         score += extra_side_changes * cfg.side_change_bonus_per
 
-        # High velocity (powerful spikes)
+        # High velocity (powerful attacks)
         if features.max_velocity > cfg.high_velocity_threshold:
             score += cfg.high_velocity_bonus
 
@@ -327,10 +327,10 @@ def extract_rally_features(
     # Compute side changes from action sequence
     action_seq = getattr(rally_stats, "action_sequence", [])
     # Count how many times the implied court side changes
-    # (each receive/dig after a spike implies a side change)
+    # (each receive/dig after an attack implies a side change)
     side_changes = 0
     for i in range(1, len(action_seq)):
-        if action_seq[i] in ("receive", "dig") and action_seq[i - 1] in ("spike", "serve"):
+        if action_seq[i] in ("receive", "dig") and action_seq[i - 1] in ("attack", "serve"):
             side_changes += 1
     features.num_side_changes = side_changes
 

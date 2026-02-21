@@ -1,7 +1,7 @@
 """Rule-based action classification for beach volleyball.
 
 Classifies detected ball contacts into volleyball actions
-(serve/receive/set/spike/block) using the contact sequence, court side,
+(serve/receive/set/attack/block) using the contact sequence, court side,
 ball direction, and beach volleyball rules.
 
 Beach volleyball rules that constrain classification:
@@ -34,7 +34,7 @@ class ActionType(str, Enum):
     SERVE = "serve"
     RECEIVE = "receive"
     SET = "set"
-    SPIKE = "spike"
+    ATTACK = "attack"
     BLOCK = "block"
     DIG = "dig"  # Defensive save after attack (similar to receive)
     UNKNOWN = "unknown"
@@ -138,7 +138,7 @@ def _ball_crossed_net(
     Detects any transient crossing: if the ball starts on one side and
     at any point spends ≥min_frames_per_side consecutive frames on the
     other side, a crossing occurred. This handles cases where the ball
-    crosses the net and immediately bounces back (e.g., spike → dig).
+    crosses the net and immediately bounces back (e.g., attack → dig).
 
     Args:
         ball_positions: Sorted list of confident ball positions.
@@ -250,9 +250,9 @@ class ActionClassifier:
     1. SERVE — first contact, from behind baseline
     2. RECEIVE — first contact on receiving side
     3. SET — second contact on same side
-    4. SPIKE — third contact on same side (or ball directed to other court)
+    4. ATTACK — third contact on same side (or ball directed to other court)
     5. After ball crosses net, count resets:
-       - DIG (1st contact) → SET (2nd) → SPIKE (3rd)
+       - DIG (1st contact) → SET (2nd) → ATTACK (3rd)
     6. BLOCK — contact at net immediately after opponent's attack
 
     The classifier uses a state machine that tracks:
@@ -308,7 +308,7 @@ class ActionClassifier:
             # Check for block (must be at net, immediately after opponent's attack)
             if (
                 contact.is_at_net
-                and last_action_type == ActionType.SPIKE
+                and last_action_type == ActionType.ATTACK
                 and i > 0
                 and (contact.frame - contacts[i - 1].frame) <= self.config.block_max_frame_gap
                 and contact.court_side != contacts[i - 1].court_side
@@ -378,7 +378,7 @@ class ActionClassifier:
             # Unconditional safety valve: beach volleyball allows max 3 touches
             # per side. If counter exceeds this, a net crossing was missed
             # (e.g., ball trajectory stays visually below net_y due to camera
-            # angle). Reset to 1 to resume the dig→set→spike cycle.
+            # angle). Reset to 1 to resume the dig→set→attack cycle.
             if contact_count_on_side > 3 and receive_detected:
                 contact_count_on_side = 1
 
@@ -456,7 +456,7 @@ class ActionClassifier:
                 confidence = self.config.high_confidence
 
             elif contact_count_on_side >= 3:
-                action_type = ActionType.SPIKE
+                action_type = ActionType.ATTACK
                 confidence = self.config.high_confidence
 
             # Modulate action confidence with contact classifier confidence.
@@ -516,7 +516,7 @@ class ActionClassifier:
         # Pass 1: Arc-based serve detection — check only the first 2 contacts
         # (serve is always at the start of the rally). A serve initiates a
         # trajectory that crosses the net. Limit to first 2 to avoid false
-        # positives from mid-rally spikes that also cross the net.
+        # positives from mid-rally attacks that also cross the net.
         if ball_positions and len(contacts) >= 2:
             max_arc_candidates = min(2, len(contacts))
             for i in range(max_arc_candidates):

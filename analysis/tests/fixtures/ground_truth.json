@@ -88,7 +88,7 @@
           },
           {
             "time": 17.1,
-            "type": "spike"
+            "type": "attack"
           }
         ]
       },
@@ -135,7 +135,7 @@
           },
           {
             "time": 44.95,
-            "type": "spike"
+            "type": "attack"
           }
         ]
       },
@@ -340,7 +340,7 @@
           },
           {
             "time": 16.9,
-            "type": "spike"
+            "type": "attack"
           },
           {
             "time": 19.45,
@@ -371,7 +371,7 @@
           },
           {
             "time": 45.6,
-            "type": "spike"
+            "type": "attack"
           },
           {
             "time": 46.18,
@@ -421,7 +421,7 @@
           },
           {
             "time": 101.8,
-            "type": "spike"
+            "type": "attack"
           },
           {
             "time": 102.4,

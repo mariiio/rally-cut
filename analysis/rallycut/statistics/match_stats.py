@@ -31,7 +31,7 @@ class PlayerStats:
     serves: int = 0
     receives: int = 0
     sets: int = 0
-    spikes: int = 0
+    attacks: int = 0
     blocks: int = 0
     digs: int = 0
     # Movement
@@ -49,7 +49,7 @@ class PlayerStats:
 
     @property
     def total_actions(self) -> int:
-        return self.serves + self.receives + self.sets + self.spikes + self.blocks + self.digs
+        return self.serves + self.receives + self.sets + self.attacks + self.blocks + self.digs
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -57,7 +57,7 @@ class PlayerStats:
             "serves": self.serves,
             "receives": self.receives,
             "sets": self.sets,
-            "spikes": self.spikes,
+            "attacks": self.attacks,
             "blocks": self.blocks,
             "digs": self.digs,
             "totalActions": self.total_actions,
@@ -298,8 +298,8 @@ def compute_match_stats(
                     player.receives += 1
                 elif action.action_type == ActionType.SET:
                     player.sets += 1
-                elif action.action_type == ActionType.SPIKE:
-                    player.spikes += 1
+                elif action.action_type == ActionType.ATTACK:
+                    player.attacks += 1
                 elif action.action_type == ActionType.BLOCK:
                     player.blocks += 1
                 elif action.action_type == ActionType.DIG:

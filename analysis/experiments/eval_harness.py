@@ -662,13 +662,13 @@ class EvalHarness:
         Args:
             predictions: List of {"frame": int, "action": str, "player_id": int}.
             ground_truth: List of {"frame": int, "action": str, "player_id": int}.
-            action_classes: Action classes to evaluate. Default: serve, receive, set, spike, block.
+            action_classes: Action classes to evaluate. Default: serve, receive, set, attack, block.
 
         Returns:
             ActionEvalResult with per-class and aggregate metrics.
         """
         if action_classes is None:
-            action_classes = ["serve", "receive", "set", "spike", "block"]
+            action_classes = ["serve", "receive", "set", "attack", "block"]
 
         # Match predictions to GT by frame proximity (±5 frames)
         matched_pairs: list[tuple[str, str]] = []  # (gt_action, pred_action)

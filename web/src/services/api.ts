@@ -1800,7 +1800,7 @@ export interface ContactsData {
 // Action ground truth label
 export interface ActionGroundTruthLabel {
   frame: number;
-  action: 'serve' | 'receive' | 'set' | 'spike' | 'block' | 'dig';
+  action: 'serve' | 'receive' | 'set' | 'attack' | 'block' | 'dig';
   playerTrackId: number;
   ballX?: number;
   ballY?: number;
@@ -1808,7 +1808,7 @@ export interface ActionGroundTruthLabel {
 
 // Action classification from contact sequence
 export interface ActionInfo {
-  action: string;  // "serve", "receive", "set", "spike", "block", "dig", "unknown"
+  action: string;  // "serve", "receive", "set", "attack", "block", "dig", "unknown"
   frame: number;
   ballX: number;
   ballY: number;

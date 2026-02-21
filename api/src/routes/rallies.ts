@@ -157,7 +157,7 @@ router.post(
 // Action Ground Truth
 const actionLabelSchema = z.object({
   frame: z.number().int().min(0),
-  action: z.enum(["serve", "receive", "set", "spike", "block", "dig"]),
+  action: z.enum(["serve", "receive", "set", "attack", "block", "dig"]),
   playerTrackId: z.number().int(),
   ballX: z.number().min(0).max(1).optional(),
   ballY: z.number().min(0).max(1).optional(),

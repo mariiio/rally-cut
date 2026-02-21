@@ -94,7 +94,7 @@ class TestActionScoring:
         assert extended > normal
 
     def test_high_velocity_bonus(self) -> None:
-        """Rally with high velocity spike gets bonus."""
+        """Rally with high velocity attack gets bonus."""
         scorer = HighlightScorer()
         slow = scorer._score_actions(_features(max_velocity=0.01))
         fast = scorer._score_actions(_features(max_velocity=0.06))
@@ -282,7 +282,7 @@ class TestExtractRallyFeatures:
             has_block = True
             has_extended_exchange = False
             max_rally_velocity = 0.04
-            action_sequence = ["serve", "receive", "set", "spike", "dig", "spike"]
+            action_sequence = ["serve", "receive", "set", "attack", "dig", "attack"]
 
         features = extract_rally_features(
             MockRallyStats(),
@@ -308,10 +308,10 @@ class TestExtractRallyFeatures:
             has_block = False
             has_extended_exchange = False
             max_rally_velocity = 0.03
-            action_sequence = ["serve", "receive", "set", "spike", "dig", "set", "spike"]
+            action_sequence = ["serve", "receive", "set", "attack", "dig", "set", "attack"]
 
         features = extract_rally_features(MockStats())
-        # receive after serve = 1, dig after spike = 1
+        # receive after serve = 1, dig after attack = 1
         assert features.num_side_changes == 2
 
     def test_audio_features(self) -> None:

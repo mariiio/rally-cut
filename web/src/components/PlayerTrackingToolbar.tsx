@@ -25,7 +25,7 @@ const ACTION_COLORS: Record<string, string> = {
   serve: '#4CAF50',
   receive: '#2196F3',
   set: '#FFC107',
-  spike: '#f44336',
+  attack: '#f44336',
   block: '#9C27B0',
   dig: '#FF9800',
   unknown: '#9e9e9e',

@@ -193,7 +193,7 @@ class VolleyballPhase(Enum):
     SERVE = "serve"      # Initial hit from baseline
     RECEIVE = "receive"  # First contact after serve (pass/dig)
     SET = "set"          # Second contact (setter touch)
-    ATTACK = "attack"    # Third contact (spike/hit)
+    ATTACK = "attack"    # Third contact (attack/hit)
     DIG = "dig"          # Defensive save after attack
     UNKNOWN = "unknown"
 

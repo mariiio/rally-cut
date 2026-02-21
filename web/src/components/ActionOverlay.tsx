@@ -10,13 +10,13 @@ const ACTION_COLORS: Record<string, string> = {
   serve: '#4CAF50',     // Green
   receive: '#2196F3',   // Blue
   set: '#FFC107',       // Amber
-  spike: '#f44336',     // Red
+  attack: '#f44336',    // Red
   block: '#9C27B0',     // Purple
   dig: '#FF9800',       // Orange
   unknown: '#9e9e9e',   // Grey
 };
 
-const ACTION_TYPES = ['serve', 'receive', 'set', 'spike', 'block', 'dig'] as const;
+const ACTION_TYPES = ['serve', 'receive', 'set', 'attack', 'block', 'dig'] as const;
 
 interface ActionOverlayProps {
   actions: ActionsData;
