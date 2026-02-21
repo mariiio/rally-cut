@@ -1,10 +1,19 @@
 # RallyCut
 
-Volleyball video analysis and editing platform. Automatically detects rallies and removes dead time using machine learning.
+RallyCut helps volleyball players and coaches get more out of their match videos — without spending hours reviewing footage.
+
+Upload a match recording, and RallyCut does the rest. It automatically finds every rally, identifies who's on court, tracks the ball, and breaks down what happened — serves, sets, spikes, digs — point by point.
+
+- **Skip the boring parts** — dead time between rallies is cut automatically
+- **Pull out highlights** — export specific rallies or standout plays as clips to share
+- **See match stats** — get a score breakdown and action counts without manual tallying
+- **Review plays visually** — watch with player and ball tracking overlays to study positioning
+
+It turns a raw camera recording into organized, actionable match data — something that normally takes a dedicated analyst or hours of manual work.
 
 ## Overview
 
-RallyCut is a monorepo containing three projects:
+RallyCut is a monorepo containing four projects:
 
 | Project | Description | Stack |
 |---------|-------------|-------|
@@ -15,12 +24,14 @@ RallyCut is a monorepo containing three projects:
 
 ## Features
 
-- **Rally Detection**: ML classifier identifies active play vs dead time with 95%+ accuracy
+- **Rally Detection**: ML classifier identifies active play vs dead time
+- **Ball Tracking**: Frame-by-frame ball position tracking with trained neural networks
+- **Player Tracking**: Identifies and follows players throughout each rally
+- **Contact Detection**: Recognizes serves, receives, sets, spikes, and digs
+- **Match Statistics**: Automated scoring, action breakdowns, and per-rally analysis
 - **Timeline Editor**: Drag-and-drop interface for adjusting rally boundaries
 - **Highlights**: Create custom highlight reels from selected rallies
 - **Video Export**: Export edited videos with fade transitions
-- **Cloud Storage**: S3 for videos, CloudFront for streaming
-- **GPU Processing**: Modal cloud for ML inference
 
 ## Quick Start
 
