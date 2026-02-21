@@ -136,8 +136,10 @@ def _ball_crossed_net(
 ) -> bool | None:
     """Check if ball Y crossed net_y between two frames.
 
-    Requires the ball to be on one side for min_frames_per_side frames,
-    then the other side for min_frames_per_side frames, to avoid noise.
+    Detects any transient crossing: if the ball starts on one side and
+    at any point spends ≥min_frames_per_side consecutive frames on the
+    other side, a crossing occurred. This handles cases where the ball
+    crosses the net and immediately bounces back (e.g., spike → dig).
 
     Args:
         ball_positions: Sorted list of confident ball positions.
@@ -157,42 +159,38 @@ def _ball_crossed_net(
     if len(positions_in_range) < min_frames_per_side * 2:
         return None
 
-    # Count consecutive frames on each side from start and end
-    near_from_start = 0
-    far_from_start = 0
+    # Determine starting side from first min_frames consecutive frames
+    start_near = 0
+    start_far = 0
     for bp in positions_in_range:
         if bp.y >= net_y:
-            if far_from_start == 0:
-                near_from_start += 1
+            if start_far == 0:
+                start_near += 1
             else:
                 break
         else:
-            if near_from_start == 0:
-                far_from_start += 1
+            if start_near == 0:
+                start_far += 1
             else:
                 break
 
-    near_from_end = 0
-    far_from_end = 0
-    for bp in reversed(positions_in_range):
-        if bp.y >= net_y:
-            if far_from_end == 0:
-                near_from_end += 1
-            else:
-                break
+    if start_near < min_frames_per_side and start_far < min_frames_per_side:
+        return None  # Can't determine starting side (noisy data)
+
+    starting_is_near = start_near >= min_frames_per_side
+
+    # Scan for any contiguous block on the opposite side
+    consecutive_opposite = 0
+    for bp in positions_in_range:
+        is_near = bp.y >= net_y
+        if is_near != starting_is_near:
+            consecutive_opposite += 1
+            if consecutive_opposite >= min_frames_per_side:
+                return True
         else:
-            if near_from_end == 0:
-                far_from_end += 1
-            else:
-                break
+            consecutive_opposite = 0
 
-    # Crossing: started on one side, ended on the other
-    started_near = near_from_start >= min_frames_per_side
-    started_far = far_from_start >= min_frames_per_side
-    ended_near = near_from_end >= min_frames_per_side
-    ended_far = far_from_end >= min_frames_per_side
-
-    return (started_near and ended_far) or (started_far and ended_near)
+    return False
 
 
 def _ball_moving_toward_net(
@@ -376,6 +374,13 @@ class ActionClassifier:
                     contact_count_on_side = 0
 
             contact_count_on_side += 1
+
+            # Unconditional safety valve: beach volleyball allows max 3 touches
+            # per side. If counter exceeds this, a net crossing was missed
+            # (e.g., ball trajectory stays visually below net_y due to camera
+            # angle). Reset to 1 to resume the dig→set→spike cycle.
+            if contact_count_on_side > 3 and receive_detected:
+                contact_count_on_side = 1
 
             # Rule-based classification
             if not serve_detected:
