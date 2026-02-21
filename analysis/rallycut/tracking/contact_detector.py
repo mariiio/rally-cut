@@ -788,6 +788,7 @@ def detect_contacts(
     velocity_lookup = dict(zip(frames, smoothed))
 
     contacts: list[Contact] = []
+    prev_candidate_frame = 0  # Track ALL candidates, not just accepted ones
 
     for frame in candidate_frames:
         # Skip warmup period (ball tracking produces false detections early)
@@ -841,10 +842,12 @@ def detect_contacts(
         has_direction_change = direction_change >= cfg.min_direction_change_deg
         arc_residual = residual_by_frame.get(frame, 0.0)
 
-        # Compute frames since last accepted candidate
+        # Compute frames since last candidate (accepted or rejected).
+        # Must match training script semantics (prev_frame tracks all candidates).
         frames_since_last = (
-            frame - contacts[-1].frame if contacts else 0
+            frame - prev_candidate_frame if prev_candidate_frame > 0 else 0
         )
+        prev_candidate_frame = frame
 
         # Determine which source detected this candidate
         is_vel_peak = frame in velocity_peak_set
