@@ -7,9 +7,8 @@ const BALL_COLOR = '#FFC107'; // Amber - consistent trail color
 
 interface BallTrackOverlayProps {
   positions: BallPosition[];
-  frameCount: number;
+  fps: number;
   rallyStartTime: number;
-  rallyEndTime: number;
   videoRef: RefObject<HTMLVideoElement | null>;
 }
 
@@ -18,9 +17,8 @@ const MAX_TRAIL_DOTS = 15; // Maximum dots to render
 
 export function BallTrackOverlay({
   positions,
-  frameCount,
+  fps,
   rallyStartTime,
-  rallyEndTime,
   videoRef,
 }: BallTrackOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -29,18 +27,15 @@ export function BallTrackOverlay({
 
   // Pre-calculate the absolute time for each position (only when data changes)
   const positionsWithTime = useMemo(() => {
-    // frameNumber is SEGMENT-RELATIVE (0 to frameCount-1) because tracking
-    // runs on an extracted video segment, not the full video.
-    // Map segment frame to absolute video time using rally boundaries.
-    const rallyDuration = rallyEndTime - rallyStartTime;
-    const maxFrame = Math.max(1, frameCount - 1);
-
+    // frameNumber is SEGMENT-RELATIVE (0-based) because tracking runs on an
+    // extracted video segment. Convert to absolute video time using fps directly
+    // (same approach as PlayerOverlay) to avoid timing drift when segment frame
+    // count doesn't exactly match fps * duration.
     return positions.map((p) => ({
       ...p,
-      // Map segment frame (0 to maxFrame) to video time (rallyStart to rallyEnd)
-      absoluteTime: rallyStartTime + (p.frameNumber / maxFrame) * rallyDuration,
+      absoluteTime: rallyStartTime + p.frameNumber / fps,
     }));
-  }, [positions, frameCount, rallyStartTime, rallyEndTime]);
+  }, [positions, fps, rallyStartTime]);
 
   // Create dot elements once
   useEffect(() => {
