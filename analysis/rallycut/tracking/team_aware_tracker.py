@@ -18,7 +18,7 @@ Safety layers:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -39,181 +39,6 @@ class TeamAwareConfig:
     min_team_separation: float = 0.08  # Minimum median Y gap between teams
     min_clearance_from_split: float = 0.05  # Each team's median must be >= this from split_y
 
-    # Net interaction freeze (Tier 1: preventive identity preservation)
-    # Disabled by default — single-frame and short overlaps during normal net
-    # play can cause track fragmentation. Needs more work on duration gating
-    # and scoring before enabling. See retrack_labeled_rallies.py results.
-    enable_freeze: bool = False
-    freeze_proximity: float = 0.08         # Center distance < this triggers freeze (normalized)
-    freeze_net_band: float = 0.10          # Both tracks must be within this of split_y
-    freeze_penalty: float = 1e6            # Hard barrier in cost matrix
-    freeze_cooldown_frames: int = 10       # Keep freeze N frames after overlap ends
-    freeze_min_duration: int = 3           # Min consecutive overlap frames before penalty fires
-    freeze_min_team_separation: float = 0.05   # Relaxed vs 0.08 for soft penalty
-    freeze_min_clearance: float = 0.03         # Relaxed vs 0.05 for soft penalty
-
-
-@dataclass
-class ActiveFreeze:
-    """A currently active identity freeze between two cross-team tracks."""
-
-    track_a: int          # near team track
-    track_b: int          # far team track
-    start_frame: int
-    last_overlap_frame: int
-
-
-class NetInteractionDetector:
-    """Detects overlapping cross-team pairs near the net and manages freeze lifecycle.
-
-    Operates in image space on per-frame bounding boxes. When a cross-team pair
-    overlaps near the net, their identities are frozen (hard barrier in cost matrix)
-    to prevent BoT-SORT from swapping them during the unobservable window.
-    """
-
-    def __init__(
-        self,
-        config: TeamAwareConfig,
-        court_split_y: float,
-    ) -> None:
-        self.config = config
-        self.court_split_y = court_split_y
-        self._active_freezes: dict[tuple[int, int], ActiveFreeze] = {}
-        self._completed_freezes: list[ActiveFreeze] = []
-
-    def update(
-        self,
-        positions: list[Any],
-        team_assignments: dict[int, int],
-        frame_num: int,
-    ) -> None:
-        """Detect overlapping cross-team pairs near net, manage freeze lifecycle.
-
-        Args:
-            positions: List of objects with track_id, x, y, width, height attrs.
-            team_assignments: track_id -> team (0=near, 1=far).
-            frame_num: Current frame number.
-        """
-        cfg = self.config
-
-        # Build position lookup for this frame
-        pos_by_id: dict[int, Any] = {}
-        for p in positions:
-            if p.track_id >= 0:
-                pos_by_id[p.track_id] = p
-
-        # Find cross-team pairs that overlap near the net
-        overlapping_pairs: set[tuple[int, int]] = set()
-        near_tracks = [
-            tid for tid, team in team_assignments.items()
-            if team == 0 and tid in pos_by_id
-        ]
-        far_tracks = [
-            tid for tid, team in team_assignments.items()
-            if team == 1 and tid in pos_by_id
-        ]
-
-        for near_tid in near_tracks:
-            p_near = pos_by_id[near_tid]
-            for far_tid in far_tracks:
-                p_far = pos_by_id[far_tid]
-
-                # Check if both are near the net
-                near_at_net = abs(p_near.y - self.court_split_y) < cfg.freeze_net_band
-                far_at_net = abs(p_far.y - self.court_split_y) < cfg.freeze_net_band
-                if not (near_at_net and far_at_net):
-                    continue
-
-                # Check overlap: IoU > 0 or center distance < proximity threshold
-                if self._check_overlap(p_near, p_far):
-                    pair_key = (min(near_tid, far_tid), max(near_tid, far_tid))
-                    overlapping_pairs.add(pair_key)
-
-        # Update active freezes
-        expired_keys: list[tuple[int, int]] = []
-        for key, freeze in self._active_freezes.items():
-            if key in overlapping_pairs:
-                freeze.last_overlap_frame = frame_num
-            elif frame_num - freeze.last_overlap_frame > cfg.freeze_cooldown_frames:
-                expired_keys.append(key)
-
-        # Expire old freezes
-        for key in expired_keys:
-            freeze = self._active_freezes.pop(key)
-            self._completed_freezes.append(freeze)
-            logger.debug(
-                "Freeze expired: %d<->%d (f%d-f%d, cooldown at f%d)",
-                freeze.track_a, freeze.track_b,
-                freeze.start_frame, freeze.last_overlap_frame, frame_num,
-            )
-
-        # Activate new freezes
-        for pair_key in overlapping_pairs:
-            if pair_key not in self._active_freezes:
-                # Determine which is near/far
-                tid_a, tid_b = pair_key
-                team_a = team_assignments.get(tid_a, -1)
-                near_tid = tid_a if team_a == 0 else tid_b
-                far_tid = tid_b if team_a == 0 else tid_a
-
-                self._active_freezes[pair_key] = ActiveFreeze(
-                    track_a=near_tid,
-                    track_b=far_tid,
-                    start_frame=frame_num,
-                    last_overlap_frame=frame_num,
-                )
-                logger.debug(
-                    "Freeze activated: %d<->%d at frame %d",
-                    near_tid, far_tid, frame_num,
-                )
-
-    def _check_overlap(self, p_a: Any, p_b: Any) -> bool:
-        """Check if two positions overlap (IoU > 0 or centers close)."""
-        # Center distance check (fast)
-        dx = p_a.x - p_b.x
-        dy = p_a.y - p_b.y
-        dist = (dx * dx + dy * dy) ** 0.5
-        if dist < self.config.freeze_proximity:
-            return True
-
-        # IoU check
-        a_x1 = p_a.x - p_a.width / 2
-        a_y1 = p_a.y - p_a.height / 2
-        a_x2 = p_a.x + p_a.width / 2
-        a_y2 = p_a.y + p_a.height / 2
-
-        b_x1 = p_b.x - p_b.width / 2
-        b_y1 = p_b.y - p_b.height / 2
-        b_x2 = p_b.x + p_b.width / 2
-        b_y2 = p_b.y + p_b.height / 2
-
-        inter_x1 = max(a_x1, b_x1)
-        inter_y1 = max(a_y1, b_y1)
-        inter_x2 = min(a_x2, b_x2)
-        inter_y2 = min(a_y2, b_y2)
-
-        if inter_x1 < inter_x2 and inter_y1 < inter_y2:
-            return True  # Any overlap
-
-        return False
-
-    def get_frozen_pairs(self) -> set[tuple[int, int]]:
-        """Return currently frozen pairs that have met the minimum duration gate.
-
-        Only returns pairs that have been overlapping for >= freeze_min_duration
-        frames. This prevents single-frame bbox overlaps from injecting 1e6
-        cost spikes into BoT-SORT, which would fragment tracks and create IDsw.
-        """
-        min_dur = self.config.freeze_min_duration
-        return {
-            (f.track_a, f.track_b)
-            for f in self._active_freezes.values()
-            if (f.last_overlap_frame - f.start_frame) >= min_dur - 1
-        }
-
-    def get_all_frozen_interactions(self) -> list[ActiveFreeze]:
-        """Return all interactions that were frozen (completed + active)."""
-        return self._completed_freezes + list(self._active_freezes.values())
 
 
 class TeamSideTracker:
@@ -240,10 +65,6 @@ class TeamSideTracker:
         self._bootstrapped = False
         self._active = False  # Set to True after bootstrap + trust gate passes
 
-        # Net interaction freeze detector (created after bootstrap succeeds)
-        self._interaction_detector: NetInteractionDetector | None = None
-        self._freeze_active = False  # Freeze can activate with weaker gates
-
     @property
     def is_active(self) -> bool:
         """Whether the penalty is currently being applied."""
@@ -253,11 +74,6 @@ class TeamSideTracker:
     def team_assignments(self) -> dict[int, int]:
         """Current team assignments (track_id -> 0=near, 1=far)."""
         return dict(self._team)
-
-    @property
-    def interaction_detector(self) -> NetInteractionDetector | None:
-        """Access the net interaction detector (available after bootstrap)."""
-        return self._interaction_detector
 
     def update(self, positions: list[Any]) -> None:
         """Feed frame positions to accumulate Y statistics.
@@ -306,41 +122,18 @@ class TeamSideTracker:
         for tid, ys in qualified.items():
             self._assign_track(tid)
 
-        # Check team separation trust gate (strict for soft penalty)
-        strict_pass = self._check_separation()
-
-        # Check relaxed gates for freeze only
-        relaxed_pass = False
-        if not strict_pass and self.config.enable_freeze:
-            relaxed_pass = self._check_separation(
-                min_separation=self.config.freeze_min_team_separation,
-                min_clearance=self.config.freeze_min_clearance,
-            )
-
-        if not strict_pass and not relaxed_pass:
+        # Check team separation trust gate
+        if not self._check_separation():
             logger.debug("Team-aware: insufficient team separation, staying inactive")
             return
 
-        if strict_pass:
-            self._active = True
-
-        # Create freeze detector if enabled (uses relaxed or strict gates)
-        if self.config.enable_freeze and (strict_pass or relaxed_pass):
-            self._interaction_detector = NetInteractionDetector(
-                self.config, self.court_split_y
-            )
-            self._freeze_active = True
-            logger.info(
-                "Net interaction freeze enabled (strict_penalty=%s)",
-                strict_pass,
-            )
+        self._active = True
 
         near = [t for t, team in self._team.items() if team == 0]
         far = [t for t, team in self._team.items() if team == 1]
         logger.info(
-            "Team-aware tracking active: split_y=%.3f, near=%s, far=%s, "
-            "soft_penalty=%s, freeze=%s",
-            self.court_split_y, near, far, self._active, self._freeze_active,
+            "Team-aware tracking active: split_y=%.3f, near=%s, far=%s",
+            self.court_split_y, near, far,
         )
 
     def _assign_track(self, track_id: int) -> None:
@@ -427,8 +220,7 @@ class TeamSideTracker:
     ) -> np.ndarray:
         """Compute team-crossing penalty matrix for BoT-SORT cost fusion.
 
-        Combines the soft ramp penalty (for general team-side enforcement)
-        with the hard freeze penalty (for specific overlapping pairs at net).
+        Applies a soft ramp penalty for general team-side enforcement.
 
         Args:
             tracks: List of STrack objects from BoT-SORT.
@@ -469,62 +261,7 @@ class TeamSideTracker:
                         self.config.max_penalty,
                     )
 
-        # Hard freeze penalty overlay (uses relaxed gates, targets specific pairs)
-        if self._interaction_detector is not None:
-            frozen_pairs = self._interaction_detector.get_frozen_pairs()
-            if frozen_pairs:
-                self._apply_freeze_penalty(
-                    penalty, tracks, detections, img_height, frozen_pairs
-                )
-
         return penalty
-
-    def _apply_freeze_penalty(
-        self,
-        penalty: np.ndarray,
-        tracks: list[Any],
-        detections: list[Any],
-        img_height: int,
-        frozen_pairs: set[tuple[int, int]],
-    ) -> None:
-        """Overlay hard freeze penalty for active net interaction pairs.
-
-        For frozen pairs, penalizes associations that would swap identities:
-        if track A (near team) is frozen with track B (far team), penalize
-        A being matched to detections on B's side and vice versa.
-        """
-        freeze_pen = self.config.freeze_penalty
-
-        for i, track in enumerate(tracks):
-            tid = track.track_id
-            # Check if this track is in any frozen pair
-            partner_tid = None
-            for fa, fb in frozen_pairs:
-                if tid == fa:
-                    partner_tid = fb
-                    break
-                elif tid == fb:
-                    partner_tid = fa
-                    break
-
-            if partner_tid is None:
-                continue
-
-            partner_team = self._team.get(partner_tid, -1)
-            if partner_team < 0:
-                continue
-
-            for j, det in enumerate(detections):
-                tlwh = det.tlwh
-                det_cy = (tlwh[1] + tlwh[3] / 2) / img_height
-
-                # Penalize this track matching detections on the partner's side
-                if partner_team == 0 and det_cy > self.court_split_y:
-                    # Partner is near team → detection on near side is partner's
-                    penalty[i, j] = max(penalty[i, j], freeze_pen)
-                elif partner_team == 1 and det_cy < self.court_split_y:
-                    # Partner is far team → detection on far side is partner's
-                    penalty[i, j] = max(penalty[i, j], freeze_pen)
 
 
 def get_court_split_y_from_calibration(
