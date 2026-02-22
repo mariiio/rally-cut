@@ -20,9 +20,8 @@ const ACTION_TYPES = ['serve', 'receive', 'set', 'attack', 'block', 'dig'] as co
 
 interface ActionOverlayProps {
   actions: ActionsData;
-  frameCount: number;
+  fps: number;
   rallyStartTime: number;
-  rallyEndTime: number;
   videoRef: RefObject<HTMLVideoElement | null>;
   groundTruthLabels?: ActionGroundTruthLabel[];
   isLabelingMode?: boolean;
@@ -37,9 +36,8 @@ const LABEL_FADE_IN = 0.15;
 
 export function ActionOverlay({
   actions,
-  frameCount,
+  fps,
   rallyStartTime,
-  rallyEndTime,
   videoRef,
   groundTruthLabels,
   isLabelingMode,
@@ -56,26 +54,21 @@ export function ActionOverlay({
 
   // Pre-calculate absolute time for each auto-detected action
   const actionsWithTime = useMemo(() => {
-    const rallyDuration = rallyEndTime - rallyStartTime;
-    const maxFrame = Math.max(1, frameCount - 1);
-
     return actions.actions.map((a) => ({
       ...a,
-      absoluteTime: rallyStartTime + (a.frame / maxFrame) * rallyDuration,
+      absoluteTime: rallyStartTime + a.frame / fps,
     }));
-  }, [actions, frameCount, rallyStartTime, rallyEndTime]);
+  }, [actions, fps, rallyStartTime]);
 
   // Pre-calculate absolute time for GT labels
   const gtWithTime = useMemo(() => {
     if (!groundTruthLabels?.length) return [];
-    const rallyDuration = rallyEndTime - rallyStartTime;
-    const maxFrame = Math.max(1, frameCount - 1);
 
     return groundTruthLabels.map((l) => ({
       ...l,
-      absoluteTime: rallyStartTime + (l.frame / maxFrame) * rallyDuration,
+      absoluteTime: rallyStartTime + l.frame / fps,
     }));
-  }, [groundTruthLabels, frameCount, rallyStartTime, rallyEndTime]);
+  }, [groundTruthLabels, fps, rallyStartTime]);
 
   const handleGtLabelClick = useCallback((e: MouseEvent) => {
     if (!isLabelingMode) return;
