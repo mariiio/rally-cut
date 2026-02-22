@@ -29,7 +29,6 @@ if TYPE_CHECKING:
     from rallycut.tracking.color_repair import ColorHistogramStore
     from rallycut.tracking.contact_detector import ContactSequence
     from rallycut.tracking.identity_anchor import ServeAnchor
-    from rallycut.tracking.team_aware_tracker import ActiveFreeze
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +139,6 @@ class CourtIdentityResolver:
         contact_sequence: ContactSequence | None = None,
         serve_anchor: ServeAnchor | None = None,
         color_store: ColorHistogramStore | None = None,
-        frozen_interactions: list[ActiveFreeze] | None = None,
     ) -> tuple[list[PlayerPosition], list[SwapDecision]]:
         """Run court-plane identity resolution.
 
@@ -150,8 +148,6 @@ class CourtIdentityResolver:
             contact_sequence: Optional contact sequence for grammar scoring.
             serve_anchor: Optional serve anchor for identity anchoring.
             color_store: Optional color histogram store for appearance scoring.
-            frozen_interactions: Optional list of freeze periods from in-tracker
-                detector. Used to add no-swap bonus for freeze-protected interactions.
 
         Returns:
             Tuple of (positions, list of swap decisions made).
@@ -204,7 +200,6 @@ class CourtIdentityResolver:
                 contact_sequence=contact_sequence,
                 serve_anchor=serve_anchor,
                 color_store=color_store,
-                frozen_interactions=frozen_interactions,
             )
             decisions.append(decision)
 
@@ -513,7 +508,6 @@ class CourtIdentityResolver:
         contact_sequence: ContactSequence | None = None,
         serve_anchor: ServeAnchor | None = None,
         color_store: ColorHistogramStore | None = None,
-        frozen_interactions: list[ActiveFreeze] | None = None,
     ) -> SwapDecision:
         """Score swap vs no-swap hypotheses for one interaction."""
         cfg = self.config
@@ -606,19 +600,6 @@ class CourtIdentityResolver:
             + weight_grammar * swap.grammar_score
             + weight_serve * swap.serve_anchor_score
         )
-
-        # Freeze metadata bonus: if the in-tracker freeze was active for this
-        # interaction, identities were preserved during overlap → small no-swap bonus
-        if frozen_interactions:
-            freeze_bonus = self._compute_freeze_bonus(
-                interaction, frozen_interactions
-            )
-            if freeze_bonus > 0:
-                no_swap_total += freeze_bonus
-                logger.debug(
-                    f"  Freeze bonus +{freeze_bonus:.2f} for "
-                    f"{track_a}<->{track_b}"
-                )
 
         should_swap = swap_total > no_swap_total + cfg.confidence_margin
         confident = abs(swap_total - no_swap_total) >= cfg.confidence_margin
@@ -1004,33 +985,6 @@ class CourtIdentityResolver:
         return no_swap_score, swap_score
 
     @staticmethod
-    def _compute_freeze_bonus(
-        interaction: NetInteraction,
-        frozen_interactions: list[ActiveFreeze],
-        bonus: float = 0.10,
-    ) -> float:
-        """Check if the in-tracker freeze was active for this interaction.
-
-        When the freeze was active, BoT-SORT was prevented from swapping,
-        so the current assignment is more likely correct → no-swap bonus.
-
-        Returns bonus value if freeze overlaps, 0.0 otherwise.
-        """
-        for freeze in frozen_interactions:
-            # Check if freeze overlaps with this court-space interaction
-            a_match = {interaction.track_a, interaction.track_b}
-            f_match = {freeze.track_a, freeze.track_b}
-            if a_match != f_match:
-                continue
-
-            # Check temporal overlap
-            if (freeze.start_frame <= interaction.end_frame
-                    and freeze.last_overlap_frame >= interaction.start_frame):
-                return bonus
-
-        return 0.0
-
-    @staticmethod
     def _get_positions_in_range(
         ct: CourtTrack,
         start: int,
@@ -1097,7 +1051,6 @@ def resolve_court_identity(
     contact_sequence: ContactSequence | None = None,
     serve_anchor: ServeAnchor | None = None,
     color_store: ColorHistogramStore | None = None,
-    frozen_interactions: list[ActiveFreeze] | None = None,
 ) -> tuple[list[PlayerPosition], int, list[SwapDecision]]:
     """Convenience function for court-plane identity resolution.
 
@@ -1111,7 +1064,6 @@ def resolve_court_identity(
         contact_sequence: Optional contacts for grammar scoring.
         serve_anchor: Optional serve anchor for identity anchoring.
         color_store: Optional color histogram store for appearance scoring.
-        frozen_interactions: Optional freeze metadata from in-tracker detector.
 
     Returns:
         Tuple of (positions, num_swaps, decisions).
@@ -1131,7 +1083,6 @@ def resolve_court_identity(
         contact_sequence=contact_sequence,
         serve_anchor=serve_anchor,
         color_store=color_store,
-        frozen_interactions=frozen_interactions,
     )
     num_swaps = sum(1 for d in decisions if d.should_swap and d.confident)
 

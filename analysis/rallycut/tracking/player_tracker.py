@@ -1169,15 +1169,15 @@ class PlayerTracker:
                     patch_tracker_with_team_awareness,
                 )
 
-                cal_split_y = get_court_split_y_from_calibration(court_calibrator)
-                if cal_split_y is not None:
+                split_y = get_court_split_y_from_calibration(court_calibrator)
+                if split_y is not None:
                     team_tracker = TeamSideTracker(
-                        court_split_y=cal_split_y,
+                        court_split_y=split_y,
                         config=team_aware_config,
                     )
                     logger.info(
                         "Team-aware tracking enabled (split_y=%.3f from calibration)",
-                        cal_split_y,
+                        split_y,
                     )
                 else:
                     logger.info("Team-aware tracking disabled: net projection failed")
@@ -1237,17 +1237,6 @@ class PlayerTracker:
                         # Team-aware tracker: feed positions and apply patch
                         if team_tracker is not None:
                             team_tracker.update(frame_positions)
-
-                            # Update net interaction freeze detector
-                            if (
-                                team_tracker.interaction_detector is not None
-                                and (team_tracker.is_active or team_tracker._freeze_active)
-                            ):
-                                team_tracker.interaction_detector.update(
-                                    frame_positions,
-                                    team_tracker.team_assignments,
-                                    frame_idx,
-                                )
 
                             if (
                                 not team_patch_applied
@@ -1347,17 +1336,6 @@ class PlayerTracker:
             # Team classification (populated during filtering)
             team_assignments: dict[int, int] = {}
 
-            # Frozen interactions from team-aware tracker (for court identity scoring)
-            frozen_interactions = None
-            if (
-                team_tracker is not None
-                and team_tracker.interaction_detector is not None
-            ):
-                frozen_interactions = (
-                    team_tracker.interaction_detector
-                    .get_all_frozen_interactions()
-                )
-
             if filter_enabled:
                 from rallycut.tracking.player_filter import (
                     PlayerFilter,
@@ -1422,7 +1400,6 @@ class PlayerTracker:
                                 video_width=video_width,
                                 video_height=video_height,
                                 color_store=color_store,
-                                frozen_interactions=frozen_interactions,
                             )
                         )
 
@@ -1535,7 +1512,6 @@ class PlayerTracker:
                                     video_width=video_width,
                                     video_height=video_height,
                                     color_store=color_store,
-                                    frozen_interactions=frozen_interactions,
                                 )
                             )
                             if post_swaps > 0:

@@ -14,7 +14,6 @@ from rallycut.tracking.court_identity import (
     resolve_court_identity,
 )
 from rallycut.tracking.player_tracker import PlayerPosition
-from rallycut.tracking.team_aware_tracker import ActiveFreeze
 
 
 def _make_positions(
@@ -555,53 +554,3 @@ class TestColorScoring:
         assert swap == 0.5
 
 
-class TestFreezeBonusScoring:
-    """Tests for freeze metadata bonus in court identity scoring."""
-
-    def test_freeze_bonus_matching_interaction(self) -> None:
-        """Freeze overlapping the interaction should return bonus."""
-        interaction = NetInteraction(track_a=1, track_b=2, start_frame=50, end_frame=60)
-        frozen = [
-            ActiveFreeze(track_a=1, track_b=2, start_frame=45, last_overlap_frame=55),
-        ]
-
-        bonus = CourtIdentityResolver._compute_freeze_bonus(interaction, frozen)
-        assert bonus == 0.10
-
-    def test_freeze_bonus_no_overlap(self) -> None:
-        """Freeze that doesn't overlap temporally should return 0."""
-        interaction = NetInteraction(track_a=1, track_b=2, start_frame=50, end_frame=60)
-        frozen = [
-            ActiveFreeze(track_a=1, track_b=2, start_frame=10, last_overlap_frame=20),
-        ]
-
-        bonus = CourtIdentityResolver._compute_freeze_bonus(interaction, frozen)
-        assert bonus == 0.0
-
-    def test_freeze_bonus_different_tracks(self) -> None:
-        """Freeze for different track pair should return 0."""
-        interaction = NetInteraction(track_a=1, track_b=2, start_frame=50, end_frame=60)
-        frozen = [
-            ActiveFreeze(track_a=3, track_b=4, start_frame=45, last_overlap_frame=55),
-        ]
-
-        bonus = CourtIdentityResolver._compute_freeze_bonus(interaction, frozen)
-        assert bonus == 0.0
-
-    def test_freeze_bonus_empty_list(self) -> None:
-        """Empty frozen_interactions should return 0."""
-        interaction = NetInteraction(track_a=1, track_b=2, start_frame=50, end_frame=60)
-
-        bonus = CourtIdentityResolver._compute_freeze_bonus(interaction, [])
-        assert bonus == 0.0
-
-    def test_freeze_bonus_reversed_track_order(self) -> None:
-        """Freeze should match regardless of track_a/track_b order."""
-        interaction = NetInteraction(track_a=1, track_b=2, start_frame=50, end_frame=60)
-        # Freeze has tracks in reversed order
-        frozen = [
-            ActiveFreeze(track_a=2, track_b=1, start_frame=45, last_overlap_frame=55),
-        ]
-
-        bonus = CourtIdentityResolver._compute_freeze_bonus(interaction, frozen)
-        assert bonus == 0.10
