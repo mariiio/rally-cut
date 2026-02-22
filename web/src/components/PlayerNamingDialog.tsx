@@ -89,10 +89,10 @@ export function PlayerNamingDialog({ open, videoId, onClose }: PlayerNamingDialo
       PaperProps={{ sx: { bgcolor: 'background.paper' } }}
     >
       <DialogTitle sx={{ pb: 0.5 }}>
-        <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+        <Typography variant="subtitle1" component="span" sx={{ fontWeight: 600, display: 'block' }}>
           Name the players
         </Typography>
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="caption" component="span" color="text.secondary">
           Optional — helps identify players in stats
         </Typography>
       </DialogTitle>
