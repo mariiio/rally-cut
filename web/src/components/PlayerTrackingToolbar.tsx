@@ -283,9 +283,7 @@ export function PlayerTrackingToolbar() {
 
   const handleSeekToLabel = (frame: number) => {
     if (!selectedRally || !trackData) return;
-    const rallyDuration = selectedRally.end_time - selectedRally.start_time;
-    const maxFrame = Math.max(1, trackData.frameCount - 1);
-    const time = selectedRally.start_time + (frame / maxFrame) * rallyDuration;
+    const time = selectedRally.start_time + frame / trackData.fps;
     seek(time);
   };
 

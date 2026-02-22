@@ -70,13 +70,10 @@ export function ActionLabelingMode({ videoRef, onLabelAdded }: ActionLabelingMod
 
     // Calculate rally-relative frame from current video time
     const rallyStart = selectedRally.start_time;
-    const rallyEnd = selectedRally.end_time;
-    const rallyDuration = rallyEnd - rallyStart;
     const fps = trackData.fps;
-    const maxFrame = Math.max(1, trackData.frameCount - 1);
 
     const timeInRally = Math.max(0, video.currentTime - rallyStart);
-    const frame = Math.round((timeInRally / rallyDuration) * maxFrame);
+    const frame = Math.round(timeInRally * fps);
 
     // Find ball position at this frame (from ball positions or actions data)
     let ballX: number | undefined;
