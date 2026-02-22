@@ -51,6 +51,18 @@ class FPDetail:
 
 
 @dataclass
+class SegmentDetail:
+    """Detail for any predicted segment (TP or FP)."""
+
+    video: str
+    start: float
+    end: float
+    duration: float
+    avg_prob: float
+    is_tp: bool  # True if matched to a GT rally at IoU=0.4
+
+
+@dataclass
 class FoldResult:
     """Result for a single LOO fold."""
 
@@ -72,6 +84,12 @@ class FoldResult:
     training_time_s: float = 0.0
     # FP details (from IoU=0.4)
     fp_details: list[FPDetail] = field(default_factory=list)
+    # All segment details for threshold sweep
+    all_segments: list[SegmentDetail] = field(default_factory=list)
+    # Raw data for re-matching at different thresholds
+    gt_segments: list[tuple[float, float]] = field(default_factory=list)
+    pred_segments: list[tuple[float, float]] = field(default_factory=list)
+    pred_avg_probs: list[float] = field(default_factory=list)
 
 
 def auto_detect_device() -> str:
@@ -150,13 +168,14 @@ def run_fold(
 
     ho_features, ho_labels, ho_fps, ho_duration = held_out_data
 
-    # Train model in a temp directory
+    # Train model in a temp directory (seed=42 for reproducibility)
     config = TemporalMaxerTrainingConfig(
         learning_rate=5e-4,
         epochs=50,
         batch_size=4,
-        patience=10,
+        patience=15,
         device=device,
+        seed=42,
     )
 
     trainer = TemporalMaxerTrainer(config=config)
@@ -197,7 +216,17 @@ def run_fold(
     # Match at IoU=0.5
     match_05: MatchingResult = match_rallies(gt_segments, pred_segments, iou_threshold=0.5)
 
+    # Compute avg_prob for each predicted segment
+    def _seg_avg_prob(seg_start: float, seg_end: float) -> float:
+        s_idx = int(seg_start / window_duration)
+        e_idx = min(int(seg_end / window_duration) + 1, len(result.window_probs))
+        if e_idx <= s_idx:
+            e_idx = s_idx + 1
+        seg_probs = result.window_probs[s_idx:min(e_idx, len(result.window_probs))]
+        return float(np.mean(seg_probs)) if len(seg_probs) > 0 else 0.0
+
     # Collect FP details with confidence
+    matched_pred_indices = {m.predicted_idx for m in match_04.matches}
     fp_details: list[FPDetail] = []
     for pred_idx in match_04.unmatched_predictions:
         pred_s, pred_e = pred_segments[pred_idx]
@@ -216,6 +245,21 @@ def run_fold(
             num_windows=len(seg_probs),
         ))
 
+    # Collect all segment details + raw data for threshold sweep
+    all_segments: list[SegmentDetail] = []
+    pred_avg_probs: list[float] = []
+    for pred_idx, (pred_s, pred_e) in enumerate(pred_segments):
+        avg_p = _seg_avg_prob(pred_s, pred_e)
+        pred_avg_probs.append(avg_p)
+        all_segments.append(SegmentDetail(
+            video=held_out.filename,
+            start=pred_s,
+            end=pred_e,
+            duration=pred_e - pred_s,
+            avg_prob=avg_p,
+            is_tp=pred_idx in matched_pred_indices,
+        ))
+
     fold = FoldResult(
         video_id=held_out.id,
         filename=held_out.filename,
@@ -231,6 +275,10 @@ def run_fold(
         end_errors_ms=[m.end_error_ms for m in match_04.matches],
         training_time_s=train_time,
         fp_details=fp_details,
+        all_segments=all_segments,
+        gt_segments=list(gt_segments),
+        pred_segments=list(pred_segments),
+        pred_avg_probs=pred_avg_probs,
     )
 
     # Print fold summary
@@ -457,6 +505,65 @@ def main() -> None:
         print(f"    Abs mean:   {np.mean(np.abs(end_arr)):.0f} ms")
         print(f"    P25/P75: {np.percentile(end_arr, 25):+.0f} / {np.percentile(end_arr, 75):+.0f} ms")
         print()
+
+    # Confidence threshold sweep (re-match at each threshold)
+    print("=" * 80)
+    print("CONFIDENCE THRESHOLD SWEEP (avg_prob filter, IoU=0.4)")
+    print("=" * 80)
+    print()
+    print(
+        f"  {'Thresh':>6} {'TP':>4} {'FP':>4} {'FN':>4} "
+        f"{'P':>6} {'R':>6} {'F1':>6} {'dTP':>5} {'dFP':>5} {'dFN':>5}"
+    )
+    print("  " + "-" * 62)
+
+    thresholds = [0.0, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90]
+    baseline_tp = sum(f.tp_04 for f in fold_results)
+    baseline_fp = sum(f.fp_04 for f in fold_results)
+    baseline_fn = sum(f.fn_04 for f in fold_results)
+
+    best_f1 = 0.0
+    best_threshold = 0.0
+
+    for thresh in thresholds:
+        total_tp = 0
+        total_fp = 0
+        total_fn = 0
+
+        for fold in fold_results:
+            if not fold.pred_segments:
+                total_fn += fold.gt_count
+                continue
+
+            # Filter predictions by threshold
+            filtered_preds = [
+                seg for seg, prob in zip(fold.pred_segments, fold.pred_avg_probs)
+                if prob >= thresh
+            ]
+
+            # Re-match filtered predictions against GT
+            result = match_rallies(fold.gt_segments, filtered_preds, iou_threshold=0.4)
+            total_tp += result.true_positives
+            total_fp += result.false_positives
+            total_fn += result.false_negatives
+
+        p, r, f1 = compute_f1(total_tp, total_fp, total_fn)
+        d_tp = total_tp - baseline_tp
+        d_fp = total_fp - baseline_fp
+        d_fn = total_fn - baseline_fn
+
+        print(
+            f"  {thresh:>6.2f} {total_tp:>4} {total_fp:>4} {total_fn:>4} "
+            f"{p:>5.1%} {r:>5.1%} {f1:>5.1%} {d_tp:>+5} {d_fp:>+5} {d_fn:>+5}"
+        )
+
+        if f1 > best_f1:
+            best_f1 = f1
+            best_threshold = thresh
+
+    print()
+    print(f"  Best threshold: {best_threshold:.2f} (F1={best_f1:.1%})")
+    print()
 
     total_time = time.time() - total_start
     total_train_time = sum(f.training_time_s for f in fold_results)

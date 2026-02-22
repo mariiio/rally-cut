@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -34,13 +35,16 @@ class TemporalMaxerTrainingConfig:
     weight_decay: float = 0.01
     epochs: int = 50
     batch_size: int = 4  # Sequence batches (one video per sample)
-    patience: int = 10
+    patience: int = 15
 
     # Loss
     tmse_weight: float = 0.15  # Smoothing loss weight
 
     # Device
     device: str = "cpu"
+
+    # Reproducibility
+    seed: int = 42
 
 
 @dataclass
@@ -171,15 +175,24 @@ class TemporalMaxerTrainer:
         device = torch.device(self.config.device)
         cfg = self.config
 
+        # Set random seeds for reproducibility
+        random.seed(cfg.seed)
+        np.random.seed(cfg.seed)
+        torch.manual_seed(cfg.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(cfg.seed)
+
         # Create datasets
         train_dataset = VideoSequenceDataset(train_features, train_labels)
         val_dataset = VideoSequenceDataset(val_features, val_labels)
 
+        train_generator = torch.Generator().manual_seed(cfg.seed)
         train_loader = DataLoader(
             train_dataset,
             batch_size=cfg.batch_size,
             shuffle=True,
             collate_fn=collate_video_sequences,
+            generator=train_generator,
         )
         val_loader = DataLoader(
             val_dataset,

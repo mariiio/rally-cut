@@ -2459,6 +2459,7 @@ def train_temporal_maxer_cmd(
         batch_size=batch_size,
         patience=patience,
         device=device,
+        seed=seed,
     )
 
     rprint()
