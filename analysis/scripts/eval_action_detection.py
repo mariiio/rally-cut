@@ -286,9 +286,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate action detection vs ground truth")
     parser.add_argument("--rally", type=str, help="Specific rally ID to evaluate")
     parser.add_argument("--tolerance-ms", type=int, default=167, help="Time tolerance in ms for matching (default: 167, ~5 frames at 30fps)")
-    parser.add_argument("--redetect", action="store_true", help="Re-run contact detection instead of using stored results")
-    parser.add_argument("--config", type=str, help="JSON config overrides for ContactDetectionConfig (implies --redetect)")
-    parser.add_argument("--classifier", type=str, help="Path to trained contact classifier model (implies --redetect)")
+    parser.add_argument("--stored", action="store_true", help="Use stored actions from DB instead of re-running detection (default: re-detect)")
+    parser.add_argument("--config", type=str, help="JSON config overrides for ContactDetectionConfig")
+    parser.add_argument("--classifier", type=str, help="Path to trained contact classifier model")
     parser.add_argument("--no-classifier", action="store_true", help="Disable auto-loading of trained contact classifier (force hand-tuned gates)")
     parser.add_argument("--no-action-classifier", action="store_true", help="Disable learned action type classifier (force rule-based state machine)")
     args = parser.parse_args()
@@ -343,7 +343,7 @@ def main() -> None:
         # Get predicted actions — either from stored data or re-detect
         pred_actions: list[dict] = []
 
-        if (args.redetect or contact_config or contact_classifier) and rally.ball_positions_json:
+        if not args.stored and rally.ball_positions_json:
             # Re-run contact detection from ball/player positions
             from rallycut.tracking.ball_tracker import BallPosition as BallPos
             from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
