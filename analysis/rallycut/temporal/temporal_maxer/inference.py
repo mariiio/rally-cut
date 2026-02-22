@@ -58,7 +58,7 @@ class TemporalMaxerInference:
         min_segment_duration: float = 1.0,
         max_gap_duration: float = 3.0,
         max_segment_duration: float = 60.0,
-        min_segment_confidence: float = 0.0,
+        min_segment_confidence: float = 0.6,
     ) -> TemporalMaxerResult:
         """Run full-sequence inference and extract segments.
 
