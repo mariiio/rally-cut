@@ -1092,6 +1092,7 @@ export async function getVideoForEditor(videoId: string, userId: string) {
       durationMs: effectiveDuration,
       width: video.width,
       height: video.height,
+      fps: video.fps,
       status: video.status,
       rallies: transformedRallies,
       cameraSettings: video.cameraSettings[0] ?? null,

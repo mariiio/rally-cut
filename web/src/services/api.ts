@@ -100,6 +100,7 @@ interface ApiVideo {
   durationMs: number | null;
   width: number | null;
   height: number | null;
+  fps: number | null;
   fileSizeBytes: string | null;
   posterS3Key?: string | null;
   proxyS3Key?: string | null;
@@ -193,8 +194,8 @@ function apiRallyToFrontend(apiRally: ApiRally, videoId: string, fps: number): R
 }
 
 function apiVideoToMatch(apiVideo: ApiVideo, cloudfrontDomain?: string): Match {
-  // Default FPS if not known (will be updated when video loads)
-  const fps = 30;
+  // Use video's actual FPS from database, fall back to 30 if not set
+  const fps = apiVideo.fps ?? 30;
   const duration = apiVideo.durationMs ? apiVideo.durationMs / 1000 : 0;
 
   // Build video URL
@@ -688,6 +689,7 @@ interface ApiVideoEditorResponse {
     durationMs: number | null;
     width: number | null;
     height: number | null;
+    fps: number | null;
     rallies: ApiRally[];
     status: 'PENDING' | 'UPLOADED' | 'DETECTING' | 'DETECTED' | 'ERROR';
     cameraSettings?: ApiVideoCameraSettings | null;
@@ -747,8 +749,8 @@ export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEd
     return cloudfrontDomain ? `https://${cloudfrontDomain}/${s3Key}` : `/${s3Key}`;
   };
 
-  // Default FPS to 30 (not available from API)
-  const fps = 30;
+  // Use video's actual FPS from API, fall back to 30 if not set
+  const fps = data.video.fps ?? 30;
 
   // Transform rallies to frontend format
   const rallies: Rally[] = data.video.rallies.map((apiRally) => {

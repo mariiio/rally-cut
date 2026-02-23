@@ -869,14 +869,14 @@ export function VideoPlayer() {
               rallyStartTime={currentRally.start_time}
               videoRef={videoRef}
               containerRef={videoContainerRef}
-              fps={activeMatch?.video?.fps || 30}
+              fps={activeMatch?.video?.fps ?? 30}
             />
           )}
           {/* Ball track overlay */}
           {showBallOverlay && currentRally && currentRally._backendId && playerTracks[currentRally._backendId]?.tracksJson?.ballPositions && (
             <BallTrackOverlay
               positions={playerTracks[currentRally._backendId]!.tracksJson!.ballPositions!}
-              fps={playerTracks[currentRally._backendId]!.tracksJson!.fps || activeMatch?.video?.fps || 30}
+              fps={playerTracks[currentRally._backendId]!.tracksJson!.fps ?? activeMatch?.video?.fps ?? 30}
               rallyStartTime={currentRally.start_time}
               videoRef={videoRef}
             />
@@ -885,7 +885,7 @@ export function VideoPlayer() {
           {showBallOverlay && currentRally && currentRally._backendId && playerTracks[currentRally._backendId]?.tracksJson?.actions?.actions?.length && (
             <ActionOverlay
               actions={playerTracks[currentRally._backendId]!.tracksJson!.actions!}
-              fps={playerTracks[currentRally._backendId]!.tracksJson!.fps || activeMatch?.video?.fps || 30}
+              fps={playerTracks[currentRally._backendId]!.tracksJson!.fps ?? activeMatch?.video?.fps ?? 30}
               rallyStartTime={currentRally.start_time}
               videoRef={videoRef}
               groundTruthLabels={actionGroundTruth[currentRally._backendId]}

@@ -594,7 +594,7 @@ export async function exportToLabelStudio(
     }
 
     // Build predictions with rally start time
-    const fps = playerTrack.fps || 30;
+    const fps = playerTrack.fps ?? 30;
     const rallyStartTime = rally.startMs / 1000;
     const rallyEndTime = rally.endMs / 1000;
     const videoDuration = (rally.video.durationMs || 0) / 1000;
