@@ -693,6 +693,7 @@ def _assign_segments_to_profiles(
 
         # Check for temporal overlap within same player
         conflict_found = False
+        conflicted_segs: set[int] = set()
         player_segments: dict[int, list[int]] = defaultdict(list)
         for si, pi in round_assignment.items():
             player_segments[pi].append(si)
@@ -708,25 +709,36 @@ def _assign_segments_to_profiles(
                         sa.start_frame <= sb.end_frame
                         and sb.start_frame <= sa.end_frame
                     ):
-                        # Block the higher-cost assignment
+                        # Block the higher-cost assignment for next round
                         cost_a = cost_matrix[seg_indices[a_idx], pi]
                         cost_b = cost_matrix[seg_indices[b_idx], pi]
                         if cost_a > cost_b:
                             blocked.add((seg_indices[a_idx], pi))
                         else:
                             blocked.add((seg_indices[b_idx], pi))
+                        # Track both overlapping segments as ambiguous
+                        conflicted_segs.add(seg_indices[a_idx])
+                        conflicted_segs.add(seg_indices[b_idx])
                         conflict_found = True
 
         if not conflict_found:
             final_assignment = round_assignment
             break
-        # Keep last conflict-free assignment as fallback; don't save
-        # conflicted rounds (could assign overlapping segments to same player)
+
+        # Save non-conflicting assignments as fallback. Segments involved
+        # in temporal overlap are excluded (ambiguous), but the rest are safe.
+        safe_assignment = {
+            si: pi for si, pi in round_assignment.items()
+            if si not in conflicted_segs
+        }
+        if safe_assignment:
+            final_assignment = safe_assignment
     else:
         if blocked:
             logger.debug(
                 f"Conflict resolution exhausted {MAX_REASSIGNMENT_ROUNDS} rounds "
-                f"with {len(blocked)} blocked pairs; no remapping applied"
+                f"with {len(blocked)} blocked pairs; "
+                f"applying {len(final_assignment)} non-conflicting assignments"
             )
 
     # Apply remapping — build lookup for targeted updates
