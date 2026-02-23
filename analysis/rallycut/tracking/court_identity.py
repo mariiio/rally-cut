@@ -450,6 +450,7 @@ class CourtIdentityResolver:
                 # Find streaks of both-near-net frames
                 streak_start: int | None = None
                 streak_len = 0
+                last_streak_frame = 0
 
                 for frame in common_frames:
                     near_pos = near_ct.positions[frame]
@@ -462,6 +463,7 @@ class CourtIdentityResolver:
                         if streak_start is None:
                             streak_start = frame
                         streak_len += 1
+                        last_streak_frame = frame
                     else:
                         if (
                             streak_start is not None
@@ -471,7 +473,7 @@ class CourtIdentityResolver:
                                 track_a=near_tid,
                                 track_b=far_tid,
                                 start_frame=streak_start,
-                                end_frame=frame - 1,
+                                end_frame=last_streak_frame,
                             ))
                         streak_start = None
                         streak_len = 0

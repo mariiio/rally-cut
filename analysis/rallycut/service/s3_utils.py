@@ -13,10 +13,15 @@ import boto3
 def create_s3_client() -> Any:
     """Create an S3 client with optional MinIO endpoint support."""
     s3_config: dict = {
-        "aws_access_key_id": os.environ.get("AWS_ACCESS_KEY_ID"),
-        "aws_secret_access_key": os.environ.get("AWS_SECRET_ACCESS_KEY"),
         "region_name": os.environ.get("AWS_REGION", "us-east-1"),
     }
+    # Only pass explicit credentials if set; otherwise let boto3 use its
+    # default credential chain (env vars, instance roles, ~/.aws/).
+    access_key = os.environ.get("AWS_ACCESS_KEY_ID")
+    secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
+    if access_key and secret_key:
+        s3_config["aws_access_key_id"] = access_key
+        s3_config["aws_secret_access_key"] = secret_key
     if os.environ.get("S3_ENDPOINT"):
         s3_config["endpoint_url"] = os.environ["S3_ENDPOINT"]
     return boto3.client("s3", **s3_config)

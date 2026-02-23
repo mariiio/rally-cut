@@ -10,6 +10,7 @@ from rallycut.tracking.action_classifier import (
     ActionType,
     ClassifiedAction,
     RallyActions,
+    TemporalGapValidationConfig,
     _ball_crossed_net,
     _ball_moving_toward_net,
     _ball_starts_on_contact_side,
@@ -18,6 +19,7 @@ from rallycut.tracking.action_classifier import (
     _make_synthetic_serve,
     classify_rally_actions,
     repair_action_sequence,
+    validate_temporal_gaps,
 )
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.contact_detector import Contact, ContactSequence
@@ -1257,3 +1259,196 @@ class TestRepairWrongSideServe:
         assert len(repaired) == 2
         assert repaired[0].action_type == ActionType.SERVE
         assert repaired[0].is_synthetic is True
+
+
+def _action(
+    action_type: ActionType,
+    frame: int,
+    confidence: float = 0.6,
+    court_side: str = "near",
+    is_synthetic: bool = False,
+) -> ClassifiedAction:
+    """Helper to create a ClassifiedAction for gap validation tests."""
+    return ClassifiedAction(
+        action_type=action_type,
+        frame=frame,
+        ball_x=0.5,
+        ball_y=0.5,
+        velocity=0.02,
+        player_track_id=-1,
+        court_side=court_side,
+        confidence=confidence,
+        is_synthetic=is_synthetic,
+    )
+
+
+class TestTemporalGapValidation:
+    """Tests for temporal gap validation of detected contacts."""
+
+    def test_no_removal_within_threshold(self) -> None:
+        """Contacts within max_gap_seconds are not removed."""
+        actions = [
+            _action(ActionType.SERVE, 0, confidence=0.9),
+            _action(ActionType.RECEIVE, 60, confidence=0.5, court_side="far"),
+            _action(ActionType.SET, 120, confidence=0.5, court_side="far"),
+            _action(ActionType.ATTACK, 180, confidence=0.5, court_side="far"),
+        ]
+        config = TemporalGapValidationConfig(max_gap_seconds=5.0, fps=30.0)
+        result = validate_temporal_gaps(actions, config)
+        assert len(result) == 4
+
+    def test_orphan_removal(self) -> None:
+        """Contact with both gaps > threshold and low confidence is removed."""
+        actions = [
+            _action(ActionType.SERVE, 0, confidence=0.9),
+            _action(ActionType.RECEIVE, 60, confidence=0.8, court_side="far"),
+            # Orphan: 200 frames (6.7s) gap before and after at 30fps
+            _action(ActionType.DIG, 260, confidence=0.4),
+            _action(ActionType.ATTACK, 520, confidence=0.8, court_side="far"),
+        ]
+        config = TemporalGapValidationConfig(max_gap_seconds=5.0, fps=30.0)
+        result = validate_temporal_gaps(actions, config)
+        assert len(result) == 3
+        assert all(a.action_type != ActionType.DIG for a in result)
+
+    def test_serve_protection(self) -> None:
+        """Serves are never removed even with large gaps."""
+        actions = [
+            _action(ActionType.SERVE, 0, confidence=0.4),
+            _action(ActionType.RECEIVE, 300, confidence=0.8, court_side="far"),
+            _action(ActionType.SET, 330, confidence=0.8, court_side="far"),
+        ]
+        config = TemporalGapValidationConfig(max_gap_seconds=5.0, fps=30.0)
+        result = validate_temporal_gaps(actions, config)
+        assert result[0].action_type == ActionType.SERVE
+
+    def test_synthetic_serve_protection(self) -> None:
+        """Synthetic serves are never removed."""
+        actions = [
+            _action(ActionType.SERVE, 0, confidence=0.4, is_synthetic=True),
+            _action(ActionType.RECEIVE, 300, confidence=0.8, court_side="far"),
+            _action(ActionType.SET, 330, confidence=0.8, court_side="far"),
+        ]
+        config = TemporalGapValidationConfig(max_gap_seconds=5.0, fps=30.0)
+        result = validate_temporal_gaps(actions, config)
+        assert result[0].action_type == ActionType.SERVE
+        assert result[0].is_synthetic is True
+
+    def test_high_confidence_protection(self) -> None:
+        """Contacts with confidence >= removal_max_confidence are never removed."""
+        actions = [
+            _action(ActionType.SERVE, 0, confidence=0.9),
+            _action(ActionType.RECEIVE, 60, confidence=0.8, court_side="far"),
+            # Would be orphan but confidence is high
+            _action(ActionType.DIG, 260, confidence=0.75),
+            _action(ActionType.ATTACK, 520, confidence=0.8, court_side="far"),
+        ]
+        config = TemporalGapValidationConfig(
+            max_gap_seconds=5.0, fps=30.0, removal_max_confidence=0.70,
+        )
+        result = validate_temporal_gaps(actions, config)
+        assert len(result) == 4
+
+    def test_trailing_contact_removal(self) -> None:
+        """Last contact with large gap and low confidence is removed."""
+        actions = [
+            _action(ActionType.SERVE, 0, confidence=0.9),
+            _action(ActionType.RECEIVE, 60, confidence=0.8, court_side="far"),
+            _action(ActionType.SET, 120, confidence=0.8, court_side="far"),
+            # Trailing: 300 frames (10s) gap, conf 0.3 < trailing_max 0.50
+            _action(ActionType.DIG, 420, confidence=0.3),
+        ]
+        config = TemporalGapValidationConfig(
+            max_gap_seconds=5.0, fps=30.0,
+            trailing_gap_multiplier=1.5,
+            trailing_max_confidence=0.50,
+        )
+        result = validate_temporal_gaps(actions, config)
+        assert len(result) == 3
+        assert result[-1].action_type == ActionType.SET
+
+    def test_trailing_not_removed_if_confident(self) -> None:
+        """Trailing contact above trailing confidence threshold stays."""
+        actions = [
+            _action(ActionType.SERVE, 0, confidence=0.9),
+            _action(ActionType.RECEIVE, 60, confidence=0.8, court_side="far"),
+            _action(ActionType.SET, 120, confidence=0.8, court_side="far"),
+            # Large gap but confidence above trailing_max_confidence
+            _action(ActionType.DIG, 420, confidence=0.55),
+        ]
+        config = TemporalGapValidationConfig(
+            max_gap_seconds=5.0, fps=30.0,
+            trailing_max_confidence=0.50,
+        )
+        result = validate_temporal_gaps(actions, config)
+        assert len(result) == 4
+
+    def test_iterative_removal(self) -> None:
+        """Multiple orphaned contacts are removed one at a time."""
+        actions = [
+            _action(ActionType.SERVE, 0, confidence=0.9),
+            _action(ActionType.RECEIVE, 60, confidence=0.8, court_side="far"),
+            # Two orphans in sequence, both with big gaps from neighbors
+            _action(ActionType.DIG, 300, confidence=0.3),
+            _action(ActionType.SET, 600, confidence=0.35),
+            _action(ActionType.ATTACK, 900, confidence=0.8, court_side="far"),
+        ]
+        config = TemporalGapValidationConfig(max_gap_seconds=5.0, fps=30.0)
+        result = validate_temporal_gaps(actions, config)
+        # Both orphans should be removed (iteratively)
+        assert len(result) == 3
+        types = [a.action_type for a in result]
+        assert ActionType.DIG not in types
+        assert ActionType.SET not in types
+
+    def test_min_contacts_guard(self) -> None:
+        """No removal when fewer than min_contacts_for_validation contacts."""
+        actions = [
+            _action(ActionType.SERVE, 0, confidence=0.9),
+            _action(ActionType.DIG, 300, confidence=0.3),
+        ]
+        config = TemporalGapValidationConfig(
+            max_gap_seconds=5.0, fps=30.0, min_contacts_for_validation=3,
+        )
+        result = validate_temporal_gaps(actions, config)
+        assert len(result) == 2
+
+    def test_disabled_config(self) -> None:
+        """No removal when config.enabled is False."""
+        actions = [
+            _action(ActionType.SERVE, 0, confidence=0.9),
+            _action(ActionType.RECEIVE, 60, confidence=0.8, court_side="far"),
+            _action(ActionType.DIG, 260, confidence=0.3),
+            _action(ActionType.ATTACK, 520, confidence=0.8, court_side="far"),
+        ]
+        config = TemporalGapValidationConfig(enabled=False)
+        result = validate_temporal_gaps(actions, config)
+        assert len(result) == 4
+
+    def test_never_reduce_below_two_contacts(self) -> None:
+        """Rally is never reduced below serve + 1 action."""
+        # Only 2 contacts: serve + receive. Even with a huge gap and low
+        # confidence, the receive should not be removed because the serve
+        # is the only other contact (removable_count < 1 after removing it
+        # would leave 0 non-serve contacts). But actually min_contacts_for_validation
+        # (default 3) prevents removal because we only have 2 non-unknown contacts.
+        actions = [
+            _action(ActionType.SERVE, 0, confidence=0.9),
+            _action(ActionType.RECEIVE, 300, confidence=0.3, court_side="far"),
+        ]
+        config = TemporalGapValidationConfig(max_gap_seconds=1.0, fps=30.0)
+        result = validate_temporal_gaps(actions, config)
+        assert len(result) == 2
+
+    def test_one_sided_gap_not_removed(self) -> None:
+        """Contact with only one large gap (not orphaned) is kept."""
+        actions = [
+            _action(ActionType.SERVE, 0, confidence=0.9),
+            _action(ActionType.RECEIVE, 60, confidence=0.8, court_side="far"),
+            # 200 frames (6.7s) gap before, but only 30 frames gap after
+            _action(ActionType.DIG, 260, confidence=0.4),
+            _action(ActionType.SET, 290, confidence=0.8, court_side="far"),
+        ]
+        config = TemporalGapValidationConfig(max_gap_seconds=5.0, fps=30.0)
+        result = validate_temporal_gaps(actions, config)
+        assert len(result) == 4

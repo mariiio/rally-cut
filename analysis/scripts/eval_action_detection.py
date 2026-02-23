@@ -28,7 +28,10 @@ from rich.console import Console
 from rich.table import Table
 
 from rallycut.evaluation.db import get_connection
-from rallycut.tracking.action_classifier import classify_rally_actions
+from rallycut.tracking.action_classifier import (
+    TemporalGapValidationConfig,
+    classify_rally_actions,
+)
 from rallycut.tracking.contact_detector import ContactDetectionConfig, detect_contacts
 
 console = Console()
@@ -291,6 +294,8 @@ def main() -> None:
     parser.add_argument("--classifier", type=str, help="Path to trained contact classifier model")
     parser.add_argument("--no-classifier", action="store_true", help="Disable auto-loading of trained contact classifier (force hand-tuned gates)")
     parser.add_argument("--no-action-classifier", action="store_true", help="Disable learned action type classifier (force rule-based state machine)")
+    parser.add_argument("--no-gap-validation", action="store_true", help="Disable temporal gap validation (on by default)")
+    parser.add_argument("--max-gap", type=float, default=5.0, help="Max plausible gap between contacts in seconds (default: 5.0)")
     args = parser.parse_args()
 
     # Build ContactDetectionConfig from overrides
@@ -313,6 +318,12 @@ def main() -> None:
         from rallycut.tracking.contact_classifier import ContactClassifier
         contact_classifier = ContactClassifier.load(args.classifier)
         console.print(f"[bold]Using trained classifier: {args.classifier}[/bold]")
+
+    # Build temporal gap validation config
+    gap_config = TemporalGapValidationConfig(
+        enabled=not args.no_gap_validation,
+        max_gap_seconds=args.max_gap,
+    )
 
     rallies = load_rallies_with_action_gt(rally_id=args.rally)
 
@@ -387,6 +398,7 @@ def main() -> None:
             rally_actions = classify_rally_actions(
                 contacts, rally.rally_id,
                 use_classifier=not args.no_action_classifier,
+                gap_validation_config=gap_config,
             )
             pred_actions = [a.to_dict() for a in rally_actions.actions]
         elif rally.actions_json:

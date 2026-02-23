@@ -56,8 +56,20 @@ interface AnalysisState {
   setShowPlayerNaming: (videoId: string | null) => void;
 }
 
-// Polling intervals stored outside React state
+// Polling intervals stored outside React state.
+// On HMR re-evaluation, the previous module's timers become orphaned.
+// We store a reference on globalThis so we can clean up stale timers.
+const HMR_KEY = '__rallycut_analysis_poll_timers__' as const;
+
+// Clean up any orphaned timers from previous HMR module evaluation
+const staleTimers = (globalThis as Record<string, unknown>)[HMR_KEY] as Record<string, ReturnType<typeof setInterval>> | undefined;
+if (staleTimers) {
+  Object.values(staleTimers).forEach(clearInterval);
+}
+
 const pollTimers: Record<string, ReturnType<typeof setInterval>> = {};
+(globalThis as Record<string, unknown>)[HMR_KEY] = pollTimers;
+
 // Guard against concurrent completeAnalysis calls
 const completingLock = new Set<string>();
 
@@ -79,6 +91,12 @@ export const useAnalysisStore = create<AnalysisState>()(
       },
 
       startAnalysis: async (videoId: string) => {
+        // Prevent re-entrance: skip if already running for this video
+        const existing = get().pipelines[videoId];
+        if (existing && existing.phase !== 'idle' && existing.phase !== 'done' && existing.phase !== 'error') {
+          return;
+        }
+
         const update = (patch: Partial<AnalysisPipeline>) => {
           set((state) => ({
             pipelines: {

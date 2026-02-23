@@ -30,6 +30,7 @@ const router = Router();
 
 router.post(
   "/v1/sessions",
+  requireUser,
   validateRequest({ body: createSessionSchema }),
   async (req, res, next) => {
     try {
@@ -110,6 +111,7 @@ router.get(
 
 router.patch(
   "/v1/sessions/:id",
+  requireUser,
   validateRequest({
     params: z.object({ id: uuidSchema }),
     body: updateSessionSchema,
@@ -126,6 +128,7 @@ router.patch(
 
 router.delete(
   "/v1/sessions/:id",
+  requireUser,
   validateRequest({ params: z.object({ id: uuidSchema }) }),
   async (req, res, next) => {
     try {

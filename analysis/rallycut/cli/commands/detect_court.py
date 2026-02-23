@@ -24,6 +24,7 @@ def detect_court(
         Path("debug_court_detection"), "--debug-dir",
         help="Directory for debug images",
     ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress console output"),
 ) -> None:
     """Automatically detect court corners from a volleyball video.
 
@@ -53,7 +54,7 @@ def detect_court(
 
     detector = CourtDetector(CourtDetectionConfig())
 
-    if not output_json:
+    if not output_json and not quiet:
         console.print(f"[bold]Detecting court in:[/bold] {video.name}")
 
     result = detector.detect(video, start_frame=start_frame, end_frame=end_frame)

@@ -110,7 +110,7 @@ def track_batch(request: dict) -> dict:
     calibration_corners = request.get("calibration_corners")
     callback_url = request.get("callback_url")
     webhook_secret = request.get("webhook_secret")
-    s3_bucket = request.get("s3_bucket", os.environ.get("S3_BUCKET_NAME", "rallycut-dev"))
+    s3_bucket = request.get("s3_bucket") or os.environ["S3_BUCKET_NAME"]
 
     if not batch_job_id or not video_id or not video_key or not callback_url:
         return {"error": "Missing required fields: batch_job_id, video_id, video_key, callback_url"}

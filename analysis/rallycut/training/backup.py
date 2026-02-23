@@ -561,6 +561,8 @@ class DatasetBackup:
             multipart_chunksize=MULTIPART_CHUNKSIZE,
         )
 
+        failed_paths: set[str] = set()
+
         def _upload_one(info: WeightFileInfo) -> None:
             try:
                 if self._weight_file_exists_remote(info.content_hash):
@@ -581,6 +583,7 @@ class DatasetBackup:
             except Exception as e:
                 with lock:
                     result.errors.append(f"{info.relative_path}: {e}")
+                    failed_paths.add(info.relative_path)
 
             if progress and task_id is not None:
                 progress.advance(task_id)
@@ -590,12 +593,13 @@ class DatasetBackup:
             for future in as_completed(futures):
                 future.result()
 
-        # Build and upload manifest
+        # Build and upload manifest (exclude failed uploads)
+        successful = [f for f in file_infos if f.relative_path not in failed_paths]
         manifest = {
             "created": datetime.now(UTC).isoformat(),
             "name": name or "latest",
-            "total_size_bytes": sum(f.size_bytes for f in file_infos),
-            "file_count": len(file_infos),
+            "total_size_bytes": sum(f.size_bytes for f in successful),
+            "file_count": len(successful),
             "files": [
                 {
                     "relative_path": f.relative_path,
@@ -603,7 +607,7 @@ class DatasetBackup:
                     "size_bytes": f.size_bytes,
                     "group": f.group,
                 }
-                for f in file_infos
+                for f in successful
             ],
         }
         manifest_json = json.dumps(manifest, indent=2)

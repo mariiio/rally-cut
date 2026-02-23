@@ -226,25 +226,27 @@ def _ball_crossed_net(
     if len(positions_in_range) < min_frames_per_side * 2:
         return None
 
-    # Determine starting side from first min_frames consecutive frames
+    # Determine starting side from consecutive frames. Count consecutive
+    # near/far from the start; stop once the side switches. Use 1 frame
+    # minimum to identify the starting side (the crossing scan below
+    # already requires min_frames_per_side consecutive on the opposite side).
     start_near = 0
     start_far = 0
     for bp in positions_in_range:
-        if bp.y >= net_y:
-            if start_far == 0:
-                start_near += 1
-            else:
-                break
+        is_near = bp.y >= net_y
+        if is_near:
+            if start_far > 0:
+                break  # Side switched
+            start_near += 1
         else:
-            if start_near == 0:
-                start_far += 1
-            else:
-                break
+            if start_near > 0:
+                break  # Side switched
+            start_far += 1
 
-    if start_near < min_frames_per_side and start_far < min_frames_per_side:
-        return None  # Can't determine starting side (noisy data)
+    if start_near == 0 and start_far == 0:
+        return None  # No data
 
-    starting_is_near = start_near >= min_frames_per_side
+    starting_is_near = start_near > start_far
 
     # Scan for any contiguous block on the opposite side
     consecutive_opposite = 0
@@ -1112,9 +1114,9 @@ class ActionClassifier:
                 # receives where the ball immediately crosses to the other
                 # side after a high-velocity contact).
                 if ball_positions:
-                    if not _ball_moving_toward_net(
+                    if _ball_moving_toward_net(
                         ball_positions, c.frame, c.ball_y, net_y,
-                    ):
+                    ) is False:
                         continue
                     on_side = _ball_starts_on_contact_side(
                         ball_positions, c.frame, c.court_side, net_y,
@@ -1320,12 +1322,145 @@ def repair_action_sequence(
     return repaired
 
 
+@dataclass
+class TemporalGapValidationConfig:
+    """Configuration for temporal gap validation of detected contacts."""
+
+    enabled: bool = True
+    max_gap_seconds: float = 5.0  # Max plausible gap between contacts
+    removal_max_confidence: float = 0.70  # Only remove contacts below this
+    trailing_max_confidence: float = 0.50  # Stricter gate for trailing removal
+    trailing_gap_multiplier: float = 1.5  # Trailing gap = max_gap * this
+    min_contacts_for_validation: int = 3  # Need context to validate
+    fps: float = 30.0  # Video frame rate for frame→seconds conversion
+
+
+def validate_temporal_gaps(
+    actions: list[ClassifiedAction],
+    config: TemporalGapValidationConfig | None = None,
+) -> list[ClassifiedAction]:
+    """Remove contacts creating implausible temporal gaps.
+
+    A contact is "orphaned" if the gap before AND after it both exceed
+    max_gap_seconds, and its confidence is below removal_max_confidence,
+    and it's not a serve. The both-sides requirement ensures real contacts
+    (which have at least one plausible neighbor) are never removed.
+
+    A trailing contact (last in sequence) is removed if its gap from the
+    previous contact exceeds max_gap * trailing_gap_multiplier and its
+    confidence is below trailing_max_confidence.
+
+    Iterative: removes one contact per pass (lowest confidence first),
+    then re-evaluates, since removing one changes its neighbors' gaps.
+
+    Args:
+        actions: Classified actions (post-repair).
+        config: Validation configuration.
+
+    Returns:
+        Filtered list of ClassifiedAction.
+    """
+    if config is None:
+        config = TemporalGapValidationConfig()
+
+    if not config.enabled:
+        return actions
+
+    result = list(actions)
+    max_gap_frames = config.max_gap_seconds * config.fps
+    trailing_gap_frames = max_gap_frames * config.trailing_gap_multiplier
+
+    while True:
+        # Need enough contacts to validate
+        non_unknown = [a for a in result if a.action_type != ActionType.UNKNOWN]
+        if len(non_unknown) < config.min_contacts_for_validation:
+            break
+
+        # Never reduce below 2 real contacts (serve + 1 action)
+        removable_count = sum(
+            1 for a in non_unknown
+            if a.action_type != ActionType.SERVE and not a.is_synthetic
+        )
+        if removable_count < 1:
+            break
+
+        # Find candidates for removal
+        best_candidate_idx: int | None = None
+        best_candidate_conf: float = float("inf")
+        best_reason: str = ""
+
+        for i, action in enumerate(result):
+            # Never remove serves (real or synthetic) or unknowns
+            if action.action_type == ActionType.SERVE or action.is_synthetic:
+                continue
+            if action.action_type == ActionType.UNKNOWN:
+                continue
+            # Never remove high-confidence contacts
+            if action.confidence >= config.removal_max_confidence:
+                continue
+
+            # Compute gap before
+            prev_frame: int | None = None
+            for j in range(i - 1, -1, -1):
+                if result[j].action_type != ActionType.UNKNOWN:
+                    prev_frame = result[j].frame
+                    break
+
+            # Compute gap after
+            next_frame: int | None = None
+            for j in range(i + 1, len(result)):
+                if result[j].action_type != ActionType.UNKNOWN:
+                    next_frame = result[j].frame
+                    break
+
+            # Orphaned contact: both gaps exceed threshold
+            if prev_frame is not None and next_frame is not None:
+                gap_before = action.frame - prev_frame
+                gap_after = next_frame - action.frame
+                if gap_before > max_gap_frames and gap_after > max_gap_frames:
+                    if action.confidence < best_candidate_conf:
+                        best_candidate_idx = i
+                        best_candidate_conf = action.confidence
+                        best_reason = (
+                            f"orphaned (gaps: {gap_before / config.fps:.1f}s / "
+                            f"{gap_after / config.fps:.1f}s)"
+                        )
+
+            # Trailing contact: last real contact with large gap
+            if next_frame is None and prev_frame is not None:
+                gap_before = action.frame - prev_frame
+                if (
+                    gap_before > trailing_gap_frames
+                    and action.confidence < config.trailing_max_confidence
+                ):
+                    if action.confidence < best_candidate_conf:
+                        best_candidate_idx = i
+                        best_candidate_conf = action.confidence
+                        best_reason = (
+                            f"trailing (gap: {gap_before / config.fps:.1f}s)"
+                        )
+
+        if best_candidate_idx is None:
+            break  # No more candidates
+
+        removed = result[best_candidate_idx]
+        logger.info(
+            "Temporal gap validation: removing %s at f%d (conf=%.2f) — %s",
+            removed.action_type.value, removed.frame,
+            removed.confidence, best_reason,
+        )
+        result.pop(best_candidate_idx)
+
+    return result
+
+
 def classify_rally_actions(
     contact_sequence: ContactSequence,
     rally_id: str = "",
     config: ActionClassifierConfig | None = None,
     use_classifier: bool = True,
     team_assignments: dict[int, int] | None = None,
+    gap_validation_config: TemporalGapValidationConfig | None = None,
 ) -> RallyActions:
     """Convenience function to classify actions in a rally.
 
@@ -1339,6 +1474,8 @@ def classify_rally_actions(
         config: Optional classifier configuration.
         use_classifier: Whether to auto-load and use the learned classifier.
         team_assignments: Optional mapping of track_id → team (0=near/A, 1=far/B).
+        gap_validation_config: Optional temporal gap validation configuration.
+            Defaults to enabled with conservative thresholds.
 
     Returns:
         RallyActions with all classified actions.
@@ -1358,6 +1495,9 @@ def classify_rally_actions(
                 ball_positions=contact_sequence.ball_positions,
                 rally_start_frame=contact_sequence.rally_start_frame,
             )
+            result.actions = validate_temporal_gaps(
+                result.actions, gap_validation_config,
+            )
             return result
 
     result = action_classifier.classify_rally(
@@ -1369,5 +1509,8 @@ def classify_rally_actions(
         net_y=contact_sequence.net_y,
         ball_positions=contact_sequence.ball_positions,
         rally_start_frame=contact_sequence.rally_start_frame,
+    )
+    result.actions = validate_temporal_gaps(
+        result.actions, gap_validation_config,
     )
     return result
