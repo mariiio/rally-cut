@@ -335,6 +335,9 @@ uv run rallycut evaluate-tracking compare-yolo-models --all
 
 Multi-stage filtering to identify active players and exclude non-players. See `tracking/player_filter.py`.
 
+**Pre-step: Stationary Background Removal:**
+Removes tracks with very low position variance (spread < 0.015) AND high presence (>80% of frames) before any post-processing. Background objects (signs, equipment) are always detected but never move; real players in ready position have ~55% presence.
+
 **Primary Track Identification:**
 1. **Hard filters** (must pass all):
    - Not on sidelines (x between 0.20-0.80)

@@ -1060,6 +1060,13 @@ def compute_ball_proximity_scores(
     return scores
 
 
+def _position_spread(x_std: float, y_std: float) -> float:
+    """Geometric mean of X/Y standard deviations (handles one-axis-only movement)."""
+    if x_std > 0 and y_std > 0:
+        return float(np.sqrt(x_std * y_std))
+    return max(x_std, y_std)
+
+
 def compute_track_stats(
     all_positions: list[PlayerPosition],
     total_frames: int,
@@ -1108,8 +1115,7 @@ def compute_track_stats(
         y_std = float(np.std(y_positions)) if len(positions) > 1 else 0.0
         avg_x = float(np.mean(x_positions))
         avg_y = float(np.mean(y_positions))
-        # Geometric mean handles case where movement is mostly in one direction
-        position_spread = float(np.sqrt(x_std * y_std)) if x_std > 0 and y_std > 0 else max(x_std, y_std)
+        position_spread = _position_spread(x_std, y_std)
 
         stats[track_id] = TrackStats(
             track_id=track_id,
@@ -1183,11 +1189,7 @@ def remove_stationary_background_tracks(
         ys = np.array([p.y for p in track_positions])
         x_std = float(np.std(xs))
         y_std = float(np.std(ys))
-        spread = (
-            float(np.sqrt(x_std * y_std))
-            if x_std > 0 and y_std > 0
-            else max(x_std, y_std)
-        )
+        spread = _position_spread(x_std, y_std)
 
         if spread < config.stationary_bg_max_spread:
             removed_ids.add(track_id)
