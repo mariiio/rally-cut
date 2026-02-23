@@ -93,10 +93,11 @@ export async function assessVideoQuality(
 
   // Download video to local temp file for CLI analysis
   await fs.mkdir(TEMP_DIR, { recursive: true });
-  const videoPath = path.join(TEMP_DIR, `quality_${videoId}${path.extname(video.filename || '.mp4')}`);
+  const suffix = `_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const videoPath = path.join(TEMP_DIR, `quality_${videoId}${suffix}${path.extname(video.filename || '.mp4')}`);
 
   try {
-    await downloadFromS3(video.s3Key, videoPath);
+    await downloadFromS3(video.proxyS3Key ?? video.s3Key, videoPath);
   } catch (downloadErr) {
     throw new Error(`Failed to download video for quality check: ${downloadErr}`);
   }
@@ -363,7 +364,7 @@ function runQualityAssessmentCli(videoPath: string): Promise<QualityAssessmentRe
 
 function runCourtDetectionCli(videoPath: string): Promise<CourtDetectionResult> {
   return new Promise((resolve, reject) => {
-    const args = ['run', 'rallycut', 'detect-court', videoPath, '--json'];
+    const args = ['run', 'rallycut', 'detect-court', videoPath, '--json', '--quiet'];
 
     console.log(`[QUALITY] Running: uv ${args.join(' ')}`);
 

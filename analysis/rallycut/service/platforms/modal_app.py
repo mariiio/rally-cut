@@ -116,6 +116,7 @@ def detect(request: dict) -> dict:
     print(f"  Video key: {video_key}")
     print(f"  Callback URL: {callback_url}")
 
+    temp_path: str | None = None
     try:
         # Download video from S3
         s3 = boto3.client(
@@ -125,7 +126,7 @@ def detect(request: dict) -> dict:
             region_name=os.environ.get("AWS_REGION", "us-east-1"),
         )
 
-        bucket = os.environ.get("S3_BUCKET_NAME", "rallycut-dev")
+        bucket = os.environ["S3_BUCKET_NAME"]
 
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
             temp_path = tmp.name
@@ -188,9 +189,6 @@ def detect(request: dict) -> dict:
         if response.status == "failed":
             raise RuntimeError(response.error or "Detection failed with no error details")
 
-        # Clean up temp file
-        os.unlink(temp_path)
-
         # Transform response to API webhook format
         from rallycut.service.webhook_utils import build_detection_webhook_payload
 
@@ -232,6 +230,13 @@ def detect(request: dict) -> dict:
             pass
 
         return {"status": "failed", "job_id": job_id, "error": str(e)}
+
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
 
 
 # Local testing entrypoint

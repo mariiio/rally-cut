@@ -212,15 +212,12 @@ export async function checkAndReserveDetectionQuota(
  * Decrements detectionsUsed by 1, clamped to 0.
  */
 export async function releaseDetectionQuota(userId: string): Promise<void> {
-  const quota = await getOrCreateUsageQuota(userId);
-  if (quota.detectionsUsed > 0) {
-    await prisma.userUsageQuota.update({
-      where: { userId },
-      data: {
-        detectionsUsed: { decrement: 1 },
-      },
-    });
-  }
+  await prisma.userUsageQuota.updateMany({
+    where: { userId, detectionsUsed: { gt: 0 } },
+    data: {
+      detectionsUsed: { decrement: 1 },
+    },
+  });
 }
 
 // ============================================================================

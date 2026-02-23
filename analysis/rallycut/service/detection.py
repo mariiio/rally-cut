@@ -206,19 +206,20 @@ class DetectionService:
 
             # Calculate statistics
             stats = cutter.get_cut_stats(video_info.duration, segments)
-            durations = [s.duration for s in segments] if segments else [0.0]
+            rally_durations = [s.duration for s in rally_segments] if rally_segments else [0.0]
 
+            n_rallies = len(rally_segments)
             match_stats = MatchStatistics(
                 total_segments=stats["segment_count"],
-                rally_count=stats["segment_count"],
+                rally_count=n_rallies,
                 total_play_duration=stats["kept_duration"],
                 total_dead_time=stats["removed_duration"],
                 play_percentage=stats["kept_percentage"],
                 avg_rally_duration=(
-                    stats["kept_duration"] / max(1, stats["segment_count"])
+                    stats["kept_duration"] / max(1, n_rallies)
                 ),
-                longest_rally_duration=max(durations),
-                shortest_rally_duration=min(durations) if durations else 0.0,
+                longest_rally_duration=max(rally_durations),
+                shortest_rally_duration=min(rally_durations) if rally_durations else 0.0,
             )
 
             processing_time = time.time() - start_time

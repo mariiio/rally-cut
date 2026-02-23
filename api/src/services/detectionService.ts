@@ -333,7 +333,7 @@ export async function triggerRallyDetection(
   // New job was created - job is guaranteed non-null here (early return handled existingJob case)
   const createdJob = job;
 
-  const callbackUrl = `${env.CORS_ORIGIN.replace("localhost:3000", "localhost:3001")}/v1/webhooks/detection-complete`;
+  const callbackUrl = `${env.API_BASE_URL}/v1/webhooks/detection-complete`;
 
   // Choose between local detection (dev) or Modal (prod)
   const useLocal = shouldUseLocalDetection();
