@@ -590,7 +590,6 @@ def _compute_assignment_cost(
     return cost
 
 
-
 def _assign_all_to_single(
     positions: list[PlayerPosition],
     segments: list[TrackSegment],
