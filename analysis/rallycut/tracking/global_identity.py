@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 # Segment extraction
 INTERACTION_MARGIN_FRAMES = 5  # ±frames around interaction boundary
-MIN_SEGMENT_FRAMES = 5  # Drop segments shorter than this
+MIN_SEGMENT_FRAMES = 5  # Shorter than track filters (20/50) to capture fine-grained splits
 
 # Anchor selection
 MIN_ANCHOR_BHATTACHARYYA = 0.20  # Minimum distance between same-team anchors
@@ -722,6 +722,12 @@ def _assign_segments_to_profiles(
             break
         # Keep last conflict-free assignment as fallback; don't save
         # conflicted rounds (could assign overlapping segments to same player)
+    else:
+        if blocked:
+            logger.debug(
+                f"Conflict resolution exhausted {MAX_REASSIGNMENT_ROUNDS} rounds "
+                f"with {len(blocked)} blocked pairs; no remapping applied"
+            )
 
     # Apply remapping — build lookup for targeted updates
     remap_keys: dict[tuple[int, int], int] = {}  # (track_id, frame) -> new_id
