@@ -28,6 +28,7 @@ Usage:
 from __future__ import annotations
 
 import csv
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -112,6 +113,7 @@ def export_pseudo_labels(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     stats = ExportStats()
+    gold_rally_ids: list[str] = []
 
     # Select cache based on cache_type
     if cache_type == "ensemble":
@@ -203,11 +205,17 @@ def export_pseudo_labels(
             frame_data[frame] = {"visibility": 1, "x": x_norm, "y": y_norm}
             stats.visible_frames += 1
 
-        # Include gold GT labels (overwrite pseudo-labels where available)
-        if include_gold and gt_rally is not None and gt_rally.ground_truth:
+        # Check if this rally has real ball GT (for val-split marker,
+        # independent of whether we bake it into pseudo-labels)
+        has_gold = False
+        if gt_rally is not None and gt_rally.ground_truth:
             gt_ball = [
                 p for p in gt_rally.ground_truth.positions if p.label == "ball"
             ]
+            has_gold = len(gt_ball) > 0
+
+        # Include gold GT labels (overwrite pseudo-labels where available)
+        if has_gold and include_gold:
             for gt_pos in gt_ball:
                 x_norm = max(0.0, min(gt_pos.x, 1.0))
                 y_norm = max(0.0, min(gt_pos.y, 1.0))
@@ -236,6 +244,9 @@ def export_pseudo_labels(
                 ])
                 stats.total_frames += 1
 
+        if has_gold:
+            gold_rally_ids.append(rally_id)
+
         visible_count = sum(
             1 for d in frame_data.values() if d.get("visibility") == 1
         )
@@ -244,6 +255,19 @@ def export_pseudo_labels(
             f"Exported {rally_id[:8]}: "
             f"{visible_count} visible / {max_frame + 1} total frames{gt_tag} → {csv_path}"
         )
+
+    # Write manifest so training can discover GT rallies for val split
+    manifest = {
+        "gold_rally_ids": gold_rally_ids,
+        "cache_type": cache_type,
+        "include_gold": include_gold,
+        "total_rallies": len(rally_list),
+        "gold_label_frames": stats.gold_label_frames,
+    }
+    manifest_path = output_dir / "manifest.json"
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
+    logger.info(f"Wrote manifest: {len(gold_rally_ids)} GT rallies → {manifest_path}")
 
     logger.info(
         f"Export complete: {stats.visible_frames} pseudo-labels, "

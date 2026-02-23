@@ -78,6 +78,7 @@ def train_model(
     Returns:
         Training results dict.
     """
+    import json
     import random
     import re
     import shutil
@@ -132,25 +133,26 @@ def train_model(
     if not rally_ids:
         raise ValueError(
             f"No valid rally data found in {data_dir}. "
-            "Need {rally_id}.csv and images/{rally_id}/ for each rally."
+            "Need <rally_id>.csv and images/<rally_id>/ for each rally."
         )
 
     print(f"  Found {len(rally_ids)} rallies with labels + images")
 
-    # Rallies with real ball GT — force into validation to prevent
-    # eval contamination (pseudo-labels include gold GT overrides)
-    gt_rally_ids = {
-        "1bfcbc4f-64be-44e9-bc5a-1d20b78cca2e",
-        "fb8fd612-ce32-444d-8c58-82774c79cae7",
-        "73581b32-8207-42bb-9af7-12491fdbe65c",
-        "1f87460b-62d4-4af8-a106-f0a9c3d40d03",
-        "c3b31af2-41ba-49f3-9f18-917a4fd9d924",
-        "9dbe457a-af4c-463f-9a8d-eeb115384599",
-        "0af554b5-11cc-4404-aebe-d40cadf21d95",
-        "bd77efd1-612c-431d-8ead-c5be87fd0262",
-        "0d84f858-afad-4cdc-9f72-e88b4137c313",
-        "87ce7bff-2dd3-434e-829c-365e0c53cfcb",
-    }
+    # Read manifest to discover GT rallies (written by pseudo_label_export.py).
+    # GT rallies are forced into validation to prevent eval contamination.
+    manifest_path = data_path / "manifest.json"
+    if not manifest_path.exists():
+        raise ValueError(
+            f"No manifest.json found in {data_dir}. "
+            "Re-export pseudo-labels: python -m experiments.pseudo_label_export "
+            "--output-dir experiments/wasb_pseudo_labels --all-tracked"
+        )
+
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    gt_rally_ids = set(manifest.get("gold_rally_ids", []))
+    print(f"  Manifest: {len(gt_rally_ids)} GT rallies (eval holdout)")
 
     # Split: GT rallies → val, remaining → random 85/15 train/val
     gt_ids = [r for r in rally_ids if r in gt_rally_ids]
