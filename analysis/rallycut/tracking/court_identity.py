@@ -633,14 +633,91 @@ class CourtIdentityResolver:
         """Score side-of-net consistency for no-swap vs swap.
 
         Returns (no_swap_score, swap_score) each in [0, 1].
+
+        A genuine ID swap creates a sudden change in which side of the net a
+        track is on. If a track was ALREADY predominantly on the "wrong" side
+        before the interaction (genuine crosser — an attacker reaching past the
+        net), the post-interaction data does not indicate a swap. We detect this
+        by checking the pre-interaction fraction: if either track was already on
+        the wrong side, we return neutral 0.5/0.5 to avoid false swap decisions.
         """
         cfg = self.config
+        start = interaction.start_frame
         end = interaction.end_frame
         window_end = end + cfg.observation_window
         dead_zone = cfg.net_dead_zone
 
         team_a = team_assignments.get(interaction.track_a, 0)
         team_b = team_assignments.get(interaction.track_b, 1)
+
+        # Genuine-crosser guard: if a track was already on the wrong side of
+        # the net before this interaction, the side-of-net signal is unreliable.
+        # A real ID swap causes a sudden transition AT the interaction boundary;
+        # a genuine crosser has already established a position past the net.
+        #
+        # Two checks: (1) recent window — was the track on the wrong side in the
+        # last 30 frames? (2) extended history — has the track spent significant
+        # time on the wrong side across ALL pre-interaction frames? The extended
+        # check catches players who approach the net frequently but happened to be
+        # on the "correct" side in the recent window due to BoT-SORT non-determinism.
+        pre_window = max(start - cfg.observation_window, 0)
+        a_pre = [
+            ct_a.positions[f] for f in range(pre_window, start)
+            if f in ct_a.positions
+            and abs(ct_a.positions[f][1] - effective_net_y) > dead_zone
+        ]
+        b_pre = [
+            ct_b.positions[f] for f in range(pre_window, start)
+            if f in ct_b.positions
+            and abs(ct_b.positions[f][1] - effective_net_y) > dead_zone
+        ]
+        if len(a_pre) >= cfg.min_pre_frames and len(b_pre) >= cfg.min_pre_frames:
+            a_pre_correct = self._fraction_on_correct_side(
+                a_pre, team_a, dead_zone, effective_net_y
+            )
+            b_pre_correct = self._fraction_on_correct_side(
+                b_pre, team_b, dead_zone, effective_net_y
+            )
+            # If either track was already predominantly on the wrong side
+            # (< 35% correct), this is a genuine crosser, not a swap victim.
+            if a_pre_correct < 0.35 or b_pre_correct < 0.35:
+                logger.debug(
+                    f"  Side-of-net: genuine crosser detected "
+                    f"(a_pre={a_pre_correct:.2f}, b_pre={b_pre_correct:.2f}) "
+                    f"— neutralizing side-of-net score"
+                )
+                return 0.5, 0.5
+
+        # Extended pre-interaction check: use ALL frames before the interaction.
+        # A genuine crosser who frequently approaches the net will have >30% of
+        # their entire pre-interaction history on the "wrong" side. A swap victim
+        # would have been consistently on the correct side (swap hasn't happened).
+        a_pre_all = [
+            ct_a.positions[f] for f in ct_a.positions
+            if f < start
+            and abs(ct_a.positions[f][1] - effective_net_y) > dead_zone
+        ]
+        b_pre_all = [
+            ct_b.positions[f] for f in ct_b.positions
+            if f < start
+            and abs(ct_b.positions[f][1] - effective_net_y) > dead_zone
+        ]
+        for positions_all, team, tid in [
+            (a_pre_all, team_a, interaction.track_a),
+            (b_pre_all, team_b, interaction.track_b),
+        ]:
+            if len(positions_all) >= 20:
+                correct = self._fraction_on_correct_side(
+                    positions_all, team, dead_zone, effective_net_y
+                )
+                if correct < 0.70:
+                    logger.debug(
+                        f"  Side-of-net: extended genuine crosser detected "
+                        f"(track {tid}: {correct:.2f} correct over "
+                        f"{len(positions_all)} pre-interaction frames) "
+                        f"— neutralizing side-of-net score"
+                    )
+                    return 0.5, 0.5
 
         # Collect post-interaction positions (outside dead zone)
         a_positions: list[tuple[float, float]] = []
