@@ -1748,6 +1748,249 @@ def _human_size(size_bytes: int) -> str:
     return f"{size_f:.1f} TB"
 
 
+@app.command("push-weights")
+def push_weights(
+    name: str | None = typer.Option(
+        None,
+        "--name",
+        "-n",
+        help="Named snapshot (also updates 'latest')",
+    ),
+    include_external: bool = typer.Option(
+        False,
+        "--include-external",
+        help="Also backup external weights (game_state_classifier, WASB pretrained)",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Preview what would be uploaded without uploading",
+    ),
+    weights_dir: Path = typer.Option(
+        Path("weights"),
+        "--weights-dir",
+        help="Path to weights directory",
+    ),
+) -> None:
+    """Push model weights to S3 for backup.
+
+    Uploads trained model weights (VideoMAE, TemporalMaxer, WASB, classifiers)
+    with content-hash deduplication. Only new/changed files are uploaded.
+
+    Examples:
+        rallycut train push-weights
+        rallycut train push-weights --name pre-retrain
+        rallycut train push-weights --include-external
+        rallycut train push-weights --dry-run
+    """
+    from rallycut.training.backup import (
+        WEIGHT_GROUPS,
+        DatasetBackup,
+        make_transfer_progress,
+    )
+
+    # Validate weights directory
+    if not weights_dir.exists():
+        rprint(f"[red]Weights directory not found: {weights_dir}[/red]")
+        raise typer.Exit(1)
+
+    # Scan files for dry-run display and validation
+    groups = ["trained"]
+    if include_external:
+        groups.append("external")
+
+    found_files: list[tuple[str, str, int]] = []  # (rel_path, group, size)
+    missing_files: list[tuple[str, str]] = []  # (rel_path, group)
+
+    for group in groups:
+        for rel_path in WEIGHT_GROUPS[group]:
+            full_path = weights_dir / rel_path
+            if full_path.exists():
+                found_files.append((rel_path, group, full_path.stat().st_size))
+            else:
+                missing_files.append((rel_path, group))
+
+    if not found_files:
+        rprint("[red]No weight files found to push[/red]")
+        raise typer.Exit(1)
+
+    total_size = sum(size for _, _, size in found_files)
+
+    rprint("[bold]Push Model Weights to S3[/bold]")
+    rprint()
+    rprint(f"  Snapshot: [cyan]{name or 'latest'}[/cyan]")
+    rprint(f"  Files: [cyan]{len(found_files)}[/cyan] ({_human_size(total_size)})")
+    if include_external:
+        rprint("  Including: [cyan]trained + external[/cyan]")
+
+    if missing_files:
+        rprint()
+        rprint(f"  [yellow]Skipping {len(missing_files)} missing file(s):[/yellow]")
+        for rel_path, group in missing_files:
+            rprint(f"    - {rel_path} ({group})")
+
+    if dry_run:
+        rprint()
+        rprint("[bold]Files to upload:[/bold]")
+        for rel_path, group, size in found_files:
+            rprint(f"  [cyan]{rel_path}[/cyan]  ({_human_size(size)}, {group})")
+        rprint()
+        rprint("[yellow]Dry run — nothing uploaded[/yellow]")
+        return
+
+    rprint()
+
+    try:
+        backup = DatasetBackup()
+    except ValueError as e:
+        rprint(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    rprint(f"  Bucket: [cyan]{backup.bucket}[/cyan]")
+    rprint()
+
+    with make_transfer_progress() as progress:
+        result = backup.push_weights(
+            weights_dir,
+            name=name,
+            include_external=include_external,
+            progress=progress,
+        )
+
+    rprint()
+    rprint("[green]Push complete![/green]")
+    rprint(f"  Uploaded: [green]{result.uploaded_files}[/green] files ({_human_size(result.uploaded_bytes)})")
+    rprint(f"  Skipped: [yellow]{result.skipped_files}[/yellow] files (already in S3)")
+
+    if result.errors:
+        rprint()
+        rprint("[red]Errors:[/red]")
+        for err in result.errors:
+            rprint(f"  - {err}")
+
+
+@app.command("pull-weights")
+def pull_weights(
+    name: str | None = typer.Option(
+        None,
+        "--name",
+        "-n",
+        help="Named snapshot to pull (default: 'latest')",
+    ),
+    include_external: bool = typer.Option(
+        False,
+        "--include-external",
+        help="Also pull external weights",
+    ),
+    weights_dir: Path = typer.Option(
+        Path("weights"),
+        "--weights-dir",
+        help="Path to weights directory",
+    ),
+) -> None:
+    """Pull model weights from S3.
+
+    Downloads weight files from the latest (or named) snapshot.
+    Files that already match locally (by content hash) are skipped.
+
+    Examples:
+        rallycut train pull-weights
+        rallycut train pull-weights --name pre-retrain
+        rallycut train pull-weights --include-external
+    """
+    from rallycut.training.backup import DatasetBackup, make_transfer_progress
+
+    rprint("[bold]Pull Model Weights from S3[/bold]")
+    rprint()
+
+    try:
+        backup = DatasetBackup()
+    except ValueError as e:
+        rprint(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    snapshot_label = name or "latest"
+    rprint(f"  Snapshot: [cyan]{snapshot_label}[/cyan]")
+    rprint(f"  Bucket: [cyan]{backup.bucket}[/cyan]")
+    rprint(f"  Output: [cyan]{weights_dir}[/cyan]")
+    rprint()
+
+    weights_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with make_transfer_progress() as progress:
+            result = backup.pull_weights(
+                weights_dir,
+                name=name,
+                include_external=include_external,
+                progress=progress,
+            )
+    except Exception as e:
+        rprint(f"[red]Pull failed: {e}[/red]")
+        raise typer.Exit(1)
+
+    rprint()
+    rprint("[green]Pull complete![/green]")
+    rprint(f"  Downloaded: [green]{result.downloaded_files}[/green] files ({_human_size(result.downloaded_bytes)})")
+    rprint(f"  Skipped: [yellow]{result.skipped_files}[/yellow] files (already up to date)")
+
+    if result.errors:
+        rprint()
+        rprint("[red]Errors:[/red]")
+        for err in result.errors:
+            rprint(f"  - {err}")
+
+
+@app.command("list-weights")
+def list_weights() -> None:
+    """List weight snapshots backed up in S3.
+
+    Example:
+        rallycut train list-weights
+    """
+    from rallycut.training.backup import DatasetBackup
+
+    try:
+        backup = DatasetBackup()
+    except ValueError as e:
+        rprint(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    rprint("[bold]Weight Snapshots[/bold]")
+    rprint(f"  Bucket: [cyan]{backup.bucket}[/cyan]")
+    rprint()
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        progress.add_task("Listing snapshots...", total=None)
+        snapshots = backup.list_weight_snapshots()
+
+    if not snapshots:
+        rprint("[yellow]No weight snapshots found in S3[/yellow]")
+        return
+
+    table = Table(title="Weight Snapshots")
+    table.add_column("Name", style="cyan")
+    table.add_column("Files", justify="right", style="green")
+    table.add_column("Size", justify="right")
+    table.add_column("Created")
+
+    for snap in snapshots:
+        size = _human_size(snap.total_size_bytes) if snap.total_size_bytes else "-"
+        created = snap.created[:19] if snap.created else "-"
+        table.add_row(
+            snap.name,
+            str(snap.file_count),
+            size,
+            created,
+        )
+
+    console.print(table)
+
+
 @app.command("extract-features")
 def extract_features(
     stride: int = typer.Option(8, "--stride", "-s", help="Frame stride between windows"),

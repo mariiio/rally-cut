@@ -74,6 +74,15 @@ uv run rallycut train restore --name beach_v2 --upload-to-app-s3  # + upload to 
 uv run rallycut train restore --name beach_v2 --dry-run  # Preview without changes
 uv run rallycut train list-remote                     # List datasets backed up in S3
 
+# Model weight backup (survives local machine loss and Modal volume clears)
+uv run rallycut train push-weights                      # Push trained weights (latest)
+uv run rallycut train push-weights --name pre-retrain   # Named snapshot + update latest
+uv run rallycut train push-weights --include-external   # Also backup external weights
+uv run rallycut train push-weights --dry-run            # Preview what would upload
+uv run rallycut train pull-weights                      # Pull latest weights
+uv run rallycut train pull-weights --name pre-retrain   # Pull specific snapshot
+uv run rallycut train list-weights                      # List snapshots in S3
+
 # Training is preemption-resilient:
 # - Auto-retries up to 2 times on GPU preemption
 # - Checkpoints saved every 100 steps (~5 min max loss)
