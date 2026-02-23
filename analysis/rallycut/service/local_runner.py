@@ -16,33 +16,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import tempfile
 import time
 from pathlib import Path
 
-import boto3
 import httpx
 
-
-def download_from_s3(s3_key: str, bucket: str, temp_dir: Path) -> Path:
-    """Download video from S3 to temp directory."""
-    s3_config = {
-        "aws_access_key_id": os.environ.get("AWS_ACCESS_KEY_ID"),
-        "aws_secret_access_key": os.environ.get("AWS_SECRET_ACCESS_KEY"),
-        "region_name": os.environ.get("AWS_REGION", "us-east-1"),
-    }
-    # Support MinIO/local S3 endpoint
-    if os.environ.get("S3_ENDPOINT"):
-        s3_config["endpoint_url"] = os.environ["S3_ENDPOINT"]
-    s3 = boto3.client("s3", **s3_config)
-
-    filename = Path(s3_key).name
-    local_path = temp_dir / filename
-
-    print(f"[LOCAL] Downloading s3://{bucket}/{s3_key} to {local_path}")
-    s3.download_file(bucket, s3_key, str(local_path))
-    return local_path
+from rallycut.service.s3_utils import create_s3_client, download_from_s3
 
 
 def send_progress(callback_url: str, webhook_secret: str | None, job_id: str, progress: float, message: str) -> None:
@@ -50,7 +30,9 @@ def send_progress(callback_url: str, webhook_secret: str | None, job_id: str, pr
     print(f"[{progress*100:.0f}%] {message}")
 
     # Build progress endpoint URL from callback URL
-    progress_url = callback_url.replace("detection-complete", "detection-progress")
+    # Derive from base URL path to avoid fragile string replacement
+    base_url = callback_url.rsplit("/", 1)[0] if "/" in callback_url else callback_url
+    progress_url = f"{base_url}/detection-progress"
 
     headers = {"Content-Type": "application/json"}
     if webhook_secret:
@@ -97,15 +79,7 @@ def save_results_to_s3(
 ) -> str | None:
     """Save detection results JSON to S3 alongside the video."""
     try:
-        s3_config = {
-            "aws_access_key_id": os.environ.get("AWS_ACCESS_KEY_ID"),
-            "aws_secret_access_key": os.environ.get("AWS_SECRET_ACCESS_KEY"),
-            "region_name": os.environ.get("AWS_REGION", "us-east-1"),
-        }
-        # Support MinIO/local S3 endpoint
-        if os.environ.get("S3_ENDPOINT"):
-            s3_config["endpoint_url"] = os.environ["S3_ENDPOINT"]
-        s3 = boto3.client("s3", **s3_config)
+        s3 = create_s3_client()
 
         # Store results in same folder as video
         video_dir = str(Path(video_s3_key).parent)
@@ -143,6 +117,7 @@ def run_detection(
         # Import detection service
         from rallycut.service.detection import DetectionService
         from rallycut.service.schemas import DetectionConfig, DetectionRequest
+        from rallycut.service.webhook_utils import build_detection_webhook_payload
 
         # Determine if we need to download from S3
         if video_path.startswith("s3://") or (s3_bucket and not Path(video_path).exists()):
@@ -156,7 +131,7 @@ def run_detection(
                 video_s3_key = video_path
 
             temp_dir = Path(tempfile.mkdtemp(prefix="rallycut_"))
-            local_video_path = download_from_s3(video_s3_key, s3_bucket or "", temp_dir)
+            local_video_path = download_from_s3(video_s3_key, s3_bucket or "", temp_dir, label="[LOCAL]")
         else:
             local_video_path = Path(video_path)
 
@@ -201,24 +176,9 @@ def run_detection(
 
         response = service.detect(request, progress_callback)
 
-        # Transform to API webhook format
-        rallies = []
-        for segment in response.segments:
-            if segment.segment_type.value == "rally":
-                rallies.append({
-                    "start_ms": int(segment.start_time * 1000),
-                    "end_ms": int(segment.end_time * 1000),
-                })
-
-        # Include suggested rallies (segments that almost passed detection)
-        suggested_rallies = []
-        for sugg in response.suggested_segments:
-            suggested_rallies.append({
-                "start_ms": int(sugg.start_time * 1000),
-                "end_ms": int(sugg.end_time * 1000),
-                "confidence": sugg.avg_confidence,
-                "rejection_reason": sugg.rejection_reason.value,
-            })
+        # Check if detection failed internally
+        if response.status == "failed":
+            raise RuntimeError(response.error or "Detection failed with no error details")
 
         # Build full results for S3 storage
         full_results = {
@@ -248,15 +208,11 @@ def run_detection(
             result_s3_key = save_results_to_s3(full_results, video_s3_key, s3_bucket)
 
         # Build webhook payload (simplified format for API)
-        webhook_payload = {
-            "job_id": job_id,
-            "status": "completed",
-            "rallies": rallies,
-            "suggested_rallies": suggested_rallies,
-            "result_s3_key": result_s3_key,
-        }
+        webhook_payload = build_detection_webhook_payload(
+            response, job_id, result_s3_key=result_s3_key,
+        )
 
-        print(f"[LOCAL] Detection complete: {len(rallies)} rallies found")
+        print(f"[LOCAL] Detection complete: {len(webhook_payload['rallies'])} rallies found")
         print(f"[LOCAL] Processing time: {time.time() - start_time:.1f}s")
 
         # Send webhook

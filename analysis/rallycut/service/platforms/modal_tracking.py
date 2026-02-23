@@ -46,7 +46,6 @@ image = (
         # Utilities
         "tqdm>=4.65.0",
         "scipy>=1.11.0",
-        "filterpy>=1.4.5",
         # ONNX inference (GPU-accelerated for WASB ball tracker)
         "onnxruntime-gpu>=1.17.0",
         # AWS S3 access
@@ -97,6 +96,7 @@ def track_batch(request: dict) -> dict:
     """
     import os
     import tempfile
+    import time as _time
 
     import boto3
     import httpx
@@ -142,7 +142,17 @@ def track_batch(request: dict) -> dict:
             video_path = tmp.name
 
         print(f"Downloading s3://{s3_bucket}/{video_key} to {video_path}")
-        s3.download_file(s3_bucket, video_key, video_path)
+        for attempt in range(1, 4):
+            try:
+                s3.download_file(s3_bucket, video_key, video_path)
+                break
+            except Exception as dl_err:
+                if attempt < 3:
+                    delay = 2 ** (attempt - 1)
+                    print(f"S3 download failed (attempt {attempt}/3), retrying in {delay}s: {dl_err}")
+                    _time.sleep(delay)
+                else:
+                    raise
         print("Video downloaded successfully")
 
         # Process each rally
@@ -172,18 +182,25 @@ def track_batch(request: dict) -> dict:
             }
 
             webhook_ok = False
-            try:
-                with httpx.Client(timeout=30.0) as client:
-                    resp = client.post(
-                        f"{callback_url}/tracking-rally-complete",
-                        json=rally_payload,
-                        headers=headers,
-                    )
-                    resp.raise_for_status()
-                    webhook_ok = True
-                    print(f"Rally webhook sent: {rally_result['status']}")
-            except Exception as e:
-                print(f"Rally webhook failed: {e}")
+            for wh_attempt in range(1, 4):
+                try:
+                    with httpx.Client(timeout=30.0) as client:
+                        resp = client.post(
+                            f"{callback_url}/tracking-rally-complete",
+                            json=rally_payload,
+                            headers=headers,
+                        )
+                        resp.raise_for_status()
+                        webhook_ok = True
+                        print(f"Rally webhook sent: {rally_result['status']}")
+                        break
+                except Exception as e:
+                    if wh_attempt < 3:
+                        delay = 3 ** (wh_attempt - 1)  # 1s, 3s
+                        print(f"Rally webhook failed (attempt {wh_attempt}/3), retrying in {delay}s: {e}")
+                        _time.sleep(delay)
+                    else:
+                        print(f"Rally webhook failed after 3 attempts: {e}")
 
             if rally_result["status"] == "completed" and webhook_ok:
                 completed_count += 1

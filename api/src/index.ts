@@ -22,6 +22,7 @@ import videoSharesRouter from "./routes/videoShares.js";
 import accessRequestsRouter from "./routes/accessRequests.js";
 import videosRouter from "./routes/videos.js";
 import webhooksRouter from "./routes/webhooks.js";
+import { cleanupStaleJobs } from "./services/detectionService.js";
 
 const app = express();
 
@@ -85,6 +86,10 @@ app.use(errorHandler);
 if (process.env["NODE_ENV"] !== "test") {
   app.listen(env.PORT, () => {
     console.log(`Server running on port ${env.PORT}`);
+    // Clean up stale jobs from previous crashes/timeouts
+    cleanupStaleJobs().catch((e) =>
+      console.error(`[STARTUP] Failed to clean up stale jobs: ${e}`)
+    );
   });
 }
 

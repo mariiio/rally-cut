@@ -207,6 +207,22 @@ export async function checkAndReserveDetectionQuota(
   });
 }
 
+/**
+ * Release a previously reserved detection quota slot (e.g., on detection failure).
+ * Decrements detectionsUsed by 1, clamped to 0.
+ */
+export async function releaseDetectionQuota(userId: string): Promise<void> {
+  const quota = await getOrCreateUsageQuota(userId);
+  if (quota.detectionsUsed > 0) {
+    await prisma.userUsageQuota.update({
+      where: { userId },
+      data: {
+        detectionsUsed: { decrement: 1 },
+      },
+    });
+  }
+}
+
 // ============================================================================
 // Upload Quota
 // ============================================================================
