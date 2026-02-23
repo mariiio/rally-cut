@@ -1342,12 +1342,23 @@ class PlayerTracker:
                     PlayerFilterConfig,
                     classify_teams,
                     compute_court_split,
+                    remove_stationary_background_tracks,
                     split_tracks_at_jumps,
                     stabilize_track_ids,
                 )
 
                 # Get config (or create default)
                 config = filter_config or PlayerFilterConfig()
+
+                # Pre-step: Remove stationary background tracks before any
+                # post-processing to prevent them from interfering with
+                # tracklet linking, court identity, etc.
+                positions, removed_bg_tracks = (
+                    remove_stationary_background_tracks(
+                        positions, config,
+                        total_frames=total_frames_in_range,
+                    )
+                )
 
                 # Step 0: Split tracks at large position jumps (detects ID switches)
                 split_info: list[tuple[int, int, int]] = []

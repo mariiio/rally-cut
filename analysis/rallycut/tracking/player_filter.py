@@ -170,6 +170,17 @@ class PlayerFilterConfig:
     referee_ball_proximity_max: float = 0.12  # Referees occasionally near ball trajectory
     referee_y_std_max: float = 0.04  # Referees don't move up/down court like players (< 4%)
 
+    # Stationary background track pre-filter
+    # Removes tracks from raw positions that are clearly fixed objects (signs, equipment,
+    # distant spectators). These have near-zero position variance AND high presence.
+    # Key insight: real players in ready position can have spread < 0.015 at ~55% presence,
+    # but background objects are present in 80-100% of frames because they never leave.
+    # Runs before split/merge/link to prevent background tracks from interfering.
+    enable_stationary_background_filter: bool = True
+    stationary_bg_max_spread: float = 0.015  # Max position_spread (geometric mean of x/y std)
+    stationary_bg_min_detections: int = 50  # Minimum detections to be considered
+    stationary_bg_min_presence: float = 0.80  # Must be present in 80%+ of frames (background = always there)
+
 
 @dataclass
 class CourtFilterConfig:
@@ -1116,6 +1127,85 @@ def compute_track_stats(
         )
 
     return stats
+
+
+def remove_stationary_background_tracks(
+    positions: list[PlayerPosition],
+    config: PlayerFilterConfig,
+    total_frames: int | None = None,
+) -> tuple[list[PlayerPosition], set[int]]:
+    """Remove tracks that are clearly stationary background objects.
+
+    Background objects (signs, equipment, distant spectators at fixed positions)
+    have very low position variance despite being consistently detected. Real
+    players always move more than the threshold even when standing still due to
+    body sway, game reactions, and court movement.
+
+    Runs before split/merge/link to prevent background tracks from interfering
+    with post-processing (tracklet linking, court identity, etc.).
+
+    Args:
+        positions: All raw player positions from tracker.
+        config: Filter configuration with stationary background thresholds.
+        total_frames: Total frames in the rally. If None, estimated from positions.
+
+    Returns:
+        Tuple of (filtered positions, set of removed track IDs).
+    """
+    if not positions or not config.enable_stationary_background_filter:
+        return positions, set()
+
+    # Estimate total frames if not provided
+    if total_frames is None:
+        frame_nums = {p.frame_number for p in positions}
+        total_frames = max(frame_nums) - min(frame_nums) + 1 if frame_nums else 1
+
+    # Group by track
+    tracks: dict[int, list[PlayerPosition]] = {}
+    for p in positions:
+        if p.track_id not in tracks:
+            tracks[p.track_id] = []
+        tracks[p.track_id].append(p)
+
+    removed_ids: set[int] = set()
+
+    for track_id, track_positions in tracks.items():
+        n = len(track_positions)
+        if n < config.stationary_bg_min_detections:
+            continue
+
+        presence = n / total_frames
+        if presence < config.stationary_bg_min_presence:
+            continue
+
+        # Compute position spread
+        xs = np.array([p.x for p in track_positions])
+        ys = np.array([p.y for p in track_positions])
+        x_std = float(np.std(xs))
+        y_std = float(np.std(ys))
+        spread = (
+            float(np.sqrt(x_std * y_std))
+            if x_std > 0 and y_std > 0
+            else max(x_std, y_std)
+        )
+
+        if spread < config.stationary_bg_max_spread:
+            removed_ids.add(track_id)
+            logger.info(
+                f"Stationary background filter: removing track {track_id} "
+                f"({n} det, presence={presence:.0%}, spread={spread:.4f}, "
+                f"pos=({float(np.mean(xs)):.3f}, {float(np.mean(ys)):.3f}))"
+            )
+
+    if removed_ids:
+        original_count = len(positions)
+        positions = [p for p in positions if p.track_id not in removed_ids]
+        logger.info(
+            f"Stationary background filter: removed {len(removed_ids)} tracks "
+            f"({sorted(removed_ids)}), {original_count} -> {len(positions)} positions"
+        )
+
+    return positions, removed_ids
 
 
 def stabilize_track_ids(
