@@ -16,12 +16,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import tempfile
 import time
 import traceback
 from pathlib import Path
 
 import httpx
+
+# Configure logging so detection/cutter diagnostics are visible
+logging.basicConfig(
+    level=logging.INFO,
+    format="[LOCAL] %(name)s: %(message)s",
+)
 
 from rallycut.service.s3_utils import create_s3_client, download_from_s3
 

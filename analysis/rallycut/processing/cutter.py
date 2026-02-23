@@ -1252,6 +1252,12 @@ class VideoCutter:
         if progress_callback:
             progress_callback(0.0, "Loading TemporalMaxer model...")
 
+        logger.info(
+            "TemporalMaxer: model=%s, video=%s, fps=%.1f, frames=%d, hash=%s",
+            model_path, input_path, source_fps, source_frame_count,
+            content_hash[:12] if content_hash else "?",
+        )
+
         inference = TemporalMaxerInference(model_path, device=self.device)
 
         # Load cached features (or extract inline if not cached)
@@ -1262,16 +1268,23 @@ class VideoCutter:
         stride = self.base_stride
 
         cached = cache.get(content_hash, stride)
+        feature_source = "default_cache"
         if cached is None:
             # Check training data dir (backward compat with extract-features command)
             from rallycut.temporal.features import FeatureCache as FeatureCacheImpl
 
             training_cache = FeatureCacheImpl(cache_dir=Path("training_data/features"))
             cached = training_cache.get(content_hash, stride)
+            if cached is not None:
+                feature_source = "training_data"
 
         if cached is None:
             # Extract features inline (slow — VideoMAE over full video)
-            logger.info("Extracting VideoMAE features for TemporalMaxer...")
+            feature_source = "inline_extraction"
+            logger.info(
+                "TemporalMaxer: extracting features inline (stride=%d, not cached)",
+                stride,
+            )
             if progress_callback:
                 progress_callback(0.05, "Extracting video features...")
             from lib.volleyball_ml.video_mae import GameStateClassifier
@@ -1294,6 +1307,11 @@ class VideoCutter:
         else:
             features, _ = cached
 
+        logger.info(
+            "TemporalMaxer: features=%s, shape=%s, stride=%d, source=%s",
+            type(features).__name__, features.shape, stride, feature_source,
+        )
+
         if progress_callback:
             progress_callback(0.1, "Running TemporalMaxer inference...")
 
@@ -1302,6 +1320,17 @@ class VideoCutter:
             fps=source_fps,
             stride=stride,
             min_segment_confidence=0.6,
+        )
+
+        logger.info(
+            "TemporalMaxer: %d raw segments, prob range [%.3f, %.3f], "
+            "mean=%.3f, %d/%d windows predicted rally",
+            len(result.segments),
+            float(result.window_probs.min()) if len(result.window_probs) > 0 else 0,
+            float(result.window_probs.max()) if len(result.window_probs) > 0 else 0,
+            float(result.window_probs.mean()) if len(result.window_probs) > 0 else 0,
+            int(result.window_predictions.sum()) if len(result.window_predictions) > 0 else 0,
+            len(result.window_predictions),
         )
 
         if progress_callback:
@@ -1403,16 +1432,27 @@ class VideoCutter:
         Returns:
             Tuple of (confirmed_segments, suggested_segments)
         """
+        logger.info(
+            "analyze_only: temporal_maxer=%s, binary_head=%s, heuristics=%s, "
+            "stride=%d, min_play=%.1f, proxy=%s",
+            self.use_temporal_maxer, self.use_binary_head_decoder,
+            self.use_heuristics, self.base_stride,
+            self.min_play_duration, self.use_proxy,
+        )
+
         # Use TemporalMaxer if explicitly enabled (highest priority)
         if self.use_temporal_maxer:
+            logger.info("Pipeline selected: TemporalMaxer (explicit)")
             return self._analyze_with_temporal_maxer(input_path, progress_callback)
 
         # Use binary head decoder if explicitly enabled
         if self.use_binary_head_decoder:
+            logger.info("Pipeline selected: binary head (explicit)")
             return self._analyze_with_binary_head_decoder(input_path, progress_callback)
 
         # Use temporal model if explicitly enabled (deprecated)
         if self.use_temporal_model:
+            logger.info("Pipeline selected: temporal model (deprecated, explicit)")
             return self._analyze_with_temporal_model(input_path, progress_callback)
 
         # If heuristics explicitly requested, skip auto-selection
