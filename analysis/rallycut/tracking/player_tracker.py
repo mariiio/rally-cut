@@ -1353,11 +1353,9 @@ class PlayerTracker:
                 # Pre-step: Remove stationary background tracks before any
                 # post-processing to prevent them from interfering with
                 # tracklet linking, court identity, etc.
-                positions, removed_bg_tracks = (
-                    remove_stationary_background_tracks(
-                        positions, config,
-                        total_frames=total_frames_in_range,
-                    )
+                positions, removed_bg_tracks = remove_stationary_background_tracks(
+                    positions, config,
+                    total_frames=total_frames_in_range,
                 )
 
                 # Step 0: Split tracks at large position jumps (detects ID switches)
@@ -1588,6 +1586,7 @@ class PlayerTracker:
                     court_identity_swaps=num_court_swaps,
                     uncertain_identity_count=len(uncertain_windows),
                     court_detection_insights=court_detection_insights,
+                    stationary_bg_removed_count=len(removed_bg_tracks),
                 )
 
             processing_time_ms = (time.time() - start_time) * 1000

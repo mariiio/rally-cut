@@ -21,9 +21,8 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
-from typing import cast
 
 import cv2
 import numpy as np
@@ -141,6 +140,8 @@ def run_yolo_on_frames(
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {video_path}")
 
+    # Seeking is intentional here — this diagnostic script runs YOLO on
+    # arbitrary rally ranges, not full videos, so sequential read is impractical.
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
     results_per_frame: list[dict] = []
@@ -369,7 +370,7 @@ def print_report(meta: dict, stats: dict, frames_def: list[dict], frames_agg: li
     total = stats["total_frames"]
 
     print(f"\n{'='*70}")
-    print(f"YOLO Detection Diagnostic Report")
+    print("YOLO Detection Diagnostic Report")
     print(f"{'='*70}")
     print(f"Rally:   {rally_id}")
     print(f"Video:   {video_id}")
@@ -408,7 +409,7 @@ def print_report(meta: dict, stats: dict, frames_def: list[dict], frames_agg: li
     print()
 
     # --- Post-filter (_filter_detections) ---
-    print(f"AFTER _filter_detections (aspect ratio + min area + cap@8) on default run")
+    print("AFTER _filter_detections (aspect ratio + min area + cap@8) on default run")
     print("-" * 50)
     pf_dist = stats["postfilter_count_distribution"]
     for n in sorted(pf_dist.keys()):
@@ -424,7 +425,7 @@ def print_report(meta: dict, stats: dict, frames_def: list[dict], frames_agg: li
     # --- 3->4 analysis ---
     frames_3_def = stats["frames_3_default"]
     frames_3_to_4 = stats["frames_3_to_4_aggressive"]
-    print(f"3->4 PLAYER TRANSITION ANALYSIS")
+    print("3->4 PLAYER TRANSITION ANALYSIS")
     print("-" * 50)
     print(f"  Frames with exactly 3 players (default): {frames_3_def} ({100.0*frames_3_def/total_frames:.1f}%)")
     if frames_3_def > 0:
@@ -442,7 +443,7 @@ def print_report(meta: dict, stats: dict, frames_def: list[dict], frames_agg: li
     print()
 
     # --- 4th player confidence range ---
-    print(f"4TH PLAYER CONFIDENCE RANGE (when 4+ visible at conf=0.01 but fewer at default)")
+    print("4TH PLAYER CONFIDENCE RANGE (when 4+ visible at conf=0.01 but fewer at default)")
     print("-" * 50)
     n_samples = stats["fourth_player_conf_samples_count"]
     if n_samples == 0:
@@ -486,7 +487,7 @@ def print_report(meta: dict, stats: dict, frames_def: list[dict], frames_agg: li
     print()
 
     # --- Spatial analysis of where 4th player appears ---
-    print(f"SPATIAL ANALYSIS: Where is the 4th player?")
+    print("SPATIAL ANALYSIS: Where is the 4th player?")
     print("-" * 50)
     # For frames where aggressive gets 4+ and default gets <4,
     # show the Y position of the lost detection
@@ -506,10 +507,10 @@ def print_report(meta: dict, stats: dict, frames_def: list[dict], frames_agg: li
         arr_y = np.array(fourth_y_positions)
         arr_x = np.array(fourth_x_positions)
         print(f"  Lost detections (at conf=0.01 vs pipeline default): {len(arr_y)}")
-        print(f"  Y position (0=top/far, 1=bottom/near):")
+        print("  Y position (0=top/far, 1=bottom/near):")
         print(f"    Mean={arr_y.mean():.3f}  Min={arr_y.min():.3f}  Max={arr_y.max():.3f}")
         print(f"    P25={np.percentile(arr_y,25):.3f}  P75={np.percentile(arr_y,75):.3f}")
-        print(f"  X position (0=left, 1=right):")
+        print("  X position (0=left, 1=right):")
         print(f"    Mean={arr_x.mean():.3f}  Min={arr_x.min():.3f}  Max={arr_x.max():.3f}")
 
         # Where in Y does the 4th player appear? (near vs far)
@@ -517,7 +518,7 @@ def print_report(meta: dict, stats: dict, frames_def: list[dict], frames_agg: li
         mid = ((arr_y >= 0.48) & (arr_y <= 0.58)).sum()
         far = (arr_y < 0.48).sum()
         total_pts = len(arr_y)
-        print(f"  Court zone:")
+        print("  Court zone:")
         print(f"    Far  (y<0.48):       {far:4d} ({100.0*far/total_pts:.1f}%)")
         print(f"    Mid  (0.48-0.58):    {mid:4d} ({100.0*mid/total_pts:.1f}%)")
         print(f"    Near (y>0.58):       {near:4d} ({100.0*near/total_pts:.1f}%)")
@@ -526,7 +527,7 @@ def print_report(meta: dict, stats: dict, frames_def: list[dict], frames_agg: li
     print()
 
     # --- Interpretation ---
-    print(f"INTERPRETATION")
+    print("INTERPRETATION")
     print("-" * 50)
     pct_detectable_at_min = 100.0 * sum(v for k, v in a_dist.items() if k >= 4) / total_frames
     if pct_detectable_at_min < 10:
@@ -586,7 +587,7 @@ def main() -> None:
     print(f"  Duration:  {(meta['end_ms']-meta['start_ms'])/1000:.1f}s")
     print(f"  FPS:       {meta['fps']:.1f}")
 
-    print(f"Resolving video path...")
+    print("Resolving video path...")
     video_path = get_video_path_for_rally(meta["video_id"])
     print(f"  Video:     {video_path}")
 

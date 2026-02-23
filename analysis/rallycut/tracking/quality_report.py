@@ -47,6 +47,7 @@ class TrackingQualityReport:
 
     # Distractor detection
     unique_raw_track_count: int = 0  # Unique tracks before filtering
+    stationary_bg_removed_count: int = 0  # Tracks removed by stationary background filter
     calibration_recommended: bool = False  # True if calibration would likely help
 
     # Court detection
@@ -81,6 +82,7 @@ class TrackingQualityReport:
             "swapFixCount": self.swap_fix_count,
             "appearanceLinkCount": self.appearance_link_count,
             "uniqueRawTrackCount": self.unique_raw_track_count,
+            "stationaryBgRemovedCount": self.stationary_bg_removed_count,
             "calibrationRecommended": self.calibration_recommended,
             "courtDetected": self.court_detected,
             "courtConfidence": self.court_confidence,
@@ -113,6 +115,7 @@ def compute_quality_report(
     uncertain_identity_count: int = 0,
     court_detection_insights: CourtDetectionInsights | None = None,
     contact_readiness_issues: list[str] | None = None,
+    stationary_bg_removed_count: int = 0,
 ) -> TrackingQualityReport:
     """Compute a tracking quality report from tracking results.
 
@@ -143,6 +146,7 @@ def compute_quality_report(
     report.court_identity_interactions = court_identity_interactions
     report.court_identity_swaps = court_identity_swaps
     report.uncertain_identity_count = uncertain_identity_count
+    report.stationary_bg_removed_count = stationary_bg_removed_count
 
     duration_sec = frame_count / video_fps if video_fps > 0 else 0.0
 
