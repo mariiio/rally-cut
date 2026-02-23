@@ -315,7 +315,13 @@ async function runPlayerTracker(
 
         // Read output JSON
         const jsonContent = await fs.readFile(outputPath, 'utf-8');
-        const result = JSON.parse(jsonContent);
+        let result;
+        try {
+          result = JSON.parse(jsonContent);
+        } catch {
+          reject(new Error(`Player tracker output is not valid JSON: ${jsonContent.slice(0, 200)}`));
+          return;
+        }
 
         // Flat positions list with frameNumber, trackId, x, y, width, height, confidence
         const positions: PlayerPosition[] = (result.positions || []).map((p: PlayerPosition) => ({

@@ -18,6 +18,8 @@ Environment setup:
 
 from __future__ import annotations
 
+import traceback
+
 import modal
 
 # Define the Modal app
@@ -190,8 +192,6 @@ def detect(request: dict) -> dict:
 
     except Exception as e:
         print(f"Detection failed: {e}")
-        import traceback
-
         traceback.print_exc()
 
         # Try to send error to callback

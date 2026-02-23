@@ -18,6 +18,7 @@ import argparse
 import json
 import tempfile
 import time
+import traceback
 from pathlib import Path
 
 import httpx
@@ -105,7 +106,7 @@ def run_detection(
     callback_url: str,
     webhook_secret: str | None,
     s3_bucket: str | None = None,
-    model_variant: str = "indoor",
+    model_variant: str = "beach",
 ) -> None:
     """Run detection and send results via webhook."""
     start_time = time.time()
@@ -220,7 +221,6 @@ def run_detection(
 
     except Exception as e:
         print(f"[LOCAL] Detection failed: {e}")
-        import traceback
         traceback.print_exc()
 
         # Send error webhook
