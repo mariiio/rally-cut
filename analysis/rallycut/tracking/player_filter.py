@@ -173,11 +173,13 @@ class PlayerFilterConfig:
     # Stationary background track pre-filter
     # Removes tracks from raw positions that are clearly fixed objects (signs, equipment,
     # distant spectators). These have near-zero position variance AND high presence.
-    # Key insight: real players in ready position can have spread < 0.015 at ~55% presence,
-    # but background objects are present in 80-100% of frames because they never leave.
+    # Key insight: real background objects have spread < 0.008 (truly zero motion),
+    # while real players even in ready position have spread > 0.012 (body sway, reactions).
+    # Threshold 0.010 sits in the gap. yolo11s produces tighter bboxes than yolov8n,
+    # so players have lower spread than before — threshold must be conservative.
     # Runs before split/merge/link to prevent background tracks from interfering.
     enable_stationary_background_filter: bool = True
-    stationary_bg_max_spread: float = 0.015  # Max position_spread (geometric mean of x/y std)
+    stationary_bg_max_spread: float = 0.010  # Max position_spread (geometric mean of x/y std)
     stationary_bg_min_detections: int = 50  # Minimum detections to be considered
     stationary_bg_min_presence: float = 0.80  # Must be present in 80%+ of frames (background = always there)
 
