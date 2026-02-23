@@ -99,7 +99,7 @@ class DetectionService:
             # Phase 2: Run analysis (10-90% progress)
             config = request.config or DetectionConfig()
 
-            # Enable TemporalMaxer when weights are available (75% LOO F1 vs 57% heuristics)
+            # Enable TemporalMaxer when weights are available (88% LOO F1 vs 57% heuristics)
             from rallycut.core.config import get_config
 
             cfg = get_config()
@@ -108,12 +108,22 @@ class DetectionService:
             )
             use_temporal_maxer = temporal_maxer_path.exists()
 
+            logger.info(
+                "Detection config: weights_dir=%s, cwd=%s, stride=%d, "
+                "use_proxy=%s, min_play_duration=%.1f, model=%s",
+                cfg.weights_dir, Path.cwd(), config.stride,
+                config.use_proxy, config.min_play_duration,
+                config.model_variant.value,
+            )
+            logger.info(
+                "TemporalMaxer path: %s (exists=%s)",
+                temporal_maxer_path, use_temporal_maxer,
+            )
+
             if use_temporal_maxer:
-                logger.info("Using TemporalMaxer for rally detection (75% LOO F1)")
+                logger.info("Pipeline: TemporalMaxer (88%% LOO F1)")
             else:
-                logger.info(
-                    "TemporalMaxer weights not found, using heuristics fallback"
-                )
+                logger.info("Pipeline: heuristics fallback (TemporalMaxer weights not found)")
 
             cutter = VideoCutter(
                 device=self.device,
@@ -133,6 +143,17 @@ class DetectionService:
                     progress_callback(0.1 + pct * 0.8, msg)
 
             segments, suggested = cutter.analyze_only(local_path, analysis_progress)
+
+            rally_segments = [s for s in segments if s.state in (GameState.PLAY, GameState.SERVICE)]
+            logger.info(
+                "Detection result: %d total segments, %d rallies, %d suggested",
+                len(segments), len(rally_segments), len(suggested),
+            )
+            for i, seg in enumerate(rally_segments):
+                logger.info(
+                    "  Rally %d: %.1fs - %.1fs (%.1fs)",
+                    i + 1, seg.start_time, seg.end_time, seg.end_time - seg.start_time,
+                )
 
             # Phase 3: Build response (90-100% progress)
             if progress_callback:
