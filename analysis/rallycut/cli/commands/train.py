@@ -858,15 +858,36 @@ def wasb_modal(
             )
             raise typer.Exit(1)
 
+        # Validate manifest exists (written by pseudo_label_export.py)
+        manifest_path = data_dir / "manifest.json"
+        if not manifest_path.exists():
+            rprint("[red]No manifest.json found in training data[/red]")
+            rprint(
+                "  Re-export pseudo-labels:\n"
+                "  [cyan]uv run python -m experiments.pseudo_label_export "
+                "--output-dir experiments/wasb_pseudo_labels "
+                "--cache-type ensemble --all-tracked --extract-frames[/cyan]"
+            )
+            raise typer.Exit(1)
+
+        import json
+
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        gt_count = len(manifest.get("gold_rally_ids", []))
+
         # Check for CSVs and images
-        csv_count = len(list(data_dir.glob("*.csv")))
+        csv_count = len([
+            f for f in data_dir.glob("*.csv")
+            if not f.stem.endswith("_gold")
+        ])
         img_dirs = [d for d in (data_dir / "images").iterdir() if d.is_dir()] if (data_dir / "images").exists() else []
         if csv_count == 0 or not img_dirs:
             rprint(f"[red]No training data found in {data_dir}[/red]")
             rprint(f"  CSVs: {csv_count}, Image dirs: {len(img_dirs)}")
             raise typer.Exit(1)
 
-        rprint(f"  CSVs: {csv_count}, Image dirs: {len(img_dirs)}")
+        rprint(f"  CSVs: {csv_count}, Image dirs: {len(img_dirs)}, GT rallies: {gt_count}")
 
         # Upload training data
         cmd = [

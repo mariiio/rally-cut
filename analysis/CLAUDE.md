@@ -80,9 +80,12 @@ uv run rallycut train list-remote                     # List datasets backed up 
 # - Resumes from latest checkpoint automatically
 
 # WASB HRNet fine-tuning (improve ball detection on beach volleyball)
+# IMPORTANT: Always re-export before retraining. The export writes a manifest.json
+# that lists GT rally IDs — training uses it to hold GT rallies out of the training
+# split. Stale exports will cause the upload step to error (missing manifest).
 uv run python -m experiments.pseudo_label_export \
     --output-dir experiments/wasb_pseudo_labels \
-    --cache-type ensemble --all-tracked --extract-frames  # Export pseudo-labels
+    --cache-type ensemble --all-tracked --extract-frames  # Export pseudo-labels + manifest
 uv run rallycut train wasb-modal --upload           # Upload data + pretrained weights to Modal
 uv run rallycut train wasb-modal --epochs 30 --fresh  # Train on A10G GPU (~$1.10/hr)
 uv run rallycut train wasb-modal --download         # Download fine-tuned model (auto-deletes ONNX)
