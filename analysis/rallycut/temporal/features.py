@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -236,6 +236,7 @@ def extract_features_for_video(
     stride: int = 8,
     batch_size: int = 8,
     pooling: str = "cls",
+    progress_callback: Callable[[float, str], None] | None = None,
 ) -> tuple[np.ndarray, FeatureMetadata]:
     """Extract VideoMAE encoder features from a video.
 
@@ -249,6 +250,7 @@ def extract_features_for_video(
         stride: Frame stride between windows (default 8 for fine resolution).
         batch_size: Number of windows to process at once.
         pooling: Feature pooling method ("cls" or "mean").
+        progress_callback: Optional callback for progress updates (0-1, message).
 
     Returns:
         Tuple of (features array, metadata).
@@ -264,9 +266,15 @@ def extract_features_for_video(
     subsample_factor = 2 if fps > ProxyGenerator.FPS_NORMALIZE_THRESHOLD else 1
     effective_fps = fps / subsample_factor
 
+    # Estimate total windows for progress reporting
+    total_frames = video.info.frame_count or 0
+    effective_frames = total_frames // subsample_factor
+    estimated_windows = max(1, (effective_frames - WINDOW_SIZE) // stride + 1)
+
     # Collect all windows
     all_features: list[np.ndarray] = []
     window_batch: list[list[np.ndarray]] = []
+    windows_processed = 0
 
     for start_frame, frames in iter_frame_windows(
         video, stride=stride, subsample_factor=subsample_factor
@@ -277,7 +285,12 @@ def extract_features_for_video(
             # Process batch
             batch_features = classifier.get_encoder_features_batch(window_batch, pooling=pooling)
             all_features.append(batch_features)
+            windows_processed += len(window_batch)
             window_batch = []
+
+            if progress_callback:
+                pct = min(windows_processed / estimated_windows, 0.99)
+                progress_callback(pct, f"Extracting features ({windows_processed}/{estimated_windows} windows)...")
 
     # Process remaining windows
     if window_batch:
