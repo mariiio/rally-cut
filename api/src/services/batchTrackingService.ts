@@ -55,6 +55,8 @@ export async function trackAllRallies(
     throw new ValidationError('No confirmed rallies found for this video');
   }
 
+  // Prefer original quality for tracking — proxy (720p) degrades ball detection.
+  // Falls back to proxy if original has been quality-downgraded.
   const videoKey = video.s3Key ?? video.proxyS3Key;
   if (!videoKey) {
     throw new ValidationError('Video has no accessible source');
