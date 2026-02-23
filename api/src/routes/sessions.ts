@@ -43,6 +43,7 @@ router.post(
 
 router.get(
   "/v1/sessions",
+  requireUser,
   validateRequest({ query: paginationSchema }),
   async (req, res, next) => {
     try {

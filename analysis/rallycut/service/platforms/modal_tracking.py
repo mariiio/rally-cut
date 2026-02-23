@@ -241,8 +241,8 @@ def track_batch(request: dict) -> dict:
         if video_path:
             try:
                 os.unlink(video_path)
-            except OSError:
-                pass
+            except OSError as e:
+                print(f"Failed to unlink temp file {video_path}: {e}")
 
     # Send batch-complete webhook
     batch_status = "failed" if failed_count == len(rallies) else "completed"
@@ -372,10 +372,10 @@ def _track_single_rally(
         if segment_path:
             try:
                 os.unlink(segment_path)
-            except OSError:
-                pass
+            except OSError as e:
+                print(f"Failed to unlink temp file {segment_path}: {e}")
         if output_path:
             try:
                 os.unlink(output_path)
-            except OSError:
-                pass
+            except OSError as e:
+                print(f"Failed to unlink temp file {output_path}: {e}")
