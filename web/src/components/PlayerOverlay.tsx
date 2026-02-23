@@ -36,7 +36,6 @@ export function PlayerOverlay({
 }: PlayerOverlayProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const trackElementsRef = useRef<Map<number, HTMLDivElement>>(new Map());
-  const rafIdRef = useRef<number | null>(null);
   const dimensionsRef = useRef({ width: 0, height: 0, offsetX: 0, offsetY: 0 });
 
   // Get track data from store
@@ -62,9 +61,9 @@ export function PlayerOverlay({
   const getInterpolatedPosition = useCallback((positions: PlayerPosition[], currentFrame: number) => {
     if (positions.length === 0) return null;
 
-    // Show last known position for up to 30 frames (1 second at 30fps)
+    // Show last known position for up to 1 second (fps-aware)
     // This prevents flickering when a player is temporarily undetected
-    const maxDistanceFromDetection = 30;
+    const maxDistanceFromDetection = fps;
     const firstFrame = positions[0].frame;
     const lastFrame = positions[positions.length - 1].frame;
 
@@ -99,8 +98,8 @@ export function PlayerOverlay({
     const after = positions[lo + 1];
     const gap = after.frame - before.frame;
 
-    // Handle large gaps - allow up to 45 frames (1.5s) for interpolation
-    const maxGap = 45;
+    // Handle large gaps - allow up to 1.5s for interpolation (fps-aware)
+    const maxGap = Math.round(fps * 1.5);
     if (gap > maxGap) {
       const distToBefore = currentFrame - before.frame;
       const distToAfter = after.frame - currentFrame;
@@ -124,7 +123,7 @@ export function PlayerOverlay({
       courtY: before.courtY !== undefined && after.courtY !== undefined
         ? lerp(before.courtY, after.courtY, t) : before.courtY ?? after.courtY,
     };
-  }, []);
+  }, [fps]);
 
   // Create/update track elements when tracks change
   useEffect(() => {
@@ -248,7 +247,7 @@ export function PlayerOverlay({
     };
   }, [videoRef, containerRef]);
 
-  // Animation loop - direct DOM manipulation
+  // Animation loop — uses requestVideoFrameCallback for frame-accurate sync
   useEffect(() => {
     if (!showPlayerOverlay) {
       // Hide all elements when overlay is disabled
@@ -261,14 +260,12 @@ export function PlayerOverlay({
     const video = videoRef.current;
     if (!video) return;
 
-    const updatePositions = () => {
-      const { width, height, offsetX, offsetY } = dimensionsRef.current;
-      if (width === 0) {
-        rafIdRef.current = requestAnimationFrame(updatePositions);
-        return;
-      }
+    let rvfcId: number;
 
-      const videoTime = video.currentTime;
+    const render = (videoTime: number) => {
+      const { width, height, offsetX, offsetY } = dimensionsRef.current;
+      if (width === 0) return;
+
       const currentFrame = (videoTime - rallyStartTime) * fps;
 
       for (const [trackId, positions] of trackPositions) {
@@ -310,16 +307,19 @@ export function PlayerOverlay({
           }
         }
       }
-
-      rafIdRef.current = requestAnimationFrame(updatePositions);
     };
 
-    rafIdRef.current = requestAnimationFrame(updatePositions);
+    const onFrame = (_now: DOMHighResTimeStamp, metadata: VideoFrameCallbackMetadata) => {
+      render(metadata.mediaTime);
+      rvfcId = video.requestVideoFrameCallback(onFrame);
+    };
+
+    // Initial render + start loop
+    render(video.currentTime);
+    rvfcId = video.requestVideoFrameCallback(onFrame);
 
     return () => {
-      if (rafIdRef.current !== null) {
-        cancelAnimationFrame(rafIdRef.current);
-      }
+      video.cancelVideoFrameCallback(rvfcId);
     };
   }, [videoRef, rallyStartTime, fps, trackPositions, showPlayerOverlay, selectedTrackId, getInterpolatedPosition]);
 

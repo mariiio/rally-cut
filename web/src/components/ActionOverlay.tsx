@@ -47,7 +47,6 @@ export function ActionOverlay({
   const containerRef = useRef<HTMLDivElement>(null);
   const labelsRef = useRef<HTMLDivElement[]>([]);
   const gtLabelsRef = useRef<HTMLDivElement[]>([]);
-  const rafIdRef = useRef<number | undefined>(undefined);
   const [editAnchor, setEditAnchor] = useState<HTMLDivElement | null>(null);
   const [editFrame, setEditFrame] = useState<number | null>(null);
   const [editAction, setEditAction] = useState<string>('');
@@ -206,17 +205,14 @@ export function ActionOverlay({
     };
   }, [actionsWithTime, gtWithTime, isLabelingMode, handleGtLabelClick]);
 
-  // Animation loop
+  // Animation loop — uses requestVideoFrameCallback for frame-accurate sync
   useEffect(() => {
-    const updateLabels = () => {
-      const video = videoRef.current;
-      if (!video) {
-        rafIdRef.current = requestAnimationFrame(updateLabels);
-        return;
-      }
+    const video = videoRef.current;
+    if (!video) return;
 
-      const videoTime = video.currentTime;
+    let rvfcId: number;
 
+    const render = (videoTime: number) => {
       // Update auto-detected labels
       for (let i = 0; i < labelsRef.current.length; i++) {
         const label = labelsRef.current[i];
@@ -277,16 +273,19 @@ export function ActionOverlay({
           label.style.display = 'none';
         }
       }
-
-      rafIdRef.current = requestAnimationFrame(updateLabels);
     };
 
-    rafIdRef.current = requestAnimationFrame(updateLabels);
+    const onFrame = (_now: DOMHighResTimeStamp, metadata: VideoFrameCallbackMetadata) => {
+      render(metadata.mediaTime);
+      rvfcId = video.requestVideoFrameCallback(onFrame);
+    };
+
+    // Initial render + start loop
+    render(video.currentTime);
+    rvfcId = video.requestVideoFrameCallback(onFrame);
 
     return () => {
-      if (rafIdRef.current) {
-        cancelAnimationFrame(rafIdRef.current);
-      }
+      video.cancelVideoFrameCallback(rvfcId);
     };
   }, [videoRef, actionsWithTime, gtWithTime, isLabelingMode]);
 

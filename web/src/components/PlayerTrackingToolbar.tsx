@@ -90,7 +90,7 @@ export function PlayerTrackingToolbar() {
   const selectedRally = rallies.find((r) => r.id === selectedRallyId);
   const backendRallyId = selectedRally?._backendId ?? null;
   const activeMatch = getActiveMatch();
-  const fps = activeMatch?.video?.fps || 30;
+  const fps = activeMatch?.video?.fps ?? 30;
 
   // Compute track data variables (needed for hooks below)
   const hasCalibration = activeMatchId ? !!calibrations[activeMatchId] : false;

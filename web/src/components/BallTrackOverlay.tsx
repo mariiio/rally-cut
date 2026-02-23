@@ -23,14 +23,13 @@ export function BallTrackOverlay({
 }: BallTrackOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const dotsRef = useRef<HTMLDivElement[]>([]);
-  const rafIdRef = useRef<number | undefined>(undefined);
 
   // Pre-calculate the absolute time for each position (only when data changes)
   const positionsWithTime = useMemo(() => {
     // frameNumber is SEGMENT-RELATIVE (0-based) because tracking runs on an
     // extracted video segment. Convert to absolute video time using fps directly
-    // (same approach as PlayerOverlay) to avoid timing drift when segment frame
-    // count doesn't exactly match fps * duration.
+    // to avoid timing drift when segment frame count doesn't exactly match
+    // fps * duration.
     return positions.map((p) => ({
       ...p,
       absoluteTime: rallyStartTime + p.frameNumber / fps,
@@ -42,11 +41,9 @@ export function BallTrackOverlay({
     const container = containerRef.current;
     if (!container) return;
 
-    // Clear existing dots
     container.innerHTML = '';
     dotsRef.current = [];
 
-    // Create pool of dot elements
     for (let i = 0; i < MAX_TRAIL_DOTS; i++) {
       const dot = document.createElement('div');
       dot.style.cssText = `
@@ -62,17 +59,16 @@ export function BallTrackOverlay({
     }
   }, []);
 
-  // Animation loop - direct DOM manipulation, no React re-renders
+  // Animation loop — uses requestVideoFrameCallback for frame-accurate sync.
+  // RVFC fires when a video frame is presented to the compositor, providing
+  // the exact mediaTime of the displayed frame (vs RAF which can lag 1-2 frames).
   useEffect(() => {
-    const updatePositions = () => {
-      const video = videoRef.current;
-      if (!video || dotsRef.current.length === 0) {
-        rafIdRef.current = requestAnimationFrame(updatePositions);
-        return;
-      }
+    const video = videoRef.current;
+    if (!video || dotsRef.current.length === 0) return;
 
-      const videoTime = video.currentTime;
+    let rvfcId: number;
 
+    const render = (videoTime: number) => {
       // Find visible positions (within trail duration)
       const visible: typeof positionsWithTime = [];
       for (const p of positionsWithTime) {
@@ -82,7 +78,7 @@ export function BallTrackOverlay({
         }
       }
 
-      // Find current position (closest to video time)
+      // Find current position (closest to video time within trail)
       let currentFrameNumber = -1;
       if (visible.length > 0) {
         let closest = visible[0];
@@ -94,11 +90,14 @@ export function BallTrackOverlay({
         currentFrameNumber = closest.frameNumber;
       }
 
-      // Update dot elements directly
+      // At high fps (e.g. 60fps), the trail window contains more positions than
+      // MAX_TRAIL_DOTS. Show the most recent ones so the "current" dot (nearest
+      // to videoTime) is always rendered — older trail dots are the ones dropped.
+      const displayStart = Math.max(0, visible.length - dotsRef.current.length);
       const dots = dotsRef.current;
       for (let i = 0; i < dots.length; i++) {
         const dot = dots[i];
-        const pos = visible[i];
+        const pos = visible[displayStart + i];
 
         if (!pos) {
           dot.style.display = 'none';
@@ -107,9 +106,7 @@ export function BallTrackOverlay({
 
         const age = videoTime - pos.absoluteTime;
         const isCurrent = pos.frameNumber === currentFrameNumber;
-        // Higher minimum opacity for better visibility
         const opacity = Math.max(0.4, 1 - age / TRAIL_DURATION) * Math.max(0.6, pos.confidence);
-        // Larger dots for better visibility (current: 20px, trail: 12px min)
         const size = isCurrent ? 20 : 12 + (TRAIL_DURATION - age) * 12;
 
         dot.style.display = 'block';
@@ -119,22 +116,23 @@ export function BallTrackOverlay({
         dot.style.height = `${size}px`;
         dot.style.opacity = String(opacity);
         dot.style.backgroundColor = BALL_COLOR;
-        // Stronger glow effect for visibility
         dot.style.boxShadow = isCurrent
           ? `0 0 15px ${BALL_COLOR}, 0 0 30px ${BALL_COLOR}`
           : `0 0 8px ${BALL_COLOR}`;
         dot.style.border = isCurrent ? '3px solid white' : '1px solid rgba(255,255,255,0.5)';
       }
-
-      rafIdRef.current = requestAnimationFrame(updatePositions);
     };
 
-    rafIdRef.current = requestAnimationFrame(updatePositions);
+    const onFrame = (_now: DOMHighResTimeStamp, metadata: VideoFrameCallbackMetadata) => {
+      render(metadata.mediaTime);
+      rvfcId = video.requestVideoFrameCallback(onFrame);
+    };
+
+    render(video.currentTime);
+    rvfcId = video.requestVideoFrameCallback(onFrame);
 
     return () => {
-      if (rafIdRef.current) {
-        cancelAnimationFrame(rafIdRef.current);
-      }
+      video.cancelVideoFrameCallback(rvfcId);
     };
   }, [videoRef, positionsWithTime]);
 

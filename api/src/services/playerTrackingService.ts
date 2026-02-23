@@ -321,7 +321,7 @@ async function runPlayerTracker(
 
         // Calculate stats
         const frameCount = result.frameCount || 0;
-        const fps = result.videoFps || 30;
+        const fps = result.videoFps ?? 30;
         const framesWithDetections = new Set(positions.map(p => p.frameNumber)).size;
         const detectionRate = result.detectionRate ?? (framesWithDetections / Math.max(1, frameCount));
         const avgConfidence = positions.length > 0
