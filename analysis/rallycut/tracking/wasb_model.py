@@ -43,7 +43,7 @@ BN_MOMENTUM = 0.1
 WEIGHTS_DIR = Path(__file__).parent.parent.parent / "weights" / "wasb"
 
 # WASB volleyball model config (from wasb.yaml)
-WASB_CONFIG = {
+WASB_CONFIG: dict[str, Any] = {
     "name": "hrnet",
     "frames_in": 3,
     "frames_out": 3,
@@ -136,7 +136,7 @@ class BasicBlock(nn.Module):
         if self.downsample is not None:
             residual = self.downsample(x)
         out += residual
-        return self.relu(out)
+        return self.relu(out)  # type: ignore[no-any-return]
 
 
 class Bottleneck(nn.Module):
@@ -168,7 +168,7 @@ class Bottleneck(nn.Module):
         if self.downsample is not None:
             residual = self.downsample(x)
         out += residual
-        return self.relu(out)
+        return self.relu(out)  # type: ignore[no-any-return]
 
 
 BLOCKS_DICT: dict[str, type[BasicBlock] | type[Bottleneck]] = {
@@ -323,7 +323,7 @@ class HRNet(nn.Module):
     producing high-quality heatmaps at the input resolution.
     """
 
-    def __init__(self, cfg: dict | None = None) -> None:
+    def __init__(self, cfg: dict[str, Any] | None = None) -> None:
         super().__init__()
         if cfg is None:
             cfg = WASB_CONFIG
@@ -478,7 +478,7 @@ class HRNet(nn.Module):
                     fuse_method, reset_multi_scale,
                 )
             )
-            num_inchannels = modules[-1].get_num_inchannels()  # type: ignore[union-attr]
+            num_inchannels = modules[-1].get_num_inchannels()  # type: ignore[operator]
         return nn.Sequential(*modules), num_inchannels
 
     def forward(self, x: torch.Tensor) -> dict[int, torch.Tensor]:
@@ -778,7 +778,7 @@ class WASBBallTracker:
 
         torch.onnx.export(
             wrapper,
-            dummy_input,
+            (dummy_input,),
             str(onnx_path),
             opset_version=17,
             input_names=["input"],

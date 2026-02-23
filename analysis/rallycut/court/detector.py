@@ -1024,7 +1024,7 @@ class CourtDetector:
         # findHomography: court_pts → img_pts (H maps court→image)
         method = cv2.RANSAC if len(correspondences) > 4 else 0
         try:
-            H, _mask = cv2.findHomography(
+            H, _mask = cv2.findHomography(  # noqa: N806
                 court_pts.reshape(-1, 1, 2),
                 img_pts.reshape(-1, 1, 2),
                 method,
@@ -1256,7 +1256,7 @@ class CourtDetector:
 
             method = cv2.RANSAC if len(frame_correspondences) > 4 else 0
             try:
-                H, _mask = cv2.findHomography(
+                H, _mask = cv2.findHomography(  # noqa: N806
                     court_pts.reshape(-1, 1, 2),
                     img_pts.reshape(-1, 1, 2),
                     method,
@@ -1270,7 +1270,7 @@ class CourtDetector:
 
             # Normalize so H[2,2] = 1
             if abs(H[2, 2]) > 1e-10:
-                H = H / H[2, 2]
+                H = H / H[2, 2]  # noqa: N806
 
             # Project court corners
             corners = project_court_corners(H)
@@ -1342,9 +1342,9 @@ class CourtDetector:
             COURT_MODEL_CORNERS, dtype=np.float64,
         ).reshape(-1, 1, 2)
         try:
-            H_final, _ = cv2.findHomography(consensus_court, consensus_img, 0)
+            H_final, _ = cv2.findHomography(consensus_court, consensus_img, 0)  # noqa: N806
         except cv2.error:
-            H_final = None
+            H_final = None  # noqa: N806
 
         correspondences = collect_court_correspondences(identified_real)
         reproj_error = 0.0
@@ -1374,7 +1374,7 @@ class CourtDetector:
 
     @staticmethod
     def _compute_reprojection_error(
-        H: np.ndarray,
+        H: np.ndarray,  # noqa: N803
         correspondences: list[tuple[tuple[float, float], tuple[float, float]]],
     ) -> float:
         """Mean reprojection error: project court pts through H, compare to image pts."""

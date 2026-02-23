@@ -8,7 +8,8 @@ representations, and court model mapping used by the court detector.
 from __future__ import annotations
 
 import math
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 import cv2
 import numpy as np
