@@ -139,6 +139,8 @@ def run_fold(
     device: str,
     stride: int = DEFAULT_STRIDE,
     min_segment_confidence: float = 0.0,
+    valley_threshold: float = 0.5,
+    min_valley_duration: float = 2.0,
 ) -> FoldResult:
     """Run a single LOO fold: train on N-1, evaluate on held-out."""
     print(
@@ -202,6 +204,8 @@ def run_fold(
             fps=ho_fps,
             stride=stride,
             min_segment_confidence=min_segment_confidence,
+            valley_threshold=valley_threshold,
+            min_valley_duration=min_valley_duration,
         )
 
     # Match predictions against GT
@@ -323,9 +327,19 @@ def main() -> None:
         "--min-confidence", type=float, default=0.0,
         help="Min avg probability to keep a segment (0 = disabled)",
     )
+    parser.add_argument(
+        "--valley-threshold", type=float, default=0.5,
+        help="Split segments at sustained prob valleys below this (0 = disabled)",
+    )
+    parser.add_argument(
+        "--min-valley-duration", type=float, default=2.0,
+        help="Min valley duration in seconds to trigger split (default: 2.0)",
+    )
     args = parser.parse_args()
     stride = args.stride
     min_confidence = args.min_confidence
+    valley_threshold = args.valley_threshold
+    min_valley_duration = args.min_valley_duration
 
     total_start = time.time()
 
@@ -339,6 +353,10 @@ def main() -> None:
     print(f"Feature stride: {stride}")
     if min_confidence > 0:
         print(f"Min segment confidence: {min_confidence}")
+    if valley_threshold > 0:
+        print(f"Valley splitting: threshold={valley_threshold}, min_duration={min_valley_duration}s")
+    else:
+        print("Valley splitting: disabled")
     print(f"Feature directory: {FEATURE_DIR}")
     print()
 
@@ -374,6 +392,7 @@ def main() -> None:
         train_videos = [v for j, v in enumerate(videos) if j != i]
         fold = run_fold(
             i + 1, n, held_out, train_videos, cache, device, stride, min_confidence,
+            valley_threshold, min_valley_duration,
         )
         fold_results.append(fold)
 

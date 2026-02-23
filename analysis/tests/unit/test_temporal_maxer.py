@@ -262,3 +262,120 @@ class TestPredictionsToSegments:
             predictions, probs, 1.0, 0.5, 0.0, 0.0, 999.0,
         )
         assert segments == []
+
+
+class TestValleySplitting:
+    """Tests for probability-valley splitting in _predictions_to_segments."""
+
+    def test_valley_splits_merged_rallies(self) -> None:
+        """A sustained low-probability valley should split a segment into two."""
+        inf = _make_inference()
+        # window_duration=0.8s, window_length=0.533s
+        # 5 high-prob windows, 4 low-prob windows (<0.5), 5 high-prob windows
+        predictions = np.ones(14, dtype=int)  # All rally
+        probs = np.array([
+            0.9, 0.9, 0.9, 0.9, 0.9,    # Rally 1
+            0.2, 0.3, 0.2, 0.1,          # Dead time (4 windows = 3.2s > 2.0s)
+            0.9, 0.9, 0.9, 0.9, 0.9,     # Rally 2
+        ])
+        segments = inf._predictions_to_segments(
+            predictions, probs, 0.8, 0.533,
+            min_duration=1.0, max_gap=5.0, max_duration=999.0,
+            valley_threshold=0.5, min_valley_duration=2.0,
+        )
+        assert len(segments) == 2
+        # First segment ends at valley start, second starts at valley end
+        assert segments[0][1] == pytest.approx(5 * 0.8)  # 4.0s
+        assert segments[1][0] == pytest.approx(9 * 0.8)  # 7.2s
+
+    def test_short_valley_no_split(self) -> None:
+        """A valley shorter than min_valley_duration should not cause a split."""
+        inf = _make_inference()
+        # 5 high, 1 low (0.8s < 2.0s min), 5 high
+        predictions = np.ones(11, dtype=int)
+        probs = np.array([
+            0.9, 0.9, 0.9, 0.9, 0.9,
+            0.2,  # Single low window = 0.8s
+            0.9, 0.9, 0.9, 0.9, 0.9,
+        ])
+        segments = inf._predictions_to_segments(
+            predictions, probs, 0.8, 0.533,
+            min_duration=0.0, max_gap=5.0, max_duration=999.0,
+            valley_threshold=0.5, min_valley_duration=2.0,
+        )
+        assert len(segments) == 1
+
+    def test_multiple_valleys(self) -> None:
+        """Two qualifying valleys should produce 3 segments."""
+        inf = _make_inference()
+        # Rally, valley, rally, valley, rally
+        predictions = np.ones(19, dtype=int)
+        probs = np.array([
+            0.9, 0.9, 0.9, 0.9,           # Rally 1 (4 windows)
+            0.1, 0.2, 0.1,                 # Valley 1 (3 windows = 2.4s)
+            0.9, 0.9, 0.9, 0.9,            # Rally 2 (4 windows)
+            0.2, 0.1, 0.2,                 # Valley 2 (3 windows = 2.4s)
+            0.9, 0.9, 0.9, 0.9, 0.9,       # Rally 3 (5 windows)
+        ])
+        segments = inf._predictions_to_segments(
+            predictions, probs, 0.8, 0.533,
+            min_duration=1.0, max_gap=5.0, max_duration=999.0,
+            valley_threshold=0.5, min_valley_duration=2.0,
+        )
+        assert len(segments) == 3
+
+    def test_disabled_with_zero_threshold(self) -> None:
+        """Valley splitting should be disabled when threshold=0."""
+        inf = _make_inference()
+        predictions = np.ones(14, dtype=int)
+        probs = np.array([
+            0.9, 0.9, 0.9, 0.9, 0.9,
+            0.2, 0.3, 0.2, 0.1,  # Would be valley
+            0.9, 0.9, 0.9, 0.9, 0.9,
+        ])
+        segments = inf._predictions_to_segments(
+            predictions, probs, 0.8, 0.533,
+            min_duration=0.0, max_gap=5.0, max_duration=999.0,
+            valley_threshold=0.0, min_valley_duration=2.0,
+        )
+        assert len(segments) == 1
+
+    def test_short_sub_segment_filtered(self) -> None:
+        """Sub-segments shorter than min_duration after split should be removed."""
+        inf = _make_inference()
+        # 1 high window (0.533s < 1.0s min), valley, 5 high windows
+        predictions = np.ones(9, dtype=int)
+        probs = np.array([
+            0.9,                           # Tiny rally (1 window = 0.533s)
+            0.1, 0.2, 0.1,                # Valley (3 windows = 2.4s)
+            0.9, 0.9, 0.9, 0.9, 0.9,      # Real rally (5 windows)
+        ])
+        segments = inf._predictions_to_segments(
+            predictions, probs, 0.8, 0.533,
+            min_duration=1.0, max_gap=5.0, max_duration=999.0,
+            valley_threshold=0.5, min_valley_duration=2.0,
+        )
+        # First sub-segment (0.0 to 0.8) is only 0.8s < 1.0s min_duration → filtered
+        assert len(segments) == 1
+        assert segments[0][0] == pytest.approx(4 * 0.8)  # Starts after valley
+
+    def test_leading_and_trailing_valley(self) -> None:
+        """Valleys at the start or end of a segment should trim correctly."""
+        inf = _make_inference()
+        # Leading valley (3 windows), rally (5 windows), trailing valley (3 windows)
+        predictions = np.ones(11, dtype=int)
+        probs = np.array([
+            0.1, 0.2, 0.1,                # Leading valley
+            0.9, 0.9, 0.9, 0.9, 0.9,      # Real rally (5 windows)
+            0.2, 0.1, 0.2,                # Trailing valley
+        ])
+        segments = inf._predictions_to_segments(
+            predictions, probs, 0.8, 0.533,
+            min_duration=1.0, max_gap=5.0, max_duration=999.0,
+            valley_threshold=0.5, min_valley_duration=2.0,
+        )
+        assert len(segments) == 1
+        # Rally starts after leading valley
+        assert segments[0][0] == pytest.approx(3 * 0.8)
+        # Rally ends at original segment end (trailing valley trims it)
+        assert segments[0][1] < 11 * 0.8  # Shorter than full segment

@@ -59,6 +59,8 @@ class TemporalMaxerInference:
         max_gap_duration: float = 3.0,
         max_segment_duration: float = 60.0,
         min_segment_confidence: float = 0.6,
+        valley_threshold: float = 0.5,
+        min_valley_duration: float = 2.0,
     ) -> TemporalMaxerResult:
         """Run full-sequence inference and extract segments.
 
@@ -72,6 +74,10 @@ class TemporalMaxerInference:
             max_segment_duration: Split segments longer than this (seconds).
             min_segment_confidence: Minimum average probability to keep a segment.
                 0.0 disables confidence filtering (default).
+            valley_threshold: Split segments at sustained low-probability regions
+                below this threshold. 0.0 disables valley splitting.
+            min_valley_duration: Minimum duration (seconds) of a low-probability
+                region to trigger a split.
 
         Returns:
             TemporalMaxerResult with segments and probabilities.
@@ -100,6 +106,8 @@ class TemporalMaxerInference:
             max_gap_duration,
             max_segment_duration,
             min_segment_confidence,
+            valley_threshold=valley_threshold,
+            min_valley_duration=min_valley_duration,
         )
 
         return TemporalMaxerResult(
@@ -118,6 +126,9 @@ class TemporalMaxerInference:
         max_gap: float,
         max_duration: float,
         min_confidence: float = 0.0,
+        *,
+        valley_threshold: float = 0.0,
+        min_valley_duration: float = 2.0,
     ) -> list[tuple[float, float]]:
         """Convert window predictions to time segments with cleanup.
 
@@ -125,6 +136,7 @@ class TemporalMaxerInference:
         - Fill short gaps
         - Remove short segments
         - Confidence filter (remove low-confidence segments)
+        - Valley splitting (split at sustained low-probability regions)
         - Anti-overmerge (split at lowest probability point)
         """
         n = len(predictions)
@@ -180,6 +192,13 @@ class TemporalMaxerInference:
                     confident.append((start, end))
             filtered = confident
 
+        # Valley splitting: split at sustained low-probability regions
+        if valley_threshold > 0 and min_valley_duration > 0:
+            filtered = self._split_at_valleys(
+                filtered, probs, window_duration,
+                valley_threshold, min_valley_duration, min_duration,
+            )
+
         # Anti-overmerge: split segments > max_duration at lowest probability point
         final: list[tuple[float, float]] = []
         for start, end in filtered:
@@ -191,6 +210,71 @@ class TemporalMaxerInference:
                 )
 
         return final
+
+    def _split_at_valleys(
+        self,
+        segments: list[tuple[float, float]],
+        probs: np.ndarray,
+        window_duration: float,
+        valley_threshold: float,
+        min_valley_duration: float,
+        min_segment_duration: float,
+    ) -> list[tuple[float, float]]:
+        """Split segments at sustained low-probability valleys.
+
+        For each segment, find contiguous runs of windows where prob < valley_threshold.
+        If a run spans >= min_valley_duration seconds, remove that region and split
+        the segment. Keep resulting sub-segments >= min_segment_duration.
+        """
+        min_valley_windows = max(1, int(min_valley_duration / window_duration))
+        result: list[tuple[float, float]] = []
+
+        for seg_start, seg_end in segments:
+            start_idx = int(seg_start / window_duration)
+            end_idx = min(int(seg_end / window_duration) + 1, len(probs))
+
+            if end_idx <= start_idx:
+                result.append((seg_start, seg_end))
+                continue
+
+            # Find contiguous valley runs within this segment
+            valleys: list[tuple[int, int]] = []  # (start_idx, end_idx) of valleys
+            valley_start: int | None = None
+
+            for i in range(start_idx, end_idx):
+                if probs[i] < valley_threshold:
+                    if valley_start is None:
+                        valley_start = i
+                else:
+                    if valley_start is not None:
+                        valley_len = i - valley_start
+                        if valley_len >= min_valley_windows:
+                            valleys.append((valley_start, i))
+                        valley_start = None
+
+            # Close trailing valley
+            if valley_start is not None:
+                valley_len = end_idx - valley_start
+                if valley_len >= min_valley_windows:
+                    valleys.append((valley_start, end_idx))
+
+            if not valleys:
+                result.append((seg_start, seg_end))
+                continue
+
+            # Split segment around valleys
+            sub_start = seg_start
+            for v_start, v_end in valleys:
+                sub_end = v_start * window_duration
+                if sub_end - sub_start >= min_segment_duration:
+                    result.append((sub_start, sub_end))
+                sub_start = v_end * window_duration
+
+            # Trailing sub-segment after last valley
+            if seg_end - sub_start >= min_segment_duration:
+                result.append((sub_start, seg_end))
+
+        return result
 
     def _split_long_segment(
         self,
