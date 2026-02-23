@@ -58,6 +58,10 @@ class TrackingQualityReport:
     court_identity_swaps: int = 0  # Swaps applied by court identity
     uncertain_identity_count: int = 0  # Ambiguous interactions
 
+    # Contact detection readiness
+    contact_readiness_score: float = 0.0  # 0-1, decreases per issue
+    contact_readiness_issues: list[str] = field(default_factory=list)
+
     # Overall score
     trackability_score: float = 0.0  # 0-1 composite score
     suggestions: list[str] = field(default_factory=list)
@@ -83,6 +87,8 @@ class TrackingQualityReport:
             "courtIdentityInteractions": self.court_identity_interactions,
             "courtIdentitySwaps": self.court_identity_swaps,
             "uncertainIdentityCount": self.uncertain_identity_count,
+            "contactReadinessScore": self.contact_readiness_score,
+            "contactReadinessIssues": self.contact_readiness_issues,
             "trackabilityScore": self.trackability_score,
             "suggestions": self.suggestions,
         }
@@ -106,6 +112,7 @@ def compute_quality_report(
     court_identity_swaps: int = 0,
     uncertain_identity_count: int = 0,
     court_detection_insights: CourtDetectionInsights | None = None,
+    contact_readiness_issues: list[str] | None = None,
 ) -> TrackingQualityReport:
     """Compute a tracking quality report from tracking results.
 
@@ -220,6 +227,11 @@ def compute_quality_report(
 
     # Ball score (0.20)
     ball_score = min(ball_detection_rate, 1.0)
+
+    # Contact detection readiness
+    cr_issues = contact_readiness_issues or []
+    report.contact_readiness_issues = cr_issues
+    report.contact_readiness_score = max(0.0, 1.0 - 0.33 * len(cr_issues))
 
     # Weighted composite
     report.trackability_score = (
