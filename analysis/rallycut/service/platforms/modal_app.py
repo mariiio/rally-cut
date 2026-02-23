@@ -103,6 +103,7 @@ def detect(request: dict) -> dict:
     import httpx
 
     job_id = request.get("job_id")
+    # API sends proxy key — detection runs at 480p so proxy is sufficient and faster
     video_key = request.get("video_key")
     callback_url = request.get("callback_url")
     webhook_secret = request.get("webhook_secret")
@@ -158,8 +159,28 @@ def detect(request: dict) -> dict:
 
         service = DetectionService(device="cuda")
 
+        # Derive progress endpoint from callback URL (same pattern as local_runner)
+        callback_base = callback_url.rsplit("/", 1)[0] if "/" in callback_url else callback_url
+        progress_url = f"{callback_base}/detection-progress"
+
         def progress_callback(pct: float, msg: str) -> None:
             print(f"[{pct*100:.1f}%] {msg}")
+            try:
+                progress_headers: dict[str, str] = {"Content-Type": "application/json"}
+                if webhook_secret:
+                    progress_headers["X-Webhook-Secret"] = webhook_secret
+                with httpx.Client(timeout=5.0) as progress_client:
+                    progress_client.post(
+                        progress_url,
+                        json={
+                            "job_id": job_id,
+                            "progress": round(pct * 100, 1),
+                            "message": msg,
+                        },
+                        headers=progress_headers,
+                    )
+            except Exception:
+                pass  # Don't crash detection over a progress update
 
         response = service.detect(detection_request, progress_callback)
 
