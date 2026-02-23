@@ -83,6 +83,8 @@ def run_inference_for_video(
     inference: TemporalMaxerInference,
     feature_cache: FeatureCache,
     video: EvaluationVideo,
+    valley_threshold: float = 0.5,
+    min_valley_duration: float = 2.0,
 ) -> tuple[list[tuple[float, float]], np.ndarray, float] | None:
     """Run TemporalMaxer inference on a single video's cached features.
 
@@ -93,7 +95,11 @@ def run_inference_for_video(
         return None
 
     features, metadata = cached_data
-    result = inference.predict(features=features, fps=metadata.fps, stride=STRIDE)
+    result = inference.predict(
+        features=features, fps=metadata.fps, stride=STRIDE,
+        valley_threshold=valley_threshold,
+        min_valley_duration=min_valley_duration,
+    )
     window_duration = STRIDE / metadata.fps
     return result.segments, result.window_probs, window_duration
 
@@ -333,6 +339,8 @@ def print_gt_duration_stats(
 def analyze(
     iou_threshold: float = 0.4,
     output_path: Path | None = None,
+    valley_threshold: float = 0.5,
+    min_valley_duration: float = 2.0,
 ) -> dict[str, Any]:
     """Run full analysis and print report."""
     # Load model
@@ -365,7 +373,9 @@ def analyze(
     skipped = 0
 
     for video in videos:
-        result = run_inference_for_video(inference, feature_cache, video)
+        result = run_inference_for_video(
+            inference, feature_cache, video, valley_threshold, min_valley_duration,
+        )
         if result is None:
             print(f"  SKIP {video.filename}: no cached features")
             skipped += 1
@@ -511,6 +521,14 @@ def main() -> None:
     parser.add_argument("--iou", type=float, default=0.4, help="IoU threshold (default: 0.4)")
     parser.add_argument("-o", "--output", type=Path, help="Export results to JSON")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
+    parser.add_argument(
+        "--valley-threshold", type=float, default=0.5,
+        help="Split segments at sustained prob valleys below this (0 = disabled)",
+    )
+    parser.add_argument(
+        "--min-valley-duration", type=float, default=2.0,
+        help="Min valley duration in seconds to trigger split (default: 2.0)",
+    )
     args = parser.parse_args()
 
     if args.verbose:
@@ -518,7 +536,12 @@ def main() -> None:
     else:
         logging.basicConfig(level=logging.WARNING)
 
-    analyze(iou_threshold=args.iou, output_path=args.output)
+    analyze(
+        iou_threshold=args.iou,
+        output_path=args.output,
+        valley_threshold=args.valley_threshold,
+        min_valley_duration=args.min_valley_duration,
+    )
 
 
 if __name__ == "__main__":
