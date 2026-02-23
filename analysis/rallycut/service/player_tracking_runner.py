@@ -19,32 +19,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import tempfile
 import time
 from pathlib import Path
 
-import boto3
 import httpx
 
-
-def download_from_s3(s3_key: str, bucket: str, temp_dir: Path) -> Path:
-    """Download video from S3 to temp directory."""
-    s3_config = {
-        "aws_access_key_id": os.environ.get("AWS_ACCESS_KEY_ID"),
-        "aws_secret_access_key": os.environ.get("AWS_SECRET_ACCESS_KEY"),
-        "region_name": os.environ.get("AWS_REGION", "us-east-1"),
-    }
-    if os.environ.get("S3_ENDPOINT"):
-        s3_config["endpoint_url"] = os.environ["S3_ENDPOINT"]
-    s3 = boto3.client("s3", **s3_config)
-
-    filename = Path(s3_key).name
-    local_path = temp_dir / filename
-
-    print(f"[LOCAL] Downloading s3://{bucket}/{s3_key} to {local_path}")
-    s3.download_file(bucket, s3_key, str(local_path))
-    return local_path
+from rallycut.service.s3_utils import download_from_s3
 
 
 def send_webhook(
@@ -76,10 +57,9 @@ def send_progress_webhook(
     message: str,
 ) -> bool:
     """Send progress update webhook."""
-    # Convert complete URL to progress URL
-    progress_url = base_callback_url.replace(
-        "player-tracking-complete", "player-tracking-progress"
-    )
+    # Derive progress URL from base URL path
+    base_url = base_callback_url.rsplit("/", 1)[0] if "/" in base_callback_url else base_callback_url
+    progress_url = f"{base_url}/player-tracking-progress"
 
     headers = {"Content-Type": "application/json"}
     if webhook_secret:
@@ -167,7 +147,7 @@ def run_tracking(
                 video_s3_key = video_path
 
             temp_dir = Path(tempfile.mkdtemp(prefix="rallycut_tracking_"))
-            local_video_path = download_from_s3(video_s3_key, s3_bucket or "", temp_dir)
+            local_video_path = download_from_s3(video_s3_key, s3_bucket or "", temp_dir, label="[LOCAL]")
         else:
             local_video_path = Path(video_path)
 

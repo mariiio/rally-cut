@@ -264,6 +264,13 @@ async function runPlayerTracker(
       },
     });
 
+    // Kill subprocess after 5 minutes to prevent infinite hangs (e.g., YOLO GPU lock)
+    const TRACKING_TIMEOUT_MS = 5 * 60 * 1000;
+    const timeout = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error(`Player tracker timed out after ${TRACKING_TIMEOUT_MS / 1000}s`));
+    }, TRACKING_TIMEOUT_MS);
+
     let stdout = '';
     let stderr = '';
 
@@ -284,10 +291,12 @@ async function runPlayerTracker(
     });
 
     child.on('error', (error) => {
+      clearTimeout(timeout);
       reject(new Error(`Player tracker failed to start: ${error.message}`));
     });
 
     child.on('exit', async (code) => {
+      clearTimeout(timeout);
       if (code !== 0) {
         const output = stderr || stdout;
         reject(new Error(`Player tracker exited with code ${code}: ${output.slice(-1000)}`));

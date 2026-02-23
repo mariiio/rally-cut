@@ -4,7 +4,7 @@ import logging
 import time
 import uuid
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rallycut.core.models import GameState
@@ -213,7 +213,7 @@ class DetectionService:
                 suggested_segments=suggested_segments,
                 statistics=match_stats,
                 processing_time_seconds=processing_time,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(UTC),
             )
 
         except Exception as e:
@@ -224,7 +224,7 @@ class DetectionService:
                 segments=[],
                 statistics=None,
                 processing_time_seconds=time.time() - start_time,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(UTC),
                 error=str(e),
             )
 

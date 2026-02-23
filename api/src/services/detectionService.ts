@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { ProcessingStatus, RejectionReason, Video, DetectionJobStatus, VideoStatus, RallyStatus, ConfirmationStatus } from "@prisma/client";
+import { RejectionReason, DetectionJobStatus, VideoStatus, RallyStatus, ConfirmationStatus } from "@prisma/client";
 
 import { env } from "../config/env.js";
 import { triggerModalDetection } from "../lib/modal.js";
@@ -17,6 +17,7 @@ import {
   getUserTier,
   getTierLimits,
   checkAndReserveDetectionQuota,
+  releaseDetectionQuota,
 } from "./tierService.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -168,30 +169,6 @@ async function triggerLocalDetection(params: {
   return Promise.resolve();
 }
 
-// Check if video proxy is ready for detection
-// Returns the video - uses proxy if available, otherwise falls back to original
-function getVideoForDetection(video: Video): Video {
-  // Proxy is ready - use it for faster detection
-  if (video.proxyS3Key) {
-    console.log(`[DETECTION] Using proxy for video ${video.id}`);
-    return video;
-  }
-
-  // Processing failed - warn but allow detection with original
-  if (video.processingStatus === ProcessingStatus.FAILED) {
-    console.log(
-      `[DETECTION] Processing failed for ${video.id}, using original video`
-    );
-    return video;
-  }
-
-  // Proxy not ready yet - fall back to original video
-  // This allows detection to start immediately without waiting for proxy
-  console.log(
-    `[DETECTION] Proxy not ready (status: ${video.processingStatus}), using original for ${video.id}`
-  );
-  return video;
-}
 
 export async function triggerRallyDetection(
   videoId: string,
@@ -248,9 +225,6 @@ export async function triggerRallyDetection(
       }
     );
   }
-
-  // Get the video source for detection (proxy if available, otherwise original)
-  const detectionVideo = getVideoForDetection(video);
 
   // Atomically check and reserve a detection quota slot
   // This prevents race conditions where concurrent requests bypass quota limits
@@ -362,12 +336,11 @@ export async function triggerRallyDetection(
   const callbackUrl = `${env.CORS_ORIGIN.replace("localhost:3000", "localhost:3001")}/v1/webhooks/detection-complete`;
 
   // Choose between local detection (dev) or Modal (prod)
-  const triggerFn = shouldUseLocalDetection()
-    ? triggerLocalDetection
-    : triggerModalDetection;
-
   const useLocal = shouldUseLocalDetection();
-  const videoKey = detectionVideo.proxyS3Key ?? detectionVideo.s3Key;
+  const triggerFn = useLocal ? triggerLocalDetection : triggerModalDetection;
+
+  // Detection prefers proxy for speed (smaller file, same ML quality at 480p)
+  const videoKey = video.proxyS3Key ?? video.s3Key;
   console.log(
     `[DETECTION] Using ${useLocal ? "LOCAL" : "MODAL"} detection for job ${createdJob.id}`
   );
@@ -554,6 +527,16 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
       }),
     ]);
 
+    // Refund the detection quota slot that was reserved before ML trigger
+    if (job.video.userId) {
+      try {
+        await releaseDetectionQuota(job.video.userId);
+        console.log(`[DETECTION] Refunded detection quota for user ${job.video.userId} (job ${job.id} failed)`);
+      } catch (e) {
+        console.error(`[DETECTION] Failed to refund detection quota: ${e}`);
+      }
+    }
+
     return { success: false, error: payload.error_message };
   }
 
@@ -648,17 +631,17 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
       orderBy: { startMs: "asc" },
     });
 
-    // Collect rallies that need order updates
+    // Batch update rally order using parallel queries (avoids O(n) sequential updates)
     const updates = allRallies
       .map((rally, i) => ({ id: rally.id, order: i }))
       .filter((u, i) => allRallies[i].order !== u.order);
 
-    // Batch update all order changes
-    for (const u of updates) {
-      await tx.rally.update({
-        where: { id: u.id },
-        data: { order: u.order },
-      });
+    if (updates.length > 0) {
+      await Promise.all(
+        updates.map((u) =>
+          tx.rally.update({ where: { id: u.id }, data: { order: u.order } })
+        )
+      );
     }
 
     await tx.rallyDetectionJob.update({
@@ -692,4 +675,71 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
     userRalliesPreserved: userRallies.length,
     mlRalliesReplaced: mlOnlyRallies.length,
   };
+}
+
+/**
+ * Clean up stale detection and batch tracking jobs that got stuck.
+ * Call on API startup to recover from crashes/timeouts.
+ */
+export async function cleanupStaleJobs(): Promise<void> {
+  const DETECTION_TIMEOUT_MS = 45 * 60 * 1000; // 45 minutes
+  const BATCH_TRACKING_TIMEOUT_MS = 90 * 60 * 1000; // 90 minutes
+  const now = new Date();
+
+  // Clean up stale detection jobs
+  const staleDetectionCutoff = new Date(now.getTime() - DETECTION_TIMEOUT_MS);
+  const staleDetections = await prisma.rallyDetectionJob.findMany({
+    where: {
+      status: { in: [DetectionJobStatus.PENDING, DetectionJobStatus.RUNNING] },
+      createdAt: { lt: staleDetectionCutoff },
+    },
+    include: { video: { select: { id: true, userId: true } } },
+  });
+
+  for (const job of staleDetections) {
+    console.log(`[CLEANUP] Marking stale detection job ${job.id} as FAILED (created ${job.createdAt.toISOString()})`);
+    await prisma.$transaction([
+      prisma.rallyDetectionJob.update({
+        where: { id: job.id },
+        data: {
+          status: DetectionJobStatus.FAILED,
+          errorMessage: "Job timed out (stale job cleanup)",
+          completedAt: now,
+        },
+      }),
+      prisma.video.update({
+        where: { id: job.video.id },
+        data: { status: VideoStatus.ERROR },
+      }),
+    ]);
+
+    // Refund quota for stale detection jobs
+    if (job.video.userId) {
+      try {
+        await releaseDetectionQuota(job.video.userId);
+      } catch (e) {
+        console.error(`[CLEANUP] Failed to refund quota for user ${job.video.userId}: ${e}`);
+      }
+    }
+  }
+
+  // Clean up stale batch tracking jobs
+  const staleBatchCutoff = new Date(now.getTime() - BATCH_TRACKING_TIMEOUT_MS);
+  const staleBatchJobs = await prisma.batchTrackingJob.updateMany({
+    where: {
+      status: { in: ["PENDING", "PROCESSING"] },
+      createdAt: { lt: staleBatchCutoff },
+    },
+    data: {
+      status: "FAILED",
+      completedAt: now,
+      error: "Job timed out (stale job cleanup)",
+    },
+  });
+
+  if (staleDetections.length > 0 || staleBatchJobs.count > 0) {
+    console.log(
+      `[CLEANUP] Cleaned up ${staleDetections.length} stale detection jobs and ${staleBatchJobs.count} stale batch tracking jobs`
+    );
+  }
 }
