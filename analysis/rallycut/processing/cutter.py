@@ -1273,15 +1273,21 @@ class VideoCutter:
             # Extract features inline (slow — VideoMAE over full video)
             logger.info("Extracting VideoMAE features for TemporalMaxer...")
             if progress_callback:
-                progress_callback(0.05, "Extracting video features (this may take a few minutes)...")
+                progress_callback(0.05, "Extracting video features...")
             from lib.volleyball_ml.video_mae import GameStateClassifier
             from rallycut.temporal.features import extract_features_for_video
+
+            def feature_progress(pct: float, msg: str) -> None:
+                if progress_callback:
+                    # Map extraction 0-1 to overall 0.05-0.10
+                    progress_callback(0.05 + pct * 0.05, msg)
 
             classifier = GameStateClassifier(
                 model_path=self._model_path, device=self.device
             )
             features, metadata = extract_features_for_video(
-                input_path, classifier, stride=stride
+                input_path, classifier, stride=stride,
+                progress_callback=feature_progress,
             )
             metadata.content_hash = content_hash
             cache.put(content_hash, stride, features, metadata)
