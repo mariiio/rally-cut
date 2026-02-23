@@ -139,7 +139,7 @@ def train_model(
 
     # Rallies with real ball GT — force into validation to prevent
     # eval contamination (pseudo-labels include gold GT overrides)
-    GT_RALLY_IDS = {
+    gt_rally_ids = {
         "1bfcbc4f-64be-44e9-bc5a-1d20b78cca2e",
         "fb8fd612-ce32-444d-8c58-82774c79cae7",
         "73581b32-8207-42bb-9af7-12491fdbe65c",
@@ -153,8 +153,8 @@ def train_model(
     }
 
     # Split: GT rallies → val, remaining → random 85/15 train/val
-    gt_ids = [r for r in rally_ids if r in GT_RALLY_IDS]
-    non_gt_ids = [r for r in rally_ids if r not in GT_RALLY_IDS]
+    gt_ids = [r for r in rally_ids if r in gt_rally_ids]
+    non_gt_ids = [r for r in rally_ids if r not in gt_rally_ids]
 
     random.seed(42)
     random.shuffle(non_gt_ids)
