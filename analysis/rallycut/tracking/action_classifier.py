@@ -226,27 +226,25 @@ def _ball_crossed_net(
     if len(positions_in_range) < min_frames_per_side * 2:
         return None
 
-    # Determine starting side from consecutive frames. Count consecutive
-    # near/far from the start; stop once the side switches. Use 1 frame
-    # minimum to identify the starting side (the crossing scan below
-    # already requires min_frames_per_side consecutive on the opposite side).
+    # Determine starting side from first min_frames consecutive frames
     start_near = 0
     start_far = 0
     for bp in positions_in_range:
-        is_near = bp.y >= net_y
-        if is_near:
-            if start_far > 0:
-                break  # Side switched
-            start_near += 1
+        if bp.y >= net_y:
+            if start_far == 0:
+                start_near += 1
+            else:
+                break
         else:
-            if start_near > 0:
-                break  # Side switched
-            start_far += 1
+            if start_near == 0:
+                start_far += 1
+            else:
+                break
 
-    if start_near == 0 and start_far == 0:
-        return None  # No data
+    if start_near < min_frames_per_side and start_far < min_frames_per_side:
+        return None  # Can't determine starting side (noisy data)
 
-    starting_is_near = start_near > start_far
+    starting_is_near = start_near >= min_frames_per_side
 
     # Scan for any contiguous block on the opposite side
     consecutive_opposite = 0
