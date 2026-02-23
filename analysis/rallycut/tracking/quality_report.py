@@ -59,6 +59,10 @@ class TrackingQualityReport:
     court_identity_swaps: int = 0  # Swaps applied by court identity
     uncertain_identity_count: int = 0  # Ambiguous interactions
 
+    # Global identity optimization
+    global_identity_segments: int = 0  # Segments after splitting at interactions
+    global_identity_remapped: int = 0  # Positions remapped to canonical IDs
+
     # Contact detection readiness
     contact_readiness_score: float = 0.0  # 0-1, decreases per issue
     contact_readiness_issues: list[str] = field(default_factory=list)
@@ -89,6 +93,8 @@ class TrackingQualityReport:
             "courtIdentityInteractions": self.court_identity_interactions,
             "courtIdentitySwaps": self.court_identity_swaps,
             "uncertainIdentityCount": self.uncertain_identity_count,
+            "globalIdentitySegments": self.global_identity_segments,
+            "globalIdentityRemapped": self.global_identity_remapped,
             "contactReadinessScore": self.contact_readiness_score,
             "contactReadinessIssues": self.contact_readiness_issues,
             "trackabilityScore": self.trackability_score,
@@ -116,6 +122,8 @@ def compute_quality_report(
     court_detection_insights: CourtDetectionInsights | None = None,
     contact_readiness_issues: list[str] | None = None,
     stationary_bg_removed_count: int = 0,
+    global_identity_segments: int = 0,
+    global_identity_remapped: int = 0,
 ) -> TrackingQualityReport:
     """Compute a tracking quality report from tracking results.
 
@@ -132,6 +140,15 @@ def compute_quality_report(
         swap_fix_count: Number of swap fixes.
         appearance_link_count: Number of tracklet appearance-based merges.
         expected_players: Expected number of court players.
+        has_court_calibration: Whether court calibration is available.
+        court_identity_interactions: Number of net interactions detected.
+        court_identity_swaps: Number of swaps applied by court identity.
+        uncertain_identity_count: Number of ambiguous interactions.
+        court_detection_insights: Court detection diagnostic info.
+        contact_readiness_issues: Issues affecting contact detection readiness.
+        stationary_bg_removed_count: Tracks removed by stationary background filter.
+        global_identity_segments: Segments from global identity optimization.
+        global_identity_remapped: Positions remapped by global identity.
 
     Returns:
         TrackingQualityReport with score and suggestions.
@@ -147,6 +164,8 @@ def compute_quality_report(
     report.court_identity_swaps = court_identity_swaps
     report.uncertain_identity_count = uncertain_identity_count
     report.stationary_bg_removed_count = stationary_bg_removed_count
+    report.global_identity_segments = global_identity_segments
+    report.global_identity_remapped = global_identity_remapped
 
     duration_sec = frame_count / video_fps if video_fps > 0 else 0.0
 

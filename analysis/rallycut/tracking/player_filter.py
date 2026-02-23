@@ -1200,6 +1200,19 @@ def remove_stationary_background_tracks(
             )
 
     if removed_ids:
+        # Safety: never remove tracks if it would leave fewer than expected players.
+        # Background objects don't cause harm when co-existing with real players
+        # (primary track selection already deprioritizes stationary tracks), but
+        # removing real players in short rallies (100% presence, low spread) is
+        # catastrophic for tracking accuracy.
+        surviving_ids = set(tracks.keys()) - removed_ids
+        if len(surviving_ids) < config.max_players:
+            logger.warning(
+                f"Stationary background filter: would leave {len(surviving_ids)} "
+                f"tracks (< {config.max_players} expected) — skipping removal"
+            )
+            return positions, set()
+
         original_count = len(positions)
         positions = [p for p in positions if p.track_id not in removed_ids]
         logger.info(

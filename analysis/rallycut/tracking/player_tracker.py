@@ -1453,6 +1453,46 @@ class PlayerTracker:
                     for merged_id in id_mapping:
                         team_assignments.pop(merged_id, None)
 
+                # Step 1b: Global identity optimization
+                # Splits tracks at interaction boundaries and reassigns
+                # segments to canonical players via greedy cost minimization
+                num_global_segments = 0
+                num_global_remapped = 0
+                if (
+                    color_store is not None
+                    and color_store.has_data()
+                    and team_assignments
+                ):
+                    from rallycut.tracking.global_identity import (
+                        optimize_global_identity,
+                    )
+
+                    positions, global_result = optimize_global_identity(
+                        positions,
+                        team_assignments,
+                        color_store,
+                        court_split_y=preliminary_split_y,
+                        appearance_store=appearance_store,
+                    )
+                    num_global_segments = global_result.num_segments
+                    num_global_remapped = global_result.num_remapped
+                    if not global_result.skipped:
+                        logger.info(
+                            f"Global identity: {global_result.num_segments} "
+                            f"segments, {global_result.num_remapped} remapped, "
+                            f"{global_result.num_interactions} interactions"
+                        )
+                        # Re-classify teams after remapping
+                        if preliminary_split_y is not None:
+                            team_assignments = classify_teams(
+                                positions, preliminary_split_y
+                            )
+                    else:
+                        logger.debug(
+                            f"Global identity skipped: "
+                            f"{global_result.skip_reason}"
+                        )
+
                 player_filter = PlayerFilter(
                     ball_positions=ball_positions,
                     total_frames=total_frames_in_range,
@@ -1587,6 +1627,8 @@ class PlayerTracker:
                     uncertain_identity_count=len(uncertain_windows),
                     court_detection_insights=court_detection_insights,
                     stationary_bg_removed_count=len(removed_bg_tracks),
+                    global_identity_segments=num_global_segments,
+                    global_identity_remapped=num_global_remapped,
                 )
 
             processing_time_ms = (time.time() - start_time) * 1000
