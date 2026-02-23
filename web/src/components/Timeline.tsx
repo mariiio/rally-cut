@@ -31,7 +31,7 @@ import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useCameraStore } from '@/stores/cameraStore';
 import { formatTimeShort, formatTime } from '@/utils/timeFormat';
-import { getDetectionStatus } from '@/services/api';
+import { useAnalysisStore } from '@/stores/analysisStore';
 import { AnalysisPipeline } from './AnalysisPipeline';
 
 // Custom effect for rally segments
@@ -107,7 +107,6 @@ export function Timeline() {
     selectHighlight,
     getHighlightsForRally,
     activeMatchId,
-    reloadCurrentMatch,
     isRallyEditingLocked,
     isCameraTabActive,
     setIsCameraTabActive,
@@ -148,7 +147,6 @@ export function Timeline() {
     activeMatch?.status ?? null
   );
   const [detectionResult, setDetectionResult] = useState<{ ralliesCount: number } | null>(null);
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const {
     currentTime,
     duration,
@@ -1117,112 +1115,56 @@ export function Timeline() {
     return !insideRally;
   }, [rallies, currentTime, videoMetadata, isDraggingCursor, selectedRallyId, isLocked]);
 
-  // Stop polling for detection status
-  const stopPolling = useCallback(() => {
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
-    }
-  }, []);
+  // Read detection progress from analysisStore (single source of truth for polling)
+  const analysisPipeline = useAnalysisStore(
+    (s) => activeMatchId ? s.pipelines[activeMatchId] ?? null : null
+  );
 
-  // Start polling for detection status
-  const startPolling = useCallback(() => {
-    if (!activeMatchId) return;
-
-    // Clear any existing interval
-    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-
-    // Poll for status every 5 seconds
-    pollIntervalRef.current = setInterval(async () => {
-      try {
-        const status = await getDetectionStatus(activeMatchId);
-        if (status.job?.status === 'COMPLETED') {
-          stopPolling();
-          setDetectionProgress(100);
-          setDetectionStatus('Loading results...');
-          // Reload match data from API instead of page reload
-          const result = await reloadCurrentMatch();
-          setIsDetecting(false);
-          setVideoDetectionStatus('DETECTED');
-          if (result) {
-            setDetectionResult(result);
-            if (result.ralliesCount > 0) {
-              setDetectionStatus(`Found ${result.ralliesCount} rallies!`);
-            } else {
-              setDetectionStatus('No rallies detected');
-              setDetectionError('The ML model did not find any rallies in this video. You can add them manually.');
-            }
-          } else {
-            setDetectionStatus('Detection complete');
-          }
-          // Clear success message after 5 seconds
-          setTimeout(() => {
-            setDetectionStatus(null);
-            setDetectionResult(null);
-          }, 5000);
-        } else if (status.job?.status === 'FAILED') {
-          stopPolling();
-          setIsDetecting(false);
-          setDetectionError(status.job.errorMessage || 'Detection failed');
-          setDetectionStatus(null);
-        } else {
-          // Update progress from server
-          const progress = status.job?.progress ?? 0;
-          const message = status.job?.progressMessage || (status.job?.status === 'RUNNING' ? 'Processing video' : 'Preparing');
-          setDetectionProgress(progress);
-          setDetectionStatus(message);
-        }
-      } catch {
-        // Ignore polling errors, keep trying
-      }
-    }, 5000);
-  }, [activeMatchId, stopPolling, reloadCurrentMatch]);
-
-  // Sync detection status when match changes
+  // Sync detection UI from analysisStore + match status (single source of truth)
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional sync on match change
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional sync
     setVideoDetectionStatus(activeMatch?.status ?? null);
-    // Reset all detection UI state, then re-initialize if the new match is detecting
-    setDetectionProgress(0);
-    setDetectionResult(null);
-    setDetectionError(null);
-    if (activeMatch?.status === 'DETECTING') {
+
+    const phase = analysisPipeline?.phase;
+    if (phase === 'detecting' && analysisPipeline) {
+      setIsDetecting(true);
+      // Map analysis pipeline progress (10-45) to 0-100 for the detection UI
+      const mapped = Math.round(((analysisPipeline.progress - 10) / 35) * 100);
+      setDetectionProgress(Math.max(0, Math.min(100, mapped)));
+      setDetectionStatus(analysisPipeline.stepMessage || 'Analyzing rallies...');
+      setDetectionResult(null);
+      setDetectionError(null);
+    } else if (phase === 'error' && analysisPipeline) {
+      setIsDetecting(false);
+      setDetectionError(analysisPipeline.error || 'Detection failed');
+      setDetectionStatus(null);
+    } else if (phase === 'done' && analysisPipeline) {
+      setIsDetecting(false);
+      const ralliesFound = analysisPipeline.ralliesFound ?? 0;
+      if (ralliesFound > 0) {
+        setDetectionResult({ ralliesCount: ralliesFound });
+        setDetectionStatus(`Found ${ralliesFound} rallies!`);
+      } else {
+        setDetectionResult(null);
+        setDetectionStatus('No rallies detected');
+        setDetectionError('The ML model did not find any rallies in this video. You can add them manually.');
+      }
+      setDetectionProgress(100);
+    } else if (activeMatch?.status === 'DETECTING') {
+      // Fallback: match is DETECTING but analysisStore not active (e.g. detection triggered elsewhere)
       setIsDetecting(true);
       setDetectionStatus('Analyzing rallies...');
+      setDetectionProgress(0);
+      setDetectionResult(null);
+      setDetectionError(null);
     } else {
       setIsDetecting(false);
       setDetectionStatus(null);
+      setDetectionProgress(0);
+      setDetectionResult(null);
+      setDetectionError(null);
     }
-  }, [activeMatchId, activeMatch?.status]);
-
-  // Fetch job progress if video is DETECTING (to get progress/elapsed time)
-  useEffect(() => {
-    if (!activeMatchId || activeMatch?.status !== 'DETECTING') return;
-
-    const fetchJobProgress = async () => {
-      try {
-        const status = await getDetectionStatus(activeMatchId);
-        if (status.job?.status === 'RUNNING') {
-          setDetectionProgress(status.job.progress ?? 0);
-          setDetectionStatus(status.job.progressMessage || 'Analyzing rallies...');
-          startPolling();
-        } else if (status.job?.status === 'COMPLETED') {
-          // Job completed while we were loading - reload match data
-          await reloadCurrentMatch();
-          setIsDetecting(false);
-          setVideoDetectionStatus('DETECTED');
-        }
-      } catch {
-        // Ignore errors, polling will handle updates
-        startPolling();
-      }
-    };
-
-    fetchJobProgress();
-
-    // Cleanup on unmount
-    return () => stopPolling();
-  }, [activeMatchId, activeMatch?.status, startPolling, stopPolling, reloadCurrentMatch]);
+  }, [activeMatchId, activeMatch?.status, analysisPipeline]);
 
   return (
     <Box sx={{ bgcolor: 'background.paper', borderRadius: 1, overflow: 'hidden' }}>

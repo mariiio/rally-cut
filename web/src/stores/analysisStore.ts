@@ -58,6 +58,8 @@ interface AnalysisState {
 
 // Polling intervals stored outside React state
 const pollTimers: Record<string, ReturnType<typeof setInterval>> = {};
+// Guard against concurrent completeAnalysis calls
+const completingLock = new Set<string>();
 
 function clearPollTimer(videoId: string) {
   if (pollTimers[videoId]) {
@@ -316,7 +318,7 @@ function pollDetection(
     } catch {
       // Ignore poll errors, retry on next interval
     }
-  }, 3000);
+  }, 10000);
 }
 
 async function startTracking(
@@ -429,13 +431,17 @@ function pollTracking(
     } catch {
       // Ignore poll errors
     }
-  }, 5000);
+  }, 10000);
 }
 
 async function completeAnalysis(
   videoId: string,
   set: (fn: (state: AnalysisState) => Partial<AnalysisState>) => void,
 ) {
+  // Prevent concurrent calls (resumeIfNeeded + pollTracking can race)
+  if (completingLock.has(videoId)) return;
+  completingLock.add(videoId);
+
   const updatePipeline = (patch: Partial<AnalysisPipeline>) => {
     set((state) => ({
       pipelines: {
@@ -473,5 +479,7 @@ async function completeAnalysis(
       progress: 100,
       stepMessage: 'Analysis complete!',
     });
+  } finally {
+    completingLock.delete(videoId);
   }
 }

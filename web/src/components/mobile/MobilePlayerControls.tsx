@@ -1,6 +1,5 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Box,
   IconButton,
@@ -18,10 +17,10 @@ import AddIcon from '@mui/icons-material/Add';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useEditorStore } from '@/stores/editorStore';
-import { triggerRallyDetection, getDetectionStatus } from '@/services/api';
 import { formatTime } from '@/utils/timeFormat';
 import { designTokens } from '@/app/theme';
 import { VideoStatus } from '@/constants/enums';
+import { useAnalysisStore } from '@/stores/analysisStore';
 
 export function MobilePlayerControls() {
   const { isPlaying, currentTime, duration, togglePlay, seek } = usePlayerStore();
@@ -29,106 +28,31 @@ export function MobilePlayerControls() {
     rallies,
     activeMatchId,
     createRallyAtTime,
-    reloadCurrentMatch,
     videoUrl,
     isRallyEditingLocked,
-    setMatchStatus,
   } = useEditorStore();
 
   const isLocked = isRallyEditingLocked();
 
-  // Detection state
-  const [isDetecting, setIsDetecting] = useState(false);
-  const [detectionProgress, setDetectionProgress] = useState(0);
-  const [_detectionStatus, setDetectionStatus] = useState<string>('');
-  const [videoDetectionStatus, setVideoDetectionStatus] = useState<string | null>(null);
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Read detection state from analysisStore (single source of truth)
+  const analysisPipeline = useAnalysisStore(
+    (s) => activeMatchId ? s.pipelines[activeMatchId] ?? null : null
+  );
+  const getActiveMatch = useEditorStore((s) => s.getActiveMatch);
+  const activeMatch = getActiveMatch();
 
-  // Define startPolling before the effect that uses it
-  const startPolling = useCallback(() => {
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-    }
+  const isDetecting = analysisPipeline?.phase === 'detecting' || analysisPipeline?.phase === 'tracking'
+    || activeMatch?.status === 'DETECTING';
+  const detectionProgress = analysisPipeline?.phase === 'detecting'
+    ? Math.max(0, Math.min(100, Math.round(((analysisPipeline.progress - 10) / 35) * 100)))
+    : 0;
+  const videoDetectionStatus = activeMatch?.status ?? null;
 
-    pollIntervalRef.current = setInterval(async () => {
-      if (!activeMatchId) return;
+  const startAnalysis = useAnalysisStore((s) => s.startAnalysis);
 
-      try {
-        const status = await getDetectionStatus(activeMatchId);
-        setDetectionProgress(status.job?.progress || 0);
-        setDetectionStatus(status.job?.progressMessage || 'Processing...');
-        setVideoDetectionStatus(status.status);
-
-        if (status.status === VideoStatus.DETECTED) {
-          setIsDetecting(false);
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current);
-          }
-          // Reload the match data to get the new rallies
-          reloadCurrentMatch();
-        } else if (status.status === VideoStatus.ERROR) {
-          setIsDetecting(false);
-          setDetectionStatus('Detection failed');
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current);
-          }
-        }
-      } catch {
-        // Continue polling
-      }
-    }, 3000);
-  }, [activeMatchId, reloadCurrentMatch]);
-
-  // Check video detection status on mount and when match changes
-  useEffect(() => {
+  const handleStartDetection = () => {
     if (!activeMatchId) return;
-
-    // Reset detection UI state for the new match
-    setIsDetecting(false);
-    setDetectionStatus('');
-    setDetectionProgress(0);
-    setVideoDetectionStatus(null);
-
-    const checkStatus = async () => {
-      try {
-        const status = await getDetectionStatus(activeMatchId);
-        setVideoDetectionStatus(status.status);
-        if (status.status === VideoStatus.DETECTING) {
-          setIsDetecting(true);
-          setDetectionStatus(status.job?.progressMessage || 'Processing...');
-          setDetectionProgress(status.job?.progress || 0);
-          startPolling();
-        }
-      } catch {
-        // Video not yet uploaded for detection
-      }
-    };
-
-    checkStatus();
-
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-      }
-    };
-  }, [activeMatchId, startPolling]);
-
-  const handleStartDetection = async () => {
-    if (!activeMatchId) return;
-
-    setIsDetecting(true);
-    setDetectionStatus('Starting...');
-    setDetectionProgress(0);
-
-    try {
-      await triggerRallyDetection(activeMatchId);
-      setMatchStatus(activeMatchId, 'DETECTING');
-      setDetectionStatus('Processing...');
-      startPolling();
-    } catch {
-      setIsDetecting(false);
-      setDetectionStatus('Failed to start');
-    }
+    startAnalysis(activeMatchId);
   };
 
   const handleSliderChange = (_: Event, value: number | number[]) => {
