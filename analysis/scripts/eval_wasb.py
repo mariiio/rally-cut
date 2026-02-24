@@ -141,8 +141,8 @@ def main() -> None:
     parser.add_argument(
         "--threshold",
         type=float,
-        default=0.5,
-        help="Heatmap score threshold (WASB default: 0.5, try 0.3 for higher recall)",
+        default=0.3,
+        help="Heatmap score threshold (production default: 0.3, try 0.5 for stricter)",
     )
     parser.add_argument(
         "--filtered",
