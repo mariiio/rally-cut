@@ -84,6 +84,10 @@ See `api/CLAUDE.md` for tier limits and enforcement. Config in `api/src/config/t
 4. **Edit**: web ↔ api (rally/highlight CRUD)
 5. **Export**: api → Lambda (FFmpeg) → S3 → web (download)
 
+## Running Diagnostics & Long Processes
+
+Never run processes silently. The user should always know what's running, why, and roughly how long to expect. Prefer running in background (`run_in_background: true`) with periodic non-blocking progress checks over blocking on a silent process. Ensure scripts produce visible progress output — if they don't, add it before running. Avoid long inline Python in Bash; write a script file with progress prints instead.
+
 ## See Also
 
 - [analysis/CLAUDE.md](analysis/CLAUDE.md) - ML pipeline details
