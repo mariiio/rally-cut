@@ -519,7 +519,7 @@ export async function triggerRallyDetection(
 ): Promise<{ jobId: string; status: string }> {
   const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/detect-rallies`, {
     method: 'POST',
-    headers: getHeaders(),
+    headers: getHeaders(model ? 'application/json' : undefined),
     body: model ? JSON.stringify({ model }) : undefined,
   });
 

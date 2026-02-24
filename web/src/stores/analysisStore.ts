@@ -52,7 +52,7 @@ interface AnalysisState {
   startAnalysis: (videoId: string) => Promise<void>;
   dismissWarnings: (videoId: string) => void;
   cancelAnalysis: (videoId: string) => void;
-  resumeIfNeeded: (videoId: string) => void;
+  resumeIfNeeded: (videoId: string) => Promise<void>;
   setShowPlayerNaming: (videoId: string | null) => void;
 }
 
@@ -73,11 +73,18 @@ const pollTimers: Record<string, ReturnType<typeof setInterval>> = {};
 // Guard against concurrent completeAnalysis calls
 const completingLock = new Set<string>();
 
+// Stale-poll escape hatch: if N consecutive polls return an unrecognized status,
+// assume the backend job is gone and surface an error instead of looping forever.
+const stalePollCounts = new Map<string, number>();
+const MAX_STALE_POLLS = 6; // 6 × 10s = 60s
+const STALE_TIMEOUT_MS = 30 * 60 * 1000; // 30 min absolute timeout
+
 function clearPollTimer(videoId: string) {
   if (pollTimers[videoId]) {
     clearInterval(pollTimers[videoId]);
     delete pollTimers[videoId];
   }
+  stalePollCounts.delete(videoId);
 }
 
 export const useAnalysisStore = create<AnalysisState>()(
@@ -180,17 +187,81 @@ export const useAnalysisStore = create<AnalysisState>()(
         }));
       },
 
-      resumeIfNeeded: (videoId: string) => {
+      resumeIfNeeded: async (videoId: string) => {
         const pipeline = get().pipelines[videoId];
         if (!pipeline) return;
 
-        // Resume polling based on current phase
+        const updatePipeline = (patch: Partial<AnalysisPipeline>) => {
+          set((state) => ({
+            pipelines: {
+              ...state.pipelines,
+              [videoId]: { ...(state.pipelines[videoId] ?? DEFAULT_PIPELINE), ...patch },
+            },
+          }));
+        };
+
+        // Absolute staleness check: if pipeline started > 30 min ago, error out
+        if (pipeline.startedAt && Date.now() - pipeline.startedAt > STALE_TIMEOUT_MS) {
+          clearPollTimer(videoId);
+          updatePipeline({
+            phase: 'error',
+            error: 'Analysis timed out. Please try again.',
+            stepMessage: 'Analysis timed out',
+          });
+          return;
+        }
+
         if (pipeline.phase === 'detecting' && !pollTimers[videoId]) {
-          pollDetection(videoId, set, get);
+          // Validate server state before blindly polling
+          try {
+            const status = await getDetectionStatus(videoId);
+            if (status.job?.status === 'COMPLETED') {
+              // Detection already finished — advance to tracking
+              const pipelineStatus = await getAnalysisPipelineStatus(videoId);
+              const ralliesFound = pipelineStatus.detection.ralliesFound;
+              if (ralliesFound === 0) {
+                updatePipeline({ phase: 'done', progress: 100, stepMessage: 'No rallies found in this video', ralliesFound: 0 });
+              } else {
+                updatePipeline({ phase: 'tracking', progress: 45, stepMessage: `Found ${ralliesFound} rallies! Starting player tracking...`, ralliesFound });
+                await startTracking(videoId, set, get);
+              }
+              return;
+            } else if (status.job?.status === 'FAILED') {
+              updatePipeline({ phase: 'error', error: status.job.errorMessage || 'Detection failed', stepMessage: 'Detection failed' });
+              return;
+            } else if (status.job?.status === 'RUNNING') {
+              // Legitimate in-progress job — resume polling
+              pollDetection(videoId, set, get);
+            } else {
+              // No job or unrecognized status — detection is not running
+              stalePollCounts.delete(videoId);
+              updatePipeline({ phase: 'error', error: 'Detection is no longer running. Please try again.', stepMessage: 'Detection not found' });
+            }
+          } catch {
+            // API call failed — start polling, stale counter will catch permanent failures
+            pollDetection(videoId, set, get);
+          }
         } else if (pipeline.phase === 'tracking' && !pollTimers[videoId]) {
-          pollTracking(videoId, set, get);
+          try {
+            const status = await getBatchTrackingStatus(videoId);
+            if (status.status === 'completed') {
+              updatePipeline({ phase: 'completing', progress: 90, stepMessage: 'Generating match stats...' });
+              await completeAnalysis(videoId, set);
+              return;
+            } else if (status.status === 'failed') {
+              updatePipeline({ phase: 'error', error: status.error || 'Tracking failed', stepMessage: 'Tracking failed' });
+              return;
+            } else if (status.status === 'processing' || status.status === 'pending') {
+              pollTracking(videoId, set, get);
+            } else {
+              stalePollCounts.delete(videoId);
+              updatePipeline({ phase: 'error', error: 'Tracking is no longer running. Please try again.', stepMessage: 'Tracking not found' });
+            }
+          } catch {
+            pollTracking(videoId, set, get);
+          }
         } else if (pipeline.phase === 'completing') {
-          completeAnalysis(videoId, set);
+          await completeAnalysis(videoId, set);
         }
       },
 
@@ -290,6 +361,17 @@ function pollDetection(
         return;
       }
 
+      // Absolute timeout: if pipeline started > 30 min ago, give up
+      if (pipeline.startedAt && Date.now() - pipeline.startedAt > STALE_TIMEOUT_MS) {
+        clearPollTimer(videoId);
+        updatePipeline({
+          phase: 'error',
+          error: 'Detection timed out. Please try again.',
+          stepMessage: 'Detection timed out',
+        });
+        return;
+      }
+
       const status = await getDetectionStatus(videoId);
 
       if (status.job?.status === 'COMPLETED') {
@@ -325,6 +407,7 @@ function pollDetection(
           stepMessage: 'Detection failed',
         });
       } else if (status.job?.status === 'RUNNING') {
+        stalePollCounts.delete(videoId);
         // Map detection progress (0-100) to pipeline progress (10-45)
         const detProgress = status.job.progress ?? 0;
         const progress = 10 + (detProgress / 100) * 35;
@@ -332,6 +415,18 @@ function pollDetection(
           progress,
           stepMessage: status.job.progressMessage || 'Analyzing video for rallies...',
         });
+      } else {
+        // Unrecognized status (e.g. UPLOADED with no job) — count as stale
+        const count = (stalePollCounts.get(videoId) ?? 0) + 1;
+        stalePollCounts.set(videoId, count);
+        if (count >= MAX_STALE_POLLS) {
+          clearPollTimer(videoId);
+          updatePipeline({
+            phase: 'error',
+            error: 'Detection does not appear to be running. Please try again.',
+            stepMessage: 'Detection not found',
+          });
+        }
       }
     } catch {
       // Ignore poll errors, retry on next interval
@@ -412,6 +507,17 @@ function pollTracking(
         return;
       }
 
+      // Absolute timeout: if pipeline started > 30 min ago, give up
+      if (pipeline.startedAt && Date.now() - pipeline.startedAt > STALE_TIMEOUT_MS) {
+        clearPollTimer(videoId);
+        updatePipeline({
+          phase: 'error',
+          error: 'Tracking timed out. Please try again.',
+          stepMessage: 'Tracking timed out',
+        });
+        return;
+      }
+
       const status = await getBatchTrackingStatus(videoId);
 
       if (status.status === 'completed') {
@@ -435,7 +541,8 @@ function pollTracking(
           error: status.error || 'Tracking failed',
           stepMessage: 'Tracking failed',
         });
-      } else if (status.status === 'processing') {
+      } else if (status.status === 'processing' || status.status === 'pending') {
+        stalePollCounts.delete(videoId);
         const completed = status.completedRallies ?? 0;
         const total = status.totalRallies ?? 1;
         // Map tracking progress (0-total) to pipeline progress (50-90)
@@ -445,6 +552,18 @@ function pollTracking(
           stepMessage: `Tracking players (rally ${completed + 1} of ${total})...`,
           trackingProgress: { completed, total },
         });
+      } else {
+        // Unrecognized status — count as stale
+        const count = (stalePollCounts.get(videoId) ?? 0) + 1;
+        stalePollCounts.set(videoId, count);
+        if (count >= MAX_STALE_POLLS) {
+          clearPollTimer(videoId);
+          updatePipeline({
+            phase: 'error',
+            error: 'Tracking does not appear to be running. Please try again.',
+            stepMessage: 'Tracking not found',
+          });
+        }
       }
     } catch {
       // Ignore poll errors
