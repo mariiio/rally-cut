@@ -94,12 +94,11 @@ uv run rallycut train list-weights                      # List snapshots in S3
 # split. Stale exports will cause the upload step to error (missing manifest).
 uv run python -m experiments.pseudo_label_export \
     --output-dir experiments/wasb_pseudo_labels \
-    --cache-type ensemble --all-tracked --extract-frames  # Export pseudo-labels + manifest
+    --all-tracked --extract-frames                    # Export pseudo-labels + manifest
 uv run rallycut train wasb-modal --upload           # Upload data + pretrained weights to Modal
 uv run rallycut train wasb-modal --epochs 30 --fresh  # Train on A10G GPU (~$1.10/hr)
 uv run rallycut train wasb-modal --download         # Download fine-tuned model (auto-deletes ONNX)
-uv run python scripts/eval_wasb.py                  # Evaluate WASB solo
-uv run python scripts/eval_ensemble.py              # Evaluate ensemble
+uv run python scripts/eval_wasb.py                  # Evaluate WASB
 uv run rallycut train wasb-modal --cleanup          # Delete from Modal volume
 
 # Temporal model training (DEPRECATED - use TemporalMaxer instead)
@@ -160,7 +159,7 @@ rallycut/
 │   ├── models.py             # v1/v2/v3 temporal models (deprecated)
 │   └── training.py           # Training loop with validation
 ├── tracking/        # Ball and player tracking
-│   ├── ball_tracker.py       # VballNet ONNX ball detection (9-frame temporal)
+│   ├── ball_tracker.py       # Ball tracker factory and data types
 │   ├── ball_filter.py        # Temporal filter for ball tracking post-processing
 │   ├── ball_features.py      # Ball features, server ID, reactivity scoring
 │   ├── player_tracker.py     # YOLO + BoT-SORT player tracking
@@ -380,72 +379,39 @@ Merges fragmented tracker IDs using velocity prediction and position/size simila
 
 Multi-stage temporal filter for ball tracking. Default raw mode applies motion energy filtering, stationarity detection, segment pruning, oscillation/blip removal, and interpolation. See `tracking/ball_filter.py`.
 
-### Ball Tracking Model Variants
+### Ball Tracking Model
 
-Multiple ball tracking models are available via the `model` parameter:
-
-| Model | ID | Match Rate | Error | Speed | Recommendation |
-|-------|-----|------------|-------|-------|----------------|
-| **WASB HRNet** | `wasb` (default) | **86.4%** | 29.2px | 33 FPS (ONNX+CoreML) | **Default** - best accuracy, fine-tuned on beach volleyball |
-| **Ensemble** | `ensemble` | 86.2% | 29.9px | 33 FPS (ONNX+CoreML) | Legacy — WASB+VballNet, marginal benefit |
-| **VballNetV2** | `v2` | 41.7% | 92.7px | 100 FPS (CPU) | Fastest, ONNX-only |
-| **VballNetFastV1** | `fast` | ~40% | ~95px | 280 FPS (CPU) | Speed priority (3.6x faster) |
-
-WASB (BMVC 2023) is an HRNet fine-tuned on beach volleyball pseudo-labels. Uses ONNX+CoreML on Apple Silicon (auto-exported from PyTorch on first use). VballNet contributes <1% of frames in the ensemble, so WASB-only is now the default.
+WASB HRNet is the sole ball tracking model. WASB (BMVC 2023) is an HRNet fine-tuned on beach volleyball pseudo-labels. Uses ONNX+CoreML on Apple Silicon (auto-exported from PyTorch on first use). Achieves **86.4% match rate** at 29.2px error, 33 FPS on ONNX+CoreML.
 
 ```python
 from rallycut.tracking import create_ball_tracker
 
-# Default: WASB (best accuracy - 86.4% match rate)
-tracker = create_ball_tracker()
-
-# Ensemble (WASB + VballNet fallback, legacy)
-tracker = create_ball_tracker("ensemble")
-
-# VballNet only (fastest, 41.7% match rate)
-tracker = create_ball_tracker("v2")
+tracker = create_ball_tracker()  # WASB (only option)
 ```
 
-CLI support:
-```bash
-rallycut track-players video.mp4                          # Default WASB
-rallycut track-players video.mp4 --ball-model ensemble    # WASB + VballNet fallback
-rallycut track-players video.mp4 --ball-model v2          # VballNet only (fastest)
-rallycut evaluate-tracking compare-ball-models --all      # Compare all variants
-```
-
-### Heatmap Decoding Options
-
-The VballNet model outputs heatmaps that are decoded to ball positions. See `tracking/ball_tracker.py`.
-
-**HeatmapDecodingConfig:**
-- `threshold=0.3`: Threshold for heatmap binarization. Uses contour method for centroid extraction.
-
-Testing on ground truth (beach volleyball) showed `threshold=0.3` with contour centroid gives best results. With frame offset auto-detection, accuracy reaches **75% match rate** at 50px threshold.
-
-The raw filter pipeline maximizes detection rate and match rate through post-processing (segment pruning, outlier removal, blip removal, interpolation) rather than Kalman smoothing.
+The heatmap threshold is 0.3 (optimal for beach volleyball). The filter pipeline maximizes detection rate and match rate through post-processing (segment pruning, outlier removal, blip removal, interpolation).
 
 **Problems solved:**
-- **False positives at static positions**: VballNet frequently detects stationary players as the ball. The motion energy filter (step 0 in raw mode) computes temporal intensity change in a 15x15 patch around each detection. Real ball in flight creates high motion energy; a player standing still has near-zero energy. Positions with `motion_energy < 0.02` are zeroed out. This removes ~5% of false positives before segment pruning runs, improving detection rate from 78.6% to 83.7% and match rate from 47.1% to 48.6%.
-- **Player lock-on (stationarity)**: WASB can lock onto a player position for 12+ consecutive frames, producing nearly identical coordinates (spread < 0.5% of screen). Since a volleyball is always in motion during a rally, this is physics-impossible and indicates model failure. The stationarity filter uses a sliding window to detect and zero these blocks. Tight thresholds (0.5% spread, 12 frames minimum) avoid false positives on real slow-ball events like set apex (~0.8% spread) or slow net trajectories (~1.5%). Source-agnostic: applies equally to WASB and VballNet. Default off; enabled only in ensemble mode.
-- **False segments at rally boundaries**: VballNet outputs consistent false detections at rally start/end (before temporal context builds up, or after ball exits frame). Segment pruning splits the trajectory at large position jumps (>20% screen) and discards short fragments (<15 frames). Short fragments that are spatially close to an anchor segment (within 10-15% of screen of the nearest anchor endpoint, wider when the anchor contains WASB positions) are recovered rather than discarded — these are real trajectory fragments between interleaved false positives.
-- **Interleaved false positives**: VballNet sometimes interleaves single-frame false detections (jumping to player positions) within real trajectory regions. Without anchor-proximity recovery, segment splitting at each jump fragments the real trajectory into tiny segments that all get pruned. The recovery step keeps real fragments and discards only the distant false positive clusters.
-- **Oscillating false detections**: After ball exits frame, VballNet can lock onto two players and alternate between them with high confidence. The pattern is cluster-based: positions stay near one player for 2-5 frames, jump to another for 1-2 frames, then back. Oscillation pruning uses spatial clustering to detect this: finds the two furthest-apart positions (poles) in each window, assigns positions to nearest pole, and counts cluster transitions. Both clusters must be compact (within 1.5% of screen of their pole — real VballNet player-locking has ~1% noise) and have ≥3 members. A transition rate ≥25% over 12+ frames triggers trimming.
-- **Exit ghost detections**: When the ball exits the frame mid-rally, VballNet produces false detections that smoothly drift from the exit point toward a player position. These "exit ghosts" are missed by other filters (no jump, no oscillation, no gap). Detected by physics: ball consistently approaching a screen edge with velocity > 0.8%/frame MUST exit — any reversal away from that edge is impossible. All subsequent positions are marked as ghosts until a gap > max_interpolation_gap frames.
-- **Hovering false detections**: After ball exits frame, VballNet can lock onto a single player position and produce many frames within a tiny radius. Detected by checking short segments (12-36 frames) that appear after a gap > max_interpolation_gap: if the first 12 positions all lie within 5% of screen of their centroid, the segment is dropped. Real ball trajectories always have spread >5% over 12 frames because the ball is in motion.
-- **Trajectory blips**: VballNet can briefly lock onto a player position for 2-5 consecutive frames mid-trajectory. Single-frame outlier detection misses these because consecutive false positives validate each other as neighbors. Blip removal uses distant trajectory context (positions ≥5 frames away) with a two-pass approach: first flags suspects, then re-evaluates with clean (non-suspect) context to prevent contamination. Only compact clusters of ≥2 consecutive suspect frames are removed (real bounces have trajectory spread, blips are tightly clustered at a fixed player position).
+- **False positives at static positions**: The detector can detect stationary players as the ball. The motion energy filter (step 0) computes temporal intensity change in a 15x15 patch around each detection. Positions with `motion_energy < 0.02` are zeroed out.
+- **Player lock-on (stationarity)**: WASB can lock onto a player position for 12+ consecutive frames, producing nearly identical coordinates (spread < 0.5% of screen). The stationarity filter uses a sliding window to detect and zero these blocks. Default off.
+- **False segments at rally boundaries**: The detector outputs false detections at rally start/end. Segment pruning splits the trajectory at large position jumps (>20% screen) and discards short fragments (<15 frames). Short fragments spatially close to an anchor segment are recovered.
+- **Interleaved false positives**: Single-frame false detections (jumping to player positions) within real trajectory regions. Anchor-proximity recovery keeps real fragments and discards distant false positive clusters.
+- **Oscillating false detections**: After ball exits frame, the detector can lock onto two players and alternate between them. Oscillation pruning uses spatial clustering to detect this pattern. A transition rate ≥25% over 12+ frames triggers trimming.
+- **Exit ghost detections**: When the ball exits the frame, false detections smoothly drift from the exit point toward a player position. Detected by physics: ball approaching a screen edge with velocity > 0.8%/frame MUST exit — any reversal is impossible.
+- **Hovering false detections**: After ball exits frame, the detector can lock onto a single player position. Detected by checking short segments where positions lie within 5% of screen of their centroid.
+- **Trajectory blips**: Brief lock-on to a player position for 2-5 consecutive frames mid-trajectory. Blip removal uses distant trajectory context with a two-pass approach.
 - **Missing frames**: Linear interpolation fills small gaps (up to 10 frames) between detections.
 
 **Key parameters (BallFilterConfig):**
 - `enable_motion_energy_filter=True`: Remove false positives at static positions (low temporal change)
 - `motion_energy_threshold=0.02`: Motion energy below this = likely false positive (zeroed)
-- `enable_stationarity_filter=False`: Detect and remove player lock-on (12+ frames within 0.5% spread). Default off; enabled in ensemble mode
+- `enable_stationarity_filter=False`: Detect and remove player lock-on (12+ frames within 0.5% spread). Default off
 - `stationarity_min_frames=12`: Minimum consecutive frames to flag as stationary (~0.4s at 30fps)
 - `stationarity_max_spread=0.005`: Maximum spread from centroid (0.5% of screen, ~10px at 1920px)
 - `enable_segment_pruning=True`: Remove short disconnected false segments
 - `segment_jump_threshold=0.20`: Position jump threshold to split segments (20% of screen)
 - `min_segment_frames=15`: Minimum frames to keep a segment
-- `min_output_confidence=0.05`: Drop VballNet zero-confidence placeholders from output
+- `min_output_confidence=0.05`: Drop zero-confidence placeholders from output
 - `enable_exit_ghost_removal=True`: Remove physics-impossible reversals near screen edges
 - `exit_edge_zone=0.10`: Screen edge zone (10%) for exit approach detection
 - `exit_approach_frames=3`: Min consecutive frames approaching edge before reversal triggers
@@ -485,8 +451,8 @@ uv run rallycut evaluate-tracking tune-ball-filter --all --grid oscillation
 # Outlier removal grid search
 uv run rallycut evaluate-tracking tune-ball-filter --all --grid outlier
 
-# Ensemble grid search
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid ensemble -o results.json
+# WASB grid search
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid wasb -o results.json
 ```
 
 ### Frame Offset Auto-Detection
@@ -567,7 +533,7 @@ uv run rallycut evaluate-tracking tune-filter --all -o results.json  # Export fu
 uv run rallycut evaluate-tracking tune-ball-filter --all --grid segment-pruning  # Segment pruning (18 configs)
 uv run rallycut evaluate-tracking tune-ball-filter --all --grid oscillation     # Oscillation pruning (18 configs)
 uv run rallycut evaluate-tracking tune-ball-filter --all --grid outlier         # Outlier removal + exit detection (18 configs)
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid ensemble        # Ensemble search
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid wasb            # WASB search
 uv run rallycut evaluate-tracking tune-ball-filter --all -o ball.json           # Export results
 ```
 

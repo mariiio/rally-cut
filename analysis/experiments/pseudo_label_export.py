@@ -1,16 +1,12 @@
 """Export ball detections as pseudo-labels for WASB fine-tuning.
 
-Converts cached ball positions (VballNet or ensemble) into CSV format,
-applying confidence and motion energy filters to keep only high-quality
-pseudo-labels. Gold GT labels override where available.
-
-Supports two cache sources:
-  --cache-type vballnet  (default) VballNet-only raw positions
-  --cache-type ensemble  WASB+VballNet ensemble positions (higher quality)
+Converts cached ball positions into CSV format, applying confidence and
+motion energy filters to keep only high-quality pseudo-labels. Gold GT
+labels override where available.
 
 Use --all-tracked to export all rallies with player tracks (not just
-the 9 with ball GT). Ensemble pseudo-labels are the key input for
-WASB fine-tuning on beach volleyball.
+those with ball GT). Pseudo-labels are the key input for WASB fine-tuning
+on beach volleyball.
 
 Output format (CSV):
     Frame,Visibility,X,Y
@@ -20,7 +16,6 @@ Output format (CSV):
 Usage:
     python -m experiments.pseudo_label_export \
         --output-dir experiments/wasb_pseudo_labels/ \
-        --cache-type ensemble \
         --all-tracked \
         --extract-frames
 """
@@ -73,15 +68,11 @@ class ExportStats:
         }
 
 
-ENSEMBLE_CACHE_DIR = Path.home() / ".cache" / "rallycut" / "ensemble_grid_search"
-
-
 def export_pseudo_labels(
     output_dir: Path,
     config: PseudoLabelConfig | None = None,
     include_gold: bool = True,
     video_ids: list[str] | None = None,
-    cache_type: str = "vballnet",
     all_tracked: bool = False,
     all_rallies: bool = False,
 ) -> ExportStats:
@@ -96,7 +87,6 @@ def export_pseudo_labels(
         config: Export configuration.
         include_gold: Whether to include gold GT labels.
         video_ids: Specific video IDs to export (default: all with ball GT).
-        cache_type: "vballnet" (default) or "ensemble" for ensemble cache.
         all_tracked: Load all rallies with player tracks, not just ball GT.
 
     Returns:
@@ -105,6 +95,8 @@ def export_pseudo_labels(
     from rallycut.evaluation.tracking.ball_grid_search import BallRawCache
     from rallycut.evaluation.tracking.db import (
         load_all_rallies as _load_all_rallies,
+    )
+    from rallycut.evaluation.tracking.db import (
         load_all_tracked_rallies,
         load_labeled_rallies,
     )
@@ -115,12 +107,7 @@ def export_pseudo_labels(
     stats = ExportStats()
     gold_rally_ids: list[str] = []
 
-    # Select cache based on cache_type
-    if cache_type == "ensemble":
-        ball_cache = BallRawCache(cache_dir=ENSEMBLE_CACHE_DIR)
-        logger.info(f"Using ensemble cache: {ENSEMBLE_CACHE_DIR}")
-    else:
-        ball_cache = BallRawCache()
+    ball_cache = BallRawCache()
 
     # Load rallies — all rallies, all tracked, or just ball GT
     if all_rallies:
@@ -147,7 +134,7 @@ def export_pseudo_labels(
         gt_rallies = load_labeled_rallies()
         gt_map = {r.rally_id: r for r in gt_rallies}
 
-        rally_list: list[tuple[str, str, int, int, Any]] = [
+        rally_list = [
             (r.rally_id, r.video_id, r.start_ms, r.end_ms, gt_map.get(r.rally_id))
             for r in tracked
         ]
@@ -169,14 +156,14 @@ def export_pseudo_labels(
         cached = ball_cache.get(rally_id)
         if cached is None:
             logger.warning(
-                f"No {cache_type} cache for rally {rally_id[:8]}. "
-                f"Run cache script first."
+                f"No cache for rally {rally_id[:8]}. "
+                f"Run tracking first."
             )
             continue
 
         ball_positions = cached.raw_ball_positions
         if not ball_positions:
-            logger.warning(f"Empty {cache_type} cache for rally {rally_id[:8]}")
+            logger.warning(f"Empty cache for rally {rally_id[:8]}")
             continue
 
         # Build frame -> position mapping from raw output
@@ -193,7 +180,6 @@ def export_pseudo_labels(
                 continue
 
             # Filter stationary false positives (low motion energy = player position)
-            # For ensemble: WASB positions have motion_energy=1.0, always pass
             if bp.motion_energy < cfg.min_motion_energy:
                 stats.filtered_low_motion += 1
                 continue
@@ -202,7 +188,12 @@ def export_pseudo_labels(
             x_norm = max(0.0, min(bp.x, 1.0))
             y_norm = max(0.0, min(bp.y, 1.0))
 
-            frame_data[frame] = {"visibility": 1, "x": x_norm, "y": y_norm}
+            frame_data[frame] = {
+                "visibility": 1,
+                "x": x_norm,
+                "y": y_norm,
+                "confidence": bp.confidence,
+            }
             stats.visible_frames += 1
 
         # Check if this rally has real ball GT (for val-split marker,
@@ -224,23 +215,27 @@ def export_pseudo_labels(
                     "visibility": 1,
                     "x": x_norm,
                     "y": y_norm,
+                    "confidence": 1.0,
                     "is_gold": True,
                 }
                 stats.gold_label_frames += 1
 
-        # Write CSV (frame_num, visible, x, y — normalized coords)
+        # Write CSV (frame_num, visible, x, y, confidence — normalized coords)
         csv_path = output_dir / f"{rally_id}.csv"
         with open(csv_path, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["frame_num", "visible", "x", "y"])
+            writer.writerow(["frame_num", "visible", "x", "y", "confidence"])
 
             for frame in range(max_frame + 1):
-                data = frame_data.get(frame, {"visibility": 0, "x": 0, "y": 0})
+                data = frame_data.get(
+                    frame, {"visibility": 0, "x": 0, "y": 0, "confidence": 0.0}
+                )
                 writer.writerow([
                     frame,
                     data["visibility"],
                     data["x"],
                     data["y"],
+                    data.get("confidence", 0.0),
                 ])
                 stats.total_frames += 1
 
@@ -259,7 +254,6 @@ def export_pseudo_labels(
     # Write manifest so training can discover GT rallies for val split
     manifest = {
         "gold_rally_ids": gold_rally_ids,
-        "cache_type": cache_type,
         "include_gold": include_gold,
         "total_rallies": len(rally_list),
         "gold_label_frames": stats.gold_label_frames,
@@ -369,9 +363,11 @@ def extract_frames(
 
     from rallycut.evaluation.tracking.db import (
         get_video_path,
-        load_all_rallies as _load_all_rallies,
         load_all_tracked_rallies,
         load_labeled_rallies,
+    )
+    from rallycut.evaluation.tracking.db import (
+        load_all_rallies as _load_all_rallies,
     )
 
     cfg = config or PseudoLabelConfig()
@@ -469,12 +465,6 @@ if __name__ == "__main__":
     parser.add_argument("--min-motion-energy", type=float, default=0.02)
     parser.add_argument("--gold-only", action="store_true", help="Export only gold GT labels")
     parser.add_argument(
-        "--cache-type",
-        choices=["vballnet", "ensemble"],
-        default="vballnet",
-        help="Ball position cache to use (default: vballnet)",
-    )
-    parser.add_argument(
         "--all-tracked",
         action="store_true",
         help="Export all tracked rallies, not just ball GT rallies",
@@ -501,7 +491,6 @@ if __name__ == "__main__":
         stats = export_pseudo_labels(
             args.output_dir,
             config,
-            cache_type=args.cache_type,
             all_tracked=args.all_tracked,
             all_rallies=args.all_rallies,
         )

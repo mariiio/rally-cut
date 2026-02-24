@@ -1858,7 +1858,7 @@ def compute_play_area(
     Compute convex hull of ball trajectory with padding.
 
     Args:
-        ball_positions: List of ball detections from BallTracker.
+        ball_positions: List of ball detections from ball tracker.
         config: Filter configuration.
 
     Returns:

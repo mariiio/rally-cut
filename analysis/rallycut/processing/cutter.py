@@ -26,7 +26,8 @@ if TYPE_CHECKING:
     from rallycut.core.proxy import ProxyGenerator
     from rallycut.temporal.features import FeatureCache
     from rallycut.temporal.processor import TemporalProcessor
-    from rallycut.tracking import BallFeatureCache, BallTracker
+    from rallycut.tracking import BallFeatureCache
+    from rallycut.tracking.wasb_model import WASBBallTracker
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ class VideoCutter:
         self._temporal_processor: TemporalProcessor | None = None
         self._binary_head_model: nn.Module | None = None
         self._feature_cache: FeatureCache | None = None
-        self._ball_tracker: BallTracker | None = None
+        self._ball_tracker: WASBBallTracker | None = None
         self._ball_cache: BallFeatureCache | None = None
         self.exporter = FFmpegExporter()
 
@@ -192,7 +193,7 @@ class VideoCutter:
             self._feature_cache = FeatureCacheImpl()
         return self._feature_cache
 
-    def _get_ball_tracker(self) -> BallTracker:
+    def _get_ball_tracker(self) -> WASBBallTracker:
         """Lazy load ball tracker."""
         if self._ball_tracker is None:
             from rallycut.tracking import create_ball_tracker

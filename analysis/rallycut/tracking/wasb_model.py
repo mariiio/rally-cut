@@ -33,7 +33,7 @@ IMG_HEIGHT = 288
 IMG_WIDTH = 512
 NUM_INPUT_FRAMES = 3
 
-# ImageNet normalization (WASB uses RGB + ImageNet norm, not grayscale like VballNet)
+# ImageNet normalization (WASB uses RGB + ImageNet norm)
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
@@ -665,7 +665,7 @@ def decode_heatmap_wasb(
 class WASBBallTracker:
     """Ball tracker using WASB HRNet with ONNX/CoreML acceleration.
 
-    Drop-in alternative to BallTracker with the same track_video() interface.
+    Primary ball tracker for the RallyCut pipeline.
     Uses 3-frame sliding window with stride 1 for maximum coverage.
     For each frame, keeps the highest-confidence detection across overlapping windows.
 
@@ -674,8 +674,8 @@ class WASBBallTracker:
     2. ONNX + CPU (4 FPS) — fallback when CoreML unavailable
     3. PyTorch batched (10 FPS on MPS) — fallback when ONNX unavailable
 
-    WASB achieves 67.5% match rate on beach volleyball GT (vs 41.7% for VballNet)
-    with higher positional accuracy (51.9px vs 92.7px mean error).
+    WASB achieves 86.4% match rate on beach volleyball GT (with tuned filter)
+    with 29.2px mean error.
     """
 
     def __init__(
@@ -824,7 +824,7 @@ class WASBBallTracker:
     ) -> BallTrackingResult:
         """Track ball positions using WASB HRNet.
 
-        Same interface as BallTracker.track_video().
+        Runs WASB inference with optional temporal filtering.
         """
         from rallycut.tracking.ball_filter import BallTemporalFilter
         from rallycut.tracking.ball_tracker import BallPosition, BallTrackingResult

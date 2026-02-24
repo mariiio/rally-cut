@@ -10,10 +10,11 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
-from rallycut.tracking.ball_tracker import BallPosition, BallTracker, BallTrackingResult
+from rallycut.tracking.ball_tracker import BallPosition, BallTrackingResult
 
 logger = logging.getLogger(__name__)
 
@@ -395,7 +396,7 @@ def _track_boundary_window(
     video_path: Path,
     boundary_time: float,
     search_window: float,
-    ball_tracker: BallTracker,
+    ball_tracker: Any,
 ) -> BallTrackingResult:
     """
     Track ball in boundary window.
@@ -404,7 +405,7 @@ def _track_boundary_window(
         video_path: Path to video.
         boundary_time: Center of search window.
         search_window: Window size in seconds.
-        ball_tracker: BallTracker instance.
+        ball_tracker: Ball tracker instance (must have track_video method).
 
     Returns:
         BallTrackingResult for the window.
@@ -412,14 +413,15 @@ def _track_boundary_window(
     start_ms = max(0, int((boundary_time - search_window) * 1000))
     end_ms = int((boundary_time + search_window) * 1000)
 
-    return ball_tracker.track_video(video_path, start_ms=start_ms, end_ms=end_ms)
+    result: BallTrackingResult = ball_tracker.track_video(video_path, start_ms=start_ms, end_ms=end_ms)
+    return result
 
 
 def refine_segment_boundaries(
     video_path: Path,
     start_time: float,
     end_time: float,
-    ball_tracker: BallTracker,
+    ball_tracker: Any,
     config: BallBoundaryConfig | None = None,
 ) -> SegmentRefinement:
     """
@@ -429,7 +431,7 @@ def refine_segment_boundaries(
         video_path: Path to video.
         start_time: Original start time.
         end_time: Original end time.
-        ball_tracker: BallTracker instance.
+        ball_tracker: Ball tracker instance (must have track_video method).
         config: Boundary configuration.
 
     Returns:
@@ -506,7 +508,7 @@ def refine_segment_boundaries(
 def refine_boundaries_parallel(
     video_path: Path,
     segments: list[tuple[float, float]],
-    ball_tracker: BallTracker,
+    ball_tracker: Any,
     config: BallBoundaryConfig | None = None,
 ) -> list[SegmentRefinement]:
     """
@@ -517,7 +519,7 @@ def refine_boundaries_parallel(
     Args:
         video_path: Path to video.
         segments: List of (start_time, end_time) tuples.
-        ball_tracker: BallTracker instance.
+        ball_tracker: Ball tracker instance (must have track_video method).
         config: Boundary configuration.
 
     Returns:

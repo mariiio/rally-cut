@@ -38,7 +38,7 @@ class CachedBallData:
 
     rally_id: str
     video_id: str
-    raw_ball_positions: list[BallPosition]  # Unfiltered VballNet output
+    raw_ball_positions: list[BallPosition]  # Unfiltered ball detector output
     video_fps: float
     frame_count: int
     video_width: int = 1920
@@ -268,10 +268,10 @@ def apply_ball_filter_config(
 ) -> list[BallPosition]:
     """Apply a ball filter config to raw positions.
 
-    This is the fast path - only runs the Kalman filter, not VballNet.
+    This is the fast path - only runs the temporal filter, not ball detection.
 
     Args:
-        raw_positions: Unfiltered VballNet output.
+        raw_positions: Unfiltered ball detector output.
         config: Filter configuration to apply.
 
     Returns:

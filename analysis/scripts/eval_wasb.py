@@ -1,8 +1,8 @@
-"""Evaluate WASB HRNet vs VballNet on ball tracking ground truth.
+"""Evaluate WASB HRNet ball tracking on ground truth.
 
 WASB (Widely Applicable Strong Baseline, BMVC 2023) uses an HRNet backbone
-pretrained on indoor volleyball (40 training + 16 test matches). This script
-evaluates whether it outperforms VballNet on our beach volleyball GT rallies.
+fine-tuned on beach volleyball pseudo-labels. This script evaluates its
+performance on our labeled GT rallies.
 
 Setup:
     1. Download WASB volleyball weights:
@@ -32,7 +32,6 @@ from rich.console import Console
 from rich.table import Table
 
 from rallycut.evaluation.tracking.ball_grid_search import (
-    BallRawCache,
     apply_ball_filter_config,
 )
 from rallycut.evaluation.tracking.ball_metrics import (
@@ -103,7 +102,7 @@ def run_wasb_inference(
             triplet = np.concatenate(preprocessed, axis=0)  # (9, H, W)
             x = torch.from_numpy(triplet).float().unsqueeze(0).to(device)  # (1, 9, H, W)
 
-            # Forward pass → {0: (1, 3, H, W)} raw logits
+            # Forward pass -> {0: (1, 3, H, W)} raw logits
             output = model(x)
             heatmaps = output[0][0].cpu().numpy()  # (3, H, W) raw logits
 
@@ -133,7 +132,7 @@ def run_wasb_inference(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate WASB HRNet vs VballNet")
+    parser = argparse.ArgumentParser(description="Evaluate WASB HRNet ball tracking")
     parser.add_argument(
         "--weights",
         default=None,
@@ -148,7 +147,7 @@ def main() -> None:
     parser.add_argument(
         "--filtered",
         action="store_true",
-        help="Apply ball filter pipeline to WASB output (like VballNet uses)",
+        help="Apply ball filter pipeline to WASB output",
     )
     parser.add_argument(
         "--device",
@@ -201,10 +200,8 @@ def main() -> None:
     print()
 
     # Collect results
-    vballnet_results: list[tuple[str, str, dict[str, float]]] = []
     wasb_results: list[tuple[str, str, dict[str, float]]] = []
 
-    raw_cache = BallRawCache()
     filter_config = BallFilterConfig()
 
     total_wasb_time = 0.0
@@ -214,38 +211,10 @@ def main() -> None:
         rally_label = rally.rally_id[:8]
         console.print(f"[bold]Rally {rally_label}[/bold] (video {rally.video_id[:8]})")
 
-        # --- VballNet baseline ---
-        cached = raw_cache.get(rally.rally_id)
-        if cached is not None:
-            vballnet_preds = apply_ball_filter_config(cached.raw_ball_positions, filter_config)
-        elif rally.predictions is not None and rally.predictions.ball_positions:
-            vballnet_preds = rally.predictions.ball_positions
-        else:
-            console.print("  [yellow]No VballNet predictions, skipping[/yellow]")
-            continue
-
-        vball_metrics = evaluate_ball_tracking(
-            ground_truth=rally.ground_truth.positions,
-            predictions=vballnet_preds,
-            video_width=rally.video_width,
-            video_height=rally.video_height,
-            video_fps=rally.video_fps,
-        )
-        vballnet_results.append((
-            rally.rally_id,
-            rally.video_id,
-            {
-                "detection": vball_metrics.detection_rate,
-                "match": vball_metrics.match_rate,
-                "mean_err": vball_metrics.mean_error_px,
-                "gt_frames": vball_metrics.num_gt_frames,
-            },
-        ))
-
         # --- WASB inference ---
         video_path = get_video_path(rally.video_id)
         if video_path is None:
-            console.print("  [yellow]Video not available, skipping WASB[/yellow]")
+            console.print("  [yellow]Video not available, skipping[/yellow]")
             wasb_results.append((
                 rally.rally_id,
                 rally.video_id,
@@ -309,118 +278,68 @@ def main() -> None:
 
         # Print per-rally results
         console.print(
-            f"  VballNet:  det={vball_metrics.detection_rate:.1%}  "
-            f"match={vball_metrics.match_rate:.1%}  "
-            f"err={vball_metrics.mean_error_px:.1f}px"
-        )
-        console.print(
-            f"  WASB:      det={wasb_metrics.detection_rate:.1%}  "
+            f"  WASB:  det={wasb_metrics.detection_rate:.1%}  "
             f"match={wasb_metrics.match_rate:.1%}  "
             f"err={wasb_metrics.mean_error_px:.1f}px  "
             f"({inference_time:.1f}s, {len(wasb_preds_raw)} raw"
-            + (f" → {len(wasb_preds)} filtered" if args.filtered else "")
+            + (f" -> {len(wasb_preds)} filtered" if args.filtered else "")
             + f", offset={best_offset})"
         )
-
-        # Highlight improvements/regressions
-        match_diff = wasb_metrics.match_rate - vball_metrics.match_rate
-        if match_diff > 0.05:
-            console.print(f"  [green]  WASB +{match_diff:.1%} match rate[/green]")
-        elif match_diff < -0.05:
-            console.print(f"  [red]  WASB {match_diff:.1%} match rate[/red]")
         print()
 
-    # --- Summary comparison table ---
-    if not vballnet_results:
-        console.print("[red]No results to compare[/red]")
+    # --- Summary table ---
+    if not wasb_results:
+        console.print("[red]No results[/red]")
         return
 
-    console.print("[bold]== Summary Comparison ==[/bold]")
+    console.print("[bold]== WASB Evaluation Results ==[/bold]")
     table = Table(show_header=True, header_style="bold")
     table.add_column("Rally")
     table.add_column("Video")
     table.add_column("GT Fr", justify="right")
-    table.add_column("VNet Det%", justify="right")
-    table.add_column("WASB Det%", justify="right")
-    table.add_column("VNet Match%", justify="right")
-    table.add_column("WASB Match%", justify="right")
-    table.add_column("VNet Err", justify="right")
-    table.add_column("WASB Err", justify="right")
-    table.add_column("Winner")
+    table.add_column("Det%", justify="right")
+    table.add_column("Match%", justify="right")
+    table.add_column("Mean Err", justify="right")
 
-    total_v_det = total_w_det = 0.0
-    total_v_match = total_w_match = 0.0
-    total_v_err = total_w_err = 0.0
+    total_det = total_match = total_err = 0.0
     count = 0
-    wasb_wins = vnet_wins = ties = 0
 
-    for (rid, vid, vr), (_, _, wr) in zip(vballnet_results, wasb_results):
-        if vr["match"] > wr["match"] + 0.005:
-            winner = "[blue]VballNet[/blue]"
-            vnet_wins += 1
-        elif wr["match"] > vr["match"] + 0.005:
-            winner = "[green]WASB[/green]"
-            wasb_wins += 1
-        else:
-            winner = "Tie"
-            ties += 1
-
+    for rid, vid, wr in wasb_results:
+        match_style = (
+            "green" if wr["match"] >= 0.70
+            else ("yellow" if wr["match"] >= 0.50 else "red")
+        )
         table.add_row(
             rid[:8],
             vid[:8],
-            str(vr["gt_frames"]),
-            f"{vr['detection']:.1%}",
+            str(int(wr["gt_frames"])),
             f"{wr['detection']:.1%}",
-            f"{vr['match']:.1%}",
-            f"{wr['match']:.1%}",
-            f"{vr['mean_err']:.1f}px",
+            f"[{match_style}]{wr['match']:.1%}[/{match_style}]",
             f"{wr['mean_err']:.1f}px" if wr["mean_err"] > 0 else "N/A",
-            winner,
         )
 
-        total_v_det += vr["detection"]
-        total_w_det += wr["detection"]
-        total_v_match += vr["match"]
-        total_w_match += wr["match"]
-        total_v_err += vr["mean_err"]
-        total_w_err += wr["mean_err"]
+        total_det += wr["detection"]
+        total_match += wr["match"]
+        total_err += wr["mean_err"]
         count += 1
 
     if count > 0:
-        avg_v_match = total_v_match / count
-        avg_w_match = total_w_match / count
-        if avg_w_match > avg_v_match + 0.005:
-            avg_winner = "[green]WASB[/green]"
-        elif avg_v_match > avg_w_match + 0.005:
-            avg_winner = "[blue]VballNet[/blue]"
-        else:
-            avg_winner = "Tie"
-
         table.add_row(
             "[bold]Average",
             "",
             "",
-            f"[bold]{total_v_det / count:.1%}",
-            f"[bold]{total_w_det / count:.1%}",
-            f"[bold]{total_v_match / count:.1%}",
-            f"[bold]{total_w_match / count:.1%}",
-            f"[bold]{total_v_err / count:.1f}px",
-            f"[bold]{total_w_err / count:.1f}px",
-            avg_winner,
+            f"[bold]{total_det / count:.1%}",
+            f"[bold]{total_match / count:.1%}",
+            f"[bold]{total_err / count:.1f}px",
         )
 
     console.print(table)
 
     # Summary stats
     print()
-    console.print(f"WASB wins: {wasb_wins}/{count}  |  VballNet wins: {vnet_wins}/{count}  |  Ties: {ties}/{count}")
     if total_frames > 0 and total_wasb_time > 0:
         console.print(f"WASB speed: {total_frames / total_wasb_time:.1f} FPS ({args.device})")
-    console.print(
-        f"Average match rate: VballNet={total_v_match / count:.1%}  "
-        f"WASB={total_w_match / count:.1%}  "
-        f"(delta={((total_w_match - total_v_match) / count):+.1%})"
-    )
+    console.print(f"Average match rate: {total_match / count:.1%}")
 
 
 if __name__ == "__main__":

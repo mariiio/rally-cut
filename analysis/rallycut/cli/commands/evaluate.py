@@ -477,8 +477,8 @@ def _apply_ball_tracking(
     from rallycut.core.video import Video
     from rallycut.tracking import (
         BallBoundaryConfig,
-        BallTracker,
         BallValidationConfig,
+        create_ball_tracker,
         get_ball_cache,
         refine_boundaries_parallel,
         validate_segment_with_ball,
@@ -496,7 +496,7 @@ def _apply_ball_tracking(
     segment_tuples = [(s.start_time, s.end_time) for s in segments]
 
     # Initialize ball tracker and cache
-    ball_tracker = BallTracker()
+    ball_tracker = create_ball_tracker()
     ball_cache = get_ball_cache()
 
     # Apply validation if enabled - CONSERVATIVE settings
