@@ -58,7 +58,7 @@ class ContactDetectionConfig:
     min_peak_distance_frames: int = 12  # Min frames between contacts (~0.4s @ 30fps)
 
     # Direction change thresholds
-    min_direction_change_deg: float = 30.0  # Min angle change to confirm contact
+    min_direction_change_deg: float = 20.0  # Min angle change to confirm contact
     direction_check_frames: int = 8  # Frames before/after to check direction
 
     # Inflection detection
@@ -78,10 +78,10 @@ class ContactDetectionConfig:
     high_velocity_threshold: float = 0.025  # Auto-accept above this velocity
 
     # Warmup filter: skip candidates in the first N frames (ball tracking warmup)
-    warmup_skip_frames: int = 10  # Skip first ~0.33s of ball tracking (avoid warmup noise)
+    warmup_skip_frames: int = 5  # Skip first ~0.17s of ball tracking (avoid warmup noise)
 
     # Minimum velocity for any candidate (floor for inflection/reversal candidates)
-    min_candidate_velocity: float = 0.005  # Below this, direction change is likely noise
+    min_candidate_velocity: float = 0.003  # Below this, direction change is likely noise
 
     # Parabolic arc breakpoint detection
     enable_parabolic_detection: bool = True
@@ -92,8 +92,8 @@ class ContactDetectionConfig:
 
     # Deceleration candidate detection (catches receives/digs)
     enable_deceleration_detection: bool = True
-    deceleration_min_speed_before: float = 0.012  # Min incoming speed to qualify
-    deceleration_min_drop_ratio: float = 0.4  # Min speed drop ratio (40%)
+    deceleration_min_speed_before: float = 0.008  # Min incoming speed to qualify
+    deceleration_min_drop_ratio: float = 0.3  # Min speed drop ratio (30%)
     deceleration_window: int = 5  # Frames before/after to check
 
     # Post-serve receive candidate search
@@ -471,8 +471,8 @@ def _find_deceleration_candidates(
     frames: list[int],
     smoothed_speeds: list[float],
     min_distance_frames: int,
-    min_speed_before: float = 0.012,
-    min_speed_drop_ratio: float = 0.4,
+    min_speed_before: float = 0.008,
+    min_speed_drop_ratio: float = 0.3,
     window: int = 5,
 ) -> list[int]:
     """Find frames where ball speed drops sharply (deceleration contacts).
@@ -490,7 +490,7 @@ def _find_deceleration_candidates(
         min_speed_before: Minimum speed in the window before the candidate
             to qualify as "incoming ball" (filters slow-ball noise).
         min_speed_drop_ratio: Minimum ratio of speed drop (1 - min/max)
-            within the analysis window. 0.4 = speed must drop by ≥40%.
+            within the analysis window. 0.3 = speed must drop by ≥30%.
         window: Frames before/after to check for speed context.
 
     Returns:

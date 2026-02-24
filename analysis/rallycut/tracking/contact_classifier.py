@@ -15,8 +15,8 @@ Features per candidate:
 - Time since last candidate (frames)
 - Court side indicator
 
-Model: scikit-learn GradientBoostingClassifier. With ~48 TP and ~72 FP labeled
-examples, a simple ensemble model is appropriate and resistant to overfitting.
+Model: scikit-learn GradientBoostingClassifier. A simple ensemble model is
+appropriate for this dataset size and resistant to overfitting.
 """
 
 from __future__ import annotations
