@@ -390,6 +390,12 @@ def track_players(
         "--team-aware/--no-team-aware",
         help="Enable team-aware BoT-SORT penalty (requires calibration, reduces cross-team ID switches)",
     ),
+    # Pose keypoint association
+    pose_keypoints: bool = typer.Option(
+        False,
+        "--pose-keypoints/--no-pose-keypoints",
+        help="Enable pose-based keypoint association (uses yolo11s-pose, reduces IDsw during overlaps)",
+    ),
     # Action classification
     actions: bool = typer.Option(
         False,
@@ -672,6 +678,15 @@ def track_players(
         if not quiet:
             console.print("[dim]Team-aware BoT-SORT: enabled[/dim]")
 
+    # Build pose keypoint config if requested
+    pose_cfg = None
+    if pose_keypoints:
+        from rallycut.tracking.pose_association import PoseAssociationConfig
+
+        pose_cfg = PoseAssociationConfig(enabled=True)
+        if not quiet:
+            console.print("[dim]Pose keypoint association: enabled (yolo11s-pose)[/dim]")
+
     # Track with progress
     if quiet:
         result = player_tracker.track_video(
@@ -685,6 +700,7 @@ def track_players(
             court_calibrator=calibrator,
             team_aware_config=ta_config,
             court_detection_insights=court_insights,
+            pose_config=pose_cfg,
         )
     else:
         with Progress(
@@ -711,6 +727,7 @@ def track_players(
                 court_calibrator=calibrator,
                 team_aware_config=ta_config,
                 court_detection_insights=court_insights,
+                pose_config=pose_cfg,
             )
 
     # Include ball positions in result for trajectory overlay
