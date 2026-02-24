@@ -18,24 +18,31 @@ logger = logging.getLogger(__name__)
 
 def _load_rally_actions_and_positions(
     video_id: str,
-) -> tuple[list[Any], list[Any], float]:
-    """Load actions and positions from DB for all tracked rallies.
+) -> tuple[list[Any], list[Any], float, dict[str, list[Any]], Any, Any, int, int]:
+    """Load actions, positions, and extended data from DB for all tracked rallies.
 
-    Returns (rally_actions_list, all_positions, video_fps).
+    Returns:
+        (rally_actions_list, all_positions, video_fps,
+         ball_positions_map, calibrator, match_analysis,
+         video_width, video_height)
     """
+    from rallycut.court.calibration import CourtCalibrator
     from rallycut.evaluation.tracking.db import get_connection
     from rallycut.tracking.action_classifier import (
         ActionType,
         ClassifiedAction,
         RallyActions,
     )
+    from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.player_tracker import PlayerPosition
 
-    query = """
+    # Load rally-level data (actions, positions, ball positions)
+    rally_query = """
         SELECT
             r.id as rally_id,
             pt.positions_json,
-            pt.actions_json
+            pt.actions_json,
+            pt.ball_positions_json
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
         WHERE r.video_id = %s
@@ -44,16 +51,57 @@ def _load_rally_actions_and_positions(
         ORDER BY r.start_ms
     """
 
+    # Load video-level data (calibration, match analysis, dimensions)
+    video_query = """
+        SELECT
+            court_calibration_json,
+            match_analysis_json,
+            width,
+            height
+        FROM videos
+        WHERE id = %s
+    """
+
     rally_actions_list: list[RallyActions] = []
     all_positions: list[PlayerPosition] = []
+    ball_positions_map: dict[str, list[BallPosition]] = {}
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, [video_id])
-            rows = cur.fetchall()
+            cur.execute(rally_query, [video_id])
+            rally_rows = cur.fetchall()
 
-    for row in rows:
-        rally_id_val, positions_json, actions_json = row
+            cur.execute(video_query, [video_id])
+            video_row = cur.fetchone()
+
+    # Parse video-level data
+    calibrator = None
+    match_analysis = None
+    video_width = 1920
+    video_height = 1080
+
+    if video_row:
+        cal_json, ma_json, v_width, v_height = video_row
+        if v_width:
+            video_width = cast(int, v_width)
+        if v_height:
+            video_height = cast(int, v_height)
+
+        # Build calibrator from court corners
+        if cal_json and isinstance(cal_json, list) and len(cal_json) == 4:
+            try:
+                calibrator = CourtCalibrator()
+                corners = [(c["x"], c["y"]) for c in cal_json]
+                calibrator.calibrate(corners)
+            except (KeyError, ValueError, RuntimeError) as e:
+                logger.warning("Failed to load court calibration: %s", e)
+                calibrator = None
+
+        if ma_json and isinstance(ma_json, dict):
+            match_analysis = ma_json
+
+    for row in rally_rows:
+        rally_id_val, positions_json, actions_json, ball_json = row
 
         # Parse actions
         actions_data = cast(dict[str, Any] | None, actions_json)
@@ -88,9 +136,10 @@ def _load_rally_actions_and_positions(
                 team=a.get("team", "unknown"),
             ))
 
+        rally_id_str = str(rally_id_val)
         rally_actions_list.append(RallyActions(
             actions=actions,
-            rally_id=str(rally_id_val),
+            rally_id=rally_id_str,
             team_assignments=team_assignments,
         ))
 
@@ -108,7 +157,24 @@ def _load_rally_actions_and_positions(
                     confidence=p.get("confidence", 0.0),
                 ))
 
-    return rally_actions_list, all_positions, 30.0
+        # Parse ball positions
+        bp_json = cast(list[dict[str, Any]] | None, ball_json)
+        if bp_json:
+            ball_list: list[BallPosition] = []
+            for bp in bp_json:
+                ball_list.append(BallPosition(
+                    frame_number=bp.get("frameNumber", 0),
+                    x=bp.get("x", 0.0),
+                    y=bp.get("y", 0.0),
+                    confidence=bp.get("confidence", 0.0),
+                ))
+            ball_positions_map[rally_id_str] = ball_list
+
+    return (
+        rally_actions_list, all_positions, 30.0,
+        ball_positions_map, calibrator, match_analysis,
+        video_width, video_height,
+    )
 
 
 @handle_errors
@@ -143,9 +209,11 @@ def compute_match_stats_cmd(
     if not quiet:
         console.print(f"[bold]Match Statistics:[/bold] video {video_id[:8]}...")
 
-    rally_actions_list, all_positions, video_fps = (
-        _load_rally_actions_and_positions(video_id)
-    )
+    (
+        rally_actions_list, all_positions, video_fps,
+        ball_positions_map, calibrator, match_analysis,
+        video_width, video_height,
+    ) = _load_rally_actions_and_positions(video_id)
 
     if not rally_actions_list:
         console.print("[red]Error:[/red] No action data found in tracked rallies.")
@@ -153,11 +221,24 @@ def compute_match_stats_cmd(
 
     if not quiet:
         console.print(f"  Loaded {len(rally_actions_list)} rallies with actions")
+        if ball_positions_map:
+            console.print(
+                f"  Ball positions: {len(ball_positions_map)} rallies"
+            )
+        if calibrator:
+            console.print("  Court calibration: loaded")
+        if match_analysis:
+            console.print("  Match analysis: loaded")
 
     stats = compute_match_stats(
         rally_actions_list=rally_actions_list,
         player_positions=all_positions,
         video_fps=video_fps,
+        video_width=video_width,
+        video_height=video_height,
+        calibrator=calibrator,
+        ball_positions_map=ball_positions_map,
+        match_analysis=match_analysis,
     )
 
     result = stats.to_dict()
