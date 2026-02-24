@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 # Ball detector confidence is bimodal: either 0.0 (no detection) or >=0.3 (confident).
 _CONFIDENCE_THRESHOLD = 0.3
 
+# Valid range for court_split_y / net_y.  Values outside this range indicate
+# extreme camera angles where bbox-clustering estimation breaks down.
+_VALID_NET_Y_RANGE = (0.30, 0.70)
+
 # Cached default classifier (loaded once from disk on first use)
 _default_classifier_cache: dict[str, ContactClassifier | None] = {}
 
@@ -1064,7 +1068,7 @@ def check_contact_prerequisites(
     court_split_y: float | None = None,
     min_ball_detection_rate: float = 0.50,
     min_player_tracks: int = 3,
-    court_split_y_range: tuple[float, float] = (0.30, 0.70),
+    court_split_y_range: tuple[float, float] = _VALID_NET_Y_RANGE,
 ) -> ContactPrerequisiteCheck:
     """Check whether contact detection prerequisites are met.
 
@@ -1173,9 +1177,15 @@ def detect_contacts(
         )
 
     # Step 2: Estimate net position
-    if net_y is not None:
+    if net_y is not None and _VALID_NET_Y_RANGE[0] <= net_y <= _VALID_NET_Y_RANGE[1]:
         estimated_net_y = net_y
     else:
+        if net_y is not None:
+            logger.warning(
+                "Rejecting extreme net_y=%.3f (outside [%.2f, %.2f]), "
+                "using ball trajectory estimate instead",
+                net_y, _VALID_NET_Y_RANGE[0], _VALID_NET_Y_RANGE[1],
+            )
         estimated_net_y = estimate_net_position(ball_positions)
 
     # Step 3: Compute velocities from filtered positions

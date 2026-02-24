@@ -580,6 +580,40 @@ class TestDetectContacts:
         for f in post_rally:
             assert f not in limited_frames
 
+    def test_extreme_net_y_rejected(self) -> None:
+        """Extreme net_y values are rejected and internal estimate is used."""
+        config = ContactDetectionConfig(
+            min_peak_velocity=0.005,
+            min_peak_prominence=0.002,
+            enable_noise_filter=False,
+        )
+
+        # Oscillating trajectory so estimate_net_position returns ~0.5
+        positions = []
+        for cycle in range(3):
+            base = cycle * 20
+            for i in range(10):
+                y = 0.7 - i * 0.04
+                positions.append(_bp(base + i, 0.3 + i * 0.01, y))
+            for i in range(10):
+                y = 0.3 + i * 0.04
+                positions.append(_bp(base + 10 + i, 0.4 - i * 0.01, y))
+
+        # Extreme net_y=0.18 (like cici.mp4) should be rejected
+        result = detect_contacts(positions, config=config, net_y=0.18, use_classifier=False)
+        # Internal estimate from oscillating trajectory should be ~0.5, not 0.18
+        assert result.net_y != 0.18
+        assert 0.30 <= result.net_y <= 0.70
+
+        # Extreme net_y=0.80 should also be rejected
+        result2 = detect_contacts(positions, config=config, net_y=0.80, use_classifier=False)
+        assert result2.net_y != 0.80
+        assert 0.30 <= result2.net_y <= 0.70
+
+        # Normal net_y=0.45 should be accepted as-is
+        result3 = detect_contacts(positions, config=config, net_y=0.45, use_classifier=False)
+        assert result3.net_y == 0.45
+
     def test_court_side_uses_net_y(self) -> None:
         """Court side is determined purely by net_y, not baseline thresholds."""
         # With net_y=0.60, ball at y=0.85 should be "near" (above net)
