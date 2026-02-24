@@ -195,21 +195,35 @@ def train_model(
     random.seed(42)
     random.shuffle(non_gt_ids)
     extra_val_count = max(0, int(len(non_gt_ids) * val_ratio) - len(gt_ids))
-    train_ids = non_gt_ids[: len(non_gt_ids) - extra_val_count]
-    val_ids = gt_ids + non_gt_ids[len(non_gt_ids) - extra_val_count :]
+    train_non_gt = non_gt_ids[: len(non_gt_ids) - extra_val_count]
+    val_non_gt = non_gt_ids[len(non_gt_ids) - extra_val_count :]
 
-    print(f"  Train: {len(train_ids)} rallies (no GT)")
-    print(f"  Val: {len(val_ids)} rallies ({len(gt_ids)} with ball GT)")
+    # GT rallies go in BOTH train (supervised signal) and val (honest evaluation)
+    train_ids = gt_ids + train_non_gt
+    val_ids = gt_ids + val_non_gt
+
+    print(f"  Train: {len(train_ids)} rallies ({len(gt_ids)} GT + {len(train_non_gt)} pseudo)")
+    print(f"  Val: {len(val_ids)} rallies ({len(gt_ids)} GT + {len(val_non_gt)} pseudo)")
 
     # Handle checkpoints
     resume_checkpoint = None
     if fresh:
-        print("  Fresh training: ignoring existing checkpoints")
         if output_path.exists():
             ckpt_dir = output_path / "checkpoint"
             if ckpt_dir.exists():
-                shutil.rmtree(ckpt_dir)
-                print("    Deleted existing checkpoints")
+                # Check if checkpoint is recent (from a retry of this same run).
+                # Modal timeout is 4h; any checkpoint < 4h old is from this run.
+                import time
+
+                ckpt_latest = ckpt_dir / "ckpt_latest.pt"
+                if ckpt_latest.exists() and (time.time() - ckpt_latest.stat().st_mtime) < 14400:
+                    resume_checkpoint = ckpt_latest
+                    print("  Fresh requested but recent checkpoint found (retry) — resuming")
+                else:
+                    shutil.rmtree(ckpt_dir)
+                    print("  Fresh training: deleted old checkpoints")
+        if not resume_checkpoint:
+            print("  Fresh training: starting from pretrained weights")
     elif output_path.exists():
         ckpt_latest = output_path / "checkpoint" / "ckpt_latest.pt"
         if ckpt_latest.exists():

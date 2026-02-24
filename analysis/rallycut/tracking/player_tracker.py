@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.court_identity import SwapDecision
     from rallycut.tracking.player_filter import PlayerFilterConfig
-    from rallycut.tracking.pose_association import PoseAssociationConfig
     from rallycut.tracking.quality_report import TrackingQualityReport
     from rallycut.tracking.team_aware_tracker import TeamAwareConfig
 
@@ -1057,7 +1056,6 @@ class PlayerTracker:
         court_calibrator: CourtCalibrator | None = None,
         team_aware_config: TeamAwareConfig | None = None,
         court_detection_insights: CourtDetectionInsights | None = None,
-        pose_config: PoseAssociationConfig | None = None,
     ) -> PlayerTrackingResult:
         """
         Track players in a video segment.
@@ -1077,10 +1075,6 @@ class PlayerTracker:
             team_aware_config: Optional team-aware tracking config. When enabled
                              with calibration, adds a penalty to cross-team
                              associations in BoT-SORT's cost matrix.
-            pose_config: Optional pose keypoint association config. When enabled,
-                        runs yolo11s-pose as a secondary model on overlap frames
-                        and adds lower-body keypoint distance penalty to BoT-SORT's
-                        cost matrix.
 
         Returns:
             PlayerTrackingResult with all detected positions.
@@ -1092,14 +1086,6 @@ class PlayerTracker:
 
         if not video_path.exists():
             raise FileNotFoundError(f"Video not found: {video_path}")
-
-        # Pose keypoint association: secondary model loaded lazily on overlap
-        pose_tracker = None
-        if pose_config is not None and pose_config.enabled:
-            from rallycut.tracking.pose_association import PoseKeypointTracker
-
-            pose_tracker = PoseKeypointTracker(config=pose_config)
-            logger.info("Pose keypoint association enabled (dual-model, on-overlap)")
 
         # Load YOLO model
         model = self._load_model()
@@ -1197,14 +1183,6 @@ class PlayerTracker:
                 else:
                     logger.info("Team-aware tracking disabled: net projection failed")
 
-            # Pose keypoint association setup (dual-model, applied on overlap)
-            pose_patch_applied = False
-            if pose_tracker is not None:
-                from rallycut.tracking.pose_association import (
-                    has_overlapping_bboxes,
-                    patch_botsort_with_pose,
-                )
-
             while frame_idx < end_frame:
                 ret, frame = cap.read()
                 if not ret:
@@ -1247,42 +1225,23 @@ class PlayerTracker:
                             results, frame_idx, video_width, video_height
                         )
 
-                        # Pose keypoint association (dual-model)
-                        # Run secondary pose model ONLY on frames with
-                        # overlapping bboxes to extract keypoints without
-                        # affecting detection quality of the primary model.
-                        if pose_tracker is not None:
-                            # Apply get_dists patch after first frame
+                        # Apply monkey-patches after first frame (when tracker exists)
+                        # Order: team-aware first, court-cost last (outermost)
+                        if (
+                            hasattr(model, "predictor")
+                            and hasattr(model.predictor, "trackers")
+                            and model.predictor.trackers
+                        ):
                             if (
-                                not pose_patch_applied
-                                and hasattr(model, "predictor")
-                                and hasattr(model.predictor, "trackers")
-                                and model.predictor.trackers
+                                team_tracker is not None
+                                and not team_patch_applied
                             ):
-                                patch_botsort_with_pose(
+                                patch_tracker_with_team_awareness(
                                     model.predictor.trackers[0],
-                                    pose_tracker,
+                                    team_tracker,
                                     video_height,
                                 )
-                                pose_patch_applied = True
-
-                            # Only invoke pose model when bboxes overlap
-                            if has_overlapping_bboxes(
-                                frame_positions,
-                                pose_tracker.config.overlap_iou_thresh,
-                            ):
-                                # Single call: updates centroids + stores
-                                # keypoints for next frame's get_dists
-                                pose_tracker.run_pose_on_frame(
-                                    frame,
-                                    frame_positions,
-                                    video_width,
-                                    video_height,
-                                )
-                            else:
-                                # Clear stale keypoints so get_dists doesn't
-                                # use misaligned data from a previous frame
-                                pose_tracker.clear_detection_keypoints()
+                                team_patch_applied = True
 
                         # Sport-aware detection filters
                         if filter_enabled:
@@ -1294,22 +1253,9 @@ class PlayerTracker:
                                 frame_positions, court_calibrator
                             )
 
-                        # Team-aware tracker: feed positions and apply patch
+                        # Team-aware tracker: feed positions for Y statistics
                         if team_tracker is not None:
                             team_tracker.update(frame_positions)
-
-                            if (
-                                not team_patch_applied
-                                and hasattr(model, "predictor")
-                                and hasattr(model.predictor, "trackers")
-                                and model.predictor.trackers
-                            ):
-                                patch_tracker_with_team_awareness(
-                                    model.predictor.trackers[0],
-                                    team_tracker,
-                                    video_height,
-                                )
-                                team_patch_applied = True
 
                         positions.extend(frame_positions)
 
@@ -1717,19 +1663,6 @@ class PlayerTracker:
 
         finally:
             cap.release()
-            # Unpatch pose keypoint association
-            if (
-                pose_patch_applied
-                and hasattr(model, "predictor")
-                and model.predictor is not None
-                and hasattr(model.predictor, "trackers")
-                and model.predictor.trackers
-            ):
-                from rallycut.tracking.pose_association import (
-                    unpatch_botsort_pose,
-                )
-
-                unpatch_botsort_pose(model.predictor.trackers[0])
             # Reset tracker state for next video
             if hasattr(model, "predictor") and model.predictor is not None:
                 model.predictor.trackers = []
