@@ -66,7 +66,7 @@ class TestComputeQualityReport:
         assert len(report.suggestions) == 0  # No issues
 
     def test_no_ball_data(self) -> None:
-        """Missing ball data should reduce score and suggest ensemble model."""
+        """Missing ball data should reduce score and suggest checking video quality."""
         frames = range(0, 300)
         positions = _make_positions([1, 2, 3, 4], frames)
 

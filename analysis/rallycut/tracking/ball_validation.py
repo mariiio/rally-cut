@@ -14,7 +14,7 @@ from typing import Any
 import cv2
 
 from rallycut.tracking.ball_features import SegmentBallFeatures, compute_ball_features
-from rallycut.tracking.ball_tracker import BallPosition, BallTracker
+from rallycut.tracking.ball_tracker import BallPosition
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ def validate_segment_with_ball(
     video_path: Path,
     start_time: float,
     end_time: float,
-    ball_tracker: BallTracker,
+    ball_tracker: Any,
     config: BallValidationConfig | None = None,
 ) -> ValidationResult:
     """
@@ -106,7 +106,7 @@ def validate_segment_with_ball(
         video_path: Path to video file (preferably proxy).
         start_time: Segment start time in seconds.
         end_time: Segment end time in seconds.
-        ball_tracker: BallTracker instance (will use existing session).
+        ball_tracker: Ball tracker instance (will use existing session).
         config: Validation configuration.
 
     Returns:
@@ -177,7 +177,7 @@ def validate_segment_with_early_exit(
     video_path: Path,
     start_time: float,
     end_time: float,
-    ball_tracker: BallTracker,
+    ball_tracker: Any,
     config: BallValidationConfig | None = None,
 ) -> ValidationResult:
     """
@@ -190,7 +190,7 @@ def validate_segment_with_early_exit(
         video_path: Path to video file (preferably proxy).
         start_time: Segment start time in seconds.
         end_time: Segment end time in seconds.
-        ball_tracker: BallTracker instance.
+        ball_tracker: Ball tracker instance.
         config: Validation configuration.
 
     Returns:
@@ -338,7 +338,7 @@ def validate_segments_batch(
     video_path: Path,
     segments: list[tuple[float, float]],
     confidences: list[float],
-    ball_tracker: BallTracker,
+    ball_tracker: Any,
     config: BallValidationConfig | None = None,
     use_early_exit: bool = True,
 ) -> list[ValidationResult]:
@@ -351,7 +351,7 @@ def validate_segments_batch(
         video_path: Path to video file.
         segments: List of (start_time, end_time) tuples.
         confidences: Decoder confidence for each segment.
-        ball_tracker: BallTracker instance.
+        ball_tracker: Ball tracker instance.
         config: Validation configuration.
         use_early_exit: Use early termination optimization.
 

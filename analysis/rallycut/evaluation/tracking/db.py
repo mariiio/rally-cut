@@ -456,7 +456,7 @@ def load_all_tracked_rallies(
     """Load ALL rallies that have player tracks (not just those with GT).
 
     Returns minimal metadata for each rally — useful for pseudo-label
-    generation and ensemble caching beyond the 9 ball-GT rallies.
+    generation beyond the 9 ball-GT rallies.
 
     Args:
         video_id: Filter by video ID (optional).

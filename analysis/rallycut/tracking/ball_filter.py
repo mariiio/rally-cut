@@ -34,7 +34,7 @@ class BallFilterConfig:
     interpolated_confidence: float = 0.5  # Confidence assigned to interpolated positions
 
     # Trajectory segment pruning (post-processing)
-    # VballNet outputs consistent false detections at rally start/end.
+    # The detector outputs consistent false detections at rally start/end.
     # Pruning splits trajectory at large jumps, discards short fragments,
     # but recovers short segments spatially close to anchor segments
     # (real trajectory fragments between interleaved false positives).
@@ -44,7 +44,7 @@ class BallFilterConfig:
     min_output_confidence: float = 0.05  # Drop positions below this confidence
 
     # Oscillation pruning (detects cluster-based player-locking after ball exits)
-    # VballNet can lock onto two players and alternate with high confidence
+    # The detector can lock onto two players and alternate with high confidence
     # after the ball leaves the frame. The pattern is cluster-based: positions
     # stay near player B for 2-5 frames, jump to player A for 1-2 frames, then
     # back. Detection uses spatial clustering: find two poles (furthest-apart
@@ -71,7 +71,7 @@ class BallFilterConfig:
     min_neighbors_for_outlier: int = 2
 
     # Trajectory blip removal (catches multi-frame false positives)
-    # VballNet can briefly lock onto a player position for 2-5 frames mid-trajectory.
+    # The detector can briefly lock onto a player position for 2-5 frames mid-trajectory.
     # Single-frame outlier detection misses these because consecutive false positives
     # validate each other. This step checks each position against distant trajectory
     # context (positions ≥5 frames away) to detect deviations from the overall path.
@@ -93,64 +93,14 @@ class BallFilterConfig:
     # Stationarity filter (removes player lock-on regardless of source)
     # A volleyball is always in motion during a rally. 12+ consecutive frames
     # within 0.5% of screen = player lock-on, not a real ball trajectory.
-    # Source-agnostic: applies to WASB and VballNet equally (physics override).
-    # Default off: only needed for ensemble mode where WASB can lock onto players.
-    # VballNet false positives at player positions are handled by motion_energy_filter.
+    # Default off: only needed when the detector can lock onto players.
+    # False positives at player positions are handled by motion_energy_filter.
     # Tight thresholds avoid false positives on real slow-ball events (apex of
     # sets/tosses have spread ~0.8%, slow trajectories ~1.5%). True player lock-on
     # has spread < 0.2% (random jitter only).
     enable_stationarity_filter: bool = False
     stationarity_min_frames: int = 12  # ~0.4s at 30fps
     stationarity_max_spread: float = 0.005  # 0.5% of screen (~10px on 1920px)
-
-    # Source-aware ensemble filtering
-    # When True, filter stages treat WASB and VballNet positions differently.
-    # WASB positions (motion_energy >= 1.0) are high-precision and should never
-    # be flagged as outliers, blips, or oscillation. VballNet positions
-    # (motion_energy < 1.0) are lower-precision and get standard filtering.
-    ensemble_source_aware: bool = False
-
-
-def get_ensemble_filter_config() -> BallFilterConfig:
-    """Get optimized BallFilterConfig for WASB+VballNet ensemble output.
-
-    Uses source-aware filtering: WASB positions (motion_energy >= 1.0) are
-    treated as high-precision anchors that should never be flagged as outliers,
-    blips, or oscillation. VballNet positions get standard filtering.
-
-    Validated by ablation on 7 GT rallies (audit_ball_filter.py):
-    - source_aware: ESSENTIAL (-4.2% match without)
-    - interpolation: ESSENTIAL (-6.5% match without)
-    - oscillation: ZERO effect → disabled
-    - exit_approach_frames=4: +1.6% match (frames=3 too aggressive on 0af554b5)
-    - min_segment_frames=12 and exit_edge_zone=0.15: free improvements
-    """
-    return BallFilterConfig(
-        # Source-aware: treat WASB and VballNet positions differently
-        ensemble_source_aware=True,
-        # Segment pruning
-        enable_segment_pruning=True,
-        segment_jump_threshold=0.20,
-        min_segment_frames=12,  # ablation: 12 > 10 (+0.2% match)
-        min_output_confidence=0.05,
-        # No motion energy filter (applied to VballNet before merging)
-        enable_motion_energy_filter=False,
-        # Stationarity filter: catches WASB player lock-on (physics override)
-        enable_stationarity_filter=True,
-        # Exit ghost removal with wider edge zone
-        enable_exit_ghost_removal=True,
-        exit_edge_zone=0.15,
-        exit_approach_frames=4,  # ablation: 4 > 3 (+1.6% match, frames=3 too aggressive)
-        # Oscillation pruning DISABLED — ablation showed zero effect
-        enable_oscillation_pruning=False,
-        # Outlier and blip removal (safe with source-awareness)
-        enable_outlier_removal=True,
-        enable_blip_removal=True,
-        blip_max_deviation=0.10,
-        # Interpolation
-        enable_interpolation=True,
-        max_interpolation_gap=10,
-    )
 
 
 def get_wasb_filter_config() -> BallFilterConfig:
@@ -162,13 +112,11 @@ def get_wasb_filter_config() -> BallFilterConfig:
     - Optimal: 90.9% match, 23.4px error
     - Key: blip removal HURTS (-1.1%), oscillation ZERO, light filter wins
 
-    Compared to old ensemble (WASB+VballNet, source-aware filter):
-    - Old: 86.2% match, 29.9px error
-    - New: 90.9% match, 23.4px error (+4.7pp match, -6.5px error)
+    Compared to default unfiltered:
+    - Unfiltered: 90.3% match, 36.9px error
+    - Filtered: 90.9% match, 23.4px error (+0.6pp match, -13.5px error)
     """
     return BallFilterConfig(
-        # No source distinction (all positions are WASB)
-        ensemble_source_aware=False,
         # Segment pruning (removes false segments at boundaries)
         enable_segment_pruning=True,
         segment_jump_threshold=0.20,
@@ -186,7 +134,7 @@ def get_wasb_filter_config() -> BallFilterConfig:
         enable_oscillation_pruning=False,
         # Outlier removal (runs after segment pruning, safe)
         enable_outlier_removal=True,
-        # Blip removal DISABLED — WASB doesn't produce VballNet-style blips,
+        # Blip removal DISABLED — fine-tuned WASB doesn't produce blips,
         # enabling it kills real positions (-1.1% match)
         enable_blip_removal=False,
         # Interpolation with shorter gap (WASB precision benefits from tighter fill)
@@ -213,15 +161,6 @@ class BallTemporalFilter:
 
     def __init__(self, config: BallFilterConfig | None = None):
         self.config = config or BallFilterConfig()
-
-    def _is_wasb(self, pos: "BallPosition") -> bool:
-        """Check if position originates from WASB model (high-precision).
-
-        WASB positions have motion_energy >= 1.0 (set by EnsembleBallTracker
-        to distinguish from VballNet positions which have real motion energy
-        values < 1.0). Only returns True when ensemble_source_aware is enabled.
-        """
-        return self.config.ensemble_source_aware and pos.motion_energy >= 1.0
 
     def _motion_energy_filter(
         self,
@@ -270,8 +209,8 @@ class BallTemporalFilter:
         A volleyball is always in motion during a rally. If 12+ consecutive
         confident detections cluster within 0.5% of screen, it's a model
         locked onto a player, not a real ball trajectory. This is source-agnostic:
-        it applies to WASB and VballNet equally because physics overrides
-        source trust.
+        it applies to any ball detector because physics overrides
+        model trust.
 
         Uses a sliding window to detect stationary blocks even when they are
         interleaved with real detections in the same contiguous run. WASB can
@@ -542,7 +481,7 @@ class BallTemporalFilter:
             return []
 
         # Build map of confident positions
-        # Use min_output_confidence (0.05) since VballNet positions are already
+        # Use min_output_confidence (0.05) since positions are already
         # filtered and we only need to skip zero-confidence placeholders.
         min_conf = self.config.min_output_confidence
         pos_by_frame = {
@@ -592,19 +531,19 @@ class BallTemporalFilter:
     ) -> list["BallPosition"]:
         """Remove short disconnected segments from the trajectory.
 
-        VballNet often outputs consistent false detections at the start and end
-        of rallies (before it has enough temporal context, or after the ball
-        leaves the frame). These form short trajectory segments that are
+        The ball detector often outputs consistent false detections at the start
+        and end of rallies (before it has enough temporal context, or after the
+        ball leaves the frame). These form short trajectory segments that are
         spatially disconnected from the main ball trajectory.
 
-        VballNet also interleaves single-frame false positives (jumping to
+        The detector also interleaves single-frame false positives (jumping to
         player positions) within real trajectory regions. This creates many
         tiny real-trajectory fragments separated by false jumps. To handle
         this, short segments that are spatially close to an anchor (long)
         segment are kept rather than discarded.
 
         This method:
-        1. Drops very low confidence positions (VballNet "no detection" placeholders)
+        1. Drops very low confidence positions (zero-confidence placeholders)
         2. Splits the trajectory into segments at large position jumps
         3. Identifies anchor segments (long enough to be reliable trajectory)
         4. Keeps non-anchor segments whose centroid is close to an anchor endpoint
@@ -614,7 +553,7 @@ class BallTemporalFilter:
             return positions
 
         # Step 1: Drop positions below minimum output confidence
-        # VballNet outputs (0.5, 0.5) at conf=0.0 for frames without detection
+        # Detector outputs (0.5, 0.5) at conf=0.0 for frames without detection
         min_conf = self.config.min_output_confidence
         confident = [p for p in positions if p.confidence >= min_conf]
         if not confident:
@@ -645,18 +584,10 @@ class BallTemporalFilter:
             return confident
 
         # Step 3: Identify anchor segments (long enough to be reliable)
-        # Source-aware: segments containing WASB positions need only half the
-        # minimum length — WASB is high-precision so even short segments are
-        # trustworthy (e.g., 4 WASB frames ≈ 8 VballNet frames).
         min_len = self.config.min_segment_frames
         anchor_indices: set[int] = set()
         for i, seg in enumerate(segments):
-            effective_min = min_len
-            if self.config.ensemble_source_aware and any(
-                self._is_wasb(p) for p in seg
-            ):
-                effective_min = max(3, min_len // 2)
-            if len(seg) >= effective_min:
+            if len(seg) >= min_len:
                 anchor_indices.add(i)
 
         # Step 3b: Exclude anchors that overlap with ghost ranges.
@@ -687,9 +618,9 @@ class BallTemporalFilter:
                     f"segments from anchors (non-ghost portion < {min_len})"
                 )
 
-        # Step 3c: Remove false start/tail anchors (VballNet warmup/cooldown).
-        # VballNet's temporal context warmup produces false detections at rally
-        # start that can be long enough to qualify as anchors (>min_segment_frames).
+        # Step 3c: Remove false start/tail anchors (detector warmup/cooldown).
+        # Temporal context warmup produces false detections at rally start that
+        # can be long enough to qualify as anchors (>min_segment_frames).
         # If the first anchor is much shorter than the second AND spatially
         # disconnected, it's a warmup artifact. Same for the last anchor.
         sorted_anchors = sorted(anchor_indices)
@@ -743,11 +674,9 @@ class BallTemporalFilter:
         # false positives (which jump to player positions 30-50% away) while
         # keeping real trajectory fragments (typically <5% from anchor).
         # Also require temporal proximity: after a large gap (ball exited frame),
-        # VballNet can restart at a player position that happens to be spatially
+        # The detector can restart at a player position that happens to be spatially
         # near the last anchor endpoint. These shouldn't be recovered.
         proximity = threshold / 2
-        # Source-aware: wider recovery for WASB-containing segments
-        wasb_proximity = threshold * 0.75 if self.config.ensemble_source_aware else proximity
         max_recovery_gap = self.config.max_interpolation_gap * 3
         kept: list[BallPosition] = []
         removed_count = 0
@@ -767,12 +696,6 @@ class BallTemporalFilter:
             centroid_x = float(np.mean([p.x for p in seg]))
             centroid_y = float(np.mean([p.y for p in seg]))
 
-            # Source-aware: use wider proximity when EITHER the short segment
-            # OR the reference anchor contains WASB positions.
-            seg_has_wasb = self.config.ensemble_source_aware and any(
-                self._is_wasb(p) for p in seg
-            )
-
             close_to_anchor = False
 
             # Check previous anchor (end position)
@@ -782,18 +705,10 @@ class BallTemporalFilter:
                     frame_gap = seg[0].frame_number - ref.frame_number
                     if frame_gap > max_recovery_gap:
                         break
-                    ref_has_wasb = self.config.ensemble_source_aware and any(
-                        self._is_wasb(p) for p in segments[j]
-                    )
-                    eff_proximity = (
-                        wasb_proximity
-                        if (seg_has_wasb or ref_has_wasb)
-                        else proximity
-                    )
                     dist = np.sqrt(
                         (centroid_x - ref.x) ** 2 + (centroid_y - ref.y) ** 2
                     )
-                    if dist < eff_proximity:
+                    if dist < proximity:
                         close_to_anchor = True
                     break
 
@@ -805,18 +720,10 @@ class BallTemporalFilter:
                         frame_gap = ref.frame_number - seg[-1].frame_number
                         if frame_gap > max_recovery_gap:
                             break
-                        ref_has_wasb = self.config.ensemble_source_aware and any(
-                            self._is_wasb(p) for p in segments[j]
-                        )
-                        eff_proximity = (
-                            wasb_proximity
-                            if (seg_has_wasb or ref_has_wasb)
-                            else proximity
-                        )
                         dist = np.sqrt(
                             (centroid_x - ref.x) ** 2 + (centroid_y - ref.y) ** 2
                         )
-                        if dist < eff_proximity:
+                        if dist < proximity:
                             close_to_anchor = True
                         break
 
@@ -850,14 +757,15 @@ class BallTemporalFilter:
     ) -> list["BallPosition"]:
         """Trim sustained oscillation from trajectory tails using cluster detection.
 
-        VballNet can lock onto two players and alternate between them with high
-        confidence after the ball exits the frame. The pattern is cluster-based:
-        positions stay near player B for 2-5 frames, jump to player A for 1-2
-        frames, then back. Per-frame displacement is tiny within each cluster,
-        so displacement-reversal detection misses this pattern entirely.
+        The ball detector can lock onto two players and alternate between them
+        with high confidence after the ball exits the frame. The pattern is
+        cluster-based: positions stay near player B for 2-5 frames, jump to
+        player A for 1-2 frames, then back. Per-frame displacement is tiny
+        within each cluster, so displacement-reversal detection misses this
+        pattern entirely.
 
         Also detects single-cluster hovering: after a large gap (ball exited
-        frame), VballNet can lock onto a single player position and produce
+        frame), the detector can lock onto a single player position and produce
         many frames within a tiny radius. Detected by checking short segments
         (≤3x window) after a large gap: if the first window positions all lie
         within segment_jump_threshold/4 of their centroid, the segment is dropped.
@@ -896,7 +804,7 @@ class BallTemporalFilter:
         for seg in segments:
             # Hovering detection: single-player lock-on after ball exits frame.
             # If segment follows a large gap and all positions cluster within
-            # a tiny radius, it's VballNet locked onto a stationary player.
+            # a tiny radius, it's the detector locked onto a stationary player.
             # Only flag short segments — long ones that start slow are likely
             # real (ball gradually accelerating after serve/bounce).
             gap = (
@@ -938,15 +846,6 @@ class BallTemporalFilter:
             for start in range(n - window + 1):
                 w = seg[start : start + window]
 
-                # Source-aware: skip windows containing WASB positions —
-                # WASB doesn't oscillate between player positions, and
-                # WASB/VballNet spatial alternation looks like oscillation
-                # but isn't.
-                if self.config.ensemble_source_aware and any(
-                    self._is_wasb(p) for p in w
-                ):
-                    continue
-
                 # Find two poles: pair with maximum distance
                 max_dist = 0.0
                 pole_a = (w[0].x, w[0].y)
@@ -982,7 +881,7 @@ class BallTemporalFilter:
                 if len(dists_a) < 3 or len(dists_b) < 3:
                     continue
 
-                # Clusters must be compact: in real oscillation, VballNet locks
+                # Clusters must be compact: in real oscillation, the detector locks
                 # onto fixed player positions so within-cluster spread is tiny
                 # (<1% of screen). In a ball bounce passing through the midpoint,
                 # cluster members span a wide trajectory arc. Use half the pole
@@ -1198,10 +1097,6 @@ class BallTemporalFilter:
         for i, frame in enumerate(frames):
             pos = pos_by_frame[frame]
 
-            # Source-aware: never flag WASB positions as outliers
-            if self._is_wasb(pos):
-                continue
-
             # Check 1: Edge detection (positions at screen boundaries)
             margin = self.config.edge_margin
             is_edge = (
@@ -1218,48 +1113,22 @@ class BallTemporalFilter:
 
             # Check 2: Trajectory consistency with neighbors
             # Find neighbors (previous and next positions)
-            # Source-aware: prefer WASB neighbors (more reliable reference)
             prev_pos = None
             next_pos = None
 
             # Look for previous neighbor (up to 5 frames back)
-            # With source-awareness, prefer WASB neighbor over VballNet
-            prev_wasb = None
-            prev_wasb_gap = 0
             for j in range(i - 1, max(-1, i - 6), -1):
                 if j >= 0 and frames[j] not in outlier_frames:
-                    candidate = pos_by_frame[frames[j]]
-                    if prev_pos is None:
-                        prev_pos = candidate
-                        prev_gap = frame - frames[j]
-                    if self._is_wasb(candidate) and prev_wasb is None:
-                        prev_wasb = candidate
-                        prev_wasb_gap = frame - frames[j]
-                        break
-                    if prev_pos is not None and not self.config.ensemble_source_aware:
-                        break
-            if prev_wasb is not None:
-                prev_pos = prev_wasb
-                prev_gap = prev_wasb_gap
+                    prev_pos = pos_by_frame[frames[j]]
+                    prev_gap = frame - frames[j]
+                    break
 
             # Look for next neighbor (up to 5 frames ahead)
-            next_wasb = None
-            next_wasb_gap = 0
             for j in range(i + 1, min(len(frames), i + 6)):
                 if frames[j] not in outlier_frames:
-                    candidate = pos_by_frame[frames[j]]
-                    if next_pos is None:
-                        next_pos = candidate
-                        next_gap = frames[j] - frame
-                    if self._is_wasb(candidate) and next_wasb is None:
-                        next_wasb = candidate
-                        next_wasb_gap = frames[j] - frame
-                        break
-                    if next_pos is not None and not self.config.ensemble_source_aware:
-                        break
-            if next_wasb is not None:
-                next_pos = next_wasb
-                next_gap = next_wasb_gap
+                    next_pos = pos_by_frame[frames[j]]
+                    next_gap = frames[j] - frame
+                    break
 
             # Need at least min_neighbors for trajectory check
             neighbor_count = (1 if prev_pos else 0) + (1 if next_pos else 0)
@@ -1406,9 +1275,10 @@ class BallTemporalFilter:
     ) -> list["BallPosition"]:
         """Remove multi-frame trajectory blips using distant context.
 
-        VballNet can briefly lock onto a player position for 2-5 consecutive
-        frames mid-trajectory. Single-frame outlier detection misses these
-        because the consecutive false positives validate each other as neighbors.
+        The ball detector can briefly lock onto a player position for 2-5
+        consecutive frames mid-trajectory. Single-frame outlier detection misses
+        these because the consecutive false positives validate each other as
+        neighbors.
 
         Two-phase approach to avoid false positives on real bounces:
         1. Flag positions that deviate from distant trajectory context
@@ -1422,7 +1292,7 @@ class BallTemporalFilter:
         max_dev = self.config.blip_max_deviation
         max_ctx_gap = self.config.blip_max_context_gap
         # Blip cluster must be spatially compact (within 5% of screen).
-        # Real bounces spread along a curve; VballNet player-locking blips
+        # Real bounces spread along a curve; detector player-locking blips
         # cluster tightly at a fixed position (~1% noise).
         max_blip_spread = 0.05
 
@@ -1430,13 +1300,9 @@ class BallTemporalFilter:
         frames = sorted(pos_by_frame.keys())
 
         # Phase 1a: Flag suspect positions deviating from distant context
-        # Source-aware: never flag WASB positions as suspects
         suspect_indices: set[int] = set()
 
         for i, frame in enumerate(frames):
-            if self._is_wasb(pos_by_frame[frame]):
-                continue
-
             prev_ctx, prev_gap, next_ctx, next_gap = self._find_blip_context(
                 i, frames, pos_by_frame, min_dist, exclude=set()
             )
@@ -1456,7 +1322,6 @@ class BallTemporalFilter:
 
         # Phase 1b: Re-evaluate suspects with clean context (skip other suspects)
         # Prevents blip positions from contaminating nearby real frame context
-        # Source-aware: WASB positions already excluded from suspects in 1a
         confirmed: set[int] = set()
         for i in suspect_indices:
             prev_ctx, prev_gap, next_ctx, next_gap = self._find_blip_context(

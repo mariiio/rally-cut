@@ -171,7 +171,7 @@ class TestFindNearestPlayer:
 
 
 class TestFilterNoiseSpikes:
-    """Tests for VballNet noise spike removal."""
+    """Tests for ball detector noise spike removal."""
 
     def test_removes_spike(self) -> None:
         """Single-frame jump far from neighbors is zeroed."""

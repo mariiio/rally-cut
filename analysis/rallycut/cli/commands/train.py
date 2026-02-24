@@ -727,7 +727,7 @@ def wasb_local(
             "Export pseudo-labels first:\n"
             "  [cyan]uv run python -m experiments.pseudo_label_export "
             "--output-dir experiments/wasb_pseudo_labels "
-            "--cache-type ensemble --all-tracked --extract-frames[/cyan]"
+            "--all-tracked --extract-frames[/cyan]"
         )
         raise typer.Exit(1)
 
@@ -801,6 +801,10 @@ def wasb_modal(
     epochs: int = typer.Option(30, "--epochs", "-e", help="Number of training epochs"),
     batch_size: int = typer.Option(8, "--batch-size", "-b", help="Batch size (8-16 for A10G GPU)"),
     learning_rate: float = typer.Option(0.001, "--lr", help="Learning rate (use 0.0003 for continued fine-tuning)"),
+    max_rallies: int = typer.Option(
+        0, "--max-rallies", "-n",
+        help="Max rallies to use (0=all). Selects best by quality score, gold GT always included",
+    ),
     upload: bool = typer.Option(
         False, "--upload", help="Upload pseudo-labels + frames + pretrained weights to Modal"
     ),
@@ -823,10 +827,10 @@ def wasb_modal(
     """Fine-tune WASB HRNet ball tracker on Modal GPU (A10G - ~$1.10/hr).
 
     Workflow:
-        1. Export ensemble pseudo-labels and frames locally:
+        1. Export pseudo-labels and frames locally:
            uv run python -m experiments.pseudo_label_export \\
                --output-dir experiments/wasb_pseudo_labels \\
-               --cache-type ensemble --all-tracked --extract-frames
+               --all-tracked --extract-frames
 
         2. Upload to Modal:
            rallycut train wasb-modal --upload
@@ -839,7 +843,6 @@ def wasb_modal(
 
         5. Evaluate:
            uv run python scripts/eval_wasb.py
-           uv run python scripts/eval_ensemble.py
 
         6. Clean up Modal storage:
            rallycut train wasb-modal --cleanup
@@ -854,7 +857,7 @@ def wasb_modal(
                 "Run pseudo-label export first:\n"
                 "  [cyan]uv run python -m experiments.pseudo_label_export "
                 "--output-dir experiments/wasb_pseudo_labels "
-                "--cache-type ensemble --all-tracked --extract-frames[/cyan]"
+                "--all-tracked --extract-frames[/cyan]"
             )
             raise typer.Exit(1)
 
@@ -866,7 +869,7 @@ def wasb_modal(
                 "  Re-export pseudo-labels:\n"
                 "  [cyan]uv run python -m experiments.pseudo_label_export "
                 "--output-dir experiments/wasb_pseudo_labels "
-                "--cache-type ensemble --all-tracked --extract-frames[/cyan]"
+                "--all-tracked --extract-frames[/cyan]"
             )
             raise typer.Exit(1)
 
@@ -969,7 +972,6 @@ def wasb_modal(
         rprint("[green]Download complete![/green]")
         rprint("Evaluate with:")
         rprint("  [cyan]uv run python scripts/eval_wasb.py[/cyan]")
-        rprint("  [cyan]uv run python scripts/eval_ensemble.py[/cyan]")
         rprint()
         rprint("To revert to original weights, delete weights/wasb/wasb_finetuned.pth.tar")
         return
@@ -994,6 +996,340 @@ def wasb_modal(
     # Run training on Modal
     rprint("[bold]Starting WASB HRNet training on Modal A10G GPU...[/bold]")
     rprint(f"  Epochs: {epochs}, Batch size: {batch_size}, LR: {learning_rate}")
+    if max_rallies > 0:
+        rprint(f"  Max rallies: {max_rallies} (gold GT always included)")
+    if fresh:
+        rprint("[yellow]  Fresh training: ignoring existing checkpoints[/yellow]")
+    rprint()
+
+    cmd = [
+        "python3", "-m", "modal",
+        "run",
+        "rallycut/training/modal_wasb.py",
+        "--epochs", str(epochs),
+        "--batch-size", str(batch_size),
+        "--learning-rate", str(learning_rate),
+    ]
+    if max_rallies > 0:
+        cmd.extend(["--max-rallies", str(max_rallies)])
+    if fresh:
+        cmd.append("--fresh")
+
+    rprint(f"Running: {' '.join(cmd)}")
+    rprint()
+    subprocess.run(cmd)
+
+
+@app.command("wasb-mt-local")
+def wasb_mt_local(
+    data_dir: Path = typer.Option(
+        Path("experiments/wasb_pseudo_labels"),
+        "--data-dir",
+        "-d",
+        help="Local directory with pseudo-labels and frames",
+    ),
+    epochs: int = typer.Option(3, "--epochs", "-e", help="Number of epochs (default: 3)"),
+    max_rallies: int = typer.Option(8, "--max-rallies", "-n", help="Max rallies to use"),
+    batch_size: int = typer.Option(4, "--batch-size", "-b", help="Batch size"),
+) -> None:
+    """Smoke test Mean Teacher WASB training locally.
+
+    Runs 3 epochs on a small subset to verify:
+    - Data loading works (CSVs with confidence column, dual augmentations)
+    - Loss components fire (supervised, pseudo-label, consistency)
+    - Gate percentage is reasonable (30-70%)
+    - No NaN/Inf losses
+
+    If this works, proceed with wasb-mt-modal for full GPU training.
+    """
+    import json as json_mod
+    import random
+
+    from rallycut.training.mean_teacher import MeanTeacherConfig, train_wasb_mean_teacher
+
+    if not data_dir.exists():
+        rprint(f"[red]Data directory not found: {data_dir}[/red]")
+        rprint(
+            "Export pseudo-labels first:\n"
+            "  [cyan]uv run python -m experiments.pseudo_label_export "
+            "--output-dir experiments/wasb_pseudo_labels "
+            "--all-tracked --extract-frames[/cyan]"
+        )
+        raise typer.Exit(1)
+
+    # Discover rallies
+    csv_files = sorted(data_dir.glob("*.csv"))
+    rally_ids = []
+    for csv_file in csv_files:
+        rally_id = csv_file.stem
+        if rally_id.endswith("_gold"):
+            continue
+        img_dir = data_dir / "images" / rally_id
+        if img_dir.exists() and any(img_dir.iterdir()):
+            rally_ids.append(rally_id)
+
+    if not rally_ids:
+        rprint(f"[red]No valid rally data found in {data_dir}[/red]")
+        raise typer.Exit(1)
+
+    # Read manifest for gold rally IDs
+    manifest_path = data_dir / "manifest.json"
+    gold_rally_ids: set[str] = set()
+    if manifest_path.exists():
+        with open(manifest_path) as f:
+            manifest = json_mod.load(f)
+        gold_rally_ids = set(manifest.get("gold_rally_ids", []))
+
+    # Subsample for smoke test
+    random.seed(42)
+    random.shuffle(rally_ids)
+    rally_ids = rally_ids[:max_rallies]
+    split = max(1, int(len(rally_ids) * 0.8))
+    train_ids = rally_ids[:split]
+    val_ids = rally_ids[split:] if split < len(rally_ids) else rally_ids[-1:]
+
+    gold_in_set = gold_rally_ids & set(rally_ids)
+
+    rprint("[bold]Mean Teacher WASB local smoke test[/bold]")
+    rprint(f"  Rallies: {len(train_ids)} train, {len(val_ids)} val (from {max_rallies} max)")
+    rprint(f"  Gold GT rallies in set: {len(gold_in_set)}")
+    rprint(f"  Epochs: {epochs}, Batch size: {batch_size}")
+    rprint()
+
+    # Find pretrained weights
+    pretrained = Path("weights/wasb/wasb_volleyball_best.pth.tar")
+    if not pretrained.exists():
+        pretrained = None  # type: ignore[assignment]
+        rprint("[yellow]No pretrained weights found — training from scratch[/yellow]")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config = MeanTeacherConfig(
+            epochs=epochs,
+            batch_size=batch_size,
+            num_workers=0,
+            early_stop_patience=2,
+            rampup_epochs=1,  # Fast ramp-up for smoke test
+        )
+
+        result = train_wasb_mean_teacher(
+            data_dir=data_dir,
+            output_dir=Path(tmp_dir),
+            config=config,
+            train_rally_ids=train_ids,
+            val_rally_ids=val_ids,
+            gold_rally_ids=gold_in_set,
+            pretrained_weights=pretrained,
+        )
+
+    rprint()
+    rprint("[bold]Smoke test results:[/bold]")
+    rprint(f"  Best epoch: {result.best_epoch}")
+    rprint(f"  Best val loss: {result.best_val_loss:.4f}")
+    rprint(f"  F1: {result.f1:.3f}  P: {result.precision:.3f}  R: {result.recall:.3f}")
+    rprint()
+    if result.f1 > 0:
+        rprint("[green]Looks good — model is learning. Proceed with wasb-mt-modal.[/green]")
+    else:
+        rprint("[yellow]Warning: F1=0 after smoke test. Check data quality.[/yellow]")
+
+
+@app.command("wasb-mt-modal")
+def wasb_mt_modal(
+    epochs: int = typer.Option(10, "--epochs", "-e", help="Number of training epochs"),
+    batch_size: int = typer.Option(32, "--batch-size", "-b", help="Batch size (16-32 for A10G GPU)"),
+    learning_rate: float = typer.Option(0.001, "--lr", help="Learning rate"),
+    max_rallies: int = typer.Option(
+        80, "--max-rallies", help="Max rallies (gold GT always included, rest by quality)"
+    ),
+    upload: bool = typer.Option(
+        False, "--upload", help="Upload pseudo-labels + frames + pretrained weights to Modal"
+    ),
+    download: bool = typer.Option(
+        False, "--download", help="Download fine-tuned WASB model from Modal"
+    ),
+    cleanup: bool = typer.Option(
+        False, "--cleanup", help="Delete Mean Teacher data/models from Modal volume"
+    ),
+    fresh: bool = typer.Option(
+        False, "--fresh", help="Start fresh training, ignoring existing checkpoints"
+    ),
+    data_dir: Path = typer.Option(
+        Path("experiments/wasb_pseudo_labels"),
+        "--data-dir",
+        "-d",
+        help="Local directory with pseudo-labels and frames",
+    ),
+) -> None:
+    """Fine-tune WASB with Mean Teacher on Modal GPU (A10G - ~$1.10/hr).
+
+    Same upload/download/cleanup as wasb-modal — uses same data, same volume,
+    just a different training function (Mean Teacher instead of standard).
+
+    Workflow:
+        1. Export pseudo-labels with confidence column:
+           uv run python -m experiments.pseudo_label_export \\
+               --output-dir experiments/wasb_pseudo_labels \\
+               --all-tracked --extract-frames
+
+        2. Upload to Modal (same as wasb-modal):
+           rallycut train wasb-mt-modal --upload
+
+        3. Train with Mean Teacher on A10G GPU:
+           rallycut train wasb-mt-modal --epochs 10 --fresh
+
+        4. Download fine-tuned model:
+           rallycut train wasb-mt-modal --download
+
+        5. Evaluate:
+           uv run python scripts/eval_wasb.py
+
+        6. Clean up Modal storage:
+           rallycut train wasb-mt-modal --cleanup
+    """
+    import subprocess
+
+    if upload:
+        rprint("[bold]Uploading WASB training data to Modal (for Mean Teacher)...[/bold]")
+        if not data_dir.exists():
+            rprint(f"[red]Data directory not found: {data_dir}[/red]")
+            rprint(
+                "Run pseudo-label export first:\n"
+                "  [cyan]uv run python -m experiments.pseudo_label_export "
+                "--output-dir experiments/wasb_pseudo_labels "
+                "--all-tracked --extract-frames[/cyan]"
+            )
+            raise typer.Exit(1)
+
+        manifest_path = data_dir / "manifest.json"
+        if not manifest_path.exists():
+            rprint("[red]No manifest.json found in training data[/red]")
+            rprint(
+                "  Re-export pseudo-labels:\n"
+                "  [cyan]uv run python -m experiments.pseudo_label_export "
+                "--output-dir experiments/wasb_pseudo_labels "
+                "--all-tracked --extract-frames[/cyan]"
+            )
+            raise typer.Exit(1)
+
+        import json as json_mod
+
+        with open(manifest_path) as f:
+            manifest = json_mod.load(f)
+        gt_count = len(manifest.get("gold_rally_ids", []))
+
+        csv_count = len([
+            f for f in data_dir.glob("*.csv")
+            if not f.stem.endswith("_gold")
+        ])
+        img_dirs = [d for d in (data_dir / "images").iterdir() if d.is_dir()] if (data_dir / "images").exists() else []
+        if csv_count == 0 or not img_dirs:
+            rprint(f"[red]No training data found in {data_dir}[/red]")
+            raise typer.Exit(1)
+
+        rprint(f"  CSVs: {csv_count}, Image dirs: {len(img_dirs)}, GT rallies: {gt_count}")
+
+        # Upload training data (same path as wasb-modal)
+        cmd = [
+            "python3", "-m", "modal", "volume", "put", "-f",
+            "rallycut-training", str(data_dir) + "/", "wasb_data/",
+        ]
+        rprint(f"Running: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            rprint(f"[red]Upload failed: {result.stderr}[/red]")
+            return
+
+        rprint("[green]WASB training data uploaded![/green]")
+
+        # Upload pretrained weights
+        finetuned = Path("weights/wasb/wasb_finetuned.pth.tar")
+        original = Path("weights/wasb/wasb_volleyball_best.pth.tar")
+        if finetuned.exists():
+            pretrained = finetuned
+            rprint(f"Uploading fine-tuned WASB weights ({pretrained.name})...")
+        elif original.exists():
+            pretrained = original
+            rprint(f"Uploading original pretrained weights ({pretrained.name})...")
+        else:
+            pretrained = None
+            rprint("[yellow]No WASB weights found — training will start from scratch[/yellow]")
+
+        if pretrained is not None:
+            cmd_pt = [
+                "python3", "-m", "modal", "volume", "put", "-f",
+                "rallycut-training", str(pretrained),
+                "pretrained/wasb_volleyball_best.pth.tar",
+            ]
+            pt_result = subprocess.run(cmd_pt, capture_output=True, text=True)
+            if pt_result.returncode == 0:
+                rprint(f"[green]Weights uploaded ({pretrained.name})![/green]")
+            else:
+                rprint("[yellow]Weights upload failed (training will start from scratch)[/yellow]")
+
+        rprint()
+        rprint("Next: [cyan]rallycut train wasb-mt-modal --epochs 10 --fresh[/cyan]")
+        return
+
+    if download:
+        rprint("[bold]Downloading Mean Teacher fine-tuned WASB model from Modal...[/bold]")
+        output = Path("weights/wasb")
+        output.mkdir(parents=True, exist_ok=True)
+
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cmd = [
+                "python3", "-m", "modal", "volume", "get", "--force",
+                "rallycut-training", "models/wasb_mt/best.pt", tmp_dir + "/",
+            ]
+            rprint("Downloading best.pt...")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                import torch
+
+                src = Path(tmp_dir) / "best.pt"
+                state_dict = torch.load(src, map_location="cpu", weights_only=True)
+                checkpoint = {"model_state_dict": state_dict}
+                dst = output / "wasb_finetuned.pth.tar"
+                torch.save(checkpoint, dst)
+                rprint(f"[green]Saved fine-tuned model to {dst}[/green]")
+            else:
+                rprint(f"[red]Download failed: {result.stderr}[/red]")
+                return
+
+        # Delete ONNX files to force re-export with new weights
+        for onnx_file in output.glob("*.onnx*"):
+            onnx_file.unlink()
+            rprint(f"[yellow]Deleted {onnx_file.name} (will re-export on next inference)[/yellow]")
+
+        rprint()
+        rprint("[green]Download complete![/green]")
+        rprint("Evaluate with:")
+        rprint("  [cyan]uv run python scripts/eval_wasb.py[/cyan]")
+        return
+
+    if cleanup:
+        rprint("[bold]Cleaning up Mean Teacher data from Modal...[/bold]")
+        for folder in ["wasb_data/", "models/wasb_mt/"]:
+            cmd = [
+                "python3", "-m", "modal", "volume", "rm",
+                "rallycut-training", folder, "-r",
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                rprint(f"[green]Deleted {folder}[/green]")
+            else:
+                rprint(f"[yellow]{folder} not found or already deleted[/yellow]")
+
+        rprint("[green]Cleanup complete![/green]")
+        return
+
+    # Run training on Modal
+    rprint("[bold]Starting WASB Mean Teacher training on Modal A10G GPU...[/bold]")
+    rprint(f"  Epochs: {epochs}, Batch size: {batch_size}, LR: {learning_rate}")
+    rprint(f"  Max rallies: {max_rallies}")
     if fresh:
         rprint("[yellow]  Fresh training: ignoring existing checkpoints[/yellow]")
     rprint()
@@ -1002,10 +1338,11 @@ def wasb_modal(
         "python3", "-m", "modal",
         "run",
         "--detach",
-        "rallycut/training/modal_wasb.py",
+        "rallycut/training/modal_wasb.py::train_mean_teacher",
         "--epochs", str(epochs),
         "--batch-size", str(batch_size),
         "--learning-rate", str(learning_rate),
+        "--max-rallies", str(max_rallies),
     ]
     if fresh:
         cmd.append("--fresh")

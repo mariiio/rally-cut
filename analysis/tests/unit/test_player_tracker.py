@@ -110,7 +110,7 @@ class TestComputeCourtRoiFromBall:
         assert "Limited ball detections" in msg
 
     def test_filters_out_zero_zero_positions(self) -> None:
-        """Should ignore (0,0) positions (VballNet no-detection placeholders)."""
+        """Should ignore (0,0) positions (no-detection placeholders)."""
         # 10 real + 20 at (0,0)
         real = [(0.3 + 0.4 * i / 10, 0.3 + 0.2 * i / 10) for i in range(10)]
         zeros = [(0.0, 0.0)] * 20

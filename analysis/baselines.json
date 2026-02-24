@@ -1,28 +1,13 @@
 {
-  "_updated": "2026-02-16",
+  "_updated": "2026-02-24",
   "_description": "Canonical baselines for ML experiments. Read by agents at runtime. Update after significant eval runs.",
 
   "ball_tracking": {
-    "ensemble_tuned": {
-      "match_pct": 85.3,
-      "error_px": 26.0,
-      "config": "get_ensemble_filter_config()",
-      "notes": "Source-aware, 9 rallies, Feb 2026"
-    },
-    "ensemble_unfiltered": {
-      "match_pct": 76.7,
-      "error_px": 73.4
-    },
     "wasb_hrnet": {
-      "match_pct": 67.5,
-      "error_px": 51.9,
-      "notes": "t=0.3, MPS"
-    },
-    "vballnet_v2": {
-      "match_pct": 41.7,
-      "error_px": 92.7,
-      "detection_pct": 83.7,
-      "notes": "With motion energy filter"
+      "match_pct": 86.4,
+      "error_px": 29.2,
+      "config": "get_wasb_filter_config()",
+      "notes": "Fine-tuned WASB, 9 rallies, Feb 2026"
     }
   },
 
@@ -52,22 +37,9 @@
     "yolo11m_1280": { "far_recall": 89.4, "mid_recall": 74.4, "fps": 2.4 }
   },
 
-  "filter_config_tuned": {
-    "segment_jump_threshold": 0.20,
-    "min_segment_frames": 12,
-    "blip_max_deviation": 0.10,
-    "max_interpolation_gap": 10,
-    "exit_approach_frames": 4,
-    "exit_edge_zone": 0.15,
-    "motion_energy_threshold": 0.02,
-    "source_aware": true,
-    "oscillation": "disabled"
-  },
-
   "known_problem_rallies": {
-    "0d84f858": "Stationary FPs — motion energy filter's biggest win (was 8.2% → 67.2%)",
-    "0af554b5": "VballNet limitation — 29.8% VballNet vs 82.1% WASB alone",
-    "9dbe457a": "Weakest ensemble rally — 61.4% match, 44.6px error",
+    "0d84f858": "Stationary FPs — motion energy filter's biggest win (was 8.2% -> 67.2%)",
+    "9dbe457a": "Weakest rally — 61.4% match, 44.6px error",
     "1f87460b": "High error despite decent match — 77.5% match, 86.5px error"
   },
 

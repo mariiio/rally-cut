@@ -529,7 +529,7 @@ class ActionClassifier:
         ball_positions = contact_sequence.ball_positions or None
 
         # Determine which contact is the serve (may be outside window if
-        # ball tracking starts late — common with VballNet warmup).
+        # ball tracking starts late — common with detector warmup).
         serve_index, serve_pass = self._find_serve_index(
             contacts, start_frame, contact_sequence.net_y,
             ball_positions=ball_positions,

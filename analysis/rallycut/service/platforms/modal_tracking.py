@@ -104,7 +104,7 @@ def track_batch(request: dict) -> dict:
     batch_job_id = request.get("batch_job_id")
     video_id = request.get("video_id")
     # API sends original-quality key — tracking needs full resolution for accurate
-    # ball detection (720p proxy degrades VballNet/WASB significantly)
+    # ball detection (720p proxy degrades WASB significantly)
     video_key = request.get("video_key")
     rallies = request.get("rallies", [])
     calibration_corners = request.get("calibration_corners")

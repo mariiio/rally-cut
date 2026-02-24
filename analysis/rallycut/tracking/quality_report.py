@@ -284,7 +284,7 @@ def compute_quality_report(
 
     if ball_score < 0.3:
         suggestions.append(
-            "Poor ball detection (<30%) — try --ball-model ensemble"
+            "Poor ball detection (<30%) — check video quality and lighting"
         )
 
     if report.primary_track_count < expected_players:

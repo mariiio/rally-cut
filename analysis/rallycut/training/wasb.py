@@ -4,7 +4,7 @@ Architecture: HRNet multi-resolution backbone for ball heatmap prediction.
 Input: 3 consecutive RGB frames (9 channels) at 288x512, ImageNet-normalized.
 Output: 3 heatmap channels (one per frame) at 288x512.
 
-Fine-tunes pretrained WASB volleyball weights on ensemble pseudo-labels
+Fine-tunes pretrained WASB volleyball weights on pseudo-labels
 to improve ball detection on beach volleyball specifically.
 
 Based on: https://github.com/nttcom/WASB-SBDT (BMVC 2023)

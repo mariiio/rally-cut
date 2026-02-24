@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Minimum confidence to treat a ball position as a real detection.
-# VballNet confidence is bimodal: either 0.0 (no detection) or >=0.3 (confident).
+# Ball detector confidence is bimodal: either 0.0 (no detection) or >=0.3 (confident).
 _CONFIDENCE_THRESHOLD = 0.3
 
 # Cached default classifier (loaded once from disk on first use)
@@ -322,7 +322,7 @@ def _filter_noise_spikes(
 ) -> list[BallPosition]:
     """Zero out noise spikes where ball jumps far from both predecessor and successor.
 
-    VballNet produces single-frame false positives that jump to player positions.
+    The ball detector produces single-frame false positives that jump to player positions.
     If a position is far from BOTH its predecessor and successor, it's a spike.
     """
     confident = [
