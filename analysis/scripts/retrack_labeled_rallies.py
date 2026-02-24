@@ -92,7 +92,6 @@ def _retrack_rally(
     rally: TrackingEvaluationRally,
     stride: int = 1,
     team_aware: bool = False,
-    pose_keypoints: bool = False,
 ) -> PlayerTrackingResult | None:
     """Re-run tracking for a single rally."""
     # Get video file
@@ -111,13 +110,6 @@ def _retrack_rally(
 
         ta_config = TeamAwareConfig(enabled=True)
 
-    # Build pose keypoint config if requested
-    pose_config = None
-    if pose_keypoints:
-        from rallycut.tracking.pose_association import PoseAssociationConfig
-
-        pose_config = PoseAssociationConfig(enabled=True)
-
     # Create tracker
     tracker = PlayerTracker()
 
@@ -130,7 +122,6 @@ def _retrack_rally(
         filter_enabled=True,
         court_calibrator=calibrator,
         team_aware_config=ta_config,
-        pose_config=pose_config,
     )
 
     # Convert absolute video frame numbers to rally-relative (0-indexed)
@@ -157,10 +148,6 @@ def main() -> None:
     parser.add_argument(
         "--team-aware", action="store_true",
         help="Enable team-aware BoT-SORT penalty (requires calibration)",
-    )
-    parser.add_argument(
-        "--pose-keypoints", action="store_true",
-        help="Enable pose-based keypoint association (uses yolo11s-pose model)",
     )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
@@ -236,7 +223,6 @@ def main() -> None:
             rally,
             stride=args.stride,
             team_aware=args.team_aware,
-            pose_keypoints=args.pose_keypoints,
         )
         elapsed = time.time() - t0
 
