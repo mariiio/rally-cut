@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
+    from rallycut.court.calibration import CourtCalibrator
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.contact_classifier import ContactClassifier
     from rallycut.tracking.player_tracker import PlayerPosition
@@ -1044,6 +1045,43 @@ def _deduplicate_contacts(
     return sorted(result, key=lambda c: c.frame)
 
 
+def _resolve_court_side(
+    ball_x: float,
+    ball_y: float,
+    player_track_id: int,
+    team_assignments: dict[int, int] | None,
+    court_calibrator: CourtCalibrator | None,
+    estimated_net_y: float,
+) -> str:
+    """Determine which court side the ball is on using multiple signals.
+
+    Signal priority:
+    1. Player identity — if the touching player has a team assignment, use it
+    2. Calibration projection — perspective-correct via homography
+    3. Y-threshold fallback — simple horizontal split (current behavior)
+    """
+    # Signal 1: Player identity (highest confidence)
+    if team_assignments and player_track_id >= 0 and player_track_id in team_assignments:
+        return "near" if team_assignments[player_track_id] == 0 else "far"
+
+    # Signal 2: Calibration projection (perspective-correct)
+    if court_calibrator is not None and court_calibrator.is_calibrated:
+        try:
+            # image_to_court takes normalized coords (0-1), pixel dims unused
+            # but required by API — pass 1,1 since coords are already normalized
+            court_x, court_y = court_calibrator.image_to_court(
+                (ball_x, ball_y), 1, 1,
+            )
+            # Beach volleyball: 8m x 16m, near side y >= 8.0
+            if 0.0 <= court_y <= 16.0:
+                return "near" if court_y >= 8.0 else "far"
+        except (RuntimeError, np.linalg.LinAlgError):
+            pass  # Calibration failed, fall through
+
+    # Signal 3: Y-threshold fallback (current behavior)
+    return "far" if ball_y < estimated_net_y else "near"
+
+
 def detect_contacts(
     ball_positions: list[BallPosition],
     player_positions: list[PlayerPosition] | None = None,
@@ -1052,6 +1090,8 @@ def detect_contacts(
     frame_count: int | None = None,
     classifier: ContactClassifier | None = None,
     use_classifier: bool = True,
+    team_assignments: dict[int, int] | None = None,
+    court_calibrator: CourtCalibrator | None = None,
 ) -> ContactSequence:
     """Detect ball contacts from trajectory inflection points and velocity peaks.
 
@@ -1079,6 +1119,10 @@ def detect_contacts(
         use_classifier: When True (default) and no explicit classifier is provided,
             auto-loads the default classifier from disk if available. Set to False
             to force hand-tuned validation gates.
+        team_assignments: Map from track_id → team (0=near, 1=far). When provided,
+            ball side is resolved from the touching player's team assignment.
+        court_calibrator: Calibrated court projector. When provided, ball side uses
+            perspective-correct projection via homography.
 
     Returns:
         ContactSequence with all detected contacts.
@@ -1322,8 +1366,11 @@ def detect_contacts(
         if velocity < cfg.min_candidate_velocity:
             continue
 
-        # Determine court side from ball position relative to net
-        court_side = "far" if ball.y < estimated_net_y else "near"
+        # Determine court side: player identity > calibration > Y-threshold
+        court_side = _resolve_court_side(
+            ball.x, ball.y, track_id, team_assignments,
+            court_calibrator, estimated_net_y,
+        )
 
         # Check if at net
         net_zone = 0.08  # ±8% of screen around net
