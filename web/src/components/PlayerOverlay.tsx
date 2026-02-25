@@ -9,6 +9,7 @@ interface PlayerOverlayProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   containerRef: React.RefObject<HTMLDivElement | null>;
   fps?: number;
+  teamAssignments?: Record<string, string>;
 }
 
 // Default colors for tracks before player assignment
@@ -18,6 +19,12 @@ const TRACK_COLORS = [
   '#45B7D1', // Blue
   '#96CEB4', // Green
 ];
+
+// Team colors for court debug overlay
+const TEAM_COLORS: Record<string, string> = {
+  A: '#f44336', // Red (near court)
+  B: '#2196F3', // Blue (far court)
+};
 
 // Linear interpolation helper
 function lerp(a: number, b: number, t: number): number {
@@ -33,6 +40,7 @@ export function PlayerOverlay({
   videoRef,
   containerRef,
   fps: propFps = 30,
+  teamAssignments,
 }: PlayerOverlayProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const trackElementsRef = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -141,14 +149,16 @@ export function PlayerOverlay({
       }
     }
 
-    // Create elements for new tracks
+    // Create or update elements for tracks
     let trackIndex = 0;
     for (const trackId of currentTrackIds) {
       if (trackIndex >= MAX_TRACKS) break;
 
-      if (!existingElements.has(trackId)) {
-        const color = TRACK_COLORS[(trackId - 1) % TRACK_COLORS.length];
+      const team = teamAssignments?.[String(trackId)];
+      const color = team ? (TEAM_COLORS[team] ?? TRACK_COLORS[(trackId - 1) % TRACK_COLORS.length]) : TRACK_COLORS[(trackId - 1) % TRACK_COLORS.length];
+      const labelText = team ? `Track ${trackId} (${team})` : `Track ${trackId}`;
 
+      if (!existingElements.has(trackId)) {
         const trackEl = document.createElement('div');
         trackEl.className = 'player-track';
         trackEl.dataset.trackId = String(trackId);
@@ -166,7 +176,7 @@ export function PlayerOverlay({
         // Track label
         const label = document.createElement('div');
         label.className = 'track-label';
-        label.textContent = `Track ${trackId}`;
+        label.textContent = labelText;
         label.style.cssText = `
           position: absolute;
           top: -24px;
@@ -200,10 +210,19 @@ export function PlayerOverlay({
 
         overlay.appendChild(trackEl);
         existingElements.set(trackId, trackEl);
+      } else {
+        // Update existing element colors when teamAssignments change
+        const trackEl = existingElements.get(trackId)!;
+        trackEl.style.borderColor = color;
+        const label = trackEl.querySelector('.track-label') as HTMLDivElement;
+        if (label) {
+          label.textContent = labelText;
+          label.style.backgroundColor = color;
+        }
       }
       trackIndex++;
     }
-  }, [trackPositions]);
+  }, [trackPositions, teamAssignments]);
 
   // Update dimensions on resize
   useEffect(() => {
@@ -289,11 +308,10 @@ export function PlayerOverlay({
         element.style.width = `${boxWidth}px`;
         element.style.height = `${boxHeight}px`;
 
-        // Update selection styling
+        // Update selection styling (read color from element to avoid recomputing per-frame)
         const isSelected = selectedTrackId === trackId;
-        const color = TRACK_COLORS[(trackId - 1) % TRACK_COLORS.length];
         element.style.boxShadow = isSelected
-          ? `0 0 0 2px white, 0 0 10px ${color}`
+          ? `0 0 0 2px white, 0 0 10px ${element.style.borderColor}`
           : '0 2px 4px rgba(0,0,0,0.3)';
 
         // Update court label
