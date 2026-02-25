@@ -50,12 +50,12 @@ def _compute_team_assignments(
 ) -> dict[int, int]:
     """Compute team assignments from Y positions."""
     config = PlayerFilterConfig()
-    split_y = compute_court_split(
+    split_result = compute_court_split(
         ball_positions or [], config, player_positions=positions
     )
-    if split_y is None:
+    if split_result is None:
         return {}
-    return classify_teams(positions, split_y)
+    return classify_teams(positions, split_result[0])
 
 
 def _apply_court_identity(

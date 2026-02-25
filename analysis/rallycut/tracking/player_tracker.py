@@ -1386,10 +1386,20 @@ class PlayerTracker:
                     )
 
                     # Classify teams using early-frame Y positions
-                    preliminary_split_y = compute_court_split(
-                        ball_positions or [], config, player_positions=positions
+                    split_result = compute_court_split(
+                        ball_positions or [], config,
+                        player_positions=positions,
+                        court_calibrator=court_calibrator,
                     )
-                    if preliminary_split_y is not None:
+                    preliminary_split_y = split_result[0] if split_result else None
+                    split_confidence = split_result[1] if split_result else None
+
+                    # Only create team assignments when split is reliable.
+                    # Low-confidence splits (e.g. median fallback when all players
+                    # are compressed in a narrow Y band) cause misassignment that
+                    # cascades through global identity, tracklet linking, etc.
+                    # When empty, those operations run unconstrained (safe default).
+                    if preliminary_split_y is not None and split_confidence == "high":
                         team_assignments = classify_teams(
                             positions, preliminary_split_y
                         )
@@ -1547,10 +1557,12 @@ class PlayerTracker:
                     )
 
                     # Recompute team assignments from clean filtered positions
-                    post_split_y = compute_court_split(
+                    post_split_result = compute_court_split(
                         ball_positions or [], config,
                         player_positions=positions,
+                        court_calibrator=court_calibrator,
                     )
+                    post_split_y = post_split_result[0] if post_split_result else None
                     if post_split_y is not None:
                         post_team_assignments = classify_teams(
                             positions, post_split_y

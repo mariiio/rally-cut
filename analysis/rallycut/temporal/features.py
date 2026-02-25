@@ -21,6 +21,8 @@ from rallycut.core.video import Video
 if TYPE_CHECKING:
     from lib.volleyball_ml.video_mae import GameStateClassifier
 
+    from rallycut.evaluation.ground_truth import EvaluationVideo, GroundTruthRally
+
 
 # Feature dimension for VideoMAE base model
 FEATURE_DIM = 768
@@ -384,3 +386,85 @@ def subsample_features(
 
     ratio = coarse_stride // fine_stride
     return features[::ratio]
+
+
+def generate_overlap_labels(
+    rallies: list[GroundTruthRally],
+    video_duration_ms: int,
+    fps: float,
+    stride: int,
+    window_size: int = 16,
+    overlap_threshold: float = 0.5,
+) -> list[int]:
+    """Generate window labels based on overlap with rallies.
+
+    A window is labeled as RALLY (1) if it overlaps with any ground truth
+    rally by more than overlap_threshold.
+
+    Args:
+        rallies: List of ground truth rallies.
+        video_duration_ms: Video duration in milliseconds.
+        fps: Video frames per second.
+        stride: Frame stride between windows.
+        window_size: Number of frames per window.
+        overlap_threshold: Minimum overlap ratio to label as RALLY.
+
+    Returns:
+        List of binary labels (0 or 1) for each window.
+    """
+    video_duration_s = video_duration_ms / 1000.0
+    window_duration_s = window_size / fps
+    num_windows = int((video_duration_s * fps - window_size) / stride) + 1
+
+    labels = []
+    for i in range(num_windows):
+        # Window time range
+        window_start_s = i * stride / fps
+        window_end_s = window_start_s + window_duration_s
+
+        # Check overlap with each rally
+        is_rally = False
+        for rally in rallies:
+            rally_start_s = rally.start_seconds
+            rally_end_s = rally.end_seconds
+
+            # Calculate overlap
+            overlap_start = max(window_start_s, rally_start_s)
+            overlap_end = min(window_end_s, rally_end_s)
+            overlap_duration = max(0, overlap_end - overlap_start)
+
+            overlap_ratio = overlap_duration / window_duration_s
+            if overlap_ratio >= overlap_threshold:
+                is_rally = True
+                break
+
+        labels.append(1 if is_rally else 0)
+
+    return labels
+
+
+def video_level_split(
+    videos: list[EvaluationVideo],
+    train_ratio: float = 0.8,
+    seed: int = 42,
+) -> tuple[list[EvaluationVideo], list[EvaluationVideo]]:
+    """Split videos into train and validation sets.
+
+    Uses video-level split to prevent data leakage between train and val.
+
+    Args:
+        videos: List of evaluation videos.
+        train_ratio: Fraction of videos for training.
+        seed: Random seed for reproducibility.
+
+    Returns:
+        Tuple of (train_videos, val_videos).
+    """
+    import random
+
+    rng = random.Random(seed)
+    shuffled = list(videos)
+    rng.shuffle(shuffled)
+
+    split_idx = int(len(shuffled) * train_ratio)
+    return shuffled[:split_idx], shuffled[split_idx:]

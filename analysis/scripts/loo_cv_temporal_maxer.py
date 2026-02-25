@@ -22,8 +22,7 @@ import numpy as np
 
 from rallycut.evaluation.ground_truth import EvaluationVideo, load_evaluation_videos
 from rallycut.evaluation.matching import MatchingResult, match_rallies
-from rallycut.temporal.binary_head import generate_overlap_labels
-from rallycut.temporal.features import FeatureCache
+from rallycut.temporal.features import FeatureCache, generate_overlap_labels
 from rallycut.temporal.temporal_maxer.inference import TemporalMaxerInference
 from rallycut.temporal.temporal_maxer.training import (
     TemporalMaxerTrainer,

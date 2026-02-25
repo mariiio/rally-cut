@@ -92,6 +92,7 @@ def _retrack_rally(
     rally: TrackingEvaluationRally,
     stride: int = 1,
     team_aware: bool = False,
+    enable_ball: bool = True,
 ) -> PlayerTrackingResult | None:
     """Re-run tracking for a single rally."""
     # Get video file
@@ -110,6 +111,20 @@ def _retrack_rally(
 
         ta_config = TeamAwareConfig(enabled=True)
 
+    # Run ball tracking first (matches production pipeline)
+    ball_positions = None
+    if enable_ball:
+        from rallycut.tracking.ball_tracker import create_ball_tracker
+
+        ball_tracker = create_ball_tracker()
+        ball_result = ball_tracker.track_video(
+            video_path, start_ms=rally.start_ms, end_ms=rally.end_ms,
+        )
+        ball_positions = ball_result.positions
+        logger.info(
+            f"Ball tracking: {len(ball_positions)} positions"
+        )
+
     # Create tracker
     tracker = PlayerTracker()
 
@@ -122,6 +137,7 @@ def _retrack_rally(
         filter_enabled=True,
         court_calibrator=calibrator,
         team_aware_config=ta_config,
+        ball_positions=ball_positions,
     )
 
     # Convert absolute video frame numbers to rally-relative (0-indexed)
@@ -148,6 +164,10 @@ def main() -> None:
     parser.add_argument(
         "--team-aware", action="store_true",
         help="Enable team-aware BoT-SORT penalty (requires calibration)",
+    )
+    parser.add_argument(
+        "--no-ball", action="store_true",
+        help="Skip ball tracking (faster, but diverges from production pipeline)",
     )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
@@ -223,6 +243,7 @@ def main() -> None:
             rally,
             stride=args.stride,
             team_aware=args.team_aware,
+            enable_ball=not args.no_ball,
         )
         elapsed = time.time() - t0
 

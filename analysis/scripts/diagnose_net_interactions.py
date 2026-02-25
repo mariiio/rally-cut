@@ -155,10 +155,11 @@ def analyze_rally(
         # Build team assignments
         from rallycut.tracking.player_filter import PlayerFilterConfig
 
-        split_y = compute_court_split(
+        split_result = compute_court_split(
             [], PlayerFilterConfig(), player_positions=predictions.positions
         )
-        if split_y is not None:
+        if split_result is not None:
+            split_y = split_result[0]
             team_assignments = classify_teams(predictions.positions, split_y)
             court_tracks = resolver._build_court_tracks(predictions.positions)
             effective_net_y = resolver._estimate_effective_net_y(

@@ -18,7 +18,6 @@ from rallycut.cli.utils import handle_errors
 from rallycut.core.config import MODEL_PRESETS, get_model_path
 from rallycut.evaluation.cached_analysis import (
     AnalysisCache,
-    CachedAnalysis,
     PostProcessingParams,
     analyze_and_cache,
     apply_post_processing_custom,
@@ -259,73 +258,6 @@ def _export_csv(results: list[VideoEvaluationResult], path: Path) -> None:
             )
 
 
-def _apply_binary_head_decoder(
-    content_hash: str,
-    stride: int,
-    feature_cache_dir: Path | None = None,
-    binary_head_model_path: Path | None = None,
-) -> list | None:
-    """Apply binary head + deterministic decoder to cached features.
-
-    Args:
-        content_hash: Video content hash to look up cached features.
-        stride: Analysis stride in frames.
-        feature_cache_dir: Directory containing cached features.
-        binary_head_model_path: Path to binary head model (optional).
-
-    Returns:
-        List of TimeSegment objects, or None if features/model not found.
-    """
-    from rallycut.core.config import get_config
-    from rallycut.core.models import GameState, TimeSegment
-    from rallycut.temporal.deterministic_decoder import DecoderConfig
-    from rallycut.temporal.features import FeatureCache
-    from rallycut.temporal.inference import load_binary_head_model, run_binary_head_decoder
-
-    config = get_config()
-
-    # Determine model path
-    if binary_head_model_path is not None:
-        model_path = binary_head_model_path
-    else:
-        model_path = config.weights_dir / "binary_head" / "best_binary_head.pt"
-
-    if not model_path.exists():
-        return None
-
-    # Load features from training feature cache (same default as temporal model)
-    cache_dir = feature_cache_dir or Path("training_data/features")
-    feature_cache = FeatureCache(cache_dir=cache_dir)
-    cached_data = feature_cache.get(content_hash, stride)
-
-    if cached_data is None:
-        return None
-
-    features, metadata = cached_data
-
-    # Load model and run decoder
-    model = load_binary_head_model(model_path, device="cpu")
-    decoder_config = DecoderConfig(fps=metadata.fps, stride=stride)
-    result = run_binary_head_decoder(features, model, decoder_config, device="cpu")
-
-    # Convert to TimeSegments
-    segments = []
-    for start_time, end_time in result.segments:
-        start_frame = int(start_time * metadata.fps)
-        end_frame = int(end_time * metadata.fps)
-        segments.append(
-            TimeSegment(
-                start_frame=start_frame,
-                end_frame=end_frame,
-                start_time=start_time,
-                end_time=end_time,
-                state=GameState.PLAY,
-            )
-        )
-
-    return segments
-
-
 def _apply_temporal_maxer(
     content_hash: str,
     stride: int,
@@ -389,67 +321,6 @@ def _apply_temporal_maxer(
         )
 
     return segments
-
-
-def _apply_temporal_model(
-    cached: CachedAnalysis,
-    model: object,  # torch.nn.Module
-    stride: int,
-    content_hash: str,
-    feature_cache_dir: Path | None = None,
-) -> list | None:
-    """Apply temporal model to cached analysis results.
-
-    Uses pre-extracted features from the specified feature cache directory.
-
-    Args:
-        cached: Cached analysis with raw_results
-        model: Loaded temporal model
-        stride: Analysis stride in frames
-        content_hash: Video content hash to look up cached features
-        feature_cache_dir: Directory containing cached features.
-            Defaults to training_data/features/ if not specified.
-
-    Returns:
-        List of RallySegment objects, or None if features not found
-    """
-    from rallycut.temporal.features import FeatureCache
-    from rallycut.temporal.inference import (
-        TemporalInferenceConfig,
-        run_temporal_inference,
-    )
-
-    # Load features from training feature cache
-    cache_dir = feature_cache_dir or Path("training_data/features")
-    feature_cache = FeatureCache(cache_dir=cache_dir)
-
-    # Load coarse features
-    cached_data = feature_cache.get(content_hash, stride)
-    if cached_data is None:
-        return None  # Features not cached for this video
-
-    features, metadata = cached_data
-
-    # Ensure features match raw_results length
-    raw_results = cached.raw_results
-    min_len = min(len(features), len(raw_results))
-    features = features[:min_len]
-
-    # Create inference config
-    config = TemporalInferenceConfig(
-        coarse_stride=stride,
-        device="cpu",
-    )
-
-    # Run temporal inference
-    result = run_temporal_inference(
-        features=features,
-        metadata=metadata,
-        model=model,  # type: ignore[arg-type]
-        config=config,
-    )
-
-    return result.segments
 
 
 def _apply_ball_tracking(
@@ -593,9 +464,7 @@ def _run_evaluation(
     use_cache: bool,
     model_path: Path | None = None,
     model_id: str = "default",
-    temporal_model_path: Path | None = None,
     feature_cache_dir: Path | None = None,
-    use_binary_head: bool = False,
     use_temporal_maxer: bool = False,
     use_heuristics: bool = False,
     ball_validation: bool = False,
@@ -608,21 +477,11 @@ def _run_evaluation(
 
     Pipeline priority:
     1. If use_temporal_maxer: use TemporalMaxer TAS model
-    2. If temporal_model_path: use temporal model (deprecated)
-    3. If use_binary_head: use binary head + decoder
-    4. If use_heuristics: use heuristics
-    5. Auto: TemporalMaxer if model+features exist, else binary head, else heuristics
+    2. If use_heuristics: use heuristics
+    3. Auto: TemporalMaxer if model+features exist, else heuristics
     """
     results: list[VideoEvaluationResult] = []
     total = len(videos)
-
-    # Load temporal model if specified
-    temporal_model = None
-    if temporal_model_path is not None:
-        from rallycut.temporal.inference import load_temporal_model
-
-        temporal_model = load_temporal_model(temporal_model_path)
-        logger.info("Using temporal model: %s", temporal_model_path)
 
     for i, video in enumerate(videos):
         # Update progress bar description
@@ -652,13 +511,12 @@ def _run_evaluation(
         # Apply post-processing pipeline
         segments = None
 
-        if use_temporal_maxer:
-            # TemporalMaxer TAS model (highest priority)
+        if use_temporal_maxer or not use_heuristics:
+            # TemporalMaxer TAS model (explicit or auto-selection)
             segments = _apply_temporal_maxer(
                 video.content_hash, stride, feature_cache_dir
             )
             if segments is not None and (ball_validation or ball_boundary):
-                # Apply ball tracking validation/refinement
                 video_path = resolver.resolve(video.s3_key, video.content_hash)
                 segments = _apply_ball_tracking(
                     video_path,
@@ -669,43 +527,9 @@ def _run_evaluation(
                     ball_fast=ball_fast,
                 )
             if segments is None:
-                logger.warning("No cached features/model for %s, using heuristics", video.filename)
-
-        elif temporal_model is not None:
-            # Deprecated temporal model path
-            segments = _apply_temporal_model(
-                cached, temporal_model, stride, video.content_hash, feature_cache_dir
-            )
-            if segments is None:
-                logger.warning("No cached features for %s, using heuristics", video.filename)
-
-        elif use_binary_head or (not use_heuristics):
-            # Try TemporalMaxer auto-selection first (if not explicitly requesting binary head)
-            if not use_binary_head:
-                segments = _apply_temporal_maxer(
-                    video.content_hash, stride, feature_cache_dir
+                logger.warning(
+                    "No cached features/model for %s, using heuristics", video.filename
                 )
-
-            # Fall back to binary head
-            if segments is None:
-                segments = _apply_binary_head_decoder(
-                    video.content_hash, stride, feature_cache_dir
-                )
-
-            if segments is not None and (ball_validation or ball_boundary):
-                # Apply ball tracking validation/refinement
-                video_path = resolver.resolve(video.s3_key, video.content_hash)
-                segments = _apply_ball_tracking(
-                    video_path,
-                    segments,
-                    video.content_hash,
-                    ball_validation=ball_validation,
-                    ball_boundary=ball_boundary,
-                    ball_fast=ball_fast,
-                )
-            if segments is None and not use_heuristics:
-                # Auto-selection: fallback to heuristics if no features/model
-                logger.info("No cached features/model for %s, using heuristics", video.filename)
 
         # Fallback to heuristics
         if segments is None:
@@ -843,40 +667,25 @@ def evaluate(
             help="Model variant: 'beach' (default) or 'indoor' (original)",
         ),
     ] = "beach",
-    temporal_model: Annotated[
-        Path | None,
-        typer.Option(
-            "--temporal-model",
-            "-t",
-            help="Path to temporal model for learned post-processing (replaces heuristics)",
-        ),
-    ] = None,
     feature_cache_dir: Annotated[
         Path | None,
         typer.Option(
             "--feature-cache",
-            help="Directory for cached features (used with --temporal-model or --binary-head)",
+            help="Directory for cached features (used with --temporal-maxer)",
         ),
     ] = None,
-    binary_head: Annotated[
-        bool,
-        typer.Option(
-            "--binary-head",
-            help="Use binary head + decoder for evaluation (84%% F1 at IoU=0.4, default when features cached)",
-        ),
-    ] = False,
     temporal_maxer: Annotated[
         bool,
         typer.Option(
             "--temporal-maxer",
-            help="Use TemporalMaxer TAS model (75%% LOO F1 at IoU=0.4)",
+            help="Use TemporalMaxer TAS model (88%% LOO F1 at IoU=0.4)",
         ),
     ] = False,
     use_heuristics: Annotated[
         bool,
         typer.Option(
             "--heuristics",
-            help="Force heuristics pipeline instead of auto-selecting binary head",
+            help="Force heuristics pipeline instead of auto-selecting TemporalMaxer",
         ),
     ] = False,
     ball_validation: Annotated[
@@ -929,30 +738,14 @@ def evaluate(
     console.print("[bold]RallyCut Evaluation Framework[/bold]")
     console.print(f"Model: [yellow]{model}[/yellow]")
 
-    # Show deprecation warning for temporal model
-    if temporal_model is not None:
-        import warnings
-
-        warnings.warn(
-            "--temporal-model is deprecated. Use --binary-head instead (84% F1 vs 65% F1).",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        console.print(
-            "[yellow]Warning: --temporal-model is deprecated. "
-            "Use --binary-head for better results (84% F1).[/yellow]"
-        )
-
     # Show pipeline info
     if temporal_maxer:
-        console.print("Pipeline: [green]TemporalMaxer TAS model (75% LOO F1)[/green]")
-    elif binary_head:
-        console.print("Pipeline: [green]Binary head + decoder (84% F1)[/green]")
+        console.print("Pipeline: [green]TemporalMaxer TAS model (88% LOO F1)[/green]")
     elif use_heuristics:
         console.print("Pipeline: [dim]Heuristics (57% F1)[/dim]")
-    elif temporal_model is None:
+    else:
         console.print(
-            "Pipeline: [dim]Auto-selecting (TemporalMaxer > binary head > heuristics)[/dim]"
+            "Pipeline: [dim]Auto-selecting (TemporalMaxer > heuristics)[/dim]"
         )
 
     # Show ball validation info
@@ -1137,9 +930,7 @@ def evaluate(
             use_cache=use_cache,
             model_path=model_path,
             model_id=model,
-            temporal_model_path=temporal_model,
             feature_cache_dir=feature_cache_dir,
-            use_binary_head=binary_head,
             use_temporal_maxer=temporal_maxer,
             use_heuristics=use_heuristics,
             ball_validation=ball_validation,
@@ -1435,371 +1226,3 @@ def clear_cache(
 
     count = cache.clear()
     console.print(f"Deleted {count} cached analyses.")
-
-
-@app.command()
-@handle_errors
-def tune_decoder(
-    iou_threshold: Annotated[
-        float,
-        typer.Option(
-            "--iou",
-            "-i",
-            help="IoU threshold for matching rallies (0.0-1.0)",
-        ),
-    ] = 0.4,
-    stride: Annotated[
-        int,
-        typer.Option(
-            "--stride",
-            "-s",
-            help="Frame stride (must match cached features)",
-        ),
-    ] = 48,
-    top_n: Annotated[
-        int,
-        typer.Option(
-            "--top",
-            "-n",
-            help="Number of top results to show",
-        ),
-    ] = 10,
-    output: Annotated[
-        Path,
-        typer.Option(
-            "--output",
-            "-o",
-            help="Output file for tuning results",
-        ),
-    ] = Path("decoder_tune_results.json"),
-    feature_cache_dir: Annotated[
-        Path | None,
-        typer.Option(
-            "--feature-cache",
-            help="Directory containing cached features",
-        ),
-    ] = None,
-    video_ids: Annotated[
-        list[str] | None,
-        typer.Option(
-            "--video",
-            "-v",
-            help="Specific video IDs to evaluate",
-        ),
-    ] = None,
-    min_video_f1: Annotated[
-        float | None,
-        typer.Option(
-            "--min-video-f1",
-            help="Minimum F1 required for each video (rejects configs where any video drops below)",
-        ),
-    ] = None,
-) -> None:
-    """
-    Grid search for optimal decoder parameters.
-
-    Searches over decoder parameters (t_on, t_off, patience, etc.) to find
-    the configuration that maximizes F1 score with minimal overmerge.
-
-    Use --min-video-f1 to ensure no video drops below a threshold (prevents regressions).
-
-    Requires cached binary head probabilities (run train extract-features first).
-
-    Examples:
-
-        rallycut evaluate tune-decoder --iou 0.4 --top 20
-
-        rallycut evaluate tune-decoder --min-video-f1 0.70  # No video below 70%
-
-        rallycut evaluate tune-decoder --output results.json
-    """
-    import numpy as np
-    import torch
-
-    from rallycut.core.config import get_config
-    from rallycut.temporal.deterministic_decoder import (
-        DEFAULT_PARAM_GRID,
-        DecoderConfig,
-        GridSearchResult,
-        compute_segment_metrics,
-        decode,
-        grid_search,
-    )
-    from rallycut.temporal.features import FeatureCache
-    from rallycut.temporal.inference import load_binary_head_model
-
-    console.print()
-    console.print("[bold]Decoder Parameter Grid Search[/bold]")
-    console.print(f"IoU threshold: {iou_threshold}")
-    console.print(f"Stride: {stride}")
-    if min_video_f1 is not None:
-        console.print(f"Min video F1 constraint: [yellow]{min_video_f1:.0%}[/yellow]")
-
-    # Load binary head model
-    config = get_config()
-    model_path = config.weights_dir / "binary_head" / "best_binary_head.pt"
-    if not model_path.exists():
-        console.print(f"[red]Binary head model not found: {model_path}[/red]")
-        console.print("Run 'uv run rallycut train binary-head' to train the model.")
-        raise typer.Exit(1)
-
-    console.print(f"Binary head model: [dim]{model_path}[/dim]")
-    model = load_binary_head_model(model_path, device="cpu")
-
-    # Load feature cache
-    cache_dir = feature_cache_dir or Path("training_data/features")
-    if not cache_dir.exists():
-        console.print(f"[red]Feature cache directory not found: {cache_dir}[/red]")
-        console.print("Run 'uv run rallycut train extract-features --stride 48' first.")
-        raise typer.Exit(1)
-
-    feature_cache = FeatureCache(cache_dir=cache_dir)
-    console.print(f"Feature cache: [dim]{cache_dir}[/dim]")
-
-    # Load ground truth from database
-    console.print()
-    console.print("Loading ground truth from database...")
-    videos = load_evaluation_videos(video_ids)
-
-    if not videos:
-        console.print("[red]No videos with ground truth found![/red]")
-        raise typer.Exit(1)
-
-    console.print(f"Found {len(videos)} videos with ground truth")
-
-    # Load features and compute probabilities for each video
-    video_probs: list[np.ndarray] = []
-    video_ground_truths: list[list[tuple[float, float]]] = []
-    video_fps: list[float] = []
-    video_names: list[str] = []
-    valid_videos: list[EvaluationVideo] = []
-
-    console.print()
-    console.print("Loading cached features and computing probabilities...")
-
-    for video in videos:
-        cached_data = feature_cache.get(video.content_hash, stride)
-        if cached_data is None:
-            console.print(f"  [yellow]Skipping {video.filename}: no cached features[/yellow]")
-            continue
-
-        features, metadata = cached_data
-
-        # Run binary head to get probabilities
-        features_t = torch.from_numpy(features).float()
-        with torch.no_grad():
-            logits = model(features_t)
-            probs = torch.sigmoid(logits).cpu().numpy()
-
-        video_probs.append(probs)
-        video_ground_truths.append(
-            [(r.start_seconds, r.end_seconds) for r in video.ground_truth_rallies]
-        )
-        video_fps.append(metadata.fps)
-        video_names.append(video.filename)
-        valid_videos.append(video)
-        console.print(f"  [green]{video.filename}[/green]: {len(probs)} windows")
-
-    if not video_probs:
-        console.print("[red]No videos with cached features found![/red]")
-        console.print("Run 'uv run rallycut train extract-features --stride 48' first.")
-        raise typer.Exit(1)
-
-    console.print()
-    console.print(f"Loaded features for {len(video_probs)} videos")
-
-    # Calculate total parameter combinations
-    total_combos = 1
-    for values in DEFAULT_PARAM_GRID.values():
-        total_combos *= len(values)
-    # Account for invalid t_off >= t_on combinations
-    t_on_values = DEFAULT_PARAM_GRID["t_on"]
-    t_off_values = DEFAULT_PARAM_GRID["t_off"]
-    valid_pairs = sum(1 for t_on in t_on_values for t_off in t_off_values if t_off < t_on)
-    valid_combos = total_combos // (len(t_on_values) * len(t_off_values)) * valid_pairs
-
-    console.print(f"Parameter grid: ~{valid_combos} valid combinations")
-
-    # Run grid search
-    console.print()
-    console.print("[bold]Running grid search...[/bold]")
-
-    result: GridSearchResult = grid_search(
-        video_probs=video_probs,
-        video_ground_truths=video_ground_truths,
-        video_fps=video_fps,
-        stride=stride,
-        iou_threshold=iou_threshold,
-        param_grid=DEFAULT_PARAM_GRID,
-        min_video_f1=min_video_f1,
-        video_names=video_names,
-    )
-
-    # Show constraint info
-    if min_video_f1 is not None:
-        console.print(
-            f"  Rejected {result.rejected_count} configs "
-            f"(video F1 < {min_video_f1:.0%})"
-        )
-        if not result.all_results:
-            console.print(
-                f"[red]No configurations satisfy min_video_f1={min_video_f1:.0%}![/red]"
-            )
-            console.print("Try lowering --min-video-f1 threshold.")
-            raise typer.Exit(1)
-
-    # Print top configurations
-    console.print()
-    console.print(f"[bold]Top {top_n} Configurations:[/bold]")
-
-    table = Table()
-    table.add_column("Rank", justify="right", style="dim")
-    table.add_column("Score", style="bold cyan", justify="right")
-    table.add_column("F1", style="bold green", justify="right")
-    table.add_column("MinF1", style="yellow", justify="right")
-    table.add_column("Prec", justify="right")
-    table.add_column("Recall", justify="right")
-    table.add_column("t_on", justify="right")
-    table.add_column("t_off", justify="right")
-    table.add_column("pat", justify="right")
-    table.add_column("sm", justify="right")
-    table.add_column("min", justify="right")
-    table.add_column("gap", justify="right")
-
-    for i, r in enumerate(result.all_results[:top_n], 1):
-        p = r["params"]
-        table.add_row(
-            str(i),
-            f"{r['score']:.1%}",
-            f"{r['f1']:.1%}",
-            f"{r['min_video_f1']:.0%}",
-            f"{r['precision']:.1%}",
-            f"{r['recall']:.1%}",
-            f"{p['t_on']:.2f}",
-            f"{p['t_off']:.2f}",
-            str(p["patience"]),
-            str(p["smooth_window"]),
-            str(p["min_segment_windows"]),
-            str(p["max_gap_windows"]),
-        )
-
-    console.print(table)
-
-    # Per-video breakdown for best configuration (use cached per_video data)
-    console.print()
-    console.print("[bold]Per-Video Results (Best Configuration):[/bold]")
-
-    best_result = result.all_results[0]
-    best_params = best_result["params"]
-    per_video_data = best_result.get("per_video", [])
-
-    per_video_table = Table()
-    per_video_table.add_column("Video", style="cyan")
-    per_video_table.add_column("GT", justify="right", style="dim")
-    per_video_table.add_column("Det", justify="right", style="dim")
-    per_video_table.add_column("Prec", justify="right")
-    per_video_table.add_column("Recall", justify="right")
-    per_video_table.add_column("F1", style="bold green", justify="right")
-
-    for pv in per_video_data:
-        # Truncate filename for display
-        filename = pv["name"][:35] + "..." if len(pv["name"]) > 38 else pv["name"]
-        # Highlight videos below threshold
-        f1_style = "bold green"
-        if min_video_f1 is not None and pv["f1"] < min_video_f1:
-            f1_style = "bold red"
-        elif pv["f1"] < 0.70:
-            f1_style = "yellow"
-
-        per_video_table.add_row(
-            filename,
-            str(pv["gt_count"]),
-            str(pv["pred_count"]),
-            f"{pv['precision']:.0%}",
-            f"{pv['recall']:.0%}",
-            f"[{f1_style}]{pv['f1']:.0%}[/{f1_style}]",
-        )
-
-    console.print(per_video_table)
-
-    # Current defaults comparison
-    console.print()
-    console.print("[bold]Comparison with Current Defaults:[/bold]")
-
-    # Evaluate current defaults
-    current_config = DecoderConfig(stride=stride)
-    total_tp_current = 0
-    total_fp_current = 0
-    total_fn_current = 0
-    current_per_video_f1: list[float] = []
-
-    for probs, gt, fps in zip(video_probs, video_ground_truths, video_fps):
-        current_config.fps = fps
-        decoder_result = decode(probs, current_config)
-        metrics = compute_segment_metrics(gt, decoder_result.segments, iou_threshold)
-        total_tp_current += int(metrics["tp"])
-        total_fp_current += int(metrics["fp"])
-        total_fn_current += int(metrics["fn"])
-        current_per_video_f1.append(float(metrics["f1"]))
-
-    precision_current = total_tp_current / (total_tp_current + total_fp_current) if (total_tp_current + total_fp_current) > 0 else 0
-    recall_current = total_tp_current / (total_tp_current + total_fn_current) if (total_tp_current + total_fn_current) > 0 else 0
-    f1_current = 2 * precision_current * recall_current / (precision_current + recall_current) if (precision_current + recall_current) > 0 else 0
-    min_f1_current = min(current_per_video_f1) if current_per_video_f1 else 0
-
-    console.print(f"  Current defaults: F1={f1_current:.1%} (P={precision_current:.1%}, R={recall_current:.1%}, MinF1={min_f1_current:.0%})")
-    console.print(f"  Best found:       F1={result.best_f1:.1%} (P={result.best_precision:.1%}, R={result.best_recall:.1%}, MinF1={best_result['min_video_f1']:.0%})")
-
-    improvement = result.best_f1 - f1_current
-    if improvement > 0:
-        console.print(f"  [green]Improvement: +{improvement:.1%}[/green]")
-    elif improvement < 0:
-        console.print(f"  [yellow]Regression: {improvement:.1%}[/yellow]")
-    else:
-        console.print("  No change")
-
-    # Save full results
-    export_data = {
-        "iou_threshold": iou_threshold,
-        "stride": stride,
-        "num_videos": len(valid_videos),
-        "min_video_f1_constraint": min_video_f1,
-        "rejected_count": result.rejected_count,
-        "current_defaults": {
-            "f1": f1_current,
-            "precision": precision_current,
-            "recall": recall_current,
-            "min_video_f1": min_f1_current,
-            "params": {
-                "smooth_window": current_config.smooth_window,
-                "t_on": current_config.t_on,
-                "t_off": current_config.t_off,
-                "patience": current_config.patience,
-                "min_segment_windows": current_config.min_segment_windows,
-                "max_gap_windows": current_config.max_gap_windows,
-            },
-        },
-        "best_config": {
-            "f1": result.best_f1,
-            "precision": result.best_precision,
-            "recall": result.best_recall,
-            "overmerge_rate": result.best_overmerge_rate,
-            "min_video_f1": best_result["min_video_f1"],
-            "params": best_params,
-            "per_video": per_video_data,
-        },
-        "all_results": result.all_results[:100],  # Top 100 for analysis
-    }
-    output.write_text(json.dumps(export_data, indent=2))
-    console.print()
-    console.print(f"Full results saved to: [cyan]{output}[/cyan]")
-
-    # Print best configuration for copy-paste
-    console.print()
-    console.print("[bold]Best configuration (for DecoderConfig defaults):[/bold]")
-    console.print(f"  smooth_window = {best_params['smooth_window']}")
-    console.print(f"  t_on = {best_params['t_on']}")
-    console.print(f"  t_off = {best_params['t_off']}")
-    console.print(f"  patience = {best_params['patience']}")
-    console.print(f"  min_segment_windows = {best_params['min_segment_windows']}")
-    console.print(f"  max_gap_windows = {best_params['max_gap_windows']}")

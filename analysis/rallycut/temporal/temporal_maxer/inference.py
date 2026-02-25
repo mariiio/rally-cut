@@ -85,6 +85,8 @@ class TemporalMaxerInference:
         if len(features) == 0:
             return TemporalMaxerResult()
 
+        assert features.shape[1] == 768, f"Expected 768-dim features, got {features.shape[1]}"
+
         # Run forward pass
         features_t = torch.from_numpy(features).float().T.unsqueeze(0).to(self.device)
         # features_t shape: (1, feature_dim, T)

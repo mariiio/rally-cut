@@ -4,8 +4,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 from rallycut.core.config import get_config
 from rallycut.core.models import GameState, GameStateResult
 from rallycut.core.video import Video
@@ -20,7 +18,6 @@ class GameStateAnalyzer:
         model_path: Path | None = None,
         enable_temporal_smoothing: bool | None = None,
         temporal_smoothing_window: int | None = None,
-        temporal_model_path: Path | None = None,
     ):
         config = get_config()
         self.device = device or config.device
@@ -35,9 +32,7 @@ class GameStateAnalyzer:
             if temporal_smoothing_window is not None
             else config.game_state.temporal_smoothing_window
         )
-        self.temporal_model_path = temporal_model_path
         self._classifier: Any = None
-        self._temporal_model: Any = None
 
     def _get_classifier(self) -> Any:
         """Lazy load the classifier."""
@@ -49,27 +44,6 @@ class GameStateAnalyzer:
                 device=self.device,
             )
         return self._classifier
-
-    def _get_temporal_model(self) -> Any:
-        """Lazy load the temporal model.
-
-        Auto-detects model version (v1/v2/v3) from checkpoint metadata.
-        Falls back to v1 for legacy models without version metadata.
-        """
-        if self._temporal_model is None:
-            if self.temporal_model_path is None:
-                raise ValueError("temporal_model_path not set")
-
-            from rallycut.temporal.inference import load_temporal_model
-
-            # load_temporal_model auto-detects version from checkpoint metadata
-            self._temporal_model = load_temporal_model(
-                self.temporal_model_path,
-                model_version=None,  # Auto-detect
-                device=self.device,
-            )
-
-        return self._temporal_model
 
     def analyze_video(
         self,
@@ -271,183 +245,6 @@ class GameStateAnalyzer:
         if return_raw:
             # raw_results is guaranteed non-None when return_raw=True (set on line 235)
             return results, raw_results  # type: ignore[return-value]
-        return results
-
-    def analyze_video_temporal(
-        self,
-        video: Video,
-        stride: int | None = None,
-        progress_callback: Callable[[float, str], None] | None = None,
-        limit_seconds: float | None = None,
-        batch_size: int | None = None,
-    ) -> list[GameStateResult]:
-        """
-        Analyze video using the learned temporal model.
-
-        This method extracts VideoMAE encoder features and runs the temporal
-        model to predict PLAY/NO_PLAY states with temporal consistency.
-
-        Args:
-            video: Video to analyze
-            stride: Number of frames between classification windows
-            progress_callback: Callback for progress updates
-            limit_seconds: Only analyze first N seconds (for testing)
-            batch_size: Number of windows to process in each batch
-
-        Returns:
-            List of GameStateResult for each analyzed window
-        """
-        import torch
-
-        config = get_config()
-        stride = stride or config.game_state.stride
-        batch_size = batch_size or config.game_state.batch_size
-        window_size = config.game_state.window_size
-        target_size = config.game_state.analysis_size
-
-        classifier = self._get_classifier()
-        temporal_model = self._get_temporal_model()
-
-        total_frames = video.info.frame_count
-        fps = video.info.fps
-
-        # FPS normalization (same as analyze_video)
-        target_fps = float(config.proxy.fps)
-        fps_threshold = config.proxy.fps_normalize_threshold
-        if fps > fps_threshold:
-            frame_step = round(fps / target_fps)
-        else:
-            frame_step = 1
-
-        if limit_seconds is not None:
-            max_frames = min(total_frames, int(limit_seconds * fps))
-        else:
-            max_frames = total_frames
-
-        effective_stride = stride // frame_step if frame_step > 1 else stride
-        effective_stride = max(1, effective_stride)
-        effective_max_frames = max_frames // frame_step
-        total_windows = max(0, (effective_max_frames - window_size) // effective_stride + 1)
-
-        if total_windows == 0:
-            return []
-
-        if progress_callback:
-            progress_callback(0.0, "Extracting features...")
-
-        # Collect all features and frame indices
-        all_features: list[np.ndarray] = []
-        frame_indices: list[tuple[int, int]] = []  # (start_frame, end_frame)
-
-        needs_resize = None
-        frame_buffer: list[np.ndarray] = []
-        buffer_start_idx = 0
-        next_window_start = 0
-        subsampled_idx = 0
-        batch_frames: list[list[np.ndarray]] = []
-        batch_starts: list[int] = []
-
-        for frame_idx, frame in video.iter_frames(end_frame=max_frames, step=frame_step):
-            if needs_resize is None and target_size:
-                h, w = frame.shape[:2]
-                needs_resize = w != target_size[0] or h != target_size[1]
-            elif needs_resize is None:
-                needs_resize = False
-
-            if needs_resize:
-                import cv2
-
-                frame = cv2.resize(frame, target_size, interpolation=cv2.INTER_AREA)
-
-            frame_buffer.append(frame)
-
-            # Collect windows into batches
-            while (
-                len(frame_buffer) >= window_size
-                and next_window_start <= subsampled_idx - window_size + 1
-            ):
-                buffer_offset = next_window_start - buffer_start_idx
-                if buffer_offset >= 0 and buffer_offset + window_size <= len(frame_buffer):
-                    window_frames = frame_buffer[buffer_offset : buffer_offset + window_size]
-                    batch_frames.append(window_frames)
-                    batch_starts.append(next_window_start)
-                    next_window_start += effective_stride
-
-                    # Process batch when full
-                    if len(batch_frames) >= batch_size:
-                        features = classifier.get_encoder_features_batch(batch_frames)
-                        all_features.extend(features)
-                        for start in batch_starts:
-                            source_start = start * frame_step
-                            source_end = source_start + (window_size - 1) * frame_step
-                            frame_indices.append((source_start, source_end))
-                        batch_frames = []
-                        batch_starts = []
-
-                        if progress_callback:
-                            progress = len(all_features) / total_windows
-                            progress_callback(progress * 0.8, "Extracting features...")
-                else:
-                    break
-
-            # Trim buffer
-            min_needed = next_window_start
-            frames_to_drop = min_needed - buffer_start_idx
-            if frames_to_drop > 0:
-                frame_buffer = frame_buffer[frames_to_drop:]
-                buffer_start_idx = min_needed
-
-            subsampled_idx += 1
-
-        # Process remaining batch
-        if batch_frames:
-            features = classifier.get_encoder_features_batch(batch_frames)
-            all_features.extend(features)
-            for start in batch_starts:
-                source_start = start * frame_step
-                source_end = source_start + (window_size - 1) * frame_step
-                frame_indices.append((source_start, source_end))
-
-        if not all_features:
-            return []
-
-        if progress_callback:
-            progress_callback(0.85, "Running temporal model...")
-
-        # Run temporal model on all features
-        features_array = np.stack(all_features, axis=0)  # (num_windows, 768)
-        features_tensor = torch.from_numpy(features_array).float().unsqueeze(0)  # (1, seq, 768)
-        features_tensor = features_tensor.to(self.device)
-
-        with torch.no_grad():
-            output = temporal_model(features_tensor)
-            predictions = output["predictions"].squeeze(0).cpu().numpy()  # (seq,)
-            probs = output["probs"].squeeze(0).cpu().numpy()  # (seq,)
-
-        if progress_callback:
-            progress_callback(0.95, "Building results...")
-
-        # Convert to GameStateResult
-        results: list[GameStateResult] = []
-        for i, (start_frame, end_frame) in enumerate(frame_indices):
-            is_rally = predictions[i] == 1
-            prob = float(probs[i])
-
-            results.append(
-                GameStateResult(
-                    state=GameState.PLAY if is_rally else GameState.NO_PLAY,
-                    confidence=prob if is_rally else 1 - prob,
-                    start_frame=start_frame,
-                    end_frame=end_frame,
-                    play_confidence=prob,
-                    service_confidence=0.0,  # Temporal model doesn't distinguish service
-                    no_play_confidence=1 - prob,
-                )
-            )
-
-        if progress_callback:
-            progress_callback(1.0, "Analysis complete!")
-
         return results
 
     def smooth_results(
