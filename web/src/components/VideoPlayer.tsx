@@ -15,6 +15,7 @@ import { BallTrackOverlay } from './BallTrackOverlay';
 import { RotationGridOverlay } from './RotationGridOverlay';
 import { CropMaskOverlay } from './CropMaskOverlay';
 import { CourtCalibrationPanel } from './CourtCalibrationPanel';
+import { CourtDebugOverlay } from './CourtDebugOverlay';
 import { PlayerOverlay } from './PlayerOverlay';
 import { ActionOverlay } from './ActionOverlay';
 import { ActionLabelingMode } from './ActionLabelingMode';
@@ -124,6 +125,8 @@ export function VideoPlayer() {
   const showPlayerOverlay = usePlayerTrackingStore((state) => state.showPlayerOverlay);
   const showBallOverlay = usePlayerTrackingStore((state) => state.showBallOverlay);
   const playerTracks = usePlayerTrackingStore((state) => state.playerTracks);
+  const showCourtDebugOverlay = usePlayerTrackingStore((state) => state.showCourtDebugOverlay);
+  const calibrations = usePlayerTrackingStore((state) => state.calibrations);
   const isLabelingActions = usePlayerTrackingStore((state) => state.isLabelingActions);
   const actionGroundTruth = usePlayerTrackingStore((state) => state.actionGroundTruth);
   const updateActionLabel = usePlayerTrackingStore((state) => state.updateActionLabel);
@@ -862,6 +865,17 @@ export function VideoPlayer() {
               containerRef={videoContainerRef}
             />
           )}
+          {/* Court debug overlay */}
+          {showCourtDebugOverlay && currentRally && currentRally._backendId && playerTracks[currentRally._backendId]?.tracksJson && (
+            <CourtDebugOverlay
+              corners={activeMatchId ? calibrations[activeMatchId]?.corners : undefined}
+              courtSplitY={playerTracks[currentRally._backendId]!.tracksJson!.courtSplitY}
+              ballPositions={playerTracks[currentRally._backendId]!.tracksJson!.ballPositions}
+              fps={playerTracks[currentRally._backendId]!.tracksJson!.fps ?? activeMatch?.video?.fps ?? 30}
+              rallyStartTime={currentRally.start_time}
+              videoRef={videoRef}
+            />
+          )}
           {/* Player tracking overlay */}
           {showPlayerOverlay && currentRally && currentRally._backendId && playerTracks[currentRally._backendId]?.tracksJson && (
             <PlayerOverlay
@@ -870,6 +884,7 @@ export function VideoPlayer() {
               videoRef={videoRef}
               containerRef={videoContainerRef}
               fps={activeMatch?.video?.fps ?? 30}
+              teamAssignments={showCourtDebugOverlay ? playerTracks[currentRally._backendId]!.tracksJson!.actions?.teamAssignments : undefined}
             />
           )}
           {/* Ball track overlay */}

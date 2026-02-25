@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Box, Button, IconButton, CircularProgress, Tooltip, Typography, Chip, Divider, Dialog, DialogTitle, DialogContent, DialogActions, TextField, FormControl, InputLabel, Select, MenuItem, FormControlLabel, Checkbox } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import CropFreeIcon from '@mui/icons-material/CropFree';
+import GridOnIcon from '@mui/icons-material/GridOn';
 import PersonSearchIcon from '@mui/icons-material/PersonSearch';
 import PlaylistPlayIcon from '@mui/icons-material/PlaylistPlay';
 import VisibilityIcon from '@mui/icons-material/Visibility';
@@ -69,6 +70,8 @@ export function PlayerTrackingToolbar() {
     togglePlayerOverlay,
     showBallOverlay,
     toggleBallOverlay,
+    showCourtDebugOverlay,
+    toggleCourtDebugOverlay,
     swapTracks,
     isLabelingActions,
     setIsLabelingActions,
@@ -394,6 +397,18 @@ export function PlayerTrackingToolbar() {
                 </IconButton>
               </Tooltip>
             )}
+            <Tooltip title={showCourtDebugOverlay ? 'Hide court debug' : 'Show court debug'}>
+              <IconButton
+                size="small"
+                onClick={toggleCourtDebugOverlay}
+                sx={{
+                  color: showCourtDebugOverlay ? '#00BCD4' : 'action.active',
+                  '&:hover': { color: showCourtDebugOverlay ? '#00ACC1' : undefined },
+                }}
+              >
+                <GridOnIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
           </>
         )}
 

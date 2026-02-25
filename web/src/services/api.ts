@@ -1818,6 +1818,7 @@ export interface ActionInfo {
   playerTrackId: number;
   courtSide: string;
   confidence: number;
+  team?: string;  // "A" or "B"
 }
 
 export interface ActionsData {
@@ -1825,6 +1826,8 @@ export interface ActionsData {
   numContacts: number;
   actionSequence: string[];
   actions: ActionInfo[];
+  teamAssignments?: Record<string, string>;  // trackId → "A"|"B"
+  servingTeam?: string;
 }
 
 export interface QualityReport {

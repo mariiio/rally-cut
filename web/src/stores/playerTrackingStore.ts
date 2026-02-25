@@ -29,6 +29,8 @@ export interface TracksJson {
   contacts?: ContactsData;
   actions?: ActionsData;
   qualityReport?: QualityReport;
+  // Court split Y for team zone visualization
+  courtSplitY?: number;
 }
 
 export interface PlayerTrack {
@@ -63,6 +65,7 @@ interface PlayerTrackingState {
   // Overlay visibility
   showPlayerOverlay: boolean;
   showBallOverlay: boolean;
+  showCourtDebugOverlay: boolean;
 
   // Selected track for highlighting
   selectedTrackId: number | null;
@@ -84,6 +87,7 @@ interface PlayerTrackingState {
   // Actions
   togglePlayerOverlay: () => void;
   toggleBallOverlay: () => void;
+  toggleCourtDebugOverlay: () => void;
   setSelectedTrack: (trackId: number | null) => void;
   setIsCalibrating: (value: boolean) => void;
   saveCalibration: (videoId: string, corners: Corner[]) => void;
@@ -185,6 +189,7 @@ function apiResponseToPlayerTrack(
       contacts: response.contacts,
       actions: response.actions,
       qualityReport: response.qualityReport,
+      courtSplitY: response.courtSplitY,
     },
     playerCount: response.uniqueTrackCount || 0,
     progress: 100,
@@ -201,6 +206,7 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
       trackingErrors: {},
       showPlayerOverlay: false,
       showBallOverlay: false,
+      showCourtDebugOverlay: false,
       selectedTrackId: null,
       isCalibrating: false,
       calibrations: {},
@@ -217,6 +223,10 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
 
       toggleBallOverlay: () => {
         set((state) => ({ showBallOverlay: !state.showBallOverlay }));
+      },
+
+      toggleCourtDebugOverlay: () => {
+        set((state) => ({ showCourtDebugOverlay: !state.showCourtDebugOverlay }));
       },
 
       setSelectedTrack: (trackId: number | null) => {
