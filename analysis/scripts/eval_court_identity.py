@@ -55,7 +55,10 @@ def _compute_team_assignments(
     )
     if split_result is None:
         return {}
-    return classify_teams(positions, split_result[0])
+    split_y, _confidence, precomputed_teams = split_result
+    return classify_teams(
+        positions, split_y, precomputed_assignments=precomputed_teams
+    )
 
 
 def _apply_court_identity(

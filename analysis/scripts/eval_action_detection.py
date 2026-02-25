@@ -374,6 +374,9 @@ def main() -> None:
                     for pp in rally.positions_json
                 ]
 
+            # team_assignments not passed here — DB doesn't store them,
+            # and recomputing would change action classification baseline.
+            # Contact detection uses net_y alone for court side fallback.
             contacts = detect_contacts(
                 ball_positions=ball_positions,
                 player_positions=player_positions,

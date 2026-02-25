@@ -153,8 +153,11 @@ def analyze_rally(
             [], PlayerFilterConfig(), player_positions=predictions.positions
         )
         if split_result is not None:
-            split_y = split_result[0]
-            team_assignments = classify_teams(predictions.positions, split_y)
+            split_y, _confidence, precomputed_teams = split_result
+            team_assignments = classify_teams(
+                predictions.positions, split_y,
+                precomputed_assignments=precomputed_teams,
+            )
             court_tracks = resolver._build_court_tracks(predictions.positions)
             effective_net_y = resolver._estimate_effective_net_y(
                 court_tracks, team_assignments
