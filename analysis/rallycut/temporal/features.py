@@ -50,23 +50,17 @@ def _get_cache_dir() -> Path:
     return cache_dir
 
 
-def _compute_cache_key(content_hash: str, stride: int, model_variant: str = "v1") -> str:
+def _compute_cache_key(content_hash: str, stride: int) -> str:
     """Compute a unique cache key for video features.
 
     Args:
         content_hash: Video content hash (SHA-256).
         stride: Frame stride used for extraction.
-        model_variant: VideoMAE model variant (v1, v2, custom).
 
     Returns:
         Cache key string.
     """
-    # Include model variant in cache key to avoid mixing v1/v2 features.
-    # "v1" is the default and uses the original key format for backward compat.
-    if model_variant == "v1":
-        key_data = f"{content_hash}:stride={stride}"
-    else:
-        key_data = f"{content_hash}:stride={stride}:model={model_variant}"
+    key_data = f"{content_hash}:stride={stride}"
     return hashlib.sha256(key_data.encode()).hexdigest()[:16]
 
 
@@ -87,20 +81,18 @@ class FeatureCache:
             cache.put(video_hash, stride=8, features, metadata)
     """
 
-    def __init__(self, cache_dir: Path | None = None, model_variant: str = "v1") -> None:
+    def __init__(self, cache_dir: Path | None = None) -> None:
         """Initialize feature cache.
 
         Args:
             cache_dir: Custom cache directory. If None, uses default.
-            model_variant: VideoMAE model variant for cache key separation.
         """
         self.cache_dir = cache_dir or _get_cache_dir()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.model_variant = model_variant
 
     def _get_paths(self, content_hash: str, stride: int) -> tuple[Path, Path]:
         """Get paths for feature array and metadata files."""
-        cache_key = _compute_cache_key(content_hash, stride, self.model_variant)
+        cache_key = _compute_cache_key(content_hash, stride)
         feature_path = self.cache_dir / f"{cache_key}.npy"
         metadata_path = self.cache_dir / f"{cache_key}.json"
         return feature_path, metadata_path

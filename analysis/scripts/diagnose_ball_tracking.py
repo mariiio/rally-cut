@@ -15,6 +15,7 @@ from rallycut.evaluation.tracking.ball_metrics import (
 )
 from rallycut.evaluation.tracking.db import load_labeled_rallies
 from rallycut.tracking.ball_filter import BallFilterConfig, BallTemporalFilter
+from rallycut.tracking.ball_filter_legacy import prune_oscillating, remove_trajectory_blips
 from rallycut.tracking.ball_tracker import BallPosition
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -83,7 +84,7 @@ def run_pipeline_stages(
 
     # Stage 4: Oscillation pruning
     if config.enable_oscillation_pruning:
-        after_osc = filt._prune_oscillating(after_ghost)
+        after_osc = prune_oscillating(after_ghost, config)
     else:
         after_osc = list(after_ghost)
     stages["3_oscillation_pruned"] = after_osc
@@ -97,7 +98,7 @@ def run_pipeline_stages(
 
     # Stage 6: Blip removal
     if config.enable_blip_removal:
-        after_blip = filt._remove_trajectory_blips(after_outlier)
+        after_blip = remove_trajectory_blips(after_outlier, config)
     else:
         after_blip = list(after_outlier)
     stages["5_blip_removed"] = after_blip
@@ -108,7 +109,7 @@ def run_pipeline_stages(
     if outlier_count > 0 or blip_count > 0:
         after_reprune = list(after_blip)
         if config.enable_oscillation_pruning:
-            after_reprune = filt._prune_oscillating(after_reprune)
+            after_reprune = prune_oscillating(after_reprune, config)
         if config.enable_segment_pruning:
             after_reprune = filt._prune_segments(after_reprune)
     else:

@@ -1837,7 +1837,6 @@ export interface QualityReport {
   avgTrackLifespanFrames: number;
   idSwitchCount: number;
   colorSplitCount: number;
-  swapFixCount: number;
   appearanceLinkCount: number;
   uniqueRawTrackCount: number;
   calibrationRecommended: boolean;

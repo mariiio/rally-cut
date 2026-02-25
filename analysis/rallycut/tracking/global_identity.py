@@ -1,7 +1,7 @@
 """Global identity optimization for player tracking.
 
-After local post-processing (jump split, color split, court identity, swap detect,
-tracklet link, stabilize), identity confusion can cascade across net interactions.
+After local post-processing (jump split, color split, tracklet link, stabilize),
+identity confusion can cascade across net interactions.
 This module adds a global pass that:
 
 1. Splits tracks at interaction boundaries into segments
