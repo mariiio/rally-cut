@@ -480,12 +480,12 @@ Maintains consistent player IDs (1-4) across a match using appearance-based matc
 
 **How it works:**
 1. For each rally, sample ~12 video frames per primary track
-2. Extract appearance features (skin tone HSV, jersey color, body proportions)
+2. Extract appearance features: HS histograms for upper body (t-shirt) and lower body (shorts), skin tone HSV, body height
 3. Use Hungarian algorithm (`scipy.optimize.linear_sum_assignment`) to match tracks to accumulated player profiles
 4. Detect side switches when swapped assignment cost < 70% of normal cost (requires 3+ rallies)
 5. Update profiles with new appearance data after assignment
 
-**Cost function:** 50% skin tone + 30% height + 20% jersey color (lower = better match).
+**Cost function:** 35% lower body histogram + 25% upper body histogram + 25% height + 15% skin tone (lower = better match). Histograms use Bhattacharyya distance; missing features are skipped and weights renormalized.
 
 **Key files:** `tracking/player_features.py` (feature extraction, similarity), `tracking/match_tracker.py` (orchestration, Hungarian assignment, side switch detection), `evaluation/tracking/db.py` (`load_rallies_for_video`), `cli/commands/match_players.py` (CLI).
 
