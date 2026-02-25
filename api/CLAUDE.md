@@ -156,7 +156,7 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
 ### Player Tracking
 - `POST /v1/rallies/:id/track-players` → triggers local YOLO + ByteTrack tracking
   - Body: `{ calibrationCorners?: [{x,y}]x4 }` - optional court calibration
-  - If not provided, auto-loads from `video.courtCalibrationJson` in database
+  - Calibration used only when explicitly passed or auto-detected by CLI (confidence > 0.4)
   - Returns player positions, ball trajectory, contacts, actions, and quality report
 - `GET /v1/rallies/:id/player-track` → retrieves existing tracking data
 - `POST /v1/rallies/:id/player-track/swap` → swap two track IDs from a frame onward
