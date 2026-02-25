@@ -1257,3 +1257,204 @@ class TestRepairWrongSideServe:
         assert len(repaired) == 2
         assert repaired[0].action_type == ActionType.SERVE
         assert repaired[0].is_synthetic is True
+
+
+# --- Helpers for compact action construction ---
+
+def _ca(
+    action_type: ActionType,
+    frame: int,
+    court_side: str = "near",
+    confidence: float = 0.8,
+    is_synthetic: bool = False,
+) -> ClassifiedAction:
+    """Compact helper for creating ClassifiedAction in repair tests."""
+    return ClassifiedAction(
+        action_type=action_type,
+        frame=frame,
+        ball_x=0.5,
+        ball_y=0.6 if court_side == "near" else 0.4,
+        velocity=0.02,
+        player_track_id=1,
+        court_side=court_side,
+        confidence=confidence,
+        is_synthetic=is_synthetic,
+    )
+
+
+class TestRepairDuplicateServe:
+    """Tests for repair rule 3: duplicate serves."""
+
+    def test_two_real_serves_second_becomes_dig(self) -> None:
+        """Second non-synthetic serve → dig."""
+        actions = [
+            _ca(ActionType.SERVE, 10, "near"),
+            _ca(ActionType.RECEIVE, 30, "far"),
+            _ca(ActionType.SERVE, 60, "far"),  # duplicate
+        ]
+        repaired = repair_action_sequence(actions, net_y=0.5)
+
+        assert repaired[0].action_type == ActionType.SERVE
+        assert repaired[2].action_type == ActionType.DIG
+        assert repaired[2].confidence <= 0.6
+
+    def test_synthetic_serve_not_touched(self) -> None:
+        """Synthetic duplicate serve is NOT repaired (only real dupes)."""
+        actions = [
+            _ca(ActionType.SERVE, 10, "near", is_synthetic=True),
+            _ca(ActionType.SERVE, 20, "near"),  # real serve
+            _ca(ActionType.RECEIVE, 40, "far"),
+        ]
+        repaired = repair_action_sequence(actions, net_y=0.5)
+
+        # First serve is synthetic (kept), second is the real one (kept)
+        assert repaired[0].action_type == ActionType.SERVE
+        assert repaired[0].is_synthetic is True
+        assert repaired[1].action_type == ActionType.SERVE
+        assert repaired[1].is_synthetic is False
+
+    def test_three_serves_all_extras_repaired(self) -> None:
+        """Three duplicate serves → all extras become dig."""
+        actions = [
+            _ca(ActionType.SERVE, 10, "near"),
+            _ca(ActionType.SERVE, 30, "far"),   # dup 1
+            _ca(ActionType.SERVE, 50, "near"),  # dup 2
+            _ca(ActionType.DIG, 90, "far"),
+        ]
+        repaired = repair_action_sequence(actions, net_y=0.5)
+
+        assert repaired[0].action_type == ActionType.SERVE  # original
+        assert repaired[1].action_type == ActionType.DIG    # repaired
+        assert repaired[2].action_type == ActionType.DIG    # repaired
+
+
+class TestRepairDuplicateReceive:
+    """Tests for repair rule 4: duplicate receives."""
+
+    def test_two_receives_same_side_second_becomes_set(self) -> None:
+        actions = [
+            _ca(ActionType.SERVE, 10, "near"),
+            _ca(ActionType.RECEIVE, 30, "far"),
+            _ca(ActionType.RECEIVE, 50, "far"),  # duplicate same side
+            _ca(ActionType.ATTACK, 70, "far"),
+        ]
+        repaired = repair_action_sequence(actions, net_y=0.5)
+
+        assert repaired[2].action_type == ActionType.SET
+
+    def test_two_receives_different_sides_second_becomes_set(self) -> None:
+        """Court_side labels are unreliable, so always use set."""
+        actions = [
+            _ca(ActionType.SERVE, 10, "near"),
+            _ca(ActionType.RECEIVE, 30, "far"),
+            _ca(ActionType.RECEIVE, 50, "near"),  # duplicate different side
+        ]
+        repaired = repair_action_sequence(actions, net_y=0.5)
+
+        assert repaired[2].action_type == ActionType.SET
+
+    def test_unknown_side_still_repaired(self) -> None:
+        """Unknown court_side doesn't block repair (no side check needed)."""
+        actions = [
+            _ca(ActionType.SERVE, 10, "near"),
+            _ca(ActionType.RECEIVE, 30, "unknown"),
+            _ca(ActionType.RECEIVE, 50, "far"),
+        ]
+        repaired = repair_action_sequence(actions, net_y=0.5)
+
+        assert repaired[2].action_type == ActionType.SET
+
+
+class TestRepairSetSet:
+    """Tests for repair rule 5: set → set same side."""
+
+    def test_set_set_same_side_second_becomes_attack(self) -> None:
+        actions = [
+            _ca(ActionType.SERVE, 10, "near"),
+            _ca(ActionType.DIG, 30, "far"),
+            _ca(ActionType.SET, 50, "far"),
+            _ca(ActionType.SET, 70, "far"),  # duplicate set
+        ]
+        repaired = repair_action_sequence(actions, net_y=0.5)
+
+        assert repaired[3].action_type == ActionType.ATTACK
+
+    def test_set_set_different_sides_no_repair(self) -> None:
+        """set on near → set on far is legal (new possession)."""
+        actions = [
+            _ca(ActionType.SERVE, 10, "near"),
+            _ca(ActionType.SET, 30, "near"),
+            _ca(ActionType.SET, 50, "far"),
+        ]
+        repaired = repair_action_sequence(actions, net_y=0.5)
+
+        # Different sides → no same-side rule applies
+        assert repaired[2].action_type == ActionType.SET
+
+
+class TestRepairAttackAttack:
+    """Tests for repair rule 6: attack → attack same side."""
+
+    def test_attack_attack_same_side_first_becomes_set(self) -> None:
+        actions = [
+            _ca(ActionType.SERVE, 10, "near"),
+            _ca(ActionType.DIG, 30, "far"),
+            _ca(ActionType.ATTACK, 50, "far"),
+            _ca(ActionType.ATTACK, 70, "far"),  # duplicate attack
+        ]
+        repaired = repair_action_sequence(actions, net_y=0.5)
+
+        assert repaired[2].action_type == ActionType.SET
+        assert repaired[3].action_type == ActionType.ATTACK  # unchanged
+
+    def test_attack_attack_different_sides_no_repair(self) -> None:
+        """attack on near → attack on far is legal (new possession)."""
+        actions = [
+            _ca(ActionType.SERVE, 10, "near"),
+            _ca(ActionType.ATTACK, 30, "near"),
+            _ca(ActionType.ATTACK, 50, "far"),
+        ]
+        repaired = repair_action_sequence(actions, net_y=0.5)
+
+        # Different sides → no same-side rule applies
+        assert repaired[2].action_type == ActionType.ATTACK
+
+
+class TestCircuitBreaker:
+    """Tests for the circuit breaker: max 3 repairs per rally."""
+
+    def test_breaker_with_mixed_violations(self) -> None:
+        """Mix of violations — only first 3 repaired, rest untouched."""
+        actions = [
+            _ca(ActionType.SERVE, 10, "near"),
+            _ca(ActionType.SERVE, 20, "near"),   # dup serve → dig (R=1)
+            _ca(ActionType.RECEIVE, 30, "far"),
+            _ca(ActionType.RECEIVE, 50, "far"),  # dup receive → set (R=2)
+            _ca(ActionType.SET, 70, "far"),
+            _ca(ActionType.SET, 90, "far"),       # set→set → attack (R=3)
+            _ca(ActionType.SET, 110, "far"),      # would be rule 5 but breaker
+        ]
+        repaired = repair_action_sequence(actions, net_y=0.5)
+
+        assert repaired[1].action_type == ActionType.DIG     # rule 3 (R=1)
+        assert repaired[3].action_type == ActionType.SET      # rule 4 (R=2)
+        assert repaired[4].action_type == ActionType.ATTACK   # rule 5 (R=3)
+        # Breaker hit — remaining violations untouched
+        assert repaired[5].action_type == ActionType.SET      # untouched
+        assert repaired[6].action_type == ActionType.SET      # untouched
+
+    def test_no_repairs_on_clean_sequence(self) -> None:
+        """Clean sequence → 0 repairs, all actions unchanged."""
+        actions = [
+            _ca(ActionType.SERVE, 10, "near"),
+            _ca(ActionType.RECEIVE, 30, "far"),
+            _ca(ActionType.SET, 50, "far"),
+            _ca(ActionType.ATTACK, 70, "far"),
+        ]
+        repaired = repair_action_sequence(actions, net_y=0.5)
+
+        types = [a.action_type for a in repaired]
+        assert types == [
+            ActionType.SERVE, ActionType.RECEIVE,
+            ActionType.SET, ActionType.ATTACK,
+        ]
