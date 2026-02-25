@@ -677,17 +677,65 @@ class BallTemporalFilter:
         # "teleporting" artifacts. For each anchor, compute leave-one-out
         # weighted centroid of all other anchors; if the anchor's centroid is
         # far from the rest, it's tracking a different object.
+        # Exception: anchors whose start/end connects to another anchor's
+        # end/start are trajectory continuations (ball traversing the court)
+        # and must be preserved even if the centroid is far away.
         if len(anchor_indices) >= 3:
             outlier_removed: set[int] = set()
 
-            # Pre-compute centroids for all segments
+            # Pre-compute centroids, endpoints, and spatial spread for
+            # all anchor segments.
             seg_centroids: dict[int, tuple[float, float]] = {}
+            seg_endpoints: dict[int, tuple[float, float, float, float]] = {}
+            seg_spread: dict[int, float] = {}
             for i in anchor_indices:
                 seg = segments[i]
+                confident = [p for p in seg if p.confidence > 0]
+                pts = confident if confident else seg
+                xs = [p.x for p in pts]
+                ys = [p.y for p in pts]
                 seg_centroids[i] = (
-                    float(np.mean([p.x for p in seg])),
-                    float(np.mean([p.y for p in seg])),
+                    float(np.mean(xs)),
+                    float(np.mean(ys)),
                 )
+                seg_endpoints[i] = (
+                    pts[0].x, pts[0].y, pts[-1].x, pts[-1].y,
+                )
+                # Minimum extent across X and Y: a ball traversal arcs
+                # across the court in both dimensions, while pigeons/cars
+                # drift along one axis only. Uses segment_jump_threshold
+                # (0.20 = 20% of screen) — the ball must move ≥20% in
+                # BOTH dimensions to qualify as a court traversal.
+                seg_spread[i] = float(min(
+                    max(xs) - min(xs), max(ys) - min(ys),
+                ))
+
+            def _is_trajectory_continuation(
+                idx: int, active: set[int],
+            ) -> bool:
+                """Check if anchor is a ball trajectory continuation.
+
+                Requires BOTH: (1) endpoint connects to another anchor,
+                AND (2) the segment has significant extent in both X
+                and Y (ball arcs across the court in 2D). A segment
+                drifting along one axis (pigeon, car) or compact in
+                both (player hand) is NOT protected.
+                """
+                if seg_spread[idx] < threshold:
+                    return False
+                threshold_sq = threshold * threshold
+                sx, sy, ex, ey = seg_endpoints[idx]
+                for j in active:
+                    if j == idx:
+                        continue
+                    osx, osy, oex, oey = seg_endpoints[j]
+                    # This anchor's start near other's end (continuation)
+                    if (sx - oex) ** 2 + (sy - oey) ** 2 < threshold_sq:
+                        return True
+                    # This anchor's end near other's start (continuation)
+                    if (ex - osx) ** 2 + (ey - osy) ** 2 < threshold_sq:
+                        return True
+                return False
 
             while True:
                 active = anchor_indices - outlier_removed
@@ -708,6 +756,21 @@ class BallTemporalFilter:
                     mx, my = seg_centroids[i]
                     dist = float(np.sqrt((mx - cx) ** 2 + (my - cy) ** 2))
                     if dist > threshold:
+                        # Skip if this is a real ball traversal: large
+                        # spatial spread AND endpoint connects to another
+                        # anchor. A compact cluster (pigeon, player hand)
+                        # with a coincidental endpoint near another anchor
+                        # is NOT protected.
+                        if _is_trajectory_continuation(i, active):
+                            logger.info(
+                                f"Spatial outlier: keeping trajectory "
+                                f"[{segments[i][0].frame_number}-"
+                                f"{segments[i][-1].frame_number}] "
+                                f"(centroid dist={dist:.3f}, "
+                                f"spread={seg_spread[i]:.3f}, "
+                                f"endpoint within {threshold})"
+                            )
+                            continue
                         candidates.append((i, dist))
 
                 if not candidates:
