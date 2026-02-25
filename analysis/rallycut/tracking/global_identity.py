@@ -184,6 +184,10 @@ def optimize_global_identity(
         profiles[team_id] = team_profiles
 
     # Phase C: Global assignment per team
+    # Snapshot input track IDs for post-optimization revert guard
+    input_tids = [p.track_id for p in positions]
+    input_unique = {tid for tid in input_tids if tid >= 0}
+
     total_remapped = 0
     for team_id in (0, 1):
         team_segs = team_segments[team_id]
@@ -215,17 +219,31 @@ def optimize_global_identity(
         )
         total_remapped += remapped
 
-    # Post-optimization validation: verify no cross-team merges and no
-    # temporal overlaps within a canonical track. The per-team loop
-    # structure guarantees within-team assignment, but validate anyway
-    # as a safety net.
+    # Post-optimization track count guard: revert if we reduced unique tracks.
+    # This catches cases where the optimizer destructively merges distinct
+    # players that should have remained separate.
+    output_unique = {p.track_id for p in positions if p.track_id >= 0}
+    if len(output_unique) < len(input_unique):
+        logger.warning(
+            f"Global identity reduced tracks from {len(input_unique)} to "
+            f"{len(output_unique)} — reverting all changes"
+        )
+        for p, orig_tid in zip(positions, input_tids):
+            p.track_id = orig_tid
+        result.skip_reason = "reverted: would reduce track count"
+        return positions, result
+
+    # Validate no temporal overlaps within a canonical track
     if total_remapped > 0:
         valid = _validate_no_temporal_overlaps(positions, team_assignments)
         if not valid:
             logger.warning(
-                "Global identity created temporal overlaps — "
-                "this indicates a bug in assignment logic"
+                "Global identity created temporal overlaps — reverting"
             )
+            for p, orig_tid in zip(positions, input_tids):
+                p.track_id = orig_tid
+            result.skip_reason = "reverted: temporal overlaps"
+            return positions, result
 
     result.num_remapped = total_remapped
     if total_remapped > 0:
