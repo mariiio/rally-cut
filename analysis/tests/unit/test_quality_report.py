@@ -97,10 +97,9 @@ class TestComputeQualityReport:
             ball_detection_rate=0.8,
             id_switch_count=15,
             color_split_count=5,
-            swap_fix_count=3,
         )
 
-        # 23 total switches in 10 seconds = ~2.3/sec should tank stability
+        # 20 total switches in 10 seconds = ~2.0/sec should tank stability
         assert report.trackability_score < 0.8
         assert any("ID switch" in s for s in report.suggestions)
 
@@ -145,9 +144,7 @@ class TestComputeQualityReport:
             primary_track_ids=[],
             id_switch_count=3,
             color_split_count=2,
-            swap_fix_count=1,
         )
 
         assert report.id_switch_count == 3
         assert report.color_split_count == 2
-        assert report.swap_fix_count == 1

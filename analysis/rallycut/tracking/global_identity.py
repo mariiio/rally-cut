@@ -184,10 +184,6 @@ def optimize_global_identity(
         profiles[team_id] = team_profiles
 
     # Phase C: Global assignment per team
-    # Snapshot input track IDs for post-optimization guard
-    input_tids = [(p.track_id, p.frame_number) for p in positions]
-    input_unique = {tid for tid, _ in input_tids if tid >= 0}
-
     total_remapped = 0
     for team_id in (0, 1):
         team_segs = team_segments[team_id]
@@ -195,7 +191,7 @@ def optimize_global_identity(
 
         if len(team_profiles) < 2:
             # Guard: don't merge distinct tracks to a single anchor.
-            # This is correct for a fragmented single player (1 player → N fragments)
+            # This is correct for a fragmented single player (1 player -> N fragments)
             # but WRONG for multiple real players whose appearances weren't
             # distinguishable enough for a 2nd anchor.
             distinct_tids = {seg.track_id for seg in team_segs}
@@ -219,18 +215,17 @@ def optimize_global_identity(
         )
         total_remapped += remapped
 
-    # Post-optimization track count guard: revert if we reduced unique tracks
-    output_unique = {p.track_id for p in positions if p.track_id >= 0}
-    if len(output_unique) < len(input_unique):
-        logger.warning(
-            f"Global identity reduced tracks from {len(input_unique)} to "
-            f"{len(output_unique)} — reverting all changes"
-        )
-        for p, (orig_tid, _) in zip(positions, input_tids):
-            p.track_id = orig_tid
-        total_remapped = 0
-        result.skip_reason = "reverted: would reduce track count"
-        return positions, result
+    # Post-optimization validation: verify no cross-team merges and no
+    # temporal overlaps within a canonical track. The per-team loop
+    # structure guarantees within-team assignment, but validate anyway
+    # as a safety net.
+    if total_remapped > 0:
+        valid = _validate_no_temporal_overlaps(positions, team_assignments)
+        if not valid:
+            logger.warning(
+                "Global identity created temporal overlaps — "
+                "this indicates a bug in assignment logic"
+            )
 
     result.num_remapped = total_remapped
     if total_remapped > 0:
@@ -307,6 +302,46 @@ def _tracks_are_clean(
                 if r0[0] <= r1[1] and r1[0] <= r0[1]:
                     return False
 
+    return True
+
+
+def _validate_no_temporal_overlaps(
+    positions: list[PlayerPosition],
+    team_assignments: dict[int, int],
+) -> bool:
+    """Validate that no two tracks on the same team have temporal overlap.
+
+    This is a safety check after global identity optimization. The per-team
+    assignment with conflict resolution should prevent overlaps, but this
+    catches bugs in the assignment logic.
+
+    Returns:
+        True if valid (no overlaps), False if overlaps detected.
+    """
+    # Build per-team frame sets for each track
+    team_track_frames: dict[int, dict[int, set[int]]] = defaultdict(
+        lambda: defaultdict(set)
+    )
+    for p in positions:
+        if p.track_id < 0:
+            continue
+        team = team_assignments.get(p.track_id)
+        if team is not None:
+            team_track_frames[team][p.track_id].add(p.frame_number)
+
+    # Check same-team tracks for frame overlap
+    for team_id, track_frames in team_track_frames.items():
+        tids = list(track_frames.keys())
+        for i in range(len(tids)):
+            for j in range(i + 1, len(tids)):
+                overlap = track_frames[tids[i]] & track_frames[tids[j]]
+                if overlap:
+                    logger.warning(
+                        f"Temporal overlap: team {team_id}, tracks "
+                        f"{tids[i]} and {tids[j]} share "
+                        f"{len(overlap)} frames"
+                    )
+                    return False
     return True
 
 

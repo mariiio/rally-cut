@@ -26,7 +26,6 @@ if TYPE_CHECKING:
     from rallycut.tracking.court_identity import SwapDecision
     from rallycut.tracking.player_filter import PlayerFilterConfig
     from rallycut.tracking.quality_report import TrackingQualityReport
-    from rallycut.tracking.team_aware_tracker import TeamAwareConfig
 
 logger = logging.getLogger(__name__)
 
@@ -1054,7 +1053,6 @@ class PlayerTracker:
         filter_enabled: bool = False,
         filter_config: PlayerFilterConfig | None = None,
         court_calibrator: CourtCalibrator | None = None,
-        team_aware_config: TeamAwareConfig | None = None,
         court_detection_insights: CourtDetectionInsights | None = None,
     ) -> PlayerTrackingResult:
         """
@@ -1072,9 +1070,6 @@ class PlayerTracker:
             court_calibrator: Optional calibrated court calibrator. When provided,
                             detections outside court bounds are filtered immediately
                             after YOLO inference, preventing off-court tracks.
-            team_aware_config: Optional team-aware tracking config. When enabled
-                             with calibration, adds a penalty to cross-team
-                             associations in BoT-SORT's cost matrix.
 
         Returns:
             PlayerTrackingResult with all detected positions.
@@ -1155,34 +1150,6 @@ class PlayerTracker:
                 color_store = ColorHistogramStore()
                 appearance_store = AppearanceDescriptorStore()
 
-            # Team-aware BoT-SORT setup (calibration trust gate)
-            team_tracker = None
-            team_patch_applied = False
-            if (
-                team_aware_config is not None
-                and team_aware_config.enabled
-                and court_calibrator is not None
-                and court_calibrator.is_calibrated
-            ):
-                from rallycut.tracking.team_aware_tracker import (
-                    TeamSideTracker,
-                    get_court_split_y_from_calibration,
-                    patch_tracker_with_team_awareness,
-                )
-
-                split_y = get_court_split_y_from_calibration(court_calibrator)
-                if split_y is not None:
-                    team_tracker = TeamSideTracker(
-                        court_split_y=split_y,
-                        config=team_aware_config,
-                    )
-                    logger.info(
-                        "Team-aware tracking enabled (split_y=%.3f from calibration)",
-                        split_y,
-                    )
-                else:
-                    logger.info("Team-aware tracking disabled: net projection failed")
-
             while frame_idx < end_frame:
                 ret, frame = cap.read()
                 if not ret:
@@ -1225,24 +1192,6 @@ class PlayerTracker:
                             results, frame_idx, video_width, video_height
                         )
 
-                        # Apply monkey-patches after first frame (when tracker exists)
-                        # Order: team-aware first, court-cost last (outermost)
-                        if (
-                            hasattr(model, "predictor")
-                            and hasattr(model.predictor, "trackers")
-                            and model.predictor.trackers
-                        ):
-                            if (
-                                team_tracker is not None
-                                and not team_patch_applied
-                            ):
-                                patch_tracker_with_team_awareness(
-                                    model.predictor.trackers[0],
-                                    team_tracker,
-                                    video_height,
-                                )
-                                team_patch_applied = True
-
                         # Sport-aware detection filters
                         if filter_enabled:
                             frame_positions = self._filter_detections(frame_positions)
@@ -1252,10 +1201,6 @@ class PlayerTracker:
                             frame_positions = self._filter_off_court(
                                 frame_positions, court_calibrator
                             )
-
-                        # Team-aware tracker: feed positions for Y statistics
-                        if team_tracker is not None:
-                            team_tracker.update(frame_positions)
 
                         positions.extend(frame_positions)
 
@@ -1335,7 +1280,6 @@ class PlayerTracker:
             # Apply court player filtering if enabled (per-frame with track stability)
             num_jump_splits = 0
             num_color_splits = 0
-            num_swap_fixes = 0
             num_appearance_links = 0
             num_court_swaps = 0
 
@@ -1377,7 +1321,6 @@ class PlayerTracker:
                 # Step 0b: Color-based track splitting
                 if color_store is not None and color_store.has_data():
                     from rallycut.tracking.color_repair import (
-                        detect_and_fix_swaps,
                         split_tracks_by_color,
                     )
 
@@ -1385,126 +1328,27 @@ class PlayerTracker:
                         positions, color_store
                     )
 
-                    # Classify teams using early-frame Y positions
-                    split_result = compute_court_split(
-                        ball_positions or [], config,
-                        player_positions=positions,
-                        court_calibrator=court_calibrator,
-                    )
-                    preliminary_split_y = split_result[0] if split_result else None
-                    split_confidence = split_result[1] if split_result else None
-
-                    # Only create team assignments when split is reliable.
-                    # Low-confidence splits (e.g. median fallback when all players
-                    # are compressed in a narrow Y band) cause misassignment that
-                    # cascades through global identity, tracklet linking, etc.
-                    # When empty, those operations run unconstrained (safe default).
-                    if preliminary_split_y is not None and split_confidence == "high":
-                        team_assignments = classify_teams(
-                            positions, preliminary_split_y
-                        )
-
-                    # Step 0c: Court-plane identity resolution (when calibrated)
-                    if (
-                        court_calibrator is not None
-                        and court_calibrator.is_calibrated
-                        and team_assignments
-                    ):
-                        from rallycut.tracking.court_identity import (
-                            resolve_court_identity,
-                        )
-
-                        positions, num_court_swaps, court_decisions = (
-                            resolve_court_identity(
-                                positions,
-                                team_assignments,
-                                court_calibrator,
-                                video_width=video_width,
-                                video_height=video_height,
-                                color_store=color_store,
-                            )
-                        )
-
-                    # Collect uncertain identity windows from court decisions
-                    for decision in court_decisions:
-                        if not decision.confident:
-                            uncertain_windows.append((
-                                decision.interaction.start_frame,
-                                decision.interaction.end_frame,
-                                {decision.interaction.track_a,
-                                 decision.interaction.track_b},
-                            ))
-
-                    # Step 0d: Color-based swap detection (fallback/complement)
-                    positions, num_swap_fixes = detect_and_fix_swaps(
-                        positions, color_store,
-                        team_assignments=team_assignments,
-                    )
-                    # Note: court swaps tracked separately in num_court_swaps
-
-                    # Step 0e: Appearance-based tracklet linking (GTA-Link inspired)
-                    # Reconnects fragments using color histogram similarity
+                    # Step 0c: Appearance-based tracklet linking (GTA-Link inspired)
+                    # Reconnects fragments using color histogram similarity.
+                    # Runs unconstrained (no team_assignments yet) -- team
+                    # classification happens once on clean post-filter data.
                     from rallycut.tracking.tracklet_link import (
                         link_tracklets_by_appearance,
                     )
 
                     positions, num_appearance_links = link_tracklets_by_appearance(
                         positions, color_store,
-                        team_assignments=team_assignments,
                         appearance_store=appearance_store,
                     )
 
                 # Step 1: Stabilize track IDs before filtering
                 # This merges tracks that represent the same player
                 positions, id_mapping = stabilize_track_ids(
-                    positions, config, team_assignments=team_assignments
+                    positions, config,
                 )
 
-                # Remap team assignments after track merging
-                # id_mapping: merged_id -> canonical_id
-                if team_assignments and id_mapping:
-                    for merged_id in id_mapping:
-                        team_assignments.pop(merged_id, None)
-
-                # Step 1b: Global identity optimization
-                # Splits tracks at interaction boundaries and reassigns
-                # segments to canonical players via greedy cost minimization
                 num_global_segments = 0
                 num_global_remapped = 0
-                if (
-                    color_store is not None
-                    and color_store.has_data()
-                    and team_assignments
-                ):
-                    from rallycut.tracking.global_identity import (
-                        optimize_global_identity,
-                    )
-
-                    positions, global_result = optimize_global_identity(
-                        positions,
-                        team_assignments,
-                        color_store,
-                        court_split_y=preliminary_split_y,
-                        appearance_store=appearance_store,
-                    )
-                    num_global_segments = global_result.num_segments
-                    num_global_remapped = global_result.num_remapped
-                    if not global_result.skipped:
-                        logger.info(
-                            f"Global identity: {global_result.num_segments} "
-                            f"segments, {global_result.num_remapped} remapped, "
-                            f"{global_result.num_interactions} interactions"
-                        )
-                        # Re-classify teams after remapping
-                        if preliminary_split_y is not None:
-                            team_assignments = classify_teams(
-                                positions, preliminary_split_y
-                            )
-                    else:
-                        logger.debug(
-                            f"Global identity skipped: "
-                            f"{global_result.skip_reason}"
-                        )
 
                 player_filter = PlayerFilter(
                     ball_positions=ball_positions,
@@ -1543,68 +1387,89 @@ class PlayerTracker:
                     f"using {filter_method}"
                 )
 
-                # Step 4b: Post-filter court identity resolution
-                # Pre-filter court identity (Step 0c) runs on noisy data with many
-                # short tracks, making team separation appear smaller than it is.
-                # Re-running on clean 4-player data catches swaps that were missed.
+                # Step 4b: Single team classification on clean filtered data
+                # All team-dependent operations (global identity, court
+                # identity) run after this single classify_teams call.
+                split_result = compute_court_split(
+                    ball_positions or [], config,
+                    player_positions=positions,
+                    court_calibrator=court_calibrator,
+                )
+                split_y = split_result[0] if split_result else None
+                split_confidence = split_result[1] if split_result else None
+
+                if split_y is not None and split_confidence == "high":
+                    team_assignments = classify_teams(
+                        positions, split_y
+                    )
+
+                # Step 4c: Global identity optimization
+                # Splits tracks at interaction boundaries and reassigns
+                # segments to canonical players via greedy cost minimization
+                if (
+                    color_store is not None
+                    and color_store.has_data()
+                    and team_assignments
+                ):
+                    from rallycut.tracking.global_identity import (
+                        optimize_global_identity,
+                    )
+
+                    positions, global_result = optimize_global_identity(
+                        positions,
+                        team_assignments,
+                        color_store,
+                        court_split_y=split_y,
+                        appearance_store=appearance_store,
+                    )
+                    num_global_segments = global_result.num_segments
+                    num_global_remapped = global_result.num_remapped
+                    if not global_result.skipped:
+                        logger.info(
+                            f"Global identity: {global_result.num_segments} "
+                            f"segments, {global_result.num_remapped} remapped, "
+                            f"{global_result.num_interactions} interactions"
+                        )
+                    else:
+                        logger.debug(
+                            f"Global identity skipped: "
+                            f"{global_result.skip_reason}"
+                        )
+
+                # Step 4d: Court identity resolution
                 if (
                     court_calibrator is not None
                     and court_calibrator.is_calibrated
                     and len(primary_track_ids) >= 2
+                    and team_assignments
                 ):
                     from rallycut.tracking.court_identity import (
                         resolve_court_identity,
                     )
 
-                    # Recompute team assignments from clean filtered positions
-                    post_split_result = compute_court_split(
-                        ball_positions or [], config,
-                        player_positions=positions,
-                        court_calibrator=court_calibrator,
-                    )
-                    post_split_y = post_split_result[0] if post_split_result else None
-                    if post_split_y is not None:
-                        post_team_assignments = classify_teams(
-                            positions, post_split_y
+                    positions, num_court_swaps, court_decisions = (
+                        resolve_court_identity(
+                            positions,
+                            team_assignments,
+                            court_calibrator,
+                            video_width=video_width,
+                            video_height=video_height,
+                            color_store=color_store,
                         )
-                        if post_team_assignments:
-                            positions, post_swaps, post_decisions = (
-                                resolve_court_identity(
-                                    positions,
-                                    post_team_assignments,
-                                    court_calibrator,
-                                    video_width=video_width,
-                                    video_height=video_height,
-                                    color_store=color_store,
-                                )
-                            )
-                            if post_swaps > 0:
-                                num_court_swaps += post_swaps
-                                team_assignments = post_team_assignments
-                                logger.info(
-                                    f"Post-filter court identity: "
-                                    f"{post_swaps} additional swaps"
-                                )
-                            court_decisions.extend(post_decisions)
-                            # Collect uncertain windows, deduplicating
-                            # with Step 0c (same interactions may be
-                            # re-detected on filtered data)
-                            existing = {
-                                (s, e) for s, e, _ in uncertain_windows
-                            }
-                            for d in post_decisions:
-                                if not d.confident:
-                                    key = (
-                                        d.interaction.start_frame,
-                                        d.interaction.end_frame,
-                                    )
-                                    if key not in existing:
-                                        uncertain_windows.append((
-                                            d.interaction.start_frame,
-                                            d.interaction.end_frame,
-                                            {d.interaction.track_a,
-                                             d.interaction.track_b},
-                                        ))
+                    )
+                    if num_court_swaps > 0:
+                        logger.info(
+                            f"Court identity: "
+                            f"{num_court_swaps} swaps applied"
+                        )
+                    for d in court_decisions:
+                        if not d.confident:
+                            uncertain_windows.append((
+                                d.interaction.start_frame,
+                                d.interaction.end_frame,
+                                {d.interaction.track_a,
+                                 d.interaction.track_b},
+                            ))
 
             # Step 5: Compute quality report
             quality_report = None
@@ -1634,7 +1499,6 @@ class PlayerTracker:
                     ball_positions_xy=ball_xy,
                     id_switch_count=num_jump_splits,
                     color_split_count=num_color_splits,
-                    swap_fix_count=num_swap_fixes,
                     appearance_link_count=num_appearance_links,
                     has_court_calibration=court_calibrator is not None,
                     court_identity_interactions=len(court_decisions),
@@ -1644,6 +1508,7 @@ class PlayerTracker:
                     stationary_bg_removed_count=len(removed_bg_tracks),
                     global_identity_segments=num_global_segments,
                     global_identity_remapped=num_global_remapped,
+                    team_classification_skipped=split_confidence != "high",
                 )
 
             processing_time_ms = (time.time() - start_time) * 1000

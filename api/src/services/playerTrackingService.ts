@@ -187,7 +187,6 @@ interface QualityReport {
   avgTrackLifespanFrames: number;
   idSwitchCount: number;
   colorSplitCount: number;
-  swapFixCount: number;
   uniqueRawTrackCount: number;
   calibrationRecommended: boolean;
   courtDetected: boolean;

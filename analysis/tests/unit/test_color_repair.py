@@ -1,4 +1,4 @@
-"""Tests for color-based track repair (splitting + swap detection)."""
+"""Tests for color-based track repair (splitting + convergence detection)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import numpy as np
 
 from rallycut.tracking.color_repair import (
     ColorHistogramStore,
-    detect_and_fix_swaps,
     detect_convergence_periods,
     extract_shorts_histogram,
     split_tracks_by_color,
@@ -386,132 +385,3 @@ class TestDetectConvergencePeriods:
         assert len(periods) == 0
 
 
-# --- TestDetectAndFixSwaps ---
-
-
-class TestDetectAndFixSwaps:
-    def test_correct_swap_detected(self) -> None:
-        """When tracks swap IDs during overlap, the fix restores original assignment."""
-        # Track 1 = blue (hue 10), Track 2 = red (hue 2)
-        hist_blue = _make_uniform_histogram(10, 5)
-        hist_red = _make_uniform_histogram(2, 3)
-
-        # Create positions: overlap at frames 20-30
-        positions: list[PlayerPosition] = []
-        for f in range(0, 50):
-            if 20 <= f <= 30:
-                # Both at same position (overlap)
-                positions.append(PlayerPosition(
-                    frame_number=f, track_id=1,
-                    x=0.5, y=0.5, width=0.1, height=0.2, confidence=0.9,
-                ))
-                positions.append(PlayerPosition(
-                    frame_number=f, track_id=2,
-                    x=0.5, y=0.5, width=0.1, height=0.2, confidence=0.9,
-                ))
-            elif f < 20:
-                # Pre-overlap: track 1 = left, track 2 = right
-                positions.append(PlayerPosition(
-                    frame_number=f, track_id=1,
-                    x=0.3, y=0.5, width=0.1, height=0.2, confidence=0.9,
-                ))
-                positions.append(PlayerPosition(
-                    frame_number=f, track_id=2,
-                    x=0.7, y=0.5, width=0.1, height=0.2, confidence=0.9,
-                ))
-            else:
-                # Post-overlap: IDs are swapped
-                positions.append(PlayerPosition(
-                    frame_number=f, track_id=1,
-                    x=0.7, y=0.5, width=0.1, height=0.2, confidence=0.9,
-                ))
-                positions.append(PlayerPosition(
-                    frame_number=f, track_id=2,
-                    x=0.3, y=0.5, width=0.1, height=0.2, confidence=0.9,
-                ))
-
-        # Pre-overlap: track 1=blue, track 2=red
-        # Post-overlap (swapped): track 1=red, track 2=blue
-        store = ColorHistogramStore()
-        for f in range(0, 50, 3):
-            if f < 20:
-                store.add(1, f, hist_blue.copy())
-                store.add(2, f, hist_red.copy())
-            elif f > 30:
-                # IDs are swapped: track 1 now looks red, track 2 now looks blue
-                store.add(1, f, hist_red.copy())
-                store.add(2, f, hist_blue.copy())
-
-        result_pos, num_swaps = detect_and_fix_swaps(
-            positions, store,
-            iou_threshold=0.3, min_overlap_frames=5, swap_cost_ratio=0.7,
-        )
-        assert num_swaps == 1
-
-        # After fix: post-overlap track 1 should be blue again
-        post_t1 = [p for p in result_pos if p.track_id == 1 and p.frame_number > 30]
-        post_t2 = [p for p in result_pos if p.track_id == 2 and p.frame_number > 30]
-        # The fix swaps IDs, so post track 1 should have the same positions as
-        # what was previously track 2
-        assert len(post_t1) > 0
-        assert len(post_t2) > 0
-
-    def test_no_swap_when_colors_match(self) -> None:
-        """When post-overlap colors match pre-overlap, no swap is performed."""
-        hist_blue = _make_uniform_histogram(10, 5)
-        hist_red = _make_uniform_histogram(2, 3)
-
-        positions: list[PlayerPosition] = []
-        for f in range(0, 50):
-            if 20 <= f <= 30:
-                positions.append(PlayerPosition(
-                    frame_number=f, track_id=1,
-                    x=0.5, y=0.5, width=0.1, height=0.2, confidence=0.9,
-                ))
-                positions.append(PlayerPosition(
-                    frame_number=f, track_id=2,
-                    x=0.5, y=0.5, width=0.1, height=0.2, confidence=0.9,
-                ))
-            else:
-                positions.append(PlayerPosition(
-                    frame_number=f, track_id=1,
-                    x=0.3, y=0.5, width=0.1, height=0.2, confidence=0.9,
-                ))
-                positions.append(PlayerPosition(
-                    frame_number=f, track_id=2,
-                    x=0.7, y=0.5, width=0.1, height=0.2, confidence=0.9,
-                ))
-
-        # Colors consistent: track 1 always blue, track 2 always red
-        store = ColorHistogramStore()
-        for f in range(0, 50, 3):
-            if f < 20 or f > 30:
-                store.add(1, f, hist_blue.copy())
-                store.add(2, f, hist_red.copy())
-
-        result_pos, num_swaps = detect_and_fix_swaps(positions, store)
-        assert num_swaps == 0
-
-    def test_skip_when_no_pre_overlap_data(self) -> None:
-        """Skip swap detection when track has no pre-overlap histograms."""
-        hist = _make_uniform_histogram(5, 3)
-
-        positions: list[PlayerPosition] = []
-        for f in range(0, 30):
-            positions.append(PlayerPosition(
-                frame_number=f, track_id=1,
-                x=0.5, y=0.5, width=0.1, height=0.2, confidence=0.9,
-            ))
-            positions.append(PlayerPosition(
-                frame_number=f, track_id=2,
-                x=0.5, y=0.5, width=0.1, height=0.2, confidence=0.9,
-            ))
-
-        # Only post-overlap data, no pre-overlap
-        store = ColorHistogramStore()
-        for f in range(20, 30, 3):
-            store.add(1, f, hist.copy())
-            store.add(2, f, hist.copy())
-
-        result_pos, num_swaps = detect_and_fix_swaps(positions, store)
-        assert num_swaps == 0

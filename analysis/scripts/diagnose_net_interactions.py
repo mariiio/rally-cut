@@ -34,10 +34,6 @@ from rallycut.tracking.court_identity import (
 )
 from rallycut.tracking.player_filter import classify_teams, compute_court_split
 from rallycut.tracking.player_tracker import PlayerTracker, PlayerTrackingResult
-from rallycut.tracking.team_aware_tracker import (
-    TeamAwareConfig,
-    get_court_split_y_from_calibration,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +105,6 @@ def _retrack_rally(
         return None
 
     calibrator = _create_calibrator(rally.court_calibration_json)
-    ta_config = TeamAwareConfig(enabled=True)
 
     tracker = PlayerTracker()
     result = tracker.track_video(
@@ -119,7 +114,6 @@ def _retrack_rally(
         stride=stride,
         filter_enabled=True,
         court_calibrator=calibrator,
-        team_aware_config=ta_config,
     )
 
     _adjust_frame_numbers(result, rally.start_ms, str(video_path))
