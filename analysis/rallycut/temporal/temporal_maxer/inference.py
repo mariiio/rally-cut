@@ -134,7 +134,7 @@ class TemporalMaxerInference:
     ) -> list[tuple[float, float]]:
         """Convert window predictions to time segments with cleanup.
 
-        Reuses cleanup logic patterns from deterministic_decoder.py:
+        Post-processing stages:
         - Fill short gaps
         - Remove short segments
         - Confidence filter (remove low-confidence segments)

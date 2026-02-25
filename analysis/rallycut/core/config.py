@@ -142,9 +142,6 @@ class GameStateConfig(BaseModel):
     enable_temporal_smoothing: bool = False
     # Window size for temporal smoothing (must be odd)
     temporal_smoothing_window: int = 3
-    # Temporal model settings (learned temporal smoothing)
-    temporal_model_path: Path | None = None
-    temporal_model_version: str = "v1"  # Auto-detected from checkpoint if None
 
 
 class HWAccelConfig(BaseModel):
