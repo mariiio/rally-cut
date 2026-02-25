@@ -6,7 +6,9 @@ camera distance, and court visibility. Runs in ~2-3 seconds.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import sys
 from pathlib import Path
 
 import cv2
@@ -71,8 +73,10 @@ def _assess_frames(frames: list[np.ndarray]) -> dict:
     except ImportError:
         return {"error": "YOLO not available", "warnings": ["Install ultralytics for quality assessment"]}
 
-    model = YOLO("yolo11s.pt")
-    model.fuse()
+    # Redirect stdout→stderr during model load to keep JSON output clean
+    with contextlib.redirect_stdout(sys.stderr):
+        model = YOLO("yolo11s.pt")
+        model.fuse()
 
     all_person_counts: list[int] = []
     all_heights: list[float] = []
