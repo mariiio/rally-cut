@@ -1137,6 +1137,31 @@ class ActionClassifier:
         return -1, 0
 
 
+# Max repairs per rally before the circuit breaker stops fixing.
+# Heavily broken sequences get worse with cascading local fixes.
+_MAX_SEQUENCE_REPAIRS = 3
+
+
+def _reclassify(action: ClassifiedAction, new_type: ActionType) -> ClassifiedAction:
+    """Create a copy of *action* with a different action_type.
+
+    Confidence is capped at 0.6 to signal that this label was inferred by
+    the repair pass, not the original classifier.
+    """
+    return ClassifiedAction(
+        action_type=new_type,
+        frame=action.frame,
+        ball_x=action.ball_x,
+        ball_y=action.ball_y,
+        velocity=action.velocity,
+        player_track_id=action.player_track_id,
+        court_side=action.court_side,
+        confidence=min(action.confidence, 0.6),
+        is_synthetic=action.is_synthetic,
+        team=action.team,
+    )
+
+
 def repair_action_sequence(
     actions: list[ClassifiedAction],
     net_y: float = 0.5,
@@ -1152,15 +1177,22 @@ def repair_action_sequence(
     Same-side rules only — cross-side sequences (e.g., dig on near → dig on
     far) are legal because each side's touch counter resets independently.
 
-    Repairs applied:
-    0. Non-synthetic serve with ball on wrong court side → reclassify as
-       receive and prepend a synthetic serve from the opposite side.
-    1. Consecutive receives → second becomes set
-    2. Consecutive digs → second becomes set
-    3. Receive/dig directly followed by attack → attack becomes set
-       (only when a subsequent action exists to serve as the actual attack)
+    Repairs applied (in order):
+    0. (serve fix) Non-synthetic serve with ball on wrong court side →
+       reclassify as receive and prepend a synthetic serve.
+    3. (pre-pass) Duplicate serves → extras become dig.
+    4. (pre-pass) Duplicate receives → extras become set.
+    1. (main pass) Consecutive receives/digs on same side → second becomes set.
+    2. (main pass) Receive/dig → attack on same side → attack becomes set
+       (only when a subsequent action exists as the actual attack).
+    5. (main pass) Set → set on same side → second becomes attack.
+    6. (main pass) Attack → attack on same side → first becomes set.
 
-    Only repairs non-block actions. Block is structurally reliable.
+    Circuit breaker: stops after 3 repairs to avoid cascading bad rewrites
+    on heavily broken sequences. Rule 0 (wrong-side serve) does not count
+    toward the circuit breaker since it is structurally necessary.
+
+    Only repairs non-block/non-unknown actions.
 
     Args:
         actions: Classified actions from classify_rally or classify_rally_learned.
@@ -1177,6 +1209,7 @@ def repair_action_sequence(
 
     # Work on a mutable copy
     repaired = list(actions)
+    repair_count = 0
 
     # Find the serve index
     serve_idx: int | None = None
@@ -1188,9 +1221,10 @@ def repair_action_sequence(
     if serve_idx is None:
         return repaired  # Can't repair without a serve anchor
 
+    # ------------------------------------------------------------------
     # Rule 0: Non-synthetic serve with ball on wrong court side.
-    # If a real serve contact has ball clearly on the receiving side,
-    # it's a misclassified receive. Reclassify and prepend synthetic serve.
+    # Does NOT count toward circuit breaker (structurally necessary).
+    # ------------------------------------------------------------------
     serve = repaired[serve_idx]
     if not serve.is_synthetic:
         on_serve_side = _is_ball_on_serve_side(
@@ -1202,20 +1236,7 @@ def repair_action_sequence(
                 opposite, serve.frame, net_y,
                 rally_start_frame=rally_start_frame,
             )
-            # Reclassify the serve as receive
-            repaired[serve_idx] = ClassifiedAction(
-                action_type=ActionType.RECEIVE,
-                frame=serve.frame,
-                ball_x=serve.ball_x,
-                ball_y=serve.ball_y,
-                velocity=serve.velocity,
-                player_track_id=serve.player_track_id,
-                court_side=serve.court_side,
-                confidence=min(serve.confidence, 0.6),
-                is_synthetic=serve.is_synthetic,
-                team=serve.team,
-            )
-            # Insert synthetic serve before the receive
+            repaired[serve_idx] = _reclassify(serve, ActionType.RECEIVE)
             repaired.insert(serve_idx, synthetic)
             logger.debug(
                 "Repair rule 0: serve at f%d on wrong court side "
@@ -1224,9 +1245,62 @@ def repair_action_sequence(
                 serve.frame, serve.court_side, serve.ball_y, net_y,
             )
 
-    # Walk through post-serve actions and fix illegal patterns
+    # Re-find serve_idx after possible insertion
+    serve_idx = None
+    for i, a in enumerate(repaired):
+        if a.action_type == ActionType.SERVE:
+            serve_idx = i
+            break
+    if serve_idx is None:
+        return repaired
+
+    # ------------------------------------------------------------------
+    # Rule 3 (pre-pass): Duplicate non-synthetic serves → extras become dig.
+    # Only non-synthetic serves count; the first real serve is the anchor.
+    # ------------------------------------------------------------------
+    first_real_serve_found = False
+    for i, a in enumerate(repaired):
+        if a.action_type == ActionType.SERVE and not a.is_synthetic:
+            if not first_real_serve_found:
+                first_real_serve_found = True
+            else:
+                if repair_count >= _MAX_SEQUENCE_REPAIRS:
+                    break
+                repaired[i] = _reclassify(a, ActionType.DIG)
+                repair_count += 1
+                logger.debug(
+                    "Repair rule 3: duplicate serve at f%d → dig",
+                    a.frame,
+                )
+
+    # ------------------------------------------------------------------
+    # Rule 4 (pre-pass): Duplicate receives → extras become set.
+    # Always use set (2nd touch) — court_side labels are too unreliable
+    # to distinguish same-side (set) from cross-side (dig).
+    # ------------------------------------------------------------------
+    first_receive_found = False
+    for i, a in enumerate(repaired):
+        if a.action_type == ActionType.RECEIVE:
+            if not first_receive_found:
+                first_receive_found = True
+            else:
+                if repair_count >= _MAX_SEQUENCE_REPAIRS:
+                    break
+                repaired[i] = _reclassify(a, ActionType.SET)
+                repair_count += 1
+                logger.debug(
+                    "Repair rule 4: duplicate receive at f%d → set",
+                    a.frame,
+                )
+
+    # ------------------------------------------------------------------
+    # Main pass: Rules 1, 2, 5, 6
+    # ------------------------------------------------------------------
     i = serve_idx + 1
     while i < len(repaired):
+        if repair_count >= _MAX_SEQUENCE_REPAIRS:
+            break
+
         a = repaired[i]
 
         # Skip blocks and unknowns — don't touch them
@@ -1247,10 +1321,6 @@ def repair_action_sequence(
 
         prev = repaired[prev_idx]
 
-        # Only apply same-side rules when actions are on the same known court side.
-        # Cross-side sequences (e.g., dig on near → dig on far) are legal
-        # in volleyball — each side's touch counter resets independently.
-        # If either side is unknown/empty, skip repair to be conservative.
         same_side = (
             prev.court_side == a.court_side
             and a.court_side in ("near", "far")
@@ -1262,20 +1332,10 @@ def repair_action_sequence(
             and prev.action_type in (ActionType.RECEIVE, ActionType.DIG)
             and a.action_type == prev.action_type
         ):
-            repaired[i] = ClassifiedAction(
-                action_type=ActionType.SET,
-                frame=a.frame,
-                ball_x=a.ball_x,
-                ball_y=a.ball_y,
-                velocity=a.velocity,
-                player_track_id=a.player_track_id,
-                court_side=a.court_side,
-                confidence=min(a.confidence, 0.6),
-                is_synthetic=a.is_synthetic,
-                team=a.team,
-            )
+            repaired[i] = _reclassify(a, ActionType.SET)
+            repair_count += 1
             logger.debug(
-                "Sequence repair: %s→%s at f%d→f%d, changed second to set",
+                "Repair rule 1: %s→%s at f%d→f%d, changed second to set",
                 prev.action_type.value, a.action_type.value,
                 prev.frame, a.frame,
             )
@@ -1288,32 +1348,48 @@ def repair_action_sequence(
             and prev.action_type in (ActionType.RECEIVE, ActionType.DIG)
             and a.action_type == ActionType.ATTACK
         ):
-            # Check if there's a next action that could be the actual attack
             next_idx: int | None = None
             for k in range(i + 1, len(repaired)):
-                if repaired[k].action_type not in (ActionType.BLOCK, ActionType.UNKNOWN):
+                if repaired[k].action_type not in (
+                    ActionType.BLOCK, ActionType.UNKNOWN,
+                ):
                     next_idx = k
                     break
-
             if next_idx is not None:
-                repaired[i] = ClassifiedAction(
-                    action_type=ActionType.SET,
-                    frame=a.frame,
-                    ball_x=a.ball_x,
-                    ball_y=a.ball_y,
-                    velocity=a.velocity,
-                    player_track_id=a.player_track_id,
-                    court_side=a.court_side,
-                    confidence=min(a.confidence, 0.6),
-                    is_synthetic=a.is_synthetic,
-                    team=a.team,
-                )
+                repaired[i] = _reclassify(a, ActionType.SET)
+                repair_count += 1
                 logger.debug(
-                    "Sequence repair: %s→attack at f%d→f%d, "
-                    "changed attack to set (next action at f%d)",
+                    "Repair rule 2: %s→attack at f%d→f%d → set "
+                    "(next action at f%d)",
                     prev.action_type.value, prev.frame, a.frame,
                     repaired[next_idx].frame,
                 )
+
+        # Rule 5: set → set on same side → second becomes attack
+        elif (
+            same_side
+            and prev.action_type == ActionType.SET
+            and a.action_type == ActionType.SET
+        ):
+            repaired[i] = _reclassify(a, ActionType.ATTACK)
+            repair_count += 1
+            logger.debug(
+                "Repair rule 5: set→set at f%d→f%d, second → attack",
+                prev.frame, a.frame,
+            )
+
+        # Rule 6: attack → attack on same side → first becomes set
+        elif (
+            same_side
+            and prev.action_type == ActionType.ATTACK
+            and a.action_type == ActionType.ATTACK
+        ):
+            repaired[prev_idx] = _reclassify(prev, ActionType.SET)
+            repair_count += 1
+            logger.debug(
+                "Repair rule 6: attack→attack at f%d→f%d, first → set",
+                prev.frame, a.frame,
+            )
 
         i += 1
 
