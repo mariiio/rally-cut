@@ -1631,6 +1631,207 @@ class TestFalseStartAnchorRemoval:
         assert any(f >= 60 for f in result_frames), "Second anchor should survive"
 
 
+class TestSpatialOutlierAnchorRemoval:
+    """Tests for Step 3d: spatial outlier anchor removal."""
+
+    def _pruning_config(self) -> BallFilterConfig:
+        return BallFilterConfig(
+            enable_segment_pruning=True,
+            segment_jump_threshold=0.20,
+            min_segment_frames=15,
+            min_output_confidence=0.05,
+            enable_exit_ghost_removal=False,
+            enable_oscillation_pruning=False,
+            enable_outlier_removal=False,
+            enable_blip_removal=False,
+            enable_interpolation=False,
+        )
+
+    def test_pigeon_segment_removed(self) -> None:
+        """A pigeon drifting horizontally at top of frame should be removed.
+
+        Pigeon moves left-to-right in X but stays at constant Y ~0.10.
+        Its centroid is far enough from the real ball anchors, and its
+        min-extent (Y) is tiny — no trajectory continuation protection.
+        """
+        filt = BallTemporalFilter(self._pruning_config())
+        positions: list[BallPosition] = []
+
+        # Pigeon: 30 frames drifting right at top (large X-extent, tiny Y-extent)
+        for i in range(30):
+            positions.append(_make_pos(i, 0.20 + i * 0.015, 0.10 + i * 0.001))
+
+        # Gap
+        for i in range(30, 35):
+            positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
+
+        # Real ball anchor 1: 50 frames at center
+        for i in range(35, 85):
+            positions.append(_make_pos(i, 0.45 + i * 0.002, 0.40 + i * 0.001))
+
+        # Gap
+        for i in range(85, 90):
+            positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
+
+        # Real ball anchor 2: 50 frames at center-right
+        for i in range(90, 140):
+            positions.append(_make_pos(i, 0.50 + i * 0.001, 0.35 - i * 0.001))
+
+        result = filt.filter_batch(positions)
+        confident = [p for p in result if p.confidence > 0]
+
+        # Pigeon should be removed — no confident detections in frames 0-29
+        pigeon_frames = [p for p in confident if p.frame_number < 30]
+        assert len(pigeon_frames) == 0, (
+            f"Pigeon segment should be removed, got {len(pigeon_frames)} frames"
+        )
+        # Real ball should survive
+        ball_frames = [p for p in confident if p.frame_number >= 35]
+        assert len(ball_frames) > 0, "Real ball segments should survive"
+
+    def test_player_hand_compact_segment_removed(self) -> None:
+        """A compact player-hand segment (low spread in both X and Y) removed."""
+        filt = BallTemporalFilter(self._pruning_config())
+        positions: list[BallPosition] = []
+
+        # Real ball anchor 1: 50 frames
+        for i in range(50):
+            positions.append(_make_pos(i, 0.40 + i * 0.002, 0.20 + i * 0.001))
+
+        # Gap
+        for i in range(50, 55):
+            positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
+
+        # Player hand: 20 frames at far-right, compact cluster
+        for i in range(55, 75):
+            positions.append(_make_pos(i, 0.80 + i * 0.001, 0.45 + i * 0.001))
+
+        # Gap
+        for i in range(75, 80):
+            positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
+
+        # Real ball anchor 2: 50 frames
+        for i in range(80, 130):
+            positions.append(_make_pos(i, 0.42 + i * 0.001, 0.22 - i * 0.001))
+
+        result = filt.filter_batch(positions)
+        confident = [p for p in result if p.confidence > 0]
+
+        # Player hand should be removed
+        hand_frames = [p for p in confident if 55 <= p.frame_number < 75]
+        assert len(hand_frames) == 0, (
+            f"Player hand segment should be removed, got {len(hand_frames)} frames"
+        )
+
+    def test_ball_traversal_kept_via_trajectory_continuation(self) -> None:
+        """A ball arcing across the court should be preserved.
+
+        The ball traverses from top-left to bottom-right (large extent in
+        both X and Y). Its centroid is far from other anchors, but its
+        start endpoint connects to another anchor's end, and it has high
+        2D spread. This is a trajectory continuation, not a different object.
+        """
+        filt = BallTemporalFilter(self._pruning_config())
+        positions: list[BallPosition] = []
+
+        # Ball anchor 1: 40 frames at center-top
+        for i in range(40):
+            positions.append(_make_pos(i, 0.40 + i * 0.002, 0.15 + i * 0.001))
+
+        # Ball anchor 2: 30 frames continuing at center
+        for i in range(40, 70):
+            j = i - 40
+            positions.append(_make_pos(i, 0.48 + j * 0.001, 0.19 - j * 0.002))
+
+        # Small gap where ball exits/re-enters
+        for i in range(70, 75):
+            positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
+
+        # Ball anchor 3: arcs from top-left to bottom-right (large 2D spread)
+        # Start near anchor 2's end position (~0.51, 0.13) → endpoint connected
+        for i in range(75, 115):
+            j = i - 75
+            # Arc from (0.35, 0.05) to (0.90, 0.55) — 0.55 X-extent, 0.50 Y-extent
+            positions.append(_make_pos(
+                i, 0.35 + j * 0.014, 0.05 + j * 0.013,
+            ))
+
+        result = filt.filter_batch(positions)
+        confident = [p for p in result if p.confidence > 0]
+
+        # All three anchors should survive — including the traversal
+        traversal_frames = [p for p in confident if p.frame_number >= 75]
+        assert len(traversal_frames) >= 30, (
+            f"Ball traversal should be kept, got {len(traversal_frames)} frames"
+        )
+
+    def test_drifting_segment_not_protected_despite_endpoint_proximity(self) -> None:
+        """A pigeon whose endpoint happens to be near a ball anchor is NOT protected.
+
+        Endpoint connectivity alone is not enough — the segment must also
+        have large 2D extent (min of X and Y extent > threshold).
+        """
+        filt = BallTemporalFilter(self._pruning_config())
+        positions: list[BallPosition] = []
+
+        # Pigeon: 25 frames drifting horizontally, ends near (0.45, 0.12)
+        for i in range(25):
+            positions.append(_make_pos(i, 0.20 + i * 0.010, 0.11 + i * 0.0005))
+
+        # Gap
+        for i in range(25, 30):
+            positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
+
+        # Real ball: starts near (0.49, 0.38) — >0.20 jump from pigeon to split
+        # segments, but pigeon endpoint is within 0.20 of ball start (0.26 dist).
+        for i in range(30, 80):
+            positions.append(_make_pos(i, 0.43 + i * 0.002, 0.35 + i * 0.001))
+
+        # Gap
+        for i in range(80, 85):
+            positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
+
+        # Real ball anchor 2 (same general area as anchor 1)
+        for i in range(85, 135):
+            positions.append(_make_pos(i, 0.50 + i * 0.001, 0.40 - i * 0.001))
+
+        result = filt.filter_batch(positions)
+        confident = [p for p in result if p.confidence > 0]
+
+        # Pigeon should be removed despite endpoint proximity
+        pigeon_frames = [p for p in confident if p.frame_number < 25]
+        assert len(pigeon_frames) == 0, (
+            f"Pigeon with endpoint proximity should still be removed, "
+            f"got {len(pigeon_frames)} frames"
+        )
+
+    def test_fewer_than_three_anchors_skips_outlier_removal(self) -> None:
+        """With only 2 anchors, no spatial outlier removal is attempted."""
+        filt = BallTemporalFilter(self._pruning_config())
+        positions: list[BallPosition] = []
+
+        # Anchor 1: 20 frames at top-left
+        for i in range(20):
+            positions.append(_make_pos(i, 0.10 + i * 0.001, 0.10))
+
+        # Gap
+        for i in range(20, 25):
+            positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
+
+        # Anchor 2: 20 frames at bottom-right (very far from anchor 1)
+        for i in range(25, 45):
+            positions.append(_make_pos(i, 0.80 + i * 0.001, 0.80))
+
+        result = filt.filter_batch(positions)
+        confident = [p for p in result if p.confidence > 0]
+
+        # Both anchors should survive — only 2, so no outlier removal
+        anchor1 = [p for p in confident if p.frame_number < 20]
+        anchor2 = [p for p in confident if p.frame_number >= 25]
+        assert len(anchor1) > 0, "First anchor should survive with only 2 anchors"
+        assert len(anchor2) > 0, "Second anchor should survive with only 2 anchors"
+
+
 class TestRemoveStationaryRuns:
     """Tests for stationarity detection (player lock-on removal)."""
 
