@@ -599,10 +599,7 @@ class ActionClassifier:
             elif contact.court_side != current_side:
                 if crossed_net is False:
                     # Confirmed no crossing — trust trajectory, keep counter.
-                    # Safety valve: beach volleyball max 3 touches per side.
-                    if contact_count_on_side >= 4:
-                        current_side = contact.court_side
-                        contact_count_on_side = 0
+                    pass
                 else:
                     # crossed_net is None (insufficient data or no ball_positions)
                     # Fall back to court_side comparison
@@ -611,11 +608,12 @@ class ActionClassifier:
 
             contact_count_on_side += 1
 
-            # Unconditional safety valve: beach volleyball allows max 3 touches
-            # per side. If counter exceeds this, a net crossing was missed
-            # (e.g., ball trajectory stays visually below net_y due to camera
-            # angle). Reset to 1 to resume the dig→set→attack cycle.
-            if contact_count_on_side > 3 and receive_detected:
+            # Safety valve: beach volleyball allows max 3 touches per side.
+            # If counter exceeds this, a net crossing was missed (e.g., ball
+            # trajectory stays visually below net_y due to camera angle).
+            # Reset to 1 to resume the dig→set→attack cycle.
+            if contact_count_on_side > 3:
+                current_side = contact.court_side
                 contact_count_on_side = 1
 
             # Rule-based classification
