@@ -40,7 +40,7 @@ class TrackingQualityReport:
     avg_track_lifespan_frames: float = 0.0
 
     # Repair metrics
-    id_switch_count: int = 0  # From split_tracks_at_jumps
+    id_switch_count: int = 0  # From enforce_spatial_consistency
     color_split_count: int = 0  # From split_tracks_by_color
     swap_fix_count: int = 0  # From detect_and_fix_swaps
     appearance_link_count: int = 0  # From link_tracklets_by_appearance
