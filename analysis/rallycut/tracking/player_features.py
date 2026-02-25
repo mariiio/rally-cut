@@ -2,8 +2,8 @@
 Player appearance feature extraction for cross-rally tracking.
 
 Extracts visual features from player detections for consistent ID assignment:
-- Skin tone (HSV) - most reliable for beach volleyball
-- Jersey color (HSV) - when visible
+- Clothing color histograms (upper body + lower body HS histograms)
+- Skin tone (HSV)
 - Body proportions - height, aspect ratio
 """
 
@@ -26,9 +26,13 @@ logger = logging.getLogger(__name__)
 SKIN_HSV_LOWER = np.array([0, 20, 50], dtype=np.uint8)
 SKIN_HSV_UPPER = np.array([50, 255, 255], dtype=np.uint8)
 
-# Minimum pixels for valid color extraction
+# Minimum pixels for valid skin color extraction
 MIN_SKIN_PIXELS = 50
-MIN_JERSEY_PIXELS = 30
+
+# HS histogram parameters (matches color_repair.py)
+HS_BINS = (16, 8)  # Hue (16 bins) x Saturation (8 bins) = 128 values
+HS_RANGES = [0, 180, 0, 256]  # OpenCV HSV: H=[0,180), S=[0,256)
+MIN_HIST_PIXELS = 200  # Minimum pixels for reliable histogram
 
 
 @dataclass
@@ -38,14 +42,16 @@ class PlayerAppearanceFeatures:
     track_id: int
     frame_number: int
 
-    # Skin tone (HSV) - most reliable for beach volleyball
+    # Skin tone (HSV)
     # None if not enough skin pixels detected
     skin_tone_hsv: tuple[float, float, float] | None = None
     skin_pixel_count: int = 0
 
-    # Jersey/shorts color (HSV) - may not be visible
-    jersey_color_hsv: tuple[float, float, float] | None = None
-    jersey_pixel_count: int = 0
+    # HS histograms for clothing regions
+    # Upper body (20-60% of bbox): captures t-shirt/jersey if present
+    upper_body_hist: np.ndarray | None = None
+    # Lower body (60-100% of bbox): captures shorts/swimsuit
+    lower_body_hist: np.ndarray | None = None
 
     # Body proportions
     bbox_height: float = 0.0  # Normalized bbox height
@@ -58,13 +64,15 @@ class PlayerAppearanceProfile:
 
     player_id: int  # Consistent 1-4 across match
 
-    # Average skin tone (HSV)
-    avg_skin_tone_hsv: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    # Average skin tone (HSV) — None until first sample
+    avg_skin_tone_hsv: tuple[float, float, float] | None = None
     skin_sample_count: int = 0
 
-    # Average jersey color (HSV) - may be None if not reliably detected
-    avg_jersey_color_hsv: tuple[float, float, float] | None = None
-    jersey_sample_count: int = 0
+    # HS histograms for clothing regions
+    avg_upper_hist: np.ndarray | None = None
+    upper_hist_count: int = 0
+    avg_lower_hist: np.ndarray | None = None
+    lower_hist_count: int = 0
 
     # Body proportions
     avg_bbox_height: float = 0.0
@@ -78,35 +86,43 @@ class PlayerAppearanceProfile:
 
     def update_from_features(self, features: PlayerAppearanceFeatures) -> None:
         """Update profile with new appearance features."""
-        # Update skin tone (running average)
+        # Update skin tone (running average, equal weight per sample)
         if features.skin_tone_hsv is not None and features.skin_pixel_count >= MIN_SKIN_PIXELS:
-            if self.skin_sample_count == 0:
+            if self.avg_skin_tone_hsv is None:
                 self.avg_skin_tone_hsv = features.skin_tone_hsv
             else:
-                # Weighted average (new sample weight decreases over time)
                 weight = 1.0 / (self.skin_sample_count + 1)
                 h1, s1, v1 = self.avg_skin_tone_hsv
                 h2, s2, v2 = features.skin_tone_hsv
-                # Hue is circular, handle wrap-around
                 h_new = _circular_mean(h1, h2, weight)
                 s_new = s1 * (1 - weight) + s2 * weight
                 v_new = v1 * (1 - weight) + v2 * weight
                 self.avg_skin_tone_hsv = (h_new, s_new, v_new)
             self.skin_sample_count += 1
 
-        # Update jersey color
-        if features.jersey_color_hsv is not None and features.jersey_pixel_count >= MIN_JERSEY_PIXELS:
-            if self.jersey_sample_count == 0 or self.avg_jersey_color_hsv is None:
-                self.avg_jersey_color_hsv = features.jersey_color_hsv
+        # Update upper body histogram (equal-weight running average)
+        if features.upper_body_hist is not None:
+            if self.avg_upper_hist is None:
+                self.avg_upper_hist = features.upper_body_hist.copy()
             else:
-                weight = 1.0 / (self.jersey_sample_count + 1)
-                h1, s1, v1 = self.avg_jersey_color_hsv
-                h2, s2, v2 = features.jersey_color_hsv
-                h_new = _circular_mean(h1, h2, weight)
-                s_new = s1 * (1 - weight) + s2 * weight
-                v_new = v1 * (1 - weight) + v2 * weight
-                self.avg_jersey_color_hsv = (h_new, s_new, v_new)
-            self.jersey_sample_count += 1
+                weight = 1.0 / (self.upper_hist_count + 1)
+                self.avg_upper_hist = (
+                    self.avg_upper_hist * (1 - weight)
+                    + features.upper_body_hist * weight
+                )
+            self.upper_hist_count += 1
+
+        # Update lower body histogram (equal-weight running average)
+        if features.lower_body_hist is not None:
+            if self.avg_lower_hist is None:
+                self.avg_lower_hist = features.lower_body_hist.copy()
+            else:
+                weight = 1.0 / (self.lower_hist_count + 1)
+                self.avg_lower_hist = (
+                    self.avg_lower_hist * (1 - weight)
+                    + features.lower_body_hist * weight
+                )
+            self.lower_hist_count += 1
 
         # Update height
         if features.bbox_height > 0:
@@ -127,7 +143,8 @@ class TrackAppearanceStats:
 
     # Computed averages
     avg_skin_tone_hsv: tuple[float, float, float] | None = None
-    avg_jersey_color_hsv: tuple[float, float, float] | None = None
+    avg_upper_hist: np.ndarray | None = None
+    avg_lower_hist: np.ndarray | None = None
     avg_bbox_height: float = 0.0
 
     def compute_averages(self) -> None:
@@ -150,20 +167,21 @@ class TrackAppearanceStats:
                 float(np.mean(v_vals)),
             )
 
-        # Jersey color average
-        jersey_samples = [
-            f.jersey_color_hsv for f in self.features
-            if f.jersey_color_hsv is not None and f.jersey_pixel_count >= MIN_JERSEY_PIXELS
+        # Upper body histogram average (each input already L1-normalized)
+        upper_hists = [
+            f.upper_body_hist for f in self.features
+            if f.upper_body_hist is not None
         ]
-        if jersey_samples:
-            h_vals = [s[0] for s in jersey_samples]
-            s_vals = [s[1] for s in jersey_samples]
-            v_vals = [s[2] for s in jersey_samples]
-            self.avg_jersey_color_hsv = (
-                float(_circular_mean_list(h_vals)),
-                float(np.mean(s_vals)),
-                float(np.mean(v_vals)),
-            )
+        if upper_hists:
+            self.avg_upper_hist = np.mean(upper_hists, axis=0).astype(np.float32)
+
+        # Lower body histogram average (each input already L1-normalized)
+        lower_hists = [
+            f.lower_body_hist for f in self.features
+            if f.lower_body_hist is not None
+        ]
+        if lower_hists:
+            self.avg_lower_hist = np.mean(lower_hists, axis=0).astype(np.float32)
 
         # Height average
         heights = [f.bbox_height for f in self.features if f.bbox_height > 0]
@@ -258,26 +276,31 @@ def extract_appearance_features(
     if player_roi.size == 0:
         return features
 
+    bbox_h_px = y2 - y1
+
     # Convert to HSV
     hsv = cv2.cvtColor(player_roi, cv2.COLOR_BGR2HSV)
 
     # Extract skin tone from upper body region (face/arms)
     # Use top 40% of bbox for skin detection
-    upper_height = int(player_roi.shape[0] * 0.4)
+    upper_height = int(bbox_h_px * 0.4)
     upper_hsv = hsv[:upper_height, :]
 
     skin_tone, skin_count = _extract_skin_tone(upper_hsv)
     features.skin_tone_hsv = skin_tone
     features.skin_pixel_count = skin_count
 
-    # Extract jersey color from torso region (middle 30-70% of bbox)
-    torso_top = int(player_roi.shape[0] * 0.3)
-    torso_bottom = int(player_roi.shape[0] * 0.7)
-    torso_hsv = hsv[torso_top:torso_bottom, :]
+    # Extract HS histograms for clothing regions
+    # Upper body: 20-60% of bbox (t-shirt/jersey if wearing one, skin if not)
+    upper_top = int(bbox_h_px * 0.2)
+    upper_bottom = int(bbox_h_px * 0.6)
+    features.upper_body_hist = _extract_hs_histogram(
+        hsv[upper_top:upper_bottom, :]
+    )
 
-    jersey_color, jersey_count = _extract_jersey_color(torso_hsv)
-    features.jersey_color_hsv = jersey_color
-    features.jersey_pixel_count = jersey_count
+    # Lower body: 60-100% of bbox (shorts/swimsuit — always visible)
+    lower_top = int(bbox_h_px * 0.6)
+    features.lower_body_hist = _extract_hs_histogram(hsv[lower_top:, :])
 
     return features
 
@@ -316,51 +339,40 @@ def _extract_skin_tone(hsv_roi: np.ndarray) -> tuple[tuple[float, float, float] 
     return (h_mean, s_mean, v_mean), skin_count
 
 
-def _extract_jersey_color(hsv_roi: np.ndarray) -> tuple[tuple[float, float, float] | None, int]:
-    """
-    Extract dominant jersey/clothing color from HSV region.
+def _extract_hs_histogram(hsv_roi: np.ndarray) -> np.ndarray | None:
+    """Extract normalized HS histogram from an HSV region.
 
     Args:
-        hsv_roi: HSV image region (torso area).
+        hsv_roi: HSV image region.
 
     Returns:
-        Tuple of (dominant HSV, pixel count) or (None, 0) if not enough pixels.
+        Normalized HS histogram (float32, sum=1), or None if too few pixels.
     """
     if hsv_roi.size == 0:
-        return None, 0
+        return None
+    if (hsv_roi.shape[0] * hsv_roi.shape[1]) < MIN_HIST_PIXELS:
+        return None
 
-    # Exclude skin pixels (jersey should be non-skin)
-    skin_mask = cv2.inRange(hsv_roi, SKIN_HSV_LOWER, SKIN_HSV_UPPER)
-    non_skin_mask = cv2.bitwise_not(skin_mask)
-
-    # Also exclude very dark pixels (shadows) and very bright (highlights)
-    value_channel = hsv_roi[:, :, 2]
-    brightness_mask = cv2.inRange(
-        value_channel,
-        np.array(30, dtype=np.uint8),
-        np.array(240, dtype=np.uint8),
+    hist = cv2.calcHist(
+        [hsv_roi], [0, 1], None, list(HS_BINS), HS_RANGES,
     )
+    cv2.normalize(hist, hist, alpha=1.0, norm_type=cv2.NORM_L1)
+    return hist.astype(np.float32)
 
-    # Combined mask
-    valid_mask = cv2.bitwise_and(non_skin_mask, brightness_mask)
 
-    pixel_count = int(cv2.countNonZero(valid_mask))
-    if pixel_count < MIN_JERSEY_PIXELS:
-        return None, pixel_count
+def _histogram_similarity(
+    hist1: np.ndarray | None, hist2: np.ndarray | None,
+) -> float | None:
+    """Bhattacharyya coefficient between two HS histograms.
 
-    # Extract valid pixels
-    valid_pixels = hsv_roi[valid_mask > 0]
-    if len(valid_pixels) == 0:
-        return None, 0
-
-    # Compute mean color (works well for solid jersey colors)
-    # For multi-colored jerseys, could use k-means clustering here
-    pixels_float = valid_pixels.astype(np.float32)
-    h_mean = _circular_mean_list(pixels_float[:, 0].tolist())
-    s_mean = float(np.mean(pixels_float[:, 1]))
-    v_mean = float(np.mean(pixels_float[:, 2]))
-
-    return (h_mean, s_mean, v_mean), pixel_count
+    Returns:
+        Similarity 0-1 (higher = more similar), or None if either is missing.
+    """
+    if hist1 is None or hist2 is None:
+        return None
+    # HISTCMP_BHATTACHARYYA returns distance (0 = identical, 1 = no overlap)
+    dist = cv2.compareHist(hist1, hist2, cv2.HISTCMP_BHATTACHARYYA)
+    return max(0.0, 1.0 - dist)
 
 
 def compute_appearance_similarity(
@@ -370,8 +382,19 @@ def compute_appearance_similarity(
     """
     Compute similarity between a player profile and track appearance.
 
+    Uses HS histograms for clothing regions (upper + lower body) as the
+    primary signal, with skin tone and height as supplementary features.
+
     Cost formula (lower = more similar):
-    cost = 1.0 - (0.50 * skin_score + 0.30 * height_score + 0.20 * jersey_score)
+        cost = 1.0 - weighted_similarity
+
+    Weights (when all features available):
+        35% lower body histogram (shorts — always visible)
+        25% upper body histogram (t-shirt/jersey — may be bare skin)
+        25% height (reliable for different-height players)
+        15% skin tone
+
+    Missing features are skipped; remaining weights are renormalized.
 
     Args:
         profile: Stored player appearance profile.
@@ -380,26 +403,37 @@ def compute_appearance_similarity(
     Returns:
         Cost (0-1, lower = more similar).
     """
-    skin_score = 0.0
-    height_score = 0.0
-    jersey_score = 0.0
+    scores: list[tuple[float, float]] = []  # (weight, score) pairs
 
-    # Skin tone similarity (most reliable)
-    if profile.avg_skin_tone_hsv and features.avg_skin_tone_hsv:
-        skin_score = _hsv_similarity(profile.avg_skin_tone_hsv, features.avg_skin_tone_hsv)
+    # Lower body histogram (shorts — most discriminative)
+    lower_sim = _histogram_similarity(profile.avg_lower_hist, features.avg_lower_hist)
+    if lower_sim is not None:
+        scores.append((0.35, lower_sim))
+
+    # Upper body histogram (t-shirt/jersey)
+    upper_sim = _histogram_similarity(profile.avg_upper_hist, features.avg_upper_hist)
+    if upper_sim is not None:
+        scores.append((0.25, upper_sim))
 
     # Height similarity
     if profile.avg_bbox_height > 0 and features.avg_bbox_height > 0:
         height_diff = abs(profile.avg_bbox_height - features.avg_bbox_height)
-        # Normalize: 10% height difference = 0 similarity
-        height_score = max(0, 1.0 - height_diff / 0.10)
+        height_score = max(0.0, 1.0 - height_diff / 0.10)
+        scores.append((0.25, height_score))
 
-    # Jersey color similarity (least reliable)
-    if profile.avg_jersey_color_hsv and features.avg_jersey_color_hsv:
-        jersey_score = _hsv_similarity(profile.avg_jersey_color_hsv, features.avg_jersey_color_hsv)
+    # Skin tone similarity
+    if profile.avg_skin_tone_hsv is not None and features.avg_skin_tone_hsv is not None:
+        skin_score = _hsv_similarity(
+            profile.avg_skin_tone_hsv, features.avg_skin_tone_hsv,
+        )
+        scores.append((0.15, skin_score))
 
-    # Weighted combination
-    similarity = 0.50 * skin_score + 0.30 * height_score + 0.20 * jersey_score
+    if not scores:
+        return 1.0  # No features → max cost (unknown)
+
+    # Normalize weights to sum to 1.0
+    total_weight = sum(w for w, _ in scores)
+    similarity = sum(w * s for w, s in scores) / total_weight
 
     return 1.0 - similarity  # Return cost (lower = better match)
 

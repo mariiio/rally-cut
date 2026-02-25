@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import cv2
+import numpy as np
+
 from rallycut.tracking.match_tracker import MatchPlayerTracker
 from rallycut.tracking.player_features import (
+    HS_BINS,
+    HS_RANGES,
     PlayerAppearanceFeatures,
     TrackAppearanceStats,
 )
@@ -33,14 +38,39 @@ def _make_positions(
     return positions
 
 
+def _make_histogram(dominant_hue: float, dominant_sat: float) -> np.ndarray:
+    """Create a synthetic HS histogram with a peak at the given H/S values.
+
+    Args:
+        dominant_hue: Hue value (0-180, OpenCV scale).
+        dominant_sat: Saturation value (0-255).
+
+    Returns:
+        L1-normalized float32 histogram matching HS_BINS shape.
+    """
+    # Create a small synthetic HSV image (20x20 = 400 pixels, above MIN_HIST_PIXELS)
+    h = np.full((20, 20), dominant_hue, dtype=np.uint8)
+    s = np.full((20, 20), int(dominant_sat), dtype=np.uint8)
+    v = np.full((20, 20), 180, dtype=np.uint8)
+    hsv = np.stack([h, s, v], axis=-1)
+    hist = cv2.calcHist([hsv], [0, 1], None, list(HS_BINS), HS_RANGES)
+    cv2.normalize(hist, hist, alpha=1.0, norm_type=cv2.NORM_L1)
+    return hist.astype(np.float32)
+
+
 def _make_stats(
     track_id: int,
     skin_hsv: tuple[float, float, float] = (20.0, 150.0, 180.0),
-    jersey_hsv: tuple[float, float, float] | None = None,
     height: float = 0.15,
     num_features: int = 5,
+    upper_hue: float = 20.0,
+    upper_sat: float = 100.0,
+    lower_hue: float = 100.0,
+    lower_sat: float = 200.0,
 ) -> TrackAppearanceStats:
     """Create TrackAppearanceStats with known feature values."""
+    upper_hist = _make_histogram(upper_hue, upper_sat)
+    lower_hist = _make_histogram(lower_hue, lower_sat)
     stats = TrackAppearanceStats(track_id=track_id)
     for i in range(num_features):
         f = PlayerAppearanceFeatures(
@@ -48,8 +78,8 @@ def _make_stats(
             frame_number=i,
             skin_tone_hsv=skin_hsv,
             skin_pixel_count=100,
-            jersey_color_hsv=jersey_hsv,
-            jersey_pixel_count=50 if jersey_hsv else 0,
+            upper_body_hist=upper_hist.copy(),
+            lower_body_hist=lower_hist.copy(),
             bbox_height=height,
             bbox_aspect_ratio=0.33,
         )
@@ -90,16 +120,20 @@ class TestHungarianAssignment:
         """Hungarian should match tracks to the most similar profiles."""
         tracker = MatchPlayerTracker()
 
-        # Rally 1: establish profiles
-        # Track 10 (near): dark skin, tall
-        # Track 11 (near): light skin, short
-        # Track 20 (far): reddish skin
-        # Track 21 (far): yellowish skin
+        # Rally 1: establish profiles with distinct clothing colors + skin + height
+        # Track 10 (near): dark skin, tall, red shorts, blue shirt
+        # Track 11 (near): light skin, short, green shorts, yellow shirt
+        # Track 20 (far): reddish skin, orange shorts, white shirt
+        # Track 21 (far): yellowish skin, purple shorts, gray shirt
         stats1 = {
-            10: _make_stats(10, skin_hsv=(15.0, 180.0, 120.0), height=0.18),
-            11: _make_stats(11, skin_hsv=(25.0, 100.0, 200.0), height=0.12),
-            20: _make_stats(20, skin_hsv=(10.0, 160.0, 150.0), height=0.10),
-            21: _make_stats(21, skin_hsv=(30.0, 120.0, 170.0), height=0.09),
+            10: _make_stats(10, skin_hsv=(15.0, 180.0, 120.0), height=0.18,
+                            lower_hue=0.0, lower_sat=200.0, upper_hue=110.0, upper_sat=180.0),
+            11: _make_stats(11, skin_hsv=(25.0, 100.0, 200.0), height=0.12,
+                            lower_hue=60.0, lower_sat=200.0, upper_hue=30.0, upper_sat=180.0),
+            20: _make_stats(20, skin_hsv=(10.0, 160.0, 150.0), height=0.10,
+                            lower_hue=15.0, lower_sat=220.0, upper_hue=0.0, upper_sat=30.0),
+            21: _make_stats(21, skin_hsv=(30.0, 120.0, 170.0), height=0.09,
+                            lower_hue=140.0, lower_sat=150.0, upper_hue=0.0, upper_sat=50.0),
         }
         positions1 = _make_positions([10, 11, 20, 21], [0.7, 0.8, 0.3, 0.4])
         result1 = tracker.process_rally(
@@ -113,13 +147,15 @@ class TestHungarianAssignment:
         p_for_t21 = result1.track_to_player[21]
 
         # Rally 2: new track IDs but SAME appearances
-        # Track 30 should match profile of track 10's player (dark skin, tall)
-        # Track 31 should match profile of track 11's player (light skin, short)
         stats2 = {
-            30: _make_stats(30, skin_hsv=(15.0, 180.0, 120.0), height=0.18),
-            31: _make_stats(31, skin_hsv=(25.0, 100.0, 200.0), height=0.12),
-            40: _make_stats(40, skin_hsv=(10.0, 160.0, 150.0), height=0.10),
-            41: _make_stats(41, skin_hsv=(30.0, 120.0, 170.0), height=0.09),
+            30: _make_stats(30, skin_hsv=(15.0, 180.0, 120.0), height=0.18,
+                            lower_hue=0.0, lower_sat=200.0, upper_hue=110.0, upper_sat=180.0),
+            31: _make_stats(31, skin_hsv=(25.0, 100.0, 200.0), height=0.12,
+                            lower_hue=60.0, lower_sat=200.0, upper_hue=30.0, upper_sat=180.0),
+            40: _make_stats(40, skin_hsv=(10.0, 160.0, 150.0), height=0.10,
+                            lower_hue=15.0, lower_sat=220.0, upper_hue=0.0, upper_sat=30.0),
+            41: _make_stats(41, skin_hsv=(30.0, 120.0, 170.0), height=0.09,
+                            lower_hue=140.0, lower_sat=150.0, upper_hue=0.0, upper_sat=50.0),
         }
         positions2 = _make_positions([30, 31, 40, 41], [0.7, 0.8, 0.3, 0.4])
         result2 = tracker.process_rally(
@@ -190,10 +226,14 @@ class TestSideSwitchDetection:
         tracker = MatchPlayerTracker()
         positions = _make_positions([10, 11, 20, 21], [0.7, 0.8, 0.3, 0.4])
         stats = {
-            10: _make_stats(10, skin_hsv=(15.0, 180.0, 120.0)),
-            11: _make_stats(11, skin_hsv=(25.0, 100.0, 200.0)),
-            20: _make_stats(20, skin_hsv=(10.0, 160.0, 150.0)),
-            21: _make_stats(21, skin_hsv=(30.0, 120.0, 170.0)),
+            10: _make_stats(10, skin_hsv=(15.0, 180.0, 120.0),
+                            lower_hue=0.0, lower_sat=200.0),
+            11: _make_stats(11, skin_hsv=(25.0, 100.0, 200.0),
+                            lower_hue=60.0, lower_sat=200.0),
+            20: _make_stats(20, skin_hsv=(10.0, 160.0, 150.0),
+                            lower_hue=120.0, lower_sat=200.0),
+            21: _make_stats(21, skin_hsv=(30.0, 120.0, 170.0),
+                            lower_hue=140.0, lower_sat=200.0),
         }
 
         # Rally 1: no switch possible
@@ -204,10 +244,14 @@ class TestSideSwitchDetection:
 
         # Rally 2: still too early (need >=3 rallies for stable profiles)
         stats2 = {
-            30: _make_stats(30, skin_hsv=(15.0, 180.0, 120.0)),
-            31: _make_stats(31, skin_hsv=(25.0, 100.0, 200.0)),
-            40: _make_stats(40, skin_hsv=(10.0, 160.0, 150.0)),
-            41: _make_stats(41, skin_hsv=(30.0, 120.0, 170.0)),
+            30: _make_stats(30, skin_hsv=(15.0, 180.0, 120.0),
+                            lower_hue=0.0, lower_sat=200.0),
+            31: _make_stats(31, skin_hsv=(25.0, 100.0, 200.0),
+                            lower_hue=60.0, lower_sat=200.0),
+            40: _make_stats(40, skin_hsv=(10.0, 160.0, 150.0),
+                            lower_hue=120.0, lower_sat=200.0),
+            41: _make_stats(41, skin_hsv=(30.0, 120.0, 170.0),
+                            lower_hue=140.0, lower_sat=200.0),
         }
         positions2 = _make_positions([30, 31, 40, 41], [0.7, 0.8, 0.3, 0.4])
         r2 = tracker.process_rally(
@@ -219,19 +263,29 @@ class TestSideSwitchDetection:
         """Switch should be detected when near/far appearances clearly swap."""
         tracker = MatchPlayerTracker()
 
-        # Distinct appearances: near team has dark skin, far has light
+        # Distinct appearances per team
         near_skin = (15.0, 180.0, 100.0)
         far_skin = (30.0, 80.0, 220.0)
+        near_lower, near_upper = (0.0, 220.0), (110.0, 180.0)
+        far_lower, far_upper = (120.0, 200.0), (30.0, 50.0)
 
         # Build profiles over 3 rallies with consistent appearances
         for i in range(3):
             tids_near = [100 + i * 10, 101 + i * 10]
             tids_far = [200 + i * 10, 201 + i * 10]
             stats = {
-                tids_near[0]: _make_stats(tids_near[0], skin_hsv=near_skin, height=0.18),
-                tids_near[1]: _make_stats(tids_near[1], skin_hsv=near_skin, height=0.17),
-                tids_far[0]: _make_stats(tids_far[0], skin_hsv=far_skin, height=0.10),
-                tids_far[1]: _make_stats(tids_far[1], skin_hsv=far_skin, height=0.09),
+                tids_near[0]: _make_stats(tids_near[0], skin_hsv=near_skin, height=0.18,
+                                          lower_hue=near_lower[0], lower_sat=near_lower[1],
+                                          upper_hue=near_upper[0], upper_sat=near_upper[1]),
+                tids_near[1]: _make_stats(tids_near[1], skin_hsv=near_skin, height=0.17,
+                                          lower_hue=near_lower[0], lower_sat=near_lower[1],
+                                          upper_hue=near_upper[0], upper_sat=near_upper[1]),
+                tids_far[0]: _make_stats(tids_far[0], skin_hsv=far_skin, height=0.10,
+                                         lower_hue=far_lower[0], lower_sat=far_lower[1],
+                                         upper_hue=far_upper[0], upper_sat=far_upper[1]),
+                tids_far[1]: _make_stats(tids_far[1], skin_hsv=far_skin, height=0.09,
+                                         lower_hue=far_lower[0], lower_sat=far_lower[1],
+                                         upper_hue=far_upper[0], upper_sat=far_upper[1]),
             }
             positions = _make_positions(
                 tids_near + tids_far, [0.7, 0.75, 0.3, 0.35]
@@ -242,10 +296,18 @@ class TestSideSwitchDetection:
 
         # Rally 4: appearances SWAPPED (far team now on near side)
         stats_swapped = {
-            500: _make_stats(500, skin_hsv=far_skin, height=0.10),
-            501: _make_stats(501, skin_hsv=far_skin, height=0.09),
-            600: _make_stats(600, skin_hsv=near_skin, height=0.18),
-            601: _make_stats(601, skin_hsv=near_skin, height=0.17),
+            500: _make_stats(500, skin_hsv=far_skin, height=0.10,
+                             lower_hue=far_lower[0], lower_sat=far_lower[1],
+                             upper_hue=far_upper[0], upper_sat=far_upper[1]),
+            501: _make_stats(501, skin_hsv=far_skin, height=0.09,
+                             lower_hue=far_lower[0], lower_sat=far_lower[1],
+                             upper_hue=far_upper[0], upper_sat=far_upper[1]),
+            600: _make_stats(600, skin_hsv=near_skin, height=0.18,
+                             lower_hue=near_lower[0], lower_sat=near_lower[1],
+                             upper_hue=near_upper[0], upper_sat=near_upper[1]),
+            601: _make_stats(601, skin_hsv=near_skin, height=0.17,
+                             lower_hue=near_lower[0], lower_sat=near_lower[1],
+                             upper_hue=near_upper[0], upper_sat=near_upper[1]),
         }
         positions_swapped = _make_positions([500, 501, 600, 601], [0.7, 0.75, 0.3, 0.35])
         result = tracker.process_rally(
@@ -268,10 +330,14 @@ class TestSideSwitchDetection:
             tids_near = [100 + i * 10, 101 + i * 10]
             tids_far = [200 + i * 10, 201 + i * 10]
             stats = {
-                tids_near[0]: _make_stats(tids_near[0], skin_hsv=skin_a, height=0.18),
-                tids_near[1]: _make_stats(tids_near[1], skin_hsv=skin_a, height=0.17),
-                tids_far[0]: _make_stats(tids_far[0], skin_hsv=skin_b, height=0.10),
-                tids_far[1]: _make_stats(tids_far[1], skin_hsv=skin_b, height=0.09),
+                tids_near[0]: _make_stats(tids_near[0], skin_hsv=skin_a, height=0.18,
+                                          lower_hue=0.0, lower_sat=220.0),
+                tids_near[1]: _make_stats(tids_near[1], skin_hsv=skin_a, height=0.17,
+                                          lower_hue=0.0, lower_sat=220.0),
+                tids_far[0]: _make_stats(tids_far[0], skin_hsv=skin_b, height=0.10,
+                                         lower_hue=120.0, lower_sat=200.0),
+                tids_far[1]: _make_stats(tids_far[1], skin_hsv=skin_b, height=0.09,
+                                         lower_hue=120.0, lower_sat=200.0),
             }
             positions = _make_positions(
                 tids_near + tids_far, [0.7, 0.75, 0.3, 0.35]
