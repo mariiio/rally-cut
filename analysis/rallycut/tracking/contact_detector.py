@@ -162,8 +162,6 @@ class ContactSequence:
     net_y: float = 0.50  # Estimated net Y position
     rally_start_frame: int = 0
     ball_positions: list[BallPosition] = field(default_factory=list)
-    low_confidence: bool = False  # True when prerequisite checks found issues
-
     @property
     def num_contacts(self) -> int:
         return len(self.contacts)
@@ -183,7 +181,6 @@ class ContactSequence:
             "netY": self.net_y,
             "rallyStartFrame": self.rally_start_frame,
             "contacts": [c.to_dict() for c in self.contacts],
-            "lowConfidence": self.low_confidence,
         }
 
 
@@ -1047,72 +1044,6 @@ def _deduplicate_contacts(
     return sorted(result, key=lambda c: c.frame)
 
 
-@dataclass
-class ContactPrerequisiteCheck:
-    """Result of checking contact detection prerequisites."""
-
-    issues: list[str] = field(default_factory=list)
-    ball_detection_rate: float = 0.0
-    num_player_tracks: int = 0
-    court_split_y: float | None = None
-
-    @property
-    def is_low_confidence(self) -> bool:
-        """True if any prerequisite issues were found."""
-        return len(self.issues) > 0
-
-
-def check_contact_prerequisites(
-    ball_positions: list[BallPosition],
-    player_positions: list[PlayerPosition] | None,
-    court_split_y: float | None = None,
-    min_ball_detection_rate: float = 0.50,
-    min_player_tracks: int = 3,
-    court_split_y_range: tuple[float, float] = _VALID_NET_Y_RANGE,
-) -> ContactPrerequisiteCheck:
-    """Check whether contact detection prerequisites are met.
-
-    Returns a check result with any issues found. When issues exist,
-    contact detection can still run but results should be flagged as
-    low-confidence.
-    """
-    check = ContactPrerequisiteCheck(court_split_y=court_split_y)
-
-    if ball_positions:
-        confident = sum(1 for p in ball_positions if p.confidence > 0.3)
-        check.ball_detection_rate = confident / len(ball_positions)
-        if check.ball_detection_rate < min_ball_detection_rate:
-            check.issues.append(
-                f"Ball detection rate {check.ball_detection_rate:.0%} "
-                f"< {min_ball_detection_rate:.0%}"
-            )
-    else:
-        check.issues.append("No ball positions provided")
-
-    if player_positions:
-        unique_tracks = len(
-            {p.track_id for p in player_positions if p.track_id >= 0}
-        )
-        check.num_player_tracks = unique_tracks
-        if unique_tracks < min_player_tracks:
-            check.issues.append(
-                f"Only {unique_tracks} player tracks "
-                f"(need >= {min_player_tracks})"
-            )
-    else:
-        check.issues.append("No player positions provided")
-
-    if court_split_y is not None:
-        min_y, max_y = court_split_y_range
-        if not (min_y <= court_split_y <= max_y):
-            check.issues.append(
-                f"court_split_y={court_split_y:.2f} outside valid range "
-                f"[{min_y}, {max_y}]"
-            )
-
-    return check
-
-
 def detect_contacts(
     ball_positions: list[BallPosition],
     player_positions: list[PlayerPosition] | None = None,
@@ -1161,14 +1092,6 @@ def detect_contacts(
 
     if not ball_positions:
         return ContactSequence()
-
-    # Check prerequisites and flag potential issues
-    prereq_check = check_contact_prerequisites(
-        ball_positions, player_positions, net_y,
-    )
-    if prereq_check.issues:
-        for issue in prereq_check.issues:
-            logger.warning("Contact detection prerequisite issue: %s", issue)
 
     # Step 1: Pre-filter noise spikes
     if cfg.enable_noise_filter:
@@ -1517,5 +1440,4 @@ def detect_contacts(
         net_y=estimated_net_y,
         rally_start_frame=first_frame,
         ball_positions=confident_positions,
-        low_confidence=prereq_check.is_low_confidence,
     )

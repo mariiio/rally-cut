@@ -726,11 +726,6 @@ def track_players(
         }
 
         if not quiet:
-            if contact_seq.low_confidence:
-                console.print(
-                    "[yellow]Warning: Contact detection may be unreliable "
-                    "(low ball detection or extreme camera angle)[/yellow]"
-                )
             seq = [a.action_type.value for a in rally_actions.actions]
             console.print(f"[dim]Contacts: {contact_seq.num_contacts}[/dim]")
             if seq:
