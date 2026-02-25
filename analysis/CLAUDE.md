@@ -397,7 +397,8 @@ The heatmap threshold is 0.3 (optimal for beach volleyball). The filter pipeline
 - **False segments at rally boundaries**: The detector outputs false detections at rally start/end. Segment pruning splits the trajectory at large position jumps (>20% screen) and discards short fragments (<15 frames). Short fragments spatially close to an anchor segment are recovered.
 - **Interleaved false positives**: Single-frame false detections (jumping to player positions) within real trajectory regions. Anchor-proximity recovery keeps real fragments and discards distant false positive clusters.
 - **Oscillating false detections**: After ball exits frame, the detector can lock onto two players and alternate between them. Oscillation pruning uses spatial clustering to detect this pattern. A transition rate ≥25% over 12+ frames triggers trimming.
-- **Exit ghost detections**: When the ball exits the frame, false detections smoothly drift from the exit point toward a player position. Detected by physics: ball approaching a screen edge with velocity > 0.8%/frame MUST exit — any reversal is impossible.
+- **Exit ghost detections**: When the ball exits the frame, false detections smoothly drift from the exit point toward a player position. Detected by physics: ball approaching a screen edge with velocity > 0.8%/frame MUST exit — any reversal is impossible. Ghost regions capped at 30 frames — longer continuous detections indicate real ball re-entry, not ghost drift.
+- **Non-ball object segments (pigeons, cars, player hands)**: WASB can detect non-ball objects that form long segments qualifying as anchors, creating "teleporting" artifacts. Spatial outlier removal (Step 3d) uses iterative leave-one-out weighted centroid analysis to identify and remove anchors whose centroids are far (>segment_jump_threshold) from the rest.
 - **Hovering false detections**: After ball exits frame, the detector can lock onto a single player position. Detected by checking short segments where positions lie within 5% of screen of their centroid.
 - **Trajectory blips**: Brief lock-on to a player position for 2-5 consecutive frames mid-trajectory. Blip removal uses distant trajectory context with a two-pass approach.
 - **Missing frames**: Linear interpolation fills small gaps (up to 10 frames) between detections.
@@ -416,6 +417,7 @@ The heatmap threshold is 0.3 (optimal for beach volleyball). The filter pipeline
 - `exit_edge_zone=0.10`: Screen edge zone (10%) for exit approach detection
 - `exit_approach_frames=3`: Min consecutive frames approaching edge before reversal triggers
 - `exit_min_approach_speed=0.008`: Min per-frame speed toward edge (~0.8% of screen)
+- `exit_max_ghost_frames=30`: Max ghost region duration (~1s at 30fps); longer = real ball re-entry
 - `enable_oscillation_pruning=True`: Detect and trim cluster-based oscillation patterns
 - `min_oscillation_frames=12`: Sliding window size for cluster transition rate detection
 - `oscillation_reversal_rate=0.25`: Cluster transition rate threshold to trigger pruning

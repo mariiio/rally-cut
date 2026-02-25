@@ -62,6 +62,9 @@ class BallFilterConfig:
     exit_edge_zone: float = 0.10  # 10% of screen — zone where exit approach is checked
     exit_approach_frames: int = 3  # Min consecutive frames approaching edge
     exit_min_approach_speed: float = 0.008  # Min per-frame speed toward edge (~0.8% of screen)
+    # Max ghost region duration (~1s at 30fps). Real ghosts drift for a few
+    # frames; 30+ consecutive detections at moving positions = real ball re-entry.
+    exit_max_ghost_frames: int = 30
 
     # Outlier removal (removes flickering and edge artifacts)
     # Runs after segment pruning to clean within real segments.
@@ -668,6 +671,68 @@ class BallTemporalFilter:
                         f"{len(second_last_seg)})"
                     )
 
+        # Step 3d: Remove spatial outlier anchors.
+        # WASB can detect non-ball objects (pigeons, cars, player hands) that
+        # form long-enough segments to qualify as anchors. These create visible
+        # "teleporting" artifacts. For each anchor, compute leave-one-out
+        # weighted centroid of all other anchors; if the anchor's centroid is
+        # far from the rest, it's tracking a different object.
+        if len(anchor_indices) >= 3:
+            outlier_removed: set[int] = set()
+
+            # Pre-compute centroids for all segments
+            seg_centroids: dict[int, tuple[float, float]] = {}
+            for i in anchor_indices:
+                seg = segments[i]
+                seg_centroids[i] = (
+                    float(np.mean([p.x for p in seg])),
+                    float(np.mean([p.y for p in seg])),
+                )
+
+            while True:
+                active = anchor_indices - outlier_removed
+                if len(active) <= 2:
+                    break
+
+                # Compute leave-one-out distances
+                candidates: list[tuple[int, float]] = []
+                for i in active:
+                    others = active - {i}
+                    total_w = sum(len(segments[j]) for j in others)
+                    cx = sum(
+                        len(segments[j]) * seg_centroids[j][0] for j in others
+                    ) / total_w
+                    cy = sum(
+                        len(segments[j]) * seg_centroids[j][1] for j in others
+                    ) / total_w
+                    mx, my = seg_centroids[i]
+                    dist = float(np.sqrt((mx - cx) ** 2 + (my - cy) ** 2))
+                    if dist > threshold:
+                        candidates.append((i, dist))
+
+                if not candidates:
+                    break
+
+                # Remove all outliers this round (largest distance first),
+                # but always keep at least 2 anchors. Batch removal is
+                # intentional: secondary clusters (e.g. two player-hand
+                # segments) should be removed together in one pass.
+                candidates.sort(key=lambda c: c[1], reverse=True)
+                max_remove = len(active) - 2
+                for idx, dist in candidates[:max_remove]:
+                    outlier_removed.add(idx)
+
+            if outlier_removed:
+                for i in sorted(outlier_removed):
+                    seg = segments[i]
+                    cx, cy = seg_centroids[i]
+                    logger.info(
+                        f"Spatial outlier: removed anchor "
+                        f"[{seg[0].frame_number}-{seg[-1].frame_number}] "
+                        f"({len(seg)} frames, centroid=({cx:.3f}, {cy:.3f}))"
+                    )
+                anchor_indices -= outlier_removed
+
         # Step 4: Keep short segments whose centroid is close to an anchor endpoint.
         # These are real trajectory fragments between interleaved false positives.
         # Use half the jump threshold as proximity — tight enough to exclude
@@ -940,6 +1005,7 @@ class BallTemporalFilter:
         edge_zone = self.config.exit_edge_zone
         min_speed = self.config.exit_min_approach_speed
         max_gap = self.config.max_interpolation_gap
+        max_ghost_frames = self.config.exit_max_ghost_frames
 
         ranges: list[tuple[int, int]] = []
         in_ghost_region = False
@@ -958,6 +1024,23 @@ class BallTemporalFilter:
                     ranges.append((ghost_start_frame, last_ghost_frame))
                     in_ghost_region = False
                     exit_edge_name = None
+                    continue
+
+                # Terminate at max ghost duration — real ghosts drift for
+                # a few frames; long consecutive detections = real ball
+                ghost_duration = curr.frame_number - ghost_start_frame
+                if ghost_duration >= max_ghost_frames:
+                    # Don't save this range — the "ghost" is actually real ball.
+                    # Intentionally skip re-evaluating frame i for new ghost
+                    # triggers: approach frames (i-3..i-1) are all from the
+                    # cancelled region and meaningless for edge-approach checks.
+                    in_ghost_region = False
+                    exit_edge_name = None
+                    logger.info(
+                        f"Exit ghost: cancelled ghost at f={ghost_start_frame} "
+                        f"(duration {ghost_duration} >= {max_ghost_frames}, "
+                        f"likely real ball re-entry)"
+                    )
                     continue
 
                 # Terminate when position returns to exit edge zone
