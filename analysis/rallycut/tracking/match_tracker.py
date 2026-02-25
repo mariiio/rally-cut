@@ -677,11 +677,55 @@ def extract_rally_appearances(
     return stats
 
 
+@dataclass
+class MatchPlayersResult:
+    """Result of cross-rally player matching."""
+
+    rally_results: list[RallyTrackingResult]
+    player_profiles: dict[int, PlayerAppearanceProfile]  # player_id -> profile
+
+
+def build_cross_rally_priors(
+    profiles_data: dict[str, dict],
+) -> list | None:
+    """Build CrossRallyPrior list from serialized player profiles.
+
+    Shared helper used by both CLI and service runner to convert
+    serialized PlayerAppearanceProfile dicts (from matchAnalysisJson)
+    into CrossRallyPrior instances for global identity optimization.
+
+    Args:
+        profiles_data: Dict mapping player_id string to profile dict
+            (as stored in matchAnalysisJson["playerProfiles"]).
+
+    Returns:
+        List of CrossRallyPrior, or None if no usable profiles.
+    """
+    from rallycut.tracking.global_identity import CrossRallyPrior
+
+    if not profiles_data:
+        return None
+
+    priors: list[CrossRallyPrior] = []
+    for _pid_str, profile_dict in profiles_data.items():
+        profile = PlayerAppearanceProfile.from_dict(profile_dict)
+        if profile.rally_count < 1:
+            continue
+        priors.append(CrossRallyPrior(
+            player_id=profile.player_id,
+            team=profile.team,
+            shorts_histogram=profile.avg_lower_hist,
+            rally_count=profile.rally_count,
+        ))
+
+    return priors if priors else None
+
+
 def match_players_across_rallies(
     video_path: Path,
     rallies: list[RallyTrackData],
     num_samples: int = 12,
-) -> list[RallyTrackingResult]:
+) -> MatchPlayersResult:
     """
     Match players across all rallies in a video for consistent IDs.
 
@@ -694,7 +738,7 @@ def match_players_across_rallies(
         num_samples: Frames to sample per track for appearance.
 
     Returns:
-        List of RallyTrackingResult with track→player mappings.
+        MatchPlayersResult with track→player mappings and accumulated profiles.
     """
     tracker = MatchPlayerTracker()
     results: list[RallyTrackingResult] = []
@@ -726,4 +770,7 @@ def match_players_across_rallies(
             f"assignments={result.track_to_player}"
         )
 
-    return results
+    return MatchPlayersResult(
+        rally_results=results,
+        player_profiles=dict(tracker.state.players),
+    )

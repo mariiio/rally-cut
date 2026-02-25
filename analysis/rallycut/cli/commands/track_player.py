@@ -39,6 +39,71 @@ from rallycut.tracking.player_tracker import (
 console = Console()
 
 
+def _load_cross_rally_priors(
+    source: str,
+    quiet: bool,
+) -> list | None:
+    """Load cross-rally priors from a video ID (DB) or JSON file path.
+
+    Args:
+        source: Video ID string, or path to a .json file from match-players.
+        quiet: Suppress progress output.
+
+    Returns:
+        List of CrossRallyPrior, or None if loading fails.
+    """
+    import json
+
+    from rallycut.tracking.match_tracker import build_cross_rally_priors
+
+    profiles_data: dict | None = None
+
+    # Distinguish file path (.json extension) from video ID
+    source_path = Path(source)
+    if source_path.exists() and source_path.suffix == ".json":
+        with open(source_path) as f:
+            data = json.load(f)
+        profiles_data = data.get("playerProfiles", {})
+        if not quiet:
+            console.print(f"[dim]Match profiles: loaded from {source_path.name}[/dim]")
+    else:
+        # Treat as video ID — load matchAnalysisJson from DB
+        try:
+            from rallycut.evaluation.tracking.db import get_connection
+
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT match_analysis_json FROM videos WHERE id = %s",
+                        [source],
+                    )
+                    row = cur.fetchone()
+
+            if row and row[0] and isinstance(row[0], dict):
+                profiles_data = row[0].get("playerProfiles", {})
+                if not quiet:
+                    console.print(
+                        f"[dim]Match profiles: loaded from DB for video {source[:8]}[/dim]"
+                    )
+            elif not quiet:
+                console.print(
+                    "[yellow]Warning: No match analysis found in DB for this video[/yellow]"
+                )
+        except Exception as e:
+            if not quiet:
+                console.print(f"[yellow]Warning: Failed to load match profiles: {e}[/yellow]")
+
+    if not profiles_data:
+        return None
+
+    priors = build_cross_rally_priors(profiles_data)
+
+    if priors and not quiet:
+        console.print(f"[dim]  {len(priors)} player priors loaded[/dim]")
+
+    return priors
+
+
 # Colors for different track IDs (BGR format for OpenCV)
 TRACK_COLORS = [
     (0, 255, 0),    # Green
@@ -390,6 +455,16 @@ def track_players(
         "--actions/--no-actions",
         help="Run action classification (contact detection + rule-based classification)",
     ),
+    # Cross-rally match profiles
+    use_match_profiles: str | None = typer.Option(
+        None,
+        "--use-match-profiles",
+        help=(
+            "Load cross-rally player profiles for global identity. "
+            "Pass a video ID to load from DB matchAnalysisJson, "
+            "or a JSON file path."
+        ),
+    ),
 ) -> None:
     """Track player positions in a beach volleyball video.
 
@@ -638,6 +713,11 @@ def track_players(
         if overrides and not quiet:
             console.print(f"[dim]Filter overrides: {', '.join(overrides)}[/dim]")
 
+    # Load cross-rally priors if requested
+    cross_rally_priors = None
+    if use_match_profiles:
+        cross_rally_priors = _load_cross_rally_priors(use_match_profiles, quiet)
+
     # Create player tracker with optional preprocessing and tracker selection
     if preprocessing != PREPROCESSING_NONE and not quiet:
         console.print(f"[dim]Preprocessing: {preprocessing}[/dim]")
@@ -669,6 +749,7 @@ def track_players(
             filter_config=filter_config,
             court_calibrator=calibrator,
             court_detection_insights=court_insights,
+            cross_rally_priors=cross_rally_priors,
         )
     else:
         with Progress(
@@ -694,6 +775,7 @@ def track_players(
                 filter_config=filter_config,
                 court_calibrator=calibrator,
                 court_detection_insights=court_insights,
+                cross_rally_priors=cross_rally_priors,
             )
 
     # Include ball positions in result for trajectory overlay
@@ -714,6 +796,8 @@ def track_players(
             player_positions=result.positions,
             net_y=result.court_split_y,
             frame_count=result.frame_count or None,
+            team_assignments=result.team_assignments,
+            court_calibrator=calibrator,
         )
         rally_actions = classify_rally_actions(
             contact_seq,

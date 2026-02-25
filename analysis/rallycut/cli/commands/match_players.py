@@ -47,7 +47,7 @@ def match_players(
         rallycut match-players abc123 -o result.json
     """
     from rallycut.evaluation.tracking.db import get_video_path, load_rallies_for_video
-    from rallycut.tracking.match_tracker import match_players_across_rallies
+    from rallycut.tracking.match_tracker import MatchPlayersResult, match_players_across_rallies
 
     if not quiet:
         console.print(f"[bold]Cross-Rally Player Matching:[/bold] video {video_id[:8]}...")
@@ -73,11 +73,12 @@ def match_players(
         console.print()
 
     # Run matching
-    results = match_players_across_rallies(
+    match_result: MatchPlayersResult = match_players_across_rallies(
         video_path=video_path,
         rallies=rallies,
         num_samples=num_samples,
     )
+    results = match_result.rally_results
 
     # Print summary table
     if not quiet:
@@ -123,11 +124,19 @@ def match_players(
         console.print(f"  Avg confidence: {avg_conf:.2f}")
         console.print(f"  Side switches: {n_switches}")
 
+    # Serialize player profiles
+    player_profiles_data = {
+        str(pid): profile.to_dict()
+        for pid, profile in match_result.player_profiles.items()
+        if profile.rally_count > 0
+    }
+
     # Write JSON output
     if output:
         output_data = {
             "video_id": video_id,
             "num_rallies": len(results),
+            "playerProfiles": player_profiles_data,
             "rallies": [
                 {
                     "rally_id": rally.rally_id,

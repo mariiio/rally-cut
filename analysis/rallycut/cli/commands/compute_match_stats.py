@@ -40,6 +40,7 @@ def _load_rally_actions_and_positions(
     rally_query = """
         SELECT
             r.id as rally_id,
+            r.start_ms,
             pt.positions_json,
             pt.actions_json,
             pt.ball_positions_json
@@ -51,13 +52,14 @@ def _load_rally_actions_and_positions(
         ORDER BY r.start_ms
     """
 
-    # Load video-level data (calibration, match analysis, dimensions)
+    # Load video-level data (calibration, match analysis, dimensions, fps)
     video_query = """
         SELECT
             court_calibration_json,
             match_analysis_json,
             width,
-            height
+            height,
+            fps
         FROM videos
         WHERE id = %s
     """
@@ -79,13 +81,16 @@ def _load_rally_actions_and_positions(
     match_analysis = None
     video_width = 1920
     video_height = 1080
+    video_fps = 30.0
 
     if video_row:
-        cal_json, ma_json, v_width, v_height = video_row
+        cal_json, ma_json, v_width, v_height, v_fps = video_row
         if v_width:
             video_width = cast(int, v_width)
         if v_height:
             video_height = cast(int, v_height)
+        if v_fps:
+            video_fps = cast(float, v_fps)
 
         # Build calibrator from court corners
         if cal_json and isinstance(cal_json, list) and len(cal_json) == 4:
@@ -100,13 +105,29 @@ def _load_rally_actions_and_positions(
         if ma_json and isinstance(ma_json, dict):
             match_analysis = ma_json
 
+    # Build rally_id → {track_id → player_id} mapping from match_analysis
+    # match_analysis.rallies[].track_to_player maps "track_id_str" -> player_id
+    rally_player_map: dict[str, dict[int, int]] = {}
+    if match_analysis and isinstance(match_analysis.get("rallies"), list):
+        for rally_entry in match_analysis["rallies"]:
+            rid = rally_entry.get("rally_id", "")
+            ttp = rally_entry.get("track_to_player", {})
+            if rid and ttp:
+                rally_player_map[rid] = {
+                    int(tid_str): int(pid)
+                    for tid_str, pid in ttp.items()
+                }
+
     for row in rally_rows:
-        rally_id_val, positions_json, actions_json, ball_json = row
+        rally_id_val, start_ms_val, positions_json, actions_json, ball_json = row
 
         # Parse actions
         actions_data = cast(dict[str, Any] | None, actions_json)
         if not actions_data:
             continue
+
+        rally_id_str = str(rally_id_val)
+        player_map = rally_player_map.get(rally_id_str, {})
 
         actions: list[ClassifiedAction] = []
         team_assignments: dict[int, int] = {}
@@ -115,7 +136,9 @@ def _load_rally_actions_and_positions(
             for tid_str, team_label in actions_data["teamAssignments"].items():
                 team_int = 0 if team_label == "A" else 1 if team_label == "B" else -1
                 if team_int >= 0:
-                    team_assignments[int(tid_str)] = team_int
+                    orig_tid = int(tid_str)
+                    mapped_tid = player_map.get(orig_tid, orig_tid)
+                    team_assignments[mapped_tid] = team_int
 
         for a in actions_data.get("actions", []):
             try:
@@ -123,33 +146,41 @@ def _load_rally_actions_and_positions(
             except (ValueError, KeyError):
                 action_type = ActionType.UNKNOWN
 
+            orig_track_id = a.get("playerTrackId", -1)
+            mapped_track_id = player_map.get(orig_track_id, orig_track_id)
+
             actions.append(ClassifiedAction(
                 action_type=action_type,
                 frame=a.get("frame", 0),
                 ball_x=a.get("ballX", 0.0),
                 ball_y=a.get("ballY", 0.0),
                 velocity=a.get("velocity", 0.0),
-                player_track_id=a.get("playerTrackId", -1),
+                player_track_id=mapped_track_id,
                 court_side=a.get("courtSide", "unknown"),
                 confidence=a.get("confidence", 0.0),
                 is_synthetic=a.get("isSynthetic", False),
                 team=a.get("team", "unknown"),
             ))
 
-        rally_id_str = str(rally_id_val)
         rally_actions_list.append(RallyActions(
             actions=actions,
             rally_id=rally_id_str,
             team_assignments=team_assignments,
         ))
 
+        # Compute frame offset for video-absolute positioning (prevents
+        # cross-rally collision when multiple rallies share track_id values)
+        frame_offset = int(cast(int, start_ms_val or 0) / 1000 * video_fps)
+
         # Parse positions
         pos_json = cast(list[dict[str, Any]] | None, positions_json)
         if pos_json:
             for p in pos_json:
+                orig_tid = p.get("trackId", -1)
+                mapped_tid = player_map.get(orig_tid, orig_tid)
                 all_positions.append(PlayerPosition(
-                    frame_number=p.get("frameNumber", 0),
-                    track_id=p.get("trackId", -1),
+                    frame_number=p.get("frameNumber", 0) + frame_offset,
+                    track_id=mapped_tid,
                     x=p.get("x", 0.0),
                     y=p.get("y", 0.0),
                     width=p.get("width", 0.0),
@@ -171,7 +202,7 @@ def _load_rally_actions_and_positions(
             ball_positions_map[rally_id_str] = ball_list
 
     return (
-        rally_actions_list, all_positions, 30.0,
+        rally_actions_list, all_positions, video_fps,
         ball_positions_map, calibrator, match_analysis,
         video_width, video_height,
     )

@@ -38,6 +38,7 @@ interface MatchAnalysisResult {
     sideSwitchDetected: boolean;
     serverPlayerId: number | null;
   }>;
+  playerProfiles?: Record<string, Record<string, unknown>>;
 }
 
 export interface MatchStatsResult {
