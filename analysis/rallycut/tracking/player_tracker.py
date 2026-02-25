@@ -1349,8 +1349,10 @@ class PlayerTracker:
                     classify_teams,
                     compute_court_split,
                     remove_stationary_background_tracks,
-                    split_tracks_at_jumps,
                     stabilize_track_ids,
+                )
+                from rallycut.tracking.spatial_consistency import (
+                    enforce_spatial_consistency,
                 )
 
                 # Get config (or create default)
@@ -1364,18 +1366,13 @@ class PlayerTracker:
                     total_frames=total_frames_in_range,
                 )
 
-                # Step 0: Split tracks at large position jumps (detects ID switches)
-                split_info: list[tuple[int, int, int]] = []
-                positions, num_jump_splits = split_tracks_at_jumps(
-                    positions, split_info_out=split_info
+                # Step 0: Spatial consistency — split tracks at large jumps
+                positions, consistency_result = enforce_spatial_consistency(
+                    positions,
+                    color_store=color_store,
+                    appearance_store=appearance_store,
                 )
-                # Rekey stores for jump splits
-                if color_store is not None:
-                    for old_id, new_id, split_frame in split_info:
-                        color_store.rekey(old_id, new_id, split_frame)
-                if appearance_store is not None:
-                    for old_id, new_id, split_frame in split_info:
-                        appearance_store.rekey(old_id, new_id, split_frame)
+                num_jump_splits = consistency_result.jump_splits
 
                 # Step 0b: Color-based track splitting
                 if color_store is not None and color_store.has_data():
