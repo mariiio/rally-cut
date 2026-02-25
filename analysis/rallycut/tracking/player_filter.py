@@ -578,6 +578,40 @@ def select_top_k_by_size(
     return sorted_players[:k]
 
 
+def _get_court_split_y_from_calibration(
+    calibrator: CourtCalibrator,
+) -> float | None:
+    """Get the net line Y position in normalized image coordinates.
+
+    Projects the net center point (court midpoint) to image space.
+
+    Args:
+        calibrator: CourtCalibrator instance (must be calibrated).
+
+    Returns:
+        Normalized Y coordinate of the net line (0-1), or None on failure.
+    """
+    from rallycut.court.calibration import COURT_LENGTH, COURT_WIDTH
+
+    net_court_x = COURT_WIDTH / 2  # Center of net
+    net_court_y = COURT_LENGTH / 2  # Net is at midpoint (8m)
+
+    try:
+        # court_to_image returns normalized coords when img dims are (1, 1)
+        _, net_y = calibrator.court_to_image(
+            (net_court_x, net_court_y), 1, 1
+        )
+        if 0.1 < net_y < 0.9:
+            return float(net_y)
+        logger.warning(
+            "Net Y projection out of reasonable range: %.3f", net_y
+        )
+        return None
+    except (RuntimeError, ValueError, np.linalg.LinAlgError) as e:
+        logger.warning("Failed to project net to image: %s", e)
+        return None
+
+
 def compute_court_split(
     ball_positions: list[BallPosition],
     config: PlayerFilterConfig,
@@ -608,11 +642,7 @@ def compute_court_split(
     """
     # Priority 1: Calibration-derived (precise geometry)
     if court_calibrator is not None and court_calibrator.is_calibrated:
-        from rallycut.tracking.team_aware_tracker import (
-            get_court_split_y_from_calibration,
-        )
-
-        cal_split = get_court_split_y_from_calibration(court_calibrator)
+        cal_split = _get_court_split_y_from_calibration(court_calibrator)
         if cal_split is not None:
             logger.debug(f"Court split from calibration: y={cal_split:.3f}")
             return (cal_split, "high")

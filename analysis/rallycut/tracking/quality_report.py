@@ -42,7 +42,6 @@ class TrackingQualityReport:
     # Repair metrics
     id_switch_count: int = 0  # From enforce_spatial_consistency
     color_split_count: int = 0  # From split_tracks_by_color
-    swap_fix_count: int = 0  # From detect_and_fix_swaps
     appearance_link_count: int = 0  # From link_tracklets_by_appearance
 
     # Distractor detection
@@ -58,6 +57,9 @@ class TrackingQualityReport:
     court_identity_interactions: int = 0  # Net interactions detected
     court_identity_swaps: int = 0  # Swaps applied by court identity
     uncertain_identity_count: int = 0  # Ambiguous interactions
+
+    # Team classification
+    team_classification_skipped: bool = False  # True when split_confidence != "high"
 
     # Global identity optimization
     global_identity_segments: int = 0  # Segments after splitting at interactions
@@ -83,7 +85,6 @@ class TrackingQualityReport:
             "avgTrackLifespanFrames": self.avg_track_lifespan_frames,
             "idSwitchCount": self.id_switch_count,
             "colorSplitCount": self.color_split_count,
-            "swapFixCount": self.swap_fix_count,
             "appearanceLinkCount": self.appearance_link_count,
             "uniqueRawTrackCount": self.unique_raw_track_count,
             "stationaryBgRemovedCount": self.stationary_bg_removed_count,
@@ -93,6 +94,7 @@ class TrackingQualityReport:
             "courtIdentityInteractions": self.court_identity_interactions,
             "courtIdentitySwaps": self.court_identity_swaps,
             "uncertainIdentityCount": self.uncertain_identity_count,
+            "teamClassificationSkipped": self.team_classification_skipped,
             "globalIdentitySegments": self.global_identity_segments,
             "globalIdentityRemapped": self.global_identity_remapped,
             "contactReadinessScore": self.contact_readiness_score,
@@ -112,7 +114,6 @@ def compute_quality_report(
     ball_positions_xy: list[tuple[float, float]] | None = None,
     id_switch_count: int = 0,
     color_split_count: int = 0,
-    swap_fix_count: int = 0,
     appearance_link_count: int = 0,
     expected_players: int = 4,
     has_court_calibration: bool = False,
@@ -124,6 +125,7 @@ def compute_quality_report(
     stationary_bg_removed_count: int = 0,
     global_identity_segments: int = 0,
     global_identity_remapped: int = 0,
+    team_classification_skipped: bool = False,
 ) -> TrackingQualityReport:
     """Compute a tracking quality report from tracking results.
 
@@ -137,7 +139,6 @@ def compute_quality_report(
         ball_positions_xy: Ball (x, y) positions for spread calculation.
         id_switch_count: Number of jump-based track splits.
         color_split_count: Number of color-based splits.
-        swap_fix_count: Number of swap fixes.
         appearance_link_count: Number of tracklet appearance-based merges.
         expected_players: Expected number of court players.
         has_court_calibration: Whether court calibration is available.
@@ -149,6 +150,8 @@ def compute_quality_report(
         stationary_bg_removed_count: Tracks removed by stationary background filter.
         global_identity_segments: Segments from global identity optimization.
         global_identity_remapped: Positions remapped by global identity.
+        team_classification_skipped: Whether team classification was skipped
+            due to low split confidence.
 
     Returns:
         TrackingQualityReport with score and suggestions.
@@ -158,7 +161,6 @@ def compute_quality_report(
     report.primary_track_count = len(primary_track_ids)
     report.id_switch_count = id_switch_count
     report.color_split_count = color_split_count
-    report.swap_fix_count = swap_fix_count
     report.appearance_link_count = appearance_link_count
     report.court_identity_interactions = court_identity_interactions
     report.court_identity_swaps = court_identity_swaps
@@ -166,6 +168,7 @@ def compute_quality_report(
     report.stationary_bg_removed_count = stationary_bg_removed_count
     report.global_identity_segments = global_identity_segments
     report.global_identity_remapped = global_identity_remapped
+    report.team_classification_skipped = team_classification_skipped
 
     duration_sec = frame_count / video_fps if video_fps > 0 else 0.0
 
@@ -217,7 +220,7 @@ def compute_quality_report(
                 report.track_destruction_rate = destroyed / duration_sec
 
     # Compute sub-scores
-    total_switches = id_switch_count + color_split_count + swap_fix_count
+    total_switches = id_switch_count + color_split_count
 
     # Detection score (0.30): primary tracks per frame vs expected
     detection_score = 0.0

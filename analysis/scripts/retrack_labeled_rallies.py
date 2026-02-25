@@ -91,7 +91,6 @@ def _adjust_frame_numbers(
 def _retrack_rally(
     rally: TrackingEvaluationRally,
     stride: int = 1,
-    team_aware: bool = False,
     enable_ball: bool = True,
 ) -> PlayerTrackingResult | None:
     """Re-run tracking for a single rally."""
@@ -103,13 +102,6 @@ def _retrack_rally(
 
     # Create calibrator
     calibrator = _create_calibrator(rally.court_calibration_json)
-
-    # Build team-aware config if requested
-    ta_config = None
-    if team_aware:
-        from rallycut.tracking.team_aware_tracker import TeamAwareConfig
-
-        ta_config = TeamAwareConfig(enabled=True)
 
     # Run ball tracking first (matches production pipeline)
     ball_positions = None
@@ -136,7 +128,6 @@ def _retrack_rally(
         stride=stride,
         filter_enabled=True,
         court_calibrator=calibrator,
-        team_aware_config=ta_config,
         ball_positions=ball_positions,
     )
 
@@ -160,10 +151,6 @@ def main() -> None:
     parser.add_argument(
         "--save", action="store_true",
         help="Save new predictions to DB (overwrites stored predictions)",
-    )
-    parser.add_argument(
-        "--team-aware", action="store_true",
-        help="Enable team-aware BoT-SORT penalty (requires calibration)",
     )
     parser.add_argument(
         "--no-ball", action="store_true",
@@ -242,7 +229,6 @@ def main() -> None:
         new_predictions = _retrack_rally(
             rally,
             stride=args.stride,
-            team_aware=args.team_aware,
             enable_ball=not args.no_ball,
         )
         elapsed = time.time() - t0

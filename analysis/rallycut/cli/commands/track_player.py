@@ -384,12 +384,6 @@ def track_players(
             'Masks regions outside the polygon to prevent background tracks.'
         ),
     ),
-    # Team-aware BoT-SORT association
-    team_aware: bool = typer.Option(
-        False,
-        "--team-aware/--no-team-aware",
-        help="Enable team-aware BoT-SORT penalty (requires calibration, reduces cross-team ID switches)",
-    ),
     # Action classification
     actions: bool = typer.Option(
         False,
@@ -663,15 +657,6 @@ def track_players(
         court_roi=court_roi,
     )
 
-    # Build team-aware config if requested
-    ta_config = None
-    if team_aware:
-        from rallycut.tracking.team_aware_tracker import TeamAwareConfig
-
-        ta_config = TeamAwareConfig(enabled=True)
-        if not quiet:
-            console.print("[dim]Team-aware BoT-SORT: enabled[/dim]")
-
     # Track with progress
     if quiet:
         result = player_tracker.track_video(
@@ -683,7 +668,6 @@ def track_players(
             filter_enabled=filter_court,
             filter_config=filter_config,
             court_calibrator=calibrator,
-            team_aware_config=ta_config,
             court_detection_insights=court_insights,
         )
     else:
@@ -709,7 +693,6 @@ def track_players(
                 filter_enabled=filter_court,
                 filter_config=filter_config,
                 court_calibrator=calibrator,
-                team_aware_config=ta_config,
                 court_detection_insights=court_insights,
             )
 
@@ -778,8 +761,6 @@ def track_players(
             console.print(f"\n  Quality Assessment: {score_pct}% trackability")
             if qr.color_split_count > 0:
                 console.print(f"    Color splits: {qr.color_split_count}")
-            if qr.swap_fix_count > 0:
-                console.print(f"    Swap fixes: {qr.swap_fix_count}")
             for suggestion in qr.suggestions:
                 console.print(f"    >> {suggestion}")
 

@@ -1,10 +1,7 @@
 """Color-based post-hoc track repair for player tracking.
 
-Detects and fixes two types of ID assignment errors:
-1. Color splitting: detects abrupt color changes within a track (indicates
-   BoT-SORT incorrectly merged two players into one track ID).
-2. Swap detection: detects track ID swaps during convergence periods (when
-   players overlap at the net, BoT-SORT may swap their identities).
+Detects abrupt color changes within a track (indicates BoT-SORT incorrectly
+merged two players into one track ID) and splits tracks at those points.
 
 Uses Hue-Saturation histograms from the shorts/swimsuit region (lower 40%
 of bbox) for brightness-invariant appearance comparison.
@@ -35,10 +32,9 @@ DEFAULT_EMA_ALPHA = 0.05
 DEFAULT_MIN_TEMPLATE_FRAMES = 5
 DEFAULT_MAX_PASSES = 2
 
-# Convergence/swap detection defaults
+# Convergence detection defaults
 DEFAULT_IOU_THRESHOLD = 0.3
 DEFAULT_MIN_OVERLAP_FRAMES = 5
-DEFAULT_SWAP_COST_RATIO = 0.7
 
 
 @dataclass
@@ -407,191 +403,3 @@ def _compute_iou(a: PlayerPosition, b: PlayerPosition) -> float:
     return inter_area / union_area
 
 
-def detect_and_fix_swaps(
-    positions: list[PlayerPosition],
-    color_store: ColorHistogramStore,
-    iou_threshold: float = DEFAULT_IOU_THRESHOLD,
-    min_overlap_frames: int = DEFAULT_MIN_OVERLAP_FRAMES,
-    swap_cost_ratio: float = DEFAULT_SWAP_COST_RATIO,
-    min_template_histograms: int = 5,
-    max_post_histograms: int = 15,
-    team_assignments: dict[int, int] | None = None,
-) -> tuple[list[PlayerPosition], int]:
-    """Detect and fix track ID swaps during convergence periods.
-
-    When two players overlap (e.g., at the net), BoT-SORT may swap their
-    track IDs. This function:
-    1. Finds convergence periods (sustained bbox overlap)
-    2. Builds color templates from pre-overlap frames
-    3. Compares post-overlap appearance to both templates
-    4. Swaps IDs if the cross-assignment is significantly better
-
-    Args:
-        positions: All player positions (modified in place).
-        color_store: Histogram store with per-frame histograms.
-        iou_threshold: IoU threshold for convergence detection.
-        min_overlap_frames: Minimum frames of overlap.
-        swap_cost_ratio: Swap must be this much cheaper (0.7 = 30% better).
-        min_template_histograms: Minimum histograms for a valid template.
-        max_post_histograms: Maximum post-convergence histograms to check.
-        team_assignments: Optional team classification (track_id -> team).
-            Blocks same-team swap fixes (swaps only happen between opposing
-            teams at the net).
-
-    Returns:
-        Tuple of (positions, number of swaps fixed).
-    """
-    periods = detect_convergence_periods(
-        positions, iou_threshold, min_overlap_frames
-    )
-
-    if not periods:
-        return positions, 0
-
-    total_swaps = 0
-
-    for period in periods:
-        track_a = period.track_a
-        track_b = period.track_b
-
-        # Get overlap frame range
-        overlap_frames = set(range(period.start_frame, period.end_frame + 1))
-
-        # Build pre-overlap templates
-        template_a = _build_template(
-            color_store, track_a, overlap_frames,
-            min_template_histograms, before_frame=period.start_frame,
-        )
-        template_b = _build_template(
-            color_store, track_b, overlap_frames,
-            min_template_histograms, before_frame=period.start_frame,
-        )
-
-        if template_a is None or template_b is None:
-            continue
-
-        # Get post-convergence histograms
-        post_a = _get_post_histograms(
-            color_store, track_a, period.end_frame, max_post_histograms
-        )
-        post_b = _get_post_histograms(
-            color_store, track_b, period.end_frame, max_post_histograms
-        )
-
-        if len(post_a) < 3 or len(post_b) < 3:
-            continue
-
-        # Build mean post-overlap histograms
-        mean_post_a = _mean_histogram(post_a)
-        mean_post_b = _mean_histogram(post_b)
-
-        # Compare normal vs swapped assignment
-        normal_cost = (
-            cv2.compareHist(template_a, mean_post_a, cv2.HISTCMP_BHATTACHARYYA)
-            + cv2.compareHist(template_b, mean_post_b, cv2.HISTCMP_BHATTACHARYYA)
-        )
-        swapped_cost = (
-            cv2.compareHist(template_a, mean_post_b, cv2.HISTCMP_BHATTACHARYYA)
-            + cv2.compareHist(template_b, mean_post_a, cv2.HISTCMP_BHATTACHARYYA)
-        )
-
-        # Block same-team swaps (swaps only happen between opposing teams
-        # at the net — same-team "swaps" are false positives)
-        if team_assignments:
-            team_a = team_assignments.get(track_a)
-            team_b = team_assignments.get(track_b)
-            if team_a is not None and team_b is not None and team_a == team_b:
-                continue
-
-        if swapped_cost < swap_cost_ratio * normal_cost:
-            # Swap IDs from end_frame onward
-            _swap_track_ids(
-                positions, color_store,
-                track_a, track_b, period.end_frame,
-            )
-            total_swaps += 1
-            logger.info(
-                f"Swap fix: tracks {track_a}<->{track_b} at frame {period.end_frame} "
-                f"(normal_cost={normal_cost:.3f}, swapped_cost={swapped_cost:.3f})"
-            )
-
-    if total_swaps:
-        logger.info(f"Track swap detection: {total_swaps} swaps fixed")
-
-    return positions, total_swaps
-
-
-def _build_template(
-    color_store: ColorHistogramStore,
-    track_id: int,
-    overlap_frames: set[int],
-    min_histograms: int,
-    before_frame: int,
-) -> np.ndarray | None:
-    """Build a mean histogram template from non-overlapping frames before overlap."""
-    histograms = color_store.get_track_histograms(track_id)
-
-    valid = [
-        hist for fn, hist in histograms
-        if fn not in overlap_frames and fn < before_frame
-    ]
-
-    if len(valid) < min_histograms:
-        return None
-
-    # Use up to 30 most recent pre-overlap histograms
-    valid = valid[-30:]
-    return _mean_histogram(valid)
-
-
-def _get_post_histograms(
-    color_store: ColorHistogramStore,
-    track_id: int,
-    after_frame: int,
-    max_count: int,
-) -> list[np.ndarray]:
-    """Get histograms for a track after a given frame."""
-    histograms = color_store.get_track_histograms(track_id)
-    post = [hist for fn, hist in histograms if fn > after_frame]
-    return post[:max_count]
-
-
-def _mean_histogram(histograms: list[np.ndarray]) -> np.ndarray:
-    """Compute the mean of a list of histograms."""
-    stacked = np.stack(histograms, axis=0)
-    mean: np.ndarray = np.mean(stacked, axis=0).astype(np.float32)
-    # Re-normalize
-    total = mean.sum()
-    if total > 0:
-        mean /= total
-    return mean
-
-
-def _swap_track_ids(
-    positions: list[PlayerPosition],
-    color_store: ColorHistogramStore,
-    track_a: int,
-    track_b: int,
-    from_frame: int,
-) -> None:
-    """Swap track IDs for two tracks from a given frame onward."""
-    # Use a temporary ID to avoid collisions during swap
-    temp_id = max(p.track_id for p in positions if p.track_id >= 0) + 1
-
-    # A -> temp
-    for p in positions:
-        if p.track_id == track_a and p.frame_number >= from_frame:
-            p.track_id = temp_id
-    color_store.rekey(track_a, temp_id, from_frame)
-
-    # B -> A
-    for p in positions:
-        if p.track_id == track_b and p.frame_number >= from_frame:
-            p.track_id = track_a
-    color_store.rekey(track_b, track_a, from_frame)
-
-    # temp -> B
-    for p in positions:
-        if p.track_id == temp_id and p.frame_number >= from_frame:
-            p.track_id = track_b
-    color_store.rekey(temp_id, track_b, from_frame)
