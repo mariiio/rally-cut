@@ -20,12 +20,9 @@ from rallycut.processing.exporter import FFmpegExporter
 if TYPE_CHECKING:
     from pathlib import Path as PathType
 
-    import torch.nn as nn
-
     from rallycut.analysis.game_state import GameStateAnalyzer
     from rallycut.core.proxy import ProxyGenerator
     from rallycut.temporal.features import FeatureCache
-    from rallycut.temporal.processor import TemporalProcessor
     from rallycut.tracking import BallFeatureCache
     from rallycut.tracking.wasb_model import WASBBallTracker
 
@@ -62,15 +59,9 @@ class VideoCutter:
         auto_stride: bool = True,
         rally_continuation_seconds: float | None = None,
         model_variant: str = "beach",
-        use_temporal_model: bool = False,
-        temporal_model_path: Path | None = None,
-        temporal_model_version: str = "v2",
-        use_binary_head_decoder: bool = False,
-        binary_head_model_path: Path | None = None,
         use_heuristics: bool = False,
         use_temporal_maxer: bool = False,
         temporal_maxer_model_path: Path | None = None,
-        boundary_refinement: bool = False,  # Disabled by default - experimental
         # Ball validation options (Phase 1 & 2 of ball tracking integration)
         ball_validation: bool = False,  # Enable ball-based FP filtering
         ball_boundary_refinement: bool = False,  # Enable ball-based boundary refinement
@@ -101,20 +92,10 @@ class VideoCutter:
         # Model path based on variant
         self._model_path: PathType | None = get_model_path(model_variant)
 
-        # Temporal model settings
-        self.use_temporal_model = use_temporal_model
-        self.temporal_model_path = temporal_model_path
-        self.temporal_model_version = temporal_model_version
-
-        # Binary head decoder settings
-        self.use_binary_head_decoder = use_binary_head_decoder
-        self.binary_head_model_path = binary_head_model_path
-
         # Pipeline selection
         self.use_heuristics = use_heuristics
         self.use_temporal_maxer = use_temporal_maxer
         self.temporal_maxer_model_path = temporal_maxer_model_path
-        self.boundary_refinement = boundary_refinement
 
         # Ball validation settings
         self.ball_validation = ball_validation
@@ -123,8 +104,6 @@ class VideoCutter:
 
         self._analyzer: GameStateAnalyzer | None = None
         self._proxy_generator: ProxyGenerator | None = None
-        self._temporal_processor: TemporalProcessor | None = None
-        self._binary_head_model: nn.Module | None = None
         self._feature_cache: FeatureCache | None = None
         self._ball_tracker: WASBBallTracker | None = None
         self._ball_cache: BallFeatureCache | None = None
@@ -169,20 +148,6 @@ class VideoCutter:
                 cache_dir=config.proxy_cache_dir,
             )
         return self._proxy_generator
-
-    def _get_temporal_processor(self) -> TemporalProcessor:
-        """Lazy load temporal processor."""
-        if self._temporal_processor is None:
-            from rallycut.temporal.processor import TemporalProcessor, TemporalProcessorConfig
-
-            config = TemporalProcessorConfig(
-                model_path=self.temporal_model_path,
-                model_version=self.temporal_model_version,
-                coarse_stride=self.base_stride,
-                device=self.device,
-            )
-            self._temporal_processor = TemporalProcessor(config)
-        return self._temporal_processor
 
     def _get_feature_cache(self) -> FeatureCache:
         """Lazy load feature cache."""
@@ -230,18 +195,6 @@ class VideoCutter:
         training_cache = FeatureCacheImpl(cache_dir=Path("training_data/features"))
         return training_cache.has(content_hash, self.base_stride)
 
-    def _has_fine_features(self, content_hash: str) -> bool:
-        """Check if fine-stride features are cached for this video.
-
-        Args:
-            content_hash: Video content hash.
-
-        Returns:
-            True if cached features exist at fine stride (16).
-        """
-        cache = self._get_feature_cache()
-        return cache.has(content_hash, 16)
-
     def _load_fine_features(self, content_hash: str) -> tuple | None:
         """Load fine-stride features from cache.
 
@@ -253,19 +206,6 @@ class VideoCutter:
         """
         cache = self._get_feature_cache()
         return cache.get(content_hash, 16)
-
-    def _has_binary_head_model(self) -> bool:
-        """Check if binary head model is available.
-
-        Returns:
-            True if binary head model exists.
-        """
-        if self.binary_head_model_path is not None:
-            return self.binary_head_model_path.exists()
-
-        config = get_config()
-        default_path = config.weights_dir / "binary_head" / "best_binary_head.pt"
-        return default_path.exists()
 
     def _has_temporal_maxer_model(self) -> bool:
         """Check if TemporalMaxer model is available.
@@ -920,296 +860,6 @@ class VideoCutter:
 
         return merged, suggested_segments
 
-    def _analyze_with_temporal_model(
-        self,
-        input_path: Path,
-        progress_callback: Callable[[float, str], None] | None = None,
-    ) -> tuple[list[TimeSegment], list[SuggestedSegment]]:
-        """Analyze video using temporal model.
-
-        Args:
-            input_path: Path to input video.
-            progress_callback: Progress callback.
-
-        Returns:
-            Tuple of (confirmed_segments, empty suggested_segments).
-        """
-        from rallycut.temporal.processor import rally_segments_to_time_segments
-
-        # Get source video info
-        with Video(input_path) as video:
-            source_fps = video.info.fps
-            source_frame_count = video.info.frame_count
-            content_hash = video.compute_content_hash()
-
-        # Use proxy for temporal model too if enabled
-        if self.use_proxy:
-            proxy_gen = self._get_proxy_generator()
-
-            def proxy_progress(pct: float, msg: str) -> None:
-                if progress_callback:
-                    progress_callback(pct * 0.1, msg)
-
-            proxy_path, mapper = proxy_gen.get_or_create(
-                input_path, source_fps, proxy_progress
-            )
-
-            # Run temporal model on proxy
-            processor = self._get_temporal_processor()
-
-            def temporal_progress(pct: float, msg: str) -> None:
-                if progress_callback:
-                    progress_callback(0.1 + pct * 0.9, msg)
-
-            with Video(proxy_path) as proxy_video:
-                result = processor.process_video(
-                    proxy_video,
-                    content_hash=content_hash,
-                    progress_callback=temporal_progress,
-                )
-
-            # Convert segments and map back to source frame space
-            source_duration = source_frame_count / source_fps
-            proxy_segments = rally_segments_to_time_segments(
-                result.segments,
-                fps=mapper.proxy_fps,
-                padding_start=self.padding_seconds,
-                padding_end=self.padding_end_seconds,
-                total_frames=int(mapper.proxy_fps * source_duration),
-            )
-
-            # Map segment times back to source
-            segments = []
-            for seg in proxy_segments:
-                source_start = mapper.proxy_to_source(seg.start_frame)
-                source_end = mapper.proxy_to_source(seg.end_frame)
-                segments.append(
-                    TimeSegment(
-                        start_frame=source_start,
-                        end_frame=min(source_end, source_frame_count - 1),
-                        start_time=source_start / source_fps,
-                        end_time=min(source_end, source_frame_count - 1) / source_fps,
-                        state=seg.state,
-                    )
-                )
-        else:
-            # Run temporal model on source video
-            processor = self._get_temporal_processor()
-
-            with Video(input_path) as video:
-                result = processor.process_video(
-                    video,
-                    content_hash=content_hash,
-                    progress_callback=progress_callback,
-                )
-
-            segments = rally_segments_to_time_segments(
-                result.segments,
-                fps=source_fps,
-                padding_start=self.padding_seconds,
-                padding_end=self.padding_end_seconds,
-                total_frames=source_frame_count,
-            )
-
-        # Temporal model doesn't produce suggested segments
-        return segments, []
-
-    def _analyze_with_binary_head_decoder(
-        self,
-        input_path: Path,
-        progress_callback: Callable[[float, str], None] | None = None,
-        content_hash: str | None = None,
-    ) -> tuple[list[TimeSegment], list[SuggestedSegment]]:
-        """Analyze video using binary head + deterministic decoder.
-
-        Args:
-            input_path: Path to input video.
-            progress_callback: Progress callback.
-            content_hash: Pre-computed content hash (avoids re-reading video).
-
-        Returns:
-            Tuple of (confirmed_segments, empty suggested_segments).
-        """
-        from rallycut.core.models import GameState
-        from rallycut.temporal.deterministic_decoder import DecoderConfig
-        from rallycut.temporal.inference import load_binary_head_model, run_binary_head_decoder
-
-        # Get source video info
-        with Video(input_path) as video:
-            source_fps = video.info.fps
-            source_frame_count = video.info.frame_count
-            if content_hash is None:
-                content_hash = video.compute_content_hash()
-
-        # Get config once for this method
-        config = get_config()
-
-        # Determine binary head model path
-        if self.binary_head_model_path is not None:
-            model_path = self.binary_head_model_path
-        else:
-            model_path = config.weights_dir / "binary_head" / "best_binary_head.pt"
-
-        if not model_path.exists():
-            raise FileNotFoundError(
-                f"Binary head model not found at {model_path}. "
-                "Train one with 'rallycut train binary-head' first."
-            )
-
-        # Load model if not cached
-        if self._binary_head_model is None:
-            if progress_callback:
-                progress_callback(0.0, "Loading binary head model...")
-            self._binary_head_model = load_binary_head_model(model_path, self.device)
-
-        # Load cached features
-        if progress_callback:
-            progress_callback(0.05, "Loading cached features...")
-
-        cache = self._get_feature_cache()
-        stride = self.base_stride
-
-        cached = cache.get(content_hash, stride)
-        if cached is None:
-            # Check training data dir (backward compat with extract-features command)
-            from rallycut.temporal.features import FeatureCache as FeatureCacheImpl
-
-            training_cache = FeatureCacheImpl(cache_dir=Path("training_data/features"))
-            cached = training_cache.get(content_hash, stride)
-        if cached is None:
-            raise ValueError(
-                f"No cached features found for video (stride={stride}). "
-                "Run 'rallycut train extract-features' first."
-            )
-
-        features, _ = cached
-
-        # Configure decoder
-        decoder_config = DecoderConfig(
-            fps=source_fps,
-            stride=stride,
-        )
-
-        # Run binary head + decoder
-        if progress_callback:
-            progress_callback(0.1, "Running binary head inference...")
-
-        result = run_binary_head_decoder(
-            features=features,
-            model=self._binary_head_model,
-            config=decoder_config,
-            device=self.device,
-        )
-
-        if progress_callback:
-            progress_callback(0.8, "Converting segments...")
-
-        # Apply boundary refinement if fine features are available
-        raw_segments = result.segments
-        segment_confidences = result.segment_confidences if hasattr(result, "segment_confidences") else None
-        if self.boundary_refinement and self._has_fine_features(content_hash):
-            if progress_callback:
-                progress_callback(0.85, "Refining boundaries...")
-
-            from rallycut.temporal.boundary_refinement import (
-                BoundaryRefinementConfig,
-                refine_boundaries,
-            )
-
-            fine_data = self._load_fine_features(content_hash)
-            if fine_data is not None:
-                fine_features, _ = fine_data
-                refinement_config = BoundaryRefinementConfig(
-                    enabled=True,
-                    search_window_seconds=2.0,
-                    fine_stride=16,
-                    smoothing_sigma=1.0,
-                    transition_threshold=0.5,
-                )
-                raw_segments = refine_boundaries(
-                    raw_segments,
-                    fine_features,
-                    self._binary_head_model,
-                    source_fps,
-                    refinement_config,
-                    device=self.device,
-                )
-
-        # Apply ball-based validation if enabled (Phase 1: False Positive Filtering)
-        if self.ball_validation and raw_segments:
-            if progress_callback:
-                progress_callback(0.86, "Validating with ball tracking...")
-
-            raw_segments, segment_confidences = self._apply_ball_validation(
-                input_path,
-                raw_segments,
-                segment_confidences,
-                content_hash,
-                source_fps,
-            )
-
-        # Apply ball-based boundary refinement if enabled (Phase 2)
-        if self.ball_boundary_refinement and raw_segments:
-            if progress_callback:
-                progress_callback(0.88, "Refining boundaries with ball tracking...")
-
-            raw_segments = self._apply_ball_boundary_refinement(
-                input_path,
-                raw_segments,
-                content_hash,
-            )
-
-        if progress_callback:
-            progress_callback(0.9, "Applying padding...")
-
-        # Convert decoder segments to TimeSegments with padding
-        padding_start_frames = int(self.padding_seconds * source_fps)
-        padding_end_frames = int(self.padding_end_seconds * source_fps)
-
-        segments = []
-        for start_time, end_time in raw_segments:
-            start_frame = int(start_time * source_fps)
-            end_frame = int(end_time * source_fps)
-
-            # Apply padding
-            padded_start = max(0, start_frame - padding_start_frames)
-            padded_end = min(end_frame + padding_end_frames, source_frame_count - 1)
-
-            segments.append(
-                TimeSegment(
-                    start_frame=padded_start,
-                    end_frame=padded_end,
-                    start_time=padded_start / source_fps,
-                    end_time=padded_end / source_fps,
-                    state=GameState.PLAY,
-                )
-            )
-
-        # Merge overlapping segments
-        if segments:
-            sorted_segments = sorted(segments, key=lambda s: s.start_frame)
-            merged = [sorted_segments[0]]
-
-            for segment in sorted_segments[1:]:
-                last = merged[-1]
-                if segment.start_frame <= last.end_frame + 1:
-                    merged[-1] = TimeSegment(
-                        start_frame=last.start_frame,
-                        end_frame=max(last.end_frame, segment.end_frame),
-                        start_time=last.start_time,
-                        end_time=max(last.end_frame, segment.end_frame) / source_fps,
-                        state=last.state,
-                    )
-                else:
-                    merged.append(segment)
-            segments = merged
-
-        if progress_callback:
-            progress_callback(1.0, "Complete")
-
-        # Binary head decoder doesn't produce suggested segments
-        return segments, []
-
     def _analyze_with_temporal_maxer(
         self,
         input_path: Path,
@@ -1421,10 +1071,8 @@ class VideoCutter:
 
         Pipeline selection priority:
         1. If --temporal-maxer flag: use TemporalMaxer TAS model
-        2. If --binary-head flag: use binary head decoder
-        3. If --temporal flag: use temporal model (deprecated)
-        4. If --heuristics flag: use heuristics
-        5. Auto-select: binary head if features cached, else heuristics
+        2. If --heuristics flag: use heuristics
+        3. Auto-select: TemporalMaxer if model+features exist, else heuristics
 
         Args:
             input_path: Path to input video
@@ -1434,9 +1082,9 @@ class VideoCutter:
             Tuple of (confirmed_segments, suggested_segments)
         """
         logger.info(
-            "analyze_only: temporal_maxer=%s, binary_head=%s, heuristics=%s, "
+            "analyze_only: temporal_maxer=%s, heuristics=%s, "
             "stride=%d, min_play=%.1f, proxy=%s",
-            self.use_temporal_maxer, self.use_binary_head_decoder,
+            self.use_temporal_maxer,
             self.use_heuristics, self.base_stride,
             self.min_play_duration, self.use_proxy,
         )
@@ -1446,43 +1094,26 @@ class VideoCutter:
             logger.info("Pipeline selected: TemporalMaxer (explicit)")
             return self._analyze_with_temporal_maxer(input_path, progress_callback)
 
-        # Use binary head decoder if explicitly enabled
-        if self.use_binary_head_decoder:
-            logger.info("Pipeline selected: binary head (explicit)")
-            return self._analyze_with_binary_head_decoder(input_path, progress_callback)
-
-        # Use temporal model if explicitly enabled (deprecated)
-        if self.use_temporal_model:
-            logger.info("Pipeline selected: temporal model (deprecated, explicit)")
-            return self._analyze_with_temporal_model(input_path, progress_callback)
-
         # If heuristics explicitly requested, skip auto-selection
         if not self.use_heuristics:
             # Auto-select best available pipeline
             with Video(input_path) as video:
                 content_hash = video.compute_content_hash()
 
-            if self._has_cached_features(content_hash):
-                # Prefer TemporalMaxer > binary head
-                if self._has_temporal_maxer_model():
-                    logger.info("Using TemporalMaxer (75%% LOO F1) - features cached")
-                    return self._analyze_with_temporal_maxer(
-                        input_path, progress_callback, content_hash=content_hash
-                    )
-                elif self._has_binary_head_model():
-                    logger.info("Using binary head + decoder (84%% F1) - features cached")
-                    return self._analyze_with_binary_head_decoder(
-                        input_path, progress_callback, content_hash=content_hash
-                    )
-                else:
-                    logger.info(
-                        "No model found - using heuristics. For 75%% LOO F1, run: "
-                        "rallycut train temporal-maxer"
-                    )
+            if self._has_cached_features(content_hash) and self._has_temporal_maxer_model():
+                logger.info("Using TemporalMaxer (92%% LOO F1) - features cached")
+                return self._analyze_with_temporal_maxer(
+                    input_path, progress_callback, content_hash=content_hash
+                )
+            elif not self._has_cached_features(content_hash):
+                logger.info(
+                    "No cached features - using heuristics. For 92%% LOO F1, run: "
+                    "rallycut train extract-features --stride 24"
+                )
             else:
                 logger.info(
-                    "No cached features - using heuristics. For 75%% LOO F1, run: "
-                    "rallycut train extract-features --stride 48"
+                    "No model found - using heuristics. For 92%% LOO F1, run: "
+                    "rallycut train temporal-maxer"
                 )
 
         from rallycut.core.models import GameStateResult

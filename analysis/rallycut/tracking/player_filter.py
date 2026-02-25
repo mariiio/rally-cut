@@ -582,44 +582,62 @@ def compute_court_split(
     ball_positions: list[BallPosition],
     config: PlayerFilterConfig,
     player_positions: list[PlayerPosition] | None = None,
-) -> float | None:
+    court_calibrator: CourtCalibrator | None = None,
+) -> tuple[float, str] | None:
     """
     Compute the Y-coordinate that splits the court into near/far teams.
 
     Camera is always behind baseline, so teams are split by a horizontal line.
 
-    Primary method: Use player positions to find the net. Players cluster on
-    opposite sides of the net, creating a gap with minimum player density.
-
-    Fallback: Use ball trajectory center if player data is insufficient.
+    Priority order:
+    1. Calibration-derived (precise geometry from court homography)
+    2. Bbox clustering (player Y positions + bbox sizes)
+    3. Ball trajectory direction changes
+    4. Ball trajectory center (fallback)
 
     Args:
         ball_positions: Ball positions from tracking.
         config: Filter configuration.
         player_positions: All player positions (preferred for split calculation).
+        court_calibrator: Optional calibrated court calibrator for precise net_y.
 
     Returns:
-        Y-coordinate that splits the court (0-1 normalized), or None if insufficient data.
+        Tuple of (split_y, confidence) where confidence is "high" or "low",
+        or None if insufficient data. High confidence means the split is
+        reliable for team-constrained operations.
     """
-    # Primary method: find net by clustering players by bbox size
-    # Near team = larger bboxes (closer to camera), Far team = smaller bboxes
+    # Priority 1: Calibration-derived (precise geometry)
+    if court_calibrator is not None and court_calibrator.is_calibrated:
+        from rallycut.tracking.team_aware_tracker import (
+            get_court_split_y_from_calibration,
+        )
+
+        cal_split = get_court_split_y_from_calibration(court_calibrator)
+        if cal_split is not None:
+            logger.debug(f"Court split from calibration: y={cal_split:.3f}")
+            return (cal_split, "high")
+
+    # Priority 2: Bbox clustering (player Y positions + bbox sizes)
     if player_positions and len(player_positions) >= 20:
-        split_y = _find_net_from_bbox_clustering(
+        result = _find_net_from_bbox_clustering(
             player_positions, config.players_per_team
         )
-        if split_y is not None:
-            logger.debug(f"Court split from bbox clustering: y={split_y:.3f}")
-            return split_y
+        if result is not None:
+            split_y, confidence = result
+            logger.debug(
+                f"Court split from bbox clustering: y={split_y:.3f} "
+                f"(confidence={confidence})"
+            )
+            return (split_y, confidence)
 
-    # Secondary method: use ball trajectory direction changes
-    # Ball crosses net multiple times during a rally
+    # Priority 3: Ball trajectory direction changes
     if ball_positions:
-        split_y = _find_net_from_ball_crossings(ball_positions)
-        if split_y is not None:
-            logger.debug(f"Court split from ball crossings: y={split_y:.3f}")
-            return split_y
+        crossing_y = _find_net_from_ball_crossings(ball_positions)
+        if crossing_y is not None:
+            logger.debug(f"Court split from ball crossings: y={crossing_y:.3f}")
+            return (crossing_y, "low")
 
-    # Fallback: use ball trajectory center
+    # Priority 4: Ball trajectory center (fallback)
     confident = [
         p.y for p in ball_positions
         if p.confidence >= config.ball_confidence_threshold
@@ -628,12 +646,11 @@ def compute_court_split(
     if len(confident) < config.min_ball_points:
         return None
 
-    # Use ball trajectory Y-range center as court center (net position)
     y_center = (max(confident) + min(confident)) / 2
 
     logger.debug(f"Court split from ball trajectory center: y={y_center:.3f}")
 
-    return y_center
+    return (y_center, "low")
 
 
 def _find_net_from_ball_crossings(
@@ -780,7 +797,7 @@ def classify_teams(
 def _find_net_from_bbox_clustering(
     player_positions: list[PlayerPosition],
     players_per_team: int = 2,
-) -> float | None:
+) -> tuple[float, str] | None:
     """
     Find the net Y position using bbox size to identify near/far teams.
 
@@ -794,7 +811,8 @@ def _find_net_from_bbox_clustering(
         players_per_team: Expected players per team (2 for beach volleyball).
 
     Returns:
-        Y-coordinate of the net (0-1 normalized), or None if unclear.
+        Tuple of (split_y, confidence) or None. Confidence is "high" when
+        teams are cleanly separated, "low" when falling back to median.
     """
     # Compute average bbox size and Y per track
     track_sizes: dict[int, list[float]] = {}
@@ -855,7 +873,7 @@ def _find_net_from_bbox_clustering(
             f"Teams overlap (max_far={max_far_y:.2f} >= min_near={min_near_y:.2f}), "
             f"using median y={split_y:.2f}"
         )
-        return split_y
+        return (split_y, "low")
 
     # Split at the midpoint between teams
     split_y = (max_far_y + min_near_y) / 2
@@ -865,7 +883,7 @@ def _find_net_from_bbox_clustering(
         f"(far_max={max_far_y:.2f}, near_min={min_near_y:.2f})"
     )
 
-    return split_y
+    return (split_y, "high")
 
 
 def select_two_teams(
@@ -2067,9 +2085,11 @@ class PlayerFilter:
 
                 # Compute court split for two-team filtering
                 if self.config.use_two_team_filter:
-                    self.court_split_y = compute_court_split(
-                        self.ball_positions, self.config
+                    split_result = compute_court_split(
+                        self.ball_positions, self.config,
+                        court_calibrator=self.court_calibrator,
                     )
+                    self.court_split_y = split_result[0] if split_result else None
                     if self.court_split_y is not None:
                         self._use_two_team = True
                         logger.info(
@@ -2147,9 +2167,12 @@ class PlayerFilter:
         # Recompute court split using player positions (more reliable than ball alone)
         # Player positions show clear clustering on opposite sides of the net
         if self.config.use_two_team_filter:
-            new_split_y = compute_court_split(
-                self.ball_positions, self.config, player_positions=all_positions
+            split_result = compute_court_split(
+                self.ball_positions, self.config,
+                player_positions=all_positions,
+                court_calibrator=self.court_calibrator,
             )
+            new_split_y = split_result[0] if split_result else None
             if new_split_y is not None:
                 old_split = self.court_split_y
                 self.court_split_y = new_split_y

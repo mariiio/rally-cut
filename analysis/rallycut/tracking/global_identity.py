@@ -184,13 +184,28 @@ def optimize_global_identity(
         profiles[team_id] = team_profiles
 
     # Phase C: Global assignment per team
+    # Snapshot input track IDs for post-optimization guard
+    input_tids = [(p.track_id, p.frame_number) for p in positions]
+    input_unique = {tid for tid, _ in input_tids if tid >= 0}
+
     total_remapped = 0
     for team_id in (0, 1):
         team_segs = team_segments[team_id]
         team_profiles = profiles[team_id]
 
         if len(team_profiles) < 2:
-            # Single player on this team: assign all to that player
+            # Guard: don't merge distinct tracks to a single anchor.
+            # This is correct for a fragmented single player (1 player → N fragments)
+            # but WRONG for multiple real players whose appearances weren't
+            # distinguishable enough for a 2nd anchor.
+            distinct_tids = {seg.track_id for seg in team_segs}
+            if len(distinct_tids) > 1:
+                logger.info(
+                    f"Global identity: team {team_id} has {len(distinct_tids)} "
+                    f"tracks but only 1 anchor — skipping to preserve distinct tracks"
+                )
+                continue
+            # Single fragmented track — safe to reassemble
             canonical_id = team_profiles[0].player_id
             remapped = _assign_all_to_single(
                 positions, team_segs, canonical_id
@@ -203,6 +218,19 @@ def optimize_global_identity(
             color_store, appearance_store,
         )
         total_remapped += remapped
+
+    # Post-optimization track count guard: revert if we reduced unique tracks
+    output_unique = {p.track_id for p in positions if p.track_id >= 0}
+    if len(output_unique) < len(input_unique):
+        logger.warning(
+            f"Global identity reduced tracks from {len(input_unique)} to "
+            f"{len(output_unique)} — reverting all changes"
+        )
+        for p, (orig_tid, _) in zip(positions, input_tids):
+            p.track_id = orig_tid
+        total_remapped = 0
+        result.skip_reason = "reverted: would reduce track count"
+        return positions, result
 
     result.num_remapped = total_remapped
     if total_remapped > 0:

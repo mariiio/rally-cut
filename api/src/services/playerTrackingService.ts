@@ -968,14 +968,11 @@ export async function trackPlayersForRally(
     throw new ForbiddenError('You do not have permission to track players for this rally');
   }
 
-  // Auto-load calibration from DB if not provided in request
-  if ((!calibrationCorners || calibrationCorners.length !== 4) && rally.video.courtCalibrationJson) {
-    const dbCorners = rally.video.courtCalibrationJson as unknown as CalibrationCorner[];
-    if (Array.isArray(dbCorners) && dbCorners.length === 4) {
-      calibrationCorners = dbCorners;
-      console.log(`[PLAYER_TRACK] Using court calibration from database for video ${rally.video.id}`);
-    }
-  }
+  // Calibration is used only when:
+  // 1. Explicitly passed in the API request body
+  // 2. Auto-detected by CLI's auto_detect_court() (confidence > 0.4)
+  // DB-stored courtCalibrationJson is NOT auto-loaded — it may contain
+  // debug/manual calibration not validated for production tracking.
 
   // Check duration limit
   const durationMs = rally.endMs - rally.startMs;

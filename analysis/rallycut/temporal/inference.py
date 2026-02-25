@@ -1,50 +1,30 @@
-"""Temporal model inference for rally detection.
+"""Temporal inference utilities for rally detection.
 
-Provides functions for:
-- Running temporal models on cached features
+Provides:
+- Data classes for inference configuration and results
+- Segment extraction from window predictions
 - Anti-overmerge constraints
-- Integration with the existing rally detection pipeline
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
-import torch
-
-if TYPE_CHECKING:
-    import torch.nn as nn
-
-    from rallycut.temporal.deterministic_decoder import DecoderConfig, DecoderResult
-    from rallycut.temporal.features import FeatureMetadata
 
 
 @dataclass
 class TemporalInferenceConfig:
     """Configuration for temporal model inference."""
 
-    # Model
-    model_version: str = "v2"
-    model_path: Path | None = None
-
     # Stride
     coarse_stride: int = 48
-
-    # Chunking for long videos
-    chunk_size: int = 500  # Max windows per chunk
-    chunk_overlap: int = 50  # Overlap between chunks
 
     # Anti-overmerge
     max_rally_duration_seconds: float = 60.0
     internal_no_rally_threshold: float = 0.4
     consecutive_no_rally_windows: int = 2
     forced_split_multiplier: float = 1.5
-
-    # Device
-    device: str = "cpu"
 
 
 @dataclass
@@ -70,162 +50,6 @@ class TemporalInferenceResult:
     window_predictions: list[int] = field(default_factory=list)
     fps: float = 30.0
     stride: int = 48
-
-
-def detect_model_version(model_path: Path) -> str | None:
-    """Detect model version from checkpoint metadata.
-
-    Args:
-        model_path: Path to the model checkpoint.
-
-    Returns:
-        Model version string (v1, v2, v3) if found in metadata, None otherwise.
-    """
-    state_dict = torch.load(model_path, map_location="cpu", weights_only=True)
-    version = state_dict.get("_model_version")
-    return str(version) if version is not None else None
-
-
-def load_temporal_model(
-    model_path: Path,
-    model_version: str | None = None,
-    device: str = "cpu",
-) -> nn.Module:
-    """Load a trained temporal model.
-
-    Auto-detects model version from checkpoint metadata if not specified.
-    Falls back to v1 if no version is specified or detected.
-
-    Args:
-        model_path: Path to the model checkpoint.
-        model_version: Model version (v1, v2, v3). Auto-detected if None.
-        device: Device to load model on.
-
-    Returns:
-        Loaded temporal model in eval mode.
-    """
-    from rallycut.temporal.models import get_temporal_model
-
-    # Load weights first to check for metadata
-    state_dict = torch.load(model_path, map_location=device, weights_only=True)
-
-    # Auto-detect version from metadata if not specified
-    if model_version is None:
-        model_version = state_dict.pop("_model_version", None)
-    else:
-        # Remove metadata key if present to avoid load_state_dict error
-        state_dict.pop("_model_version", None)
-
-    # Default to v1 if no version detected (legacy models)
-    if model_version is None:
-        model_version = "v1"
-
-    # Extract pos_weight for v1 models (stored as buffer)
-    pos_weight = None
-    if model_version == "v1" and "pos_weight" in state_dict:
-        pw_tensor = state_dict.get("pos_weight")
-        if pw_tensor is not None:
-            pos_weight = float(pw_tensor.item())
-
-    # Create model architecture with matching parameters
-    model = get_temporal_model(model_version, feature_dim=768, pos_weight=pos_weight)
-
-    # Load weights
-    model.load_state_dict(state_dict)
-    model.to(device)
-    model.eval()
-
-    return model
-
-
-def run_inference(
-    model: nn.Module,
-    features: np.ndarray,
-    device: str = "cpu",
-    chunk_size: int | None = None,
-    chunk_overlap: int | None = None,
-) -> tuple[list[int], list[float]]:
-    """Run inference on features with chunking for long videos.
-
-    Args:
-        model: Trained temporal model.
-        features: Feature array of shape (num_windows, feature_dim).
-        device: Device for inference.
-        chunk_size: Max windows per chunk. Uses TemporalInferenceConfig default if None.
-        chunk_overlap: Overlap between chunks. Uses TemporalInferenceConfig default if None.
-
-    Returns:
-        Tuple of (predictions, probabilities).
-    """
-    # Use defaults from config if not specified
-    defaults = TemporalInferenceConfig()
-    if chunk_size is None:
-        chunk_size = defaults.chunk_size
-    if chunk_overlap is None:
-        chunk_overlap = defaults.chunk_overlap
-    num_windows = len(features)
-
-    if num_windows == 0:
-        return [], []
-
-    # Short video: process in one pass
-    if num_windows <= chunk_size:
-        features_t = torch.from_numpy(features).float().unsqueeze(0).to(device)
-
-        with torch.no_grad():
-            # All models (v1/v2/v3) accept full features
-            # v1 has internal projection (768 -> 2)
-            output = model(features_t)
-
-            preds = output["predictions"].squeeze(0).cpu().numpy()
-
-            # Get probabilities if available
-            if "probs" in output:
-                probs = output["probs"].squeeze(0).cpu().numpy()
-            elif "emissions" in output:
-                emissions = output["emissions"].squeeze(0)
-                probs = torch.softmax(emissions, dim=-1)[:, 1].cpu().numpy()
-            else:
-                probs = np.zeros(len(preds))
-
-        return preds.tolist(), probs.tolist()
-
-    # Long video: process in overlapping chunks
-    all_probs = np.zeros(num_windows)
-    all_counts = np.zeros(num_windows)
-    all_preds = np.zeros(num_windows)
-
-    for start in range(0, num_windows, chunk_size - chunk_overlap):
-        end = min(start + chunk_size, num_windows)
-        chunk_features = features[start:end]
-        chunk_features_t = torch.from_numpy(chunk_features).float().unsqueeze(0).to(device)
-
-        with torch.no_grad():
-            # All models accept full features
-            output = model(chunk_features_t)
-
-            chunk_preds = output["predictions"].squeeze(0).cpu().numpy()
-
-            if "probs" in output:
-                chunk_probs = output["probs"].squeeze(0).cpu().numpy()
-            elif "emissions" in output:
-                emissions = output["emissions"].squeeze(0)
-                chunk_probs = torch.softmax(emissions, dim=-1)[:, 1].cpu().numpy()
-            else:
-                chunk_probs = np.zeros(len(chunk_preds))
-
-        # Accumulate (overlapping regions get averaged)
-        all_probs[start:end] += chunk_probs
-        all_preds[start:end] += chunk_preds
-        all_counts[start:end] += 1
-
-    # Average overlapping regions (protect against division by zero)
-    all_counts = np.maximum(all_counts, 1)
-    all_probs = all_probs / all_counts
-    avg_preds = all_preds / all_counts
-    final_preds = (avg_preds > 0.5).astype(int)
-
-    return final_preds.tolist(), all_probs.tolist()
 
 
 def extract_segments_from_predictions(
@@ -399,102 +223,3 @@ def apply_anti_overmerge_segments(
             result.append(segment)
 
     return result
-
-
-def load_binary_head_model(model_path: Path, device: str = "cpu") -> nn.Module:
-    """Load trained binary head model.
-
-    Args:
-        model_path: Path to the model checkpoint.
-        device: Device to load model on.
-
-    Returns:
-        Loaded BinaryHead model in eval mode.
-    """
-    from rallycut.temporal.binary_head import BinaryHead
-
-    state_dict = torch.load(model_path, map_location=device, weights_only=True)
-    model = BinaryHead(feature_dim=768, hidden_dim=128, dropout=0.0)
-    model.load_state_dict(state_dict)
-    model.to(device)
-    model.eval()
-    return model
-
-
-def run_binary_head_decoder(
-    features: np.ndarray,
-    model: nn.Module,
-    config: DecoderConfig,
-    device: str = "cpu",
-) -> DecoderResult:
-    """Run binary head + deterministic decoder pipeline.
-
-    Args:
-        features: Feature array of shape (num_windows, feature_dim).
-        model: Trained BinaryHead model.
-        config: Decoder configuration.
-        device: Device for inference.
-
-    Returns:
-        DecoderResult with segments and probabilities.
-    """
-    from rallycut.temporal.deterministic_decoder import decode
-
-    features_t = torch.from_numpy(features).float().to(device)
-    with torch.no_grad():
-        logits = model(features_t)
-        probs = torch.sigmoid(logits).cpu().numpy()
-
-    return decode(probs, config)
-
-
-def run_temporal_inference(
-    features: np.ndarray,
-    metadata: FeatureMetadata,
-    model: nn.Module,
-    config: TemporalInferenceConfig,
-) -> TemporalInferenceResult:
-    """Run full temporal inference pipeline.
-
-    Args:
-        features: Coarse-stride features (num_windows, 768).
-        metadata: Feature metadata.
-        model: Trained temporal model.
-        config: Inference configuration.
-
-    Returns:
-        Inference result with segments and probabilities.
-    """
-    fps = metadata.fps
-
-    # Run coarse inference
-    predictions, probs = run_inference(
-        model,
-        features,
-        device=config.device,
-    )
-
-    # Extract segments
-    segments = extract_segments_from_predictions(
-        predictions,
-        probs,
-        fps,
-        config.coarse_stride,
-    )
-
-    # Apply anti-overmerge
-    segments = apply_anti_overmerge_segments(
-        segments,
-        probs,
-        fps,
-        config.coarse_stride,
-        config,
-    )
-
-    return TemporalInferenceResult(
-        segments=segments,
-        window_probs=probs,
-        window_predictions=predictions,
-        fps=fps,
-        stride=config.coarse_stride,
-    )
