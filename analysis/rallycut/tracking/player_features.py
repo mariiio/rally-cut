@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import cv2
 import numpy as np
@@ -83,6 +83,52 @@ class PlayerAppearanceProfile:
 
     # How many rallies this player has been seen in
     rally_count: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize profile to a JSON-compatible dict."""
+        d: dict[str, Any] = {
+            "player_id": self.player_id,
+            "team": self.team,
+            "rally_count": self.rally_count,
+            "skin_sample_count": self.skin_sample_count,
+            "upper_hist_count": self.upper_hist_count,
+            "lower_hist_count": self.lower_hist_count,
+            "avg_bbox_height": self.avg_bbox_height,
+            "height_sample_count": self.height_sample_count,
+        }
+        if self.avg_skin_tone_hsv is not None:
+            d["avg_skin_tone_hsv"] = list(self.avg_skin_tone_hsv)
+        if self.avg_upper_hist is not None:
+            d["avg_upper_hist"] = self.avg_upper_hist.flatten().tolist()
+        if self.avg_lower_hist is not None:
+            d["avg_lower_hist"] = self.avg_lower_hist.flatten().tolist()
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> PlayerAppearanceProfile:
+        """Deserialize profile from a dict."""
+        profile = cls(
+            player_id=d["player_id"],
+            team=d.get("team", 0),
+            rally_count=d.get("rally_count", 0),
+            skin_sample_count=d.get("skin_sample_count", 0),
+            upper_hist_count=d.get("upper_hist_count", 0),
+            lower_hist_count=d.get("lower_hist_count", 0),
+            avg_bbox_height=d.get("avg_bbox_height", 0.0),
+            height_sample_count=d.get("height_sample_count", 0),
+        )
+        if "avg_skin_tone_hsv" in d and d["avg_skin_tone_hsv"] is not None:
+            hsv = d["avg_skin_tone_hsv"]
+            profile.avg_skin_tone_hsv = (float(hsv[0]), float(hsv[1]), float(hsv[2]))
+        if "avg_upper_hist" in d and d["avg_upper_hist"] is not None:
+            profile.avg_upper_hist = np.array(
+                d["avg_upper_hist"], dtype=np.float32
+            ).reshape(HS_BINS)
+        if "avg_lower_hist" in d and d["avg_lower_hist"] is not None:
+            profile.avg_lower_hist = np.array(
+                d["avg_lower_hist"], dtype=np.float32
+            ).reshape(HS_BINS)
+        return profile
 
     def update_from_features(self, features: PlayerAppearanceFeatures) -> None:
         """Update profile with new appearance features."""
