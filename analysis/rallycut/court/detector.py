@@ -28,6 +28,7 @@ from rallycut.court.line_geometry import (
     cross2d,
     harmonic_conjugate,
     line_intersection,
+    point_line_distance,
     project_court_corners,
     segment_angle_deg,
     segment_to_rho_theta,
@@ -289,7 +290,7 @@ class CourtDetector:
                 )
 
             # Stage 3: Temporal aggregation
-            consensus_lines = self._aggregate_lines(all_segments)
+            consensus_lines, rejected_lines = self._aggregate_lines(all_segments)
             if not consensus_lines:
                 return CourtDetectionResult(
                     corners=[], confidence=0.0,
@@ -297,7 +298,9 @@ class CourtDetector:
                 )
 
             # Stage 4: Identify court lines
-            identified = self._identify_court_lines(consensus_lines)
+            identified = self._identify_court_lines(
+                consensus_lines, rejected_lines=rejected_lines,
+            )
             if identified is None:
                 return CourtDetectionResult(
                     corners=[], confidence=0.0,
@@ -338,14 +341,16 @@ class CourtDetector:
                 warnings=["No white line segments detected"],
             )
 
-        consensus_lines = self._aggregate_lines(all_segments)
+        consensus_lines, rejected_lines = self._aggregate_lines(all_segments)
         if not consensus_lines:
             return CourtDetectionResult(
                 corners=[], confidence=0.0,
                 warnings=["No consensus lines after temporal aggregation"],
             )
 
-        identified = self._identify_court_lines(consensus_lines)
+        identified = self._identify_court_lines(
+            consensus_lines, rejected_lines=rejected_lines,
+        )
         if identified is None:
             return CourtDetectionResult(
                 corners=[], confidence=0.0,
@@ -560,11 +565,17 @@ class CourtDetector:
     def _aggregate_lines(
         self,
         all_segments: list[list[tuple[float, float, float, float]]],
-    ) -> list[tuple[list[tuple[float, float, float, float]], int]]:
+    ) -> tuple[
+        list[tuple[list[tuple[float, float, float, float]], int]],
+        list[tuple[list[tuple[float, float, float, float]], int]],
+    ]:
         """Cluster segments across frames using DBSCAN in (rho, theta) space.
 
         Returns:
-            List of (segment_cluster, temporal_support) tuples.
+            Tuple of (consensus_lines, rejected_lines). Each element is a list
+            of (segment_cluster, temporal_support) tuples. Rejected lines are
+            DBSCAN noise clusters and low-support clusters that didn't meet
+            the temporal threshold — useful for VP-based sideline recovery.
         """
         cfg = self.config
 
@@ -581,7 +592,7 @@ class CourtDetector:
                 frame_indices.append(frame_idx)
 
         if len(features) < cfg.dbscan_min_samples:
-            return []
+            return [], []
 
         # DBSCAN clustering
         from sklearn.cluster import DBSCAN
@@ -589,40 +600,58 @@ class CourtDetector:
         feature_matrix = np.array(features, dtype=np.float64)
         db = DBSCAN(eps=cfg.dbscan_eps, min_samples=cfg.dbscan_min_samples).fit(feature_matrix)
 
-        # Group segments by cluster
+        # Group segments by cluster (including noise as pseudo-clusters)
         clusters: dict[int, list[int]] = {}
+        noise_indices: list[int] = []
         for idx, label in enumerate(db.labels_):
             if label == -1:
-                continue
-            clusters.setdefault(label, []).append(idx)
+                noise_indices.append(idx)
+            else:
+                clusters.setdefault(label, []).append(idx)
 
-        # Compute temporal support and filter
+        # Compute temporal support and separate accepted vs rejected
         results: list[tuple[list[tuple[float, float, float, float]], int]] = []
+        rejected: list[tuple[list[tuple[float, float, float, float]], int]] = []
+
         for cluster_indices in clusters.values():
             frames_seen = set(frame_indices[i] for i in cluster_indices)
             support = len(frames_seen)
+            segs = [segment_data[i] for i in cluster_indices]
 
             if support < cfg.min_temporal_support:
-                continue
+                rejected.append((segs, support))
+            else:
+                results.append((segs, support))
 
-            segs = [segment_data[i] for i in cluster_indices]
-            results.append((segs, support))
+        # Add noise segments as individual rejected entries (group by frame proximity)
+        if noise_indices:
+            noise_segs = [segment_data[i] for i in noise_indices]
+            noise_frames = set(frame_indices[i] for i in noise_indices)
+            rejected.append((noise_segs, len(noise_frames)))
 
         # Sort by support (strongest first)
         results.sort(key=lambda x: -x[1])
+        rejected.sort(key=lambda x: -x[1])
         logger.info(
             f"Temporal aggregation: {len(results)} consensus lines "
-            f"from {len(clusters)} clusters"
+            f"from {len(clusters)} clusters, {len(rejected)} rejected groups"
         )
-        return results
+        return results, rejected
 
     # ── Stage 4: Court Line Identification ───────────────────────────────
 
     def _identify_court_lines(
         self,
         consensus_lines: list[tuple[list[tuple[float, float, float, float]], int]],
+        rejected_lines: list[tuple[list[tuple[float, float, float, float]], int]] | None = None,
     ) -> dict[str, tuple[DetectedLine, list[tuple[float, float, float, float]]]] | None:
         """Classify consensus lines as court lines.
+
+        Args:
+            consensus_lines: Lines that passed temporal aggregation thresholds.
+            rejected_lines: Lines rejected by temporal aggregation (noise, low
+                support). Used for VP-based sideline recovery when only one
+                sideline is found in the consensus lines.
 
         Returns dict mapping line label to (DetectedLine, raw_segments), or None
         if minimum requirements not met (far baseline + at least 1 sideline).
@@ -785,6 +814,15 @@ class CourtDetector:
                 else:
                     left_sideline = None
 
+        # ── VP-based sideline recovery ──
+        # When only one sideline detected, try to recover the missing one using
+        # vanishing point geometry instead of naive mirroring.
+        if (left_sideline is None) != (right_sideline is None):
+            left_sideline, right_sideline = self._recover_missing_sideline_vp(
+                far_baseline, left_sideline, right_sideline,
+                rejected_lines or [],
+            )
+
         if left_sideline is None and right_sideline is None:
             logger.warning("No sidelines found")
             return None
@@ -847,6 +885,176 @@ class CourtDetector:
         logger.info(f"Identified court lines: {lines_found}")
 
         return result
+
+    def _recover_missing_sideline_vp(
+        self,
+        far_baseline: dict[str, Any],
+        left_sideline: dict[str, Any] | None,
+        right_sideline: dict[str, Any] | None,
+        rejected_lines: list[tuple[list[tuple[float, float, float, float]], int]],
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """Recover a missing sideline using vanishing point geometry.
+
+        When only one sideline is detected, computes the VP from that sideline
+        and the far baseline. Then:
+        1. Searches rejected segments for sideline-angle segments that converge
+           toward the VP from the correct side.
+        2. If no evidence found, uses the VP + 8:16 aspect ratio to geometrically
+           place the missing sideline (more accurate than mirroring because it
+           respects the actual camera position).
+
+        Returns:
+            Updated (left_sideline, right_sideline) tuple.
+        """
+        cfg = self.config
+        known_sl = left_sideline or right_sideline
+        missing_side = "right" if left_sideline is not None else "left"
+
+        if known_sl is None:
+            return left_sideline, right_sideline
+
+        # Compute VP from the known sideline and far baseline
+        vp = line_intersection(
+            known_sl["p1"], known_sl["p2"],
+            far_baseline["p1"], far_baseline["p2"],
+        )
+        if vp is None:
+            logger.debug("VP-recovery: sideline parallel to baseline, skipping")
+            return left_sideline, right_sideline
+
+        # VP should be above (lower Y than) far baseline for valid perspective
+        if vp[1] > far_baseline["mid_y"]:
+            logger.debug(
+                f"VP-recovery: VP ({vp[0]:.2f}, {vp[1]:.2f}) below baseline, skipping"
+            )
+            return left_sideline, right_sideline
+
+        logger.info(
+            f"VP-recovery: VP at ({vp[0]:.2f}, {vp[1]:.2f}), "
+            f"missing {missing_side} sideline"
+        )
+
+        # Search rejected segments for evidence of the missing sideline
+        frame_center_x = 0.5
+        best_candidate: dict[str, Any] | None = None
+        best_score = 0.0
+
+        for rejected_segs, support in rejected_lines:
+            if support < max(2, cfg.min_temporal_support // 2):
+                continue
+
+            for seg in rejected_segs:
+                x1, y1, x2, y2 = seg
+                angle = segment_angle_deg(x1, y1, x2, y2)
+
+                # Must be in sideline angle range
+                if not (cfg.sideline_angle_min <= angle <= cfg.sideline_angle_max):
+                    continue
+
+                # Near endpoint (higher Y = closer to camera)
+                near_x = x2 if y2 > y1 else x1
+
+                # Must be on the correct side
+                if missing_side == "right" and near_x < frame_center_x:
+                    continue
+                if missing_side == "left" and near_x >= frame_center_x:
+                    continue
+
+                # Check convergence toward VP: extend segment line and check
+                # if it passes near the VP
+                seg_vp_dist = point_line_distance(vp, (x1, y1), (x2, y2))
+                if seg_vp_dist > 0.08:  # Must converge within 8% of frame
+                    continue
+
+                # Score: lower VP distance + higher support = better
+                score = support / (1.0 + seg_vp_dist * 50.0)
+                if score > best_score:
+                    best_score = score
+                    # Build a candidate dict matching the format from consensus
+                    mid_x = (x1 + x2) / 2.0
+                    mid_y = (y1 + y2) / 2.0
+                    near_end = (x2, y2) if y2 > y1 else (x1, y1)
+                    far_end = (x1, y1) if y2 > y1 else (x2, y2)
+                    best_candidate = {
+                        "p1": (x1, y1),
+                        "p2": (x2, y2),
+                        "angle": angle,
+                        "mid_x": mid_x,
+                        "mid_y": mid_y,
+                        "x_span": abs(x2 - x1),
+                        "near_end": near_end,
+                        "far_end": far_end,
+                        "support": support,
+                        "segments": [seg],
+                    }
+
+        if best_candidate is not None:
+            logger.info(
+                f"VP-recovery: found {missing_side} sideline evidence in "
+                f"rejected segments (support={best_candidate['support']}, "
+                f"angle={best_candidate['angle']:.1f}°)"
+            )
+            if missing_side == "right":
+                return left_sideline, best_candidate
+            else:
+                return best_candidate, right_sideline
+
+        # No evidence found — synthesize using VP + far baseline endpoint
+        # The missing sideline passes through the VP and through the
+        # far baseline endpoint on the missing side.
+        bl_p1 = far_baseline["p1"]
+        bl_p2 = far_baseline["p2"]
+
+        # Determine which baseline endpoint is on the missing side
+        if missing_side == "left":
+            # Left endpoint of baseline (smaller X)
+            anchor = bl_p1 if bl_p1[0] < bl_p2[0] else bl_p2
+        else:
+            # Right endpoint of baseline (larger X)
+            anchor = bl_p1 if bl_p1[0] > bl_p2[0] else bl_p2
+
+        # Extend the VP→anchor line downward to where the known sideline
+        # near endpoint is (matching the expected sideline extent)
+        known_near_y = known_sl["near_end"][1]
+        dx = anchor[0] - vp[0]
+        dy = anchor[1] - vp[1]
+
+        if abs(dy) < 1e-6:
+            logger.debug("VP-recovery: degenerate VP-anchor line, skipping")
+            return left_sideline, right_sideline
+
+        # Parametric: extend from VP through anchor to near_y
+        t_near = (known_near_y - vp[1]) / dy
+        near_x = vp[0] + t_near * dx
+        near_pt = (near_x, known_near_y)
+
+        # Build synthetic sideline from anchor (far end) to near_pt
+        angle = segment_angle_deg(anchor[0], anchor[1], near_pt[0], near_pt[1])
+        mid_x = (anchor[0] + near_pt[0]) / 2.0
+        mid_y = (anchor[1] + near_pt[1]) / 2.0
+
+        synthetic = {
+            "p1": anchor,
+            "p2": near_pt,
+            "angle": angle,
+            "mid_x": mid_x,
+            "mid_y": mid_y,
+            "x_span": abs(near_pt[0] - anchor[0]),
+            "near_end": near_pt,
+            "far_end": anchor,
+            "support": 0,  # Synthetic
+            "segments": [(anchor[0], anchor[1], near_pt[0], near_pt[1])],
+        }
+
+        logger.info(
+            f"VP-recovery: synthesized {missing_side} sideline via VP geometry "
+            f"(angle={angle:.1f}°, anchor=({anchor[0]:.2f}, {anchor[1]:.2f}))"
+        )
+
+        if missing_side == "right":
+            return left_sideline, synthetic
+        else:
+            return synthetic, right_sideline
 
     # ── Stage 5: Geometric Court Model Fitting ───────────────────────────
 
@@ -1042,10 +1250,12 @@ class CourtDetector:
         # COURT_MODEL_CORNERS order: near-left, near-right, far-right, far-left
         img_corners = project_court_corners(H)
 
-        # Validate quadrilateral
+        # Validate and fix quadrilateral
         near_left, near_right, far_right, far_left = img_corners
-        valid, validation_warnings = self._validate_quadrilateral(
-            far_left, far_right, near_right, near_left,
+        valid, validation_warnings, far_left, far_right, near_right, near_left = (
+            self._validate_quadrilateral(
+                far_left, far_right, near_right, near_left,
+            )
         )
         warnings.extend(validation_warnings)
 
@@ -1315,9 +1525,11 @@ class CourtDetector:
         far_right = (float(median_corners[2, 0]), float(median_corners[2, 1]))
         far_left = (float(median_corners[3, 0]), float(median_corners[3, 1]))
 
-        # Validate
-        valid, validation_warnings = self._validate_quadrilateral(
-            far_left, far_right, near_right, near_left,
+        # Validate and fix
+        valid, validation_warnings, far_left, far_right, near_right, near_left = (
+            self._validate_quadrilateral(
+                far_left, far_right, near_right, near_left,
+            )
         )
         if not valid:
             logger.info("Temporal consensus: invalid quadrilateral, skipping")
@@ -1538,9 +1750,11 @@ class CourtDetector:
                 warnings=["Cannot determine near corners"],
             )
 
-        # ── Validate quadrilateral ──
-        valid, validation_warnings = self._validate_quadrilateral(
-            far_left, far_right, near_right, near_left
+        # ── Validate and fix quadrilateral ──
+        valid, validation_warnings, far_left, far_right, near_right, near_left = (
+            self._validate_quadrilateral(
+                far_left, far_right, near_right, near_left,
+            )
         )
         warnings.extend(validation_warnings)
 
@@ -1571,13 +1785,29 @@ class CourtDetector:
         far_right: tuple[float, float],
         near_right: tuple[float, float],
         near_left: tuple[float, float],
-    ) -> tuple[bool, list[str]]:
-        """Validate the detected quadrilateral has reasonable properties."""
+    ) -> tuple[
+        bool,
+        list[str],
+        tuple[float, float],
+        tuple[float, float],
+        tuple[float, float],
+        tuple[float, float],
+    ]:
+        """Validate and fix the detected quadrilateral.
+
+        Non-convex quads are fixed by projecting the inverted corner along its
+        sideline direction until convexity is restored.
+
+        Returns:
+            Tuple of (is_valid, warnings, far_left, far_right, near_right, near_left)
+            where the corner tuples may be adjusted to enforce convexity.
+        """
         warnings: list[str] = []
 
         # Check for self-intersection using cross products
         # Order: near-left, near-right, far-right, far-left
         pts = [near_left, near_right, far_right, far_left]
+        labels = ["near_left", "near_right", "far_right", "far_left"]
 
         # All cross products at vertices should have same sign (convex)
         n = len(pts)
@@ -1591,7 +1821,54 @@ class CourtDetector:
         is_convex = all_positive or all_negative
 
         if not is_convex:
-            warnings.append("Detected quadrilateral is not convex")
+            # Identify the inverted corner (sign differs from majority)
+            pos_count = sum(1 for s in signs if s > 0)
+            target_sign_positive = pos_count >= n // 2
+            inverted_indices = [
+                i for i, s in enumerate(signs)
+                if (s > 0) != target_sign_positive
+            ]
+
+            if len(inverted_indices) == 1:
+                inv_idx = inverted_indices[0]
+                inv_label = labels[inv_idx]
+
+                # Fix by projecting the inverted corner along the adjacent
+                # edge directions until convexity is restored.
+                # For corner i: edges (i-1,i) and (i,i+1). Move corner i along
+                # the bisector direction toward the inside of the polygon.
+                prev_idx = (inv_idx - 1) % n
+                next_idx = (inv_idx + 1) % n
+                prev_pt = pts[prev_idx]
+                next_pt = pts[next_idx]
+
+                # Replace the inverted corner with the midpoint of its neighbors
+                # projected slightly inward — this restores convexity
+                fixed_pt = (
+                    (prev_pt[0] + next_pt[0]) / 2.0,
+                    (prev_pt[1] + next_pt[1]) / 2.0,
+                )
+                original_pt = [near_left, near_right, far_right, far_left][inv_idx]
+                pts[inv_idx] = fixed_pt
+                warnings.append(
+                    f"Non-convex quad fixed: adjusted {inv_label} "
+                    f"from ({original_pt[0]:.3f}, {original_pt[1]:.3f}) "
+                    f"to ({fixed_pt[0]:.3f}, {fixed_pt[1]:.3f})"
+                )
+
+                # Re-check convexity after fix
+                new_signs = []
+                for i in range(n):
+                    cp = cross2d(pts[i], pts[(i + 1) % n], pts[(i + 2) % n])
+                    new_signs.append(cp)
+                is_convex = all(s > 0 for s in new_signs) or all(s < 0 for s in new_signs)
+            else:
+                warnings.append(
+                    f"Detected quadrilateral is not convex "
+                    f"({len(inverted_indices)} inverted corners, cannot auto-fix)"
+                )
+
+        near_left, near_right, far_right, far_left = pts[0], pts[1], pts[2], pts[3]
 
         # Far side should be smaller than near side (perspective)
         far_width = math.sqrt(
@@ -1611,7 +1888,11 @@ class CourtDetector:
         if far_mid_y > near_mid_y:
             warnings.append("Far baseline below near baseline in image")
 
-        return (is_convex and far_mid_y <= near_mid_y, warnings)
+        return (
+            is_convex and far_mid_y <= near_mid_y,
+            warnings,
+            far_left, far_right, near_right, near_left,
+        )
 
     def _compute_confidence(
         self,
