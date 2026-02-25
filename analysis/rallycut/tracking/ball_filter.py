@@ -429,8 +429,12 @@ class BallTemporalFilter:
         This method:
         1. Drops very low confidence positions (zero-confidence placeholders)
         2. Splits the trajectory into segments at large position jumps
-        3. Identifies anchor segments (long enough to be reliable trajectory)
+        3. Identifies anchor segments (long enough to be reliable trajectory),
+           then removes false anchors: ghost-overlapping (3b), false start/tail
+           (3c), and spatial outliers (3d). Removed anchors are excluded from
+           recovery in step 4.
         4. Keeps non-anchor segments whose centroid is close to an anchor endpoint
+           (unless the segment was explicitly removed as an outlier in step 3)
         5. Discards remaining segments (false detections)
         """
         if len(positions) < 2:
@@ -457,8 +461,9 @@ class BallTemporalFilter:
             frame_gap = curr.frame_number - prev.frame_number
             dist = np.sqrt((curr.x - prev.x) ** 2 + (curr.y - prev.y) ** 2)
 
-            # Split on large position jump (normalized by gap for velocity)
-            # or large frame gap (likely different context)
+            # Split on large spatial jump or large frame gap.
+            # Uses raw distance (not velocity): a 20% screen jump is a
+            # segment boundary regardless of how many frames it spans.
             if dist > threshold or frame_gap > 15:
                 segments.append([curr])
             else:
@@ -473,6 +478,10 @@ class BallTemporalFilter:
         for i, seg in enumerate(segments):
             if len(seg) >= min_len:
                 anchor_indices.add(i)
+
+        # Track segments explicitly removed as outliers/false anchors.
+        # These must NOT be recovered in Step 4 (anchor-proximity recovery).
+        excluded_segments: set[int] = set()
 
         # Step 3b: Exclude anchors that overlap with ghost ranges.
         # Ghost segments (false detections after ball exits frame) can be long
@@ -497,6 +506,7 @@ class BallTemporalFilter:
                     ghost_anchors.add(i)
             if ghost_anchors:
                 anchor_indices -= ghost_anchors
+                excluded_segments |= ghost_anchors
                 logger.debug(
                     f"Excluded {len(ghost_anchors)} ghost-overlapping "
                     f"segments from anchors (non-ghost portion < {min_len})"
@@ -523,6 +533,7 @@ class BallTemporalFilter:
                 > threshold
             ):
                 anchor_indices.discard(first_idx)
+                excluded_segments.add(first_idx)
                 logger.info(
                     f"Segment pruning: removed false start anchor "
                     f"[{first_seg[0].frame_number}-{first_seg[-1].frame_number}] "
@@ -545,6 +556,7 @@ class BallTemporalFilter:
                     > threshold
                 ):
                     anchor_indices.discard(last_idx)
+                    excluded_segments.add(last_idx)
                     logger.info(
                         f"Segment pruning: removed false tail anchor "
                         f"[{last_seg[0].frame_number}-{last_seg[-1].frame_number}] "
@@ -571,8 +583,8 @@ class BallTemporalFilter:
             seg_spread: dict[int, float] = {}
             for i in anchor_indices:
                 seg = segments[i]
-                confident = [p for p in seg if p.confidence > 0]
-                pts = confident if confident else seg
+                seg_confident = [p for p in seg if p.confidence > 0]
+                pts = seg_confident if seg_confident else seg
                 xs = [p.x for p in pts]
                 ys = [p.y for p in pts]
                 seg_centroids[i] = (
@@ -676,6 +688,7 @@ class BallTemporalFilter:
                         f"({len(seg)} frames, centroid=({cx:.3f}, {cy:.3f}))"
                     )
                 anchor_indices -= outlier_removed
+                excluded_segments |= outlier_removed
 
         # Step 4: Keep short segments whose centroid is close to an anchor endpoint.
         # These are real trajectory fragments between interleaved false positives.
@@ -699,6 +712,15 @@ class BallTemporalFilter:
             if i in anchor_indices:
                 kept.extend(seg)
                 kept_info.append(tag)
+                continue
+
+            # Never recover segments explicitly removed as outliers, false
+            # start/tail, or ghost-overlapping. These were identified as
+            # non-ball objects (pigeons, cars, player hands, detector warmup)
+            # and must stay removed even if spatially close to an anchor.
+            if i in excluded_segments:
+                removed_count += len(seg)
+                removed_info.append(tag + "x")  # x marks excluded segments
                 continue
 
             # Short segment: check proximity to nearest anchor endpoints
@@ -758,7 +780,7 @@ class BallTemporalFilter:
                 parts.append(f"recovered {recovered_count} near-anchor positions")
             logger.info(", ".join(parts))
 
-        return kept if kept else confident  # Fall back to all if nothing survives
+        return kept
 
     def _detect_exit_ghost_ranges(
         self,
