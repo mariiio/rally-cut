@@ -617,7 +617,7 @@ def compute_court_split(
     config: PlayerFilterConfig,
     player_positions: list[PlayerPosition] | None = None,
     court_calibrator: CourtCalibrator | None = None,
-) -> tuple[float, str] | None:
+) -> tuple[float, str, dict[int, int]] | None:
     """
     Compute the Y-coordinate that splits the court into near/far teams.
 
@@ -636,36 +636,47 @@ def compute_court_split(
         court_calibrator: Optional calibrated court calibrator for precise net_y.
 
     Returns:
-        Tuple of (split_y, confidence) where confidence is "high" or "low",
-        or None if insufficient data. High confidence means the split is
-        reliable for team-constrained operations.
+        Tuple of (split_y, confidence, team_assignments) where confidence is
+        "high" or "low", and team_assignments maps track_id -> team (0=near,
+        1=far) from bbox size ranking. Empty dict when bbox clustering is not
+        available. Returns None if insufficient data.
     """
     # Priority 1: Calibration-derived (precise geometry)
     if court_calibrator is not None and court_calibrator.is_calibrated:
         cal_split = _get_court_split_y_from_calibration(court_calibrator)
         if cal_split is not None:
             logger.debug(f"Court split from calibration: y={cal_split:.3f}")
-            return (cal_split, "high")
+            # Still run bbox clustering to get team assignments from size
+            team_assignments: dict[int, int] = {}
+            if player_positions and len(player_positions) >= 20:
+                bbox_result = _find_net_from_bbox_clustering(
+                    player_positions, config.players_per_team,
+                    ball_positions=ball_positions or None,
+                )
+                if bbox_result is not None:
+                    team_assignments = bbox_result[2]
+            return (cal_split, "high", team_assignments)
 
     # Priority 2: Bbox clustering (player Y positions + bbox sizes)
     if player_positions and len(player_positions) >= 20:
         result = _find_net_from_bbox_clustering(
-            player_positions, config.players_per_team
+            player_positions, config.players_per_team,
+            ball_positions=ball_positions or None,
         )
         if result is not None:
-            split_y, confidence = result
+            split_y, confidence, team_assignments = result
             logger.debug(
                 f"Court split from bbox clustering: y={split_y:.3f} "
                 f"(confidence={confidence})"
             )
-            return (split_y, confidence)
+            return (split_y, confidence, team_assignments)
 
     # Priority 3: Ball trajectory direction changes
     if ball_positions:
         crossing_y = _find_net_from_ball_crossings(ball_positions)
         if crossing_y is not None:
             logger.debug(f"Court split from ball crossings: y={crossing_y:.3f}")
-            return (crossing_y, "low")
+            return (crossing_y, "low", {})
 
     # Priority 4: Ball trajectory center (fallback)
     confident = [
@@ -680,7 +691,7 @@ def compute_court_split(
 
     logger.debug(f"Court split from ball trajectory center: y={y_center:.3f}")
 
-    return (y_center, "low")
+    return (y_center, "low", {})
 
 
 def _find_net_from_ball_crossings(
@@ -780,18 +791,26 @@ def classify_teams(
     positions: list[PlayerPosition],
     court_split_y: float,
     window_frames: int = 60,
+    precomputed_assignments: dict[int, int] | None = None,
 ) -> dict[int, int]:
     """Classify each track into team 0 (near) or team 1 (far).
 
-    Uses median Y position of the first window_frames per track.
-    At rally start, teams are physically separated (serving team at
-    baseline/net, receiving team behind opposite baseline), so early
-    frames provide clean team anchoring.
+    When precomputed_assignments is provided (from bbox size ranking),
+    those assignments are used directly for known tracks, ensuring a
+    correct 2+2 split. Remaining tracks (from track splitting or new
+    fragments) fall back to median-Y classification.
+
+    Without precomputed assignments, uses median Y position of the first
+    window_frames per track. At rally start, teams are physically separated
+    so early frames provide clean team anchoring.
 
     Args:
         positions: All player positions across frames.
         court_split_y: Y-coordinate that splits near/far court (0-1).
         window_frames: Number of initial frames to use per track.
+        precomputed_assignments: Optional pre-computed team assignments
+            from bbox size ranking (track_id -> team). Tracks in this
+            dict use the precomputed team; remaining tracks use Y fallback.
 
     Returns:
         Dict mapping track_id -> team (0=near, 1=far).
@@ -806,8 +825,16 @@ def classify_teams(
         track_positions[p.track_id].append(p)
 
     team_assignments: dict[int, int] = {}
+    precomputed_used = 0
 
     for track_id, track_pos in track_positions.items():
+        # Use precomputed assignment if available for this track
+        if precomputed_assignments and track_id in precomputed_assignments:
+            team_assignments[track_id] = precomputed_assignments[track_id]
+            precomputed_used += 1
+            continue
+
+        # Fallback: classify by median Y position
         track_pos.sort(key=lambda p: p.frame_number)
         # Use first window_frames positions
         early = track_pos[:window_frames]
@@ -815,19 +842,49 @@ def classify_teams(
         # Near team (closer to camera) has higher Y values
         team_assignments[track_id] = 0 if median_y > court_split_y else 1
 
+    near_count = sum(1 for t in team_assignments.values() if t == 0)
+    far_count = sum(1 for t in team_assignments.values() if t == 1)
     logger.debug(
         f"Team classification (split_y={court_split_y:.3f}): "
-        f"near={sum(1 for t in team_assignments.values() if t == 0)}, "
-        f"far={sum(1 for t in team_assignments.values() if t == 1)}"
+        f"near={near_count}, far={far_count}"
+        f"{f', {precomputed_used} from bbox size' if precomputed_used else ''}"
     )
 
     return team_assignments
 
 
+def _validate_split_with_ball(
+    split_y: float,
+    ball_positions: list[BallPosition],
+    tolerance: float = 0.10,
+) -> bool:
+    """Check if ball direction reversals cluster near split_y.
+
+    Cross-validates bbox-derived split_y against ball trajectory. If ball
+    Y-direction reversals (which indicate net crossings) cluster far from
+    split_y, the bbox grouping might be wrong (e.g., a spectator's bbox
+    ranked above a real player).
+
+    Args:
+        split_y: Bbox-derived court split Y coordinate.
+        ball_positions: Ball positions from tracking.
+        tolerance: Maximum allowed disagreement between split_y and ball
+            crossing Y (default 0.10 = 10% of screen).
+
+    Returns:
+        True if ball data agrees or is insufficient, False if disagreement.
+    """
+    crossing_y = _find_net_from_ball_crossings(ball_positions)
+    if crossing_y is None:
+        return True  # No data → assume valid
+    return abs(crossing_y - split_y) < tolerance
+
+
 def _find_net_from_bbox_clustering(
     player_positions: list[PlayerPosition],
     players_per_team: int = 2,
-) -> tuple[float, str] | None:
+    ball_positions: list[BallPosition] | None = None,
+) -> tuple[float, str, dict[int, int]] | None:
     """
     Find the net Y position using bbox size to identify near/far teams.
 
@@ -836,13 +893,19 @@ def _find_net_from_bbox_clustering(
 
     The net is the boundary between the Y ranges of these two groups.
 
+    Also returns direct team assignments from bbox size ranking, avoiding
+    the lossy intermediate step of re-classifying via a Y threshold.
+
     Args:
         player_positions: All player positions across frames.
         players_per_team: Expected players per team (2 for beach volleyball).
+        ball_positions: Optional ball positions for cross-validation.
 
     Returns:
-        Tuple of (split_y, confidence) or None. Confidence is "high" when
-        teams are cleanly separated, "low" when falling back to median.
+        Tuple of (split_y, confidence, team_assignments) or None.
+        Confidence is "high" when teams are cleanly separated, "low" when
+        falling back to median. team_assignments maps track_id -> team
+        (0=near, 1=far) for the top tracks identified by bbox size.
     """
     # Compute average bbox size and Y per track
     track_sizes: dict[int, list[float]] = {}
@@ -879,6 +942,14 @@ def _find_net_from_bbox_clustering(
     near_tracks = top_tracks[:players_per_team]  # Largest bboxes
     far_tracks = top_tracks[players_per_team:]   # Smaller bboxes
 
+    # Build team assignments directly from bbox size ranking
+    # This is the key fix: assignments come from size, not from Y threshold
+    team_assignments: dict[int, int] = {}
+    for t in near_tracks:
+        team_assignments[t] = 0  # Near team
+    for t in far_tracks:
+        team_assignments[t] = 1  # Far team
+
     # Get Y positions for each team
     near_ys = [track_avg_y[t] for t in near_tracks]
     far_ys = [track_avg_y[t] for t in far_tracks]
@@ -890,8 +961,8 @@ def _find_net_from_bbox_clustering(
 
     # Log the team positions for debugging
     logger.debug(
-        f"Bbox clustering: near_ys={[f'{y:.2f}' for y in near_ys]}, "
-        f"far_ys={[f'{y:.2f}' for y in far_ys]}"
+        f"Bbox clustering: near={near_tracks} ys={[f'{y:.2f}' for y in near_ys]}, "
+        f"far={far_tracks} ys={[f'{y:.2f}' for y in far_ys]}"
     )
 
     # Validate: far team should be above (lower Y) near team
@@ -903,17 +974,27 @@ def _find_net_from_bbox_clustering(
             f"Teams overlap (max_far={max_far_y:.2f} >= min_near={min_near_y:.2f}), "
             f"using median y={split_y:.2f}"
         )
-        return (split_y, "low")
+        return (split_y, "low", team_assignments)
 
     # Split at the midpoint between teams
     split_y = (max_far_y + min_near_y) / 2
 
+    # Cross-validate with ball trajectory if available
+    confidence = "high"
+    if ball_positions and not _validate_split_with_ball(split_y, ball_positions):
+        confidence = "low"
+        logger.debug(
+            f"Ball crossings disagree with bbox split y={split_y:.3f}, "
+            f"downgrading confidence to low"
+        )
+
     logger.debug(
         f"Net found between teams: y={split_y:.3f} "
-        f"(far_max={max_far_y:.2f}, near_min={min_near_y:.2f})"
+        f"(far_max={max_far_y:.2f}, near_min={min_near_y:.2f}, "
+        f"confidence={confidence})"
     )
 
-    return (split_y, "high")
+    return (split_y, confidence, team_assignments)
 
 
 def select_two_teams(
