@@ -54,38 +54,9 @@ WEIGHT_BBOX_SIZE = 0.10
 WEIGHT_MULTI_REGION = 0.15
 SPATIAL_NORMALIZER = 0.30  # Euclidean distance normalization
 
-# Cross-rally prior weights (when priors available, borrowed from appearance)
-WEIGHT_CROSS_RALLY = 0.15
-WEIGHT_APPEARANCE_WITH_PRIOR = 0.35  # 0.50 - 0.15
-
-# Cross-rally prior gating
-CROSS_RALLY_MIN_RALLIES = 2  # Minimum rallies seen to activate prior
-CROSS_RALLY_MAX_DISTANCE = 0.50  # Max Bhattacharyya distance for usable prior
-
 # Assignment
 MAX_REASSIGNMENT_ROUNDS = 10
 MAX_ASSIGNMENT_COST = 0.70  # Drop segments with best cost above this
-
-
-@dataclass
-class CrossRallyPrior:
-    """Cross-rally appearance prior for a player.
-
-    Built from accumulated PlayerAppearanceProfile across multiple rallies.
-    Used as a stabilizing signal in global identity cost computation.
-    """
-
-    player_id: int  # Global player ID (1-4)
-    team: int  # 0=near, 1=far (current side after side switches)
-    shorts_histogram: np.ndarray | None = field(default=None, repr=False)
-    rally_count: int = 0  # How many rallies contributed to this prior
-
-    @property
-    def confidence(self) -> float:
-        """Confidence ramp: 0 at 1 rally, 1.0 at 10+ rallies."""
-        if self.rally_count < CROSS_RALLY_MIN_RALLIES:
-            return 0.0
-        return min((self.rally_count - 1) / 9.0, 1.0)
 
 
 @dataclass
@@ -145,7 +116,6 @@ def optimize_global_identity(
     color_store: ColorHistogramStore,
     court_split_y: float | None = None,
     appearance_store: AppearanceDescriptorStore | None = None,
-    cross_rally_priors: list[CrossRallyPrior] | None = None,
 ) -> tuple[list[PlayerPosition], GlobalIdentityResult]:
     """Run global identity optimization on tracked positions.
 
@@ -155,9 +125,6 @@ def optimize_global_identity(
         color_store: Per-frame color histograms.
         court_split_y: Y-coordinate splitting near/far court.
         appearance_store: Optional multi-region appearance descriptors.
-        cross_rally_priors: Optional cross-rally appearance priors from
-            match_players. When available, adds a stabilizing cost term
-            (weight 0.15) to segment assignment.
 
     Returns:
         Tuple of (positions, result). Positions are modified in place when
@@ -246,20 +213,9 @@ def optimize_global_identity(
             total_remapped += remapped
             continue
 
-        # Filter cross-rally priors to this team
-        team_priors: list[CrossRallyPrior] | None = None
-        if cross_rally_priors:
-            team_priors = [
-                p for p in cross_rally_priors
-                if p.team == team_id and p.confidence > 0
-            ]
-            if not team_priors:
-                team_priors = None
-
         remapped = _assign_segments_to_profiles(
             positions, team_segs, team_profiles,
             color_store, appearance_store,
-            cross_rally_priors=team_priors,
         )
         total_remapped += remapped
 
@@ -663,31 +619,25 @@ def _compute_assignment_cost(
     seg_multi_desc: MultiRegionDescriptor | None,
     profile_multi_desc: MultiRegionDescriptor | None,
     compute_multi_region_distance_fn: Callable[..., float] | None,
-    cross_rally_cost: float | None = None,
 ) -> float:
     """Compute cost of assigning a segment to a player profile.
 
     Lower cost = better match. Pre-computed histograms and multi-region
     descriptors are passed in to avoid redundant computation.
 
-    Weights without priors: appearance 0.50, spatial 0.25, bbox_size 0.10, multi_region 0.15.
-    Weights with priors: appearance 0.35, spatial 0.25, bbox_size 0.10, multi_region 0.15, cross_rally 0.15.
+    Weights: appearance 0.50, spatial 0.25, bbox_size 0.10, multi_region 0.15 (sum 1.0).
     """
     cost = 0.0
-    has_prior = cross_rally_cost is not None
 
     # 1. Appearance cost (shorts histogram Bhattacharyya)
-    # When cross-rally priors are available, appearance weight drops from
-    # 0.50 to 0.35 to make room for the 0.15 cross-rally term.
-    w_appearance = WEIGHT_APPEARANCE_WITH_PRIOR if has_prior else WEIGHT_APPEARANCE
     if seg_histogram is not None and profile.histogram is not None:
         appearance_dist = cv2.compareHist(
             profile.histogram, seg_histogram.astype(np.float32),
             cv2.HISTCMP_BHATTACHARYYA,
         )
-        cost += w_appearance * appearance_dist
+        cost += WEIGHT_APPEARANCE * appearance_dist
     else:
-        cost += w_appearance * 0.5  # neutral penalty
+        cost += WEIGHT_APPEARANCE * 0.5  # neutral penalty
 
     # 2. Spatial cost (segment centroid vs profile centroid)
     sx, sy = segment.centroid
@@ -717,10 +667,6 @@ def _compute_assignment_cost(
                 seg_multi_desc, profile_multi_desc
             )
     cost += WEIGHT_MULTI_REGION * multi_cost
-
-    # 5. Cross-rally prior cost (when available)
-    if cross_rally_cost is not None:
-        cost += WEIGHT_CROSS_RALLY * cross_rally_cost
 
     return cost
 
@@ -756,7 +702,6 @@ def _assign_segments_to_profiles(
     profiles: list[PlayerProfile],
     color_store: ColorHistogramStore,
     appearance_store: AppearanceDescriptorStore | None,
-    cross_rally_priors: list[CrossRallyPrior] | None = None,
 ) -> int:
     """Assign each segment to its best-matching player profile.
 
@@ -798,72 +743,15 @@ def _assign_segments_to_profiles(
         )
         compute_multi_region_distance_fn = compute_multi_region_distance
 
-    # Pre-compute cross-rally prior costs per (profile_idx, segment_idx).
-    # Team filtering already happened upstream (optimize_global_identity passes
-    # only same-team priors). Here we match each intra-rally profile to its
-    # best cross-rally prior by histogram similarity, then compute segment-
-    # to-prior Bhattacharyya distances for the cost matrix.
-    cross_rally_costs: dict[tuple[int, int], float] = {}
-    if cross_rally_priors:
-        profile_to_prior: dict[int, CrossRallyPrior] = {}
-        for j, profile in enumerate(profiles):
-            if profile.histogram is None:
-                continue
-            best_prior: CrossRallyPrior | None = None
-            best_dist = CROSS_RALLY_MAX_DISTANCE
-            for prior in cross_rally_priors:
-                if prior.shorts_histogram is None:
-                    continue
-                dist = cv2.compareHist(
-                    profile.histogram,
-                    prior.shorts_histogram.astype(np.float32),
-                    cv2.HISTCMP_BHATTACHARYYA,
-                )
-                if dist < best_dist:
-                    best_dist = dist
-                    best_prior = prior
-            if best_prior is not None:
-                profile_to_prior[j] = best_prior
-
-        # Warn if multiple profiles mapped to the same prior (benign but
-        # means one historical player provides no differentiating signal)
-        prior_ids = [p.player_id for p in profile_to_prior.values()]
-        if len(prior_ids) != len(set(prior_ids)):
-            logger.debug(
-                "Cross-rally: multiple intra-rally profiles matched "
-                "the same prior — prior signal may be weaker"
-            )
-
-        # Compute cross-rally cost for each (segment, profile) pair.
-        # Cost is scaled by prior.confidence (ramps 0→1 over 10 rallies),
-        # so at low confidence the effective cross-rally weight is less
-        # than WEIGHT_CROSS_RALLY — this is intentional (conservative
-        # until enough appearance data has accumulated).
-        for i, seg in enumerate(team_segments):
-            seg_hist = seg_histograms[i]
-            if seg_hist is None:
-                continue
-            for j, prior in profile_to_prior.items():
-                if prior.shorts_histogram is None:
-                    continue
-                dist = cv2.compareHist(
-                    seg_hist.astype(np.float32),
-                    prior.shorts_histogram.astype(np.float32),
-                    cv2.HISTCMP_BHATTACHARYYA,
-                )
-                cross_rally_costs[(i, j)] = dist * prior.confidence
-
     # Build cost matrix [n_segs x n_players]
     cost_matrix = np.full((n_segs, n_players), fill_value=1.0)
 
     for i, seg in enumerate(team_segments):
         for j, profile in enumerate(profiles):
-            cr_cost = cross_rally_costs.get((i, j))
             cost_matrix[i, j] = _compute_assignment_cost(
                 seg, profile,
                 seg_histograms[i], seg_multi_descs[i], profile_multi_descs[j],
                 compute_multi_region_distance_fn,
-                cross_rally_cost=cr_cost,
             )
 
     # Greedy assignment: each segment picks its lowest-cost profile
