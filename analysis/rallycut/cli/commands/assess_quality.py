@@ -68,6 +68,9 @@ def _get_video_info(video_path: str) -> dict:
 
 def _assess_frames(frames: list[np.ndarray]) -> dict:
     """Run YOLO on sample frames to assess scene quality."""
+    import logging
+    logging.getLogger('ultralytics').setLevel(logging.WARNING)
+
     try:
         from ultralytics import YOLO
     except ImportError:

@@ -20,6 +20,7 @@ from rallycut.tracking.ball_tracker import (
 )
 from rallycut.tracking.player_filter import PlayerFilterConfig
 from rallycut.tracking.player_tracker import (
+    DEFAULT_CONFIDENCE,
     DEFAULT_COURT_ROI,
     DEFAULT_IMGSZ,
     DEFAULT_TRACKER,
@@ -281,7 +282,7 @@ def track_players(
         help="End time in milliseconds",
     ),
     confidence: float = typer.Option(
-        0.25,
+        DEFAULT_CONFIDENCE,
         "--confidence", "-c",
         help="Detection confidence threshold (0-1)",
     ),
