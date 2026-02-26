@@ -916,6 +916,17 @@ class PlayerTracker:
         if self._model is not None:
             return self._model
 
+        import os
+        import time
+
+        # Disable ultralytics network calls that can hang in subprocess contexts
+        # (update checks, telemetry, hub sync). Must be set before import.
+        os.environ.setdefault("YOLO_AUTOCHECK", "False")
+        os.environ.setdefault("ULTRALYTICS_SYNC", "False")
+
+        t0 = time.monotonic()
+        print("Loading YOLO: importing ultralytics...", flush=True)
+
         try:
             from ultralytics import YOLO
         except ImportError:
@@ -924,21 +935,32 @@ class PlayerTracker:
                 "Install with: pip install ultralytics>=8.2.0"
             )
 
+        t_import = time.monotonic() - t0
+        print(f"Loading YOLO: ultralytics imported ({t_import:.1f}s)", flush=True)
+
+        # Suppress ultralytics' verbose output (download progress, telemetry)
+        logging.getLogger("ultralytics").setLevel(logging.WARNING)
+
         # Load model - ultralytics handles download automatically
         model_path = self._ensure_model()
         model_filename = self._get_model_filename()
 
+        t1 = time.monotonic()
         # Try to load from cache first, fallback to auto-download
         if model_path.exists():
+            print(f"Loading YOLO: {model_filename} from cache...", flush=True)
             self._model = YOLO(str(model_path))
         else:
             # Download model automatically
-            logger.info(f"Downloading {model_filename} model...")
+            print(f"Loading YOLO: downloading {model_filename}...", flush=True)
             self._model = YOLO(model_filename)
 
-        # Configure for CPU/GPU
-        # ultralytics auto-detects available hardware
-        logger.info(f"Loaded YOLO model: {model_filename}")
+        t_load = time.monotonic() - t1
+        print(
+            f"Loading YOLO: {model_filename} ready ({t_load:.1f}s, "
+            f"total {time.monotonic() - t0:.1f}s)",
+            flush=True,
+        )
 
         return self._model
 
@@ -1227,9 +1249,10 @@ class PlayerTracker:
             total_frames_in_range = end_frame - start_frame
             # With stride, we process fewer frames
             frames_to_process = (total_frames_in_range + stride - 1) // stride
-            logger.info(
-                f"Processing frames {start_frame}-{end_frame} "
-                f"({total_frames_in_range} frames, stride={stride}, processing {frames_to_process} frames, {fps:.1f} fps)"
+            print(
+                f"YOLO tracking: {total_frames_in_range} frames "
+                f"(stride={stride}, {frames_to_process} to process, {fps:.1f} fps)",
+                flush=True,
             )
 
             positions: list[PlayerPosition] = []
@@ -1348,14 +1371,31 @@ class PlayerTracker:
 
                     frames_processed += 1
 
-                    # Progress callback
+                    # Progress callback (for Rich progress bar)
                     if progress_callback and frames_processed % 30 == 0:
-                        progress = frames_processed / frames_to_process
-                        progress_callback(progress)
+                        pct = frames_processed / frames_to_process
+                        progress_callback(pct)
+
+                    # Periodic progress to stdout (visible through pipes where
+                    # Rich live display is buffered)
+                    if frames_processed % 100 == 0 or frames_processed == 1:
+                        elapsed = time.time() - start_time
+                        fps_actual = frames_processed / max(elapsed, 0.001)
+                        print(
+                            f"YOLO tracking: {frames_processed}/{frames_to_process} "
+                            f"frames ({fps_actual:.1f} FPS)",
+                            flush=True,
+                        )
 
                 frame_idx += 1
 
             # Final progress
+            elapsed = time.time() - start_time
+            print(
+                f"YOLO tracking: done ({frames_to_process} frames in "
+                f"{elapsed:.1f}s, {frames_to_process / max(elapsed, 0.001):.1f} FPS)",
+                flush=True,
+            )
             if progress_callback:
                 progress_callback(1.0)
 
