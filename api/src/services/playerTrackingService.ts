@@ -224,11 +224,25 @@ interface PlayerTrackerOutput {
 }
 
 /**
+ * Compute adaptive timeout for player tracking based on rally duration.
+ * Processing time scales with frame count: YOLO ~6 FPS + WASB ~4-33 FPS.
+ * Returns timeout in milliseconds.
+ */
+function computeTrackingTimeout(durationSeconds: number): number {
+  const BASE_MS = 120_000;                // 2min for model loading + post-processing
+  const PER_VIDEO_SECOND_MS = 15_000;     // ~15s processing per 1s of 60fps video (conservative CPU estimate)
+  const MIN_TIMEOUT_MS = 5 * 60 * 1000;   // 5min floor (model loading dominates short rallies)
+
+  return Math.max(MIN_TIMEOUT_MS, BASE_MS + durationSeconds * PER_VIDEO_SECOND_MS);
+}
+
+/**
  * Run the Python player tracker CLI.
  */
 async function runPlayerTracker(
   videoPath: string,
   outputPath: string,
+  durationSeconds: number,
   calibrationCorners?: CalibrationCorner[],
 ): Promise<PlayerTrackerOutput> {
   return new Promise((resolve, reject) => {
@@ -263,12 +277,14 @@ async function runPlayerTracker(
       },
     });
 
-    // Kill subprocess after 5 minutes to prevent infinite hangs (e.g., YOLO GPU lock)
-    const TRACKING_TIMEOUT_MS = 5 * 60 * 1000;
+    // Adaptive timeout: scales with rally duration to prevent false timeouts on long rallies,
+    // while still catching actual hangs (e.g., YOLO GPU lock)
+    const timeoutMs = computeTrackingTimeout(durationSeconds);
     const timeout = setTimeout(() => {
       child.kill('SIGKILL');
-      reject(new Error(`Player tracker timed out after ${TRACKING_TIMEOUT_MS / 1000}s`));
-    }, TRACKING_TIMEOUT_MS);
+      reject(new Error(`Player tracker timed out after ${Math.round(timeoutMs / 1000)}s (rally duration: ${durationSeconds.toFixed(1)}s)`));
+    }, timeoutMs);
+    console.log(`[PLAYER_TRACK] Timeout: ${Math.round(timeoutMs / 1000)}s for ${durationSeconds.toFixed(1)}s rally`);
 
     let stdout = '';
     let stderr = '';
@@ -664,7 +680,7 @@ export async function trackRallyFromLocalVideo(
     console.log(`[BATCH_TRACK] Extracting segment for rally ${rallyId}: ${startSeconds}s - ${endMs / 1000}s`);
     await extractVideoSegmentFromLocal(localVideoPath, startSeconds, durationSeconds, segmentPath);
 
-    const trackerResult = await runPlayerTracker(segmentPath, outputPath, calibrationCorners);
+    const trackerResult = await runPlayerTracker(segmentPath, outputPath, durationSeconds, calibrationCorners);
     const processingTimeMs = Date.now() - startTime;
 
     await saveTrackingResult(rallyId, videoId, trackerResult, processingTimeMs);
@@ -1004,7 +1020,7 @@ export async function trackPlayersForRally(
     await extractVideoSegment(videoUrl, startSeconds, durationSeconds, segmentPath);
 
     // Run player tracker (with court filtering enabled by default)
-    const trackerResult = await runPlayerTracker(segmentPath, outputPath, calibrationCorners);
+    const trackerResult = await runPlayerTracker(segmentPath, outputPath, durationSeconds, calibrationCorners);
 
     const processingTimeMs = Date.now() - startTime;
     console.log(`[PLAYER_TRACK] Completed in ${processingTimeMs}ms`);
