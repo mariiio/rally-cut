@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -916,15 +918,14 @@ class PlayerTracker:
         if self._model is not None:
             return self._model
 
-        import os
-        import time
-
         # Disable ultralytics network calls that can hang in subprocess contexts
         # (update checks, telemetry, hub sync). Must be set before import.
         os.environ.setdefault("YOLO_AUTOCHECK", "False")
         os.environ.setdefault("ULTRALYTICS_SYNC", "False")
 
         t0 = time.monotonic()
+        # print() not logger: must be visible through Node.js subprocess pipe
+        # where the default logging level is WARNING.
         print("Loading YOLO: importing ultralytics...", flush=True)
 
         try:
@@ -1199,8 +1200,6 @@ class PlayerTracker:
         Returns:
             PlayerTrackingResult with all detected positions.
         """
-        import time
-
         start_time = time.time()
         video_path = Path(video_path)
 

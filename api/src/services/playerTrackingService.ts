@@ -228,7 +228,7 @@ interface PlayerTrackerOutput {
  */
 function computeTrackingTimeout(durationSeconds: number): number {
   const BASE_MS = 120_000;                // 2min for model loading + post-processing
-  const PER_VIDEO_SECOND_MS = 30_000;     // ~30s per 1s video (60fps stride=1 at ~2-3 FPS YOLO throughput)
+  const PER_VIDEO_SECOND_MS = 30_000;     // ~30s per 1s video (conservative: covers 60fps stride=1 worst case)
   const MIN_TIMEOUT_MS = 5 * 60 * 1000;   // 5min floor (model loading dominates short rallies)
 
   return Math.max(MIN_TIMEOUT_MS, BASE_MS + durationSeconds * PER_VIDEO_SECOND_MS);
