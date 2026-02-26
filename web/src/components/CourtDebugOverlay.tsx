@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useMemo, RefObject } from 'react';
-import type { BallPosition, ContactInfo } from '@/services/api';
+import type { ActionInfo, BallPosition, ContactInfo } from '@/services/api';
 import type { Corner } from '@/stores/playerTrackingStore';
 
 // Team colors
@@ -90,6 +90,7 @@ interface CourtDebugOverlayProps {
   courtSplitY?: number;
   ballPositions?: BallPosition[];
   contacts?: ContactInfo[];
+  actions?: ActionInfo[];
   fps: number;
   rallyStartTime: number;
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -100,6 +101,7 @@ export function CourtDebugOverlay({
   courtSplitY,
   ballPositions,
   contacts,
+  actions,
   fps,
   rallyStartTime,
   videoRef,
@@ -112,23 +114,34 @@ export function CourtDebugOverlay({
     return computePerspectiveNetLine(corners);
   }, [corners]);
 
-  // Pre-calculate contact absolute times (sorted by frame)
-  const contactsWithTime = useMemo(() => {
+  // Pre-calculate court side events with absolute times (sorted by frame).
+  // Prefer actions (have propagated court_side from volleyball rules) over raw contacts.
+  const courtSideEvents = useMemo(() => {
+    if (actions && actions.length > 0) {
+      return actions
+        .map((a) => ({
+          frame: a.frame,
+          courtSide: a.courtSide,
+          absoluteTime: rallyStartTime + a.frame / fps,
+        }))
+        .sort((a, b) => a.absoluteTime - b.absoluteTime);
+    }
     if (!contacts || contacts.length === 0) return [];
     return contacts
       .filter((c) => c.isValidated)
       .map((c) => ({
-        ...c,
+        frame: c.frame,
+        courtSide: c.courtSide,
         absoluteTime: rallyStartTime + c.frame / fps,
       }))
       .sort((a, b) => a.absoluteTime - b.absoluteTime);
-  }, [contacts, fps, rallyStartTime]);
+  }, [actions, contacts, fps, rallyStartTime]);
 
-  // RVFC loop for ball side badge — shows court side from last contact
+  // RVFC loop for ball side badge — shows court side from last action/contact
   useEffect(() => {
     const video = videoRef.current;
     const badge = badgeRef.current;
-    if (!video || !badge || contactsWithTime.length === 0) {
+    if (!video || !badge || courtSideEvents.length === 0) {
       if (badge) badge.style.display = 'none';
       return;
     }
@@ -136,29 +149,28 @@ export function CourtDebugOverlay({
     let rvfcId: number | undefined;
 
     const render = (videoTime: number) => {
-      // Find the last contact at or before current time
-      // Binary search for the rightmost contact <= videoTime
+      // Binary search for the rightmost event <= videoTime
       let lo = 0;
-      let hi = contactsWithTime.length - 1;
-      let lastContact: (typeof contactsWithTime)[0] | null = null;
+      let hi = courtSideEvents.length - 1;
+      let lastEvent: (typeof courtSideEvents)[0] | null = null;
 
       while (lo <= hi) {
         const mid = (lo + hi) >>> 1;
-        if (contactsWithTime[mid].absoluteTime <= videoTime) {
-          lastContact = contactsWithTime[mid];
+        if (courtSideEvents[mid].absoluteTime <= videoTime) {
+          lastEvent = courtSideEvents[mid];
           lo = mid + 1;
         } else {
           hi = mid - 1;
         }
       }
 
-      // Hide before first contact or more than 3s after last contact
-      if (!lastContact || videoTime - lastContact.absoluteTime > 3.0) {
+      // Hide before first event or more than 3s after last event
+      if (!lastEvent || videoTime - lastEvent.absoluteTime > 3.0) {
         badge.style.display = 'none';
         return;
       }
 
-      const isNear = lastContact.courtSide === 'near';
+      const isNear = lastEvent.courtSide === 'near';
       const side = isNear ? 'NEAR' : 'FAR';
       const team = isNear ? 'A' : 'B';
       const color = isNear ? TEAM_A_COLOR : TEAM_B_COLOR;
@@ -179,7 +191,7 @@ export function CourtDebugOverlay({
     return () => {
       if (rvfcId !== undefined) video.cancelVideoFrameCallback(rvfcId);
     };
-  }, [videoRef, contactsWithTime]);
+  }, [videoRef, courtSideEvents]);
 
   const hasCorners = corners && corners.length === 4;
   const hasSplitY = courtSplitY !== undefined && courtSplitY > 0;

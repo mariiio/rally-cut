@@ -1435,8 +1435,13 @@ def propagate_court_side(actions: list[ClassifiedAction]) -> list[ClassifiedActi
                 if tgt.court_side != expected:
                     tgt.court_side = expected
         elif src.action_type in _SAME_SIDE_ACTIONS:
-            if src.confidence >= _MEDIUM_CONFIDENCE_GATE:
-                # Only fill unknown, never override
+            if src.confidence >= _HIGH_CONFIDENCE_GATE:
+                # High confidence: fill unknown or override disagreement —
+                # consecutive same-side actions are unambiguous (same possession)
+                if tgt.court_side != src.court_side:
+                    tgt.court_side = src.court_side
+            elif src.confidence >= _MEDIUM_CONFIDENCE_GATE:
+                # Medium confidence: only fill unknown
                 if tgt.court_side == "unknown":
                     tgt.court_side = src.court_side
 

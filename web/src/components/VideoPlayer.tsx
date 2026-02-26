@@ -872,6 +872,7 @@ export function VideoPlayer() {
               courtSplitY={playerTracks[currentRally._backendId]!.tracksJson!.courtSplitY}
               ballPositions={playerTracks[currentRally._backendId]!.tracksJson!.ballPositions}
               contacts={playerTracks[currentRally._backendId]!.tracksJson!.contacts?.contacts}
+              actions={playerTracks[currentRally._backendId]!.tracksJson!.actions?.actions}
               fps={playerTracks[currentRally._backendId]!.tracksJson!.fps ?? activeMatch?.video?.fps ?? 30}
               rallyStartTime={currentRally.start_time}
               videoRef={videoRef}
