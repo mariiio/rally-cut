@@ -184,6 +184,9 @@ def run_tracking(
                 print("[LOCAL] Using calibration ROI")
             elif cal_msg:
                 print(f"[LOCAL] Calibration ROI failed: {cal_msg}")
+                # Invalidate calibrator — degenerate homography will cause
+                # off-court filtering to silently reject all detections
+                calibrator = None
 
         # Create tracker with tuned confidence threshold
         tracker = PlayerTracker(confidence=0.15, court_roi=court_roi)
