@@ -130,8 +130,8 @@ export async function trackAllRallies(
       }
     });
   } else {
-    // Local CPU path: existing processBatchTracking() unchanged
-    processBatchTracking(job.id, videoId, videoKey, video.rallies, calibrationCorners).catch(
+    // Local CPU path
+    processBatchTracking(job.id, videoId, videoKey, video.rallies, video.fps ?? undefined, calibrationCorners).catch(
       async (error) => {
         console.error(`[BATCH_TRACK] Fatal error in batch job ${job.id}:`, error);
         try {
@@ -163,6 +163,7 @@ async function processBatchTracking(
   videoId: string,
   videoKey: string,
   rallies: Array<{ id: string; startMs: number; endMs: number }>,
+  videoFps?: number,
   calibrationCorners?: CalibrationCorner[],
 ): Promise<void> {
   await fs.mkdir(TEMP_DIR, { recursive: true });
@@ -198,6 +199,7 @@ async function processBatchTracking(
           localVideoPath,
           rally.startMs,
           rally.endMs,
+          videoFps,
           calibrationCorners,
         );
 

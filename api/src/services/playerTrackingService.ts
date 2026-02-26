@@ -146,9 +146,7 @@ async function extractVideoSegment(
       '-ss', startSeconds.toString(), // Input-level seeking (fast, uses HTTP range requests)
       '-i', videoUrl,
       '-t', durationSeconds.toString(),
-      '-c:v', 'libx264',
-      '-preset', 'fast',
-      '-crf', '18', // Visually lossless — preserves detail for VballNet ball detection
+      '-c', 'copy',  // Stream copy — no re-encoding (~2s vs ~2min)
       '-an', // No audio needed for player tracking
       '-y',
       outputPath,
@@ -243,6 +241,7 @@ async function runPlayerTracker(
   videoPath: string,
   outputPath: string,
   durationSeconds: number,
+  videoFps?: number,
   calibrationCorners?: CalibrationCorner[],
 ): Promise<PlayerTrackerOutput> {
   return new Promise((resolve, reject) => {
@@ -257,6 +256,12 @@ async function runPlayerTracker(
       '--actions',  // Enable contact detection + action classification
       // Note: Not using --quiet so we can see filter logs
     ];
+
+    // Auto-stride for high-FPS videos: 60fps at stride=2 ≈ 30fps quality,
+    // halves processing time with negligible accuracy loss (IDsw 41→37)
+    if (videoFps && videoFps >= 50) {
+      args.push('--stride', '2');
+    }
 
     // Pass calibration corners if available
     if (calibrationCorners && calibrationCorners.length === 4) {
@@ -480,9 +485,7 @@ export async function extractVideoSegmentFromLocal(
       '-ss', startSeconds.toString(),
       '-i', localVideoPath,
       '-t', durationSeconds.toString(),
-      '-c:v', 'libx264',
-      '-preset', 'fast',
-      '-crf', '18',
+      '-c', 'copy',  // Stream copy — no re-encoding
       '-an',
       '-y',
       outputPath,
@@ -647,6 +650,7 @@ export async function trackRallyFromLocalVideo(
   localVideoPath: string,
   startMs: number,
   endMs: number,
+  videoFps?: number,
   calibrationCorners?: CalibrationCorner[],
 ): Promise<TrackPlayersResult> {
   const startTime = Date.now();
@@ -680,7 +684,7 @@ export async function trackRallyFromLocalVideo(
     console.log(`[BATCH_TRACK] Extracting segment for rally ${rallyId}: ${startSeconds}s - ${endMs / 1000}s`);
     await extractVideoSegmentFromLocal(localVideoPath, startSeconds, durationSeconds, segmentPath);
 
-    const trackerResult = await runPlayerTracker(segmentPath, outputPath, durationSeconds, calibrationCorners);
+    const trackerResult = await runPlayerTracker(segmentPath, outputPath, durationSeconds, videoFps, calibrationCorners);
     const processingTimeMs = Date.now() - startTime;
 
     await saveTrackingResult(rallyId, videoId, trackerResult, processingTimeMs);
@@ -1006,8 +1010,7 @@ export async function trackPlayersForRally(
   const outputPath = path.join(TEMP_DIR, `rally_${rallyId}_players.json`);
 
   try {
-    // Prefer original quality — proxy video (720p) degrades VballNet ball
-    // detection significantly due to lower resolution and re-encoding artifacts.
+    // Prefer original quality — proxy (720p) degrades ball detection.
     // Falls back to proxy if original has been quality-downgraded.
     const videoKey = rally.video.s3Key ?? rally.video.proxyS3Key;
     if (!videoKey) {
@@ -1024,7 +1027,8 @@ export async function trackPlayersForRally(
     await extractVideoSegment(videoUrl, startSeconds, durationSeconds, segmentPath);
 
     // Run player tracker (with court filtering enabled by default)
-    const trackerResult = await runPlayerTracker(segmentPath, outputPath, durationSeconds, calibrationCorners);
+    const videoFps = rally.video.fps ?? undefined;
+    const trackerResult = await runPlayerTracker(segmentPath, outputPath, durationSeconds, videoFps, calibrationCorners);
 
     const processingTimeMs = Date.now() - startTime;
     console.log(`[PLAYER_TRACK] Completed in ${processingTimeMs}ms`);

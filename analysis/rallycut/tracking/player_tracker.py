@@ -1277,6 +1277,15 @@ class PlayerTracker:
                 appearance_store = AppearanceDescriptorStore()
 
             while frame_idx < end_frame:
+                # For strided processing, grab() skips frame decoding
+                # (~2x faster than read() for non-processed frames)
+                is_process_frame = (frame_idx - start_frame) % stride == 0
+                if not is_process_frame:
+                    if not cap.grab():
+                        break
+                    frame_idx += 1
+                    continue
+
                 ret, frame = cap.read()
                 if not ret:
                     logger.warning(
@@ -1285,107 +1294,105 @@ class PlayerTracker:
                     )
                     break
 
-                # Only process every Nth frame (stride)
-                if (frame_idx - start_frame) % stride == 0:
-                    # Apply preprocessing if enabled (e.g., CLAHE for sand backgrounds)
-                    processed_frame = frame
-                    if self.preprocessing == PREPROCESSING_CLAHE:
-                        processed_frame = apply_clahe_preprocessing(frame)
+                # Apply preprocessing if enabled (e.g., CLAHE for sand backgrounds)
+                processed_frame = frame
+                if self.preprocessing == PREPROCESSING_CLAHE:
+                    processed_frame = apply_clahe_preprocessing(frame)
 
-                    # Apply ROI mask to prevent tracks on background objects
-                    frame_to_track = processed_frame
-                    if self.court_roi is not None:
-                        frame_to_track = self._apply_roi_mask(
-                            processed_frame, self.court_roi
+                # Apply ROI mask to prevent tracks on background objects
+                frame_to_track = processed_frame
+                if self.court_roi is not None:
+                    frame_to_track = self._apply_roi_mask(
+                        processed_frame, self.court_roi
+                    )
+
+                # Run YOLO with ByteTrack
+                # persist=True enables tracking across frames
+                try:
+                    results = model.track(
+                        frame_to_track,
+                        persist=True,
+                        tracker=str(self._get_tracker_config()),
+                        conf=self.confidence,
+                        iou=self.iou,
+                        imgsz=self.imgsz,
+                        classes=[PERSON_CLASS_ID],
+                        verbose=False,
+                    )
+
+                    # Decode results
+                    frame_positions = self._decode_results(
+                        results, frame_idx, video_width, video_height
+                    )
+
+                    # Sport-aware detection filters
+                    if filter_enabled:
+                        frame_positions = self._filter_detections(frame_positions)
+
+                    # Filter off-court detections if calibrator available
+                    if court_calibrator is not None and court_calibrator.is_calibrated:
+                        frame_positions = self._filter_off_court(
+                            frame_positions, court_calibrator
                         )
 
-                    # Run YOLO with ByteTrack
-                    # persist=True enables tracking across frames
-                    try:
-                        results = model.track(
-                            frame_to_track,
-                            persist=True,
-                            tracker=str(self._get_tracker_config()),
-                            conf=self.confidence,
-                            iou=self.iou,
-                            imgsz=self.imgsz,
-                            classes=[PERSON_CLASS_ID],
-                            verbose=False,
-                        )
+                    positions.extend(frame_positions)
 
-                        # Decode results
-                        frame_positions = self._decode_results(
-                            results, frame_idx, video_width, video_height
-                        )
-
-                        # Sport-aware detection filters
-                        if filter_enabled:
-                            frame_positions = self._filter_detections(frame_positions)
-
-                        # Filter off-court detections if calibrator available
-                        if court_calibrator is not None and court_calibrator.is_calibrated:
-                            frame_positions = self._filter_off_court(
-                                frame_positions, court_calibrator
-                            )
-
-                        positions.extend(frame_positions)
-
-                        # Extract color histograms for post-hoc repair
-                        if (
-                            color_store is not None
-                            and frames_processed % histogram_stride == 0
-                        ):
-                            for p in frame_positions:
-                                if p.track_id >= 0:
-                                    hist = extract_shorts_histogram(
-                                        frame,  # Original BGR, NOT masked
-                                        (p.x, p.y, p.width, p.height),
-                                        video_width,
-                                        video_height,
+                    # Extract color histograms for post-hoc repair
+                    if (
+                        color_store is not None
+                        and frames_processed % histogram_stride == 0
+                    ):
+                        for p in frame_positions:
+                            if p.track_id >= 0:
+                                hist = extract_shorts_histogram(
+                                    frame,  # Original BGR, NOT masked
+                                    (p.x, p.y, p.width, p.height),
+                                    video_width,
+                                    video_height,
+                                )
+                                if hist is not None:
+                                    color_store.add(
+                                        p.track_id, p.frame_number, hist
                                     )
-                                    if hist is not None:
-                                        color_store.add(
-                                            p.track_id, p.frame_number, hist
-                                        )
 
-                        # Extract multi-region appearance descriptors
-                        if (
-                            appearance_store is not None
-                            and frames_processed % histogram_stride == 0
-                        ):
-                            for p in frame_positions:
-                                if p.track_id >= 0:
-                                    desc = extract_multi_region_descriptor(
-                                        frame,
-                                        (p.x, p.y, p.width, p.height),
-                                        video_width,
-                                        video_height,
+                    # Extract multi-region appearance descriptors
+                    if (
+                        appearance_store is not None
+                        and frames_processed % histogram_stride == 0
+                    ):
+                        for p in frame_positions:
+                            if p.track_id >= 0:
+                                desc = extract_multi_region_descriptor(
+                                    frame,
+                                    (p.x, p.y, p.width, p.height),
+                                    video_width,
+                                    video_height,
+                                )
+                                if desc is not None:
+                                    appearance_store.add(
+                                        p.track_id, p.frame_number, desc
                                     )
-                                    if desc is not None:
-                                        appearance_store.add(
-                                            p.track_id, p.frame_number, desc
-                                        )
-                    except (IndexError, RuntimeError, ValueError) as e:
-                        # Handle any errors from YOLO/ByteTrack internals
-                        logger.debug(f"Frame {frame_idx} tracking failed: {e}")
+                except (IndexError, RuntimeError, ValueError) as e:
+                    # Handle any errors from YOLO/ByteTrack internals
+                    logger.debug(f"Frame {frame_idx} tracking failed: {e}")
 
-                    frames_processed += 1
+                frames_processed += 1
 
-                    # Progress callback (for Rich progress bar)
-                    if progress_callback and frames_processed % 30 == 0:
-                        pct = frames_processed / frames_to_process
-                        progress_callback(pct)
+                # Progress callback (for Rich progress bar)
+                if progress_callback and frames_processed % 30 == 0:
+                    pct = frames_processed / frames_to_process
+                    progress_callback(pct)
 
-                    # Periodic progress to stdout (visible through pipes where
-                    # Rich live display is buffered)
-                    if frames_processed % 100 == 0 or frames_processed == 1:
-                        elapsed = time.time() - start_time
-                        fps_actual = frames_processed / max(elapsed, 0.001)
-                        print(
-                            f"YOLO tracking: {frames_processed}/{frames_to_process} "
-                            f"frames ({fps_actual:.1f} FPS)",
-                            flush=True,
-                        )
+                # Periodic progress to stdout (visible through pipes where
+                # Rich live display is buffered)
+                if frames_processed % 100 == 0 or frames_processed == 1:
+                    elapsed = time.time() - start_time
+                    fps_actual = frames_processed / max(elapsed, 0.001)
+                    print(
+                        f"YOLO tracking: {frames_processed}/{frames_to_process} "
+                        f"frames ({fps_actual:.1f} FPS)",
+                        flush=True,
+                    )
 
                 frame_idx += 1
 
