@@ -353,7 +353,12 @@ function runQualityAssessmentCli(videoPath: string): Promise<QualityAssessmentRe
         return;
       }
       try {
-        const result = JSON.parse(stdout.trim());
+        const jsonMatch = stdout.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+          reject(new Error(`No JSON found in quality assessment output: ${stdout.slice(0, 200)}`));
+          return;
+        }
+        const result = JSON.parse(jsonMatch[0]);
         resolve(result);
       } catch (e) {
         reject(new Error(`Failed to parse quality assessment output: ${e}`));
@@ -411,7 +416,12 @@ function runCourtDetectionCli(videoPath: string): Promise<CourtDetectionResult> 
         return;
       }
       try {
-        const result = JSON.parse(stdout.trim());
+        const jsonMatch = stdout.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+          reject(new Error(`No JSON found in court detection output: ${stdout.slice(0, 200)}`));
+          return;
+        }
+        const result = JSON.parse(jsonMatch[0]);
         resolve(result);
       } catch (e) {
         reject(new Error(`Failed to parse court detection output: ${e}`));
