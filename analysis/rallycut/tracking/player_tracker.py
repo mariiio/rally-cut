@@ -197,6 +197,89 @@ def auto_detect_court(
     return None, result
 
 
+def refine_court_with_players(
+    initial_result: Any,
+    player_positions: list[PlayerPosition],
+    team_assignments: dict[int, int],
+    confidence_threshold: float = 0.4,
+) -> tuple[CourtCalibrator | None, Any]:
+    """Refine court detection using tracked player positions.
+
+    Called after first-pass player tracking to improve court calibration,
+    especially near corners which are often off-screen and poorly estimated
+    by line detection alone.
+
+    Args:
+        initial_result: CourtDetectionResult from line detection.
+        player_positions: Player tracking results.
+        team_assignments: Map of track_id → team (0=near, 1=far).
+        confidence_threshold: Minimum confidence for line detection to refine.
+
+    Returns:
+        Tuple of (calibrator, result). Returns improved calibration, or the
+        original if refinement didn't help.
+    """
+    from rallycut.court.calibration import CourtCalibrator
+    from rallycut.court.detector import CourtDetectionResult
+    from rallycut.court.player_constrained import (
+        PlayerConstrainedOptimizer,
+        extract_player_feet,
+    )
+
+    initial_corners = getattr(initial_result, "corners", [])
+    initial_confidence = getattr(initial_result, "confidence", 0.0)
+
+    # Extract player foot positions with team assignments
+    feet = extract_player_feet(player_positions, team_assignments)
+    if len(feet) < 20:
+        logger.info(
+            f"Court refinement: insufficient player feet ({len(feet)}), skipping"
+        )
+        if initial_corners and initial_confidence >= confidence_threshold:
+            calibrator = CourtCalibrator()
+            calibrator.calibrate([(c["x"], c["y"]) for c in initial_corners])
+            return calibrator, initial_result
+        return None, initial_result
+
+    optimizer = PlayerConstrainedOptimizer()
+
+    # Case 1: Line detection succeeded — keep existing result
+    # Note: refinement of already-detected corners is disabled because
+    # team assignments from tracking are often inaccurate, causing regressions.
+    # Player-constrained optimization is only used for detection failures.
+    if len(initial_corners) == 4 and initial_confidence >= confidence_threshold:
+        calibrator = CourtCalibrator()
+        calibrator.calibrate([(c["x"], c["y"]) for c in initial_corners])
+        return calibrator, initial_result
+
+    # Case 2: Line detection failed — estimate from players
+    # Get net_y from player positions
+    near_feet_y = [f.y for f in feet if f.team == 0]
+    far_feet_y = [f.y for f in feet if f.team == 1]
+    if near_feet_y and far_feet_y:
+        net_y = (min(near_feet_y) + max(far_feet_y)) / 2.0
+    else:
+        logger.info("Court refinement: cannot estimate net_y, skipping")
+        return None, initial_result
+
+    estimated = optimizer.estimate_from_players(feet, net_y)
+    if estimated is not None:
+        calibrator = CourtCalibrator()
+        calibrator.calibrate([(c["x"], c["y"]) for c in estimated])
+
+        result = CourtDetectionResult(
+            corners=estimated,
+            confidence=0.35,  # lower confidence for player-only estimate
+            detected_lines=[],
+            warnings=["Court estimated from player positions (no line detection)"],
+            fitting_method="player_only",
+        )
+        logger.info("Court refinement: estimated from player positions only")
+        return calibrator, result
+
+    return None, initial_result
+
+
 def compute_court_roi_from_ball(
     ball_positions: list[BallPosition],
     x_margin: float = 0.08,

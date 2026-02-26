@@ -77,6 +77,10 @@ class CourtDetectionConfig:
     dark_value_offset: int = 55  # grid search: 55 > 45/35 (darker relative to sand)
     dark_value_min: int = 25  # grid search: 25 > 35/45 (include very dark ropes)
 
+    # Stage 2b: Edge map accumulation (average edge maps across frames)
+    enable_edge_accumulation: bool = True
+    edge_accumulation_threshold: float = 0.15  # fraction of frames a pixel must be edge
+
     # Stage 3: Temporal aggregation
     dbscan_eps: float = 0.03
     dbscan_min_samples: int = 5
@@ -526,13 +530,17 @@ class CourtDetector:
             maxLineGap=cfg.hough_max_gap,
         )
 
-        if lines is None:
+        raw_lines: list[tuple[int, int, int, int]] = []
+        if lines is not None:
+            for line in lines:
+                raw_lines.append(tuple(line[0]))
+
+        if not raw_lines:
             return []
 
         segments: list[tuple[float, float, float, float]] = []
-        for line in lines:
-            x1, y1, x2, y2 = line[0]
-
+        seen: set[tuple[float, float, float, float]] = set()
+        for x1, y1, x2, y2 in raw_lines:
             # Filter by pixel length
             px_len = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
             if px_len < cfg.min_segment_px:
@@ -543,21 +551,137 @@ class CourtDetector:
             if angle > cfg.max_angle_from_horizontal:
                 continue
 
-            # Normalize to [0,1]
-            segments.append((x1 / w, y1 / h, x2 / w, y2 / h))
+            # Normalize to [0,1] and deduplicate
+            norm_seg = (
+                round(x1 / w, 4), round(y1 / h, 4),
+                round(x2 / w, 4), round(y2 / h, 4),
+            )
+            if norm_seg not in seen:
+                seen.add(norm_seg)
+                segments.append((x1 / w, y1 / h, x2 / w, y2 / h))
 
         return segments
+
+    def _compute_line_mask(self, frame: np.ndarray) -> np.ndarray:
+        """Compute binary line mask for a single frame (shared by detection and accumulation)."""
+        cfg = self.config
+        h, w = frame.shape[:2]
+
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+        strip_y1 = int(h * 0.40)
+        strip_y2 = int(h * 0.70)
+        strip_x1 = int(w * 0.20)
+        strip_x2 = int(w * 0.80)
+        central_v = hsv[strip_y1:strip_y2, strip_x1:strip_x2, 2]
+        sand_median_v = float(np.median(central_v))
+
+        v_threshold = max(cfg.white_value_min, sand_median_v + cfg.white_value_offset)
+        line_mask = (
+            (hsv[:, :, 1] < cfg.white_saturation_max)
+            & (hsv[:, :, 2] > v_threshold)
+        ).astype(np.uint8) * 255
+
+        if cfg.enable_blue_detection:
+            blue_mask = (
+                (hsv[:, :, 0] >= cfg.blue_hue_min)
+                & (hsv[:, :, 0] <= cfg.blue_hue_max)
+                & (hsv[:, :, 1] >= cfg.blue_saturation_min)
+                & (hsv[:, :, 2] >= cfg.blue_value_min)
+            ).astype(np.uint8) * 255
+            line_mask = cv2.bitwise_or(line_mask, blue_mask)  # type: ignore[assignment]
+
+        if cfg.enable_dark_detection:
+            dark_mask = (
+                (hsv[:, :, 1] < cfg.dark_saturation_max)
+                & (hsv[:, :, 2] < sand_median_v - cfg.dark_value_offset)
+                & (hsv[:, :, 2] > cfg.dark_value_min)
+            ).astype(np.uint8) * 255
+            line_mask = cv2.bitwise_or(line_mask, dark_mask)  # type: ignore[assignment]
+
+        kernel_open = cv2.getStructuringElement(
+            cv2.MORPH_RECT, (cfg.morph_open_size, cfg.morph_open_size)
+        )
+        line_mask = cv2.morphologyEx(line_mask, cv2.MORPH_OPEN, kernel_open)  # type: ignore[assignment]
+
+        kernel_close = cv2.getStructuringElement(
+            cv2.MORPH_RECT, (cfg.morph_close_width, 1)
+        )
+        line_mask = cv2.morphologyEx(line_mask, cv2.MORPH_CLOSE, kernel_close)  # type: ignore[assignment]
+
+        return line_mask
 
     def _detect_lines_all_frames(
         self, frames: list[np.ndarray],
     ) -> list[list[tuple[float, float, float, float]]]:
-        """Detect lines in all frames. Returns list of segment lists per frame."""
+        """Detect lines in all frames, with optional edge map accumulation.
+
+        When edge accumulation is enabled, averages binary edge maps across
+        all frames so faint lines that appear consistently become strong,
+        then runs Hough+LSD on the accumulated map for additional segments.
+        """
+        cfg = self.config
         all_segments: list[list[tuple[float, float, float, float]]] = []
+
+        # Per-frame detection
+        edge_maps: list[np.ndarray] = []
         for frame in frames:
             segs = self._detect_lines_single_frame(frame)
             all_segments.append(segs)
+
+            # Collect edge maps for accumulation
+            if cfg.enable_edge_accumulation:
+                line_mask = self._compute_line_mask(frame)
+                edges = cv2.Canny(line_mask, cfg.canny_low, cfg.canny_high)
+                edge_maps.append(edges)
+
         total = sum(len(s) for s in all_segments)
         logger.info(f"Detected {total} segments across {len(frames)} frames")
+
+        # Edge map accumulation: average edge maps, threshold, run detection
+        if cfg.enable_edge_accumulation and len(edge_maps) >= 5:
+            h, w = edge_maps[0].shape[:2]
+            accumulated = np.zeros((h, w), dtype=np.float32)
+            for em in edge_maps:
+                accumulated += (em > 0).astype(np.float32)
+            accumulated /= len(edge_maps)
+
+            # Threshold: pixel must be edge in at least X% of frames
+            acc_binary = (accumulated >= cfg.edge_accumulation_threshold).astype(
+                np.uint8
+            ) * 255
+
+            # Run Hough on accumulated edge map
+            lines = cv2.HoughLinesP(
+                acc_binary,
+                rho=1,
+                theta=np.pi / 180,
+                threshold=cfg.hough_threshold,
+                minLineLength=cfg.hough_min_length,
+                maxLineGap=cfg.hough_max_gap,
+            )
+
+            acc_segs: list[tuple[float, float, float, float]] = []
+            if lines is not None:
+                for line in lines:
+                    x1, y1, x2, y2 = line[0]
+                    px_len = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+                    if px_len < cfg.min_segment_px:
+                        continue
+                    angle = segment_angle_deg(x1 / w, y1 / h, x2 / w, y2 / h)
+                    if angle > cfg.max_angle_from_horizontal:
+                        continue
+                    acc_segs.append((x1 / w, y1 / h, x2 / w, y2 / h))
+
+            if acc_segs:
+                logger.info(
+                    f"Edge accumulation: {len(acc_segs)} additional segments "
+                    f"from {len(edge_maps)} accumulated frames"
+                )
+                # Add accumulated segments as a synthetic "frame" so they
+                # participate in temporal aggregation as one observation
+                all_segments.append(acc_segs)
+
         return all_segments
 
     # ── Stage 3: Temporal Aggregation ────────────────────────────────────
@@ -609,7 +733,7 @@ class CourtDetector:
             else:
                 clusters.setdefault(label, []).append(idx)
 
-        # Compute temporal support and separate accepted vs rejected
+        # Compute temporal support and separate accepted vs rejected.
         results: list[tuple[list[tuple[float, float, float, float]], int]] = []
         rejected: list[tuple[list[tuple[float, float, float, float]], int]] = []
 
@@ -618,10 +742,10 @@ class CourtDetector:
             support = len(frames_seen)
             segs = [segment_data[i] for i in cluster_indices]
 
-            if support < cfg.min_temporal_support:
-                rejected.append((segs, support))
-            else:
+            if support >= cfg.min_temporal_support:
                 results.append((segs, support))
+            else:
+                rejected.append((segs, support))
 
         # Add noise segments as individual rejected entries (group by frame proximity)
         if noise_indices:

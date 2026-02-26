@@ -216,6 +216,30 @@ def run_tracking(
             court_detection_insights=court_insights,
         )
 
+        # Estimate court from player positions when line detection failed
+        if result.positions:
+            try:
+                from rallycut.tracking.player_tracker import refine_court_with_players
+
+                team_assigns = getattr(result, "team_assignments", {})
+                if team_assigns:
+                    refined_cal, refined_result = refine_court_with_players(
+                        auto_result if court_insights is not None else None,
+                        result.positions,
+                        team_assigns,
+                    )
+                    method = getattr(refined_result, "fitting_method", "")
+                    if refined_cal is not None and "player" in method:
+                        calibrator = refined_cal
+                        if court_insights is not None:
+                            from rallycut.court.detector import CourtDetectionInsights
+                            court_insights = CourtDetectionInsights.from_result(
+                                refined_result,
+                            )
+                        print(f"[LOCAL] Court estimated from players ({method})")
+            except Exception as e:
+                print(f"[LOCAL] Court player estimation failed (non-fatal): {e}")
+
         processing_time_ms = (time.time() - start_time) * 1000
 
         # Build webhook payload

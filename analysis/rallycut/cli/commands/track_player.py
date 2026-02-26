@@ -479,6 +479,7 @@ def track_players(
     # Auto-detect court when explicitly requested or when filtering is
     # enabled with no manual calibration and no explicit ROI mode.
     court_insights = None
+    auto_result = None
     if auto_detect_requested or (
         calibrator is None
         and filter_court
@@ -699,6 +700,25 @@ def track_players(
     # Include ball positions in result for trajectory overlay
     if ball_positions:
         result.ball_positions = ball_positions
+
+    # Estimate court from player positions when line detection failed
+    if result.positions and result.team_assignments:
+        try:
+            from rallycut.tracking.player_tracker import refine_court_with_players
+
+            refined_cal, refined_res = refine_court_with_players(
+                auto_result,
+                result.positions,
+                result.team_assignments,
+            )
+            if refined_cal is not None:
+                method = getattr(refined_res, "fitting_method", "unknown")
+                if "player" in method:
+                    calibrator = refined_cal
+                    if not quiet:
+                        console.print(f"[dim]Court estimated from players ({method})[/dim]")
+        except Exception:
+            pass  # Non-fatal: player estimation is best-effort
 
     # Run action classification if requested
     actions_data = None
