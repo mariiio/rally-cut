@@ -17,6 +17,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -372,12 +373,14 @@ def analyze(
     all_fn_details: list[dict[str, Any]] = []
     skipped = 0
 
-    for video in videos:
+    total_videos = len(videos)
+    for video_idx, video in enumerate(videos):
+        t_start = time.monotonic()
         result = run_inference_for_video(
             inference, feature_cache, video, valley_threshold, min_valley_duration,
         )
         if result is None:
-            print(f"  SKIP {video.filename}: no cached features")
+            print(f"[{video_idx + 1}/{total_videos}] {video.filename[:30]}  SKIP (no cached features)")
             skipped += 1
             continue
 
@@ -457,6 +460,17 @@ def analyze(
                 "duration": gt_e - gt_s,
                 "best_iou": best_iou,
             })
+
+        elapsed = time.monotonic() - t_start
+        v_p, v_r, v_f1 = _compute_f1(matching.true_positives, matching.false_positives, matching.false_negatives)
+        cum_tp = len(all_matches)
+        cum_p, cum_r, cum_f1 = _compute_f1(cum_tp, total_fp, total_fn)
+        print(
+            f"[{video_idx + 1}/{total_videos}] {video.filename[:30]:<30s}  "
+            f"GT={len(ground_truth)} pred={len(predictions)} "
+            f"F1={v_f1:.0%}  (cum F1={cum_f1:.0%} TP={cum_tp} FP={total_fp} FN={total_fn})  "
+            f"({elapsed:.1f}s)"
+        )
 
     if skipped:
         print(f"\nSkipped {skipped} videos (no cached features)")

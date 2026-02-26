@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -339,7 +340,15 @@ def main() -> None:
     rally_table.add_column("F1", justify="right")
     rally_table.add_column("Action Acc", justify="right")
 
-    for rally in rallies:
+    total_rallies = len(rallies)
+    cumulative_tp = 0
+    cumulative_fp = 0
+    cumulative_fn = 0
+
+    for rally_idx, rally in enumerate(rallies):
+        t_start = time.monotonic()
+        print(f"[{rally_idx + 1}/{total_rallies}] {rally.rally_id[:8]}...", end=" ", flush=True)
+
         # Get predicted actions — either from stored data or re-detect
         pred_actions: list[dict] = []
 
@@ -433,6 +442,20 @@ def main() -> None:
 
         all_matches.extend(matches)
         all_unmatched.extend(unmatched)
+
+        cumulative_tp += metrics["tp"]
+        cumulative_fp += metrics["fp"]
+        cumulative_fn += metrics["fn"]
+        elapsed = time.monotonic() - t_start
+        cum_p = cumulative_tp / max(1, cumulative_tp + cumulative_fp)
+        cum_r = cumulative_tp / max(1, cumulative_tp + cumulative_fn)
+        cum_f1 = 2 * cum_p * cum_r / max(1e-9, cum_p + cum_r)
+        print(
+            f"F1={metrics['f1']:.1%} acc={metrics['action_accuracy']:.1%} "
+            f"(cum F1={cum_f1:.1%} TP={cumulative_tp} FP={cumulative_fp} FN={cumulative_fn}) "
+            f"({elapsed:.1f}s)"
+        )
+
 
     console.print(rally_table)
 

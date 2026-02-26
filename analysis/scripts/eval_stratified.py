@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -65,7 +66,9 @@ def evaluate_rallies(
         c: defaultdict(GroupMetrics) for c in characteristics
     }
 
-    for rally in rallies:
+    total_rallies = len(rallies)
+    for rally_idx, rally in enumerate(rallies):
+        t_start = time.monotonic()
         # Ball metrics
         ball_gt = [
             p
@@ -115,6 +118,7 @@ def evaluate_rallies(
                 console.print(f"[dim]Skip player eval {rally.rally_id[:8]}: {e}[/dim]")
 
         # Group by each characteristic
+        cats_applied = []
         for char_name in characteristics:
             cat = get_category(rally, char_name)
             g = groups[char_name][cat]
@@ -128,6 +132,18 @@ def evaluate_rallies(
 
             if hota is not None:
                 g.hota_scores.append(hota)
+
+            if cat != "unknown":
+                cats_applied.append(f"{char_name}={cat}")
+
+        elapsed = time.monotonic() - t_start
+        ball_str = f"ball={ball_metrics.num_matched / ball_metrics.num_gt_frames:.0%}" if ball_metrics and ball_metrics.num_gt_frames > 0 else "no ball"
+        hota_str = f"HOTA={hota * 100:.1f}%" if hota is not None else "no player"
+        cats_str = ", ".join(cats_applied) if cats_applied else "no characteristics"
+        console.print(
+            f"[{rally_idx + 1}/{total_rallies}] {rally.rally_id[:8]}  "
+            f"{ball_str}  {hota_str}  [{cats_str}]  ({elapsed:.1f}s)"
+        )
 
     return groups
 
