@@ -1362,6 +1362,7 @@ class PlayerTracker:
 
             # Apply court player filtering if enabled (per-frame with track stability)
             num_jump_splits = 0
+            num_height_swaps = 0
             num_color_splits = 0
             num_appearance_links = 0
             num_court_swaps = 0
@@ -1400,6 +1401,16 @@ class PlayerTracker:
                     appearance_store=appearance_store,
                 )
                 num_jump_splits = consistency_result.jump_splits
+
+                # Step 0a: Height-based swap correction
+                from rallycut.tracking.height_consistency import fix_height_swaps
+
+                positions, height_swap_result = fix_height_swaps(
+                    positions,
+                    color_store=color_store,
+                    appearance_store=appearance_store,
+                )
+                num_height_swaps = height_swap_result.swaps
 
                 # Step 0b: Color-based track splitting
                 if color_store is not None and color_store.has_data():
@@ -1584,6 +1595,7 @@ class PlayerTracker:
                     ball_positions_xy=ball_xy,
                     id_switch_count=num_jump_splits,
                     color_split_count=num_color_splits,
+                    height_swap_count=num_height_swaps,
                     appearance_link_count=num_appearance_links,
                     has_court_calibration=court_calibrator is not None,
                     court_identity_interactions=len(court_decisions),

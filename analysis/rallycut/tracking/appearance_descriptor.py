@@ -88,6 +88,31 @@ class AppearanceDescriptorStore:
 
         # Note: old_id may still have earlier descriptors under its original key
 
+    def swap(self, track_a: int, track_b: int, from_frame: int) -> None:
+        """Exchange descriptors between two tracks from from_frame onward.
+
+        Used after height-based swap correction to keep descriptor store
+        in sync when two track IDs are exchanged (bidirectional rekey).
+        """
+        a_keys = [
+            (tid, fn)
+            for (tid, fn) in self._descriptors
+            if tid == track_a and fn >= from_frame
+        ]
+        b_keys = [
+            (tid, fn)
+            for (tid, fn) in self._descriptors
+            if tid == track_b and fn >= from_frame
+        ]
+
+        a_entries = {fn: self._descriptors.pop((track_a, fn)) for _, fn in a_keys}
+        b_entries = {fn: self._descriptors.pop((track_b, fn)) for _, fn in b_keys}
+
+        for fn, desc in a_entries.items():
+            self._descriptors[(track_b, fn)] = desc
+        for fn, desc in b_entries.items():
+            self._descriptors[(track_a, fn)] = desc
+
 
 def extract_multi_region_descriptor(
     frame: np.ndarray,

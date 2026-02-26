@@ -42,6 +42,7 @@ class TrackingQualityReport:
     # Repair metrics
     id_switch_count: int = 0  # From enforce_spatial_consistency
     color_split_count: int = 0  # From split_tracks_by_color
+    height_swap_count: int = 0  # From fix_height_swaps
     appearance_link_count: int = 0  # From link_tracklets_by_appearance
 
     # Distractor detection
@@ -85,6 +86,7 @@ class TrackingQualityReport:
             "avgTrackLifespanFrames": self.avg_track_lifespan_frames,
             "idSwitchCount": self.id_switch_count,
             "colorSplitCount": self.color_split_count,
+            "heightSwapCount": self.height_swap_count,
             "appearanceLinkCount": self.appearance_link_count,
             "uniqueRawTrackCount": self.unique_raw_track_count,
             "stationaryBgRemovedCount": self.stationary_bg_removed_count,
@@ -114,6 +116,7 @@ def compute_quality_report(
     ball_positions_xy: list[tuple[float, float]] | None = None,
     id_switch_count: int = 0,
     color_split_count: int = 0,
+    height_swap_count: int = 0,
     appearance_link_count: int = 0,
     expected_players: int = 4,
     has_court_calibration: bool = False,
@@ -139,6 +142,7 @@ def compute_quality_report(
         ball_positions_xy: Ball (x, y) positions for spread calculation.
         id_switch_count: Number of jump-based track splits.
         color_split_count: Number of color-based splits.
+        height_swap_count: Number of height-based track swaps.
         appearance_link_count: Number of tracklet appearance-based merges.
         expected_players: Expected number of court players.
         has_court_calibration: Whether court calibration is available.
@@ -161,6 +165,7 @@ def compute_quality_report(
     report.primary_track_count = len(primary_track_ids)
     report.id_switch_count = id_switch_count
     report.color_split_count = color_split_count
+    report.height_swap_count = height_swap_count
     report.appearance_link_count = appearance_link_count
     report.court_identity_interactions = court_identity_interactions
     report.court_identity_swaps = court_identity_swaps
