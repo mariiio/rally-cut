@@ -192,6 +192,26 @@ def auto_detect_court(
         calibrator = CourtCalibrator()
         corners = [(c["x"], c["y"]) for c in result.corners]
         calibrator.calibrate(corners)
+
+        # Validate the homography isn't degenerate by checking that near side
+        # projects below far side in image space (higher Y = lower in frame).
+        # A degenerate homography (e.g., from elevated camera VP issues) would
+        # silently cause off-court filtering to reject all player detections.
+        try:
+            from rallycut.court.calibration import COURT_LENGTH, COURT_WIDTH
+
+            near_pt = calibrator.court_to_image((COURT_WIDTH / 2, 0), 1, 1)
+            far_pt = calibrator.court_to_image((COURT_WIDTH / 2, COURT_LENGTH), 1, 1)
+            if near_pt[1] < far_pt[1]:
+                logger.warning(
+                    f"Court homography is inverted (near Y={near_pt[1]:.1f} "
+                    f"< far Y={far_pt[1]:.1f}), discarding calibration"
+                )
+                return None, result
+        except (RuntimeError, ValueError, np.linalg.LinAlgError):
+            logger.warning("Court homography validation failed, discarding calibration")
+            return None, result
+
         return calibrator, result
 
     return None, result

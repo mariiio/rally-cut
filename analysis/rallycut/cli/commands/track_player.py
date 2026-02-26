@@ -574,6 +574,10 @@ def track_players(
             else:
                 if not quiet:
                     console.print(f"[yellow]  Calibration ROI failed: {cal_msg}[/yellow]")
+                # Invalidate calibrator — if ROI projection fails, the
+                # homography is degenerate and will cause _filter_off_court
+                # to silently reject all detections.
+                calibrator = None
                 if calibration_roi_requested:
                     court_roi = DEFAULT_COURT_ROI
                     if not quiet:
