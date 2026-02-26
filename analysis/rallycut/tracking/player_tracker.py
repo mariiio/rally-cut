@@ -143,6 +143,11 @@ def compute_court_roi_from_calibration(
     roi_y_min = max(0.0, far_avg_y - far_margin)
     roi_y_max = min(1.0, near_avg_y + near_margin)
 
+    # Enforce minimum Y extent — near-side players' feet can be at y=0.90+,
+    # so the ROI must extend far enough down. Without this, inaccurate
+    # near-corner extrapolation clips valid players.
+    roi_y_max = max(roi_y_max, 0.95)
+
     roi_points: list[tuple[float, float]] = [
         (roi_x_min, roi_y_min),  # top-left
         (roi_x_max, roi_y_min),  # top-right
