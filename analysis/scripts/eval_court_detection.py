@@ -27,6 +27,7 @@ import json
 import logging
 import math
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -516,23 +517,27 @@ def main() -> None:
     print(header)
     print("-" * (140 if args.compare else 120))
 
-    for video_info in videos:
+    total_videos = len(videos)
+    for video_idx, video_info in enumerate(videos):
+        t_start = time.monotonic()
         vid_id = video_info["video_id"]
         gt_corners = video_info["gt_corners"]
         vid_width = video_info["width"]
         vid_height = video_info["height"]
 
+        counter_prefix = f"[{video_idx + 1}/{total_videos}]"
+
         # Resolve video path
         video_path = get_video_path(vid_id)
         if video_path is None:
-            print(f"{vid_id[:12]:>12s}  {'SKIP':>7s}  (video not found)")
+            print(f"{counter_prefix} {vid_id[:12]:>12s}  {'SKIP':>7s}  (video not found)")
             continue
 
         # Run detection
         try:
             result = detector.detect(video_path)
         except Exception as e:
-            print(f"{vid_id[:12]:>12s}  {'ERROR':>7s}  {e}")
+            print(f"{counter_prefix} {vid_id[:12]:>12s}  {'ERROR':>7s}  {e}")
             continue
 
         # Player-constrained refinement
@@ -582,8 +587,9 @@ def main() -> None:
 
             reproj_str = f"{reproj:.2f}m" if reproj is not None else "N/A"
 
+            elapsed = time.monotonic() - t_start
             line = (
-                f"{vid_id[:12]:>12s}  "
+                f"{counter_prefix} {vid_id[:12]:>12s}  "
                 f"{mcd:.4f}  "
                 f"{mcd_px:6.1f}  "
                 f"{iou:.3f}  "
@@ -592,7 +598,8 @@ def main() -> None:
                 f"{lines_found:>5d}  "
                 f"{fitting_method:>20s}  "
                 f"{n_correspondences:>4d}  "
-                f"{reproj_err:>6.4f}"
+                f"{reproj_err:>6.4f}  "
+                f"({elapsed:.1f}s)"
             )
 
             if is_success:
@@ -646,12 +653,14 @@ def main() -> None:
             print(line)
 
         else:
+            elapsed = time.monotonic() - t_start
             line = (
-                f"{vid_id[:12]:>12s}  {'FAIL':>7s}  "
+                f"{counter_prefix} {vid_id[:12]:>12s}  {'FAIL':>7s}  "
                 f"conf={result.confidence:.3f}  "
                 f"lines={lines_found}  "
                 f"method={fitting_method}  "
-                f"{'; '.join(result.warnings[:2])}"
+                f"{'; '.join(result.warnings[:2])}  "
+                f"({elapsed:.1f}s)"
             )
 
             # Player-only can still produce results

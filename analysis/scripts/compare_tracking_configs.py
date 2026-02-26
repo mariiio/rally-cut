@@ -6,6 +6,7 @@ Usage:
 """
 
 import tempfile
+import time
 from pathlib import Path
 
 import boto3
@@ -88,9 +89,11 @@ def main():
     from rallycut.evaluation.db import get_connection
 
     results = []
+    total_rallies = len(rallies)
 
-    for rally in rallies:  # Test with all rallies
-        console.print(f"[bold]Processing rally {rally.rally_id[:8]}...[/bold]")
+    for rally_idx, rally in enumerate(rallies):  # Test with all rallies
+        t_start = time.monotonic()
+        console.print(f"[bold][{rally_idx + 1}/{total_rallies}] Processing rally {rally.rally_id[:8]}...[/bold]")
 
         # Get video S3 key
         with get_connection() as conn:
@@ -165,9 +168,17 @@ def main():
                     "new_id_sw": new_result.aggregate.num_id_switches,
                 })
 
-            console.print(f"  [green]Done![/green] New: recall={new_result.aggregate.recall:.1%}, "
-                         f"precision={new_result.aggregate.precision:.1%}, "
-                         f"F1={new_result.aggregate.f1:.1%}")
+            elapsed = time.monotonic() - t_start
+            delta_str = ""
+            if rally.predictions:
+                delta_f1 = (new_result.aggregate.f1 - old_result.aggregate.f1) * 100
+                delta_idsw = results[-1]["new_id_sw"] - results[-1]["old_id_sw"]
+                delta_str = f"  ΔF1={delta_f1:+.1f}pp ΔIDsw={delta_idsw:+d}"
+            console.print(
+                f"  [green]Done![/green] F1={new_result.aggregate.f1:.1%} "
+                f"IDsw={new_result.aggregate.num_id_switches}"
+                f"{delta_str}  ({elapsed:.1f}s)"
+            )
 
         finally:
             # Clean up

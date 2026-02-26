@@ -248,16 +248,17 @@ def main() -> None:
             best_result = result
 
         # Progress
-        if (i + 1) % 10 == 0 or i == len(configs) - 1:
-            elapsed = time.time() - t0
-            rate = (i + 1) / elapsed
-            remaining = (len(configs) - i - 1) / rate if rate > 0 else 0
-            print(
-                f"  [{i + 1}/{len(configs)}] "
-                f"best IoU={best_result['mean_iou']:.3f} "
-                f"det={best_result['detected']}/{best_result['n_videos']} "
-                f"({elapsed:.0f}s elapsed, ~{remaining:.0f}s remaining)"
-            )
+        elapsed = time.time() - t0
+        rate = (i + 1) / elapsed
+        remaining = (len(configs) - i - 1) / rate if rate > 0 else 0
+        config_str = ", ".join(f"{k}={v}" for k, v in config_overrides.items())
+        print(
+            f"  [{i + 1}/{len(configs)}] "
+            f"IoU={result['mean_iou']:.3f} det={result['detected']}/{result['n_videos']}  "
+            f"best IoU={best_result['mean_iou']:.3f}  "
+            f"({elapsed:.0f}s elapsed, ~{remaining:.0f}s remaining)  "
+            f"{config_str}"
+        )
 
     elapsed = time.time() - t0
     print(f"\nGrid search completed in {elapsed:.1f}s\n")
