@@ -104,6 +104,39 @@ class ColorHistogramStore:
             if not any(tid == old_id for tid, _ in self._histograms):
                 self._track_ids.discard(old_id)
 
+    def swap(self, track_a: int, track_b: int, from_frame: int) -> None:
+        """Exchange histograms between two tracks from from_frame onward.
+
+        Used after height-based swap correction to keep histogram store
+        in sync when two track IDs are exchanged (bidirectional rekey).
+        """
+        a_keys = [
+            (tid, fn)
+            for (tid, fn) in self._histograms
+            if tid == track_a and fn >= from_frame
+        ]
+        b_keys = [
+            (tid, fn)
+            for (tid, fn) in self._histograms
+            if tid == track_b and fn >= from_frame
+        ]
+
+        a_entries = {fn: self._histograms.pop((track_a, fn)) for _, fn in a_keys}
+        b_entries = {fn: self._histograms.pop((track_b, fn)) for _, fn in b_keys}
+
+        for fn, hist in a_entries.items():
+            self._histograms[(track_b, fn)] = hist
+        for fn, hist in b_entries.items():
+            self._histograms[(track_a, fn)] = hist
+
+        # Rebuild track_ids for the two affected tracks
+        self._track_ids.discard(track_a)
+        self._track_ids.discard(track_b)
+        if any(tid == track_a for tid, _ in self._histograms):
+            self._track_ids.add(track_a)
+        if any(tid == track_b for tid, _ in self._histograms):
+            self._track_ids.add(track_b)
+
 
 def extract_shorts_histogram(
     frame: np.ndarray,
