@@ -1394,6 +1394,77 @@ def repair_action_sequence(
     return repaired
 
 
+# Net-crossing actions: ball goes to opposite side
+_NET_CROSSING_ACTIONS = {ActionType.SERVE, ActionType.ATTACK}
+# Same-side actions: ball stays on same side
+_SAME_SIDE_ACTIONS = {ActionType.RECEIVE, ActionType.SET, ActionType.DIG}
+
+_HIGH_CONFIDENCE_GATE = 0.6
+_MEDIUM_CONFIDENCE_GATE = 0.5
+
+
+def propagate_court_side(actions: list[ClassifiedAction]) -> list[ClassifiedAction]:
+    """Propagate court_side using volleyball transition rules.
+
+    Uses domain knowledge: serve/attack cross the net (next contact on
+    opposite side), receive/set/dig stay on the same side.
+
+    Runs after action classification, before repair_action_sequence().
+    """
+    if len(actions) < 2:
+        return actions
+
+    opposite = {"near": "far", "far": "near"}
+
+    # Forward pass
+    for i in range(len(actions) - 1):
+        src = actions[i]
+        tgt = actions[i + 1]
+
+        if src.court_side not in ("near", "far"):
+            continue
+        if tgt.action_type in (ActionType.BLOCK, ActionType.UNKNOWN):
+            continue
+        if src.action_type == ActionType.BLOCK:
+            continue
+
+        if src.action_type in _NET_CROSSING_ACTIONS:
+            expected = opposite[src.court_side]
+            if src.confidence >= _HIGH_CONFIDENCE_GATE:
+                # Fill unknown OR override disagreement
+                if tgt.court_side != expected:
+                    tgt.court_side = expected
+        elif src.action_type in _SAME_SIDE_ACTIONS:
+            if src.confidence >= _MEDIUM_CONFIDENCE_GATE:
+                # Only fill unknown, never override
+                if tgt.court_side == "unknown":
+                    tgt.court_side = src.court_side
+
+    # Backward pass: fill unknown predecessors from known successors.
+    # Use the PREDECESSOR's action type to determine the transition:
+    # if predecessor was net-crossing, successor is on opposite side,
+    # so predecessor = opposite(successor). If same-side, predecessor = successor.
+    for i in range(len(actions) - 1, 0, -1):
+        successor = actions[i]
+        predecessor = actions[i - 1]
+
+        if successor.court_side not in ("near", "far"):
+            continue
+        if predecessor.court_side != "unknown":
+            continue
+        if predecessor.action_type in (ActionType.BLOCK, ActionType.UNKNOWN):
+            continue
+
+        if predecessor.action_type in _NET_CROSSING_ACTIONS:
+            # Predecessor crossed net → successor on opposite side → predecessor = opposite
+            predecessor.court_side = opposite[successor.court_side]
+        elif predecessor.action_type in _SAME_SIDE_ACTIONS:
+            # Predecessor stayed same side → successor on same side → predecessor = same
+            predecessor.court_side = successor.court_side
+
+    return actions
+
+
 def classify_rally_actions(
     contact_sequence: ContactSequence,
     rally_id: str = "",
@@ -1426,6 +1497,7 @@ def classify_rally_actions(
                 contact_sequence, learned, rally_id,
                 team_assignments=team_assignments,
             )
+            result.actions = propagate_court_side(result.actions)
             result.actions = repair_action_sequence(
                 result.actions,
                 net_y=contact_sequence.net_y,
@@ -1438,6 +1510,7 @@ def classify_rally_actions(
         contact_sequence, rally_id,
         team_assignments=team_assignments,
     )
+    result.actions = propagate_court_side(result.actions)
     result.actions = repair_action_sequence(
         result.actions,
         net_y=contact_sequence.net_y,
