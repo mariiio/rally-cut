@@ -1054,7 +1054,6 @@ class PlayerTracker:
         filter_config: PlayerFilterConfig | None = None,
         court_calibrator: CourtCalibrator | None = None,
         court_detection_insights: CourtDetectionInsights | None = None,
-        cross_rally_priors: list[Any] | None = None,
     ) -> PlayerTrackingResult:
         """
         Track players in a video segment.
@@ -1071,8 +1070,6 @@ class PlayerTracker:
             court_calibrator: Optional calibrated court calibrator. When provided,
                             detections outside court bounds are filtered immediately
                             after YOLO inference, preventing off-court tracks.
-            cross_rally_priors: Optional list of CrossRallyPrior from match_players.
-                When provided, adds a stabilizing cost term to global identity.
 
         Returns:
             PlayerTrackingResult with all detected positions.
@@ -1426,7 +1423,6 @@ class PlayerTracker:
                         color_store,
                         court_split_y=split_y,
                         appearance_store=appearance_store,
-                        cross_rally_priors=cross_rally_priors,
                     )
                     num_global_segments = global_result.num_segments
                     num_global_remapped = global_result.num_remapped

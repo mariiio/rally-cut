@@ -93,7 +93,6 @@ def run_tracking(
     s3_bucket: str | None = None,
     calibration_json: str | None = None,
     ball_positions_json: str | None = None,
-    match_analysis_json: str | None = None,
 ) -> None:
     """Run player tracking and send results via webhook."""
     start_time = time.time()
@@ -186,24 +185,6 @@ def run_tracking(
             elif cal_msg:
                 print(f"[LOCAL] Calibration ROI failed: {cal_msg}")
 
-        # Load cross-rally priors from match analysis if available
-        cross_rally_priors = None
-        if match_analysis_json:
-            try:
-                from rallycut.tracking.match_tracker import build_cross_rally_priors
-
-                data = json.loads(match_analysis_json)
-                cross_rally_priors = build_cross_rally_priors(
-                    data.get("playerProfiles", {})
-                )
-                if cross_rally_priors:
-                    print(
-                        f"[LOCAL] Using {len(cross_rally_priors)} "
-                        f"cross-rally priors for global identity"
-                    )
-            except Exception as e:
-                print(f"[LOCAL] Failed to load cross-rally priors: {e}")
-
         # Create tracker with tuned confidence threshold
         tracker = PlayerTracker(confidence=0.15, court_roi=court_roi)
 
@@ -233,7 +214,6 @@ def run_tracking(
             filter_config=filter_config,
             court_calibrator=calibrator,
             court_detection_insights=court_insights,
-            cross_rally_priors=cross_rally_priors,
         )
 
         processing_time_ms = (time.time() - start_time) * 1000
@@ -289,7 +269,6 @@ def main() -> None:
     parser.add_argument("--s3-bucket", help="S3 bucket name (for S3 downloads)")
     parser.add_argument("--calibration", help="Calibration data as JSON string")
     parser.add_argument("--ball-positions-json", help="Ball positions as JSON string")
-    parser.add_argument("--match-analysis-json", help="Match analysis JSON string (for cross-rally priors)")
 
     args = parser.parse_args()
 
@@ -304,7 +283,6 @@ def main() -> None:
         s3_bucket=args.s3_bucket,
         calibration_json=args.calibration,
         ball_positions_json=args.ball_positions_json,
-        match_analysis_json=args.match_analysis_json,
     )
 
 
