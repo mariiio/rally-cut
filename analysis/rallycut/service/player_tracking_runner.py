@@ -160,6 +160,7 @@ def run_tracking(
 
         # Auto-detect court if no manual calibration provided
         court_insights = None
+        calibrator_roi_eligible = True  # manual calibration always ROI-eligible
         if calibrator is None:
             from rallycut.court.detector import CourtDetectionInsights
             from rallycut.tracking.player_tracker import auto_detect_court
@@ -167,15 +168,24 @@ def run_tracking(
             calibrator, auto_result = auto_detect_court(local_video_path)
             court_insights = CourtDetectionInsights.from_result(auto_result)
             if calibrator is not None:
-                print(f"[LOCAL] Court auto-detected (confidence: {auto_result.confidence:.2f})")
+                auto_confidence = auto_result.confidence
+                if auto_confidence < 0.6:
+                    calibrator_roi_eligible = False
+                    print(
+                        f"[LOCAL] Court auto-detected (confidence: {auto_confidence:.2f}) "
+                        f"— used for team classification only, not ROI"
+                    )
+                else:
+                    print(f"[LOCAL] Court auto-detected (confidence: {auto_confidence:.2f})")
             else:
+                calibrator_roi_eligible = False
                 print("[LOCAL] Court auto-detection: no confident result")
                 for tip in court_insights.recording_tips:
                     print(f"[LOCAL]   Tip: {tip}")
 
-        # Compute calibration ROI if calibrator available
+        # Compute calibration ROI if calibrator available and confidence is high
         court_roi = None
-        if calibrator is not None:
+        if calibrator is not None and calibrator_roi_eligible:
             from rallycut.tracking.player_tracker import compute_court_roi_from_calibration
 
             cal_roi, cal_msg = compute_court_roi_from_calibration(calibrator)
@@ -187,6 +197,13 @@ def run_tracking(
                 # Invalidate calibrator — degenerate homography will cause
                 # off-court filtering to silently reject all detections
                 calibrator = None
+
+        # Fall back to default ROI when no calibration ROI available
+        if court_roi is None:
+            from rallycut.tracking.player_tracker import DEFAULT_COURT_ROI
+
+            court_roi = DEFAULT_COURT_ROI
+            print("[LOCAL] Court ROI: falling back to default rectangle")
 
         # Create tracker with tuned confidence threshold
         tracker = PlayerTracker(confidence=0.15, court_roi=court_roi)
@@ -217,6 +234,7 @@ def run_tracking(
             filter_config=filter_config,
             court_calibrator=calibrator,
             court_detection_insights=court_insights,
+            enable_off_court_filter=calibrator_roi_eligible,
         )
 
         # Estimate court from player positions when line detection failed

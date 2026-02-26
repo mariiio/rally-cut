@@ -481,6 +481,7 @@ def track_players(
     # enabled with no manual calibration and no explicit ROI mode.
     court_insights = None
     auto_result = None
+    calibrator_roi_eligible = True  # manual calibration always ROI-eligible
     if auto_detect_requested or (
         calibrator is None
         and filter_court
@@ -499,23 +500,40 @@ def track_players(
 
         if auto_cal is not None:
             calibrator = auto_cal
-            if not quiet:
-                console.print(
-                    f"[dim]Court Detection: {court_insights.lines_found} lines, "
-                    f"confidence {auto_result.confidence:.2f} "
-                    f"({court_insights.camera_height} camera, "
-                    f"{court_insights.line_visibility} visibility)[/dim]"
-                )
+            # When confidence is moderate (0.4-0.6), use calibrator for team
+            # classification but NOT for ROI masking — near corners from
+            # extrapolation methods are unreliable and can produce bad ROI
+            auto_confidence = auto_result.confidence
+            if auto_confidence < 0.6:
+                calibrator_roi_eligible = False
+                if not quiet:
+                    console.print(
+                        f"[dim]Court Detection: {court_insights.lines_found} lines, "
+                        f"confidence {auto_confidence:.2f} "
+                        f"(used for team classification only, "
+                        f"not ROI — near corners may be unreliable)[/dim]"
+                    )
+            else:
+                if not quiet:
+                    console.print(
+                        f"[dim]Court Detection: {court_insights.lines_found} lines, "
+                        f"confidence {auto_confidence:.2f} "
+                        f"({court_insights.camera_height} camera, "
+                        f"{court_insights.line_visibility} visibility)[/dim]"
+                    )
         else:
+            calibrator_roi_eligible = False
             if not quiet:
                 warn = auto_result.warnings[0] if auto_result.warnings else "low confidence"
                 console.print(f"[dim]Court auto-detection: {warn}[/dim]")
                 for tip in court_insights.recording_tips:
                     console.print(f"[dim]  Tip: {tip}[/dim]")
-            if auto_detect_requested:
-                court_roi = DEFAULT_COURT_ROI
-                if not quiet:
-                    console.print("[dim]Court ROI: falling back to default rectangle[/dim]")
+            # Fall back to default ROI for both explicit (--court-roi auto)
+            # and implicit auto-detect — without ROI, tracking is unprotected
+            # from background noise
+            court_roi = DEFAULT_COURT_ROI
+            if not quiet:
+                console.print("[dim]Court ROI: falling back to default rectangle[/dim]")
 
     # Run ball tracking first if filtering enabled
     ball_positions: list[BallPosition] | None = None
@@ -556,8 +574,13 @@ def track_players(
                 f"[dim]Ball detection rate: {ball_result.detection_rate * 100:.1f}%[/dim]"
             )
 
-    # Compute calibration ROI if requested or auto-detect from calibration
-    if calibration_roi_requested or (calibrator is not None and court_roi_str is None):
+    # Compute calibration ROI if explicitly requested or auto-applied from
+    # high-confidence calibration. Low-confidence auto-detections (0.4-0.6)
+    # are used for team classification but not ROI masking.
+    use_cal_roi = calibration_roi_requested or (
+        calibrator is not None and court_roi_str is None and calibrator_roi_eligible
+    )
+    if use_cal_roi:
         if calibrator is not None:
             cal_roi, cal_msg = compute_court_roi_from_calibration(calibrator)
             if cal_roi is not None:
@@ -675,6 +698,7 @@ def track_players(
             filter_config=filter_config,
             court_calibrator=calibrator,
             court_detection_insights=court_insights,
+            enable_off_court_filter=calibrator_roi_eligible,
         )
     else:
         with Progress(
@@ -700,6 +724,7 @@ def track_players(
                 filter_config=filter_config,
                 court_calibrator=calibrator,
                 court_detection_insights=court_insights,
+                enable_off_court_filter=calibrator_roi_eligible,
             )
 
     # Include ball positions in result for trajectory overlay

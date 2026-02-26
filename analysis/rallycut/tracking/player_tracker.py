@@ -265,11 +265,35 @@ def refine_court_with_players(
 
     optimizer = PlayerConstrainedOptimizer()
 
-    # Case 1: Line detection succeeded — keep existing result
-    # Note: refinement of already-detected corners is disabled because
-    # team assignments from tracking are often inaccurate, causing regressions.
-    # Player-constrained optimization is only used for detection failures.
+    # Case 1: Line detection succeeded
     if len(initial_corners) == 4 and initial_confidence >= confidence_threshold:
+        fitting_method = getattr(initial_result, "fitting_method", "legacy")
+        unreliable_near = fitting_method in ("aspect_ratio", "harmonic_conjugate")
+
+        # Case 1b: Near corners were extrapolated — refine them using players
+        # while keeping the reliable far corners fixed. This is safe because
+        # far corners from line detection are ~2.5x more accurate.
+        if unreliable_near and initial_confidence < 0.65:
+            refined = optimizer.refine_corners(
+                initial_corners, feet, fix_far_corners=True,
+            )
+            if refined is not None:
+                calibrator = CourtCalibrator()
+                calibrator.calibrate([(c["x"], c["y"]) for c in refined])
+                result = CourtDetectionResult(
+                    corners=refined,
+                    confidence=initial_confidence + 0.05,
+                    detected_lines=getattr(initial_result, "detected_lines", []),
+                    warnings=["Near corners refined using player positions"],
+                    fitting_method="player_refined",
+                )
+                logger.info(
+                    f"Court refinement: near corners refined from {fitting_method} "
+                    f"using player positions"
+                )
+                return calibrator, result
+
+        # Case 1a: Good detection or refinement didn't help — use as-is
         calibrator = CourtCalibrator()
         calibrator.calibrate([(c["x"], c["y"]) for c in initial_corners])
         return calibrator, initial_result
@@ -1091,10 +1115,16 @@ class PlayerTracker:
                 filtered.append(p)
 
         if len(filtered) < len(positions):
-            logger.debug(
+            removed = len(positions) - len(filtered)
+            msg = (
                 f"Court filter: {len(positions)} -> {len(filtered)} "
-                f"(removed {len(positions) - len(filtered)} off-court detections)"
+                f"(removed {removed} off-court detections)"
             )
+            # Warn when >50% of detections removed in a single frame
+            if positions and removed > len(positions) / 2:
+                logger.warning(msg)
+            else:
+                logger.debug(msg)
 
         return filtered
 
@@ -1180,6 +1210,7 @@ class PlayerTracker:
         filter_config: PlayerFilterConfig | None = None,
         court_calibrator: CourtCalibrator | None = None,
         court_detection_insights: CourtDetectionInsights | None = None,
+        enable_off_court_filter: bool = True,
     ) -> PlayerTrackingResult:
         """
         Track players in a video segment.
@@ -1196,6 +1227,9 @@ class PlayerTracker:
             court_calibrator: Optional calibrated court calibrator. When provided,
                             detections outside court bounds are filtered immediately
                             after YOLO inference, preventing off-court tracks.
+            enable_off_court_filter: If True (default), apply off-court detection
+                            filtering using the court calibrator's homography.
+                            Should be False when calibration confidence is low.
 
         Returns:
             PlayerTrackingResult with all detected positions.
@@ -1257,6 +1291,15 @@ class PlayerTracker:
             positions: list[PlayerPosition] = []
             frame_idx = start_frame
             frames_processed = 0
+
+            # Off-court filter safety valve: disable if calibration removes
+            # too many detections (indicates bad homography)
+            off_court_warmup_frames = 30
+            off_court_max_removal_rate = 0.50
+            off_court_total_before = 0
+            off_court_total_after = 0
+            off_court_disabled = False
+            off_court_checked = False
 
             # Color histogram store for post-hoc track repair
             color_store = None
@@ -1329,10 +1372,48 @@ class PlayerTracker:
                         frame_positions = self._filter_detections(frame_positions)
 
                     # Filter off-court detections if calibrator available
-                    if court_calibrator is not None and court_calibrator.is_calibrated:
+                    # Gated on enable_off_court_filter (tied to calibration confidence)
+                    # with a safety valve that disables filtering if too many
+                    # detections are removed (indicates bad homography)
+                    if (
+                        enable_off_court_filter
+                        and not off_court_disabled
+                        and court_calibrator is not None
+                        and court_calibrator.is_calibrated
+                    ):
+                        before_count = len(frame_positions)
                         frame_positions = self._filter_off_court(
                             frame_positions, court_calibrator
                         )
+                        after_count = len(frame_positions)
+
+                        off_court_total_before += before_count
+                        off_court_total_after += after_count
+
+                        # Check safety valve once after warmup period.
+                        # off_court_checked guards against repeated evaluation;
+                        # >= handles short rallies and the fact that
+                        # frames_processed increments after this block.
+                        if (
+                            not off_court_checked
+                            and frames_processed >= off_court_warmup_frames
+                            and off_court_total_before > 0
+                        ):
+                            off_court_checked = True
+                            removal_rate = (
+                                1.0
+                                - off_court_total_after / off_court_total_before
+                            )
+                            if removal_rate > off_court_max_removal_rate:
+                                off_court_disabled = True
+                                logger.warning(
+                                    f"Off-court filter disabled: removed "
+                                    f"{removal_rate:.0%} of detections over "
+                                    f"first {frames_processed + 1} frames "
+                                    f"(threshold: "
+                                    f"{off_court_max_removal_rate:.0%}). "
+                                    f"Calibration homography may be inaccurate."
+                                )
 
                     positions.extend(frame_positions)
 
