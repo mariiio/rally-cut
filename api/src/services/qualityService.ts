@@ -143,17 +143,31 @@ export async function assessVideoQuality(
     }
   }
 
-  // Auto-save court calibration if confident
+  // Auto-save court calibration if confident, but never overwrite manual calibration.
+  // Uses transaction to prevent TOCTOU race between read and write.
+  // Pre-migration rows (courtCalibrationSource = null) are treated as auto-saved
+  // and can be overwritten — only explicit "manual" source is protected.
   let courtAutoSaved = false;
   if (court && court.confidence > 0.7 && court.corners.length === 4) {
-    await prisma.video.update({
-      where: { id: videoId },
-      data: {
-        courtCalibrationJson: court.corners as unknown as Prisma.InputJsonValue,
-      },
+    courtAutoSaved = await prisma.$transaction(async (tx) => {
+      const currentVideo = await tx.video.findUnique({
+        where: { id: videoId },
+        select: { courtCalibrationJson: true, courtCalibrationSource: true },
+      });
+      if (currentVideo?.courtCalibrationSource === 'manual') {
+        console.log(`[QUALITY] Skipped auto-save for video ${videoId} — manual calibration exists`);
+        return false;
+      }
+      await tx.video.update({
+        where: { id: videoId },
+        data: {
+          courtCalibrationJson: court.corners as unknown as Prisma.InputJsonValue,
+          courtCalibrationSource: 'auto',
+        },
+      });
+      console.log(`[QUALITY] Auto-saved court calibration for video ${videoId} (confidence: ${court.confidence.toFixed(2)})`);
+      return true;
     });
-    courtAutoSaved = true;
-    console.log(`[QUALITY] Auto-saved court calibration for video ${videoId} (confidence: ${court.confidence.toFixed(2)})`);
   }
 
   // Save quality assessment to characteristicsJson (merge with existing)

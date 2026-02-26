@@ -273,6 +273,9 @@ def refine_court_with_players(
         # Case 1b: Near corners were extrapolated — refine them using players
         # while keeping the reliable far corners fixed. This is safe because
         # far corners from line detection are ~2.5x more accurate.
+        # The 0.65 threshold is separate from confidence_threshold (0.4) —
+        # it targets the confidence range where near corners are unreliable
+        # but far corners and line detection are still useful.
         if unreliable_near and initial_confidence < 0.65:
             refined = optimizer.refine_corners(
                 initial_corners, feet, fix_far_corners=True,
@@ -282,7 +285,10 @@ def refine_court_with_players(
                 calibrator.calibrate([(c["x"], c["y"]) for c in refined])
                 result = CourtDetectionResult(
                     corners=refined,
-                    confidence=initial_confidence + 0.05,
+                    # Small boost since player refinement improves near corners;
+                    # stays below 0.7 (auto-save threshold) to avoid persisting
+                    # player-refined results as if they were high-confidence detections
+                    confidence=min(initial_confidence + 0.05, 0.69),
                     detected_lines=getattr(initial_result, "detected_lines", []),
                     warnings=["Near corners refined using player positions"],
                     fitting_method="player_refined",

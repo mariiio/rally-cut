@@ -160,6 +160,7 @@ def run_tracking(
 
         # Auto-detect court if no manual calibration provided
         court_insights = None
+        auto_result = None
         calibrator_roi_eligible = True  # manual calibration always ROI-eligible
         if calibrator is None:
             from rallycut.court.detector import CourtDetectionInsights

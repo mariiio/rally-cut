@@ -1900,7 +1900,7 @@ class CourtDetector:
             confidence=confidence,
             detected_lines=detected_lines,
             warnings=warnings,
-            fitting_method="legacy",
+            fitting_method=near_method,
         )
 
     def _validate_quadrilateral(
@@ -2075,6 +2075,15 @@ class CourtDetector:
             + 0.15 * coverage_score
             + 0.15 * reproj_score
         )
+
+        # Additional flat penalty for extrapolated near corners (stacks with the
+        # geo_score multiplier above — intentional double penalty). Without this,
+        # aspect_ratio detections land at ~0.55-0.65 which passes the 0.6 ROI
+        # threshold despite unreliable near corners (off by ~1m in eval).
+        if fitting_method == "aspect_ratio":
+            confidence -= 0.15
+        elif fitting_method == "harmonic_conjugate":
+            confidence -= 0.10
 
         return round(min(1.0, max(0.0, confidence)), 3)
 

@@ -518,7 +518,10 @@ router.put(
 
       await prisma.video.update({
         where: { id: req.params.id },
-        data: { courtCalibrationJson: req.body.corners },
+        data: {
+          courtCalibrationJson: req.body.corners,
+          courtCalibrationSource: 'manual',
+        },
       });
 
       return res.json({ success: true });
@@ -548,7 +551,10 @@ router.delete(
 
       await prisma.video.update({
         where: { id: req.params.id },
-        data: { courtCalibrationJson: Prisma.DbNull },
+        data: {
+          courtCalibrationJson: Prisma.DbNull,
+          courtCalibrationSource: null,
+        },
       });
 
       return res.json({ success: true });
