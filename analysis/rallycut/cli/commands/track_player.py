@@ -599,8 +599,8 @@ def track_players(
                 if not quiet:
                     console.print(f"[yellow]  Calibration ROI failed: {cal_msg}[/yellow]")
                 # Invalidate calibrator — if ROI projection fails, the
-                # homography is degenerate and will cause _filter_off_court
-                # to silently reject all detections.
+                # homography is degenerate and will produce bad court-space
+                # projections for team classification.
                 calibrator = None
                 if calibration_roi_requested:
                     court_roi = DEFAULT_COURT_ROI
@@ -698,7 +698,6 @@ def track_players(
             filter_config=filter_config,
             court_calibrator=calibrator,
             court_detection_insights=court_insights,
-            enable_off_court_filter=calibrator_roi_eligible,
         )
     else:
         with Progress(
@@ -724,8 +723,7 @@ def track_players(
                 filter_config=filter_config,
                 court_calibrator=calibrator,
                 court_detection_insights=court_insights,
-                enable_off_court_filter=calibrator_roi_eligible,
-            )
+                )
 
     # Include ball positions in result for trajectory overlay
     if ball_positions:
