@@ -195,8 +195,8 @@ def run_tracking(
                 print("[LOCAL] Using calibration ROI")
             elif cal_msg:
                 print(f"[LOCAL] Calibration ROI failed: {cal_msg}")
-                # Invalidate calibrator — degenerate homography will cause
-                # off-court filtering to silently reject all detections
+                # Invalidate calibrator — degenerate homography will produce
+                # bad court-space projections for team classification
                 calibrator = None
 
         # Fall back to default ROI when no calibration ROI available
@@ -235,7 +235,6 @@ def run_tracking(
             filter_config=filter_config,
             court_calibrator=calibrator,
             court_detection_insights=court_insights,
-            enable_off_court_filter=calibrator_roi_eligible,
         )
 
         # Estimate court from player positions when line detection failed
