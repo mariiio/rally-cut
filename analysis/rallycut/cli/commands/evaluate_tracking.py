@@ -203,6 +203,7 @@ def evaluate_tracking(
             ball_table.add_column("Median", justify="right")
             ball_table.add_column("P90", justify="right")
             ball_table.add_column("<20px", justify="right")
+            ball_table.add_column("Offset", justify="right")
 
             for rally_id_str, metrics in ball_results:
                 ball_table.add_row(
@@ -213,6 +214,7 @@ def evaluate_tracking(
                     f"{metrics.median_error_px:.1f}px",
                     f"{metrics.p90_error_px:.1f}px",
                     f"{metrics.error_under_20px_rate:.1%}",
+                    f"+{metrics.frame_offset}" if metrics.frame_offset else "0",
                 )
 
             console.print(ball_table)

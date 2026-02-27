@@ -63,6 +63,9 @@ class BallTrackingMetrics:
     video_height: int = 1080
     video_fps: float = 30.0
 
+    # Frame offset applied during evaluation (0 = no shift)
+    frame_offset: int = 0
+
     @property
     def detection_rate(self) -> float:
         """Fraction of GT frames where ball was detected."""
@@ -198,6 +201,7 @@ class BallTrackingMetrics:
             "errorUnder50pxRate": self.error_under_50px_rate,
             "videoWidth": self.video_width,
             "videoHeight": self.video_height,
+            "frameOffset": self.frame_offset,
         }
 
         # Add velocity and jitter metrics if available
@@ -242,6 +246,9 @@ def evaluate_ball_tracking(
 ) -> BallTrackingMetrics:
     """Evaluate ball tracking predictions against ground truth.
 
+    Automatically detects the optimal frame offset (0-5 frames) to handle
+    FPS variations and labeling timing differences between videos.
+
     Args:
         ground_truth: Ground truth ball positions (from Label Studio).
         predictions: Predicted ball positions from tracker.
@@ -254,6 +261,13 @@ def evaluate_ball_tracking(
     Returns:
         BallTrackingMetrics with detailed accuracy statistics.
     """
+    # Auto-detect optimal frame offset
+    best_offset, _ = find_optimal_frame_offset(
+        ground_truth, predictions,
+        video_width=video_width, video_height=video_height,
+        match_threshold_px=match_threshold_px,
+    )
+
     # Filter GT to ball positions only
     gt_ball = [p for p in ground_truth if p.label == "ball"]
 
@@ -262,20 +276,22 @@ def evaluate_ball_tracking(
     for gt_pos in gt_ball:
         gt_by_frame[gt_pos.frame_number] = gt_pos
 
-    # Group predictions by frame (take highest confidence per frame)
+    # Group predictions by frame, applying offset (shift predictions back)
     pred_by_frame: dict[int, BallPosition] = {}
     for pred_pos in predictions:
         if pred_pos.confidence < min_confidence:
             continue
-        existing = pred_by_frame.get(pred_pos.frame_number)
+        shifted_frame = pred_pos.frame_number - best_offset
+        existing = pred_by_frame.get(shifted_frame)
         if existing is None or pred_pos.confidence > existing.confidence:
-            pred_by_frame[pred_pos.frame_number] = pred_pos
+            pred_by_frame[shifted_frame] = pred_pos
 
     metrics = BallTrackingMetrics(
         num_gt_frames=len(gt_by_frame),
         video_width=video_width,
         video_height=video_height,
         video_fps=video_fps,
+        frame_offset=best_offset,
     )
 
     # Initialize confidence band dict
