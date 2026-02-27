@@ -135,6 +135,11 @@ def _retrack_rally(
     # track_video() uses absolute frame indices; GT expects 0-indexed
     _adjust_frame_numbers(result, rally.start_ms, str(video_path))
 
+    # Attach ball positions AFTER frame adjustment — WASB returns 0-indexed
+    # frames already, so they must not go through _adjust_frame_numbers
+    if ball_positions:
+        result.ball_positions = ball_positions
+
     return result
 
 
