@@ -86,7 +86,24 @@ See `api/CLAUDE.md` for tier limits and enforcement. Config in `api/src/config/t
 
 ## Running Diagnostics & Long Processes
 
-Never run processes silently. The user should always know what's running, why, and roughly how long to expect. Prefer running in background (`run_in_background: true`) with periodic non-blocking progress checks over blocking on a silent process. Ensure scripts produce visible progress output — if they don't, add it before running. Avoid long inline Python in Bash; write a script file with progress prints instead.
+**Before running:**
+- Validate inputs/config will work BEFORE starting the long operation. Run a quick dry-run or sanity check (e.g., verify files exist, data loads, model loads, one item processes successfully) rather than discovering errors 10 minutes in.
+- Tell the user what you're about to run, how many items it will process, and roughly how long to expect.
+- If the script doesn't already have per-item progress output, ADD IT before running. Every script that loops over rallies/videos/items must print progress per item (e.g., `[3/16] rally_id: HOTA=89.0%, IDsw=3 (12.4s)`).
+
+**While running:**
+- Run in background (`run_in_background: true`) for anything that takes >30 seconds.
+- Check output periodically with non-blocking reads — don't wait silently for completion.
+- If the first few items show errors or unexpected results, STOP EARLY and investigate rather than letting the full run complete.
+
+**Output requirements:**
+- Per-item results as they complete (not just a summary at the end).
+- Running totals or aggregates so partial output is already useful if the process is interrupted.
+- Print a final summary table at the end.
+- Avoid long inline Python in Bash — write a script file instead.
+
+**After running:**
+- Review the output for anomalies before reporting results. Don't just relay the final summary — check for per-item regressions, errors, or unexpected patterns.
 
 ## See Also
 

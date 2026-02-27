@@ -315,7 +315,7 @@ uv run rallycut track-players video.mp4 --tracker bytetrack
 # Tune filter parameters for edge cases
 uv run rallycut track-players video.mp4 --min-bbox-area 0.002 --min-bbox-height 0.06
 
-# Use court calibration for ROI masking + off-court filtering
+# Use court calibration for ROI masking + team classification
 uv run rallycut track-players video.mp4 --calibration '[{"x":0.1,"y":0.8},{"x":0.9,"y":0.8},{"x":0.7,"y":0.5},{"x":0.3,"y":0.5}]'
 # Explicit calibration ROI (also available: default, adaptive)
 uv run rallycut track-players video.mp4 --calibration '...' --court-roi calibration
@@ -347,9 +347,8 @@ Removes tracks with very low position variance (spread < 0.015) AND high presenc
 **Per-Frame Filtering:**
 1. Bbox size filter (removes small background detections, keeps primary tracks)
 2. Play area filter (convex hull of ball positions, keeps primary tracks)
-3. Court boundary filter (if calibration available, removes off-court detections before tracking)
-4. Distractor/referee/stationary filter (hard 4-player constraint removes non-primary tracks coexisting with all players; excludes referees and stationary tracks)
-5. Two-team selection (2 players per court side by Y position)
+3. Distractor/referee/stationary filter (hard 4-player constraint removes non-primary tracks coexisting with all players; excludes referees and stationary tracks)
+4. Two-team selection (2 players per court side by Y position)
 
 **Key insight:** Positively identify players by volleyball behaviors (ball engagement, court coverage, movement) rather than detecting "non-players".
 
@@ -380,7 +379,8 @@ The heatmap threshold is 0.3 (optimal for beach volleyball). The filter pipeline
 - **Interleaved false positives**: Single-frame false detections (jumping to player positions) within real trajectory regions. Anchor-proximity recovery keeps real fragments and discards distant false positive clusters.
 - **Oscillating false detections**: After ball exits frame, the detector can lock onto two players and alternate between them. Oscillation pruning uses spatial clustering to detect this pattern. A transition rate ≥25% over 12+ frames triggers trimming.
 - **Exit ghost detections**: When the ball exits the frame, false detections smoothly drift from the exit point toward a player position. Detected by physics: ball approaching a screen edge with velocity > 0.8%/frame MUST exit — any reversal is impossible. Ghost regions capped at 30 frames — longer continuous detections indicate real ball re-entry, not ghost drift.
-- **Non-ball object segments (pigeons, cars, player hands)**: WASB can detect non-ball objects that form long segments qualifying as anchors, creating "teleporting" artifacts. Spatial outlier removal (Step 3d) uses iterative leave-one-out weighted centroid analysis to identify and remove anchors whose centroids are far (>segment_jump_threshold) from the rest. Exception: anchors with large 2D extent (min of X and Y extent > threshold) AND endpoint connectivity to another anchor are preserved as trajectory continuations (ball arcing across the court).
+- **Non-ball object segments (pigeons, cars, player hands)**: WASB can detect non-ball objects that form long segments qualifying as anchors, creating "teleporting" artifacts. Spatial outlier removal (Step 3d) uses iterative leave-one-out weighted centroid analysis to identify and remove anchors whose centroids are far (>segment_jump_threshold) from the rest. Exception: anchors are preserved as trajectory continuations via two-check OR: (A) large 2D spread + endpoint connectivity, OR (B) temporal adjacency + endpoint connectivity + directional coherence (velocity dot product ≥ 0). Check B handles horizontal/vertical exits where spread is small in one dimension.
+- **Post-trajectory false segments**: After ball exits frame, detector can produce false anchor clusters at player positions that survive outlier removal by reinforcing each other. Step 3e builds a trajectory chain from the longest anchor, greedily extends via spatial proximity + directional coherence, then prunes anchors temporally after the chain that are spatially far AND directionally opposite.
 - **Hovering false detections**: After ball exits frame, the detector can lock onto a single player position. Detected by checking short segments where positions lie within 5% of screen of their centroid.
 - **Trajectory blips**: Brief lock-on to a player position for 2-5 consecutive frames mid-trajectory. Blip removal uses distant trajectory context with a two-pass approach.
 - **Missing frames**: Linear interpolation fills small gaps (up to 10 frames) between detections.
