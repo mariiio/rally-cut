@@ -32,6 +32,9 @@ backups/
 *.cache
 .rallycut_cache/
 
+# Claude Code
+.claude/
+
 # Test outputs
 /tmp/
 *.mp4
@@ -51,6 +54,9 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Local databases
+*.db
 
 # Secrets
 secrets/

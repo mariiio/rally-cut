@@ -581,6 +581,10 @@ class BallTemporalFilter:
             seg_centroids: dict[int, tuple[float, float]] = {}
             seg_endpoints: dict[int, tuple[float, float, float, float]] = {}
             seg_spread: dict[int, float] = {}
+            # Velocity at segment start/end (average displacement over
+            # last/first 3 confident positions). None if < 3 positions.
+            seg_start_velocity: dict[int, tuple[float, float] | None] = {}
+            seg_end_velocity: dict[int, tuple[float, float] | None] = {}
             for i in anchor_indices:
                 seg = segments[i]
                 seg_confident = [p for p in seg if p.confidence > 0]
@@ -602,32 +606,98 @@ class BallTemporalFilter:
                 seg_spread[i] = float(min(
                     max(xs) - min(xs), max(ys) - min(ys),
                 ))
+                # Compute endpoint velocities (average direction over
+                # last/first 3 confident positions).
+                if len(pts) >= 3:
+                    # End velocity: average displacement over last 3 pts
+                    dvx = pts[-1].x - pts[-3].x
+                    dvy = pts[-1].y - pts[-3].y
+                    seg_end_velocity[i] = (dvx / 2, dvy / 2)
+                    # Start velocity: average displacement over first 3
+                    dvx = pts[2].x - pts[0].x
+                    dvy = pts[2].y - pts[0].y
+                    seg_start_velocity[i] = (dvx / 2, dvy / 2)
+                else:
+                    seg_end_velocity[i] = None
+                    seg_start_velocity[i] = None
+
+            max_continuation_gap = self.config.max_interpolation_gap * 3
 
             def _is_trajectory_continuation(
                 idx: int, active: set[int],
             ) -> bool:
                 """Check if anchor is a ball trajectory continuation.
 
-                Requires BOTH: (1) endpoint connects to another anchor,
-                AND (2) the segment has significant extent in both X
-                and Y (ball arcs across the court in 2D). A segment
-                drifting along one axis (pigeon, car) or compact in
-                both (player hand) is NOT protected.
+                Two-check OR:
+                  A) Large 2D spread + endpoint within threshold (cross-
+                     court arcs that move in both X and Y).
+                  B) Temporal adjacency + endpoint within threshold +
+                     directional coherence (horizontal/vertical exits
+                     where spread is small in one dimension but the
+                     segment continues in the same direction).
+
+                A segment drifting along one axis (pigeon, car) or
+                compact in both (player hand) is NOT protected unless
+                it also passes check B.
                 """
-                if seg_spread[idx] < threshold:
-                    return False
                 threshold_sq = threshold * threshold
                 sx, sy, ex, ey = seg_endpoints[idx]
+                seg_start_frame = segments[idx][0].frame_number
+                seg_end_frame = segments[idx][-1].frame_number
+
                 for j in active:
                     if j == idx:
                         continue
                     osx, osy, oex, oey = seg_endpoints[j]
-                    # This anchor's start near other's end (continuation)
-                    if (sx - oex) ** 2 + (sy - oey) ** 2 < threshold_sq:
-                        return True
-                    # This anchor's end near other's start (continuation)
-                    if (ex - osx) ** 2 + (ey - osy) ** 2 < threshold_sq:
-                        return True
+
+                    # Test both connectivity directions:
+                    # (a) this start ← other end (this follows other)
+                    # (b) this end → other start (other follows this)
+                    connections = [
+                        (
+                            (sx - oex) ** 2 + (sy - oey) ** 2,
+                            seg_end_velocity[j],  # other's end vel
+                            oex, oey, sx, sy,  # bridge: other end → this start
+                            segments[j][-1].frame_number,
+                            seg_start_frame,
+                        ),
+                        (
+                            (ex - osx) ** 2 + (ey - osy) ** 2,
+                            seg_end_velocity[idx],  # this end vel
+                            ex, ey, osx, osy,  # bridge: this end → other start
+                            seg_end_frame,
+                            segments[j][0].frame_number,
+                        ),
+                    ]
+
+                    for (
+                        dist_sq, vel, bx0, by0, bx1, by1,
+                        from_frame, to_frame,
+                    ) in connections:
+                        if dist_sq >= threshold_sq:
+                            continue
+
+                        # Check A: large 2D spread (existing check)
+                        if seg_spread[idx] >= threshold:
+                            return True
+
+                        # Check B: temporal + directional coherence
+                        frame_gap = abs(to_frame - from_frame)
+                        if frame_gap > max_continuation_gap:
+                            continue
+                        # Directional coherence: dot product of the
+                        # neighbor's end velocity and bridge vector ≥ 0
+                        if vel is not None:
+                            bridge_dx = bx1 - bx0
+                            bridge_dy = by1 - by0
+                            dot = vel[0] * bridge_dx + vel[1] * bridge_dy
+                            if dot >= 0:
+                                return True
+                        else:
+                            # No velocity info — fall back to spatial
+                            # proximity alone (temporal guard is enough)
+                            return True
+
                 return False
 
             while True:
@@ -689,6 +759,140 @@ class BallTemporalFilter:
                     )
                 anchor_indices -= outlier_removed
                 excluded_segments |= outlier_removed
+
+            # Step 3e: Remove post-trajectory false segments.
+            # After the ball exits the frame, the detector can produce
+            # false segments at player positions that form a self-
+            # reinforcing cluster surviving outlier removal. Build a
+            # trajectory chain from the longest anchor and prune anchors
+            # temporally AFTER the chain that are both spatially and
+            # directionally disconnected.
+            if len(anchor_indices) >= 3:
+                # Build chain starting from longest surviving anchor
+                sorted_by_len = sorted(
+                    anchor_indices,
+                    key=lambda i: len(segments[i]),
+                    reverse=True,
+                )
+                chain: set[int] = {sorted_by_len[0]}
+
+                # Greedily extend forward/backward
+                changed = True
+                while changed:
+                    changed = False
+                    for candidate in sorted(anchor_indices - chain):
+                        c_seg = segments[candidate]
+                        c_start = c_seg[0].frame_number
+                        c_end = c_seg[-1].frame_number
+                        # Compute candidate velocity/endpoints if not
+                        # already in the pre-computed dicts (can happen
+                        # if anchors changed since pre-computation)
+                        if candidate not in seg_endpoints:
+                            cpts = [
+                                p for p in c_seg if p.confidence > 0
+                            ] or c_seg
+                            seg_endpoints[candidate] = (
+                                cpts[0].x, cpts[0].y,
+                                cpts[-1].x, cpts[-1].y,
+                            )
+                        csx, csy, cex, cey = seg_endpoints[candidate]
+
+                        for ch_idx in list(chain):
+                            osx, osy, oex, oey = seg_endpoints[ch_idx]
+                            ch_start = segments[ch_idx][0].frame_number
+                            ch_end = segments[ch_idx][-1].frame_number
+
+                            # candidate follows chain member
+                            dist = np.sqrt(
+                                (csx - oex) ** 2 + (csy - oey) ** 2,
+                            )
+                            gap = abs(c_start - ch_end)
+                            if (
+                                dist < threshold
+                                and gap <= max_continuation_gap
+                            ):
+                                vel = seg_end_velocity.get(ch_idx)
+                                if vel is not None:
+                                    bdx = csx - oex
+                                    bdy = csy - oey
+                                    dot = vel[0] * bdx + vel[1] * bdy
+                                    if dot < 0:
+                                        continue
+                                chain.add(candidate)
+                                changed = True
+                                break
+
+                            # chain member follows candidate
+                            dist = np.sqrt(
+                                (osx - cex) ** 2 + (osy - cey) ** 2,
+                            )
+                            gap = abs(ch_start - c_end)
+                            if (
+                                dist < threshold
+                                and gap <= max_continuation_gap
+                            ):
+                                vel = seg_end_velocity.get(candidate)
+                                if vel is not None:
+                                    bdx = osx - cex
+                                    bdy = osy - cey
+                                    dot = vel[0] * bdx + vel[1] * bdy
+                                    if dot < 0:
+                                        continue
+                                chain.add(candidate)
+                                changed = True
+                                break
+
+                # Prune post-chain anchors that are disconnected
+                chain_end_frame = max(
+                    segments[i][-1].frame_number for i in chain
+                )
+                # Get the chain endpoint (last position of last segment)
+                chain_end_idx = max(
+                    chain,
+                    key=lambda i: segments[i][-1].frame_number,
+                )
+                _, _, cex, cey = seg_endpoints[chain_end_idx]
+                chain_end_vel = seg_end_velocity.get(chain_end_idx)
+
+                post_chain_removed: set[int] = set()
+                for i in sorted(anchor_indices - chain):
+                    seg_start = segments[i][0].frame_number
+                    if seg_start <= chain_end_frame:
+                        continue  # Not temporally after chain
+                    sx, sy, _, _ = seg_endpoints[i]
+                    dist = float(np.sqrt(
+                        (sx - cex) ** 2 + (sy - cey) ** 2,
+                    ))
+                    if dist < threshold:
+                        continue  # Spatially close — could be real
+
+                    # Directional check: negative dot = opposite dir
+                    if chain_end_vel is not None:
+                        bdx = sx - cex
+                        bdy = sy - cey
+                        dot = (
+                            chain_end_vel[0] * bdx
+                            + chain_end_vel[1] * bdy
+                        )
+                        if dot >= 0:
+                            continue  # Same direction — keep
+                    else:
+                        continue  # No velocity — can't determine
+
+                    post_chain_removed.add(i)
+
+                if post_chain_removed:
+                    for i in sorted(post_chain_removed):
+                        seg = segments[i]
+                        logger.info(
+                            f"Post-trajectory: removed anchor "
+                            f"[{seg[0].frame_number}-"
+                            f"{seg[-1].frame_number}] "
+                            f"({len(seg)} frames, post-chain "
+                            f"at dist={float(np.sqrt((seg_endpoints[i][0] - cex) ** 2 + (seg_endpoints[i][1] - cey) ** 2)):.3f})"
+                        )
+                    anchor_indices -= post_chain_removed
+                    excluded_segments |= post_chain_removed
 
         # Step 4: Keep short segments whose centroid is close to an anchor endpoint.
         # These are real trajectory fragments between interleaved false positives.

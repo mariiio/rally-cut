@@ -1831,6 +1831,175 @@ class TestSpatialOutlierAnchorRemoval:
         assert len(anchor1) > 0, "First anchor should survive with only 2 anchors"
         assert len(anchor2) > 0, "Second anchor should survive with only 2 anchors"
 
+    def test_horizontal_exit_continuation_kept(self) -> None:
+        """Ball exiting horizontally should be kept as trajectory continuation.
+
+        A ball moving mostly horizontally (large X spread, small Y spread)
+        fails the old min(X, Y) >= 0.20 check, but the new directional
+        coherence check (Check B) preserves it because it is temporally
+        adjacent, spatially close, and moving in the same direction.
+        """
+        filt = BallTemporalFilter(self._pruning_config())
+        positions: list[BallPosition] = []
+
+        # Main anchor: 50 frames, ball at center moving right
+        for i in range(50):
+            positions.append(_make_pos(i, 0.40 + i * 0.005, 0.20 + i * 0.001))
+
+        # Small gap (5 frames)
+        for i in range(50, 55):
+            positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
+
+        # Continuation: 20 frames, ball continues rightward (large X, small Y)
+        # X spread: ~0.18, Y spread: ~0.05 → min = 0.05 < 0.20
+        for i in range(55, 75):
+            j = i - 55
+            positions.append(_make_pos(i, 0.65 + j * 0.009, 0.25 + j * 0.0025))
+
+        # Gap
+        for i in range(75, 80):
+            positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
+
+        # Third anchor: ball back at center (gives outlier removal context)
+        for i in range(80, 130):
+            positions.append(_make_pos(i, 0.45 + i * 0.001, 0.22 - i * 0.0005))
+
+        result = filt.filter_batch(positions)
+        confident = [p for p in result if p.confidence > 0]
+
+        # Continuation segment (frames 55-74) should survive
+        continuation = [p for p in confident if 55 <= p.frame_number < 75]
+        assert len(continuation) >= 15, (
+            f"Horizontal exit continuation should be kept, "
+            f"got {len(continuation)} frames"
+        )
+
+    def test_false_post_exit_segment_removed(self) -> None:
+        """False segment at player position after ball exit should be removed.
+
+        After the ball exits rightward, detector produces a false anchor
+        at a player position (far from trajectory, opposite direction).
+        Step 3e should prune this post-chain false segment.
+        """
+        filt = BallTemporalFilter(self._pruning_config())
+        positions: list[BallPosition] = []
+
+        # Main anchor: ball moving right toward exit
+        for i in range(60):
+            positions.append(_make_pos(i, 0.30 + i * 0.008, 0.15 + i * 0.0005))
+
+        # Gap (ball exits frame)
+        for i in range(60, 80):
+            positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
+
+        # Second real anchor: ball returns from left side (continues story)
+        for i in range(80, 130):
+            positions.append(_make_pos(i, 0.35 + i * 0.001, 0.18 - i * 0.0003))
+
+        # Gap
+        for i in range(130, 145):
+            positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
+
+        # False anchor: at player position far below trajectory, AFTER chain
+        # spatially far (y=0.55 vs trajectory at y~0.18) and direction away
+        for i in range(145, 170):
+            positions.append(_make_pos(i, 0.40 + i * 0.001, 0.55 + i * 0.001))
+
+        result = filt.filter_batch(positions)
+        confident = [p for p in result if p.confidence > 0]
+
+        # False post-exit should be removed
+        false_frames = [p for p in confident if p.frame_number >= 145]
+        assert len(false_frames) == 0, (
+            f"False post-exit segment should be removed, "
+            f"got {len(false_frames)} frames"
+        )
+
+    def test_genuine_re_entry_kept(self) -> None:
+        """Ball that genuinely re-enters the frame should not be pruned.
+
+        A ball that exits and re-enters from a similar position in the
+        same direction should be kept by step 3e (spatially close to
+        chain endpoint OR same direction).
+        """
+        filt = BallTemporalFilter(self._pruning_config())
+        positions: list[BallPosition] = []
+
+        # Main anchor: ball moving right
+        for i in range(50):
+            positions.append(_make_pos(i, 0.30 + i * 0.006, 0.20 + i * 0.001))
+
+        # Gap (ball exits right, re-enters right)
+        for i in range(50, 65):
+            positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
+
+        # Re-entry anchor: starts near where ball exited, continues right
+        for i in range(65, 95):
+            j = i - 65
+            positions.append(_make_pos(i, 0.55 + j * 0.005, 0.22 + j * 0.002))
+
+        # Gap
+        for i in range(95, 100):
+            positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
+
+        # Third anchor at center (for outlier detection context)
+        for i in range(100, 150):
+            positions.append(_make_pos(i, 0.42 + i * 0.001, 0.24 - i * 0.0005))
+
+        result = filt.filter_batch(positions)
+        confident = [p for p in result if p.confidence > 0]
+
+        # Re-entry segment (frames 65-94) should survive
+        reentry = [p for p in confident if 65 <= p.frame_number < 95]
+        assert len(reentry) >= 20, (
+            f"Genuine re-entry should be kept, got {len(reentry)} frames"
+        )
+
+    def test_opposite_direction_not_protected(self) -> None:
+        """Segment moving opposite to trajectory should NOT be protected.
+
+        Check B requires directional coherence (positive dot product).
+        A segment at a player position that happens to be near the main
+        anchor but drifts in the opposite direction should still be
+        removed as a spatial outlier. Step 3e also catches it: it's
+        temporally after the chain, spatially far, and directionally
+        disconnected.
+        """
+        filt = BallTemporalFilter(self._pruning_config())
+        positions: list[BallPosition] = []
+
+        # Main anchor: ball moving right at y≈0.15 (upper frame)
+        for i in range(50):
+            positions.append(_make_pos(i, 0.30 + i * 0.006, 0.15 + i * 0.001))
+
+        # Large gap (>15 frames) to force segment split
+        for i in range(50, 70):
+            positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
+
+        # Second real anchor: same area as first (forms chain)
+        for i in range(70, 120):
+            positions.append(_make_pos(i, 0.35 + (i - 70) * 0.003, 0.17 + (i - 70) * 0.0005))
+
+        # Large gap
+        for i in range(120, 140):
+            positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
+
+        # False anchor: at player position (y≈0.55), far from trajectory
+        # and moving downward (opposite to ball trajectory direction)
+        for i in range(140, 165):
+            j = i - 140
+            positions.append(_make_pos(i, 0.45 + j * 0.002, 0.55 + j * 0.003))
+
+        result = filt.filter_batch(positions)
+        confident = [p for p in result if p.confidence > 0]
+
+        # False anchor at player position should be removed
+        false_frames = [p for p in confident if p.frame_number >= 140]
+        assert len(false_frames) == 0, (
+            f"False post-trajectory segment should be removed, "
+            f"got {len(false_frames)} frames"
+        )
+
 
 class TestRemoveStationaryRuns:
     """Tests for stationarity detection (player lock-on removal)."""
