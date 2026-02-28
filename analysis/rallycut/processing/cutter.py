@@ -955,12 +955,16 @@ class VideoCutter:
             )
             metadata.content_hash = content_hash
             cache.put(content_hash, stride, features, metadata)
+            feature_fps = metadata.fps
         else:
-            features, _ = cached
+            features, cached_metadata = cached
+            feature_fps = cached_metadata.fps
 
         logger.info(
-            "TemporalMaxer: features=%s, shape=%s, stride=%d, source=%s",
+            "TemporalMaxer: features=%s, shape=%s, stride=%d, source=%s, "
+            "feature_fps=%.1f, source_fps=%.1f",
             type(features).__name__, features.shape, stride, feature_source,
+            feature_fps, source_fps,
         )
 
         if progress_callback:
@@ -968,7 +972,7 @@ class VideoCutter:
 
         result = inference.predict(
             features=features,
-            fps=source_fps,
+            fps=feature_fps,
             stride=stride,
             min_segment_confidence=0.6,
         )
