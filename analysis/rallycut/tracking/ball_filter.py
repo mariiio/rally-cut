@@ -811,13 +811,19 @@ class BallTemporalFilter:
                                 dist < threshold
                                 and gap <= max_continuation_gap
                             ):
-                                vel = seg_end_velocity.get(ch_idx)
-                                if vel is not None:
-                                    bdx = csx - oex
-                                    bdy = csy - oey
-                                    dot = vel[0] * bdx + vel[1] * bdy
-                                    if dot < 0:
-                                        continue
+                                # Skip directional check when very
+                                # close — ball bounces reverse velocity
+                                # but proximity proves same trajectory
+                                if dist >= threshold / 2:
+                                    vel = seg_end_velocity.get(ch_idx)
+                                    if vel is not None:
+                                        bdx = csx - oex
+                                        bdy = csy - oey
+                                        dot = (
+                                            vel[0] * bdx + vel[1] * bdy
+                                        )
+                                        if dot < 0:
+                                            continue
                                 chain.add(candidate)
                                 changed = True
                                 break
@@ -831,13 +837,16 @@ class BallTemporalFilter:
                                 dist < threshold
                                 and gap <= max_continuation_gap
                             ):
-                                vel = seg_end_velocity.get(candidate)
-                                if vel is not None:
-                                    bdx = osx - cex
-                                    bdy = osy - cey
-                                    dot = vel[0] * bdx + vel[1] * bdy
-                                    if dot < 0:
-                                        continue
+                                if dist >= threshold / 2:
+                                    vel = seg_end_velocity.get(candidate)
+                                    if vel is not None:
+                                        bdx = osx - cex
+                                        bdy = osy - cey
+                                        dot = (
+                                            vel[0] * bdx + vel[1] * bdy
+                                        )
+                                        if dot < 0:
+                                            continue
                                 chain.add(candidate)
                                 changed = True
                                 break
