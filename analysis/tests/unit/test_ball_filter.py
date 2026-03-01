@@ -1955,6 +1955,62 @@ class TestSpatialOutlierAnchorRemoval:
             f"Genuine re-entry should be kept, got {len(reentry)} frames"
         )
 
+    def test_chain_extends_through_bounce_point(self) -> None:
+        """Chain should extend through ball bounces that reverse velocity.
+
+        When two anchor segments are spatially very close (within
+        threshold/2), the directional coherence check is skipped because
+        proximity alone proves same trajectory. Ball contacts naturally
+        reverse velocity — the chain must not break at bounce points.
+
+        Scenario: 3 anchors. Anchor 1 ends moving rightward at (0.60, 0.30).
+        Anchor 2 starts very close at (0.60, 0.28) but moves leftward
+        (bounce). Without the fix, 3e's chain can't extend from 1→2 due
+        to velocity reversal, leaving anchor 2 as post-chain and removing
+        it. With the fix, the close proximity (< threshold/2) bypasses the
+        directional check.
+        """
+        filt = BallTemporalFilter(self._pruning_config())
+        positions: list[BallPosition] = []
+
+        # Anchor 1: ball moving right and downward (frames 0-49)
+        for i in range(50):
+            positions.append(_make_pos(i, 0.30 + i * 0.006, 0.20 + i * 0.002))
+        # Anchor 1 ends at: (0.594, 0.298)
+
+        # Large gap to force segment split (>15 frames)
+        for i in range(50, 70):
+            positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
+
+        # Anchor 2: starts close to anchor 1's end (dist ≈ 0.02)
+        # but moves in OPPOSITE direction (leftward + upward = bounce)
+        # This tests the proximity-based directional check bypass
+        for i in range(70, 100):
+            j = i - 70
+            positions.append(_make_pos(
+                i, 0.59 - j * 0.005, 0.28 - j * 0.003,
+            ))
+        # Anchor 2 ends at: (0.445, 0.193)
+
+        # Gap
+        for i in range(100, 120):
+            positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
+
+        # Anchor 3: false segment at player position (far from trajectory)
+        for i in range(120, 150):
+            j = i - 120
+            positions.append(_make_pos(i, 0.70 + j * 0.001, 0.55 + j * 0.002))
+
+        result = filt.filter_batch(positions)
+        confident = [p for p in result if p.confidence > 0]
+
+        # Anchor 2 (bounce continuation) should survive — it's close to
+        # anchor 1's endpoint despite moving in opposite direction
+        bounce_frames = [p for p in confident if 70 <= p.frame_number < 100]
+        assert len(bounce_frames) >= 20, (
+            f"Bounce continuation should be kept, got {len(bounce_frames)} frames"
+        )
+
     def test_opposite_direction_not_protected(self) -> None:
         """Segment moving opposite to trajectory should NOT be protected.
 
