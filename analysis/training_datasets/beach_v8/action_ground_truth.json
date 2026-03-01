@@ -1,0 +1,3086 @@
+{
+  "rallies": [
+    {
+      "video_content_hash": "178047d8abd84ade8bbd07bf78eb5f3fed334959687386170b891ab68b2c3080",
+      "rally_start_ms": 14683,
+      "rally_end_ms": 25095,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.4374030688447341,
+          "ballY": 0.3619318213604459,
+          "frame": 61,
+          "action": "serve",
+          "playerTrackId": 22
+        },
+        {
+          "ballX": 0.1992259530584317,
+          "ballY": 0.3959310350435758,
+          "frame": 92,
+          "action": "receive",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.4624233974332932,
+          "ballY": 0.3208621714304576,
+          "frame": 136,
+          "action": "set",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.392894343773485,
+          "ballY": 0.2477425016283146,
+          "frame": 181,
+          "action": "attack",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.4342919841180007,
+          "ballY": 0.403163090023167,
+          "frame": 226,
+          "action": "dig",
+          "playerTrackId": 22
+        }
+      ]
+    },
+    {
+      "video_content_hash": "178047d8abd84ade8bbd07bf78eb5f3fed334959687386170b891ab68b2c3080",
+      "rally_start_ms": 38538,
+      "rally_end_ms": 44111,
+      "action_ground_truth_json": [
+        {
+          "frame": 50,
+          "action": "serve",
+          "playerTrackId": -1
+        }
+      ]
+    },
+    {
+      "video_content_hash": "24e5b6de64016eef989293d643a425936b81db946b7e43449741f369b5b594c9",
+      "rally_start_ms": 4006,
+      "rally_end_ms": 19053,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.6104779315528195,
+          "ballY": 0.3907958416768316,
+          "frame": 73,
+          "action": "serve",
+          "playerTrackId": 6
+        },
+        {
+          "ballX": 0.6237799735455728,
+          "ballY": 0.5158967469560335,
+          "frame": 93,
+          "action": "receive",
+          "playerTrackId": 6
+        },
+        {
+          "ballX": 0.6211010980751255,
+          "ballY": 0.4426902736925847,
+          "frame": 140,
+          "action": "set",
+          "playerTrackId": 8
+        },
+        {
+          "ballX": 0.7252300026062037,
+          "ballY": 0.3207331586190623,
+          "frame": 185,
+          "action": "attack",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.340955524301881,
+          "ballY": 0.538300351582085,
+          "frame": 213,
+          "action": "dig",
+          "playerTrackId": 6
+        },
+        {
+          "ballX": 0.4865655416669731,
+          "ballY": 0.3585318792443893,
+          "frame": 256,
+          "action": "attack",
+          "playerTrackId": 8
+        },
+        {
+          "ballX": 0.5777893951706511,
+          "ballY": 0.4701089519089797,
+          "frame": 269,
+          "action": "dig",
+          "playerTrackId": 8
+        },
+        {
+          "ballX": 0.5028894070764073,
+          "ballY": 0.4665840762518674,
+          "frame": 334,
+          "action": "set",
+          "playerTrackId": 6
+        },
+        {
+          "ballX": 0.5922399212225614,
+          "ballY": 0.3318047576136963,
+          "frame": 381,
+          "action": "attack",
+          "playerTrackId": 2
+        }
+      ]
+    },
+    {
+      "video_content_hash": "24e5b6de64016eef989293d643a425936b81db946b7e43449741f369b5b594c9",
+      "rally_start_ms": 40673,
+      "rally_end_ms": 54221,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.6326743888802333,
+          "ballY": 0.1750449016010967,
+          "frame": 73,
+          "action": "serve",
+          "playerTrackId": 4
+        },
+        {
+          "frame": 101,
+          "action": "receive",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.4772649243817593,
+          "ballY": 0.5135361092924101,
+          "frame": 146,
+          "action": "set",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.5917915095097434,
+          "ballY": 0.3728307208146007,
+          "frame": 198,
+          "action": "attack",
+          "playerTrackId": 36
+        },
+        {
+          "frame": 212,
+          "action": "dig",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.6323346414624959,
+          "ballY": 0.4281459905846181,
+          "frame": 263,
+          "action": "set",
+          "playerTrackId": 36
+        },
+        {
+          "ballX": 0.7276010041811429,
+          "ballY": 0.3555321574296239,
+          "frame": 311,
+          "action": "attack",
+          "playerTrackId": 36
+        }
+      ]
+    },
+    {
+      "video_content_hash": "28b6d76171fd9a2a48dcbed74fadc6120f062eb17da85a6b12c11e9f862544bb",
+      "rally_start_ms": 76760,
+      "rally_end_ms": 87260,
+      "action_ground_truth_json": [
+        {
+          "frame": 46,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.4192154343141531,
+          "ballY": 0.4523494164114542,
+          "frame": 79,
+          "action": "receive",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.3655239268326785,
+          "ballY": 0.4321019659864866,
+          "frame": 136,
+          "action": "set",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.3700997510667508,
+          "ballY": 0.303875274468557,
+          "frame": 182,
+          "action": "attack",
+          "playerTrackId": 8
+        }
+      ]
+    },
+    {
+      "video_content_hash": "28b6d76171fd9a2a48dcbed74fadc6120f062eb17da85a6b12c11e9f862544bb",
+      "rally_start_ms": 120033,
+      "rally_end_ms": 131986,
+      "action_ground_truth_json": [
+        {
+          "frame": 17,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.593385117981177,
+          "ballY": 0.3992642767736041,
+          "frame": 52,
+          "action": "receive",
+          "playerTrackId": 10
+        },
+        {
+          "ballX": 0.5381009206150088,
+          "ballY": 0.2899626929153932,
+          "frame": 103,
+          "action": "set",
+          "playerTrackId": 4
+        },
+        {
+          "frame": 152,
+          "action": "attack",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.4613182192701409,
+          "ballY": 0.3644167453433858,
+          "frame": 184,
+          "action": "dig",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.5874809523599384,
+          "ballY": 0.3647213781807039,
+          "frame": 227,
+          "action": "set",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.4272481913191714,
+          "ballY": 0.2836087960207619,
+          "frame": 275,
+          "action": "attack",
+          "playerTrackId": 1
+        }
+      ]
+    },
+    {
+      "video_content_hash": "40e92a6bdd9bd29f028d4a84d1218f946b5d56e97cd2fd35bef15d4795b2e0bf",
+      "rally_start_ms": 15500,
+      "rally_end_ms": 26995,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.3419612156148867,
+          "ballY": 0.3196804207119741,
+          "frame": 68,
+          "action": "serve",
+          "playerTrackId": 3
+        },
+        {
+          "frame": 139,
+          "action": "receive",
+          "playerTrackId": -1
+        },
+        {
+          "frame": 239,
+          "action": "set",
+          "playerTrackId": -1
+        },
+        {
+          "frame": 338,
+          "action": "attack",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.5816227111176624,
+          "ballY": 0.4859936415385511,
+          "frame": 398,
+          "action": "dig",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.4839805635248797,
+          "ballY": 0.3759128361192691,
+          "frame": 477,
+          "action": "set",
+          "playerTrackId": 13
+        },
+        {
+          "ballX": 0.5903584298555586,
+          "ballY": 0.1954420555978594,
+          "frame": 563,
+          "action": "attack",
+          "playerTrackId": 3
+        }
+      ]
+    },
+    {
+      "video_content_hash": "40e92a6bdd9bd29f028d4a84d1218f946b5d56e97cd2fd35bef15d4795b2e0bf",
+      "rally_start_ms": 41825,
+      "rally_end_ms": 45825,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.5136301817281091,
+          "ballY": 0.3335859200048424,
+          "frame": 56,
+          "action": "serve",
+          "playerTrackId": 3
+        }
+      ]
+    },
+    {
+      "video_content_hash": "46eb0ed3eca0dbcf71ff99abe48566671989fbf8fb3bd08ebf14b62d0c10c33d",
+      "rally_start_ms": 9692,
+      "rally_end_ms": 17924,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.2506136254789272,
+          "ballY": 0.2572371221796509,
+          "frame": 90,
+          "action": "serve",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.4943163159867408,
+          "ballY": 0.5162188802422947,
+          "frame": 151,
+          "action": "receive",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.6766166447923532,
+          "ballY": 0.5214222749239266,
+          "frame": 244,
+          "action": "set",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.5846906739823984,
+          "ballY": 0.4146286292436712,
+          "frame": 341,
+          "action": "attack",
+          "playerTrackId": 3
+        }
+      ]
+    },
+    {
+      "video_content_hash": "46eb0ed3eca0dbcf71ff99abe48566671989fbf8fb3bd08ebf14b62d0c10c33d",
+      "rally_start_ms": 30230,
+      "rally_end_ms": 45128,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.6162430357333328,
+          "ballY": 0.4649880818697485,
+          "frame": 81,
+          "action": "serve",
+          "playerTrackId": 31
+        },
+        {
+          "ballX": 0.4398502534756946,
+          "ballY": 0.5405396524382856,
+          "frame": 144,
+          "action": "receive",
+          "playerTrackId": 28
+        },
+        {
+          "ballX": 0.5745234896930904,
+          "ballY": 0.5031451926027202,
+          "frame": 244,
+          "action": "set",
+          "playerTrackId": 31
+        },
+        {
+          "ballX": 0.4899858830851285,
+          "ballY": 0.3892024185786025,
+          "frame": 334,
+          "action": "attack",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.4291520994531212,
+          "ballY": 0.5214256676862568,
+          "frame": 365,
+          "action": "dig",
+          "playerTrackId": 28
+        },
+        {
+          "ballX": 0.5525800286941184,
+          "ballY": 0.4197966615804332,
+          "frame": 473,
+          "action": "attack",
+          "playerTrackId": 31
+        },
+        {
+          "ballX": 0.6507653599375636,
+          "ballY": 0.4735964280217385,
+          "frame": 535,
+          "action": "dig",
+          "playerTrackId": 28
+        },
+        {
+          "ballX": 0.7050951587812765,
+          "ballY": 0.5407048702613044,
+          "frame": 632,
+          "action": "set",
+          "playerTrackId": 31
+        },
+        {
+          "ballX": 0.6207905034356607,
+          "ballY": 0.3798110053502026,
+          "frame": 728,
+          "action": "attack",
+          "playerTrackId": 3
+        }
+      ]
+    },
+    {
+      "video_content_hash": "4b611e2a08d9d37a8f81d0863325a7916e1feec228f5b68192a7e4aff21311b5",
+      "rally_start_ms": 12574,
+      "rally_end_ms": 21324,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.5664697662601625,
+          "ballY": 0.2833954381210478,
+          "frame": 54,
+          "action": "serve",
+          "playerTrackId": 14
+        },
+        {
+          "ballX": 0.4071438393839384,
+          "ballY": 0.4950138532371755,
+          "frame": 85,
+          "action": "receive",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.3945079985119047,
+          "ballY": 0.3676835317460317,
+          "frame": 125,
+          "action": "set",
+          "playerTrackId": 3
+        },
+        {
+          "frame": 171,
+          "action": "attack",
+          "playerTrackId": -1
+        },
+        {
+          "frame": 204,
+          "action": "dig",
+          "playerTrackId": -1
+        }
+      ]
+    },
+    {
+      "video_content_hash": "4b611e2a08d9d37a8f81d0863325a7916e1feec228f5b68192a7e4aff21311b5",
+      "rally_start_ms": 54054,
+      "rally_end_ms": 61330,
+      "action_ground_truth_json": [
+        {
+          "frame": 29,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.6055069710372153,
+          "ballY": 0.4772060847294272,
+          "frame": 64,
+          "action": "receive",
+          "playerTrackId": 17
+        },
+        {
+          "ballX": 0.5292381855633348,
+          "ballY": 0.4692042809844266,
+          "frame": 103,
+          "action": "set",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.547180670204281,
+          "ballY": 0.2773864768261444,
+          "frame": 142,
+          "action": "block",
+          "playerTrackId": 1
+        }
+      ]
+    },
+    {
+      "video_content_hash": "4cd067307a9acc79a35f0a6a3856f41b8aaaddab69b470ea92a1376174203961",
+      "rally_start_ms": 15000,
+      "rally_end_ms": 27533,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.6041536779559828,
+          "ballY": 0.4189441056017142,
+          "frame": 102,
+          "action": "serve",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.4858812048646483,
+          "ballY": 0.682919373448545,
+          "frame": 128,
+          "action": "receive",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.3764413063042333,
+          "ballY": 0.4859043638549532,
+          "frame": 171,
+          "action": "set",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.570419506843516,
+          "ballY": 0.3374503501765853,
+          "frame": 221,
+          "action": "attack",
+          "playerTrackId": 2
+        }
+      ]
+    },
+    {
+      "video_content_hash": "4cd067307a9acc79a35f0a6a3856f41b8aaaddab69b470ea92a1376174203961",
+      "rally_start_ms": 40600,
+      "rally_end_ms": 53933,
+      "action_ground_truth_json": [
+        {
+          "frame": 115,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "frame": 151,
+          "action": "receive",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.4541161024461348,
+          "ballY": 0.5868101195480852,
+          "frame": 184,
+          "action": "set",
+          "playerTrackId": 8
+        },
+        {
+          "ballX": 0.3766354419818689,
+          "ballY": 0.4129276966672731,
+          "frame": 218,
+          "action": "attack",
+          "playerTrackId": 8
+        },
+        {
+          "ballX": 0.5955866249946032,
+          "ballY": 0.5858047122186636,
+          "frame": 246,
+          "action": "attack",
+          "playerTrackId": 2
+        }
+      ]
+    },
+    {
+      "video_content_hash": "67b57630574fa0381b09c2ab9fca5fce3ae801fd11aaa7510f86dd359fadcdc4",
+      "rally_start_ms": 6889,
+      "rally_end_ms": 14866,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.5576492811032863,
+          "ballY": 0.3547372196139802,
+          "frame": 55,
+          "action": "serve",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.3483220073094644,
+          "ballY": 0.4901385538065355,
+          "frame": 85,
+          "action": "receive",
+          "playerTrackId": 5
+        },
+        {
+          "ballX": 0.3980470937150056,
+          "ballY": 0.419880189540044,
+          "frame": 134,
+          "action": "set",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.3348312458664021,
+          "ballY": 0.2877792475014697,
+          "frame": 181,
+          "action": "attack",
+          "playerTrackId": 1
+        }
+      ]
+    },
+    {
+      "video_content_hash": "67b57630574fa0381b09c2ab9fca5fce3ae801fd11aaa7510f86dd359fadcdc4",
+      "rally_start_ms": 44836,
+      "rally_end_ms": 52803,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.1852229738263296,
+          "ballY": 0.3020709883076133,
+          "frame": 55,
+          "action": "serve",
+          "playerTrackId": 5
+        },
+        {
+          "ballX": 0.5792042768584332,
+          "ballY": 0.4642228045107903,
+          "frame": 77,
+          "action": "receive",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.5913287517976935,
+          "ballY": 0.4235381597136677,
+          "frame": 135,
+          "action": "set",
+          "playerTrackId": 5
+        },
+        {
+          "ballX": 0.6495599051031615,
+          "ballY": 0.323700316016469,
+          "frame": 180,
+          "action": "attack",
+          "playerTrackId": 2
+        }
+      ]
+    },
+    {
+      "video_content_hash": "67b57630574fa0381b09c2ab9fca5fce3ae801fd11aaa7510f86dd359fadcdc4",
+      "rally_start_ms": 230281,
+      "rally_end_ms": 243881,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.369860705668921,
+          "ballY": 0.3605305178232137,
+          "frame": 43,
+          "action": "serve",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.5024151682954172,
+          "ballY": 0.5626807389389629,
+          "frame": 73,
+          "action": "receive",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.4156469151373641,
+          "ballY": 0.446163874890708,
+          "frame": 122,
+          "action": "set",
+          "playerTrackId": 11
+        },
+        {
+          "ballX": 0.5262496066055574,
+          "ballY": 0.3446995621899913,
+          "frame": 173,
+          "action": "attack",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.5754328040392356,
+          "ballY": 0.4373664267346694,
+          "frame": 181,
+          "action": "dig",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.4945826491304547,
+          "ballY": 0.326452627333087,
+          "frame": 229,
+          "action": "attack",
+          "playerTrackId": 11
+        },
+        {
+          "ballX": 0.4725241376169805,
+          "ballY": 0.4887441412818638,
+          "frame": 250,
+          "action": "dig",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.4079248350174881,
+          "ballY": 0.4538559433457534,
+          "frame": 284,
+          "action": "set",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.3810861044264357,
+          "ballY": 0.2927951966525086,
+          "frame": 333,
+          "action": "attack",
+          "playerTrackId": 3
+        }
+      ]
+    },
+    {
+      "video_content_hash": "719e3318c988415f8f90de67e01a11491782c7b27995523de425d8d019e2fb5e",
+      "rally_start_ms": 1735,
+      "rally_end_ms": 10079,
+      "action_ground_truth_json": [
+        {
+          "frame": 48,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.6737087594226387,
+          "ballY": 0.4284228151935582,
+          "frame": 79,
+          "action": "receive",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.5675002177326225,
+          "ballY": 0.3819802423849757,
+          "frame": 128,
+          "action": "set",
+          "playerTrackId": 6
+        },
+        {
+          "ballX": 0.5830616920352134,
+          "ballY": 0.2801466656180895,
+          "frame": 169,
+          "action": "attack",
+          "playerTrackId": 3
+        }
+      ]
+    },
+    {
+      "video_content_hash": "719e3318c988415f8f90de67e01a11491782c7b27995523de425d8d019e2fb5e",
+      "rally_start_ms": 41385,
+      "rally_end_ms": 50385,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.4957313721778958,
+          "ballY": 0.3460337993474961,
+          "frame": 51,
+          "action": "serve",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.1880104849151412,
+          "ballY": 0.4929361648270468,
+          "frame": 93,
+          "action": "receive",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.3567511245174266,
+          "ballY": 0.361157678050641,
+          "frame": 141,
+          "action": "set",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.2337536813192319,
+          "ballY": 0.2583584014915112,
+          "frame": 191,
+          "action": "attack",
+          "playerTrackId": 2
+        }
+      ]
+    },
+    {
+      "video_content_hash": "7eb97a209ad3995655688419f47680ff0db8f405325288647f98f97ae1a5754d",
+      "rally_start_ms": 7574,
+      "rally_end_ms": 16486,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.4136696300287356,
+          "ballY": 0.247974537037037,
+          "frame": 53,
+          "action": "serve",
+          "playerTrackId": 13
+        },
+        {
+          "ballX": 0.5453771195966934,
+          "ballY": 0.3374210915803855,
+          "frame": 84,
+          "action": "receive",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.4061216375496852,
+          "ballY": 0.3344797772309248,
+          "frame": 128,
+          "action": "set",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.4144043958628572,
+          "ballY": 0.1749322917403522,
+          "frame": 176,
+          "action": "attack",
+          "playerTrackId": 4
+        }
+      ]
+    },
+    {
+      "video_content_hash": "7eb97a209ad3995655688419f47680ff0db8f405325288647f98f97ae1a5754d",
+      "rally_start_ms": 64304,
+      "rally_end_ms": 71804,
+      "action_ground_truth_json": [
+        {
+          "frame": 29,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.5279329065921555,
+          "ballY": 0.4001571561549847,
+          "frame": 67,
+          "action": "receive",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.4958439454786821,
+          "ballY": 0.3272576898990351,
+          "frame": 114,
+          "action": "set",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.565552320523362,
+          "ballY": 0.2333345809451309,
+          "frame": 160,
+          "action": "attack",
+          "playerTrackId": 2
+        }
+      ]
+    },
+    {
+      "video_content_hash": "896156d100e1b6259f17d533b72f25c5721f29c7a4e462aaf27d01929b1c8d80",
+      "rally_start_ms": 42200,
+      "rally_end_ms": 61833,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.5225391635773111,
+          "ballY": 0.1633490993838522,
+          "frame": 87,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "frame": 127,
+          "action": "receive",
+          "playerTrackId": -1
+        },
+        {
+          "frame": 185,
+          "action": "set",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.4231977231758379,
+          "ballY": 0.3544823303969986,
+          "frame": 237,
+          "action": "attack",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.6766760510559173,
+          "ballY": 0.08631543033733709,
+          "frame": 276,
+          "action": "dig",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.5488619443222942,
+          "ballY": 0.009087595299609535,
+          "frame": 326,
+          "action": "dig",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.4959517698317373,
+          "ballY": 0.2093499449391684,
+          "frame": 379,
+          "action": "attack",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.5359308090213319,
+          "ballY": 0.2475505154493499,
+          "frame": 420,
+          "action": "dig",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.4670067815081969,
+          "ballY": 0.004151617289563487,
+          "frame": 477,
+          "action": "dig",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.4437699104363535,
+          "ballY": 0.3927784674397991,
+          "frame": 520,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.6193479347789146,
+          "ballY": 0.4419777476758177,
+          "frame": 565,
+          "action": "attack",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.669921875,
+          "ballY": 0.4722222222222222,
+          "frame": 593,
+          "action": "dig",
+          "playerTrackId": -1
+        }
+      ]
+    },
+    {
+      "video_content_hash": "967376a9389cde24fd597b84ed42fb228edaa13164c2decdb019bea95e3875ed",
+      "rally_start_ms": 24600,
+      "rally_end_ms": 41066,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.370494372767966,
+          "ballY": 0.3088514806086929,
+          "frame": 59,
+          "action": "serve",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.1896706904782148,
+          "ballY": 0.2919380171007575,
+          "frame": 91,
+          "action": "receive",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.3726420225363771,
+          "ballY": 0.3752153033418422,
+          "frame": 145,
+          "action": "set",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.332949407518495,
+          "ballY": 0.2209385633937682,
+          "frame": 194,
+          "action": "attack",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.4882385320222246,
+          "ballY": 0.3823326640630303,
+          "frame": 224,
+          "action": "dig",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.4637419419214452,
+          "ballY": 0.3850846355961106,
+          "frame": 270,
+          "action": "set",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.5757694608000197,
+          "ballY": 0.2471198094400635,
+          "frame": 309,
+          "action": "attack",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.6903520589596526,
+          "ballY": 0.2240275872146078,
+          "frame": 329,
+          "action": "dig",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.6082017472337272,
+          "ballY": 0.4347165845148198,
+          "frame": 369,
+          "action": "set",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.7218722847458876,
+          "ballY": 0.2464101118919898,
+          "frame": 413,
+          "action": "attack",
+          "playerTrackId": 2
+        }
+      ]
+    },
+    {
+      "video_content_hash": "967376a9389cde24fd597b84ed42fb228edaa13164c2decdb019bea95e3875ed",
+      "rally_start_ms": 61933,
+      "rally_end_ms": 70566,
+      "action_ground_truth_json": [
+        {
+          "frame": 51,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "frame": 86,
+          "action": "receive",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.4435850349692608,
+          "ballY": 0.4063930951373723,
+          "frame": 134,
+          "action": "set",
+          "playerTrackId": 10
+        },
+        {
+          "ballX": 0.311353946289437,
+          "ballY": 0.2936306977984833,
+          "frame": 171,
+          "action": "attack",
+          "playerTrackId": 10
+        }
+      ]
+    },
+    {
+      "video_content_hash": "967376a9389cde24fd597b84ed42fb228edaa13164c2decdb019bea95e3875ed",
+      "rally_start_ms": 127000,
+      "rally_end_ms": 142400,
+      "action_ground_truth_json": [
+        {
+          "frame": 57,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "frame": 101,
+          "action": "receive",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.5594345595903312,
+          "ballY": 0.4181468625822313,
+          "frame": 157,
+          "action": "set",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.7066840649155768,
+          "ballY": 0.2188057393766576,
+          "frame": 197,
+          "action": "attack",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.6986679623343797,
+          "ballY": 0.2006329442615207,
+          "frame": 201,
+          "action": "block",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.7011403309800551,
+          "ballY": 0.3468416723714082,
+          "frame": 234,
+          "action": "dig",
+          "playerTrackId": 7
+        },
+        {
+          "ballX": 0.5631340299978473,
+          "ballY": 0.4190297212764665,
+          "frame": 267,
+          "action": "set",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.6711381434680349,
+          "ballY": 0.257991579212605,
+          "frame": 302,
+          "action": "attack",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.640760891346158,
+          "ballY": 0.3244694283911022,
+          "frame": 314,
+          "action": "dig",
+          "playerTrackId": 7
+        },
+        {
+          "ballX": 0.580698769915517,
+          "ballY": 0.3975679334452142,
+          "frame": 355,
+          "action": "set",
+          "playerTrackId": 4
+        }
+      ]
+    },
+    {
+      "video_content_hash": "9f62af3f74f10972658c4cc59f0c3478bd3e7964172b02c04a30e82f7d3b4ecc",
+      "rally_start_ms": 49400,
+      "rally_end_ms": 62733,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.3604316854497482,
+          "ballY": 0.4373929141522916,
+          "frame": 89,
+          "action": "serve",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.4969696037747454,
+          "ballY": 0.4565578880132137,
+          "frame": 127,
+          "action": "receive",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.4035574999225714,
+          "ballY": 0.4589013071971542,
+          "frame": 177,
+          "action": "set",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.6149109753072718,
+          "ballY": 0.3688344208293045,
+          "frame": 215,
+          "action": "attack",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.4956868926228367,
+          "ballY": 0.5179796528837295,
+          "frame": 241,
+          "action": "dig",
+          "playerTrackId": 8
+        },
+        {
+          "ballX": 0.4446636655557786,
+          "ballY": 0.451042968502163,
+          "frame": 282,
+          "action": "set",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.4760471412606183,
+          "ballY": 0.3584343853889024,
+          "frame": 324,
+          "action": "attack",
+          "playerTrackId": 8
+        }
+      ]
+    },
+    {
+      "video_content_hash": "9f62af3f74f10972658c4cc59f0c3478bd3e7964172b02c04a30e82f7d3b4ecc",
+      "rally_start_ms": 135000,
+      "rally_end_ms": 146133,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.6029116274537422,
+          "ballY": 0.4237545315417115,
+          "frame": 139,
+          "action": "serve",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.2920898346501484,
+          "ballY": 0.5579619833099322,
+          "frame": 171,
+          "action": "receive",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.4439561467782333,
+          "ballY": 0.4594199711031515,
+          "frame": 212,
+          "action": "set",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.355066761123423,
+          "ballY": 0.3228395735510057,
+          "frame": 264,
+          "action": "attack",
+          "playerTrackId": 2
+        }
+      ]
+    },
+    {
+      "video_content_hash": "9f62af3f74f10972658c4cc59f0c3478bd3e7964172b02c04a30e82f7d3b4ecc",
+      "rally_start_ms": 167800,
+      "rally_end_ms": 179133,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.5899223938662574,
+          "ballY": 0.426159719290962,
+          "frame": 120,
+          "action": "serve",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.333013770185924,
+          "ballY": 0.4039970255561042,
+          "frame": 151,
+          "action": "receive",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.5569042997477403,
+          "ballY": 0.4205225969820787,
+          "frame": 203,
+          "action": "set",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.4520861611627655,
+          "ballY": 0.3348601805042823,
+          "frame": 256,
+          "action": "attack",
+          "playerTrackId": 2
+        }
+      ]
+    },
+    {
+      "video_content_hash": "a05071583fe72817c9c88092e2b2e3a751fe8e77d9c1e16b25f5ef36405cd113",
+      "rally_start_ms": 10733,
+      "rally_end_ms": 19666,
+      "action_ground_truth_json": [
+        {
+          "frame": 42,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.6525140033176493,
+          "ballY": 0.5265827261370305,
+          "frame": 78,
+          "action": "receive",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.5358899132288767,
+          "ballY": 0.4083587904165379,
+          "frame": 123,
+          "action": "set",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.7084770591212993,
+          "ballY": 0.3622161141101742,
+          "frame": 160,
+          "action": "attack",
+          "playerTrackId": 3
+        }
+      ]
+    },
+    {
+      "video_content_hash": "a05071583fe72817c9c88092e2b2e3a751fe8e77d9c1e16b25f5ef36405cd113",
+      "rally_start_ms": 61933,
+      "rally_end_ms": 71933,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.5072434570120731,
+          "ballY": 0.4096683994240443,
+          "frame": 39,
+          "action": "serve",
+          "playerTrackId": 15
+        },
+        {
+          "ballX": 0.4605893133114844,
+          "ballY": 0.5014551657623719,
+          "frame": 71,
+          "action": "receive",
+          "playerTrackId": 10
+        },
+        {
+          "ballX": 0.519021332644668,
+          "ballY": 0.4621346960646781,
+          "frame": 113,
+          "action": "set",
+          "playerTrackId": 10
+        },
+        {
+          "ballX": 0.3667175319416199,
+          "ballY": 0.3121875820758462,
+          "frame": 162,
+          "action": "attack",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.470033926666108,
+          "ballY": 0.4962414164179612,
+          "frame": 188,
+          "action": "dig",
+          "playerTrackId": 1
+        }
+      ]
+    },
+    {
+      "video_content_hash": "a05071583fe72817c9c88092e2b2e3a751fe8e77d9c1e16b25f5ef36405cd113",
+      "rally_start_ms": 137666,
+      "rally_end_ms": 152366,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.5713184519510542,
+          "ballY": 0.4145233515671237,
+          "frame": 79,
+          "action": "serve",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.4164189641134404,
+          "ballY": 0.391443651472431,
+          "frame": 112,
+          "action": "receive",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.3879331668993573,
+          "ballY": 0.4477174891708096,
+          "frame": 162,
+          "action": "set",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.422678526783869,
+          "ballY": 0.3153992837104223,
+          "frame": 202,
+          "action": "attack",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.4762365496490426,
+          "ballY": 0.4651765290202879,
+          "frame": 233,
+          "action": "dig",
+          "playerTrackId": 5
+        },
+        {
+          "ballX": 0.458116478140259,
+          "ballY": 0.4583463860669503,
+          "frame": 278,
+          "action": "set",
+          "playerTrackId": 5
+        },
+        {
+          "ballX": 0.5974524584092913,
+          "ballY": 0.3734447969366593,
+          "frame": 318,
+          "action": "attack",
+          "playerTrackId": 5
+        }
+      ]
+    },
+    {
+      "video_content_hash": "a2059b5254608b1e26c423e04c4c0a3940dcb918a3f30edd4cdfb8a818f6d98b",
+      "rally_start_ms": 9666,
+      "rally_end_ms": 18166,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.5657949098237046,
+          "ballY": 0.4280204714049518,
+          "frame": 127,
+          "action": "serve",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.2536036447094968,
+          "ballY": 0.7003821691554363,
+          "frame": 164,
+          "action": "receive",
+          "playerTrackId": 1
+        }
+      ]
+    },
+    {
+      "video_content_hash": "a2059b5254608b1e26c423e04c4c0a3940dcb918a3f30edd4cdfb8a818f6d98b",
+      "rally_start_ms": 22466,
+      "rally_end_ms": 31533,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.5699046955200577,
+          "ballY": 0.4006396757952853,
+          "frame": 77,
+          "action": "serve",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.4742789660313461,
+          "ballY": 0.5124778357414402,
+          "frame": 109,
+          "action": "receive",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.5102402589005671,
+          "ballY": 0.3052049371407245,
+          "frame": 161,
+          "action": "attack",
+          "playerTrackId": 3
+        }
+      ]
+    },
+    {
+      "video_content_hash": "a2059b5254608b1e26c423e04c4c0a3940dcb918a3f30edd4cdfb8a818f6d98b",
+      "rally_start_ms": 265666,
+      "rally_end_ms": 281000,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.1605682350329404,
+          "ballY": 0.5677727924064254,
+          "frame": 93,
+          "action": "serve",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.2177925422868645,
+          "ballY": 0.5728494107971558,
+          "frame": 133,
+          "action": "receive",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.2482217121013042,
+          "ballY": 0.5772383433969308,
+          "frame": 175,
+          "action": "set",
+          "playerTrackId": 4
+        },
+        {
+          "frame": 220,
+          "action": "attack",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.5824372211282485,
+          "ballY": 0.3610310356839567,
+          "frame": 250,
+          "action": "dig",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.430110707971701,
+          "ballY": 0.504647420029093,
+          "frame": 297,
+          "action": "set",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.7011846886118084,
+          "ballY": 0.2889018645435895,
+          "frame": 352,
+          "action": "attack",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.6211692678905933,
+          "ballY": 0.6059933368429323,
+          "frame": 380,
+          "action": "set",
+          "playerTrackId": 4
+        }
+      ]
+    },
+    {
+      "video_content_hash": "a95f6b77a01f7fb886e319f50115b7381e34dc5d4cb0c0265a3e1466c18579c9",
+      "rally_start_ms": 26027,
+      "rally_end_ms": 34840,
+      "action_ground_truth_json": [
+        {
+          "frame": 52,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.5421977796052632,
+          "ballY": 0.5818713450292398,
+          "frame": 87,
+          "action": "receive",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.4911688633786848,
+          "ballY": 0.5647203325774754,
+          "frame": 133,
+          "action": "set",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.5985120925841443,
+          "ballY": 0.4543106808146345,
+          "frame": 177,
+          "action": "attack",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.8078826098528842,
+          "ballY": 0.6904312922097474,
+          "frame": 206,
+          "action": "dig",
+          "playerTrackId": 12
+        }
+      ]
+    },
+    {
+      "video_content_hash": "a95f6b77a01f7fb886e319f50115b7381e34dc5d4cb0c0265a3e1466c18579c9",
+      "rally_start_ms": 59036,
+      "rally_end_ms": 63536,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.41349272196915,
+          "ballY": 0.4758564267407074,
+          "frame": 41,
+          "action": "serve",
+          "playerTrackId": 13
+        }
+      ]
+    },
+    {
+      "video_content_hash": "a95f6b77a01f7fb886e319f50115b7381e34dc5d4cb0c0265a3e1466c18579c9",
+      "rally_start_ms": 213393,
+      "rally_end_ms": 228058,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.6230849235939077,
+          "ballY": 0.4954994206433942,
+          "frame": 64,
+          "action": "serve",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.3191540481980457,
+          "ballY": 0.4353296021139472,
+          "frame": 91,
+          "action": "receive",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.5443598985460565,
+          "ballY": 0.5486112138566746,
+          "frame": 145,
+          "action": "set",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.4806759457498536,
+          "ballY": 0.4387092243532587,
+          "frame": 195,
+          "action": "attack",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.3894270545856613,
+          "ballY": 0.631789079416889,
+          "frame": 220,
+          "action": "dig",
+          "playerTrackId": 22
+        },
+        {
+          "ballX": 0.4345891162580066,
+          "ballY": 0.5959389354046595,
+          "frame": 246,
+          "action": "set",
+          "playerTrackId": 22
+        },
+        {
+          "ballX": 0.4158862463999253,
+          "ballY": 0.4221690622712692,
+          "frame": 283,
+          "action": "attack",
+          "playerTrackId": 22
+        },
+        {
+          "ballX": 0.5295827198715763,
+          "ballY": 0.6697964148543298,
+          "frame": 315,
+          "action": "dig",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.7298941362421822,
+          "ballY": 0.555130201737018,
+          "frame": 348,
+          "action": "set",
+          "playerTrackId": 1
+        }
+      ]
+    },
+    {
+      "video_content_hash": "ab8ce1aca545fc80c63fd9f5f4327d2d18ad5764a8ae6d1f9f09d63b90d9667f",
+      "rally_start_ms": 6640,
+      "rally_end_ms": 17800,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.406534766176961,
+          "ballY": 0.3091230463039975,
+          "frame": 46,
+          "action": "serve",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.1732025227047166,
+          "ballY": 0.3212994500433208,
+          "frame": 67,
+          "action": "receive",
+          "playerTrackId": 2
+        },
+        {
+          "frame": 109,
+          "action": "set",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.1948629678991992,
+          "ballY": 0.151080009261838,
+          "frame": 148,
+          "action": "attack",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.379691559118683,
+          "ballY": 0.1244783877440785,
+          "frame": 168,
+          "action": "dig",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.2660391138277737,
+          "ballY": 0.389916766438023,
+          "frame": 190,
+          "action": "set",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.4623590219208156,
+          "ballY": 0.181008120874128,
+          "frame": 230,
+          "action": "attack",
+          "playerTrackId": 1
+        }
+      ]
+    },
+    {
+      "video_content_hash": "b014b0df902ab97420db1560c8291adf5b4999d6112b436f84ad8c603cd6e257",
+      "rally_start_ms": 16999,
+      "rally_end_ms": 26999,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.6319456614251399,
+          "ballY": 0.611111131696396,
+          "frame": 168,
+          "action": "serve",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.5288905245278646,
+          "ballY": 0.514833679130916,
+          "frame": 232,
+          "action": "receive",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.4932798097893891,
+          "ballY": 0.4931637846595862,
+          "frame": 342,
+          "action": "set",
+          "playerTrackId": 7
+        },
+        {
+          "ballX": 0.6453339547821969,
+          "ballY": 0.3294402356902356,
+          "frame": 445,
+          "action": "attack",
+          "playerTrackId": 18
+        }
+      ]
+    },
+    {
+      "video_content_hash": "b014b0df902ab97420db1560c8291adf5b4999d6112b436f84ad8c603cd6e257",
+      "rally_start_ms": 40999,
+      "rally_end_ms": 46499,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.603104423230783,
+          "ballY": 0.4017597821260189,
+          "frame": 236,
+          "action": "serve",
+          "playerTrackId": 3
+        }
+      ]
+    },
+    {
+      "video_content_hash": "b2d21ae7515fb6b32747cac97572556b2c4b9253947c533647449f63a22f93b7",
+      "rally_start_ms": 11000,
+      "rally_end_ms": 20933,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.4371161080301537,
+          "ballY": 0.3469549994312855,
+          "frame": 83,
+          "action": "serve",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.4255558691760538,
+          "ballY": 0.3530948139388656,
+          "frame": 118,
+          "action": "receive",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.4166879257825187,
+          "ballY": 0.4376551880002229,
+          "frame": 164,
+          "action": "set",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.3159973925154437,
+          "ballY": 0.3032723334907838,
+          "frame": 211,
+          "action": "attack",
+          "playerTrackId": 1
+        }
+      ]
+    },
+    {
+      "video_content_hash": "b2d21ae7515fb6b32747cac97572556b2c4b9253947c533647449f63a22f93b7",
+      "rally_start_ms": 48600,
+      "rally_end_ms": 59233,
+      "action_ground_truth_json": [
+        {
+          "frame": 98,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.3181364583875437,
+          "ballY": 0.4416185200247612,
+          "frame": 131,
+          "action": "receive",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.4078513021142953,
+          "ballY": 0.4584489131758999,
+          "frame": 181,
+          "action": "set",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.2976079252147084,
+          "ballY": 0.3104564225572187,
+          "frame": 224,
+          "action": "attack",
+          "playerTrackId": 2
+        }
+      ]
+    },
+    {
+      "video_content_hash": "b2d21ae7515fb6b32747cac97572556b2c4b9253947c533647449f63a22f93b7",
+      "rally_start_ms": 90200,
+      "rally_end_ms": 103433,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.4330107668532928,
+          "ballY": 0.4044865209045972,
+          "frame": 88,
+          "action": "serve",
+          "playerTrackId": 7
+        },
+        {
+          "ballX": 0.5609532472615621,
+          "ballY": 0.3414247979876197,
+          "frame": 124,
+          "action": "receive",
+          "playerTrackId": 5
+        },
+        {
+          "ballX": 0.5624194923413741,
+          "ballY": 0.3361842480167345,
+          "frame": 173,
+          "action": "set",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.4644357998904085,
+          "ballY": 0.3057602533784636,
+          "frame": 215,
+          "action": "attack",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.4309067665593682,
+          "ballY": 0.4209553149139887,
+          "frame": 238,
+          "action": "dig",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.3573024552684201,
+          "ballY": 0.3872914161909779,
+          "frame": 271,
+          "action": "set",
+          "playerTrackId": 7
+        },
+        {
+          "ballX": 0.4361383177607167,
+          "ballY": 0.3496758906345591,
+          "frame": 303,
+          "action": "attack",
+          "playerTrackId": 7
+        }
+      ]
+    },
+    {
+      "video_content_hash": "b2d21ae7515fb6b32747cac97572556b2c4b9253947c533647449f63a22f93b7",
+      "rally_start_ms": 154200,
+      "rally_end_ms": 161106,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.4737518989787509,
+          "ballY": 0.1053751901869405,
+          "frame": 119,
+          "action": "serve",
+          "playerTrackId": 10
+        },
+        {
+          "ballX": 0.392587403860787,
+          "ballY": 0.4638840255737625,
+          "frame": 148,
+          "action": "receive",
+          "playerTrackId": 10
+        }
+      ]
+    },
+    {
+      "video_content_hash": "cb8308d4b04711708b82200b2ab683c3e26e30f86a9ebddad6bd5aac597f6e38",
+      "rally_start_ms": 16066,
+      "rally_end_ms": 38366,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.650800503875321,
+          "ballY": 0.3153095737322719,
+          "frame": 34,
+          "action": "serve",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.2311553955078125,
+          "ballY": 0.3110170717592592,
+          "frame": 68,
+          "action": "receive",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.5578589209741031,
+          "ballY": 0.3182338684149309,
+          "frame": 117,
+          "action": "set",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.4011316178264224,
+          "ballY": 0.1862900934411992,
+          "frame": 161,
+          "action": "attack",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.6785636264616266,
+          "ballY": 0.4538352617738226,
+          "frame": 194,
+          "action": "dig",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.6196219519435036,
+          "ballY": 0.2637432925441998,
+          "frame": 227,
+          "action": "attack",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.3931629503841002,
+          "ballY": 0.4727992168328473,
+          "frame": 262,
+          "action": "dig",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.4343217217638021,
+          "ballY": 0.358108621010053,
+          "frame": 297,
+          "action": "set",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.4387514551740153,
+          "ballY": 0.2078535301908163,
+          "frame": 348,
+          "action": "attack",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.5845339459594223,
+          "ballY": 0.354255669535267,
+          "frame": 365,
+          "action": "dig",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.6277512838196856,
+          "ballY": 0.373416262908344,
+          "frame": 408,
+          "action": "set",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.7255312979967801,
+          "ballY": 0.227251094969651,
+          "frame": 456,
+          "action": "attack",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.5263283218538714,
+          "ballY": 0.4373288279251286,
+          "frame": 476,
+          "action": "dig",
+          "playerTrackId": 3
+        },
+        {
+          "frame": 514,
+          "action": "dig",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.8122483361094912,
+          "ballY": 0.3548986338027239,
+          "frame": 567,
+          "action": "dig",
+          "playerTrackId": 2
+        }
+      ]
+    },
+    {
+      "video_content_hash": "cb8308d4b04711708b82200b2ab683c3e26e30f86a9ebddad6bd5aac597f6e38",
+      "rally_start_ms": 60866,
+      "rally_end_ms": 74066,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.6508264193149663,
+          "ballY": 0.3205355757977942,
+          "frame": 64,
+          "action": "serve",
+          "playerTrackId": 15
+        },
+        {
+          "ballX": 0.3187119533726419,
+          "ballY": 0.467310038411737,
+          "frame": 97,
+          "action": "receive",
+          "playerTrackId": 12
+        },
+        {
+          "ballX": 0.1901579185083646,
+          "ballY": 0.3458455808477868,
+          "frame": 145,
+          "action": "set",
+          "playerTrackId": 12
+        },
+        {
+          "ballX": 0.3896990483594397,
+          "ballY": 0.2339046388727437,
+          "frame": 186,
+          "action": "attack",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.4856780042033839,
+          "ballY": 0.4066552230016496,
+          "frame": 206,
+          "action": "dig",
+          "playerTrackId": 8
+        },
+        {
+          "ballX": 0.4350183823004505,
+          "ballY": 0.2936686430180167,
+          "frame": 246,
+          "action": "attack",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.4757743580007396,
+          "ballY": 0.3753408186790664,
+          "frame": 277,
+          "action": "attack",
+          "playerTrackId": 15
+        }
+      ]
+    },
+    {
+      "video_content_hash": "d0734564e893bfffde90bd56b406e967243af4b65ba18c5085d9ee7cb8932ca2",
+      "rally_start_ms": 10560,
+      "rally_end_ms": 19380,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.5746883868679051,
+          "ballY": 0.04531336169945561,
+          "frame": 49,
+          "action": "serve",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.4986053378875558,
+          "ballY": 0.5362844703048666,
+          "frame": 73,
+          "action": "receive",
+          "playerTrackId": 8
+        },
+        {
+          "ballX": 0.4181301722642632,
+          "ballY": 0.4054260340155619,
+          "frame": 111,
+          "action": "set",
+          "playerTrackId": 8
+        },
+        {
+          "ballX": 0.4362309941836435,
+          "ballY": 0.2187822776843253,
+          "frame": 148,
+          "action": "attack",
+          "playerTrackId": 8
+        }
+      ]
+    },
+    {
+      "video_content_hash": "d0734564e893bfffde90bd56b406e967243af4b65ba18c5085d9ee7cb8932ca2",
+      "rally_start_ms": 31480,
+      "rally_end_ms": 40400,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.6244845752155912,
+          "ballY": 0.4066354001214474,
+          "frame": 55,
+          "action": "serve",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.7848395061842243,
+          "ballY": 0.3282061396564993,
+          "frame": 81,
+          "action": "receive",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.4778646226762076,
+          "ballY": 0.1886900324256777,
+          "frame": 117,
+          "action": "attack",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.5359400263883026,
+          "ballY": 0.2881046926320125,
+          "frame": 122,
+          "action": "block",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.6300470191091976,
+          "ballY": 0.5515546497484178,
+          "frame": 146,
+          "action": "dig",
+          "playerTrackId": 3
+        }
+      ]
+    },
+    {
+      "video_content_hash": "d5b1ec6c0856e6b502e3f966e44f316d3abb83576ffbbc2d6df0bb207e1400a1",
+      "rally_start_ms": 19552,
+      "rally_end_ms": 29083,
+      "action_ground_truth_json": [
+        {
+          "frame": 62,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.6232244067614352,
+          "ballY": 0.3966581241253407,
+          "frame": 95,
+          "action": "receive",
+          "playerTrackId": 5
+        },
+        {
+          "ballX": 0.5603654848462487,
+          "ballY": 0.3236094799540395,
+          "frame": 133,
+          "action": "set",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.57188198201719,
+          "ballY": 0.1857718217365268,
+          "frame": 181,
+          "action": "attack",
+          "playerTrackId": 9
+        },
+        {
+          "ballX": 0.3045073640931006,
+          "ballY": 0.4488949294767701,
+          "frame": 215,
+          "action": "dig",
+          "playerTrackId": 1
+        }
+      ]
+    },
+    {
+      "video_content_hash": "d5b1ec6c0856e6b502e3f966e44f316d3abb83576ffbbc2d6df0bb207e1400a1",
+      "rally_start_ms": 44313,
+      "rally_end_ms": 69852,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.5245334066134281,
+          "ballY": 0.2673151316631051,
+          "frame": 62,
+          "action": "serve",
+          "playerTrackId": 30
+        },
+        {
+          "ballX": 0.2297906691289825,
+          "ballY": 0.3638906933533537,
+          "frame": 96,
+          "action": "receive",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.4573428870167957,
+          "ballY": 0.290532616808766,
+          "frame": 140,
+          "action": "set",
+          "playerTrackId": 26
+        },
+        {
+          "ballX": 0.4529359380530653,
+          "ballY": 0.1693450590350092,
+          "frame": 185,
+          "action": "attack",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.4680736780543516,
+          "ballY": 0.1918891709284315,
+          "frame": 188,
+          "action": "block",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.549101683492014,
+          "ballY": 0.3678982740441372,
+          "frame": 208,
+          "action": "dig",
+          "playerTrackId": 26
+        },
+        {
+          "ballX": 0.4566205102379349,
+          "ballY": 0.1982196501904975,
+          "frame": 247,
+          "action": "attack",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.5472351204487964,
+          "ballY": 0.4442816587281483,
+          "frame": 275,
+          "action": "dig",
+          "playerTrackId": 26
+        },
+        {
+          "ballX": 0.4558965968867856,
+          "ballY": 0.3164658273367461,
+          "frame": 303,
+          "action": "set",
+          "playerTrackId": 30
+        },
+        {
+          "ballX": 0.541585011653335,
+          "ballY": 0.2302534661450547,
+          "frame": 353,
+          "action": "attack",
+          "playerTrackId": 26
+        },
+        {
+          "ballX": 0.2893018206275569,
+          "ballY": 0.369809763442825,
+          "frame": 385,
+          "action": "dig",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.4962070596319003,
+          "ballY": 0.1946055364518929,
+          "frame": 424,
+          "action": "attack",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.3717074166803349,
+          "ballY": 0.3067050659078373,
+          "frame": 451,
+          "action": "dig",
+          "playerTrackId": 2
+        },
+        {
+          "frame": 497,
+          "action": "dig",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.7447797745648793,
+          "ballY": 0.1615002480577417,
+          "frame": 539,
+          "action": "attack",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.5195848209171345,
+          "ballY": 0.337453044324848,
+          "frame": 588,
+          "action": "dig",
+          "playerTrackId": 30
+        },
+        {
+          "ballX": 0.544018964862199,
+          "ballY": 0.340554085814053,
+          "frame": 637,
+          "action": "set",
+          "playerTrackId": 26
+        },
+        {
+          "ballX": 0.6150420134231444,
+          "ballY": 0.2244204242530608,
+          "frame": 685,
+          "action": "attack",
+          "playerTrackId": 30
+        }
+      ]
+    },
+    {
+      "video_content_hash": "d84522b493caae7d5c2f593fb59abb7f858acc92deda69bcb8b158d1340cf110",
+      "rally_start_ms": 16667,
+      "rally_end_ms": 22167,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.5427063899253731,
+          "ballY": 0.3604201216141514,
+          "frame": 76,
+          "action": "serve",
+          "playerTrackId": 4
+        }
+      ]
+    },
+    {
+      "video_content_hash": "d84522b493caae7d5c2f593fb59abb7f858acc92deda69bcb8b158d1340cf110",
+      "rally_start_ms": 36470,
+      "rally_end_ms": 59060,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.5872694184296708,
+          "ballY": 0.1246496349155837,
+          "frame": 86,
+          "action": "serve",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.4969924943369285,
+          "ballY": 0.464600589070605,
+          "frame": 106,
+          "action": "receive",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.5054816511562479,
+          "ballY": 0.4207241533211804,
+          "frame": 159,
+          "action": "set",
+          "playerTrackId": 16
+        },
+        {
+          "ballX": 0.4769107769050425,
+          "ballY": 0.3166566639657843,
+          "frame": 203,
+          "action": "attack",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.2415827241712004,
+          "ballY": 0.478138446546462,
+          "frame": 216,
+          "action": "dig",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.508288470400704,
+          "ballY": 0.3122694288228006,
+          "frame": 257,
+          "action": "attack",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.651175696622253,
+          "ballY": 0.4156884660885154,
+          "frame": 282,
+          "action": "dig",
+          "playerTrackId": 16
+        },
+        {
+          "ballX": 0.5289171179019514,
+          "ballY": 0.4472413823054001,
+          "frame": 323,
+          "action": "set",
+          "playerTrackId": 7
+        },
+        {
+          "ballX": 0.6525575755038533,
+          "ballY": 0.3344506832866629,
+          "frame": 372,
+          "action": "attack",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.3446579814876574,
+          "ballY": 0.6205468169920552,
+          "frame": 390,
+          "action": "dig",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.6239270764452918,
+          "ballY": 0.3670306223595761,
+          "frame": 424,
+          "action": "set",
+          "playerTrackId": 16
+        },
+        {
+          "ballX": 0.2603722854334465,
+          "ballY": 0.2558990125302938,
+          "frame": 474,
+          "action": "attack",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.3948297565903656,
+          "ballY": 0.4362419349283041,
+          "frame": 504,
+          "action": "dig",
+          "playerTrackId": 7
+        },
+        {
+          "ballX": 0.5345652118402907,
+          "ballY": 0.4425513889300847,
+          "frame": 554,
+          "action": "set",
+          "playerTrackId": 7
+        },
+        {
+          "ballX": 0.4593504349438625,
+          "ballY": 0.3138990337160792,
+          "frame": 599,
+          "action": "attack",
+          "playerTrackId": 1
+        }
+      ]
+    },
+    {
+      "video_content_hash": "dc095079326e11dafbf943e027c6d5e407e54590cf541e0a06c4ee475677fd45",
+      "rally_start_ms": 10200,
+      "rally_end_ms": 29433,
+      "action_ground_truth_json": [
+        {
+          "frame": 18,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.5630003779837396,
+          "ballY": 0.4186714496044992,
+          "frame": 64,
+          "action": "receive",
+          "playerTrackId": 7
+        },
+        {
+          "ballX": 0.6606613983207655,
+          "ballY": 0.4133636249277062,
+          "frame": 112,
+          "action": "set",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.7292840065289788,
+          "ballY": 0.2159430862717654,
+          "frame": 152,
+          "action": "attack",
+          "playerTrackId": 7
+        },
+        {
+          "ballX": 0.6937334327670899,
+          "ballY": 0.3812277235502319,
+          "frame": 187,
+          "action": "attack",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.5905549016303131,
+          "ballY": 0.3915231108356906,
+          "frame": 239,
+          "action": "dig",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.6144702625496398,
+          "ballY": 0.3749520029540186,
+          "frame": 275,
+          "action": "attack",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.7881093378184635,
+          "ballY": 0.3026547496398306,
+          "frame": 318,
+          "action": "attack",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.7652142489848007,
+          "ballY": 0.1235313769557963,
+          "frame": 323,
+          "action": "receive",
+          "playerTrackId": 7
+        },
+        {
+          "ballX": 0.5727952051555972,
+          "ballY": 0.3707776396811782,
+          "frame": 375,
+          "action": "dig",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.6427364977747289,
+          "ballY": 0.3819626335067165,
+          "frame": 418,
+          "action": "set",
+          "playerTrackId": 7
+        },
+        {
+          "ballX": 0.5668251085791247,
+          "ballY": 0.2489574036179854,
+          "frame": 466,
+          "action": "attack",
+          "playerTrackId": 2
+        }
+      ]
+    },
+    {
+      "video_content_hash": "dc095079326e11dafbf943e027c6d5e407e54590cf541e0a06c4ee475677fd45",
+      "rally_start_ms": 37400,
+      "rally_end_ms": 47533,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.3490169414747217,
+          "ballY": 0.1037812276832383,
+          "frame": 37,
+          "action": "serve",
+          "playerTrackId": 3
+        },
+        {
+          "frame": 80,
+          "action": "receive",
+          "playerTrackId": -1
+        },
+        {
+          "frame": 125,
+          "action": "set",
+          "playerTrackId": -1
+        },
+        {
+          "frame": 178,
+          "action": "attack",
+          "playerTrackId": -1
+        },
+        {
+          "frame": 194,
+          "action": "dig",
+          "playerTrackId": -1
+        }
+      ]
+    },
+    {
+      "video_content_hash": "dc095079326e11dafbf943e027c6d5e407e54590cf541e0a06c4ee475677fd45",
+      "rally_start_ms": 69400,
+      "rally_end_ms": 89033,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.4604100727608954,
+          "ballY": 0.2975231572610313,
+          "frame": 85,
+          "action": "serve",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.6214653006930506,
+          "ballY": 0.3681675673724252,
+          "frame": 120,
+          "action": "receive",
+          "playerTrackId": 16
+        },
+        {
+          "ballX": 0.6707961462987219,
+          "ballY": 0.3181105405692329,
+          "frame": 165,
+          "action": "set",
+          "playerTrackId": 16
+        },
+        {
+          "ballX": 0.7492976366321307,
+          "ballY": 0.2417551470304207,
+          "frame": 204,
+          "action": "attack",
+          "playerTrackId": 16
+        },
+        {
+          "ballX": 0.5383047806815549,
+          "ballY": 0.4507264449222079,
+          "frame": 219,
+          "action": "dig",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.6603296363059089,
+          "ballY": 0.3935909069138669,
+          "frame": 265,
+          "action": "set",
+          "playerTrackId": 16
+        },
+        {
+          "frame": 314,
+          "action": "attack",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.6452180582194917,
+          "ballY": 0.3785055752315282,
+          "frame": 325,
+          "action": "dig",
+          "playerTrackId": 16
+        },
+        {
+          "ballX": 0.6766609751049422,
+          "ballY": 0.458987502834592,
+          "frame": 355,
+          "action": "set",
+          "playerTrackId": 16
+        },
+        {
+          "ballX": 0.7460256267678986,
+          "ballY": 0.3420609019405871,
+          "frame": 390,
+          "action": "attack",
+          "playerTrackId": 16
+        },
+        {
+          "ballX": 0.5527935629436518,
+          "ballY": 0.4165756937485665,
+          "frame": 436,
+          "action": "dig",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.6220624559949492,
+          "ballY": 0.3189113784736236,
+          "frame": 484,
+          "action": "set",
+          "playerTrackId": 16
+        },
+        {
+          "ballX": 0.7203536220578761,
+          "ballY": 0.2603246378997202,
+          "frame": 525,
+          "action": "attack",
+          "playerTrackId": 16
+        }
+      ]
+    },
+    {
+      "video_content_hash": "edaa1aaca3b6d3bbed481186013fccb2695acfcf9d4a92e14cb9e46c3f506ce9",
+      "rally_start_ms": 15000,
+      "rally_end_ms": 24066,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.5544606851039844,
+          "ballY": 0.4607937164186537,
+          "frame": 61,
+          "action": "serve",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.490796466150208,
+          "ballY": 0.5318862485001173,
+          "frame": 97,
+          "action": "receive",
+          "playerTrackId": 27
+        },
+        {
+          "ballX": 0.5365643037351405,
+          "ballY": 0.4923188291105665,
+          "frame": 148,
+          "action": "set",
+          "playerTrackId": 27
+        },
+        {
+          "ballX": 0.6910949723595655,
+          "ballY": 0.3719080675238404,
+          "frame": 196,
+          "action": "attack",
+          "playerTrackId": 2
+        }
+      ]
+    },
+    {
+      "video_content_hash": "edaa1aaca3b6d3bbed481186013fccb2695acfcf9d4a92e14cb9e46c3f506ce9",
+      "rally_start_ms": 41666,
+      "rally_end_ms": 51166,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.5568797245163633,
+          "ballY": 0.4449543747440683,
+          "frame": 56,
+          "action": "serve",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.3792851122924247,
+          "ballY": 0.5615752112996509,
+          "frame": 89,
+          "action": "receive",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.4342933149668352,
+          "ballY": 0.5029769067869138,
+          "frame": 136,
+          "action": "set",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.3898439569744382,
+          "ballY": 0.3558829026178745,
+          "frame": 186,
+          "action": "attack",
+          "playerTrackId": 1
+        }
+      ]
+    },
+    {
+      "video_content_hash": "efe6e2e4c38b8061c66babbeaad9364f0d5297e4849008e68b8fc554d21213f0",
+      "rally_start_ms": 14116,
+      "rally_end_ms": 30366,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.3485398526769363,
+          "ballY": 0.2298863928413885,
+          "frame": 53,
+          "action": "serve",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.661894846584428,
+          "ballY": 0.5120108659261534,
+          "frame": 90,
+          "action": "receive",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.5942372816689577,
+          "ballY": 0.3188168699722048,
+          "frame": 131,
+          "action": "set",
+          "playerTrackId": 10
+        },
+        {
+          "ballX": 0.379225168638035,
+          "ballY": 0.1467367532059777,
+          "frame": 175,
+          "action": "attack",
+          "playerTrackId": 10
+        },
+        {
+          "ballX": 0.2765203189049136,
+          "ballY": 0.4439792321242492,
+          "frame": 201,
+          "action": "dig",
+          "playerTrackId": 10
+        },
+        {
+          "ballX": 0.3734959128117675,
+          "ballY": 0.3106640488491281,
+          "frame": 237,
+          "action": "set",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.3097616079304139,
+          "ballY": 0.1803001225335902,
+          "frame": 284,
+          "action": "attack",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.4035466239428928,
+          "ballY": 0.3270872319578108,
+          "frame": 306,
+          "action": "dig",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.4787161321871848,
+          "ballY": 0.3004357348285287,
+          "frame": 355,
+          "action": "set",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.3612941647766056,
+          "ballY": 0.1528391076882633,
+          "frame": 399,
+          "action": "attack",
+          "playerTrackId": 10
+        }
+      ]
+    },
+    {
+      "video_content_hash": "efe6e2e4c38b8061c66babbeaad9364f0d5297e4849008e68b8fc554d21213f0",
+      "rally_start_ms": 41741,
+      "rally_end_ms": 50153,
+      "action_ground_truth_json": [
+        {
+          "frame": 56,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.4695763321617943,
+          "ballY": 0.4134965569438356,
+          "frame": 90,
+          "action": "receive",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.5582353452762956,
+          "ballY": 0.3044095312108695,
+          "frame": 136,
+          "action": "set",
+          "playerTrackId": 7
+        },
+        {
+          "ballX": 0.4210238313087315,
+          "ballY": 0.1927340965254692,
+          "frame": 184,
+          "action": "attack",
+          "playerTrackId": 7
+        }
+      ]
+    },
+    {
+      "video_content_hash": "efe6e2e4c38b8061c66babbeaad9364f0d5297e4849008e68b8fc554d21213f0",
+      "rally_start_ms": 160531,
+      "rally_end_ms": 177281,
+      "action_ground_truth_json": [
+        {
+          "frame": 46,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.5544132784137283,
+          "ballY": 0.4098791559424084,
+          "frame": 68,
+          "action": "receive",
+          "playerTrackId": 32
+        },
+        {
+          "ballX": 0.5130925881416922,
+          "ballY": 0.3051884956534752,
+          "frame": 128,
+          "action": "set",
+          "playerTrackId": 32
+        },
+        {
+          "ballX": 0.3165480968623089,
+          "ballY": 0.2167636131708688,
+          "frame": 174,
+          "action": "attack",
+          "playerTrackId": 32
+        },
+        {
+          "ballX": 0.3234398935477696,
+          "ballY": 0.1166842753509292,
+          "frame": 176,
+          "action": "block",
+          "playerTrackId": 30
+        },
+        {
+          "frame": 229,
+          "action": "set",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.2931191570251722,
+          "ballY": 0.2169613844587018,
+          "frame": 278,
+          "action": "attack",
+          "playerTrackId": 32
+        },
+        {
+          "ballX": 0.4432863465694085,
+          "ballY": 0.3290442561121125,
+          "frame": 351,
+          "action": "dig",
+          "playerTrackId": 32
+        },
+        {
+          "ballX": 0.4281291766464299,
+          "ballY": 0.3313166147514296,
+          "frame": 393,
+          "action": "set",
+          "playerTrackId": 32
+        },
+        {
+          "ballX": 0.3337940269337175,
+          "ballY": 0.1937661197948042,
+          "frame": 438,
+          "action": "attack",
+          "playerTrackId": 30
+        }
+      ]
+    },
+    {
+      "video_content_hash": "efe6e2e4c38b8061c66babbeaad9364f0d5297e4849008e68b8fc554d21213f0",
+      "rally_start_ms": 191359,
+      "rally_end_ms": 199136,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.4990221314474795,
+          "ballY": 0.2392819695401966,
+          "frame": 57,
+          "action": "serve",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.6984318583762097,
+          "ballY": 0.4312504644054169,
+          "frame": 80,
+          "action": "receive",
+          "playerTrackId": 7
+        },
+        {
+          "ballX": 0.6203067393034923,
+          "ballY": 0.2998035906742486,
+          "frame": 130,
+          "action": "set",
+          "playerTrackId": 4
+        },
+        {
+          "ballX": 0.4771634179050857,
+          "ballY": 0.1833097786510848,
+          "frame": 175,
+          "action": "attack",
+          "playerTrackId": 1
+        }
+      ]
+    },
+    {
+      "video_content_hash": "f201e92eab9e74b418c23d4f0c5bd7b30107422a012277dcad93a57c79787e17",
+      "rally_start_ms": 9382,
+      "rally_end_ms": 22928,
+      "action_ground_truth_json": [
+        {
+          "frame": 95,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "frame": 150,
+          "action": "receive",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.4322916666666666,
+          "ballY": 0.3438709231619679,
+          "frame": 197,
+          "action": "attack",
+          "playerTrackId": 19
+        },
+        {
+          "ballX": 0.6925485321969697,
+          "ballY": 0.3025042087542087,
+          "frame": 272,
+          "action": "dig",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.54129067748708,
+          "ballY": 0.3656106445592879,
+          "frame": 364,
+          "action": "set",
+          "playerTrackId": 19
+        },
+        {
+          "ballX": 0.7555781943927231,
+          "ballY": 0.1695042495739698,
+          "frame": 454,
+          "action": "attack",
+          "playerTrackId": 2
+        },
+        {
+          "frame": 505,
+          "action": "dig",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.4876373626373626,
+          "ballY": 0.3760683760683761,
+          "frame": 604,
+          "action": "set",
+          "playerTrackId": 14
+        },
+        {
+          "ballX": 0.3427929252929008,
+          "ballY": 0.2297004647012469,
+          "frame": 705,
+          "action": "attack",
+          "playerTrackId": 19
+        }
+      ]
+    },
+    {
+      "video_content_hash": "f201e92eab9e74b418c23d4f0c5bd7b30107422a012277dcad93a57c79787e17",
+      "rally_start_ms": 39686,
+      "rally_end_ms": 48449,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.4301710329281033,
+          "ballY": 0.3552815074421114,
+          "frame": 88,
+          "action": "serve",
+          "playerTrackId": 13
+        },
+        {
+          "ballX": 0.1252577706382465,
+          "ballY": 0.2336085770606836,
+          "frame": 156,
+          "action": "receive",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.3602360851929088,
+          "ballY": 0.3331932509806306,
+          "frame": 265,
+          "action": "set",
+          "playerTrackId": 1
+        },
+        {
+          "ballX": 0.3462949737217059,
+          "ballY": 0.2311449292521925,
+          "frame": 356,
+          "action": "attack",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.3301403777524155,
+          "ballY": 0.4843223846207157,
+          "frame": 391,
+          "action": "dig",
+          "playerTrackId": 3
+        }
+      ]
+    },
+    {
+      "video_content_hash": "fa9580db96b28820d69cf44d66a492de077c3e2e7ba17c62dad2cb3019b9ebc1",
+      "rally_start_ms": 16116,
+      "rally_end_ms": 24528,
+      "action_ground_truth_json": [
+        {
+          "frame": 43,
+          "action": "serve",
+          "playerTrackId": -1
+        },
+        {
+          "ballX": 0.3954784528366617,
+          "ballY": 0.510868258238871,
+          "frame": 84,
+          "action": "receive",
+          "playerTrackId": 6
+        },
+        {
+          "ballX": 0.4124321715682389,
+          "ballY": 0.3969141460836117,
+          "frame": 124,
+          "action": "set",
+          "playerTrackId": 2
+        },
+        {
+          "ballX": 0.3242197076847457,
+          "ballY": 0.2634997202412417,
+          "frame": 168,
+          "action": "attack",
+          "playerTrackId": 4
+        }
+      ]
+    },
+    {
+      "video_content_hash": "fa9580db96b28820d69cf44d66a492de077c3e2e7ba17c62dad2cb3019b9ebc1",
+      "rally_start_ms": 35470,
+      "rally_end_ms": 43247,
+      "action_ground_truth_json": [
+        {
+          "ballX": 0.6084180900450767,
+          "ballY": 0.3423693843835721,
+          "frame": 40,
+          "action": "serve",
+          "playerTrackId": 3
+        },
+        {
+          "ballX": 0.6359590367848916,
+          "ballY": 0.4317146995060023,
+          "frame": 69,
+          "action": "receive",
+          "playerTrackId": 16
+        },
+        {
+          "ballX": 0.7044594276491208,
+          "ballY": 0.4264229627542703,
+          "frame": 113,
+          "action": "set",
+          "playerTrackId": 16
+        },
+        {
+          "ballX": 0.7745747047246277,
+          "ballY": 0.2520923903694186,
+          "frame": 160,
+          "action": "attack",
+          "playerTrackId": 16
+        }
+      ]
+    }
+  ],
+  "stats": {
+    "total_rallies_with_action_gt": 65,
+    "total_videos": 28
+  }
+}
