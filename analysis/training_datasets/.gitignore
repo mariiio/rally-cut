@@ -17,3 +17,5 @@
 # But track manifest and ground truth files
 !manifest.json
 !ground_truth.json
+!tracking_ground_truth.json
+!action_ground_truth.json
