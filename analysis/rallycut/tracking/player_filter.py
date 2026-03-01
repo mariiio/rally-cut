@@ -1617,13 +1617,11 @@ def detect_referee_tracks(
         # A track is likely a referee if:
         # - Near sideline AND (parallel mover OR low ball proximity OR low Y variance)
         # - OR outside ball range AND low ball proximity AND low Y variance
-        # - OR low Y variance AND positioned on sideline area (x <= 0.25) - aggressive filter
-        # - OR near sideline AND low Y variance (simple case for line referees)
+        # - OR low Y variance AND positioned in sideline area (x <= 0.25 or x >= 0.75)
         is_likely_referee = (
             (is_near_sideline and (is_parallel_mover or has_low_ball_proximity or has_low_y_variance))
             or (is_outside_ball_range and has_low_ball_proximity and has_low_y_variance)
-            or (has_low_y_variance and stats.avg_x <= 0.25)  # Removed ball proximity requirement
-            or (is_near_sideline and has_low_y_variance)  # Simple case: sideline + no vertical movement
+            or (has_low_y_variance and (stats.avg_x <= 0.25 or stats.avg_x >= 0.75))
         )
 
         if is_likely_referee:

@@ -1431,7 +1431,7 @@ class PlayerTracker:
                 # tracklet linking, court identity, etc.
                 positions, removed_bg_tracks = remove_stationary_background_tracks(
                     positions, config,
-                    total_frames=total_frames_in_range,
+                    total_frames=frames_to_process,
                 )
 
                 # Step 0: Spatial consistency — split tracks at large jumps
@@ -1486,7 +1486,7 @@ class PlayerTracker:
 
                 player_filter = PlayerFilter(
                     ball_positions=ball_positions,
-                    total_frames=total_frames_in_range,
+                    total_frames=frames_to_process,
                     config=config,
                     court_calibrator=court_calibrator,
                 )
