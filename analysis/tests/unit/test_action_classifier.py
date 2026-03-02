@@ -630,8 +630,10 @@ class TestTrajectoryPossession:
         )
         result = classify_rally_actions(seq, use_classifier=False)
 
-        # After 4 contacts on far, safety valve triggers for near contact
-        assert result.actions[5].action_type == ActionType.DIG
+        # Safety valve triggers at 4th far contact (index 4 → DIG),
+        # so the next near contact (index 5) is the 2nd touch → SET
+        assert result.actions[4].action_type == ActionType.DIG
+        assert result.actions[5].action_type == ActionType.SET
 
     def test_no_trajectory_falls_back_to_court_side(self) -> None:
         """Without ball_positions, court_side comparison still works for possession."""
