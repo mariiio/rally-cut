@@ -38,8 +38,15 @@ htmlcov/
 experiments/pseudo_labels*/
 experiments/wasb_pseudo_labels/
 
-# Training data (generated, large)
+# Training data and datasets (generated, large)
 training_data/
+datasets/
+
+# Training runs (ultralytics output)
+runs/
+
+# Debug output (generated images)
+debug_*/
 
 # Model weights (downloaded/trained)
 weights/

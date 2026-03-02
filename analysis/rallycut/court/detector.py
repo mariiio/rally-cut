@@ -14,7 +14,10 @@ import logging
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from rallycut.court.keypoint_detector import CourtKeypointDetector
 
 import cv2
 import numpy as np
@@ -232,21 +235,45 @@ class CourtDetectionInsights:
 class CourtDetector:
     """Automatic court detector for beach volleyball videos."""
 
-    def __init__(self, config: CourtDetectionConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: CourtDetectionConfig | None = None,
+        keypoint_model_path: str | Path | None = None,
+    ) -> None:
         self.config = config or CourtDetectionConfig()
+        self._keypoint_detector: CourtKeypointDetector | None = None
+        self._keypoint_model_path = keypoint_model_path
+
+    def _get_keypoint_detector(self) -> CourtKeypointDetector | None:
+        """Lazy-load keypoint detector if model exists."""
+        if self._keypoint_detector is not None:
+            return self._keypoint_detector
+
+        from rallycut.court.keypoint_detector import CourtKeypointDetector
+
+        detector = CourtKeypointDetector(model_path=self._keypoint_model_path)
+        if detector.model_exists:
+            self._keypoint_detector = detector
+            return detector
+        return None
 
     def detect(
         self,
         video_path: str | Path,
         start_frame: int | None = None,
         end_frame: int | None = None,
+        keypoint_confidence_threshold: float = 0.5,
     ) -> CourtDetectionResult:
         """Detect court corners from a video.
+
+        Tries keypoint model first (if available). Falls back to classical
+        pipeline if keypoint confidence is below threshold.
 
         Args:
             video_path: Path to the video file.
             start_frame: First frame to analyze (default: skip_seconds from start).
             end_frame: Last frame to analyze (default: skip_seconds from end).
+            keypoint_confidence_threshold: Min confidence to accept keypoint result.
 
         Returns:
             CourtDetectionResult with corners and confidence.
@@ -254,6 +281,26 @@ class CourtDetector:
         video_path = Path(video_path)
         if not video_path.exists():
             raise FileNotFoundError(f"Video not found: {video_path}")
+
+        # Try keypoint model first
+        kp_detector = self._get_keypoint_detector()
+        if kp_detector is not None:
+            try:
+                kp_result = kp_detector.detect(video_path)
+                if (
+                    len(kp_result.corners) == 4
+                    and kp_result.confidence >= keypoint_confidence_threshold
+                ):
+                    logger.info(
+                        f"Keypoint court detection: conf={kp_result.confidence:.3f}"
+                    )
+                    return kp_result
+                logger.info(
+                    f"Keypoint detection low confidence ({kp_result.confidence:.3f}), "
+                    f"falling back to classical pipeline"
+                )
+            except Exception as e:
+                logger.warning(f"Keypoint detection failed: {e}, falling back to classical")
 
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
