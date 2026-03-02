@@ -827,6 +827,18 @@ def main() -> None:
         print(f"  Mean IoU:      {avg_iou:.3f}")
         print(f"  Success Rate:  {success_count}/{evaluated} ({rate:.1f}%)")
 
+        # Print quality diagnostics for keypoint model
+        if args.keypoint and kp_detector is not None and kp_detector.last_diagnostics is not None:
+            diag = kp_detector.last_diagnostics
+            print(f"\n  Quality Diagnostics (last video):")
+            print(f"    Detection rate: {diag.detection_rate:.0%}")
+            print(f"    Perspective ratio: {diag.perspective_ratio:.2f}")
+            if diag.off_screen_corners:
+                print(f"    Off-screen corners: {', '.join(diag.off_screen_corners)}")
+            if diag.warnings:
+                for w in diag.warnings:
+                    print(f"    Warning: {w}")
+
         # Per-corner breakdown
         if corner_count > 0:
             print("  Per-corner MCD:")

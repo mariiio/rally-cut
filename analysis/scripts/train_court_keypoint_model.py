@@ -69,45 +69,57 @@ def main() -> None:
     else:
         device = "cpu"
 
-    # Load pretrained pose model
-    model = YOLO("yolo11s-pose.pt")
-    print("Loaded yolo11s-pose.pt (COCO pretrained, 17 kpts → fine-tune to 4 kpts)")
-    print(f"Dataset: {args.data}")
-    print(f"Epochs: {args.epochs}, Batch: {args.batch}, Image size: {args.imgsz}")
-    print(f"Freeze backbone: {not args.no_freeze}, Device: {device}")
+    # Resume from last checkpoint if available, otherwise start fresh
+    last_pt = Path("runs/court_keypoint/train/weights/last.pt").resolve()
+    if args.resume and last_pt.exists():
+        model = YOLO(str(last_pt))
+        print(f"Resuming from {last_pt}")
+        print(f"Device: {device}")
 
-    # Train with augmentation tuned for single-court images
-    results = model.train(
-        data=str(args.data),
-        epochs=args.epochs,
-        batch=args.batch,
-        imgsz=args.imgsz,
-        device=device,
-        # Freeze backbone layers (small dataset, avoid overfitting)
-        freeze=0 if args.no_freeze else 10,
-        # Early stopping
-        patience=30,
-        # Augmentation: no mosaic (single court per image), conservative transforms
-        mosaic=0.0,
-        fliplr=0.5,
-        flipud=0.0,
-        degrees=5.0,
-        translate=0.1,
-        scale=0.2,
-        hsv_h=0.015,
-        hsv_s=0.5,
-        hsv_v=0.3,
-        # Flip index: swap left/right corners on horizontal flip
-        # near-left(0) <-> near-right(1), far-left(3) <-> far-right(2)
-        # (defined in dataset YAML as flip_idx)
-        # Other settings
-        workers=4,
-        project=str(Path("runs/court_keypoint").resolve()),
-        name="train",
-        exist_ok=True,
-        resume=args.resume,
-        verbose=True,
-    )
+        results = model.train(
+            resume=True,
+            device=device,
+        )
+    else:
+        model = YOLO("yolo11s-pose.pt")
+        print("Loaded yolo11s-pose.pt (COCO pretrained, 17 kpts → fine-tune to 4 kpts)")
+        print(f"Dataset: {args.data}")
+        print(f"Epochs: {args.epochs}, Batch: {args.batch}, Image size: {args.imgsz}")
+        print(f"Freeze backbone: {not args.no_freeze}, Device: {device}")
+
+        # Train with augmentation tuned for single-court images
+        results = model.train(
+            data=str(args.data),
+            epochs=args.epochs,
+            batch=args.batch,
+            imgsz=args.imgsz,
+            device=device,
+            # Freeze backbone layers (small dataset, avoid overfitting)
+            freeze=0 if args.no_freeze else 10,
+            # Early stopping
+            patience=30,
+            # Augmentation: no mosaic (single court per image), conservative transforms
+            mosaic=0.0,
+            fliplr=0.5,
+            flipud=0.0,
+            degrees=5.0,
+            translate=0.1,
+            scale=0.2,
+            hsv_h=0.015,
+            hsv_s=0.5,
+            hsv_v=0.3,
+            # Flip index: swap left/right corners on horizontal flip
+            # near-left(0) <-> near-right(1), far-left(3) <-> far-right(2)
+            # (defined in dataset YAML as flip_idx)
+            # Other settings
+            workers=4,
+            project=str(Path("runs/court_keypoint").resolve()),
+            name="train",
+            exist_ok=True,
+            # Checkpoint every 10 epochs for sleep/crash resilience
+            save_period=10,
+            verbose=True,
+        )
 
     # Copy best model to weights directory
     best_path = Path("runs/court_keypoint/train/weights/best.pt").resolve()

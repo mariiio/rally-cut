@@ -275,6 +275,14 @@ def extract_candidate_features(
 
         frames_since_last = frame - prev_frame if prev_frame > 0 else 0
 
+        # Ball detection density: fraction of ±10 frames with confident ball
+        density_window = 10
+        n_with_ball = sum(
+            1 for f in range(frame - density_window, frame + density_window + 1)
+            if f in ball_by_frame
+        )
+        ball_detection_density = n_with_ball / (2 * density_window + 1)
+
         features = CandidateFeatures(
             frame=frame,
             velocity=velocity,
@@ -294,6 +302,8 @@ def extract_candidate_features(
             is_inflection=frame in inflection_set,
             is_deceleration=frame in deceleration_set,
             is_parabolic=frame in parabolic_set,
+            ball_detection_density=ball_detection_density,
+            frames_since_rally_start=frame - first_frame,
         )
 
         features_list.append(features)
