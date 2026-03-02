@@ -88,10 +88,45 @@ def _adjust_frame_numbers(
             bp.frame_number = bp.frame_number - start_frame
 
 
+def _detect_keypoint_court(
+    video_path: str,
+    video_id: str,
+    cache: dict[str, CourtCalibrator | None],
+) -> CourtCalibrator | None:
+    """Run keypoint court detection and create calibrator (cached per video)."""
+    if video_id in cache:
+        return cache[video_id]
+
+    from rallycut.court.keypoint_detector import CourtKeypointDetector
+
+    detector = CourtKeypointDetector()
+    if not detector.model_exists:
+        logger.warning("Keypoint model not found, falling back to DB calibration")
+        cache[video_id] = None
+        return None
+
+    result = detector.detect(video_path)
+    if len(result.corners) == 4 and result.confidence >= 0.5:
+        calibrator = _create_calibrator(result.corners)
+        logger.info(
+            f"Keypoint court: conf={result.confidence:.3f} for {video_id[:8]}"
+        )
+        cache[video_id] = calibrator
+        return calibrator
+
+    logger.warning(
+        f"Keypoint court low confidence ({result.confidence:.3f}) "
+        f"for {video_id[:8]}, falling back to DB calibration"
+    )
+    cache[video_id] = None
+    return None
+
+
 def _retrack_rally(
     rally: TrackingEvaluationRally,
     stride: int = 1,
     enable_ball: bool = True,
+    keypoint_court_cache: dict[str, CourtCalibrator | None] | None = None,
 ) -> PlayerTrackingResult | None:
     """Re-run tracking for a single rally."""
     # Get video file
@@ -100,8 +135,16 @@ def _retrack_rally(
         logger.error(f"Could not get video for {rally.video_id}")
         return None
 
-    # Create calibrator
-    calibrator = _create_calibrator(rally.court_calibration_json)
+    # Create calibrator — keypoint detection or DB calibration
+    if keypoint_court_cache is not None:
+        calibrator = _detect_keypoint_court(
+            str(video_path), rally.video_id, keypoint_court_cache,
+        )
+        if calibrator is None:
+            # Fall back to DB calibration
+            calibrator = _create_calibrator(rally.court_calibration_json)
+    else:
+        calibrator = _create_calibrator(rally.court_calibration_json)
 
     # Run ball tracking first (matches production pipeline)
     ball_positions = None
@@ -161,6 +204,10 @@ def main() -> None:
         "--no-ball", action="store_true",
         help="Skip ball tracking (faster, but diverges from production pipeline)",
     )
+    parser.add_argument(
+        "--keypoint-court", action="store_true",
+        help="Use YOLO-pose keypoint court detection instead of DB calibration",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -179,6 +226,13 @@ def main() -> None:
         sys.exit(1)
 
     print(f"Loaded {len(rallies)} labeled rally(s)")
+
+    # Keypoint court detection cache (per-video, avoid re-detecting for each rally)
+    keypoint_cache: dict[str, CourtCalibrator | None] | None = (
+        {} if args.keypoint_court else None
+    )
+    if args.keypoint_court:
+        print("Using YOLO-pose keypoint court detection")
 
     # Check video availability
     if args.dry_run:
@@ -235,6 +289,7 @@ def main() -> None:
             rally,
             stride=args.stride,
             enable_ball=not args.no_ball,
+            keypoint_court_cache=keypoint_cache,
         )
         elapsed = time.time() - t0
 

@@ -27,6 +27,34 @@ CORNER_NAMES = ["near-left", "near-right", "far-right", "far-left"]
 DEFAULT_MODEL_PATH = Path("weights/court_keypoint/court_keypoint_best.pt")
 
 
+def _weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
+    """Compute weighted median.
+
+    For each value, its weight determines how much it contributes.
+    The weighted median is the value where cumulative weight reaches 50%.
+    Falls back to unweighted median if all weights are zero.
+    """
+    if len(values) == 0:
+        return 0.0
+    total = weights.sum()
+    if total <= 0:
+        return float(np.median(values))
+
+    # Sort by value
+    order = np.argsort(values)
+    sorted_vals = values[order]
+    sorted_weights = weights[order]
+
+    # Cumulative weight
+    cumsum = np.cumsum(sorted_weights)
+    cutoff = total / 2.0
+
+    # Find first index where cumulative weight >= 50%
+    idx = int(np.searchsorted(cumsum, cutoff))
+    idx = min(idx, len(sorted_vals) - 1)
+    return float(sorted_vals[idx])
+
+
 @dataclass
 class FrameKeypoints:
     """Keypoint detection result for a single frame."""
@@ -256,10 +284,10 @@ class CourtKeypointDetector:
     def _aggregate(
         self, frame_results: list[FrameKeypoints],
     ) -> tuple[list[dict[str, float]], float]:
-        """Aggregate multi-frame detections via outlier-filtered median.
+        """Aggregate multi-frame detections via confidence-weighted median.
 
         For each corner, collects all predictions, removes outliers (>2σ from
-        median), and takes the median of remaining predictions.
+        median), and takes the weighted median using per-keypoint confidence.
 
         Returns:
             (corners, confidence) tuple.
@@ -271,23 +299,25 @@ class CourtKeypointDetector:
         if n == 1:
             return frame_results[0].corners, frame_results[0].confidence
 
-        # Collect per-corner coordinates and confidences
-        # Shape: (n_frames, 4, 2) for coords
+        # Collect per-corner coordinates and per-keypoint confidences
         all_x = np.zeros((n, 4))
         all_y = np.zeros((n, 4))
         all_conf = np.zeros(n)
+        all_kpt_conf = np.zeros((n, 4))
 
         for i, fr in enumerate(frame_results):
             all_conf[i] = fr.confidence
             for j in range(4):
                 all_x[i, j] = fr.corners[j]["x"]
                 all_y[i, j] = fr.corners[j]["y"]
+                all_kpt_conf[i, j] = fr.kpt_confidences[j]
 
-        # Per-corner outlier filtering + median
+        # Per-corner outlier filtering + confidence-weighted median
         corners = []
         for j in range(4):
             xs = all_x[:, j]
             ys = all_y[:, j]
+            weights = all_kpt_conf[:, j]
 
             # Remove outliers: distance from median > 2σ
             med_x, med_y = float(np.median(xs)), float(np.median(ys))
@@ -299,13 +329,14 @@ class CourtKeypointDetector:
                 if mask.sum() >= 3:
                     xs = xs[mask]
                     ys = ys[mask]
+                    weights = weights[mask]
 
             corners.append({
-                "x": round(float(np.median(xs)), 6),
-                "y": round(float(np.median(ys)), 6),
+                "x": round(float(_weighted_median(xs, weights)), 6),
+                "y": round(float(_weighted_median(ys, weights)), 6),
             })
 
-        # Confidence: median of frame confidences weighted by keypoint visibility
+        # Confidence: median of frame confidences
         confidence = float(np.median(all_conf))
 
         return corners, confidence
