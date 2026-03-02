@@ -6,9 +6,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import numpy as np
+
 from rallycut.court.keypoint_detector import (
     CourtKeypointDetector,
     FrameKeypoints,
+    _weighted_median,
 )
 
 
@@ -146,6 +149,71 @@ class TestAggregateCorners:
         corners, conf = detector._aggregate([])
         assert corners == []
         assert conf == 0.0
+
+
+class TestWeightedMedian:
+    """Test weighted median helper."""
+
+    def test_equal_weights_gives_regular_median(self) -> None:
+        """Equal weights → same as np.median."""
+        values = np.array([1.0, 3.0, 5.0, 7.0, 9.0])
+        weights = np.ones(5)
+        assert abs(_weighted_median(values, weights) - 5.0) < 1e-6
+
+    def test_heavy_weight_pulls_toward_value(self) -> None:
+        """One dominant weight → result near that value."""
+        values = np.array([1.0, 5.0, 9.0])
+        weights = np.array([0.1, 0.1, 10.0])
+        result = _weighted_median(values, weights)
+        assert result == 9.0
+
+    def test_zero_weights_falls_back_to_median(self) -> None:
+        """All-zero weights → unweighted median."""
+        values = np.array([1.0, 3.0, 5.0])
+        weights = np.zeros(3)
+        assert abs(_weighted_median(values, weights) - 3.0) < 1e-6
+
+    def test_empty_values(self) -> None:
+        """Empty array → 0.0."""
+        assert _weighted_median(np.array([]), np.array([])) == 0.0
+
+    def test_confidence_weighted_aggregation(self) -> None:
+        """High-confidence frames should dominate the aggregated corner."""
+        detector = CourtKeypointDetector.__new__(CourtKeypointDetector)
+        detector._pad_ratio = 0.3
+        detector._conf_threshold = 0.3
+
+        frames = []
+        # 5 low-confidence frames with x=0.12
+        for _ in range(5):
+            frames.append(FrameKeypoints(
+                corners=[
+                    {"x": 0.12, "y": 0.90},
+                    {"x": 0.88, "y": 0.90},
+                    {"x": 0.70, "y": 0.30},
+                    {"x": 0.30, "y": 0.30},
+                ],
+                confidence=0.4,
+                kpt_confidences=[0.2, 0.2, 0.2, 0.2],
+            ))
+        # 5 high-confidence frames with x=0.10
+        for _ in range(5):
+            frames.append(FrameKeypoints(
+                corners=[
+                    {"x": 0.10, "y": 0.90},
+                    {"x": 0.90, "y": 0.90},
+                    {"x": 0.70, "y": 0.30},
+                    {"x": 0.30, "y": 0.30},
+                ],
+                confidence=0.95,
+                kpt_confidences=[0.95, 0.95, 0.95, 0.95],
+            ))
+
+        corners, _ = detector._aggregate(frames)
+        # With unweighted median, result would be 0.11 (even split).
+        # With confidence-weighted, x=0.10 should win
+        # (5×0.95=4.75 vs 5×0.2=1.0 cumulative weight).
+        assert abs(corners[0]["x"] - 0.10) < 0.005
 
 
 class TestFallbackToClassical:
