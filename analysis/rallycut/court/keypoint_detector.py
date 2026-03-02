@@ -39,7 +39,7 @@ class CourtQualityDiagnostics:
     perspective_ratio: float  # near_width / far_width (>3 = extreme perspective)
     warnings: list[str]  # actionable quality warnings
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "detection_rate": round(self.detection_rate, 3),
             "per_corner_confidence": {
@@ -53,7 +53,9 @@ class CourtQualityDiagnostics:
             "warnings": self.warnings,
         }
 
-DEFAULT_MODEL_PATH = Path("weights/court_keypoint/court_keypoint_best.pt")
+DEFAULT_MODEL_PATH = (
+    Path(__file__).parent.parent.parent / "weights" / "court_keypoint" / "court_keypoint_best.pt"
+)
 
 
 def _weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
@@ -268,7 +270,7 @@ class CourtKeypointDetector:
             device="cpu",  # Small model, CPU is fine for inference
         )
 
-        if not results or len(results) == 0:
+        if not results:
             return None
 
         result = results[0]
@@ -400,6 +402,15 @@ class CourtKeypointDetector:
         diagnostics = self._build_diagnostics(corners, frame_results, n_total, n)
         diagnostics.per_corner_confidence = dict(zip(CORNER_NAMES, corner_confs))
         diagnostics.per_corner_std = dict(zip(CORNER_NAMES, corner_stds))
+
+        # Check per-corner confidence for weak corners
+        for name, conf in zip(CORNER_NAMES, corner_confs):
+            if 0 < conf < 0.5:
+                diagnostics.warnings.append(
+                    f"Low confidence for {name} corner ({conf:.2f}) — "
+                    "position may be inaccurate"
+                )
+
         self._last_diagnostics = diagnostics
 
         return corners, confidence, diagnostics
@@ -455,16 +466,6 @@ class CourtKeypointDetector:
                 f"Strong perspective (ratio {perspective_ratio:.1f}) — consider "
                 "recording from a higher vantage point"
             )
-
-        # Check per-corner confidence for weak corners
-        if frame_results:
-            for i, name in enumerate(CORNER_NAMES):
-                avg_conf = per_corner_conf.get(name, 0.0)
-                if avg_conf > 0 and avg_conf < 0.5:
-                    warnings.append(
-                        f"Low confidence for {name} corner ({avg_conf:.2f}) — "
-                        "position may be inaccurate"
-                    )
 
         return CourtQualityDiagnostics(
             detection_rate=detection_rate,
