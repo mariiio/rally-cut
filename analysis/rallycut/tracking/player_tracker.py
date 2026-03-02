@@ -169,6 +169,7 @@ def compute_court_roi_from_calibration(
 def auto_detect_court(
     video_path: Path | str,
     confidence_threshold: float = 0.4,
+    keypoint_model_path: str | Path | None = None,
 ) -> tuple[CourtCalibrator | None, Any]:
     """Auto-detect court corners from video and create calibrator if confident enough.
 
@@ -177,6 +178,7 @@ def auto_detect_court(
     Args:
         video_path: Path to the video file.
         confidence_threshold: Minimum confidence to accept detection.
+        keypoint_model_path: Optional path to YOLO-pose keypoint model weights.
 
     Returns:
         Tuple of (calibrator, result):
@@ -187,7 +189,7 @@ def auto_detect_court(
     from rallycut.court.detector import CourtDetectionResult, CourtDetector
 
     try:
-        detector = CourtDetector()
+        detector = CourtDetector(keypoint_model_path=keypoint_model_path)
         result = detector.detect(video_path)
     except (FileNotFoundError, RuntimeError) as e:
         logger.warning(f"Court auto-detection failed: {e}")

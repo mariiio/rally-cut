@@ -438,6 +438,18 @@ def main() -> None:
         "--compare", action="store_true",
         help="Show A/B comparison: line-only vs player-constrained",
     )
+    parser.add_argument(
+        "--keypoint", action="store_true",
+        help="Use YOLO-pose keypoint model for court detection",
+    )
+    parser.add_argument(
+        "--compare-keypoint", action="store_true",
+        help="Show A/B comparison: classical vs keypoint model",
+    )
+    parser.add_argument(
+        "--keypoint-model", type=str, default=None,
+        help="Path to keypoint model weights (default: weights/court_keypoint/court_keypoint_best.pt)",
+    )
     args = parser.parse_args()
 
     from rallycut.court.detector import CourtDetectionConfig, CourtDetector
@@ -484,7 +496,31 @@ def main() -> None:
     if args.config:
         config_overrides = json.loads(args.config)
         print(f"Config overrides: {config_overrides}\n")
-    detector = CourtDetector(CourtDetectionConfig(**config_overrides))
+
+    # Keypoint detector setup
+    kp_detector = None
+    use_keypoint = args.keypoint or args.compare_keypoint
+    if use_keypoint:
+        from rallycut.court.keypoint_detector import CourtKeypointDetector
+
+        kp_detector = CourtKeypointDetector(model_path=args.keypoint_model)
+        if not kp_detector.model_exists:
+            print("Keypoint model not found. Train it first:")
+            print("  uv run python scripts/train_court_keypoint_model.py")
+            if args.keypoint and not args.compare_keypoint:
+                return
+            print("Continuing with classical detection only.\n")
+            kp_detector = None
+
+    if args.keypoint and kp_detector is not None:
+        # Use keypoint model as primary (no classical fallback in eval)
+        detector = CourtDetector(CourtDetectionConfig(**config_overrides))
+    else:
+        # Force classical-only: pass nonexistent path to prevent keypoint auto-detection
+        detector = CourtDetector(
+            CourtDetectionConfig(**config_overrides),
+            keypoint_model_path="/nonexistent/disabled.pt",
+        )
 
     use_players = args.with_players or args.compare
 
@@ -507,6 +543,13 @@ def main() -> None:
     pc_total_iou = 0.0
     pc_evaluated = 0
 
+    # Keypoint tracking
+    kp_success_count = 0
+    kp_total_mcd = 0.0
+    kp_total_iou = 0.0
+    kp_evaluated = 0
+    kp_corner_mcd_sums = [0.0, 0.0, 0.0, 0.0]
+
     # Header
     header = (
         f"{'Video':>12s}  {'MCD':>7s}  {'MCD px':>7s}  {'IoU':>5s}  {'Reproj':>7s}  "
@@ -514,8 +557,10 @@ def main() -> None:
     )
     if args.compare:
         header += f"  {'PC MCD':>7s}  {'PC IoU':>5s}  {'PC Meth':>15s}"
+    if args.compare_keypoint:
+        header += f"  {'KP MCD':>7s}  {'KP IoU':>5s}  {'KP Conf':>7s}"
     print(header)
-    print("-" * (140 if args.compare else 120))
+    print("-" * (160 if args.compare_keypoint else (140 if args.compare else 120)))
 
     total_videos = len(videos)
     for video_idx, video_info in enumerate(videos):
@@ -533,12 +578,27 @@ def main() -> None:
             print(f"{counter_prefix} {vid_id[:12]:>12s}  {'SKIP':>7s}  (video not found)")
             continue
 
-        # Run detection
+        # Run detection (keypoint-only or classical)
         try:
-            result = detector.detect(video_path)
+            if args.keypoint and kp_detector is not None:
+                result = kp_detector.detect(video_path)
+            else:
+                result = detector.detect(video_path)
         except Exception as e:
             print(f"{counter_prefix} {vid_id[:12]:>12s}  {'ERROR':>7s}  {e}")
             continue
+
+        # Keypoint comparison (run keypoint alongside classical)
+        kp_corners = None
+        kp_conf = 0.0
+        if args.compare_keypoint and kp_detector is not None:
+            try:
+                kp_result = kp_detector.detect(video_path)
+                if len(kp_result.corners) == 4:
+                    kp_corners = kp_result.corners
+                    kp_conf = kp_result.confidence
+            except Exception as e:
+                logging.debug(f"Keypoint detection failed for {vid_id[:12]}: {e}")
 
         # Player-constrained refinement
         pc_corners = None
@@ -650,6 +710,32 @@ def main() -> None:
             elif args.compare:
                 line += f"  {'N/A':>7s}  {'N/A':>5s}  {'no data':>15s}"
 
+            # Keypoint comparison
+            if args.compare_keypoint and kp_corners is not None:
+                kp_metrics = evaluate_corners(
+                    kp_corners, gt_corners, vid_width, vid_height,
+                )
+                line += (
+                    f"  {kp_metrics['mcd_norm']:.4f}  "
+                    f"{kp_metrics['iou']:.3f}  "
+                    f"{kp_conf:>7.3f}"
+                )
+                if kp_metrics["success"]:
+                    kp_success_count += 1
+                kp_total_mcd += kp_metrics["mcd_norm"]
+                kp_total_iou += kp_metrics["iou"]
+                kp_evaluated += 1
+                for i, cd in enumerate(kp_metrics["per_corner_dist"]):
+                    kp_corner_mcd_sums[i] += cd
+                result_data["keypoint"] = {
+                    "corners": kp_corners,
+                    "mcd_norm": kp_metrics["mcd_norm"],
+                    "iou": kp_metrics["iou"],
+                    "confidence": kp_conf,
+                }
+            elif args.compare_keypoint:
+                line += f"  {'N/A':>7s}  {'N/A':>5s}  {'N/A':>7s}"
+
             print(line)
 
         else:
@@ -684,6 +770,29 @@ def main() -> None:
                     "method": pc_method,
                 }
 
+            # Keypoint can still produce results even if classical fails
+            if args.compare_keypoint and kp_corners is not None:
+                kp_metrics = evaluate_corners(
+                    kp_corners, gt_corners, vid_width, vid_height,
+                )
+                line += (
+                    f"  KP: MCD={kp_metrics['mcd_norm']:.4f} "
+                    f"IoU={kp_metrics['iou']:.3f}"
+                )
+                if kp_metrics["success"]:
+                    kp_success_count += 1
+                kp_total_mcd += kp_metrics["mcd_norm"]
+                kp_total_iou += kp_metrics["iou"]
+                kp_evaluated += 1
+                for i, cd in enumerate(kp_metrics["per_corner_dist"]):
+                    kp_corner_mcd_sums[i] += cd
+                result_data["keypoint"] = {
+                    "corners": kp_corners,
+                    "mcd_norm": kp_metrics["mcd_norm"],
+                    "iou": kp_metrics["iou"],
+                    "confidence": kp_conf,
+                }
+
             print(line)
             result_data.update({
                 "mcd_norm": None,
@@ -707,12 +816,13 @@ def main() -> None:
                 cap.release()
 
     # Summary
-    print("-" * (140 if args.compare else 120))
+    print("-" * (160 if args.compare_keypoint else (140 if args.compare else 120)))
     if evaluated > 0:
         avg_mcd = total_mcd / evaluated
         avg_iou = total_iou / evaluated
         rate = success_count / evaluated * 100
-        print(f"\nLine Detection ({evaluated} videos):")
+        method_label = "Keypoint" if args.keypoint else "Line Detection"
+        print(f"\n{method_label} ({evaluated} videos):")
         print(f"  Mean MCD:      {avg_mcd:.4f} (norm)")
         print(f"  Mean IoU:      {avg_iou:.3f}")
         print(f"  Success Rate:  {success_count}/{evaluated} ({rate:.1f}%)")
@@ -741,6 +851,25 @@ def main() -> None:
         if evaluated > 0:
             print(f"\n  Delta MCD:  {pc_avg_mcd - avg_mcd:+.4f}")
             print(f"  Delta IoU:  {pc_avg_iou - avg_iou:+.3f}")
+
+    if args.compare_keypoint and kp_evaluated > 0:
+        kp_avg_mcd = kp_total_mcd / kp_evaluated
+        kp_avg_iou = kp_total_iou / kp_evaluated
+        kp_rate = kp_success_count / kp_evaluated * 100
+        print(f"\nKeypoint Model ({kp_evaluated} videos):")
+        print(f"  Mean MCD:      {kp_avg_mcd:.4f} (norm)")
+        print(f"  Mean IoU:      {kp_avg_iou:.3f}")
+        print(f"  Success Rate:  {kp_success_count}/{kp_evaluated} ({kp_rate:.1f}%)")
+
+        # Per-corner breakdown
+        print("  Per-corner MCD:")
+        for i, name in enumerate(CORNER_NAMES):
+            avg = kp_corner_mcd_sums[i] / kp_evaluated
+            print(f"    {name:>12s}: {avg:.4f}")
+
+        if evaluated > 0:
+            print(f"\n  Delta MCD vs classical:  {kp_avg_mcd - avg_mcd:+.4f}")
+            print(f"  Delta IoU vs classical:  {kp_avg_iou - avg_iou:+.3f}")
 
     elif evaluated == 0:
         print("\nNo videos evaluated.")
@@ -786,6 +915,17 @@ def main() -> None:
                 "success_count": pc_success_count,
                 "mean_mcd_norm": pc_total_mcd / pc_evaluated,
                 "mean_iou": pc_total_iou / pc_evaluated,
+            }
+        if args.compare_keypoint and kp_evaluated > 0:
+            aggregate["keypoint"] = {
+                "evaluated": kp_evaluated,
+                "success_count": kp_success_count,
+                "mean_mcd_norm": kp_total_mcd / kp_evaluated,
+                "mean_iou": kp_total_iou / kp_evaluated,
+                "per_corner_mcd": {
+                    CORNER_NAMES[i]: round(kp_corner_mcd_sums[i] / kp_evaluated, 5)
+                    for i in range(4)
+                },
             }
 
         with open(args.output, "w") as f:
