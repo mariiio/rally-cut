@@ -584,6 +584,8 @@ def _get_court_split_y_from_calibration(
     """Get the net line Y position in normalized image coordinates.
 
     Projects the net center point (court midpoint) to image space.
+    Falls back to midpoint of corner Y coordinates when homography
+    projection fails (e.g., extreme off-screen near corners).
 
     Args:
         calibrator: CourtCalibrator instance (must be calibrated).
@@ -606,10 +608,27 @@ def _get_court_split_y_from_calibration(
         logger.warning(
             "Net Y projection out of reasonable range: %.3f", net_y
         )
-        return None
     except (RuntimeError, ValueError, np.linalg.LinAlgError) as e:
         logger.warning("Failed to project net to image: %s", e)
-        return None
+
+    # Fallback: compute net_y directly from corner coordinates.
+    # Corner order: near-left, near-right, far-right, far-left.
+    # This handles extreme off-screen corners where homography is degenerate.
+    if calibrator.homography is not None and len(calibrator.homography.image_corners) == 4:
+        corners = calibrator.homography.image_corners
+        near_y = (corners[0][1] + corners[1][1]) / 2  # near baseline
+        far_y = (corners[2][1] + corners[3][1]) / 2   # far baseline
+        net_y_fallback = (near_y + far_y) / 2
+        if 0.1 < net_y_fallback < 0.9:
+            logger.info(
+                "Court split from corner midpoint fallback: %.3f", net_y_fallback
+            )
+            return float(net_y_fallback)
+        logger.warning(
+            "Corner midpoint fallback also out of range: %.3f", net_y_fallback
+        )
+
+    return None
 
 
 def compute_court_split(

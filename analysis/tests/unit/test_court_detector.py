@@ -697,8 +697,8 @@ class TestHomographyFitting:
             ),
         }
         result = detector._fit_court_model(identified)
-        # Should fail or use legacy (only 1 correspondence, no legacy near strategy)
-        assert result.fitting_method == "legacy"
+        # Only 1 correspondence → legacy fallback, using aspect_ratio for near corners
+        assert result.fitting_method == "aspect_ratio"
 
     def test_temporal_consensus_disabled(self) -> None:
         """When disabled, temporal consensus is skipped."""
@@ -898,7 +898,7 @@ class TestSidelineMirroring:
         # 2 real correspondences < 4 needed for homography → legacy fallback
         assert len(result.corners) == 4
         assert result.confidence > 0
-        assert result.fitting_method == "legacy"
+        assert result.fitting_method == "harmonic_conjugate"
         # Legacy still gets the mirroring warning from its own path
         assert any("mirror" in w.lower() for w in result.warnings)
 
