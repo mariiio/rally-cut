@@ -65,6 +65,7 @@ class TestAggregateCorners:
         detector = CourtKeypointDetector.__new__(CourtKeypointDetector)
         detector._pad_ratio = 0.3
         detector._conf_threshold = 0.3
+        detector._last_diagnostics = None
 
         fr = FrameKeypoints(
             corners=[
@@ -77,7 +78,7 @@ class TestAggregateCorners:
             kpt_confidences=[0.9, 0.9, 0.9, 0.9],
         )
 
-        corners, conf = detector._aggregate([fr])
+        corners, conf, _diag = detector._aggregate([fr])
         assert len(corners) == 4
         assert abs(corners[0]["x"] - 0.1) < 1e-6
         assert abs(conf - 0.85) < 1e-6
@@ -87,6 +88,7 @@ class TestAggregateCorners:
         detector = CourtKeypointDetector.__new__(CourtKeypointDetector)
         detector._pad_ratio = 0.3
         detector._conf_threshold = 0.3
+        detector._last_diagnostics = None
 
         frames = []
         for x_offset in [-0.02, 0.0, 0.01, 0.0, -0.01]:
@@ -101,7 +103,7 @@ class TestAggregateCorners:
                 kpt_confidences=[0.9, 0.9, 0.9, 0.9],
             ))
 
-        corners, conf = detector._aggregate(frames)
+        corners, conf, _diag = detector._aggregate(frames)
         # Median of [-0.02, 0.0, 0.01, 0.0, -0.01] = 0.0
         assert abs(corners[0]["x"] - 0.1) < 0.005
 
@@ -110,6 +112,7 @@ class TestAggregateCorners:
         detector = CourtKeypointDetector.__new__(CourtKeypointDetector)
         detector._pad_ratio = 0.3
         detector._conf_threshold = 0.3
+        detector._last_diagnostics = None
 
         # 9 consistent frames + 1 extreme outlier
         frames = []
@@ -136,7 +139,7 @@ class TestAggregateCorners:
             kpt_confidences=[0.5, 0.5, 0.5, 0.5],
         ))
 
-        corners, conf = detector._aggregate(frames)
+        corners, conf, _diag = detector._aggregate(frames)
         # Should be close to 0.10, not pulled toward 0.50
         assert abs(corners[0]["x"] - 0.10) < 0.02
 
@@ -145,8 +148,9 @@ class TestAggregateCorners:
         detector = CourtKeypointDetector.__new__(CourtKeypointDetector)
         detector._pad_ratio = 0.3
         detector._conf_threshold = 0.3
+        detector._last_diagnostics = None
 
-        corners, conf = detector._aggregate([])
+        corners, conf, _diag = detector._aggregate([])
         assert corners == []
         assert conf == 0.0
 
@@ -182,6 +186,7 @@ class TestWeightedMedian:
         detector = CourtKeypointDetector.__new__(CourtKeypointDetector)
         detector._pad_ratio = 0.3
         detector._conf_threshold = 0.3
+        detector._last_diagnostics = None
 
         frames = []
         # 5 low-confidence frames with x=0.12
@@ -209,7 +214,7 @@ class TestWeightedMedian:
                 kpt_confidences=[0.95, 0.95, 0.95, 0.95],
             ))
 
-        corners, _ = detector._aggregate(frames)
+        corners, _, _diag = detector._aggregate(frames)
         # With unweighted median, result would be 0.11 (even split).
         # With confidence-weighted, x=0.10 should win
         # (5×0.95=4.75 vs 5×0.2=1.0 cumulative weight).
@@ -255,6 +260,102 @@ class TestFallbackToClassical:
         # because keypoint confidence is low and it tries classical pipeline
         with pytest.raises(FileNotFoundError):
             detector.detect("/nonexistent/video.mp4")
+
+
+class TestQualityDiagnostics:
+    """Test quality diagnostics computation."""
+
+    def test_diagnostics_populated(self) -> None:
+        """Diagnostics should contain per-corner confidence and std."""
+        detector = CourtKeypointDetector.__new__(CourtKeypointDetector)
+        detector._pad_ratio = 0.3
+        detector._conf_threshold = 0.3
+        detector._last_diagnostics = None
+
+        frames = []
+        for _ in range(5):
+            frames.append(FrameKeypoints(
+                corners=[
+                    {"x": 0.10, "y": 0.90},
+                    {"x": 0.90, "y": 0.90},
+                    {"x": 0.70, "y": 0.30},
+                    {"x": 0.30, "y": 0.30},
+                ],
+                confidence=0.85,
+                kpt_confidences=[0.9, 0.85, 0.92, 0.88],
+            ))
+
+        _, _, diag = detector._aggregate(frames, n_sampled=10)
+        assert diag.detection_rate == 0.5  # 5 detected / 10 sampled
+        assert "near-left" in diag.per_corner_confidence
+        assert diag.per_corner_confidence["near-left"] == pytest.approx(0.9, abs=0.01)
+        assert diag.perspective_ratio > 0
+        assert diag.off_screen_corners == []
+
+    def test_off_screen_corner_detection(self) -> None:
+        """Near corners with y > 1.0 should be flagged as off-screen."""
+        detector = CourtKeypointDetector.__new__(CourtKeypointDetector)
+        detector._pad_ratio = 0.3
+        detector._conf_threshold = 0.3
+        detector._last_diagnostics = None
+
+        frames = [FrameKeypoints(
+            corners=[
+                {"x": 0.10, "y": 1.15},  # Off-screen
+                {"x": 0.90, "y": 1.10},  # Off-screen
+                {"x": 0.70, "y": 0.30},
+                {"x": 0.30, "y": 0.30},
+            ],
+            confidence=0.85,
+            kpt_confidences=[0.9, 0.85, 0.92, 0.88],
+        )]
+
+        _, _, diag = detector._aggregate(frames, n_sampled=1)
+        assert "near-left" in diag.off_screen_corners
+        assert "near-right" in diag.off_screen_corners
+        assert "far-right" not in diag.off_screen_corners
+
+    def test_extreme_perspective_warning(self) -> None:
+        """Extreme perspective ratio should generate a warning."""
+        detector = CourtKeypointDetector.__new__(CourtKeypointDetector)
+        detector._pad_ratio = 0.3
+        detector._conf_threshold = 0.3
+        detector._last_diagnostics = None
+
+        # Near side very wide, far side narrow → extreme perspective
+        frames = [FrameKeypoints(
+            corners=[
+                {"x": 0.05, "y": 0.95},  # near-left (wide)
+                {"x": 0.95, "y": 0.95},  # near-right (wide)
+                {"x": 0.55, "y": 0.30},  # far-right (narrow)
+                {"x": 0.45, "y": 0.30},  # far-left (narrow)
+            ],
+            confidence=0.85,
+            kpt_confidences=[0.9, 0.85, 0.92, 0.88],
+        )]
+
+        _, _, diag = detector._aggregate(frames, n_sampled=1)
+        assert diag.perspective_ratio > 4.0
+        assert any("perspective" in w.lower() for w in diag.warnings)
+
+    def test_diagnostics_to_dict(self) -> None:
+        """Diagnostics should serialize to dict."""
+        from rallycut.court.keypoint_detector import CourtQualityDiagnostics
+
+        diag = CourtQualityDiagnostics(
+            detection_rate=0.8,
+            per_corner_confidence={"near-left": 0.9, "near-right": 0.85,
+                                   "far-right": 0.92, "far-left": 0.88},
+            per_corner_std={"near-left": 0.005, "near-right": 0.004,
+                           "far-right": 0.002, "far-left": 0.003},
+            off_screen_corners=["near-left"],
+            perspective_ratio=2.5,
+            warnings=["Off-screen corners: near-left"],
+        )
+        d = diag.to_dict()
+        assert d["detection_rate"] == 0.8
+        assert "near-left" in d["per_corner_confidence"]
+        assert d["off_screen_corners"] == ["near-left"]
 
 
 class TestFrameKeypoints:

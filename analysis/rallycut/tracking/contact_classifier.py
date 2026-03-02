@@ -59,6 +59,9 @@ class CandidateFeatures:
     is_inflection: bool
     is_parabolic: bool
     is_deceleration: bool = False
+    # New features (v2)
+    ball_detection_density: float = 1.0  # fraction of frames with ball in ±10 window
+    frames_since_rally_start: int = 0  # frames from rally start (early = serve)
 
     def to_array(self) -> np.ndarray:
         """Convert to numpy feature array for classifier input."""
@@ -81,6 +84,8 @@ class CandidateFeatures:
             float(self.is_inflection),
             float(self.is_parabolic),
             float(self.is_deceleration),
+            self.ball_detection_density,
+            self.frames_since_rally_start,
         ], dtype=np.float64)
 
     @staticmethod
@@ -103,6 +108,8 @@ class CandidateFeatures:
             "is_inflection",
             "is_parabolic",
             "is_deceleration",
+            "ball_detection_density",
+            "frames_since_rally_start",
         ]
 
 
@@ -166,9 +173,9 @@ class ContactClassifier:
         from sklearn.ensemble import GradientBoostingClassifier
 
         self.model = GradientBoostingClassifier(
-            n_estimators=100,
-            max_depth=3,
-            learning_rate=0.1,
+            n_estimators=200,
+            max_depth=4,
+            learning_rate=0.05,
             min_samples_leaf=5,
             subsample=0.8,
             random_state=42,
@@ -235,9 +242,9 @@ class ContactClassifier:
                 continue
 
             model = GradientBoostingClassifier(
-                n_estimators=100,
-                max_depth=3,
-                learning_rate=0.1,
+                n_estimators=200,
+                max_depth=4,
+                learning_rate=0.05,
                 min_samples_leaf=5,
                 subsample=0.8,
                 random_state=42,

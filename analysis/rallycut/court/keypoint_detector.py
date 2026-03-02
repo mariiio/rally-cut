@@ -24,6 +24,35 @@ logger = logging.getLogger(__name__)
 
 CORNER_NAMES = ["near-left", "near-right", "far-right", "far-left"]
 
+
+@dataclass
+class CourtQualityDiagnostics:
+    """Quality diagnostics for court keypoint detection.
+
+    Helps identify problematic videos where court detection may be unreliable.
+    """
+
+    detection_rate: float  # % of sampled frames where court was detected
+    per_corner_confidence: dict[str, float]  # mean keypoint confidence per corner
+    per_corner_std: dict[str, float]  # std dev of position per corner (frame-to-frame)
+    off_screen_corners: list[str]  # corner names where y > 1.0 (below frame)
+    perspective_ratio: float  # near_width / far_width (>3 = extreme perspective)
+    warnings: list[str]  # actionable quality warnings
+
+    def to_dict(self) -> dict:
+        return {
+            "detection_rate": round(self.detection_rate, 3),
+            "per_corner_confidence": {
+                k: round(v, 3) for k, v in self.per_corner_confidence.items()
+            },
+            "per_corner_std": {
+                k: round(v, 4) for k, v in self.per_corner_std.items()
+            },
+            "off_screen_corners": self.off_screen_corners,
+            "perspective_ratio": round(self.perspective_ratio, 2),
+            "warnings": self.warnings,
+        }
+
 DEFAULT_MODEL_PATH = Path("weights/court_keypoint/court_keypoint_best.pt")
 
 
@@ -82,6 +111,7 @@ class CourtKeypointDetector:
         self._pad_ratio = pad_ratio
         self._conf_threshold = conf_threshold
         self._model: Any = None
+        self._last_diagnostics: CourtQualityDiagnostics | None = None
 
     @property
     def model_exists(self) -> bool:
@@ -133,6 +163,8 @@ class CourtKeypointDetector:
             if result is not None:
                 frame_results.append(result)
 
+        n_sampled = len(frames)
+
         if not frame_results:
             return CourtDetectionResult(
                 corners=[], confidence=0.0,
@@ -141,13 +173,21 @@ class CourtKeypointDetector:
             )
 
         # Aggregate across frames
-        corners, confidence = self._aggregate(frame_results)
+        corners, confidence, diagnostics = self._aggregate(
+            frame_results, n_sampled=n_sampled,
+        )
 
         return CourtDetectionResult(
             corners=corners,
             confidence=confidence,
+            warnings=diagnostics.warnings,
             fitting_method="keypoint",
         )
+
+    @property
+    def last_diagnostics(self) -> CourtQualityDiagnostics | None:
+        """Quality diagnostics from the most recent detect() call."""
+        return self._last_diagnostics
 
     def detect_from_frame(self, frame: np.ndarray) -> CourtDetectionResult:
         """Detect court corners from a single frame.
@@ -283,21 +323,29 @@ class CourtKeypointDetector:
 
     def _aggregate(
         self, frame_results: list[FrameKeypoints],
-    ) -> tuple[list[dict[str, float]], float]:
+        n_sampled: int | None = None,
+    ) -> tuple[list[dict[str, float]], float, CourtQualityDiagnostics]:
         """Aggregate multi-frame detections via confidence-weighted median.
 
         For each corner, collects all predictions, removes outliers (>2σ from
         median), and takes the weighted median using per-keypoint confidence.
 
         Returns:
-            (corners, confidence) tuple.
+            (corners, confidence, diagnostics) tuple.
         """
         n = len(frame_results)
+        n_total = n_sampled if n_sampled is not None else n
+
         if n == 0:
-            return [], 0.0
+            diag = self._build_diagnostics([], [], n_total, 0)
+            return [], 0.0, diag
 
         if n == 1:
-            return frame_results[0].corners, frame_results[0].confidence
+            diag = self._build_diagnostics(
+                frame_results[0].corners, frame_results, n_total, n,
+            )
+            self._last_diagnostics = diag
+            return frame_results[0].corners, frame_results[0].confidence, diag
 
         # Collect per-corner coordinates and per-keypoint confidences
         all_x = np.zeros((n, 4))
@@ -314,15 +362,24 @@ class CourtKeypointDetector:
 
         # Per-corner outlier filtering + confidence-weighted median
         corners = []
+        corner_stds: list[float] = []
+        corner_confs: list[float] = []
+
         for j in range(4):
             xs = all_x[:, j]
             ys = all_y[:, j]
             weights = all_kpt_conf[:, j]
 
+            # Track per-corner confidence (before outlier filtering)
+            corner_confs.append(float(np.mean(weights)))
+
             # Remove outliers: distance from median > 2σ
             med_x, med_y = float(np.median(xs)), float(np.median(ys))
             dists = np.sqrt((xs - med_x) ** 2 + (ys - med_y) ** 2)
             sigma = float(np.std(dists))
+
+            # Track per-corner std (position variance across frames)
+            corner_stds.append(sigma)
 
             if sigma > 0:
                 mask = dists <= 2.0 * sigma
@@ -339,4 +396,81 @@ class CourtKeypointDetector:
         # Confidence: median of frame confidences
         confidence = float(np.median(all_conf))
 
-        return corners, confidence
+        # Build diagnostics
+        diagnostics = self._build_diagnostics(corners, frame_results, n_total, n)
+        diagnostics.per_corner_confidence = dict(zip(CORNER_NAMES, corner_confs))
+        diagnostics.per_corner_std = dict(zip(CORNER_NAMES, corner_stds))
+        self._last_diagnostics = diagnostics
+
+        return corners, confidence, diagnostics
+
+    def _build_diagnostics(
+        self,
+        corners: list[dict[str, float]],
+        frame_results: list[FrameKeypoints],
+        n_sampled: int,
+        n_detected: int,
+    ) -> CourtQualityDiagnostics:
+        """Build quality diagnostics from aggregated results."""
+        detection_rate = n_detected / max(1, n_sampled)
+
+        # Per-corner defaults
+        per_corner_conf: dict[str, float] = {name: 0.0 for name in CORNER_NAMES}
+        per_corner_std: dict[str, float] = {name: 0.0 for name in CORNER_NAMES}
+
+        # Off-screen corners (y > 1.0 means below original frame)
+        off_screen: list[str] = []
+        if len(corners) == 4:
+            for i, name in enumerate(CORNER_NAMES):
+                if corners[i]["y"] > 1.0:
+                    off_screen.append(name)
+
+        # Perspective ratio: near court width / far court width
+        perspective_ratio = 0.0
+        if len(corners) == 4:
+            near_width = abs(corners[1]["x"] - corners[0]["x"])  # near-right - near-left
+            far_width = abs(corners[2]["x"] - corners[3]["x"])  # far-right - far-left
+            if far_width > 0.01:
+                perspective_ratio = near_width / far_width
+
+        # Generate warnings
+        warnings: list[str] = []
+        if detection_rate < 0.5:
+            warnings.append(
+                f"Low detection rate ({detection_rate:.0%}) — court may be "
+                "partially visible or obstructed"
+            )
+        if off_screen:
+            warnings.append(
+                f"Off-screen corners: {', '.join(off_screen)} — camera is too "
+                "close or at too low an angle"
+            )
+        if perspective_ratio > 4.0:
+            warnings.append(
+                f"Extreme perspective (ratio {perspective_ratio:.1f}) — camera "
+                "is very low, near-court accuracy may be reduced"
+            )
+        elif perspective_ratio > 3.0:
+            warnings.append(
+                f"Strong perspective (ratio {perspective_ratio:.1f}) — consider "
+                "recording from a higher vantage point"
+            )
+
+        # Check per-corner confidence for weak corners
+        if frame_results:
+            for i, name in enumerate(CORNER_NAMES):
+                avg_conf = per_corner_conf.get(name, 0.0)
+                if avg_conf > 0 and avg_conf < 0.5:
+                    warnings.append(
+                        f"Low confidence for {name} corner ({avg_conf:.2f}) — "
+                        "position may be inaccurate"
+                    )
+
+        return CourtQualityDiagnostics(
+            detection_rate=detection_rate,
+            per_corner_confidence=per_corner_conf,
+            per_corner_std=per_corner_std,
+            off_screen_corners=off_screen,
+            perspective_ratio=perspective_ratio,
+            warnings=warnings,
+        )

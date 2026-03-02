@@ -1404,6 +1404,14 @@ def detect_contacts(
             # Phase 3: Use learned classifier
             from rallycut.tracking.contact_classifier import CandidateFeatures
 
+            # Ball detection density: fraction of ±10 frames with ball
+            density_window = 10
+            n_with_ball = sum(
+                1 for f in range(frame - density_window, frame + density_window + 1)
+                if f in ball_by_frame
+            )
+            ball_detection_density = n_with_ball / (2 * density_window + 1)
+
             features = CandidateFeatures(
                 frame=frame,
                 velocity=velocity,
@@ -1423,6 +1431,8 @@ def detect_contacts(
                 is_inflection=is_infl,
                 is_parabolic=is_para,
                 is_deceleration=is_decel,
+                ball_detection_density=ball_detection_density,
+                frames_since_rally_start=frame - first_frame,
             )
             results = classifier.predict([features])
             is_validated, confidence = results[0]
