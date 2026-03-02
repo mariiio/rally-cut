@@ -95,12 +95,7 @@ def main() -> None:
         if len(gt_corners) != 4:
             continue
 
-        # Mean corner distance (MCD)
-        db_mcd = sum(
-            ((g["x"] - g["x"]) ** 2 + (g["y"] - g["y"]) ** 2) ** 0.5
-            for g in gt_corners
-        ) / 4  # DB vs DB = 0 (we don't have separate GT for comparison)
-
+        # Mean corner distance between keypoint detection and stored calibration
         kp_mcd = sum(
             ((r["x"] - g["x"]) ** 2 + (r["y"] - g["y"]) ** 2) ** 0.5
             for r, g in zip(result.corners, gt_corners)
