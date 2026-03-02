@@ -97,6 +97,7 @@ WEIGHT_GROUPS: dict[str, list[str]] = {
         "wasb/wasb_finetuned.pth.tar",
         "contact_classifier/contact_classifier.pkl",
         "action_classifier/action_classifier.pkl",
+        "court_keypoint/court_keypoint_best.pt",
     ],
     "external": [
         "videomae/game_state_classifier/model.safetensors",
