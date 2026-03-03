@@ -77,7 +77,8 @@ class ContactDetectionConfig:
 
     # Player proximity
     player_contact_radius: float = 0.15  # Max distance (normalized) for attribution
-    player_search_frames: int = 15  # Search ±N frames for nearby player (~500ms @ 30fps)
+    player_search_frames: int = 5  # Search ±N frames for nearest player (classifier feature)
+    player_candidate_search_frames: int = 15  # Wider search for ranked candidates (~500ms)
 
     # High-velocity contacts (lenient validation)
     high_velocity_threshold: float = 0.025  # Auto-accept above this velocity
@@ -154,6 +155,10 @@ class Contact:
             "isValidated": self.is_validated,
             "confidence": self.confidence,
             "arcFitResidual": self.arc_fit_residual,
+            "playerCandidates": [
+                [tid, d if math.isfinite(d) else None]
+                for tid, d in self.player_candidates
+            ],
         }
 
 
@@ -291,7 +296,12 @@ def _find_nearest_player(
     player_positions: list[PlayerPosition],
     search_frames: int = 5,
 ) -> tuple[int, float, float]:
-    """Find nearest player to ball at given frame.
+    """Find nearest player to ball at given frame using image-space distance.
+
+    Uses image-space (Euclidean on normalized coords) for player selection.
+    This MUST match the distance metric the contact classifier was trained on —
+    switching to court-space distance shifts feature distributions and breaks
+    the classifier (tested: F1 89.4% → 76.0%).
 
     Returns:
         (track_id, distance, player_center_y). track_id=-1 if no player found.
@@ -326,15 +336,30 @@ def _find_nearest_players(
     player_positions: list[PlayerPosition],
     search_frames: int = 15,
     max_candidates: int = 4,
+    court_calibrator: CourtCalibrator | None = None,
 ) -> list[tuple[int, float, float]]:
     """Find nearest players to ball, ranked by distance.
 
+    When court_calibrator is available, ranks by court-space distance
+    (perspective-corrected). Returns image-space distances for compatibility
+    with classifier features (classifier trained on image-space player_distance).
+
     Returns:
-        List of (track_id, distance, player_center_y), sorted by distance.
+        List of (track_id, image_distance, player_center_y), sorted by
+        court-space distance (when available) or image-space distance.
         Returns up to max_candidates entries. Empty if no players found.
     """
-    # Best distance per track (a track may appear in multiple frames)
-    best_per_track: dict[int, tuple[float, float]] = {}  # track_id → (distance, center_y)
+    # Pre-compute ball court position
+    ball_court: tuple[float, float] | None = None
+    if court_calibrator is not None and court_calibrator.is_calibrated:
+        try:
+            ball_court = court_calibrator.image_to_court((ball_x, ball_y), 1, 1)
+        except Exception:
+            pass
+
+    # Best distances per track (a track may appear in multiple frames)
+    # track_id → (rank_dist, img_dist, center_y)
+    best_per_track: dict[int, tuple[float, float, float]] = {}
 
     for p in player_positions:
         if abs(p.frame_number - frame) > search_frames:
@@ -343,15 +368,28 @@ def _find_nearest_players(
         player_x = p.x
         player_y = p.y - p.height * 0.25
 
-        dist = math.sqrt((ball_x - player_x) ** 2 + (ball_y - player_y) ** 2)
+        img_dist = math.sqrt((ball_x - player_x) ** 2 + (ball_y - player_y) ** 2)
 
-        if p.track_id not in best_per_track or dist < best_per_track[p.track_id][0]:
-            best_per_track[p.track_id] = (dist, p.y)
+        rank_dist = img_dist
+        if ball_court is not None:
+            try:
+                pc = court_calibrator.image_to_court((player_x, player_y), 1, 1)  # type: ignore[union-attr]
+                rank_dist = math.sqrt(
+                    (ball_court[0] - pc[0]) ** 2 + (ball_court[1] - pc[1]) ** 2
+                )
+            except Exception:
+                # Court projection failed for this player — skip to avoid
+                # mixing court-space (meters) with image-space (normalized)
+                # across frames of the same track.
+                continue
+
+        if p.track_id not in best_per_track or rank_dist < best_per_track[p.track_id][0]:
+            best_per_track[p.track_id] = (rank_dist, img_dist, p.y)
 
     ranked = sorted(best_per_track.items(), key=lambda x: x[1][0])
     return [
-        (tid, dist, center_y)
-        for tid, (dist, center_y) in ranked[:max_candidates]
+        (tid, img_dist, center_y)
+        for tid, (_rank_dist, img_dist, center_y) in ranked[:max_candidates]
     ]
 
 
@@ -1090,25 +1128,15 @@ def _resolve_court_side(
     team_assignments: dict[int, int] | None,
     court_calibrator: CourtCalibrator | None,
     estimated_net_y: float,
-    match_team_assignments: dict[int, int] | None = None,
 ) -> str:
     """Determine which court side the ball is on using multiple signals.
 
     Signal priority:
-    1a. Match-level player identity (highest confidence — cross-rally matching)
-    1b. Per-rally player identity (median Y based — less reliable)
+    1. Per-rally player identity (median Y based)
     2. Calibration projection — perspective-correct via homography
     3. Y-threshold fallback — simple horizontal split (current behavior)
     """
-    # Signal 1a: Match-level player identity (highest confidence)
-    if (
-        match_team_assignments
-        and player_track_id >= 0
-        and player_track_id in match_team_assignments
-    ):
-        return "near" if match_team_assignments[player_track_id] == 0 else "far"
-
-    # Signal 1b: Per-rally player identity
+    # Signal 1: Per-rally player identity
     if team_assignments and player_track_id >= 0 and player_track_id in team_assignments:
         return "near" if team_assignments[player_track_id] == 0 else "far"
 
@@ -1139,7 +1167,6 @@ def detect_contacts(
     classifier: ContactClassifier | None = None,
     use_classifier: bool = True,
     team_assignments: dict[int, int] | None = None,
-    match_team_assignments: dict[int, int] | None = None,
     court_calibrator: CourtCalibrator | None = None,
 ) -> ContactSequence:
     """Detect ball contacts from trajectory inflection points and velocity peaks.
@@ -1170,9 +1197,6 @@ def detect_contacts(
             to force hand-tuned validation gates.
         team_assignments: Map from track_id → team (0=near, 1=far). Per-rally teams
             from median Y position.
-        match_team_assignments: Map from track_id → team (0=near, 1=far). Match-level
-            teams from cross-rally player matching (higher confidence). Takes priority
-            over team_assignments when both provided.
         court_calibrator: Calibrated court projector. When provided, ball side uses
             perspective-correct projection via homography.
 
@@ -1404,28 +1428,34 @@ def detect_contacts(
             ball_by_frame, frame, cfg.direction_check_frames
         )
 
-        # Find nearest players (ranked by distance)
+        # Find nearest player (narrow window — matches classifier training semantics)
+        # MUST use image-space distance to preserve classifier feature distribution
+        if player_positions:
+            track_id, player_dist, _player_y = _find_nearest_player(
+                frame, ball.x, ball.y, player_positions,
+                search_frames=cfg.player_search_frames,
+            )
+        else:
+            track_id = -1
+            player_dist = float("inf")
+
+        # Find ranked candidates (wider window — for post-classification re-attribution)
         candidates: list[tuple[int, float, float]] = []
         if player_positions:
             candidates = _find_nearest_players(
                 frame, ball.x, ball.y, player_positions,
-                search_frames=cfg.player_search_frames,
+                search_frames=cfg.player_candidate_search_frames,
+                court_calibrator=court_calibrator,
             )
-        if candidates:
-            track_id, player_dist, _player_y = candidates[0]
-        else:
-            track_id = -1
-            player_dist = float("inf")
 
         # Velocity floor: skip very low velocity candidates (tracking noise)
         if velocity < cfg.min_candidate_velocity:
             continue
 
-        # Determine court side: match-level > per-rally > calibration > Y-threshold
+        # Determine court side: per-rally > calibration > Y-threshold
         court_side = _resolve_court_side(
             ball.x, ball.y, track_id, team_assignments,
             court_calibrator, estimated_net_y,
-            match_team_assignments=match_team_assignments,
         )
 
         # Check if at net

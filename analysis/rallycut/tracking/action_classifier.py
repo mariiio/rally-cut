@@ -22,6 +22,7 @@ Beach volleyball rules that constrain both modes:
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -1474,24 +1475,29 @@ def reattribute_players(
     actions: list[ClassifiedAction],
     contacts: list[Contact],
     team_assignments: dict[int, int] | None,
+    max_distance_ratio: float = 1.5,
 ) -> list[ClassifiedAction]:
     """Re-assign player attribution using team signal after action classification.
 
     For each action where the assigned player is on the WRONG team for the court
-    side, check if a candidate on the CORRECT team exists within 2x the nearest
-    distance. If so, re-assign.
+    side, check if a candidate on the CORRECT team exists within max_distance_ratio
+    of the nearest distance. If so, re-assign.
 
-    This is safe because:
-    - Only fires when team_assignments are available (match-level = reliable)
-    - The 2x distance cap prevents picking a far-away player
-    - Only overrides when current player is definitely wrong-team
+    This should only be called with high-confidence team assignments (e.g. from
+    match-level cross-rally matching with confidence >= 0.70). Low-confidence
+    teams cause more regressions than fixes.
+
+    Args:
+        actions: Classified actions to potentially re-attribute.
+        contacts: Contact objects with player_candidates.
+        team_assignments: Map of track_id → team (0=near, 1=far).
+        max_distance_ratio: Maximum distance ratio for candidate (1.5 = candidate
+            can be up to 50% farther than current player).
     """
     if not team_assignments:
         return actions
 
-    # Build frame→contact lookup for candidate access
     contact_by_frame: dict[int, Contact] = {c.frame: c for c in contacts}
-
     side_to_team = {"near": 0, "far": 1}
     n_reattributed = 0
 
@@ -1510,15 +1516,15 @@ def reattribute_players(
         if current_team is None or current_team == expected_team:
             continue
 
-        # Find contact with candidates
         contact = contact_by_frame.get(action.frame)
         if contact is None or not contact.player_candidates:
             continue
 
-        # Current player distance
         current_dist = contact.player_distance
+        if not math.isfinite(current_dist):
+            continue
 
-        # Find best candidate on the correct team within 2x distance
+        # Find best candidate on the correct team within distance cap
         best_tid = -1
         best_dist = float("inf")
         for tid, dist in contact.player_candidates:
@@ -1527,7 +1533,7 @@ def reattribute_players(
             cand_team = team_assignments.get(tid)
             if cand_team != expected_team:
                 continue
-            if dist <= 2.0 * current_dist and dist < best_dist:
+            if dist <= max_distance_ratio * current_dist and dist < best_dist:
                 best_tid = tid
                 best_dist = dist
 
@@ -1555,6 +1561,7 @@ def classify_rally_actions(
     config: ActionClassifierConfig | None = None,
     use_classifier: bool = True,
     team_assignments: dict[int, int] | None = None,
+    match_team_assignments: dict[int, int] | None = None,
 ) -> RallyActions:
     """Convenience function to classify actions in a rally.
 
@@ -1568,10 +1575,18 @@ def classify_rally_actions(
         config: Optional classifier configuration.
         use_classifier: Whether to auto-load and use the learned classifier.
         team_assignments: Optional mapping of track_id → team (0=near/A, 1=far/B).
+            Used for team labeling and action classification.
+        match_team_assignments: Optional high-confidence match-level team mapping
+            (track_id → team). Used ONLY for post-classification player
+            re-attribution — not for court_side or action classification.
+            Should only be provided when assignment confidence >= 0.70.
 
     Returns:
         RallyActions with all classified actions.
     """
+    # Only re-attribute with match-level teams (high-confidence cross-rally data).
+    # Per-rally team_assignments are too unreliable and cause net regressions.
+    reattrib_teams = match_team_assignments
     action_classifier = ActionClassifier(config)
 
     if use_classifier:
@@ -1589,7 +1604,7 @@ def classify_rally_actions(
                 rally_start_frame=contact_sequence.rally_start_frame,
             )
             result.actions = reattribute_players(
-                result.actions, contact_sequence.contacts, team_assignments,
+                result.actions, contact_sequence.contacts, reattrib_teams,
             )
             return result
 
@@ -1605,6 +1620,6 @@ def classify_rally_actions(
         rally_start_frame=contact_sequence.rally_start_frame,
     )
     result.actions = reattribute_players(
-        result.actions, contact_sequence.contacts, team_assignments,
+        result.actions, contact_sequence.contacts, reattrib_teams,
     )
     return result
