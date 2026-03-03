@@ -370,3 +370,135 @@ class TestFrameKeypoints:
         assert len(fk.corners) == 4
         assert fk.confidence == 0.8
         assert len(fk.kpt_confidences) == 4
+
+
+class TestRefineNearCorners:
+    """Test perspective-geometric near-corner refinement."""
+
+    def _make_detector(self) -> CourtKeypointDetector:
+        detector = CourtKeypointDetector.__new__(CourtKeypointDetector)
+        detector._pad_ratio = 0.3
+        detector._conf_threshold = 0.3
+        detector._last_diagnostics = None
+        return detector
+
+    def test_refine_both_near_corners(self) -> None:
+        """Both near corners low-conf should be replaced by extrapolation."""
+        detector = self._make_detector()
+
+        # Typical court: far corners accurate, near corners pulled toward center
+        corners = [
+            {"x": 0.20, "y": 0.70},  # near-left (bad — should be wider/lower)
+            {"x": 0.80, "y": 0.70},  # near-right (bad)
+            {"x": 0.65, "y": 0.35},  # far-right (good)
+            {"x": 0.35, "y": 0.35},  # far-left (good)
+        ]
+        conf = {
+            "near-left": 0.002,
+            "near-right": 0.003,
+            "far-right": 0.999,
+            "far-left": 0.998,
+        }
+
+        refined = detector._refine_near_corners(corners, conf)
+
+        # Near corners should move outward (wider X) and downward (larger Y)
+        assert refined[0]["x"] < corners[0]["x"], "near-left should move left"
+        assert refined[0]["y"] > corners[0]["y"], "near-left should move down"
+        assert refined[1]["x"] > corners[1]["x"], "near-right should move right"
+        assert refined[1]["y"] > corners[1]["y"], "near-right should move down"
+        # Far corners unchanged
+        assert refined[2] == corners[2]
+        assert refined[3] == corners[3]
+
+    def test_no_refinement_when_confident(self) -> None:
+        """All corners high confidence — no changes."""
+        detector = self._make_detector()
+
+        corners = [
+            {"x": 0.10, "y": 0.90},
+            {"x": 0.90, "y": 0.90},
+            {"x": 0.70, "y": 0.30},
+            {"x": 0.30, "y": 0.30},
+        ]
+        conf = {
+            "near-left": 0.95,
+            "near-right": 0.92,
+            "far-right": 0.99,
+            "far-left": 0.98,
+        }
+
+        refined = detector._refine_near_corners(corners, conf)
+        assert refined == corners
+
+    def test_asymmetric_refinement(self) -> None:
+        """One near corner good, one bad — only fix the bad one."""
+        detector = self._make_detector()
+
+        corners = [
+            {"x": 0.10, "y": 0.90},  # near-left (good)
+            {"x": 0.70, "y": 0.60},  # near-right (bad — pulled inward)
+            {"x": 0.65, "y": 0.35},  # far-right (good)
+            {"x": 0.35, "y": 0.35},  # far-left (good)
+        ]
+        conf = {
+            "near-left": 0.90,
+            "near-right": 0.01,
+            "far-right": 0.999,
+            "far-left": 0.998,
+        }
+
+        refined = detector._refine_near_corners(corners, conf)
+
+        # near-left unchanged (high confidence)
+        assert refined[0] == corners[0]
+        # near-right should be refined (moved outward/downward)
+        assert refined[1] != corners[1]
+        assert refined[1]["x"] > corners[1]["x"], "near-right should move right"
+
+    def test_vp_below_far_baseline_skips(self) -> None:
+        """VP below far baseline means invalid geometry — skip refinement."""
+        detector = self._make_detector()
+
+        # Sidelines diverge downward (VP below court) — invalid perspective
+        corners = [
+            {"x": 0.05, "y": 0.80},  # near-left
+            {"x": 0.95, "y": 0.80},  # near-right
+            {"x": 0.40, "y": 0.30},  # far-right (narrower than near)
+            {"x": 0.60, "y": 0.30},  # far-left (note: far-left.x > far-right.x = inverted)
+        ]
+        conf = {
+            "near-left": 0.01,
+            "near-right": 0.01,
+            "far-right": 0.99,
+            "far-left": 0.99,
+        }
+
+        refined = detector._refine_near_corners(corners, conf)
+        # Should fall back to original (VP is below far baseline or parallel)
+        assert refined == corners
+
+    def test_offscreen_near_corners_allowed(self) -> None:
+        """Refined near corners with y > 1.0 are valid (off-screen)."""
+        detector = self._make_detector()
+
+        # Wide far baseline + strong convergence → extrapolated near corners below frame
+        # VP at (0.50, -0.65), far baseline = 0.40, aspect ratio = 2.0
+        corners = [
+            {"x": 0.20, "y": 0.70},  # near-left (bad — pulled inward)
+            {"x": 0.80, "y": 0.70},  # near-right (bad)
+            {"x": 0.70, "y": 0.25},  # far-right (good)
+            {"x": 0.30, "y": 0.25},  # far-left (good)
+        ]
+        conf = {
+            "near-left": 0.001,
+            "near-right": 0.001,
+            "far-right": 0.999,
+            "far-left": 0.999,
+        }
+
+        refined = detector._refine_near_corners(corners, conf)
+
+        # Near corners should be extrapolated to y > 1.0 (below frame)
+        assert refined[0]["y"] > 1.0, f"near-left y={refined[0]['y']:.3f}, expected > 1.0"
+        assert refined[1]["y"] > 1.0, f"near-right y={refined[1]['y']:.3f}, expected > 1.0"

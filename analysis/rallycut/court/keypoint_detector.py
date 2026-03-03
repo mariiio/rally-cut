@@ -11,6 +11,7 @@ pipeline if confidence is too low.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,9 @@ from typing import Any
 import cv2
 import numpy as np
 
+from rallycut.court.calibration import COURT_LENGTH, COURT_WIDTH
 from rallycut.court.detector import CourtDetectionResult
+from rallycut.court.line_geometry import line_intersection
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +182,11 @@ class CourtKeypointDetector:
             frame_results, n_sampled=n_sampled,
         )
 
+        # Refine low-confidence near corners via perspective extrapolation
+        corners = self._refine_near_corners(
+            corners, diagnostics.per_corner_confidence,
+        )
+
         return CourtDetectionResult(
             corners=corners,
             confidence=confidence,
@@ -208,8 +216,12 @@ class CourtKeypointDetector:
                 fitting_method="keypoint",
             )
 
+        # Refine low-confidence near corners via perspective extrapolation
+        per_corner_conf = dict(zip(CORNER_NAMES, result.kpt_confidences))
+        corners = self._refine_near_corners(result.corners, per_corner_conf)
+
         return CourtDetectionResult(
-            corners=result.corners,
+            corners=corners,
             confidence=result.confidence,
             fitting_method="keypoint",
         )
@@ -322,6 +334,130 @@ class CourtKeypointDetector:
             confidence=best_conf,
             kpt_confidences=kpt_confidences,
         )
+
+    def _refine_near_corners(
+        self,
+        corners: list[dict[str, float]],
+        per_corner_confidence: dict[str, float],
+        conf_threshold: float = 0.5,
+    ) -> list[dict[str, float]]:
+        """Replace low-confidence near corners with perspective-extrapolated positions.
+
+        Uses the accurate far corners as anchors, derives the vanishing point from
+        sideline directions, and extrapolates near corners using the known court
+        aspect ratio (16m/8m = 2.0). Same math as classical detector Strategy 3.
+
+        Args:
+            corners: 4 corners [near-left, near-right, far-right, far-left].
+            per_corner_confidence: Mean confidence per corner name.
+            conf_threshold: Below this, replace the near corner.
+
+        Returns:
+            Refined corners (new list, original unchanged).
+        """
+        if len(corners) != 4:
+            return corners
+
+        nl_conf = per_corner_confidence.get("near-left", 1.0)
+        nr_conf = per_corner_confidence.get("near-right", 1.0)
+
+        # Skip if both near corners are confident
+        if nl_conf >= conf_threshold and nr_conf >= conf_threshold:
+            return corners
+
+        # Extract corner positions as tuples
+        near_left = (corners[0]["x"], corners[0]["y"])
+        near_right = (corners[1]["x"], corners[1]["y"])
+        far_right = (corners[2]["x"], corners[2]["y"])
+        far_left = (corners[3]["x"], corners[3]["y"])
+
+        # Compute vanishing point from sideline convergence
+        # Left sideline: far_left → near_left, Right sideline: far_right → near_right
+        vp = line_intersection(far_left, near_left, far_right, near_right)
+        if vp is None:
+            logger.debug("Sidelines are parallel — skipping near-corner refinement")
+            return corners
+
+        # Validate VP is above far baseline (perspective convergence upward)
+        far_mid_y = (far_left[1] + far_right[1]) / 2.0
+        if vp[1] >= far_mid_y:
+            logger.debug(
+                "VP below far baseline (y=%.3f >= %.3f) — skipping refinement",
+                vp[1], far_mid_y,
+            )
+            return corners
+
+        # Aspect ratio: court_length / court_width
+        aspect_ratio = COURT_LENGTH / COURT_WIDTH  # 2.0
+
+        # Far baseline length (in normalized image coords)
+        far_baseline_len = math.sqrt(
+            (far_right[0] - far_left[0]) ** 2 + (far_right[1] - far_left[1]) ** 2
+        )
+        if far_baseline_len < 0.01:
+            return corners
+
+        refined = list(corners)  # shallow copy of dicts
+
+        # Extrapolate low-confidence near-left
+        if nl_conf < conf_threshold:
+            dx = vp[0] - far_left[0]
+            dy = vp[1] - far_left[1]
+            sl_len = math.sqrt(dx ** 2 + dy ** 2)
+            if sl_len > 0.01:
+                t = -(far_baseline_len * aspect_ratio) / sl_len
+                nx, ny = far_left[0] + t * dx, far_left[1] + t * dy
+                refined[0] = {"x": round(nx, 6), "y": round(ny, 6)}
+                logger.info(
+                    "Refined near-left: (%.3f, %.3f) → (%.3f, %.3f) [conf=%.3f]",
+                    near_left[0], near_left[1], nx, ny, nl_conf,
+                )
+
+        # Extrapolate low-confidence near-right
+        if nr_conf < conf_threshold:
+            dx = vp[0] - far_right[0]
+            dy = vp[1] - far_right[1]
+            sl_len = math.sqrt(dx ** 2 + dy ** 2)
+            if sl_len > 0.01:
+                t = -(far_baseline_len * aspect_ratio) / sl_len
+                nx, ny = far_right[0] + t * dx, far_right[1] + t * dy
+                refined[1] = {"x": round(nx, 6), "y": round(ny, 6)}
+                logger.info(
+                    "Refined near-right: (%.3f, %.3f) → (%.3f, %.3f) [conf=%.3f]",
+                    near_right[0], near_right[1], nx, ny, nr_conf,
+                )
+
+        # Validate result is a convex quadrilateral; fall back if not
+        if not self._is_convex_quad(refined):
+            logger.warning("Refined corners not convex — falling back to original")
+            return corners
+
+        return refined
+
+    @staticmethod
+    def _is_convex_quad(corners: list[dict[str, float]]) -> bool:
+        """Check if 4 corners form a convex quadrilateral.
+
+        Uses cross product sign consistency around the polygon.
+        """
+        if len(corners) != 4:
+            return False
+
+        pts = [(c["x"], c["y"]) for c in corners]
+        sign = None
+        for i in range(4):
+            p0 = pts[i]
+            p1 = pts[(i + 1) % 4]
+            p2 = pts[(i + 2) % 4]
+            cross = (p1[0] - p0[0]) * (p2[1] - p1[1]) - (p1[1] - p0[1]) * (p2[0] - p1[0])
+            if abs(cross) < 1e-10:
+                continue  # collinear edge, skip
+            s = cross > 0
+            if sign is None:
+                sign = s
+            elif s != sign:
+                return False
+        return True
 
     def _aggregate(
         self, frame_results: list[FrameKeypoints],
