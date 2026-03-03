@@ -148,6 +148,14 @@ export async function runMatchAnalysis(videoId: string): Promise<MatchAnalysisRe
 
     console.log(`[MATCH_ANALYSIS] Saved match analysis for video ${videoId}: ${result.numRallies} rallies matched`);
 
+    // Remap per-rally track IDs to consistent player IDs (1-4)
+    // (best-effort — don't fail the whole pipeline)
+    try {
+      await remapTrackIds(videoId);
+    } catch (remapError) {
+      console.error(`[MATCH_ANALYSIS] Track ID remapping failed (non-fatal):`, remapError);
+    }
+
     // Re-attribute player actions using match-level team identity
     // (best-effort — don't fail the whole pipeline)
     try {
@@ -170,6 +178,63 @@ export async function runMatchAnalysis(videoId: string): Promise<MatchAnalysisRe
   } finally {
     await fs.unlink(outputPath).catch(() => {});
   }
+}
+
+/**
+ * Remap per-rally track IDs to consistent match-level player IDs (1-4).
+ * Updates positions_json, contacts_json, actions_json in player_tracks.
+ */
+async function remapTrackIds(videoId: string): Promise<void> {
+  const logPrefix = 'REMAP_TRACKS';
+  const analysisDir = path.resolve(__dirname, '../../../analysis');
+  const args = ['run', 'rallycut', 'remap-track-ids', videoId, '--quiet'];
+
+  console.log(`[${logPrefix}] Running: uv ${args.join(' ')}`);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (fn: () => void) => {
+      if (!settled) { settled = true; fn(); }
+    };
+
+    const child = spawn('uv', args, {
+      cwd: analysisDir,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, DATABASE_URL: env.DATABASE_URL },
+    });
+
+    // 5-minute timeout
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      settle(() => reject(new Error(`${logPrefix} timed out after 5 minutes`)));
+    }, 5 * 60 * 1000);
+
+    let stderr = '';
+    child.stdout?.on('data', (data: Buffer) => {
+      const line = data.toString().trim();
+      if (line) console.log(`[${logPrefix}:PY:OUT] ${line}`);
+    });
+    child.stderr?.on('data', (data: Buffer) => {
+      stderr += data.toString();
+      const line = data.toString().trim();
+      if (line) console.log(`[${logPrefix}:PY] ${line}`);
+    });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      settle(() => reject(new Error(`${logPrefix} failed to start: ${error.message}`)));
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code != null && code === 0) {
+        console.log(`[${logPrefix}] Completed for video ${videoId}`);
+        settle(() => resolve());
+      } else {
+        settle(() => reject(new Error(
+          `${logPrefix} exited with code ${code}: ${(stderr || '').slice(-1000)}`,
+        )));
+      }
+    });
+  });
 }
 
 /**
