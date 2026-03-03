@@ -139,6 +139,75 @@ def load_rallies_with_action_gt(
     return results
 
 
+def load_match_team_assignments(
+    video_ids: set[str],
+) -> dict[str, dict[int, int]]:
+    """Load match-level team assignments from match_analysis_json.
+
+    For each rally, builds a track_id → team (0=near, 1=far) mapping using
+    cross-rally player matching (more reliable than per-rally median Y).
+
+    Returns:
+        Dict from rally_id → {track_id: team_int}.
+    """
+    if not video_ids:
+        return {}
+
+    placeholders = ", ".join(["%s"] * len(video_ids))
+    query = f"""
+        SELECT id, match_analysis_json
+        FROM videos
+        WHERE id IN ({placeholders})
+          AND match_analysis_json IS NOT NULL
+    """
+
+    result: dict[str, dict[int, int]] = {}
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, list(video_ids))
+            rows = cur.fetchall()
+
+    for video_id_val, ma_json in rows:
+        if not isinstance(ma_json, dict):
+            continue
+        rallies = ma_json.get("rallies", [])
+        if not isinstance(rallies, list):
+            continue
+
+        # Compute cumulative side switches to determine team assignments.
+        # Players 1-2 start on near (team 0), 3-4 start on far (team 1).
+        # Each side switch flips the mapping.
+        side_switch_count = 0
+        for rally_entry in rallies:
+            if rally_entry.get("sideSwitchDetected") or rally_entry.get(
+                "side_switch_detected"
+            ):
+                side_switch_count += 1
+
+            track_to_player = rally_entry.get("trackToPlayer") or rally_entry.get(
+                "track_to_player", {}
+            )
+            rid = rally_entry.get("rallyId") or rally_entry.get("rally_id", "")
+            if not rid or not track_to_player:
+                continue
+
+            # Build track_id → team mapping
+            teams: dict[int, int] = {}
+            for tid_str, player_id in track_to_player.items():
+                pid = int(player_id)
+                # Base: players 1-2 = team 0 (near), 3-4 = team 1 (far)
+                base_team = 0 if pid <= 2 else 1
+                # Apply side switches (each switch flips teams)
+                team = base_team if side_switch_count % 2 == 0 else 1 - base_team
+                teams[int(tid_str)] = team
+
+            if teams:
+                result[rid] = teams
+
+    return result
+
+
 @dataclass
 class MatchResult:
     """Result of matching GT to predicted contacts."""
@@ -350,7 +419,13 @@ def main() -> None:
         console.print("Label actions in the web editor first (Label Actions button).")
         return
 
-    console.print(f"\n[bold]Evaluating {len(rallies)} rallies with action ground truth[/bold]\n")
+    # Load match-level team assignments for all videos
+    video_ids = {r.video_id for r in rallies}
+    match_teams_by_rally = load_match_team_assignments(video_ids)
+    n_with_match = sum(1 for r in rallies if r.rally_id in match_teams_by_rally)
+
+    console.print(f"\n[bold]Evaluating {len(rallies)} rallies with action ground truth[/bold]")
+    console.print(f"  Match-level teams available: {n_with_match}/{len(rallies)} rallies\n")
 
     all_matches: list[MatchResult] = []
     all_unmatched: list[dict] = []
@@ -411,9 +486,7 @@ def main() -> None:
                     for pp in rally.positions_json
                 ]
 
-            # team_assignments not passed here — DB doesn't store them,
-            # and recomputing would change action classification baseline.
-            # Contact detection uses net_y alone for court side fallback.
+            match_teams = match_teams_by_rally.get(rally.rally_id)
             contacts = detect_contacts(
                 ball_positions=ball_positions,
                 player_positions=player_positions,
@@ -422,11 +495,13 @@ def main() -> None:
                 frame_count=rally.frame_count or None,
                 classifier=contact_classifier,
                 use_classifier=not args.no_classifier,
+                match_team_assignments=match_teams,
             )
 
             rally_actions = classify_rally_actions(
                 contacts, rally.rally_id,
                 use_classifier=not args.no_action_classifier,
+                team_assignments=match_teams,
             )
             pred_actions = [a.to_dict() for a in rally_actions.actions]
         elif rally.actions_json:
