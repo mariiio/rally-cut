@@ -144,6 +144,15 @@ export function PlayerTrackingToolbar() {
     }
   }, [activeMatchId, isBatchActive, fps, pollBatchTrackingStatus]);
 
+  // Player number mapping: sorted trackIds → 1-based display numbers
+  const playerNumberMap = useMemo(() => {
+    if (!trackData?.tracks?.length) return new Map<number, number>();
+    const sorted = [...trackData.tracks].sort((a, b) => a.trackId - b.trackId);
+    const map = new Map<number, number>();
+    sorted.forEach((t, i) => map.set(t.trackId, i + 1));
+    return map;
+  }, [trackData?.tracks]);
+
   // Don't show if no video loaded
   if (!activeMatchId) {
     return null;
@@ -309,15 +318,6 @@ export function PlayerTrackingToolbar() {
   const gtCount = gtLabels?.length ?? 0;
   const isDirty = backendRallyId ? actionGtDirty[backendRallyId] : false;
   const isSaving = backendRallyId ? actionGtSaving[backendRallyId] : false;
-
-  // Player number mapping: sorted trackIds → 1-based display numbers
-  const playerNumberMap = useMemo(() => {
-    if (!trackData?.tracks?.length) return new Map<number, number>();
-    const sorted = [...trackData.tracks].sort((a, b) => a.trackId - b.trackId);
-    const map = new Map<number, number>();
-    sorted.forEach((t, i) => map.set(t.trackId, i + 1));
-    return map;
-  }, [trackData?.tracks]);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', py: 0.75, px: 1 }}>
