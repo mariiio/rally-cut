@@ -15,6 +15,7 @@ import typer
 from rich.console import Console
 
 from rallycut.cli.utils import handle_errors
+from rallycut.tracking.match_tracker import build_match_team_assignments
 
 if TYPE_CHECKING:
     from rallycut.tracking.action_classifier import ClassifiedAction
@@ -22,55 +23,6 @@ if TYPE_CHECKING:
 
 console = Console()
 logger = logging.getLogger(__name__)
-
-
-def _build_match_team_assignments(
-    match_analysis: dict[str, Any],
-    min_confidence: float = 0.70,
-) -> dict[str, dict[int, int]]:
-    """Build per-rally team assignments from match_analysis_json.
-
-    Returns:
-        Map of rally_id → {track_id → team (0=near, 1=far)}.
-        Only includes rallies with assignment confidence >= min_confidence.
-    """
-    rallies = match_analysis.get("rallies", [])
-    if not isinstance(rallies, list):
-        return {}
-
-    result: dict[str, dict[int, int]] = {}
-    side_switch_count = 0
-
-    for rally_entry in rallies:
-        if rally_entry.get("sideSwitchDetected") or rally_entry.get(
-            "side_switch_detected"
-        ):
-            side_switch_count += 1
-
-        track_to_player = rally_entry.get("trackToPlayer") or rally_entry.get(
-            "track_to_player", {}
-        )
-        rid = rally_entry.get("rallyId") or rally_entry.get("rally_id", "")
-        if not rid or not track_to_player:
-            continue
-
-        conf = rally_entry.get("assignmentConfidence") or rally_entry.get(
-            "assignment_confidence", 0
-        )
-        if conf < min_confidence:
-            continue
-
-        teams: dict[int, int] = {}
-        for tid_str, player_id in track_to_player.items():
-            pid = int(player_id)
-            base_team = 0 if pid <= 2 else 1
-            team = base_team if side_switch_count % 2 == 0 else 1 - base_team
-            teams[int(tid_str)] = team
-
-        if teams:
-            result[rid] = teams
-
-    return result
 
 
 def _reconstruct_contacts(
@@ -193,7 +145,7 @@ def reattribute_actions_cmd(
         raise typer.Exit(1)
 
     match_analysis = cast(dict[str, Any], row[0])
-    teams_by_rally = _build_match_team_assignments(match_analysis, min_confidence)
+    teams_by_rally = build_match_team_assignments(match_analysis, min_confidence)
 
     if not teams_by_rally:
         if not quiet:

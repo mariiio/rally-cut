@@ -36,7 +36,6 @@ def _build_full_mapping(
     Unmapped tracks keep their ID if no collision, otherwise shift to 101+.
     """
     mapping: dict[int, int] = {}
-    # Player IDs that are targets of the mapping
     used_ids = set(track_to_player.values())
 
     # First, add the explicit track→player mappings
@@ -234,8 +233,7 @@ def remap_track_ids_cmd(
         mapping = _build_full_mapping(raw_mapping, all_track_ids)
 
         # Check if already remapped (all mapped tracks already using target IDs)
-        needs_remap = any(k != v for k, v in mapping.items())
-        if not needs_remap:
+        if not any(k != v for k, v in mapping.items()):
             if not quiet:
                 console.print(f"  [dim]{rally_id[:8]}: already using player IDs[/dim]")
             continue
@@ -323,6 +321,26 @@ def remap_track_ids_cmd(
                         f"WHERE id = %s",
                         values,
                     )
+
+                # Update match_analysis_json trackToPlayer to identity mappings.
+                # This ensures idempotency: subsequent runs see identity mappings
+                # and skip (since data now uses player IDs directly).
+                for rally_entry in match_analysis.get("rallies", []):
+                    rid = (
+                        rally_entry.get("rallyId")
+                        or rally_entry.get("rally_id", "")
+                    )
+                    raw = raw_mappings.get(rid, {})
+                    if raw and any(k != v for k, v in raw.items()):
+                        identity = {str(v): v for v in raw.values()}
+                        rally_entry["trackToPlayer"] = identity
+                        if "track_to_player" in rally_entry:
+                            rally_entry["track_to_player"] = identity
+
+                cur.execute(
+                    "UPDATE videos SET match_analysis_json = %s WHERE id = %s",
+                    [json.dumps(match_analysis), video_id],
+                )
             conn.commit()
 
         if not quiet:

@@ -116,11 +116,15 @@ uv run rallycut evaluate --model beach --iou 0.5      # Evaluate beach model
 uv run python scripts/eval_stratified.py             # Group metrics by brightness/camera/complexity
 uv run python scripts/eval_stratified.py --ball-only # Ball metrics only
 
-# Cross-rally player matching
+# Cross-rally player matching & post-processing
 uv run rallycut match-players <video-id>                 # Assign consistent player IDs 1-4
 uv run rallycut match-players <video-id> -o result.json  # Export assignments to JSON
 uv run rallycut match-players <video-id> --num-samples 20  # More frames per track (default: 12)
 uv run rallycut match-players <video-id> -q              # Quiet mode
+uv run rallycut remap-track-ids <video-id>               # Remap stored track IDs to player IDs
+uv run rallycut remap-track-ids <video-id> --dry-run     # Preview changes without updating DB
+uv run rallycut reattribute-actions <video-id>           # Re-attribute actions using match-level teams
+uv run rallycut reattribute-actions <video-id> --min-confidence 0.80  # Stricter confidence gate
 
 # Development
 uv run pytest tests                    # Run tests (excludes slow ML tests)

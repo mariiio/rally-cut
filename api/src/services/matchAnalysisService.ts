@@ -353,6 +353,11 @@ function runCli<T>(
   logPrefix: string,
 ): Promise<T> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (fn: () => void) => {
+      if (!settled) { settled = true; fn(); }
+    };
+
     const analysisDir = path.resolve(__dirname, '../../../analysis');
 
     const args = ['run', 'rallycut', ...subcommandArgs];
@@ -367,6 +372,12 @@ function runCli<T>(
         DATABASE_URL: env.DATABASE_URL,
       },
     });
+
+    // 5-minute timeout
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      settle(() => reject(new Error(`${logPrefix} timed out after 5 minutes`)));
+    }, 5 * 60 * 1000);
 
     let stdout = '';
     let stderr = '';
@@ -384,21 +395,23 @@ function runCli<T>(
     });
 
     child.on('error', (error) => {
-      reject(new Error(`${logPrefix} failed to start: ${error.message}`));
+      clearTimeout(timer);
+      settle(() => reject(new Error(`${logPrefix} failed to start: ${error.message}`)));
     });
 
-    child.on('exit', async (code) => {
+    child.on('close', async (code) => {
+      clearTimeout(timer);
       if (code !== 0) {
-        reject(new Error(`${logPrefix} exited with code ${code}: ${(stderr || stdout).slice(-1000)}`));
+        settle(() => reject(new Error(`${logPrefix} exited with code ${code}: ${(stderr || stdout).slice(-1000)}`)));
         return;
       }
 
       try {
         const jsonContent = await fs.readFile(outputPath, 'utf-8');
         const result = JSON.parse(jsonContent) as T;
-        resolve(result);
+        settle(() => resolve(result));
       } catch (parseError) {
-        reject(new Error(`Failed to parse ${logPrefix} output: ${parseError}`));
+        settle(() => reject(new Error(`Failed to parse ${logPrefix} output: ${parseError}`)));
       }
     });
   });

@@ -23,7 +23,7 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import cv2
 import numpy as np
@@ -48,6 +48,65 @@ if TYPE_CHECKING:
     from rallycut.tracking.player_tracker import PlayerPosition
 
 logger = logging.getLogger(__name__)
+
+
+def build_match_team_assignments(
+    match_analysis: dict[str, Any],
+    min_confidence: float = 0.0,
+) -> dict[str, dict[int, int]]:
+    """Build per-rally team assignments from match analysis JSON.
+
+    Derives team labels (0=near, 1=far) for each track in each rally,
+    accounting for cumulative side switches across rallies.
+
+    Convention: player IDs 1-2 = team 0 (near), 3-4 = team 1 (far)
+    at baseline. Each side switch flips the mapping.
+
+    Args:
+        match_analysis: The match_analysis_json from the videos table.
+        min_confidence: Skip rallies below this assignment confidence.
+
+    Returns:
+        Dict of rally_id -> {track_id: team (0 or 1)}.
+    """
+    rallies = match_analysis.get("rallies", [])
+    if not isinstance(rallies, list):
+        return {}
+
+    result: dict[str, dict[int, int]] = {}
+    side_switch_count = 0
+
+    for rally_entry in rallies:
+        if rally_entry.get("sideSwitchDetected") or rally_entry.get(
+            "side_switch_detected"
+        ):
+            side_switch_count += 1
+
+        track_to_player = rally_entry.get("trackToPlayer") or rally_entry.get(
+            "track_to_player", {}
+        )
+        rid = rally_entry.get("rallyId") or rally_entry.get("rally_id", "")
+        if not rid or not track_to_player:
+            continue
+
+        if min_confidence > 0:
+            conf = rally_entry.get("assignmentConfidence") or rally_entry.get(
+                "assignment_confidence", 0
+            )
+            if conf < min_confidence:
+                continue
+
+        teams: dict[int, int] = {}
+        for tid_str, player_id in track_to_player.items():
+            pid = int(player_id)
+            base_team = 0 if pid <= 2 else 1
+            team = base_team if side_switch_count % 2 == 0 else 1 - base_team
+            teams[int(tid_str)] = team
+
+        if teams:
+            result[rid] = teams
+
+    return result
 
 
 @dataclass
@@ -288,6 +347,21 @@ class MatchPlayerTracker:
         # Split by court_split_y
         near_tracks = [t for t, y in track_avg_y.items() if y > court_split_y]
         far_tracks = [t for t, y in track_avg_y.items() if y <= court_split_y]
+
+        # If one side is empty and we have 4+ tracks, the court_split_y is wrong.
+        # Re-split by index (bottom half = far, top half = near) for even teams.
+        if len(track_avg_y) >= 4 and (not near_tracks or not far_tracks):
+            all_tracks = sorted(track_avg_y.keys(), key=lambda t: track_avg_y[t])
+            mid = len(all_tracks) // 2
+            far_tracks = all_tracks[:mid]
+            near_tracks = all_tracks[mid:]
+            logger.info(
+                "court_split_y=%.3f put all %d tracks on one side, "
+                "re-splitting by index: near=%s (y>%.3f), far=%s (y<=%.3f)",
+                court_split_y, len(all_tracks),
+                near_tracks, track_avg_y[near_tracks[0]],
+                far_tracks, track_avg_y[far_tracks[-1]],
+            )
 
         return near_tracks, far_tracks
 
