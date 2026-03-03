@@ -28,7 +28,9 @@ from dataclasses import dataclass
 from rich.console import Console
 from rich.table import Table
 
+from rallycut.court.calibration import CourtCalibrator
 from rallycut.evaluation.db import get_connection
+from rallycut.evaluation.tracking.db import load_court_calibration
 from rallycut.tracking.action_classifier import classify_rally_actions
 from rallycut.tracking.contact_detector import ContactDetectionConfig, detect_contacts
 
@@ -139,16 +141,15 @@ def load_rallies_with_action_gt(
     return results
 
 
-def load_match_team_assignments(
+def _load_match_team_assignments(
     video_ids: set[str],
+    min_confidence: float = 0.70,
 ) -> dict[str, dict[int, int]]:
     """Load match-level team assignments from match_analysis_json.
 
-    For each rally, builds a track_id → team (0=near, 1=far) mapping using
-    cross-rally player matching (more reliable than per-rally median Y).
-
-    Returns:
-        Dict from rally_id → {track_id: team_int}.
+    Only includes rallies where assignment confidence >= min_confidence.
+    Convention: players 1-2 = team 0 (near), 3-4 = team 1 (far),
+    flipped by cumulative side switches.
     """
     if not video_ids:
         return {}
@@ -168,16 +169,16 @@ def load_match_team_assignments(
             cur.execute(query, list(video_ids))
             rows = cur.fetchall()
 
-    for video_id_val, ma_json in rows:
+    for _video_id_val, ma_json in rows:
         if not isinstance(ma_json, dict):
             continue
         rallies = ma_json.get("rallies", [])
         if not isinstance(rallies, list):
             continue
 
-        # Compute cumulative side switches to determine team assignments.
-        # Players 1-2 start on near (team 0), 3-4 start on far (team 1).
-        # Each side switch flips the mapping.
+        # Track cumulative side switches to determine team mapping.
+        # Must be counted for ALL rallies (even those skipped for low confidence)
+        # because the parity determines near/far team assignment.
         side_switch_count = 0
         for rally_entry in rallies:
             if rally_entry.get("sideSwitchDetected") or rally_entry.get(
@@ -192,13 +193,16 @@ def load_match_team_assignments(
             if not rid or not track_to_player:
                 continue
 
-            # Build track_id → team mapping
+            conf = rally_entry.get("assignmentConfidence") or rally_entry.get(
+                "assignment_confidence", 0
+            )
+            if conf < min_confidence:
+                continue
+
             teams: dict[int, int] = {}
             for tid_str, player_id in track_to_player.items():
                 pid = int(player_id)
-                # Base: players 1-2 = team 0 (near), 3-4 = team 1 (far)
                 base_team = 0 if pid <= 2 else 1
-                # Apply side switches (each switch flips teams)
                 team = base_team if side_switch_count % 2 == 0 else 1 - base_team
                 teams[int(tid_str)] = team
 
@@ -419,13 +423,27 @@ def main() -> None:
         console.print("Label actions in the web editor first (Label Actions button).")
         return
 
-    # Load match-level team assignments for all videos
+    # Load court calibrations per video for perspective-corrected player attribution
+    calibrators: dict[str, CourtCalibrator | None] = {}
     video_ids = {r.video_id for r in rallies}
-    match_teams_by_rally = load_match_team_assignments(video_ids)
+    n_calibrated = 0
+    for vid in video_ids:
+        corners = load_court_calibration(vid)
+        if corners and len(corners) == 4:
+            cal = CourtCalibrator()
+            cal.calibrate([(c["x"], c["y"]) for c in corners])
+            calibrators[vid] = cal
+            n_calibrated += 1
+        else:
+            calibrators[vid] = None
+
+    # Load match-level team assignments for re-attribution (confidence-gated)
+    match_teams_by_rally = _load_match_team_assignments(video_ids, min_confidence=0.70)
     n_with_match = sum(1 for r in rallies if r.rally_id in match_teams_by_rally)
 
     console.print(f"\n[bold]Evaluating {len(rallies)} rallies with action ground truth[/bold]")
-    console.print(f"  Match-level teams available: {n_with_match}/{len(rallies)} rallies\n")
+    console.print(f"  Court calibration: {n_calibrated}/{len(video_ids)} videos")
+    console.print(f"  Match teams (conf>=0.70): {n_with_match}/{len(rallies)} rallies\n")
 
     all_matches: list[MatchResult] = []
     all_unmatched: list[dict] = []
@@ -486,7 +504,6 @@ def main() -> None:
                     for pp in rally.positions_json
                 ]
 
-            match_teams = match_teams_by_rally.get(rally.rally_id)
             contacts = detect_contacts(
                 ball_positions=ball_positions,
                 player_positions=player_positions,
@@ -495,13 +512,14 @@ def main() -> None:
                 frame_count=rally.frame_count or None,
                 classifier=contact_classifier,
                 use_classifier=not args.no_classifier,
-                match_team_assignments=match_teams,
+                court_calibrator=calibrators.get(rally.video_id),
             )
 
+            match_teams = match_teams_by_rally.get(rally.rally_id)
             rally_actions = classify_rally_actions(
                 contacts, rally.rally_id,
                 use_classifier=not args.no_action_classifier,
-                team_assignments=match_teams,
+                match_team_assignments=match_teams,
             )
             pred_actions = [a.to_dict() for a in rally_actions.actions]
         elif rally.actions_json:

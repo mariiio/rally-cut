@@ -14,6 +14,7 @@ from rallycut.cli.commands.evaluate_tracking import app as evaluate_tracking_app
 from rallycut.cli.commands.label import app as label_app
 from rallycut.cli.commands.match_players import match_players as match_players_command
 from rallycut.cli.commands.profile import profile as profile_command
+from rallycut.cli.commands.reattribute_actions import reattribute_actions_cmd
 from rallycut.cli.commands.track_player import track_players as track_players_command
 from rallycut.cli.commands.train import app as train_app
 
@@ -34,6 +35,7 @@ app.command(name="match-players")(match_players_command)
 app.command(name="detect-court")(detect_court_command)
 app.command(name="assess-quality")(assess_quality_command)
 app.command(name="compute-match-stats")(compute_match_stats_cmd)
+app.command(name="reattribute-actions")(reattribute_actions_cmd)
 app.add_typer(evaluate_tracking_app, name="evaluate-tracking")
 app.add_typer(label_app, name="label")
 app.add_typer(evaluate_app, name="evaluate")
