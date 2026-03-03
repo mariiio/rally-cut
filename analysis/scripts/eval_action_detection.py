@@ -151,6 +151,8 @@ def _load_match_team_assignments(
     Convention: players 1-2 = team 0 (near), 3-4 = team 1 (far),
     flipped by cumulative side switches.
     """
+    from rallycut.tracking.match_tracker import build_match_team_assignments
+
     if not video_ids:
         return {}
 
@@ -172,42 +174,7 @@ def _load_match_team_assignments(
     for _video_id_val, ma_json in rows:
         if not isinstance(ma_json, dict):
             continue
-        rallies = ma_json.get("rallies", [])
-        if not isinstance(rallies, list):
-            continue
-
-        # Track cumulative side switches to determine team mapping.
-        # Must be counted for ALL rallies (even those skipped for low confidence)
-        # because the parity determines near/far team assignment.
-        side_switch_count = 0
-        for rally_entry in rallies:
-            if rally_entry.get("sideSwitchDetected") or rally_entry.get(
-                "side_switch_detected"
-            ):
-                side_switch_count += 1
-
-            track_to_player = rally_entry.get("trackToPlayer") or rally_entry.get(
-                "track_to_player", {}
-            )
-            rid = rally_entry.get("rallyId") or rally_entry.get("rally_id", "")
-            if not rid or not track_to_player:
-                continue
-
-            conf = rally_entry.get("assignmentConfidence") or rally_entry.get(
-                "assignment_confidence", 0
-            )
-            if conf < min_confidence:
-                continue
-
-            teams: dict[int, int] = {}
-            for tid_str, player_id in track_to_player.items():
-                pid = int(player_id)
-                base_team = 0 if pid <= 2 else 1
-                team = base_team if side_switch_count % 2 == 0 else 1 - base_team
-                teams[int(tid_str)] = team
-
-            if teams:
-                result[rid] = teams
+        result.update(build_match_team_assignments(ma_json, min_confidence))
 
     return result
 
