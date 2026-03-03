@@ -478,17 +478,18 @@ class TestRefineNearCorners:
         # Should fall back to original (VP is below far baseline or parallel)
         assert refined == corners
 
-    def test_offscreen_near_corners_allowed(self) -> None:
-        """Refined near corners with y > 1.0 are valid (off-screen)."""
+    def test_offscreen_near_corners_clamped(self) -> None:
+        """Refined near corners are clamped to max margin beyond frame."""
         detector = self._make_detector()
+        margin = CourtKeypointDetector.NEAR_CORNER_MAX_MARGIN
 
-        # Wide far baseline + strong convergence → extrapolated near corners below frame
-        # VP at (0.50, -0.65), far baseline = 0.40, aspect ratio = 2.0
+        # Extreme convergence: VP very close to far baseline → large extrapolation
+        # that would overshoot far beyond the frame without clamping.
         corners = [
-            {"x": 0.20, "y": 0.70},  # near-left (bad — pulled inward)
-            {"x": 0.80, "y": 0.70},  # near-right (bad)
-            {"x": 0.70, "y": 0.25},  # far-right (good)
-            {"x": 0.30, "y": 0.25},  # far-left (good)
+            {"x": -0.50, "y": 0.90},  # near-left (model prediction, way off)
+            {"x": 1.50, "y": 0.90},  # near-right (model prediction, way off)
+            {"x": 0.70, "y": 0.40},  # far-right (good)
+            {"x": 0.30, "y": 0.40},  # far-left (good)
         ]
         conf = {
             "near-left": 0.001,
@@ -499,6 +500,8 @@ class TestRefineNearCorners:
 
         refined = detector._refine_near_corners(corners, conf)
 
-        # Near corners should be extrapolated to y > 1.0 (below frame)
-        assert refined[0]["y"] > 1.0, f"near-left y={refined[0]['y']:.3f}, expected > 1.0"
-        assert refined[1]["y"] > 1.0, f"near-right y={refined[1]['y']:.3f}, expected > 1.0"
+        # Near corners should be clamped within [-margin, 1+margin]
+        assert refined[0]["x"] >= -margin, f"near-left x={refined[0]['x']}"
+        assert refined[0]["y"] <= 1.0 + margin, f"near-left y={refined[0]['y']}"
+        assert refined[1]["x"] <= 1.0 + margin, f"near-right x={refined[1]['x']}"
+        assert refined[1]["y"] <= 1.0 + margin, f"near-right y={refined[1]['y']}"

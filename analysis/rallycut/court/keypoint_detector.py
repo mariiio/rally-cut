@@ -335,6 +335,11 @@ class CourtKeypointDetector:
             kpt_confidences=kpt_confidences,
         )
 
+    # Max extrapolation beyond [0, 1] range for near corners.
+    # Caps overshoot: near corners clamped to [-margin, 1+margin].
+    # 0.20 reduces regressions from 11→5 while keeping 33% MCD improvement.
+    NEAR_CORNER_MAX_MARGIN = 0.20
+
     def _refine_near_corners(
         self,
         corners: list[dict[str, float]],
@@ -346,6 +351,9 @@ class CourtKeypointDetector:
         Uses the accurate far corners as anchors, derives the vanishing point from
         sideline directions, and extrapolates near corners using the known court
         aspect ratio (16m/8m = 2.0). Same math as classical detector Strategy 3.
+
+        Extrapolated positions are clamped to NEAR_CORNER_MAX_MARGIN beyond the
+        frame to prevent overshoot when GT corners are just slightly off-screen.
 
         Args:
             corners: 4 corners [near-left, near-right, far-right, far-left].
@@ -426,6 +434,15 @@ class CourtKeypointDetector:
                     "Refined near-right: (%.3f, %.3f) → (%.3f, %.3f) [conf=%.3f]",
                     near_right[0], near_right[1], nx, ny, nr_conf,
                 )
+
+        # Clamp near corners to limit extrapolation overshoot
+        margin = self.NEAR_CORNER_MAX_MARGIN
+        for i in (0, 1):  # near-left, near-right
+            c = refined[i]
+            cx = max(-margin, min(1.0 + margin, c["x"]))
+            cy = max(-margin, min(1.0 + margin, c["y"]))
+            if cx != c["x"] or cy != c["y"]:
+                refined[i] = {"x": round(cx, 6), "y": round(cy, 6)}
 
         # Validate result is a convex quadrilateral; fall back if not
         if not self._is_convex_quad(refined):
