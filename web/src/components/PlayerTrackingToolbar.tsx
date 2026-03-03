@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Box, Button, IconButton, CircularProgress, Tooltip, Typography, Chip, Divider, Dialog, DialogTitle, DialogContent, DialogActions, TextField, FormControl, InputLabel, Select, MenuItem, FormControlLabel, Checkbox } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import CropFreeIcon from '@mui/icons-material/CropFree';
@@ -309,6 +309,15 @@ export function PlayerTrackingToolbar() {
   const gtCount = gtLabels?.length ?? 0;
   const isDirty = backendRallyId ? actionGtDirty[backendRallyId] : false;
   const isSaving = backendRallyId ? actionGtSaving[backendRallyId] : false;
+
+  // Player number mapping: sorted trackIds → 1-based display numbers
+  const playerNumberMap = useMemo(() => {
+    if (!trackData?.tracks?.length) return new Map<number, number>();
+    const sorted = [...trackData.tracks].sort((a, b) => a.trackId - b.trackId);
+    const map = new Map<number, number>();
+    sorted.forEach((t, i) => map.set(t.trackId, i + 1));
+    return map;
+  }, [trackData?.tracks]);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', py: 0.75, px: 1 }}>
@@ -647,7 +656,7 @@ export function PlayerTrackingToolbar() {
             />
           ))}
           <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-            , . = step frame | ESC = exit
+            1-4 = player | , . = step frame | ESC = exit
           </Typography>
         </Box>
       )}
@@ -658,10 +667,15 @@ export function PlayerTrackingToolbar() {
           <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 'bold', mr: 0.5 }}>
             GT Labels:
           </Typography>
-          {gtLabels.map((label) => (
+          {gtLabels.map((label) => {
+            const pNum = label.playerTrackId >= 0 ? playerNumberMap.get(label.playerTrackId) : undefined;
+            const chipLabel = pNum != null
+              ? `${formatPhase(label.action)} f${label.frame} P${pNum}`
+              : `${formatPhase(label.action)} f${label.frame}`;
+            return (
             <Box key={label.frame} sx={{ display: 'flex', alignItems: 'center' }}>
               <Chip
-                label={`${formatPhase(label.action)} f${label.frame}`}
+                label={chipLabel}
                 size="small"
                 onClick={() => handleSeekToLabel(label.frame)}
                 onDelete={() => handleDeleteLabel(label.frame)}
@@ -678,7 +692,8 @@ export function PlayerTrackingToolbar() {
                 }}
               />
             </Box>
-          ))}
+            );
+          })}
         </Box>
       )}
 

@@ -27,6 +27,7 @@ interface ActionOverlayProps {
   isLabelingMode?: boolean;
   onUpdateLabel?: (frame: number, action: ActionGroundTruthLabel['action']) => void;
   onDeleteLabel?: (frame: number) => void;
+  playerNumberMap?: Map<number, number>; // trackId → display number 1-4
 }
 
 // How long (seconds) to show the action label after its contact frame
@@ -43,6 +44,7 @@ export function ActionOverlay({
   isLabelingMode,
   onUpdateLabel,
   onDeleteLabel,
+  playerNumberMap,
 }: ActionOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const labelsRef = useRef<HTMLDivElement[]>([]);
@@ -124,7 +126,8 @@ export function ActionOverlay({
           font-size: 10px;
           opacity: 0.8;
         `;
-        badge.textContent = `#${action.playerTrackId}`;
+        const pNum = playerNumberMap?.get(action.playerTrackId);
+        badge.textContent = pNum != null ? `P${pNum}` : `#${action.playerTrackId}`;
         label.appendChild(badge);
       }
 
@@ -180,7 +183,8 @@ export function ActionOverlay({
           font-size: 10px;
           opacity: 0.8;
         `;
-        badge.textContent = `#${gt.playerTrackId}`;
+        const pNum = playerNumberMap?.get(gt.playerTrackId);
+        badge.textContent = pNum != null ? `P${pNum}` : `#${gt.playerTrackId}`;
         label.appendChild(badge);
       }
 
@@ -203,7 +207,7 @@ export function ActionOverlay({
         label.removeEventListener('click', clickHandler);
       }
     };
-  }, [actionsWithTime, gtWithTime, isLabelingMode, handleGtLabelClick]);
+  }, [actionsWithTime, gtWithTime, isLabelingMode, handleGtLabelClick, playerNumberMap]);
 
   // Animation loop — uses requestVideoFrameCallback for frame-accurate sync
   useEffect(() => {

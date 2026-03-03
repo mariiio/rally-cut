@@ -157,6 +157,17 @@ export function VideoPlayer() {
     return findRallyAtTime(sortedRallies, currentTime);
   }, [rallies, sortedRallies, currentTime, selectedRallyId]);
 
+  // Compute player number mapping (trackId → display number 1-4) for labeling mode
+  const labelingPlayerNumbers = useMemo(() => {
+    if (!isLabelingActions || !currentRally?._backendId) return undefined;
+    const trackData = playerTracks[currentRally._backendId]?.tracksJson;
+    if (!trackData?.tracks?.length) return undefined;
+    const sorted = [...trackData.tracks].sort((a, b) => a.trackId - b.trackId);
+    const map = new Map<number, number>();
+    sorted.forEach((t, i) => map.set(t.trackId, i + 1));
+    return map;
+  }, [isLabelingActions, currentRally, playerTracks]);
+
   // Get camera edit for current rally
   const currentCameraEdit = useMemo(() => {
     if (!currentRally) return null;
@@ -887,6 +898,7 @@ export function VideoPlayer() {
               containerRef={videoContainerRef}
               fps={activeMatch?.video?.fps ?? 30}
               teamAssignments={showCourtDebugOverlay ? playerTracks[currentRally._backendId]!.tracksJson!.actions?.teamAssignments : undefined}
+              labelingPlayerNumbers={labelingPlayerNumbers}
             />
           )}
           {/* Ball track overlay */}
@@ -909,6 +921,7 @@ export function VideoPlayer() {
               isLabelingMode={isLabelingActions}
               onUpdateLabel={(frame, action) => updateActionLabel(currentRally._backendId!, frame, action)}
               onDeleteLabel={(frame) => removeActionLabel(currentRally._backendId!, frame)}
+              playerNumberMap={labelingPlayerNumbers}
             />
           )}
           {/* Action labeling keyboard handler */}
