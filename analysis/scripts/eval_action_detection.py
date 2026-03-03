@@ -147,14 +147,24 @@ class MatchResult:
     pred_frame: int | None  # None if unmatched
     pred_action: str | None  # None if unmatched
     player_correct: bool = False
+    player_evaluable: bool = True  # False if GT track_id doesn't exist in tracking
 
 
 def match_contacts(
     gt_labels: list[GtLabel],
     pred_actions: list[dict],
     tolerance: int = 3,
+    available_track_ids: set[int] | None = None,
 ) -> tuple[list[MatchResult], list[dict]]:
     """Match GT labels to predicted actions using frame tolerance.
+
+    Args:
+        gt_labels: Ground truth labels.
+        pred_actions: Predicted action dicts.
+        tolerance: Frame tolerance for matching.
+        available_track_ids: Track IDs present in current tracking data.
+            When provided, marks matches as player_evaluable=False if the GT
+            track_id doesn't exist in the current tracking data.
 
     Returns:
         Tuple of (matched GT results, unmatched predictions).
@@ -178,6 +188,11 @@ def match_contacts(
                 best_dist = dist
                 best_idx = i
 
+        # Determine if GT track_id is evaluable
+        evaluable = True
+        if available_track_ids is not None and gt.player_track_id >= 0:
+            evaluable = gt.player_track_id in available_track_ids
+
         if best_idx is not None:
             used_preds.add(best_idx)
             pred = pred_sorted[best_idx]
@@ -187,6 +202,7 @@ def match_contacts(
                 pred_frame=pred.get("frame"),
                 pred_action=pred.get("action"),
                 player_correct=(gt.player_track_id == pred.get("playerTrackId", -1)),
+                player_evaluable=evaluable,
             ))
         else:
             results.append(MatchResult(
@@ -194,6 +210,7 @@ def match_contacts(
                 gt_action=gt.action,
                 pred_frame=None,
                 pred_action=None,
+                player_evaluable=evaluable,
             ))
 
     # Collect unmatched predictions
@@ -226,6 +243,13 @@ def compute_metrics(
     # Player attribution accuracy
     player_correct = sum(1 for m in matched if m.player_correct)
     player_accuracy = player_correct / max(1, tp)
+
+    # Evaluable player attribution (excluding GT labels with stale track_ids)
+    evaluable_matched = [m for m in matched if m.player_evaluable]
+    evaluable_correct = sum(1 for m in evaluable_matched if m.player_correct)
+    evaluable_total = len(evaluable_matched)
+    evaluable_accuracy = evaluable_correct / max(1, evaluable_total)
+    evaluable_skipped = tp - evaluable_total
 
     # Per-class metrics
     per_class: dict[str, dict[str, float]] = {}
@@ -264,6 +288,10 @@ def compute_metrics(
         "f1": f1,
         "action_accuracy": action_accuracy,
         "player_accuracy": player_accuracy,
+        "player_evaluable_accuracy": evaluable_accuracy,
+        "player_evaluable_total": evaluable_total,
+        "player_evaluable_correct": evaluable_correct,
+        "player_evaluable_skipped": evaluable_skipped,
         "per_class": per_class,
     }
 
@@ -421,10 +449,16 @@ def main() -> None:
         # FPS-adaptive tolerance: convert ms to frames for this rally
         tolerance_frames = max(1, round(rally.fps * args.tolerance_ms / 1000))
 
+        # Collect available track_ids for evaluable player attribution
+        avail_tids: set[int] | None = None
+        if rally.positions_json:
+            avail_tids = {pp["trackId"] for pp in rally.positions_json}
+
         matches, unmatched = match_contacts(
             rally.gt_labels,
             real_pred_actions,
             tolerance=tolerance_frames,
+            available_track_ids=avail_tids,
         )
 
         metrics = compute_metrics(matches, unmatched)
@@ -474,6 +508,15 @@ def main() -> None:
         console.print(f"  [bold]Contact F1:        {agg_metrics['f1']:.1%}[/bold]")
         console.print(f"  [bold]Action Accuracy:   {agg_metrics['action_accuracy']:.1%}[/bold]")
         console.print(f"  Player Attribution: {agg_metrics['player_accuracy']:.1%}")
+        skipped = agg_metrics['player_evaluable_skipped']
+        if skipped > 0:
+            ev_acc = agg_metrics['player_evaluable_accuracy']
+            ev_tot = agg_metrics['player_evaluable_total']
+            ev_cor = agg_metrics['player_evaluable_correct']
+            console.print(
+                f"  Player Attr (eval): {ev_acc:.1%} "
+                f"({ev_cor}/{ev_tot}, {skipped} skipped — stale GT track IDs)"
+            )
 
         # Serve presence: does a serve action exist (real or synthetic)?
         if total_gt_serves > 0:
@@ -529,6 +572,35 @@ def main() -> None:
                     cm_table.add_row(gt_label[:8], *cells)
 
             console.print(cm_table)
+
+        # Per-action player attribution breakdown
+        matched_with_pred = [m for m in all_matches if m.pred_frame is not None]
+        if matched_with_pred:
+            attr_table = Table(title="\nPer-Action Player Attribution")
+            attr_table.add_column("Action", style="bold")
+            attr_table.add_column("Correct", justify="right")
+            attr_table.add_column("Wrong", justify="right")
+            attr_table.add_column("Total", justify="right")
+            attr_table.add_column("Accuracy", justify="right")
+
+            for action in ACTION_TYPES:
+                action_matches = [
+                    m for m in matched_with_pred
+                    if m.gt_action == action and m.player_evaluable
+                ]
+                if not action_matches:
+                    continue
+                correct = sum(1 for m in action_matches if m.player_correct)
+                total = len(action_matches)
+                attr_table.add_row(
+                    action.capitalize(),
+                    str(correct),
+                    str(total - correct),
+                    str(total),
+                    f"{correct / total:.1%}",
+                )
+
+            console.print(attr_table)
 
 
 if __name__ == "__main__":
