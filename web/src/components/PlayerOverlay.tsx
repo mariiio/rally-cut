@@ -10,6 +10,7 @@ interface PlayerOverlayProps {
   containerRef: React.RefObject<HTMLDivElement | null>;
   fps?: number;
   teamAssignments?: Record<string, string>;
+  labelingPlayerNumbers?: Map<number, number>; // trackId → display number 1-4
 }
 
 // Default colors for tracks before player assignment
@@ -41,6 +42,7 @@ export function PlayerOverlay({
   containerRef,
   fps: propFps = 30,
   teamAssignments,
+  labelingPlayerNumbers,
 }: PlayerOverlayProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const trackElementsRef = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -156,7 +158,10 @@ export function PlayerOverlay({
 
       const team = teamAssignments?.[String(trackId)];
       const color = team ? (TEAM_COLORS[team] ?? TRACK_COLORS[(trackId - 1) % TRACK_COLORS.length]) : TRACK_COLORS[(trackId - 1) % TRACK_COLORS.length];
-      const labelText = team ? `Track ${trackId} (${team})` : `Track ${trackId}`;
+      const playerNum = labelingPlayerNumbers?.get(trackId);
+      const labelText = playerNum != null
+        ? String(playerNum)
+        : team ? `Track ${trackId} (${team})` : `Track ${trackId}`;
 
       if (!existingElements.has(trackId)) {
         const trackEl = document.createElement('div');
@@ -177,18 +182,38 @@ export function PlayerOverlay({
         const label = document.createElement('div');
         label.className = 'track-label';
         label.textContent = labelText;
-        label.style.cssText = `
-          position: absolute;
-          top: -24px;
-          left: 0;
-          background-color: ${color};
-          color: white;
-          padding: 2px 6px;
-          border-radius: 4px;
-          font-size: 11px;
-          font-weight: 600;
-          white-space: nowrap;
-        `;
+        if (playerNum != null) {
+          label.style.cssText = `
+            position: absolute;
+            top: -30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(0,0,0,0.85);
+            color: white;
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            font-size: 16px;
+            font-weight: 800;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid ${color};
+          `;
+        } else {
+          label.style.cssText = `
+            position: absolute;
+            top: -24px;
+            left: 0;
+            background-color: ${color};
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            white-space: nowrap;
+          `;
+        }
         trackEl.appendChild(label);
 
         // Court position label
@@ -211,18 +236,49 @@ export function PlayerOverlay({
         overlay.appendChild(trackEl);
         existingElements.set(trackId, trackEl);
       } else {
-        // Update existing element colors when teamAssignments change
+        // Update existing element colors/label when teamAssignments or labeling mode change
         const trackEl = existingElements.get(trackId)!;
         trackEl.style.borderColor = color;
         const label = trackEl.querySelector('.track-label') as HTMLDivElement;
         if (label) {
           label.textContent = labelText;
-          label.style.backgroundColor = color;
+          if (playerNum != null) {
+            label.style.cssText = `
+              position: absolute;
+              top: -30px;
+              left: 50%;
+              transform: translateX(-50%);
+              background-color: rgba(0,0,0,0.85);
+              color: white;
+              width: 26px;
+              height: 26px;
+              border-radius: 50%;
+              font-size: 16px;
+              font-weight: 800;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              border: 2px solid ${color};
+            `;
+          } else {
+            label.style.cssText = `
+              position: absolute;
+              top: -24px;
+              left: 0;
+              background-color: ${color};
+              color: white;
+              padding: 2px 6px;
+              border-radius: 4px;
+              font-size: 11px;
+              font-weight: 600;
+              white-space: nowrap;
+            `;
+          }
         }
       }
       trackIndex++;
     }
-  }, [trackPositions, teamAssignments]);
+  }, [trackPositions, teamAssignments, labelingPlayerNumbers]);
 
   // Update dimensions on resize
   useEffect(() => {

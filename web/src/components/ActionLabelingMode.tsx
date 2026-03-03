@@ -23,6 +23,7 @@ interface ActionLabelingModeProps {
 export function ActionLabelingMode({ videoRef, onLabelAdded }: ActionLabelingModeProps) {
   const isLabelingActions = usePlayerTrackingStore((s) => s.isLabelingActions);
   const addActionLabel = usePlayerTrackingStore((s) => s.addActionLabel);
+  const updateActionLabelPlayer = usePlayerTrackingStore((s) => s.updateActionLabelPlayer);
   const setIsLabelingActions = usePlayerTrackingStore((s) => s.setIsLabelingActions);
   const playerTracks = usePlayerTrackingStore((s) => s.playerTracks);
   const seek = usePlayerStore((s) => s.seek);
@@ -56,6 +57,34 @@ export function ActionLabelingMode({ videoRef, onLabelAdded }: ActionLabelingMod
       const frameDuration = 1 / trackData.fps;
       const direction = e.key === ',' ? -1 : 1;
       seek(video.currentTime + direction * frameDuration);
+      return;
+    }
+
+    // Player assignment: 1-4 overrides playerTrackId on current frame's GT label
+    const num = parseInt(e.key, 10);
+    if (num >= 1 && num <= 4) {
+      e.preventDefault();
+      e.stopPropagation();
+      const video = videoRef.current;
+      if (!video) return;
+
+      const rallyStart = selectedRally.start_time;
+      const fps = trackData.fps;
+      const timeInRally = Math.max(0, video.currentTime - rallyStart);
+      const frame = Math.round(timeInRally * fps);
+
+      // Read GT labels fresh from store to avoid stale closure after action key + number key back-to-back
+      const gtLabels = usePlayerTrackingStore.getState().actionGroundTruth[backendRallyId] ?? [];
+      const labelAtFrame = gtLabels.find(l => l.frame === frame);
+      if (!labelAtFrame) return;
+
+      // Map player number (1-based) to trackId via sorted tracks
+      const sortedTracks = [...trackData.tracks].sort((a, b) => a.trackId - b.trackId);
+      const playerIndex = num - 1;
+      if (playerIndex >= sortedTracks.length) return;
+
+      const trackId = sortedTracks[playerIndex].trackId;
+      updateActionLabelPlayer(backendRallyId, frame, trackId);
       return;
     }
 
@@ -116,7 +145,7 @@ export function ActionLabelingMode({ videoRef, onLabelAdded }: ActionLabelingMod
 
     addActionLabel(backendRallyId, label);
     onLabelAdded?.(action, frame);
-  }, [isLabelingActions, backendRallyId, trackData, selectedRally, videoRef, addActionLabel, setIsLabelingActions, onLabelAdded, seek]);
+  }, [isLabelingActions, backendRallyId, trackData, selectedRally, videoRef, addActionLabel, updateActionLabelPlayer, setIsLabelingActions, onLabelAdded, seek]);
 
   useEffect(() => {
     if (!isLabelingActions) return;

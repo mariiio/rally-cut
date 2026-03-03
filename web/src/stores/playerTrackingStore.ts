@@ -108,6 +108,7 @@ interface PlayerTrackingState {
   addActionLabel: (rallyId: string, label: ActionGroundTruthLabel) => void;
   removeActionLabel: (rallyId: string, frame: number) => void;
   updateActionLabel: (rallyId: string, frame: number, action: ActionGroundTruthLabel['action']) => void;
+  updateActionLabelPlayer: (rallyId: string, frame: number, playerTrackId: number) => void;
   loadActionGroundTruth: (rallyId: string) => Promise<void>;
   saveActionGroundTruth: (rallyId: string) => Promise<void>;
 }
@@ -501,6 +502,17 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
         set((state) => {
           const existing = state.actionGroundTruth[rallyId] ?? [];
           const updated = existing.map(l => l.frame === frame ? { ...l, action } : l);
+          return {
+            actionGroundTruth: { ...state.actionGroundTruth, [rallyId]: updated },
+            actionGtDirty: { ...state.actionGtDirty, [rallyId]: true },
+          };
+        });
+      },
+
+      updateActionLabelPlayer: (rallyId: string, frame: number, playerTrackId: number) => {
+        set((state) => {
+          const existing = state.actionGroundTruth[rallyId] ?? [];
+          const updated = existing.map(l => l.frame === frame ? { ...l, playerTrackId } : l);
           return {
             actionGroundTruth: { ...state.actionGroundTruth, [rallyId]: updated },
             actionGtDirty: { ...state.actionGtDirty, [rallyId]: true },
