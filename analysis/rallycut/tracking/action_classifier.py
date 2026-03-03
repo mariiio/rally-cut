@@ -1470,6 +1470,85 @@ def propagate_court_side(actions: list[ClassifiedAction]) -> list[ClassifiedActi
     return actions
 
 
+def reattribute_players(
+    actions: list[ClassifiedAction],
+    contacts: list[Contact],
+    team_assignments: dict[int, int] | None,
+) -> list[ClassifiedAction]:
+    """Re-assign player attribution using team signal after action classification.
+
+    For each action where the assigned player is on the WRONG team for the court
+    side, check if a candidate on the CORRECT team exists within 2x the nearest
+    distance. If so, re-assign.
+
+    This is safe because:
+    - Only fires when team_assignments are available (match-level = reliable)
+    - The 2x distance cap prevents picking a far-away player
+    - Only overrides when current player is definitely wrong-team
+    """
+    if not team_assignments:
+        return actions
+
+    # Build frame→contact lookup for candidate access
+    contact_by_frame: dict[int, Contact] = {c.frame: c for c in contacts}
+
+    side_to_team = {"near": 0, "far": 1}
+    n_reattributed = 0
+
+    for action in actions:
+        if action.court_side not in ("near", "far"):
+            continue
+        if action.confidence < 0.6:
+            continue
+        if action.player_track_id < 0:
+            continue
+
+        expected_team = side_to_team[action.court_side]
+        current_team = team_assignments.get(action.player_track_id)
+
+        # Only re-attribute if current player is on the WRONG team
+        if current_team is None or current_team == expected_team:
+            continue
+
+        # Find contact with candidates
+        contact = contact_by_frame.get(action.frame)
+        if contact is None or not contact.player_candidates:
+            continue
+
+        # Current player distance
+        current_dist = contact.player_distance
+
+        # Find best candidate on the correct team within 2x distance
+        best_tid = -1
+        best_dist = float("inf")
+        for tid, dist in contact.player_candidates:
+            if tid == action.player_track_id:
+                continue
+            cand_team = team_assignments.get(tid)
+            if cand_team != expected_team:
+                continue
+            if dist <= 2.0 * current_dist and dist < best_dist:
+                best_tid = tid
+                best_dist = dist
+
+        if best_tid >= 0:
+            logger.debug(
+                "Re-attribute frame %d: track %d (team %d, dist %.3f) → "
+                "track %d (team %d, dist %.3f) for %s side",
+                action.frame, action.player_track_id, current_team,
+                current_dist, best_tid, expected_team, best_dist,
+                action.court_side,
+            )
+            action.player_track_id = best_tid
+            n_reattributed += 1
+
+    if n_reattributed > 0:
+        logger.info("Re-attributed %d/%d actions using team signal",
+                     n_reattributed, len(actions))
+
+    return actions
+
+
 def classify_rally_actions(
     contact_sequence: ContactSequence,
     rally_id: str = "",
@@ -1509,6 +1588,9 @@ def classify_rally_actions(
                 ball_positions=contact_sequence.ball_positions,
                 rally_start_frame=contact_sequence.rally_start_frame,
             )
+            result.actions = reattribute_players(
+                result.actions, contact_sequence.contacts, team_assignments,
+            )
             return result
 
     result = action_classifier.classify_rally(
@@ -1521,5 +1603,8 @@ def classify_rally_actions(
         net_y=contact_sequence.net_y,
         ball_positions=contact_sequence.ball_positions,
         rally_start_frame=contact_sequence.rally_start_frame,
+    )
+    result.actions = reattribute_players(
+        result.actions, contact_sequence.contacts, team_assignments,
     )
     return result
