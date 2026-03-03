@@ -68,5 +68,8 @@ secrets/
 # Node
 node_modules/
 
+# YOLO training runs
+runs/
+
 # Speckit
 .speckit/
