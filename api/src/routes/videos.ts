@@ -46,7 +46,7 @@ import {
 import { queueVideoProcessing } from "../services/processingService.js";
 import { trackAllRallies, getBatchTrackingStatus } from "../services/batchTrackingService.js";
 import { getMatchAnalysis, getMatchStats } from "../services/matchAnalysisService.js";
-import { assessVideoQuality, getAnalysisPipelineStatus, savePlayerNames } from "../services/qualityService.js";
+import { assessVideoQuality, getAnalysisPipelineStatus, savePlayerNames, savePlayerMatchingGt, getPlayerMatchingGt } from "../services/qualityService.js";
 
 // Calibration corners can be outside 0-1 if dragged outside video bounds
 const calibrationCornerSchema = z.object({
@@ -788,6 +788,54 @@ router.put(
   async (req, res, next) => {
     try {
       const result = await savePlayerNames(req.params.id, req.userId!, req.body.names);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /v1/videos/:id/player-matching-gt
+ * Get player matching ground truth labels.
+ */
+router.get(
+  "/v1/videos/:id/player-matching-gt",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      const gt = await getPlayerMatchingGt(req.params.id, req.userId!);
+      if (!gt) {
+        res.json({ status: 'not_available' });
+        return;
+      }
+      res.json(gt);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PUT /v1/videos/:id/player-matching-gt
+ * Save player matching ground truth labels.
+ */
+router.put(
+  "/v1/videos/:id/player-matching-gt",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: z.object({
+      rallies: z.record(z.string(), z.record(z.string(), z.number())),
+      sideSwitches: z.array(z.number()),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const result = await savePlayerMatchingGt(req.params.id, req.userId!, req.body);
       res.json(result);
     } catch (error) {
       next(error);

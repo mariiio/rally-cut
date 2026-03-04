@@ -314,6 +314,50 @@ export async function savePlayerNames(
   return { success: true };
 }
 
+/**
+ * Save player matching ground truth labels.
+ */
+export async function savePlayerMatchingGt(
+  videoId: string,
+  userId: string,
+  gt: { rallies: Record<string, Record<string, number>>; sideSwitches: number[] },
+) {
+  const video = await prisma.video.findFirst({
+    where: { id: videoId, userId, deletedAt: null },
+  });
+
+  if (!video) {
+    throw new NotFoundError('Video', videoId);
+  }
+
+  await prisma.video.update({
+    where: { id: videoId },
+    data: {
+      playerMatchingGtJson: {
+        ...gt,
+        savedAt: new Date().toISOString(),
+      } as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  return { success: true };
+}
+
+/**
+ * Get player matching ground truth labels.
+ */
+export async function getPlayerMatchingGt(videoId: string, userId: string) {
+  const video = await prisma.video.findFirst({
+    where: { id: videoId, userId, deletedAt: null },
+  });
+
+  if (!video) {
+    throw new NotFoundError('Video', videoId);
+  }
+
+  return video.playerMatchingGtJson as Record<string, unknown> | null;
+}
+
 // ============================================================================
 // CLI runners
 // ============================================================================

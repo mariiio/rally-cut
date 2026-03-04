@@ -229,6 +229,7 @@ model Video {
   characteristicsJson   Json?                 @map("characteristics_json")
   matchAnalysisJson     Json?                 @map("match_analysis_json")
   matchStatsJson        Json?                 @map("match_stats_json")
+  playerMatchingGtJson  Json?                 @map("player_matching_gt_json")
   rallies               Rally[]
   confirmation          RallyConfirmation?
   detectionJobs         RallyDetectionJob[]
