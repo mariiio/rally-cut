@@ -26,6 +26,56 @@ from rallycut.cli.utils import handle_errors
 console = Console()
 
 
+def _invert_mapping(mapping: dict[int, int]) -> dict[int, int]:
+    """Invert a bijective {old: new} mapping. Raises ValueError if non-bijective."""
+    inverse: dict[int, int] = {}
+    for k, v in mapping.items():
+        if v in inverse:
+            raise ValueError(
+                f"Non-bijective mapping: both {inverse[v]} and {k} map to {v}"
+            )
+        inverse[v] = k
+    return inverse
+
+
+def _should_reverse(
+    positions: list[dict[str, Any]],
+    applied_mapping: dict[int, int],
+) -> bool:
+    """Check if current position IDs match the output of applied_mapping.
+
+    If they do, the positions are remapped and should be reversed.
+    If they don't (e.g. after re-tracking), positions already have original IDs.
+
+    Uses subset check: current IDs must be a subset of the mapping's output values
+    AND must NOT be a subset of the mapping's input values (to distinguish remapped
+    data from fresh tracker data that happens to use the same low IDs).
+    """
+    if not applied_mapping:
+        return False
+    mapped_output_ids = set(applied_mapping.values())
+    mapped_input_ids = set(applied_mapping.keys())
+    current_ids: set[int] = set()
+    for p in positions:
+        tid = p.get("trackId")
+        if tid is not None:
+            current_ids.add(int(tid))
+    if not current_ids:
+        return False
+    is_subset_of_output = current_ids.issubset(mapped_output_ids)
+    is_subset_of_input = current_ids.issubset(mapped_input_ids)
+    # If current IDs match output but NOT input, data was remapped.
+    # If they match both (e.g. identity mapping or overlapping ranges), rely on
+    # the remapApplied flag (checked by callers) to disambiguate.
+    if is_subset_of_output and not is_subset_of_input:
+        return True
+    if is_subset_of_output and is_subset_of_input:
+        # Ambiguous — could be either. Return True only if the mapping is
+        # non-trivial (not identity), since identity mappings don't need reversal.
+        return any(k != v for k, v in applied_mapping.items())
+    return False
+
+
 def _build_full_mapping(
     track_to_player: dict[int, int],
     all_track_ids: set[int],
@@ -171,8 +221,9 @@ def remap_track_ids_cmd(
 
     match_analysis = cast(dict[str, Any], row[0])
 
-    # Build per-rally track→player mappings (from match analysis)
+    # Build per-rally track→player mappings and index rally entries
     raw_mappings: dict[str, dict[int, int]] = {}
+    rally_entries_by_id: dict[str, dict[str, Any]] = {}
     for rally_entry in match_analysis.get("rallies", []):
         rid = rally_entry.get("rallyId") or rally_entry.get("rally_id", "")
         track_to_player = rally_entry.get("trackToPlayer") or rally_entry.get(
@@ -180,6 +231,8 @@ def remap_track_ids_cmd(
         )
         if rid and track_to_player:
             raw_mappings[rid] = {int(k): int(v) for k, v in track_to_player.items()}
+        if rid:
+            rally_entries_by_id[rid] = rally_entry
 
     if not raw_mappings:
         console.print("[yellow]No track mappings found in match analysis[/yellow]")
@@ -218,7 +271,50 @@ def remap_track_ids_cmd(
         if not raw_mapping:
             continue
 
-        # Collect ALL track IDs present in this rally's data
+        # --- Step 1: Reverse previous remap if needed ---
+        rally_entry = rally_entries_by_id.get(rally_id, {})
+        applied_raw = rally_entry.get("appliedFullMapping")
+        was_remapped = rally_entry.get("remapApplied", False)
+        if applied_raw and was_remapped:
+            applied = {int(k): int(v) for k, v in applied_raw.items()}
+            # Use positions for the subset check; fall back to primary_ids
+            check_positions: list[dict[str, Any]] = []
+            if pos_json:
+                check_positions = cast(list[dict[str, Any]], pos_json)
+            elif primary_ids:
+                check_positions = [
+                    {"trackId": tid} for tid in cast(list[int], primary_ids)
+                ]
+            if check_positions and _should_reverse(check_positions, applied):
+                inverse = _invert_mapping(applied)
+                if pos_json:
+                    _remap_positions(
+                        cast(list[dict[str, Any]], pos_json), inverse
+                    )
+                if contacts_json:
+                    _remap_contacts(
+                        cast(dict[str, Any], contacts_json), inverse
+                    )
+                if actions_json:
+                    _remap_actions(
+                        cast(dict[str, Any], actions_json), inverse
+                    )
+                if primary_ids:
+                    primary_ids = [
+                        inverse.get(tid, tid)
+                        for tid in cast(list[int], primary_ids)
+                    ]
+                if action_gt_json:
+                    for label in cast(list[dict[str, Any]], action_gt_json):
+                        old_tid = label.get("playerTrackId")
+                        if old_tid is not None and old_tid in inverse:
+                            label["playerTrackId"] = inverse[old_tid]
+                if not quiet:
+                    console.print(
+                        f"  {rally_id[:8]}: reversed previous remap"
+                    )
+
+        # --- Step 2: Collect all track IDs (now original IDs) ---
         all_track_ids: set[int] = set()
         if pos_json:
             for p in cast(list[dict[str, Any]], pos_json):
@@ -226,14 +322,19 @@ def remap_track_ids_cmd(
                 if tid is not None:
                     all_track_ids.add(int(tid))
         if primary_ids:
-            for pid in cast(list[int], primary_ids):
+            primary_ids_list = cast(list[int], primary_ids)
+            for pid in primary_ids_list:
                 all_track_ids.add(pid)
 
-        # Build collision-safe full mapping
+        # --- Step 3: Build and apply new mapping ---
         mapping = _build_full_mapping(raw_mapping, all_track_ids)
 
-        # Check if already remapped (all mapped tracks already using target IDs)
+        # Check if mapping is all identity (nothing to remap).
+        # Clear stale appliedFullMapping/remapApplied so they don't trigger
+        # spurious reversals on future runs (e.g. after re-tracking).
         if not any(k != v for k, v in mapping.items()):
+            rally_entry.pop("appliedFullMapping", None)
+            rally_entry.pop("remapApplied", None)
             if not quiet:
                 console.print(f"  [dim]{rally_id[:8]}: already using player IDs[/dim]")
             continue
@@ -288,6 +389,12 @@ def remap_track_ids_cmd(
             if gt_changed:
                 changes["action_ground_truth_json"] = json.dumps(gt_labels)
 
+        # --- Step 4: Store appliedFullMapping + remapApplied flag ---
+        rally_entry["appliedFullMapping"] = {
+            str(k): v for k, v in mapping.items()
+        }
+        rally_entry["remapApplied"] = True
+
         if changes:
             updates.append((pt_id, changes))
             total_remapped += rally_count
@@ -305,8 +412,24 @@ def remap_track_ids_cmd(
     if not quiet:
         console.print(f"\n  Total: {total_remapped} track ID references remapped")
 
+    # Set trackToPlayer to identity for remapped rallies (downstream consumers need this).
+    # appliedFullMapping/remapApplied already set on rally_entry objects above.
+    match_analysis_changed = False
+    for rally_entry in match_analysis.get("rallies", []):
+        rid = (
+            rally_entry.get("rallyId")
+            or rally_entry.get("rally_id", "")
+        )
+        raw = raw_mappings.get(rid, {})
+        if raw and any(k != v for k, v in raw.items()):
+            identity = {str(v): v for v in raw.values()}
+            rally_entry["trackToPlayer"] = identity
+            if "track_to_player" in rally_entry:
+                rally_entry["track_to_player"] = identity
+            match_analysis_changed = True
+
     # Update DB
-    if updates and not dry_run:
+    if not dry_run and (updates or match_analysis_changed):
         with get_connection() as conn:
             with conn.cursor() as cur:
                 for update_pt_id, cols in updates:
@@ -322,21 +445,6 @@ def remap_track_ids_cmd(
                         values,
                     )
 
-                # Update match_analysis_json trackToPlayer to identity mappings.
-                # This ensures idempotency: subsequent runs see identity mappings
-                # and skip (since data now uses player IDs directly).
-                for rally_entry in match_analysis.get("rallies", []):
-                    rid = (
-                        rally_entry.get("rallyId")
-                        or rally_entry.get("rally_id", "")
-                    )
-                    raw = raw_mappings.get(rid, {})
-                    if raw and any(k != v for k, v in raw.items()):
-                        identity = {str(v): v for v in raw.values()}
-                        rally_entry["trackToPlayer"] = identity
-                        if "track_to_player" in rally_entry:
-                            rally_entry["track_to_player"] = identity
-
                 cur.execute(
                     "UPDATE videos SET match_analysis_json = %s WHERE id = %s",
                     [json.dumps(match_analysis), video_id],
@@ -344,9 +452,14 @@ def remap_track_ids_cmd(
             conn.commit()
 
         if not quiet:
-            console.print(
-                f"  [green]Updated {len(updates)} player tracks in DB[/green]"
-            )
+            if updates:
+                console.print(
+                    f"  [green]Updated {len(updates)} player tracks in DB[/green]"
+                )
+            else:
+                console.print(
+                    "  [green]Cleared stale remap metadata in DB[/green]"
+                )
     elif dry_run and updates:
         if not quiet:
             console.print(
