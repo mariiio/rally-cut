@@ -54,6 +54,16 @@ logger = logging.getLogger(__name__)
 # Appearance costs range 0.0-1.0, so 0.15 is meaningful but not dominant.
 SIDE_PENALTY = 0.15
 
+# Position continuity weight in the cost matrix. When last positions are known,
+# the distance between early-rally track position and previous rally's late position
+# is blended into the cost. This is critical for within-team discrimination where
+# appearance discriminability is poor (typical cost gap 0.02-0.05 between teammates).
+POSITION_WEIGHT = 0.30
+
+# Minimum assignment confidence to update profiles. Below this threshold,
+# profile updates are skipped to prevent error propagation (drift).
+MIN_PROFILE_UPDATE_CONFIDENCE = 0.55
+
 
 def build_match_team_assignments(
     match_analysis: dict[str, Any],
@@ -112,6 +122,19 @@ def build_match_team_assignments(
             result[rid] = teams
 
     return result
+
+
+@dataclass
+class RallyAssignmentDiagnostics:
+    """Diagnostics for a single rally's assignment decision."""
+
+    rally_index: int
+    cost_matrix: np.ndarray  # n_tracks x n_players appearance-only costs
+    track_ids: list[int]
+    player_ids: list[int]
+    track_court_sides: dict[int, int]
+    assignment: dict[int, int]  # track_id -> player_id
+    assignment_margins: dict[int, float]  # player_id -> margin (2nd best - best)
 
 
 @dataclass
@@ -231,17 +254,22 @@ class MatchPlayerTracker:
     def __init__(
         self,
         calibrator: CourtCalibrator | None = None,
+        collect_diagnostics: bool = False,
     ):
         """
         Initialize match tracker.
 
         Args:
             calibrator: Optional court calibrator for baseline detection.
+            collect_diagnostics: If True, collect per-rally cost matrices
+                and assignment margins for diagnostic analysis.
         """
         self.calibrator = calibrator
         self.state = MatchPlayerState()
         self.state.initialize_players()
         self.rally_count = 0
+        self.collect_diagnostics = collect_diagnostics
+        self.diagnostics: list[RallyAssignmentDiagnostics] = []
 
     def process_rally(
         self,
@@ -309,6 +337,11 @@ class MatchPlayerTracker:
         all_track_ids = list(track_court_sides.keys())
         top_tracks = self._top_tracks_by_frames(all_track_ids, track_stats, 4)
 
+        # Compute early-rally positions for position continuity
+        early_positions = _compute_track_positions(
+            player_positions, top_tracks, window=30, from_start=True
+        )
+
         # Step 4: Assign tracks to players
         if self.rally_count <= 1:
             # First rally: deterministic assignment by Y position
@@ -334,12 +367,15 @@ class MatchPlayerTracker:
                 self.state.side_switches.append(rally_index)
                 logger.info(f"Side switch detected at rally {rally_index}")
 
-            # Step 4c: Final assignment with side penalty (uses updated sides if switched)
+            # Step 4c: Final assignment with side penalty + position continuity
             track_to_player = self._assign_tracks_to_players_global(
-                top_tracks, track_stats, track_court_sides
+                top_tracks, track_stats, track_court_sides,
+                early_positions=early_positions,
             )
 
         # Step 5: Within-team refinement using position continuity
+        # (still useful as a safety net for cases where the cost matrix
+        # position signal wasn't strong enough)
         if self.rally_count > 1:
             track_to_player = self._refine_within_team(
                 track_to_player, player_positions, track_court_sides
@@ -352,7 +388,15 @@ class MatchPlayerTracker:
         confidence = self._compute_assignment_confidence(track_stats, track_to_player)
 
         # Step 7: Update player profiles with new appearance data
-        self._update_profiles(track_stats, track_to_player)
+        # Always update on first rally (initialization). Gate subsequent
+        # rallies on confidence to prevent error propagation (drift).
+        if self.rally_count <= 1 or confidence >= MIN_PROFILE_UPDATE_CONFIDENCE:
+            self._update_profiles(track_stats, track_to_player)
+        else:
+            logger.info(
+                f"Skipping profile update: confidence {confidence:.2f} "
+                f"< {MIN_PROFILE_UPDATE_CONFIDENCE}"
+            )
 
         # Step 8: Record server if detected (use serve_anchor as fallback)
         server_player_id = None
@@ -539,18 +583,21 @@ class MatchPlayerTracker:
         track_court_sides: dict[int, int],
         *,
         use_side_penalty: bool = True,
+        early_positions: dict[int, tuple[float, float]] | None = None,
     ) -> dict[int, int]:
-        """Global 4x4 Hungarian assignment with optional side penalty.
+        """Global 4x4 Hungarian assignment with side + position costs.
 
         Builds a single cost matrix across all players instead of
         per-team split-then-match. Side penalty biases toward expected
-        court side but doesn't prevent cross-side matching.
+        court side. Position continuity biases toward spatial consistency
+        with previous rally (critical for within-team discrimination).
 
         Args:
             track_ids: Track IDs to assign (up to 4).
             track_stats: Appearance stats per track.
             track_court_sides: Track -> 0 (near) or 1 (far).
             use_side_penalty: Whether to add side penalty to cost matrix.
+            early_positions: Early-rally positions per track for continuity.
 
         Returns:
             track_id -> player_id mapping.
@@ -563,7 +610,14 @@ class MatchPlayerTracker:
         n_players = len(all_player_ids)
         size = max(n_tracks, n_players)
 
-        # Build cost matrix: appearance + optional side penalty
+        # Check if position continuity is available
+        has_positions = (
+            early_positions
+            and self.state.player_last_positions
+            and use_side_penalty  # Only for final assignment, not side-switch detection
+        )
+
+        # Build cost matrix: appearance + optional side penalty + position
         default_cost = 1.0 + (SIDE_PENALTY if use_side_penalty else 0.0)
         cost_matrix = np.full((size, size), default_cost)
         for i, tid in enumerate(track_ids):
@@ -576,13 +630,55 @@ class MatchPlayerTracker:
                 appearance_cost = compute_appearance_similarity(
                     self.state.players[pid], track_stats[tid]
                 )
-                # Add side penalty if track and player are on different sides
+
+                # Position continuity cost (normalized distance)
+                # Only apply within same team — position shouldn't pull
+                # tracks cross-team, only disambiguate within-team
+                pos_cost = 0.0
+                player_side = self.state.current_side_assignment.get(pid)
+                if (
+                    has_positions
+                    and track_side == player_side  # same team only
+                    and tid in early_positions  # type: ignore[operator]
+                    and pid in self.state.player_last_positions
+                ):
+                    d = _dist(
+                        early_positions[tid],  # type: ignore[index]
+                        self.state.player_last_positions[pid],
+                    )
+                    # Normalize: 0.3 distance ≈ half the court, cap at 1.0
+                    pos_cost = min(d / 0.3, 1.0)
+
+                # Side penalty (player_side already computed above)
                 if use_side_penalty:
-                    player_side = self.state.current_side_assignment.get(pid)
                     side_pen = SIDE_PENALTY if track_side != player_side else 0.0
                 else:
                     side_pen = 0.0
-                cost_matrix[i, j] = appearance_cost + side_pen
+
+                # Blend costs: appearance (1 - POSITION_WEIGHT) + position
+                if has_positions and pos_cost > 0:
+                    blended = (
+                        appearance_cost * (1.0 - POSITION_WEIGHT)
+                        + pos_cost * POSITION_WEIGHT
+                        + side_pen
+                    )
+                else:
+                    blended = appearance_cost + side_pen
+
+                cost_matrix[i, j] = blended
+
+        # Store appearance-only cost matrix for diagnostics (before side penalty)
+        if self.collect_diagnostics and use_side_penalty:
+            appearance_only = np.full((n_tracks, n_players), 1.0)
+            for i, tid in enumerate(track_ids):
+                if tid not in track_stats:
+                    continue
+                for j, pid in enumerate(all_player_ids):
+                    if pid not in self.state.players:
+                        continue
+                    appearance_only[i, j] = compute_appearance_similarity(
+                        self.state.players[pid], track_stats[tid]
+                    )
 
         row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
@@ -590,6 +686,26 @@ class MatchPlayerTracker:
         for r, c in zip(row_ind, col_ind):
             if r < n_tracks and c < n_players:
                 result[track_ids[r]] = all_player_ids[c]
+
+        # Collect diagnostics after final (penalized) assignment
+        if self.collect_diagnostics and use_side_penalty:
+            margins: dict[int, float] = {}
+            for j, pid in enumerate(all_player_ids):
+                col_costs = sorted(appearance_only[:, j]) if n_tracks > 0 else []
+                if len(col_costs) >= 2:
+                    margins[pid] = float(col_costs[1] - col_costs[0])
+                elif len(col_costs) == 1:
+                    margins[pid] = float(1.0 - col_costs[0])
+            self.diagnostics.append(RallyAssignmentDiagnostics(
+                rally_index=self.rally_count - 1,
+                cost_matrix=appearance_only,
+                track_ids=list(track_ids),
+                player_ids=list(all_player_ids),
+                track_court_sides=dict(track_court_sides),
+                assignment=dict(result),
+                assignment_margins=margins,
+            ))
+
         return result
 
     def _detect_side_switch_from_assignment(
@@ -942,12 +1058,14 @@ class MatchPlayersResult:
 
     rally_results: list[RallyTrackingResult]
     player_profiles: dict[int, PlayerAppearanceProfile]  # player_id -> profile
+    diagnostics: list[RallyAssignmentDiagnostics] = field(default_factory=list)
 
 
 def match_players_across_rallies(
     video_path: Path,
     rallies: list[RallyTrackData],
     num_samples: int = 12,
+    collect_diagnostics: bool = False,
 ) -> MatchPlayersResult:
     """
     Match players across all rallies in a video for consistent IDs.
@@ -959,11 +1077,13 @@ def match_players_across_rallies(
         video_path: Path to the video file.
         rallies: Rally data sorted chronologically.
         num_samples: Frames to sample per track for appearance.
+        collect_diagnostics: If True, collect per-rally cost matrices
+            and assignment margins for diagnostic analysis.
 
     Returns:
         MatchPlayersResult with track→player mappings and accumulated profiles.
     """
-    tracker = MatchPlayerTracker()
+    tracker = MatchPlayerTracker(collect_diagnostics=collect_diagnostics)
     results: list[RallyTrackingResult] = []
 
     for rally in rallies:
@@ -997,4 +1117,5 @@ def match_players_across_rallies(
     return MatchPlayersResult(
         rally_results=results,
         player_profiles=dict(tracker.state.players),
+        diagnostics=tracker.diagnostics,
     )

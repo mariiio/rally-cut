@@ -1162,6 +1162,8 @@ class PlayerTracker:
         filter_config: PlayerFilterConfig | None = None,
         court_calibrator: CourtCalibrator | None = None,
         court_detection_insights: CourtDetectionInsights | None = None,
+        skip_global_identity: bool = False,
+        skip_court_identity: bool = False,
     ) -> PlayerTrackingResult:
         """
         Track players in a video segment.
@@ -1545,7 +1547,8 @@ class PlayerTracker:
                 # Splits tracks at interaction boundaries and reassigns
                 # segments to canonical players via greedy cost minimization
                 if (
-                    color_store is not None
+                    not skip_global_identity
+                    and color_store is not None
                     and color_store.has_data()
                     and team_assignments
                 ):
@@ -1576,7 +1579,8 @@ class PlayerTracker:
 
                 # Step 4d: Court identity resolution
                 if (
-                    court_calibrator is not None
+                    not skip_court_identity
+                    and court_calibrator is not None
                     and court_calibrator.is_calibrated
                     and len(primary_track_ids) >= 2
                     and team_assignments

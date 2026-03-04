@@ -78,6 +78,43 @@ def find_best_permutation(
     return best_perm, best_correct, best_total
 
 
+def compute_team_accuracy(
+    gt_rallies: dict[str, dict[str, int]],
+    pred_rallies: dict[str, dict[str, int]],
+    best_perm: dict[int, int],
+) -> tuple[int, int]:
+    """Compute cross-team accuracy.
+
+    Correct if the predicted player is on the same team as the GT player
+    (P1-P2 = team 0, P3-P4 = team 1), regardless of within-team ordering.
+
+    Returns:
+        (team_correct, team_total)
+    """
+    def pid_team(pid: int) -> int:
+        return 0 if pid <= 2 else 1
+
+    team_correct = 0
+    team_total = 0
+
+    for rid in gt_rallies:
+        if rid not in pred_rallies:
+            continue
+        gt = gt_rallies[rid]
+        pred = pred_rallies[rid]
+        for tid_str in gt:
+            if tid_str not in pred:
+                continue
+            team_total += 1
+            gt_pid = gt[tid_str]
+            pred_pid = pred[tid_str]
+            mapped_pid = best_perm.get(pred_pid)
+            if mapped_pid is not None and pid_team(mapped_pid) == pid_team(gt_pid):
+                team_correct += 1
+
+    return team_correct, team_total
+
+
 def evaluate_side_switches(
     gt_switches: list[int],
     pred_rallies_list: list[dict[str, Any]],
@@ -119,6 +156,10 @@ def main() -> None:
     parser.add_argument(
         "--from-db", action="store_true",
         help="Read GT from player_matching_gt_json in DB instead of JSON files",
+    )
+    parser.add_argument(
+        "--rerun", action="store_true",
+        help="Re-run match-players instead of reading predictions from DB",
     )
     args = parser.parse_args()
 
@@ -190,38 +231,79 @@ def main() -> None:
     total_switch_tp = 0
     total_switch_fp = 0
     total_switch_fn = 0
+    total_team_correct = 0
     video_results: list[dict[str, Any]] = []
 
     for video_id, gt_rallies, gt_switches, notes in gt_entries:
 
-        # Load match analysis from DB
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT match_analysis_json FROM videos WHERE id = %s",
-                    [video_id],
-                )
-                row = cur.fetchone()
-                if not row or not row[0]:
-                    logger.warning(
-                        "No match_analysis_json for video %s, skipping", video_id[:8]
+        if args.rerun:
+            # Re-run match-players from scratch
+            from rallycut.evaluation.tracking.db import (
+                get_video_path,
+                load_rallies_for_video,
+            )
+            from rallycut.tracking.match_tracker import match_players_across_rallies
+
+            rallies = load_rallies_for_video(video_id)
+            video_path = get_video_path(video_id)
+            if not rallies or not video_path:
+                logger.warning("Cannot rerun match-players for %s", video_id[:8])
+                continue
+
+            logger.info("Re-running match-players for %s (%d rallies)...",
+                        video_id[:8], len(rallies))
+            result = match_players_across_rallies(
+                video_path=video_path, rallies=rallies,
+            )
+
+            pred_rallies_list: list[dict[str, Any]] = []
+            pred_rallies: dict[str, dict[str, int]] = {}
+            for rally_data, rally_result in zip(rallies, result.rally_results):
+                rid = rally_data.rally_id
+                ttp = {str(k): v for k, v in rally_result.track_to_player.items()}
+                pred_rallies[rid] = ttp
+                pred_rallies_list.append({
+                    "rallyId": rid,
+                    "trackToPlayer": ttp,
+                    "sideSwitchDetected": rally_result.side_switch_detected,
+                    "assignmentConfidence": rally_result.assignment_confidence,
+                })
+        else:
+            # Load match analysis from DB
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT match_analysis_json FROM videos WHERE id = %s",
+                        [video_id],
                     )
-                    continue
+                    row = cur.fetchone()
+                    if not row or not row[0]:
+                        logger.warning(
+                            "No match_analysis_json for video %s, skipping",
+                            video_id[:8],
+                        )
+                        continue
 
-                match_analysis = cast(dict[str, Any], row[0])
+                    match_analysis = cast(dict[str, Any], row[0])
 
-        pred_rallies_list = match_analysis.get("rallies", [])
+            pred_rallies_list = match_analysis.get("rallies", [])
 
-        # Build pred_rallies dict: rally_id -> {track_id_str: player_id}
-        pred_rallies: dict[str, dict[str, int]] = {}
-        for entry in pred_rallies_list:
-            rid = entry.get("rallyId", entry.get("rally_id", ""))
-            ttp = entry.get("trackToPlayer", entry.get("track_to_player", {}))
-            if rid and ttp:
-                pred_rallies[rid] = {str(k): int(v) for k, v in ttp.items()}
+            # Build pred_rallies dict: rally_id -> {track_id_str: player_id}
+            pred_rallies = {}
+            for entry in pred_rallies_list:
+                rid = entry.get("rallyId", entry.get("rally_id", ""))
+                ttp = entry.get("trackToPlayer", entry.get("track_to_player", {}))
+                if rid and ttp:
+                    pred_rallies[rid] = {str(k): int(v) for k, v in ttp.items()}
 
         # Find best permutation
         best_perm, correct, total = find_best_permutation(gt_rallies, pred_rallies)
+
+        # Compute cross-team accuracy
+        team_c, _team_t = compute_team_accuracy(
+            gt_rallies, pred_rallies, best_perm
+        )
+        total_team_correct += team_c
 
         if total == 0:
             logger.warning("No overlapping assignments for video %s", video_id[:8])
@@ -342,9 +424,16 @@ def main() -> None:
 
     agg_acc = total_correct / total_assignments * 100 if total_assignments > 0 else 0
     logger.info(
-        "\nAggregate: %d/%d = %.1f%% accuracy",
+        "\nAggregate: %d/%d = %.1f%% accuracy (exact match)",
         total_correct, total_assignments, agg_acc,
     )
+
+    if total_assignments > 0:
+        team_acc = total_team_correct / total_assignments * 100
+        logger.info(
+            "Cross-team: %d/%d = %.1f%% (correct team assignment)",
+            total_team_correct, total_assignments, team_acc,
+        )
 
     if total_switch_tp + total_switch_fp + total_switch_fn > 0:
         logger.info(

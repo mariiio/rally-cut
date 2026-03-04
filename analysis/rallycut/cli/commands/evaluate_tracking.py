@@ -1588,8 +1588,8 @@ def compare_yolo_models(
                             filter_config=filter_config,
                         )
 
-                        # Adjust frame numbers to rally-relative
-                        _adjust_frame_numbers(result, rally.start_ms, video_path)
+                        # track_video() already normalizes frame numbers to
+                        # 0-indexed rally-relative. No further adjustment needed.
 
                         # Evaluate against ground truth
                         eval_result = evaluate_rally(
@@ -1693,28 +1693,3 @@ def compare_yolo_models(
         console.print(f"\n[green]Full results exported to {output}[/green]")
 
 
-def _adjust_frame_numbers(
-    result: Any,
-    start_ms: int,
-    video_path: Path,
-) -> None:
-    """Adjust PlayerTrackingResult frame numbers to rally-relative (in place).
-
-    Args:
-        result: PlayerTrackingResult from tracking (modified in place).
-        start_ms: Rally start time in milliseconds.
-        video_path: Path to video for FPS lookup.
-    """
-    import cv2
-
-    # Get video FPS for frame offset calculation
-    cap = cv2.VideoCapture(str(video_path))
-    video_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    cap.release()
-
-    # Calculate start frame
-    start_frame = int((start_ms / 1000.0) * video_fps)
-
-    # Adjust all frame numbers in place
-    for pos in result.positions:
-        pos.frame_number = pos.frame_number - start_frame
