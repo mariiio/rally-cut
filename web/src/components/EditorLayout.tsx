@@ -26,6 +26,7 @@ import { PlayerTrackingToolbar } from './PlayerTrackingToolbar';
 import { VideoInsightsBanner } from './VideoInsightsBanner';
 import { MatchStatsPanel } from './MatchStatsPanel';
 import { PlayerNamingDialog } from './PlayerNamingDialog';
+import { PlayerMatchingDialog } from './PlayerMatchingDialog';
 import { useEditorStore } from '@/stores/editorStore';
 import { useAnalysisStore } from '@/stores/analysisStore';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -71,6 +72,7 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
   const [showNamePromptModal, setShowNamePromptModal] = useState(false);
   const [pendingCreateHighlight, setPendingCreateHighlight] = useState(false);
+  const [playerMatchingVideoId, setPlayerMatchingVideoId] = useState<string | null>(null);
 
   // Analysis pipeline state
   const showPlayerNaming = useAnalysisStore((s) => s.showPlayerNaming);
@@ -447,7 +449,7 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
             <OriginalQualityBanner currentMatch={currentMatch} />
             <VideoInsightsBanner currentMatch={currentMatch} />
             {/* Player tracking toolbar */}
-            <PlayerTrackingToolbar />
+            <PlayerTrackingToolbar onOpenPlayerMatching={currentMatch?.id ? () => setPlayerMatchingVideoId(currentMatch.id) : undefined} />
             <VideoPlayer />
           </Box>
         </Box>
@@ -503,6 +505,15 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
           open={true}
           videoId={showPlayerNaming}
           onClose={() => setShowPlayerNaming(null)}
+        />
+      )}
+
+      {/* Player Matching GT Dialog */}
+      {playerMatchingVideoId && (
+        <PlayerMatchingDialog
+          open={true}
+          videoId={playerMatchingVideoId}
+          onClose={() => setPlayerMatchingVideoId(null)}
         />
       )}
       </Box>

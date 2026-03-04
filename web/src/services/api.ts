@@ -2379,3 +2379,52 @@ export async function savePlayerNamesApi(
 
   return response.json();
 }
+
+// ============================================================================
+// Player Matching Ground Truth
+// ============================================================================
+
+export interface PlayerMatchingGt {
+  rallies: Record<string, Record<string, number>>; // rallyId -> {trackId: playerId}
+  sideSwitches: number[];
+  savedAt?: string;
+}
+
+/**
+ * Get player matching ground truth labels for a video.
+ */
+export async function getPlayerMatchingGtApi(videoId: string): Promise<PlayerMatchingGt | null> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/player-matching-gt`, {
+    method: 'GET',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get player matching GT: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.status === 'not_available' ? null : data;
+}
+
+/**
+ * Save player matching ground truth labels for a video.
+ */
+export async function savePlayerMatchingGtApi(
+  videoId: string,
+  gt: PlayerMatchingGt,
+): Promise<{ success: boolean }> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/player-matching-gt`, {
+    method: 'PUT',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify({ rallies: gt.rallies, sideSwitches: gt.sideSwitches }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to save player matching GT: ${response.status}`);
+  }
+
+  return response.json();
+}

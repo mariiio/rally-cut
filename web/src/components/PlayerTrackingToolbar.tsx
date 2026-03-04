@@ -17,6 +17,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import LabelIcon from '@mui/icons-material/Label';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import PeopleIcon from '@mui/icons-material/People';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
@@ -39,7 +40,11 @@ function formatPhase(phase: string): string {
   return phase.charAt(0).toUpperCase() + phase.slice(1);
 }
 
-export function PlayerTrackingToolbar() {
+interface PlayerTrackingToolbarProps {
+  onOpenPlayerMatching?: () => void;
+}
+
+export function PlayerTrackingToolbar({ onOpenPlayerMatching }: PlayerTrackingToolbarProps = {}) {
   const [labelStudioLoading, setLabelStudioLoading] = useState(false);
   const [hasGroundTruth, setHasGroundTruth] = useState(false);
   const [labelStudioTaskId, setLabelStudioTaskId] = useState<number | null>(null);
@@ -376,6 +381,18 @@ export function PlayerTrackingToolbar() {
                 </Button>
               </span>
             </Tooltip>
+
+            {onOpenPlayerMatching && (
+              <Tooltip title="Label cross-rally player matching ground truth">
+                <IconButton
+                  size="small"
+                  onClick={onOpenPlayerMatching}
+                  color="default"
+                >
+                  <PeopleIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
           </>
         )}
 
