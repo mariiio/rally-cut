@@ -1657,6 +1657,19 @@ class PlayerTracker:
                 f"{processing_time_ms/1000:.1f}s ({effective_fps:.1f} FPS)"
             )
 
+            # Normalize frame numbers to rally-relative (0-based).
+            # When tracking a segment of the full video (start_ms provided),
+            # frame_idx is absolute. Frontend and match_tracker expect 0-based.
+            if start_frame > 0:
+                for p in positions:
+                    p.frame_number -= start_frame
+                if raw_positions:
+                    for p in raw_positions:
+                        p.frame_number -= start_frame
+                if ball_positions:
+                    for bp in ball_positions:
+                        bp.frame_number -= start_frame
+
             return PlayerTrackingResult(
                 positions=positions,
                 frame_count=total_frames_in_range,  # Total frames in video range (for time mapping)

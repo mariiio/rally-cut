@@ -49,6 +49,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Side penalty for global Hungarian assignment. Biases toward expected court side
+# but doesn't prevent cross-side matching when appearance is a stronger signal.
+# Appearance costs range 0.0-1.0, so 0.15 is meaningful but not dominant.
+SIDE_PENALTY = 0.15
+
 
 def build_match_team_assignments(
     match_analysis: dict[str, Any],
@@ -129,6 +134,11 @@ class MatchPlayerState:
     # track_id -> player_id
     current_assignments: dict[int, int] = field(default_factory=dict)
 
+    # Last known position per player (avg of last N frames of previous rally)
+    player_last_positions: dict[int, tuple[float, float]] = field(
+        default_factory=dict
+    )
+
     # Service order tracking for alternation prediction
     service_order: ServiceOrderState = field(default_factory=ServiceOrderState)
 
@@ -172,6 +182,39 @@ class RallyTrackData:
     primary_track_ids: list[int]
     court_split_y: float | None
     ball_positions: list[BallPosition]
+    team_assignments: dict[int, int] | None = None  # track_id -> team (0=near, 1=far)
+
+
+def _compute_track_positions(
+    positions: list[PlayerPosition],
+    track_ids: list[int],
+    window: int = 30,
+    *,
+    from_start: bool = True,
+) -> dict[int, tuple[float, float]]:
+    """Compute avg (x, y) for each track from the first or last N frames."""
+    track_id_set = set(track_ids)
+    by_track: dict[int, list[PlayerPosition]] = defaultdict(list)
+    for p in positions:
+        if p.track_id in track_id_set:
+            by_track[p.track_id].append(p)
+
+    result: dict[int, tuple[float, float]] = {}
+    for tid in track_ids:
+        pts = by_track.get(tid)
+        if not pts:
+            continue
+        pts.sort(key=lambda p: p.frame_number)
+        subset = pts[:window] if from_start else pts[-window:]
+        avg_x = sum(p.x for p in subset) / len(subset)
+        avg_y = sum(p.y for p in subset) / len(subset)
+        result[tid] = (avg_x, avg_y)
+    return result
+
+
+def _dist(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Euclidean distance between two points."""
+    return float(((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5)
 
 
 class MatchPlayerTracker:
@@ -206,6 +249,7 @@ class MatchPlayerTracker:
         player_positions: list[PlayerPosition],
         ball_positions: list[BallPosition] | None = None,
         court_split_y: float | None = None,
+        team_assignments: dict[int, int] | None = None,
     ) -> RallyTrackingResult:
         """
         Process a single rally and assign consistent player IDs.
@@ -215,6 +259,8 @@ class MatchPlayerTracker:
             player_positions: All player positions from tracking.
             ball_positions: Ball positions for server detection.
             court_split_y: Y coordinate splitting near/far teams.
+            team_assignments: Pre-computed track_id -> team (0=near, 1=far)
+                from the tracking pipeline's bbox-size clustering.
 
         Returns:
             RallyTrackingResult with track-to-player assignments.
@@ -254,35 +300,61 @@ class MatchPlayerTracker:
                     serve_window_frames=30,
                 )
 
-        # Step 2: Split tracks by team (near/far court), keep top 2 per side
-        near_tracks, far_tracks = self._split_tracks_by_court(
-            track_stats, player_positions, court_split_y
-        )
-        near_tracks = self._top_tracks_by_frames(near_tracks, track_stats, 2)
-        far_tracks = self._top_tracks_by_frames(far_tracks, track_stats, 2)
-
-        # Step 3: Check for side switch (appearance-based)
-        side_switch_detected = self._detect_side_switch(
-            near_tracks, far_tracks, track_stats
+        # Step 2: Classify track sides (soft near/far labels)
+        track_avg_y, track_court_sides = self._classify_track_sides(
+            track_stats, player_positions, court_split_y, team_assignments
         )
 
-        if side_switch_detected:
-            self._apply_side_switch()
-            self.state.side_switches.append(rally_index)
-            logger.info(f"Side switch detected at rally {rally_index}")
+        # Step 3: Select top 4 tracks globally by feature count
+        all_track_ids = list(track_court_sides.keys())
+        top_tracks = self._top_tracks_by_frames(all_track_ids, track_stats, 4)
 
-        # Step 4: Match tracks to player profiles using Hungarian algorithm
-        track_to_player = self._assign_tracks_to_players(
-            near_tracks, far_tracks, track_stats
-        )
+        # Step 4: Assign tracks to players
+        if self.rally_count <= 1:
+            # First rally: deterministic assignment by Y position
+            track_to_player = self._initialize_first_rally(
+                top_tracks, track_avg_y, track_court_sides
+            )
+            side_switch_detected = False
+        else:
+            # Step 4a: Run penalty-free assignment for side switch detection.
+            # The side penalty would bias against cross-side matches, preventing
+            # switch detection when appearance isn't strong enough to overcome it.
+            unpenalized = self._assign_tracks_to_players_global(
+                top_tracks, track_stats, track_court_sides, use_side_penalty=False
+            )
 
-        # Step 5: Compute confidence BEFORE updating profiles (avoids inflated scores)
+            # Step 4b: Check for side switch from unpenalized assignment
+            side_switch_detected = self._detect_side_switch_from_assignment(
+                unpenalized, track_court_sides
+            )
+
+            if side_switch_detected:
+                self._apply_side_switch()
+                self.state.side_switches.append(rally_index)
+                logger.info(f"Side switch detected at rally {rally_index}")
+
+            # Step 4c: Final assignment with side penalty (uses updated sides if switched)
+            track_to_player = self._assign_tracks_to_players_global(
+                top_tracks, track_stats, track_court_sides
+            )
+
+        # Step 5: Within-team refinement using position continuity
+        if self.rally_count > 1:
+            track_to_player = self._refine_within_team(
+                track_to_player, player_positions, track_court_sides
+            )
+
+        # Store late-rally positions for next rally's continuity check
+        self._store_last_positions(track_to_player, player_positions)
+
+        # Step 6: Compute confidence BEFORE updating profiles (avoids inflated scores)
         confidence = self._compute_assignment_confidence(track_stats, track_to_player)
 
-        # Step 6: Update player profiles with new appearance data
+        # Step 7: Update player profiles with new appearance data
         self._update_profiles(track_stats, track_to_player)
 
-        # Step 7: Record server if detected (use serve_anchor as fallback)
+        # Step 8: Record server if detected (use serve_anchor as fallback)
         server_player_id = None
         if server_result and server_result.track_id >= 0:
             server_player_id = track_to_player.get(server_result.track_id)
@@ -311,25 +383,31 @@ class MatchPlayerTracker:
             assignment_confidence=confidence,
         )
 
-    def _split_tracks_by_court(
+    def _classify_track_sides(
         self,
         track_stats: dict[int, TrackAppearanceStats],
         player_positions: list[PlayerPosition],
         court_split_y: float | None,
-    ) -> tuple[list[int], list[int]]:
-        """Split track IDs into near and far court teams."""
-        if court_split_y is None:
-            # Use bbox size as fallback (larger = near court)
-            sizes: dict[int, float] = {}
-            for p in player_positions:
-                if p.track_id not in sizes:
-                    sizes[p.track_id] = 0.0
-                sizes[p.track_id] = max(sizes[p.track_id], p.width * p.height)
+        team_assignments: dict[int, int] | None = None,
+    ) -> tuple[dict[int, float], dict[int, int]]:
+        """Classify tracks into near/far court with soft labels.
 
-            sorted_tracks = sorted(sizes.keys(), key=lambda t: sizes.get(t, 0), reverse=True)
-            mid = len(sorted_tracks) // 2
-            return sorted_tracks[:mid], sorted_tracks[mid:]
+        Priority: team_assignments (from tracking pipeline) > court_split_y > median.
+        team_assignments are reliable because they use bbox size clustering
+        (near players have larger bboxes), not Y position alone.
 
+        Args:
+            track_stats: Appearance stats per track.
+            player_positions: All player positions for this rally.
+            court_split_y: Y coordinate splitting near/far teams.
+            team_assignments: Pre-computed track_id -> team (0=near, 1=far)
+                from the tracking pipeline's actions_json.teamAssignments.
+
+        Returns:
+            Tuple of (track_avg_y, track_court_sides) where:
+                track_avg_y: track_id -> average Y position
+                track_court_sides: track_id -> 0 (near) or 1 (far)
+        """
         # Compute average Y position for each track
         track_avg_y: dict[int, float] = {}
         track_y_values: dict[int, list[float]] = {}
@@ -344,107 +422,219 @@ class MatchPlayerTracker:
         for track_id, y_vals in track_y_values.items():
             track_avg_y[track_id] = float(np.mean(y_vals))
 
-        # Split by court_split_y
-        near_tracks = [t for t, y in track_avg_y.items() if y > court_split_y]
-        far_tracks = [t for t, y in track_avg_y.items() if y <= court_split_y]
+        track_court_sides: dict[int, int] = {}
 
-        # If one side is empty and we have 4+ tracks, the court_split_y is wrong.
-        # Re-split by index (bottom half = far, top half = near) for even teams.
-        if len(track_avg_y) >= 4 and (not near_tracks or not far_tracks):
-            all_tracks = sorted(track_avg_y.keys(), key=lambda t: track_avg_y[t])
-            mid = len(all_tracks) // 2
-            far_tracks = all_tracks[:mid]
-            near_tracks = all_tracks[mid:]
-            logger.info(
-                "court_split_y=%.3f put all %d tracks on one side, "
-                "re-splitting by index: near=%s (y>%.3f), far=%s (y<=%.3f)",
-                court_split_y, len(all_tracks),
-                near_tracks, track_avg_y[near_tracks[0]],
-                far_tracks, track_avg_y[far_tracks[-1]],
-            )
+        # Priority 1: Use pre-computed team_assignments if they cover most tracks
+        if team_assignments:
+            covered = [t for t in track_avg_y if t in team_assignments]
+            if len(covered) >= len(track_avg_y) * 0.75:
+                for t in track_avg_y:
+                    if t in team_assignments:
+                        track_court_sides[t] = team_assignments[t]
+                    else:
+                        # Uncovered track: fallback to court_split_y or median
+                        if court_split_y is not None:
+                            track_court_sides[t] = (
+                                0 if track_avg_y[t] > court_split_y else 1
+                            )
+                        else:
+                            track_court_sides[t] = 0  # default near
+                logger.info(
+                    "Using team_assignments for %d/%d tracks",
+                    len(covered),
+                    len(track_avg_y),
+                )
+                return track_avg_y, track_court_sides
 
-        return near_tracks, far_tracks
+        # Priority 2: court_split_y
+        if court_split_y is not None:
+            # Try splitting by court_split_y
+            near = [t for t in track_avg_y if track_avg_y[t] > court_split_y]
+            far = [t for t in track_avg_y if track_avg_y[t] <= court_split_y]
 
-    def _detect_side_switch(
+            if near and far:
+                # Good split — use it
+                for t in near:
+                    track_court_sides[t] = 0  # near
+                for t in far:
+                    track_court_sides[t] = 1  # far
+                return track_avg_y, track_court_sides
+
+            # All tracks on one side — fall through to median split
+            if len(track_avg_y) >= 4:
+                logger.info(
+                    "court_split_y=%.3f put all %d tracks on one side, "
+                    "using median-index split",
+                    court_split_y,
+                    len(track_avg_y),
+                )
+
+        if not track_avg_y:
+            return track_avg_y, track_court_sides
+
+        # Priority 3: sort by Y, split at median index
+        # Higher Y = near court (closer to camera)
+        sorted_tracks = sorted(track_avg_y.keys(), key=lambda t: track_avg_y[t])
+        mid = len(sorted_tracks) // 2
+        for t in sorted_tracks[:mid]:
+            track_court_sides[t] = 1  # far (lower Y)
+        for t in sorted_tracks[mid:]:
+            track_court_sides[t] = 0  # near (higher Y)
+
+        return track_avg_y, track_court_sides
+
+    def _initialize_first_rally(
         self,
-        near_tracks: list[int],
-        far_tracks: list[int],
-        track_stats: dict[int, TrackAppearanceStats],
-    ) -> bool:
+        track_ids: list[int],
+        track_avg_y: dict[int, float],
+        track_court_sides: dict[int, int],
+    ) -> dict[int, int]:
+        """Deterministic first-rally assignment sorted by Y within each team.
+
+        Lowest Y in near team -> P1, next -> P2.
+        Lowest Y in far team -> P3, next -> P4.
+        Eliminates dependency on dict/list ordering.
+
+        Args:
+            track_ids: Top tracks to assign (up to 4).
+            track_avg_y: Average Y position per track.
+            track_court_sides: Track -> 0 (near) or 1 (far).
+
+        Returns:
+            track_id -> player_id mapping.
         """
-        Detect if teams have switched sides based on appearance.
-
-        Compares current assignment cost vs swapped assignment cost.
-        If swapped is significantly better, switch detected.
-        """
-        if self.rally_count <= 2:
-            # Need stable profiles (at least 2 rallies processed)
-            return False
-
-        if not near_tracks or not far_tracks:
-            return False
-
-        # Get player IDs for each team based on current assignment
-        near_players = [
+        near_players = sorted(
             pid for pid, team in self.state.current_side_assignment.items()
             if team == 0
-        ]
-        far_players = [
+        )
+        far_players = sorted(
             pid for pid, team in self.state.current_side_assignment.items()
             if team == 1
-        ]
-
-        # Compute normal cost: near_tracks→near_players + far_tracks→far_players
-        cost_normal = self._compute_team_assignment_cost(
-            near_tracks, near_players, track_stats
-        ) + self._compute_team_assignment_cost(
-            far_tracks, far_players, track_stats
         )
 
-        # Compute swapped cost: near_tracks→far_players + far_tracks→near_players
-        cost_swapped = self._compute_team_assignment_cost(
-            near_tracks, far_players, track_stats
-        ) + self._compute_team_assignment_cost(
-            far_tracks, near_players, track_stats
+        # Split tracks by assigned side, sort by Y within each side
+        near_tracks = sorted(
+            [t for t in track_ids if track_court_sides.get(t) == 0],
+            key=lambda t: track_avg_y.get(t, 0.5),
+        )
+        far_tracks = sorted(
+            [t for t in track_ids if track_court_sides.get(t) == 1],
+            key=lambda t: track_avg_y.get(t, 0.5),
         )
 
-        # Switch if swapped is significantly cheaper (30% margin)
-        if cost_swapped < cost_normal * 0.7:
+        assignments: dict[int, int] = {}
+        for i, tid in enumerate(near_tracks[:2]):
+            if i < len(near_players):
+                assignments[tid] = near_players[i]
+        for i, tid in enumerate(far_tracks[:2]):
+            if i < len(far_players):
+                assignments[tid] = far_players[i]
+
+        return assignments
+
+    def _assign_tracks_to_players_global(
+        self,
+        track_ids: list[int],
+        track_stats: dict[int, TrackAppearanceStats],
+        track_court_sides: dict[int, int],
+        *,
+        use_side_penalty: bool = True,
+    ) -> dict[int, int]:
+        """Global 4x4 Hungarian assignment with optional side penalty.
+
+        Builds a single cost matrix across all players instead of
+        per-team split-then-match. Side penalty biases toward expected
+        court side but doesn't prevent cross-side matching.
+
+        Args:
+            track_ids: Track IDs to assign (up to 4).
+            track_stats: Appearance stats per track.
+            track_court_sides: Track -> 0 (near) or 1 (far).
+            use_side_penalty: Whether to add side penalty to cost matrix.
+
+        Returns:
+            track_id -> player_id mapping.
+        """
+        if not track_ids:
+            return {}
+
+        all_player_ids = sorted(self.state.players.keys())  # [1, 2, 3, 4]
+        n_tracks = len(track_ids)
+        n_players = len(all_player_ids)
+        size = max(n_tracks, n_players)
+
+        # Build cost matrix: appearance + optional side penalty
+        default_cost = 1.0 + (SIDE_PENALTY if use_side_penalty else 0.0)
+        cost_matrix = np.full((size, size), default_cost)
+        for i, tid in enumerate(track_ids):
+            if tid not in track_stats:
+                continue
+            track_side = track_court_sides.get(tid)
+            for j, pid in enumerate(all_player_ids):
+                if pid not in self.state.players:
+                    continue
+                appearance_cost = compute_appearance_similarity(
+                    self.state.players[pid], track_stats[tid]
+                )
+                # Add side penalty if track and player are on different sides
+                if use_side_penalty:
+                    player_side = self.state.current_side_assignment.get(pid)
+                    side_pen = SIDE_PENALTY if track_side != player_side else 0.0
+                else:
+                    side_pen = 0.0
+                cost_matrix[i, j] = appearance_cost + side_pen
+
+        row_ind, col_ind = linear_sum_assignment(cost_matrix)
+
+        result: dict[int, int] = {}
+        for r, c in zip(row_ind, col_ind):
+            if r < n_tracks and c < n_players:
+                result[track_ids[r]] = all_player_ids[c]
+        return result
+
+    def _detect_side_switch_from_assignment(
+        self,
+        track_to_player: dict[int, int],
+        track_court_sides: dict[int, int],
+    ) -> bool:
+        """Detect side switch from global assignment result.
+
+        After global assignment, count how many players ended up on the
+        opposite side from their profile. If >=3 of 4 flipped -> switch.
+
+        Args:
+            track_to_player: Assignment from global Hungarian.
+            track_court_sides: Track -> 0 (near) or 1 (far).
+
+        Returns:
+            True if side switch detected.
+        """
+        if self.rally_count <= 2:
+            return False
+
+        if len(track_to_player) < 3:
+            return False
+
+        flipped = 0
+        total = 0
+        for tid, pid in track_to_player.items():
+            track_side = track_court_sides.get(tid)
+            player_expected_side = self.state.current_side_assignment.get(pid)
+            if track_side is None or player_expected_side is None:
+                continue
+            total += 1
+            if track_side != player_expected_side:
+                flipped += 1
+
+        if total >= 3 and flipped >= 3:
             logger.info(
-                f"Side switch: cost_normal={cost_normal:.3f}, "
-                f"cost_swapped={cost_swapped:.3f}"
+                "Side switch detected: %d/%d players on opposite side",
+                flipped,
+                total,
             )
             return True
 
         return False
-
-    def _compute_team_assignment_cost(
-        self,
-        track_ids: list[int],
-        player_ids: list[int],
-        track_stats: dict[int, TrackAppearanceStats],
-    ) -> float:
-        """Compute optimal assignment cost for tracks to players using Hungarian."""
-        if not track_ids or not player_ids:
-            return 0.0
-
-        n_tracks = min(len(track_ids), 2)
-        n_players = len(player_ids)
-
-        # Build cost matrix
-        cost_matrix = np.full((n_tracks, n_players), 1.0)
-        for i, tid in enumerate(track_ids[:n_tracks]):
-            if tid not in track_stats:
-                continue
-            for j, pid in enumerate(player_ids):
-                if pid not in self.state.players:
-                    continue
-                cost_matrix[i, j] = compute_appearance_similarity(
-                    self.state.players[pid], track_stats[tid]
-                )
-
-        row_ind, col_ind = linear_sum_assignment(cost_matrix)
-        return float(cost_matrix[row_ind, col_ind].sum())
 
     def _apply_side_switch(self) -> None:
         """Apply side switch by swapping team assignments."""
@@ -457,54 +647,83 @@ class MatchPlayerTracker:
         for player_id, profile in self.state.players.items():
             profile.team = 1 - profile.team
 
-    def _assign_tracks_to_players(
+        # Clear position continuity — invalid when teams swap court sides
+        self.state.player_last_positions.clear()
+
+    def _refine_within_team(
         self,
-        near_tracks: list[int],
-        far_tracks: list[int],
-        track_stats: dict[int, TrackAppearanceStats],
+        track_to_player: dict[int, int],
+        player_positions: list[PlayerPosition],
+        track_court_sides: dict[int, int],
     ) -> dict[int, int]:
+        """Refine within-team player assignments using position continuity.
+
+        For each team of 2 tracks, compare early-rally positions to previous
+        rally's late positions. Swap within-team assignment if it reduces
+        total distance by >20% (prevents noise-driven flips).
         """
-        Assign tracks to player IDs using Hungarian algorithm.
+        if not self.state.player_last_positions:
+            return track_to_player
 
-        Args:
-            near_tracks: Track IDs on near side of court.
-            far_tracks: Track IDs on far side of court.
-            track_stats: Appearance stats per track for cost computation.
+        for team in [0, 1]:
+            team_tracks = [
+                tid
+                for tid, pid in track_to_player.items()
+                if track_court_sides.get(tid) == team
+            ]
+            if len(team_tracks) != 2:
+                continue
 
-        Returns:
-            Dictionary mapping track_id to player_id (1-4).
-        """
-        assignments: dict[int, int] = {}
+            t1, t2 = team_tracks
+            p1, p2 = track_to_player[t1], track_to_player[t2]
 
-        # Get player IDs for each team based on current assignment
-        near_players = [
-            pid for pid, team in self.state.current_side_assignment.items()
-            if team == 0
-        ]
-        far_players = [
-            pid for pid, team in self.state.current_side_assignment.items()
-            if team == 1
-        ]
+            # Need last positions for both players
+            if p1 not in self.state.player_last_positions:
+                continue
+            if p2 not in self.state.player_last_positions:
+                continue
 
-        # First rally: no profiles yet, assign arbitrarily
-        if self.rally_count <= 1:
-            for i, tid in enumerate(near_tracks[:2]):
-                if i < len(near_players):
-                    assignments[tid] = near_players[i]
-            for i, tid in enumerate(far_tracks[:2]):
-                if i < len(far_players):
-                    assignments[tid] = far_players[i]
-            return assignments
+            # Compute early-rally positions
+            early = _compute_track_positions(
+                player_positions, [t1, t2], window=30, from_start=True
+            )
+            if t1 not in early or t2 not in early:
+                continue
 
-        # Subsequent rallies: use Hungarian algorithm per team
-        assignments.update(
-            self._hungarian_assign(near_tracks, near_players, track_stats)
+            last_p1 = self.state.player_last_positions[p1]
+            last_p2 = self.state.player_last_positions[p2]
+
+            cost_keep = _dist(early[t1], last_p1) + _dist(early[t2], last_p2)
+            cost_swap = _dist(early[t1], last_p2) + _dist(early[t2], last_p1)
+
+            # Only swap if clearly better (>20% improvement prevents noise flips)
+            if cost_swap < cost_keep * 0.80:
+                track_to_player[t1] = p2
+                track_to_player[t2] = p1
+                logger.info(
+                    "Within-team swap: team %d, tracks %d↔%d "
+                    "(keep=%.3f, swap=%.3f, improvement=%.0f%%)",
+                    team, t1, t2, cost_keep, cost_swap,
+                    (1 - cost_swap / cost_keep) * 100 if cost_keep > 0 else 0,
+                )
+
+        return track_to_player
+
+    def _store_last_positions(
+        self,
+        track_to_player: dict[int, int],
+        player_positions: list[PlayerPosition],
+    ) -> None:
+        """Store each player's late-rally position for next rally's continuity check."""
+        late = _compute_track_positions(
+            player_positions,
+            list(track_to_player.keys()),
+            window=30,
+            from_start=False,
         )
-        assignments.update(
-            self._hungarian_assign(far_tracks, far_players, track_stats)
-        )
-
-        return assignments
+        for tid, pid in track_to_player.items():
+            if tid in late:
+                self.state.player_last_positions[pid] = late[tid]
 
     def _top_tracks_by_frames(
         self,
@@ -520,40 +739,6 @@ class MatchPlayerTracker:
             key=lambda t: len(track_stats[t].features) if t in track_stats else 0,
             reverse=True,
         )[:n]
-
-    def _hungarian_assign(
-        self,
-        track_ids: list[int],
-        player_ids: list[int],
-        track_stats: dict[int, TrackAppearanceStats],
-    ) -> dict[int, int]:
-        """Assign tracks to players using Hungarian algorithm on appearance cost."""
-        if not track_ids or not player_ids:
-            return {}
-
-        n_tracks = len(track_ids)
-        n_players = len(player_ids)
-        size = max(n_tracks, n_players)
-
-        # Build cost matrix padded with 1.0 for missing entries
-        cost_matrix = np.full((size, size), 1.0)
-        for i, tid in enumerate(track_ids):
-            if tid not in track_stats:
-                continue
-            for j, pid in enumerate(player_ids):
-                if pid not in self.state.players:
-                    continue
-                cost_matrix[i, j] = compute_appearance_similarity(
-                    self.state.players[pid], track_stats[tid]
-                )
-
-        row_ind, col_ind = linear_sum_assignment(cost_matrix)
-
-        result: dict[int, int] = {}
-        for r, c in zip(row_ind, col_ind):
-            if r < n_tracks and c < n_players:
-                result[track_ids[r]] = player_ids[c]
-        return result
 
     def _update_profiles(
         self,
@@ -798,6 +983,7 @@ def match_players_across_rallies(
             player_positions=rally.positions,
             ball_positions=rally.ball_positions,
             court_split_y=rally.court_split_y,
+            team_assignments=rally.team_assignments,
         )
 
         results.append(result)

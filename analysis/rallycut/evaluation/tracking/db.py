@@ -374,7 +374,8 @@ def load_rallies_for_video(video_id: str) -> list[RallyTrackData]:
             pt.positions_json,
             pt.primary_track_ids,
             pt.court_split_y,
-            pt.ball_positions_json
+            pt.ball_positions_json,
+            pt.actions_json
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
         WHERE r.video_id = %s
@@ -399,6 +400,7 @@ def load_rallies_for_video(video_id: str) -> list[RallyTrackData]:
                     primary_track_ids,
                     court_split_y,
                     ball_positions_json,
+                    actions_json,
                 ) = row
 
                 # Parse positions
@@ -433,6 +435,17 @@ def load_rallies_for_video(video_id: str) -> list[RallyTrackData]:
                             )
                         )
 
+                # Parse team assignments from actions_json
+                team_assignments: dict[int, int] | None = None
+                if actions_json and isinstance(actions_json, dict):
+                    raw_teams = actions_json.get("teamAssignments", {})
+                    if raw_teams:
+                        team_assignments = {}
+                        for tid_str, team_str in raw_teams.items():
+                            team_assignments[int(tid_str)] = (
+                                0 if team_str == "A" else 1
+                            )
+
                 results.append(
                     RallyTrackData(
                         rally_id=str(rally_id_val),
@@ -443,6 +456,7 @@ def load_rallies_for_video(video_id: str) -> list[RallyTrackData]:
                         primary_track_ids=cast(list[int], primary_track_ids) or [],
                         court_split_y=cast(float | None, court_split_y),
                         ball_positions=ball_positions,
+                        team_assignments=team_assignments,
                     )
                 )
 
@@ -652,7 +666,34 @@ def save_predictions(
                 rally_id,
             ])
             if cur.rowcount == 0:
-                raise ValueError(f"No player_tracks row found for rally {rally_id}")
+                # No existing row — insert one
+                cur.execute(
+                    """
+                    INSERT INTO player_tracks (
+                        id, rally_id, status, positions_json, raw_positions_json,
+                        ball_positions_json, primary_track_ids, court_split_y,
+                        frame_count, fps, model_version, processing_time_ms,
+                        quality_report_json, completed_at, created_at
+                    ) VALUES (
+                        gen_random_uuid(), %s, 'COMPLETED', %s::jsonb, %s::jsonb,
+                        %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s::jsonb,
+                        NOW(), NOW()
+                    )
+                    """,
+                    [
+                        rally_id,
+                        positions_json,
+                        raw_positions_json,
+                        ball_positions_json,
+                        primary_track_ids,
+                        result.court_split_y,
+                        result.frame_count,
+                        result.video_fps,
+                        result.model_version,
+                        int(processing_time_ms),
+                        quality_report_json,
+                    ],
+                )
         conn.commit()
 
     logger.info(
