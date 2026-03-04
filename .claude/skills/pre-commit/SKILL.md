@@ -1,12 +1,10 @@
 ---
 name: pre-commit
-description: Run all code quality checks before committing - type checking, linting, and tests for Python and TypeScript. Use before creating commits. (project)
-allowed-tools: Bash, Read
+description: Run RallyCut code quality checks and tests - type checking (mypy, tsc), linting (ruff, eslint), and tests (pytest, vitest). Use before committing, when checking code quality, or when running tests. (project)
+allowed-tools: Bash, Read, Edit, Grep, Glob
 ---
 
 # RallyCut Pre-Commit Checks
-
-Run these checks before committing to ensure code quality.
 
 ## Quick Check (All Projects)
 
@@ -21,31 +19,53 @@ cd api && npx tsc --noEmit
 cd web && npx tsc --noEmit && npm run lint
 ```
 
-## Detailed Checks
+Only run checks for projects with changes. If you only touched `analysis/`, skip api/web checks.
 
-### Python (analysis/)
+## Python (analysis/)
+
 ```bash
-uv run mypy rallycut/           # Type checking (strict mode)
-uv run ruff check rallycut/     # Linting
+cd analysis
+uv run mypy rallycut/              # Type check (strict mode — all functions need type hints)
+uv run ruff check rallycut/        # Lint (E, F, I, N, W, UP rules, line length 100)
 uv run ruff check rallycut/ --fix  # Auto-fix lint issues
-uv run pytest tests             # Unit tests (fast)
+uv run pytest tests                # Unit tests (fast, no ML)
+uv run pytest tests --run-slow     # Include ML inference tests
+uv run pytest tests -k "test_name" # By name pattern
+uv run pytest tests/unit/test_foo.py::test_bar -v  # Single test
 ```
 
-### API (api/)
+## API (api/)
+
 ```bash
-npx tsc --noEmit                # TypeScript type check
-npm run test                    # Vitest unit tests
+cd api
+npx tsc --noEmit         # TypeScript type check
+npm run test             # Vitest unit tests
+npm run test -- --watch  # Watch mode
 ```
 
-### Web (web/)
+## Web (web/)
+
 ```bash
-npx tsc --noEmit                # TypeScript type check
-npm run lint                    # ESLint
-npm run build                   # Verify build works
+cd web
+npx tsc --noEmit   # TypeScript type check
+npm run lint        # ESLint
+npm run build       # Verify build works
 ```
 
-## Fix Common Issues
+## Debugging Test Failures
 
-- **Import order (Python)**: `uv run ruff check --fix`
-- **Missing types (Python)**: Add type annotations to function
-- **Unused import**: Remove it or add `# noqa: F401` if intentional
+```bash
+cd analysis
+uv run pytest -v --tb=long    # Verbose with full traceback
+uv run pytest --pdb            # Drop into debugger on failure
+uv run pytest tests --cov=rallycut --cov-report=html  # Coverage report
+```
+
+## Common Fixes
+
+| Issue | Fix |
+|-------|-----|
+| Import order (Python) | `uv run ruff check --fix` |
+| Missing return type | Add `-> ReturnType` annotation |
+| Unused variable | Remove or prefix with `_` |
+| Unused import | Remove or add `# noqa: F401` if intentional |
