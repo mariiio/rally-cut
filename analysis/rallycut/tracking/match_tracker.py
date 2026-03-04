@@ -240,6 +240,19 @@ def _dist(a: tuple[float, float], b: tuple[float, float]) -> float:
     return float(((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5)
 
 
+@dataclass
+class StoredRallyData:
+    """Per-rally data stored during Pass 1 for Pass 2 refinement."""
+
+    track_stats: dict[int, TrackAppearanceStats]
+    track_court_sides: dict[int, int]
+    early_positions: dict[int, tuple[float, float]]
+    top_tracks: list[int]
+    player_positions: list[PlayerPosition]
+    # Snapshot of player→side mapping at this rally (before any switch applied)
+    player_side_assignment: dict[int, int] = field(default_factory=dict)
+
+
 class MatchPlayerTracker:
     """
     Orchestrates player tracking across an entire match.
@@ -270,6 +283,7 @@ class MatchPlayerTracker:
         self.rally_count = 0
         self.collect_diagnostics = collect_diagnostics
         self.diagnostics: list[RallyAssignmentDiagnostics] = []
+        self.stored_rally_data: list[StoredRallyData] = []
 
     def process_rally(
         self,
@@ -419,6 +433,18 @@ class MatchPlayerTracker:
         # Store current assignments
         self.state.current_assignments = track_to_player
 
+        # Store rally data for Pass 2 refinement.
+        # Snapshot current_side_assignment so Pass 2 uses the correct
+        # player→side mapping for this rally (not the final post-all-switches state).
+        self.stored_rally_data.append(StoredRallyData(
+            track_stats=track_stats,
+            track_court_sides=track_court_sides,
+            early_positions=early_positions,
+            top_tracks=top_tracks,
+            player_positions=player_positions,
+            player_side_assignment=dict(self.state.current_side_assignment),
+        ))
+
         return RallyTrackingResult(
             rally_index=rally_index,
             track_to_player=track_to_player,
@@ -504,7 +530,29 @@ class MatchPlayerTracker:
                     track_court_sides[t] = 1  # far
                 return track_avg_y, track_court_sides
 
-            # All tracks on one side — fall through to median split
+            # All tracks on one side — try team_assignments with any coverage
+            # before falling back to median split
+            if team_assignments:
+                covered = [t for t in track_avg_y if t in team_assignments]
+                if covered:
+                    for t in track_avg_y:
+                        if t in team_assignments:
+                            track_court_sides[t] = team_assignments[t]
+                        else:
+                            track_court_sides[t] = 0  # default near
+                    # Verify we got a real split (not all same team)
+                    teams_seen = set(track_court_sides.values())
+                    if len(teams_seen) >= 2:
+                        logger.info(
+                            "court_split_y failed, using team_assignments "
+                            "for %d/%d tracks",
+                            len(covered),
+                            len(track_avg_y),
+                        )
+                        return track_avg_y, track_court_sides
+                    # All same team — clear and fall through
+                    track_court_sides.clear()
+
             if len(track_avg_y) >= 4:
                 logger.info(
                     "court_split_y=%.3f put all %d tracks on one side, "
@@ -911,6 +959,97 @@ class MatchPlayerTracker:
         avg_cost = sum(costs) / len(costs)
         return 1.0 - avg_cost
 
+    def refine_assignments(
+        self,
+        initial_results: list[RallyTrackingResult],
+    ) -> list[RallyTrackingResult]:
+        """Re-score all rallies using final accumulated profiles (Pass 2).
+
+        Uses the final profiles from Pass 1 (richest signal) to re-run
+        the global Hungarian assignment for all rallies. Profiles are
+        frozen — no updates. No position continuity or within-team
+        refinement (those depend on sequential state that can propagate
+        errors when rebuilt from scratch).
+
+        Args:
+            initial_results: Results from Pass 1 forward pass.
+
+        Returns:
+            Refined results with potentially corrected assignments.
+        """
+        if len(self.stored_rally_data) != len(initial_results):
+            logger.warning(
+                "stored_rally_data length mismatch: %d vs %d results",
+                len(self.stored_rally_data),
+                len(initial_results),
+            )
+            return initial_results
+
+        if len(initial_results) <= 1:
+            return initial_results
+
+        refined: list[RallyTrackingResult] = []
+        changes = 0
+
+        for i, (data, initial) in enumerate(
+            zip(self.stored_rally_data, initial_results)
+        ):
+            if i == 0:
+                # First rally: keep initial (deterministic Y-sort, no profiles)
+                refined.append(initial)
+                continue
+
+            # Restore the player→side mapping that was active during this
+            # rally in Pass 1. Without this, videos with side switches would
+            # use the final (post-all-switches) mapping, applying wrong side
+            # penalties to pre-switch rallies.
+            saved_side = self.state.current_side_assignment
+            self.state.current_side_assignment = data.player_side_assignment
+
+            # Re-run assignment with final profiles (no position continuity
+            # in Pass 2 — position chain built from scratch can be wrong and
+            # override correct appearance-based assignments)
+            track_to_player = self._assign_tracks_to_players_global(
+                data.top_tracks,
+                data.track_stats,
+                data.track_court_sides,
+            )
+
+            # Restore final side assignment
+            self.state.current_side_assignment = saved_side
+
+            # Recompute confidence with final profiles
+            confidence = self._compute_assignment_confidence(
+                data.track_stats, track_to_player
+            )
+
+            # Check if assignment changed
+            if track_to_player != initial.track_to_player:
+                changes += 1
+                logger.info(
+                    "Pass 2 changed rally %d: %s → %s (conf %.2f → %.2f)",
+                    i,
+                    initial.track_to_player,
+                    track_to_player,
+                    initial.assignment_confidence,
+                    confidence,
+                )
+
+            refined.append(RallyTrackingResult(
+                rally_index=initial.rally_index,
+                track_to_player=track_to_player,
+                server_player_id=initial.server_player_id,
+                side_switch_detected=initial.side_switch_detected,
+                assignment_confidence=confidence,
+            ))
+
+        if changes:
+            logger.info("Pass 2 changed %d/%d rallies", changes, len(refined))
+        else:
+            logger.info("Pass 2: no changes")
+
+        return refined
+
     def get_consistent_player_id(self, track_id: int) -> int | None:
         """
         Get consistent player ID for a track.
@@ -1113,6 +1252,9 @@ def match_players_across_rallies(
             f"switch={result.side_switch_detected}, "
             f"assignments={result.track_to_player}"
         )
+
+    # Pass 2: Re-score all rallies with final profiles
+    results = tracker.refine_assignments(results)
 
     return MatchPlayersResult(
         rally_results=results,

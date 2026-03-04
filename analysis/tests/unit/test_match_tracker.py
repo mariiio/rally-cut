@@ -7,6 +7,7 @@ import numpy as np
 
 from rallycut.tracking.match_tracker import (
     MatchPlayerTracker,
+    RallyTrackingResult,
     _compute_track_positions,
     _dist,
 )
@@ -921,3 +922,167 @@ class TestConfidence:
             track_stats={}, player_positions=[], court_split_y=0.5
         )
         assert result.assignment_confidence == 0.0
+
+
+class TestCourtSplitFallbackWithTeamAssignments:
+    """Test court_split_y failure with partial team_assignments fallback."""
+
+    def test_court_split_failure_uses_team_assignments(self) -> None:
+        """When court_split_y puts all on one side, team_assignments rescues."""
+        tracker = MatchPlayerTracker()
+        # All tracks below court_split_y=0.637 (compressed Y)
+        positions = _make_positions([10, 11, 20, 21], [0.60, 0.63, 0.49, 0.52])
+        stats = {t: _make_stats(t) for t in [10, 11, 20, 21]}
+
+        # court_split_y fails but team_assignments knows the answer
+        team_assignments = {10: 0, 11: 0, 20: 1, 21: 1}
+        _, sides = tracker._classify_track_sides(
+            stats, positions, court_split_y=0.637,
+            team_assignments=team_assignments,
+        )
+
+        assert sides[10] == 0  # near
+        assert sides[11] == 0  # near
+        assert sides[20] == 1  # far
+        assert sides[21] == 1  # far
+
+    def test_court_split_failure_partial_team_assignments(self) -> None:
+        """Even partial team_assignments (2/4) can rescue court_split failure."""
+        tracker = MatchPlayerTracker()
+        positions = _make_positions([10, 11, 20, 21], [0.60, 0.63, 0.49, 0.52])
+        stats = {t: _make_stats(t) for t in [10, 11, 20, 21]}
+
+        # Only 2 tracks covered, but they're on different teams → valid split
+        team_assignments = {10: 0, 20: 1}
+        _, sides = tracker._classify_track_sides(
+            stats, positions, court_split_y=0.637,
+            team_assignments=team_assignments,
+        )
+
+        # Should use team_assignments (two different teams seen)
+        assert sides[10] == 0
+        assert sides[20] == 1
+
+    def test_court_split_failure_same_team_assignments_falls_through(self) -> None:
+        """team_assignments all same team → still falls to median split."""
+        tracker = MatchPlayerTracker()
+        positions = _make_positions([10, 11, 20, 21], [0.60, 0.63, 0.49, 0.52])
+        stats = {t: _make_stats(t) for t in [10, 11, 20, 21]}
+
+        # All covered tracks on same team → no split possible
+        team_assignments = {10: 0, 11: 0}
+        _, sides = tracker._classify_track_sides(
+            stats, positions, court_split_y=0.637,
+            team_assignments=team_assignments,
+        )
+
+        # Falls through to median split: 2 near, 2 far
+        near_count = sum(1 for s in sides.values() if s == 0)
+        far_count = sum(1 for s in sides.values() if s == 1)
+        assert near_count == 2
+        assert far_count == 2
+
+
+class TestStoredRallyData:
+    """Test that rally data is stored during processing."""
+
+    def test_stored_rally_data_populated(self) -> None:
+        """stored_rally_data should be populated after processing rallies."""
+        tracker = MatchPlayerTracker()
+        for i in range(3):
+            base = (i + 1) * 100
+            tids = [base, base + 1, base + 2, base + 3]
+            positions = _make_positions(tids, [0.7, 0.8, 0.3, 0.4])
+            stats = {t: _make_stats(t) for t in tids}
+            tracker.process_rally(
+                track_stats=stats, player_positions=positions, court_split_y=0.5
+            )
+
+        assert len(tracker.stored_rally_data) == 3
+        for data in tracker.stored_rally_data:
+            assert len(data.track_stats) > 0
+            assert len(data.track_court_sides) > 0
+            assert len(data.top_tracks) > 0
+
+
+class TestRefineAssignments:
+    """Test Pass 2 refinement corrects early-rally errors."""
+
+    def test_refinement_corrects_early_rallies(self) -> None:
+        """Pass 2 should correct early-rally assignments using richer profiles.
+
+        Scenario: 4 physically distinct players. Rally 1 establishes profiles
+        with deterministic Y-sort. Rallies 2-5 use identical appearances but
+        richer profiles accumulate. Pass 2 re-scores Rally 2 (which had only
+        1-rally profiles) with the final 5-rally profiles.
+        """
+        # 4 distinct player appearances
+        appearances = [
+            dict(skin_hsv=(15.0, 180.0, 120.0), height=0.18,
+                 lower_hue=0.0, lower_sat=200.0, upper_hue=110.0, upper_sat=180.0),
+            dict(skin_hsv=(25.0, 100.0, 200.0), height=0.12,
+                 lower_hue=60.0, lower_sat=200.0, upper_hue=30.0, upper_sat=180.0),
+            dict(skin_hsv=(10.0, 160.0, 150.0), height=0.10,
+                 lower_hue=15.0, lower_sat=220.0, upper_hue=0.0, upper_sat=30.0),
+            dict(skin_hsv=(30.0, 120.0, 170.0), height=0.09,
+                 lower_hue=140.0, lower_sat=150.0, upper_hue=0.0, upper_sat=50.0),
+        ]
+
+        tracker = MatchPlayerTracker()
+        results: list[RallyTrackingResult] = []
+
+        for rally_idx in range(5):
+            base = (rally_idx + 1) * 100
+            tids = [base + j for j in range(4)]
+            stats = {
+                tids[j]: _make_stats(tids[j], **appearances[j])
+                for j in range(4)
+            }
+            positions = _make_positions(tids, [0.7, 0.8, 0.3, 0.4])
+            result = tracker.process_rally(
+                track_stats=stats, player_positions=positions, court_split_y=0.5
+            )
+            results.append(result)
+
+        # Refine
+        refined = tracker.refine_assignments(results)
+
+        assert len(refined) == 5
+
+        # All rallies should have valid assignments
+        for r in refined:
+            assert len(r.track_to_player) == 4
+            assert set(r.track_to_player.values()) == {1, 2, 3, 4}
+
+    def test_refinement_preserves_first_rally(self) -> None:
+        """Pass 2 keeps first rally unchanged (deterministic Y-sort)."""
+        tracker = MatchPlayerTracker()
+        results: list[RallyTrackingResult] = []
+
+        for i in range(3):
+            base = (i + 1) * 100
+            tids = [base, base + 1, base + 2, base + 3]
+            stats = {t: _make_stats(t) for t in tids}
+            positions = _make_positions(tids, [0.7, 0.8, 0.3, 0.4])
+            result = tracker.process_rally(
+                track_stats=stats, player_positions=positions, court_split_y=0.5
+            )
+            results.append(result)
+
+        refined = tracker.refine_assignments(results)
+
+        # First rally should be identical
+        assert refined[0].track_to_player == results[0].track_to_player
+
+    def test_refinement_single_rally_noop(self) -> None:
+        """Pass 2 with single rally returns it unchanged."""
+        tracker = MatchPlayerTracker()
+        stats = {t: _make_stats(t) for t in [10, 11, 20, 21]}
+        positions = _make_positions([10, 11, 20, 21], [0.7, 0.8, 0.3, 0.4])
+        result = tracker.process_rally(
+            track_stats=stats, player_positions=positions, court_split_y=0.5
+        )
+
+        refined = tracker.refine_assignments([result])
+        assert len(refined) == 1
+        assert refined[0].track_to_player == result.track_to_player
