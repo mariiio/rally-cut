@@ -86,24 +86,15 @@ See `api/CLAUDE.md` for tier limits and enforcement. Config in `api/src/config/t
 
 ## Running Diagnostics & Long Processes
 
-**Before running:**
-- Validate inputs/config will work BEFORE starting the long operation. Run a quick dry-run or sanity check (e.g., verify files exist, data loads, model loads, one item processes successfully) rather than discovering errors 10 minutes in.
-- Tell the user what you're about to run, how many items it will process, and roughly how long to expect.
-- If the script doesn't already have per-item progress output, ADD IT before running. Every script that loops over rallies/videos/items must print progress per item (e.g., `[3/16] rally_id: HOTA=89.0%, IDsw=3 (12.4s)`).
+These rules apply to ANY eval, training, tuning, or diagnostic run. The ML skills (`ml-experiment`, `tracking-diagnosis`, `court-detection`, `contact-detection`) include detailed versions of these rules.
 
-**While running:**
-- Run in background (`run_in_background: true`) for anything that takes >30 seconds.
-- Check output periodically with non-blocking reads — don't wait silently for completion.
-- If the first few items show errors or unexpected results, STOP EARLY and investigate rather than letting the full run complete.
-
-**Output requirements:**
-- Per-item results as they complete (not just a summary at the end).
-- Running totals or aggregates so partial output is already useful if the process is interrupted.
-- Print a final summary table at the end.
-- Avoid long inline Python in Bash — write a script file instead.
-
-**After running:**
-- Review the output for anomalies before reporting results. Don't just relay the final summary — check for per-item regressions, errors, or unexpected patterns.
+1. **Validate first**: Sanity-check inputs before starting (files exist, data loads, model loads). Don't discover errors 10 minutes in.
+2. **Communicate**: Tell the user what you're running, how many items, and expected duration.
+3. **Progress output**: Every script that loops over items MUST print per-item results (e.g., `[3/16] rally_id: HOTA=89.0%`). If it doesn't, ADD progress output before running.
+4. **Background**: Use `run_in_background: true` for anything >30 seconds. Check output periodically.
+5. **Stop early**: If first few items show errors or unexpected results, STOP and investigate.
+6. **No long inline Python**: Write a script file instead.
+7. **Review before reporting**: Check for per-item regressions and anomalies, don't just relay the summary.
 
 ## See Also
 
