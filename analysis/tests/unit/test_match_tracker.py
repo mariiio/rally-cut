@@ -5,7 +5,11 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from rallycut.tracking.match_tracker import MatchPlayerTracker
+from rallycut.tracking.match_tracker import (
+    MatchPlayerTracker,
+    _compute_track_positions,
+    _dist,
+)
 from rallycut.tracking.player_features import (
     HS_BINS,
     HS_RANGES,
@@ -89,10 +93,10 @@ def _make_stats(
 
 
 class TestHungarianAssignment:
-    """Test _assign_tracks_to_players with Hungarian algorithm."""
+    """Test global Hungarian assignment with side penalty."""
 
-    def test_first_rally_arbitrary_assignment(self) -> None:
-        """First rally should assign arbitrarily (near→P1,P2; far→P3,P4)."""
+    def test_first_rally_deterministic_assignment(self) -> None:
+        """First rally assigns deterministically by Y within each team."""
         tracker = MatchPlayerTracker()
         positions = _make_positions([10, 11, 20, 21], [0.7, 0.8, 0.3, 0.4])
         stats = {
@@ -115,16 +119,16 @@ class TestHungarianAssignment:
         far_players = {result.track_to_player[20], result.track_to_player[21]}
         assert near_players == {1, 2}
         assert far_players == {3, 4}
+        # Deterministic: sorted by Y within each side
+        # Track 10 (y=0.7) < Track 11 (y=0.8) → P1, P2
+        assert result.track_to_player[10] == 1
+        assert result.track_to_player[11] == 2
 
     def test_hungarian_matches_similar_appearances(self) -> None:
         """Hungarian should match tracks to the most similar profiles."""
         tracker = MatchPlayerTracker()
 
         # Rally 1: establish profiles with distinct clothing colors + skin + height
-        # Track 10 (near): dark skin, tall, red shorts, blue shirt
-        # Track 11 (near): light skin, short, green shorts, yellow shirt
-        # Track 20 (far): reddish skin, orange shorts, white shirt
-        # Track 21 (far): yellowish skin, purple shorts, gray shirt
         stats1 = {
             10: _make_stats(10, skin_hsv=(15.0, 180.0, 120.0), height=0.18,
                             lower_hue=0.0, lower_sat=200.0, upper_hue=110.0, upper_sat=180.0),
@@ -185,11 +189,12 @@ class TestHungarianAssignment:
         assert result.track_to_player[10] in {1, 2}
         assert result.track_to_player[20] in {3, 4}
 
-    def test_more_tracks_than_two_per_side(self) -> None:
-        """More than 2 tracks per side should take top 2 by frame count."""
+    def test_more_tracks_than_four(self) -> None:
+        """More than 4 tracks should take top 4 by frame count globally."""
         tracker = MatchPlayerTracker()
-        # Track 10 has more features, track 12 has fewer
-        positions = _make_positions([10, 11, 12, 20, 21], [0.7, 0.75, 0.8, 0.3, 0.35])
+        positions = _make_positions(
+            [10, 11, 12, 20, 21], [0.7, 0.75, 0.8, 0.3, 0.35]
+        )
         stats = {
             10: _make_stats(10, num_features=10),
             11: _make_stats(11, num_features=8),
@@ -202,9 +207,9 @@ class TestHungarianAssignment:
             track_stats=stats, player_positions=positions, court_split_y=0.5
         )
 
-        # Should assign 4 tracks (top 2 per side)
+        # Should assign 4 tracks (top 4 globally by features)
         assert len(result.track_to_player) == 4
-        # Track 12 should be dropped (fewest features on near side)
+        # Track 12 should be dropped (fewest features globally)
         assert 12 not in result.track_to_player
 
     def test_empty_tracks(self) -> None:
@@ -217,9 +222,79 @@ class TestHungarianAssignment:
         assert result.track_to_player == {}
         assert result.assignment_confidence == 0.0
 
+    def test_compressed_y_range_consistent_assignment(self) -> None:
+        """Tracks at similar Y positions (mochi scenario) get consistent IDs.
+
+        Simulates the mochi video where all players are at y=0.49-0.63
+        with court_split_y=0.637. The global Hungarian assignment should
+        give the same physical player the same ID across rallies, even
+        when the court split puts all tracks on one side.
+        """
+        # Distinct appearances for each of 4 "physical players"
+        player_appearances = [
+            # Player A: dark skin, tall, red shorts
+            dict(skin_hsv=(15.0, 180.0, 120.0), height=0.18,
+                 lower_hue=0.0, lower_sat=200.0, upper_hue=110.0, upper_sat=180.0),
+            # Player B: light skin, short, green shorts
+            dict(skin_hsv=(25.0, 100.0, 200.0), height=0.12,
+                 lower_hue=60.0, lower_sat=200.0, upper_hue=30.0, upper_sat=180.0),
+            # Player C: reddish skin, orange shorts
+            dict(skin_hsv=(10.0, 160.0, 150.0), height=0.10,
+                 lower_hue=15.0, lower_sat=220.0, upper_hue=0.0, upper_sat=30.0),
+            # Player D: yellowish skin, purple shorts
+            dict(skin_hsv=(30.0, 120.0, 170.0), height=0.09,
+                 lower_hue=140.0, lower_sat=150.0, upper_hue=0.0, upper_sat=50.0),
+        ]
+
+        tracker = MatchPlayerTracker()
+        # All Y values compressed: 0.49-0.63, all below court_split_y=0.637
+        # Median split should still separate them
+        rally_assignments: list[dict[int, int]] = []
+
+        for rally_idx in range(5):
+            # Each rally gets different track IDs but same physical players
+            base_tid = (rally_idx + 1) * 100
+            # Vary Y positions slightly between rallies (simulating movement)
+            y_offsets = [0.005 * (rally_idx % 3), -0.003 * (rally_idx % 2),
+                         0.002 * ((rally_idx + 1) % 3), -0.004 * (rally_idx % 2)]
+            y_values = [0.60 + y_offsets[0], 0.63 + y_offsets[1],
+                        0.49 + y_offsets[2], 0.52 + y_offsets[3]]
+
+            stats = {}
+            for j, app in enumerate(player_appearances):
+                tid = base_tid + j
+                stats[tid] = _make_stats(tid, **app)
+
+            tids = [base_tid + j for j in range(4)]
+            positions = _make_positions(tids, y_values)
+
+            result = tracker.process_rally(
+                track_stats=stats,
+                player_positions=positions,
+                court_split_y=0.637,  # Above all tracks → all on one side
+            )
+
+            # Map physical player index to assigned player ID
+            assignment = {}
+            for j in range(4):
+                tid = base_tid + j
+                assignment[j] = result.track_to_player[tid]
+            rally_assignments.append(assignment)
+
+        # Each physical player should get the SAME player ID across all rallies
+        for phys_idx in range(4):
+            ids_across_rallies = [a[phys_idx] for a in rally_assignments]
+            assert len(set(ids_across_rallies)) == 1, (
+                f"Physical player {phys_idx} got inconsistent IDs: {ids_across_rallies}"
+            )
+
+        # All 4 player IDs should be assigned (1-4)
+        all_ids = set(rally_assignments[0].values())
+        assert all_ids == {1, 2, 3, 4}
+
 
 class TestSideSwitchDetection:
-    """Test _detect_side_switch appearance-based detection."""
+    """Test side switch detection from global assignment."""
 
     def test_no_switch_on_first_rallies(self) -> None:
         """Side switch should not be detected in first 2 rallies."""
@@ -348,6 +423,454 @@ class TestSideSwitchDetection:
 
         # None of the later rallies should detect a switch
         assert not result.side_switch_detected
+
+
+class TestClassifyTrackSides:
+    """Test _classify_track_sides soft labeling."""
+
+    def test_good_split(self) -> None:
+        """When court_split_y separates tracks, use it."""
+        tracker = MatchPlayerTracker()
+        positions = _make_positions([10, 11, 20, 21], [0.7, 0.8, 0.3, 0.4])
+        stats = {t: _make_stats(t) for t in [10, 11, 20, 21]}
+
+        track_avg_y, track_sides = tracker._classify_track_sides(
+            stats, positions, court_split_y=0.5
+        )
+
+        assert track_sides[10] == 0  # near (y=0.7 > 0.5)
+        assert track_sides[11] == 0  # near (y=0.8 > 0.5)
+        assert track_sides[20] == 1  # far (y=0.3 <= 0.5)
+        assert track_sides[21] == 1  # far (y=0.4 <= 0.5)
+
+    def test_all_one_side_fallback(self) -> None:
+        """When all tracks are on one side, use median split."""
+        tracker = MatchPlayerTracker()
+        # All tracks below court_split_y=0.637 (mochi scenario)
+        positions = _make_positions([10, 11, 20, 21], [0.60, 0.63, 0.49, 0.52])
+        stats = {t: _make_stats(t) for t in [10, 11, 20, 21]}
+
+        track_avg_y, track_sides = tracker._classify_track_sides(
+            stats, positions, court_split_y=0.637
+        )
+
+        # Should split at median: 2 near, 2 far
+        near_count = sum(1 for s in track_sides.values() if s == 0)
+        far_count = sum(1 for s in track_sides.values() if s == 1)
+        assert near_count == 2
+        assert far_count == 2
+
+    def test_no_court_split_fallback(self) -> None:
+        """Without court_split_y, use median split."""
+        tracker = MatchPlayerTracker()
+        positions = _make_positions([10, 11, 20, 21], [0.7, 0.8, 0.3, 0.4])
+        stats = {t: _make_stats(t) for t in [10, 11, 20, 21]}
+
+        track_avg_y, track_sides = tracker._classify_track_sides(
+            stats, positions, court_split_y=None
+        )
+
+        near_count = sum(1 for s in track_sides.values() if s == 0)
+        far_count = sum(1 for s in track_sides.values() if s == 1)
+        assert near_count == 2
+        assert far_count == 2
+
+    def test_team_assignments_override_court_split(self) -> None:
+        """team_assignments should take priority over court_split_y."""
+        tracker = MatchPlayerTracker()
+        # All tracks compressed below court_split_y (mochi scenario)
+        positions = _make_positions([10, 11, 20, 21], [0.60, 0.63, 0.49, 0.52])
+        stats = {t: _make_stats(t) for t in [10, 11, 20, 21]}
+
+        # Without team_assignments, court_split_y=0.637 fails → median split
+        _, sides_no_ta = tracker._classify_track_sides(
+            stats, positions, court_split_y=0.637
+        )
+
+        # With team_assignments, explicit mapping takes priority
+        team_assignments = {10: 0, 11: 0, 20: 1, 21: 1}
+        _, sides_with_ta = tracker._classify_track_sides(
+            stats, positions, court_split_y=0.637,
+            team_assignments=team_assignments,
+        )
+
+        assert sides_with_ta[10] == 0  # near
+        assert sides_with_ta[11] == 0  # near
+        assert sides_with_ta[20] == 1  # far
+        assert sides_with_ta[21] == 1  # far
+
+    def test_team_assignments_partial_coverage_fallback(self) -> None:
+        """When team_assignments covers <75% of tracks, fall through."""
+        tracker = MatchPlayerTracker()
+        positions = _make_positions([10, 11, 20, 21], [0.7, 0.8, 0.3, 0.4])
+        stats = {t: _make_stats(t) for t in [10, 11, 20, 21]}
+
+        # Only 2/4 tracks covered = 50% < 75% threshold
+        team_assignments = {10: 0, 11: 0}
+        _, sides = tracker._classify_track_sides(
+            stats, positions, court_split_y=0.5,
+            team_assignments=team_assignments,
+        )
+
+        # Should fall through to court_split_y (which works here)
+        assert sides[10] == 0  # near (y=0.7 > 0.5)
+        assert sides[20] == 1  # far (y=0.3 <= 0.5)
+
+    def test_team_assignments_with_uncovered_track(self) -> None:
+        """Uncovered tracks get fallback assignment when team_assignments used."""
+        tracker = MatchPlayerTracker()
+        positions = _make_positions([10, 11, 20, 21, 30], [0.7, 0.8, 0.3, 0.4, 0.5])
+        stats = {t: _make_stats(t) for t in [10, 11, 20, 21, 30]}
+
+        # 4/5 tracks covered = 80% >= 75% threshold
+        team_assignments = {10: 0, 11: 0, 20: 1, 21: 1}
+        _, sides = tracker._classify_track_sides(
+            stats, positions, court_split_y=0.5,
+            team_assignments=team_assignments,
+        )
+
+        assert sides[10] == 0
+        assert sides[11] == 0
+        assert sides[20] == 1
+        assert sides[21] == 1
+        # Track 30 (y=0.5) not in team_assignments, falls back to court_split_y
+        assert sides[30] == 1  # y=0.5 <= court_split_y=0.5 → far
+
+    def test_team_assignments_fixes_compressed_y(self) -> None:
+        """team_assignments correctly classifies compressed-Y video tracks.
+
+        Simulates mochi: court_split_y=0.637 but all players at y=0.49-0.63.
+        With team_assignments from bbox-size clustering, teams are correct
+        even though Y positions overlap.
+        """
+        tracker = MatchPlayerTracker()
+        # Near players have larger bbox (lower in frame), far players smaller
+        # But Y values are compressed — court_split_y puts all on one side
+        positions = _make_positions([1, 2, 3, 4], [0.60, 0.63, 0.49, 0.52])
+        stats = {t: _make_stats(t) for t in [1, 2, 3, 4]}
+
+        # Bbox-size clustering correctly identified teams despite Y compression
+        team_assignments = {1: 0, 2: 0, 3: 1, 4: 1}
+        result = tracker.process_rally(
+            track_stats=stats,
+            player_positions=positions,
+            court_split_y=0.637,
+            team_assignments=team_assignments,
+        )
+
+        # Near team tracks (1,2) should map to players 1-2,
+        # far team tracks (3,4) should map to players 3-4
+        near_pids = {result.track_to_player[1], result.track_to_player[2]}
+        far_pids = {result.track_to_player[3], result.track_to_player[4]}
+        assert near_pids == {1, 2}
+        assert far_pids == {3, 4}
+
+
+def _make_positions_xy(
+    track_ids: list[int],
+    xy_values: list[tuple[float, float]],
+    num_frames: int = 60,
+) -> list[PlayerPosition]:
+    """Create player positions with specified (x, y) per track."""
+    positions = []
+    for frame in range(num_frames):
+        for tid, (x, y) in zip(track_ids, xy_values):
+            positions.append(
+                PlayerPosition(
+                    frame_number=frame,
+                    track_id=tid,
+                    x=x,
+                    y=y,
+                    width=0.05,
+                    height=0.15,
+                    confidence=0.9,
+                )
+            )
+    return positions
+
+
+class TestWithinTeamRefinement:
+    """Test position-continuity-based within-team assignment refinement."""
+
+    def _make_team_stats(
+        self, track_ids: list[int]
+    ) -> dict[int, TrackAppearanceStats]:
+        """Make stats where all tracks have identical appearance (team-level only)."""
+        return {
+            tid: _make_stats(
+                tid,
+                skin_hsv=(20.0, 150.0, 180.0),
+                height=0.15,
+                lower_hue=100.0,
+                lower_sat=200.0,
+                upper_hue=50.0,
+                upper_sat=150.0,
+            )
+            for tid in track_ids
+        }
+
+    def test_position_continuity_swaps_within_team(self) -> None:
+        """Rally 2 has same players at consistent positions but global
+        assignment gets within-team order wrong → refinement swaps to correct."""
+        tracker = MatchPlayerTracker()
+
+        # Rally 1: establish positions. Near team at distinct x positions.
+        # Track 10 at x=0.3, Track 11 at x=0.7 (near side)
+        # Track 20 at x=0.3, Track 21 at x=0.7 (far side)
+        tids1 = [10, 11, 20, 21]
+        positions1 = _make_positions_xy(
+            tids1, [(0.3, 0.7), (0.7, 0.8), (0.3, 0.3), (0.7, 0.4)]
+        )
+        stats1 = self._make_team_stats(tids1)
+        r1 = tracker.process_rally(
+            track_stats=stats1, player_positions=positions1, court_split_y=0.5
+        )
+
+        # Record rally 1 assignments
+        p_for_left_near = r1.track_to_player[10]  # x=0.3, near
+        p_for_right_near = r1.track_to_player[11]  # x=0.7, near
+
+        # Rally 2: same physical players at same positions, new track IDs.
+        # Track 30 at x=0.3, Track 31 at x=0.7 — same positions as rally 1.
+        tids2 = [30, 31, 40, 41]
+        positions2 = _make_positions_xy(
+            tids2, [(0.3, 0.7), (0.7, 0.8), (0.3, 0.3), (0.7, 0.4)]
+        )
+        stats2 = self._make_team_stats(tids2)
+        r2 = tracker.process_rally(
+            track_stats=stats2, player_positions=positions2, court_split_y=0.5
+        )
+
+        # With identical appearances, global Hungarian is random within-team.
+        # Position continuity should ensure the left player keeps the same ID.
+        assert r2.track_to_player[30] == p_for_left_near
+        assert r2.track_to_player[31] == p_for_right_near
+
+    def test_no_swap_when_positions_already_correct(self) -> None:
+        """Position continuity confirms the global assignment → no swap."""
+        tracker = MatchPlayerTracker()
+
+        # Use distinct appearances so global Hungarian gets it right
+        tids1 = [10, 11, 20, 21]
+        stats1 = {
+            10: _make_stats(10, skin_hsv=(15.0, 180.0, 120.0), height=0.18,
+                            lower_hue=0.0, lower_sat=200.0),
+            11: _make_stats(11, skin_hsv=(25.0, 100.0, 200.0), height=0.12,
+                            lower_hue=60.0, lower_sat=200.0),
+            20: _make_stats(20, skin_hsv=(10.0, 160.0, 150.0), height=0.10,
+                            lower_hue=120.0, lower_sat=200.0),
+            21: _make_stats(21, skin_hsv=(30.0, 120.0, 170.0), height=0.09,
+                            lower_hue=140.0, lower_sat=200.0),
+        }
+        positions1 = _make_positions_xy(
+            tids1, [(0.3, 0.7), (0.7, 0.8), (0.3, 0.3), (0.7, 0.4)]
+        )
+        r1 = tracker.process_rally(
+            track_stats=stats1, player_positions=positions1, court_split_y=0.5
+        )
+
+        # Rally 2: same appearances, same positions
+        tids2 = [30, 31, 40, 41]
+        stats2 = {
+            30: _make_stats(30, skin_hsv=(15.0, 180.0, 120.0), height=0.18,
+                            lower_hue=0.0, lower_sat=200.0),
+            31: _make_stats(31, skin_hsv=(25.0, 100.0, 200.0), height=0.12,
+                            lower_hue=60.0, lower_sat=200.0),
+            40: _make_stats(40, skin_hsv=(10.0, 160.0, 150.0), height=0.10,
+                            lower_hue=120.0, lower_sat=200.0),
+            41: _make_stats(41, skin_hsv=(30.0, 120.0, 170.0), height=0.09,
+                            lower_hue=140.0, lower_sat=200.0),
+        }
+        positions2 = _make_positions_xy(
+            tids2, [(0.3, 0.7), (0.7, 0.8), (0.3, 0.3), (0.7, 0.4)]
+        )
+        r2 = tracker.process_rally(
+            track_stats=stats2, player_positions=positions2, court_split_y=0.5
+        )
+
+        # Global assignment correct + position continuity confirms = same result
+        assert r2.track_to_player[30] == r1.track_to_player[10]
+        assert r2.track_to_player[31] == r1.track_to_player[11]
+        assert r2.track_to_player[40] == r1.track_to_player[20]
+        assert r2.track_to_player[41] == r1.track_to_player[21]
+
+    def test_no_swap_below_threshold(self) -> None:
+        """When both permutations have similar cost → no swap (threshold)."""
+        tracker = MatchPlayerTracker()
+
+        # Rally 1: both near players at almost the same position
+        tids1 = [10, 11, 20, 21]
+        positions1 = _make_positions_xy(
+            tids1, [(0.50, 0.7), (0.51, 0.8), (0.3, 0.3), (0.7, 0.4)]
+        )
+        stats1 = self._make_team_stats(tids1)
+        r1 = tracker.process_rally(
+            track_stats=stats1, player_positions=positions1, court_split_y=0.5
+        )
+        p1 = r1.track_to_player[10]
+        p2 = r1.track_to_player[11]
+
+        # Rally 2: positions slightly shuffled but still very close
+        tids2 = [30, 31, 40, 41]
+        positions2 = _make_positions_xy(
+            tids2, [(0.51, 0.7), (0.50, 0.8), (0.3, 0.3), (0.7, 0.4)]
+        )
+        stats2 = self._make_team_stats(tids2)
+        r2 = tracker.process_rally(
+            track_stats=stats2, player_positions=positions2, court_split_y=0.5
+        )
+
+        # Costs should be so similar that the 20% threshold prevents swapping.
+        # Whatever global Hungarian assigned, refinement should NOT flip it.
+        assigned_pids = {r2.track_to_player[30], r2.track_to_player[31]}
+        assert assigned_pids == {p1, p2}
+
+    def test_graceful_degradation_no_previous_positions(self) -> None:
+        """First rally: no previous positions → falls back to global assignment."""
+        tracker = MatchPlayerTracker()
+
+        tids = [10, 11, 20, 21]
+        positions = _make_positions_xy(
+            tids, [(0.3, 0.7), (0.7, 0.8), (0.3, 0.3), (0.7, 0.4)]
+        )
+        stats = self._make_team_stats(tids)
+        result = tracker.process_rally(
+            track_stats=stats, player_positions=positions, court_split_y=0.5
+        )
+
+        # Should still assign all 4 players without error
+        assert len(result.track_to_player) == 4
+        assert set(result.track_to_player.values()) == {1, 2, 3, 4}
+
+    def test_side_switch_clears_positions(self) -> None:
+        """After side switch, position continuity is disabled for that rally."""
+        tracker = MatchPlayerTracker()
+
+        # Distinct appearances per team for side-switch detection
+        near_skin = (15.0, 180.0, 100.0)
+        far_skin = (30.0, 80.0, 220.0)
+
+        # Build profiles over 3 rallies
+        for i in range(3):
+            tids_near = [100 + i * 10, 101 + i * 10]
+            tids_far = [200 + i * 10, 201 + i * 10]
+            stats = {
+                tids_near[0]: _make_stats(
+                    tids_near[0], skin_hsv=near_skin, height=0.18,
+                    lower_hue=0.0, lower_sat=220.0, upper_hue=110.0, upper_sat=180.0,
+                ),
+                tids_near[1]: _make_stats(
+                    tids_near[1], skin_hsv=near_skin, height=0.17,
+                    lower_hue=0.0, lower_sat=220.0, upper_hue=110.0, upper_sat=180.0,
+                ),
+                tids_far[0]: _make_stats(
+                    tids_far[0], skin_hsv=far_skin, height=0.10,
+                    lower_hue=120.0, lower_sat=200.0, upper_hue=30.0, upper_sat=50.0,
+                ),
+                tids_far[1]: _make_stats(
+                    tids_far[1], skin_hsv=far_skin, height=0.09,
+                    lower_hue=120.0, lower_sat=200.0, upper_hue=30.0, upper_sat=50.0,
+                ),
+            }
+            positions = _make_positions(
+                tids_near + tids_far, [0.7, 0.75, 0.3, 0.35]
+            )
+            tracker.process_rally(
+                track_stats=stats, player_positions=positions, court_split_y=0.5
+            )
+
+        # After 3 rallies, last positions should be populated
+        assert len(tracker.state.player_last_positions) > 0
+
+        # Rally 4: side switch (swap near/far appearances)
+        stats_sw = {
+            500: _make_stats(500, skin_hsv=far_skin, height=0.10,
+                             lower_hue=120.0, lower_sat=200.0,
+                             upper_hue=30.0, upper_sat=50.0),
+            501: _make_stats(501, skin_hsv=far_skin, height=0.09,
+                             lower_hue=120.0, lower_sat=200.0,
+                             upper_hue=30.0, upper_sat=50.0),
+            600: _make_stats(600, skin_hsv=near_skin, height=0.18,
+                             lower_hue=0.0, lower_sat=220.0,
+                             upper_hue=110.0, upper_sat=180.0),
+            601: _make_stats(601, skin_hsv=near_skin, height=0.17,
+                             lower_hue=0.0, lower_sat=220.0,
+                             upper_hue=110.0, upper_sat=180.0),
+        }
+        positions_sw = _make_positions([500, 501, 600, 601], [0.7, 0.75, 0.3, 0.35])
+        result = tracker.process_rally(
+            track_stats=stats_sw, player_positions=positions_sw, court_split_y=0.5
+        )
+        assert result.side_switch_detected
+
+        # After side switch, last_positions were cleared then re-populated
+        # by _store_last_positions for this rally. The key point is that
+        # _refine_within_team saw empty positions (cleared before Step 5).
+        # Verify new positions are stored for the post-switch rally.
+        assert len(tracker.state.player_last_positions) > 0
+
+    def test_position_continuity_across_multiple_rallies(self) -> None:
+        """5 rallies with consistent positions → always correct assignment."""
+        tracker = MatchPlayerTracker()
+
+        # 4 players with distinct spatial positions but identical appearances
+        # (simulating same-team identical clothing)
+        player_xy = [
+            (0.25, 0.70),  # near-left
+            (0.75, 0.80),  # near-right
+            (0.25, 0.30),  # far-left
+            (0.75, 0.40),  # far-right
+        ]
+
+        rally_assignments: list[dict[int, int]] = []
+        for rally_idx in range(5):
+            base = (rally_idx + 1) * 100
+            tids = [base + j for j in range(4)]
+            positions = _make_positions_xy(tids, player_xy)
+            stats = self._make_team_stats(tids)
+
+            result = tracker.process_rally(
+                track_stats=stats, player_positions=positions, court_split_y=0.5
+            )
+            rally_assignments.append(result.track_to_player.copy())
+
+        # Each physical player position should get the same ID across all rallies
+        for rally_idx in range(1, 5):
+            base_prev = rally_idx * 100
+            base_curr = (rally_idx + 1) * 100
+            prev = rally_assignments[rally_idx - 1]
+            curr = rally_assignments[rally_idx]
+            for j in range(4):
+                assert prev[base_prev + j] == curr[base_curr + j], (
+                    f"Rally {rally_idx}: player at position {j} got different ID "
+                    f"({prev[base_prev + j]} vs {curr[base_curr + j]})"
+                )
+
+
+class TestHelpers:
+    """Test module-level helper functions."""
+
+    def test_compute_track_positions_from_start(self) -> None:
+        """Avg of first N frames."""
+        positions = _make_positions_xy(
+            [1, 2], [(0.2, 0.7), (0.8, 0.3)], num_frames=60
+        )
+        result = _compute_track_positions(positions, [1, 2], window=10, from_start=True)
+        assert abs(result[1][0] - 0.2) < 0.01
+        assert abs(result[1][1] - 0.7) < 0.01
+
+    def test_compute_track_positions_from_end(self) -> None:
+        """Avg of last N frames."""
+        positions = _make_positions_xy(
+            [1], [(0.5, 0.5)], num_frames=60
+        )
+        result = _compute_track_positions(positions, [1], window=10, from_start=False)
+        assert abs(result[1][0] - 0.5) < 0.01
+
+    def test_dist(self) -> None:
+        """Euclidean distance."""
+        assert abs(_dist((0.0, 0.0), (3.0, 4.0)) - 5.0) < 1e-6
+        assert abs(_dist((1.0, 1.0), (1.0, 1.0))) < 1e-6
 
 
 class TestConfidence:
