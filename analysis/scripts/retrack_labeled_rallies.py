@@ -19,8 +19,6 @@ import logging
 import sys
 import time
 
-import cv2
-
 from rallycut.court.calibration import CourtCalibrator
 from rallycut.evaluation.tracking.db import (
     TrackingEvaluationRally,
@@ -62,31 +60,6 @@ def _format_metrics(result: TrackingEvaluationResult) -> dict[str, float | int]:
     }
 
 
-def _adjust_frame_numbers(
-    result: PlayerTrackingResult,
-    start_ms: int,
-    video_path: str,
-) -> None:
-    """Adjust frame numbers from absolute video frames to rally-relative."""
-    cap = cv2.VideoCapture(video_path)
-    video_fps = cap.get(cv2.CAP_PROP_FPS)
-    if not video_fps:
-        logger.warning("Could not read FPS for %s, defaulting to 30.0", video_path)
-        video_fps = 30.0
-    cap.release()
-
-    start_frame = int((start_ms / 1000.0) * video_fps)
-
-    for pos in result.positions:
-        pos.frame_number = pos.frame_number - start_frame
-
-    for pos in result.raw_positions:
-        pos.frame_number = pos.frame_number - start_frame
-
-    if result.ball_positions:
-        for bp in result.ball_positions:
-            bp.frame_number = bp.frame_number - start_frame
-
 
 def _detect_keypoint_court(
     video_path: str,
@@ -127,6 +100,8 @@ def _retrack_rally(
     stride: int = 1,
     enable_ball: bool = True,
     keypoint_court_cache: dict[str, CourtCalibrator | None] | None = None,
+    skip_global_identity: bool = False,
+    skip_court_identity: bool = False,
 ) -> PlayerTrackingResult | None:
     """Re-run tracking for a single rally."""
     # Get video file
@@ -172,14 +147,14 @@ def _retrack_rally(
         filter_enabled=True,
         court_calibrator=calibrator,
         ball_positions=ball_positions,
+        skip_global_identity=skip_global_identity,
+        skip_court_identity=skip_court_identity,
     )
 
-    # Convert absolute video frame numbers to rally-relative (0-indexed)
-    # track_video() uses absolute frame indices; GT expects 0-indexed
-    _adjust_frame_numbers(result, rally.start_ms, str(video_path))
+    # track_video() already normalizes frame numbers to 0-indexed rally-relative
+    # (see player_tracker.py line ~1664). No further adjustment needed.
 
-    # Attach ball positions AFTER frame adjustment — WASB returns 0-indexed
-    # frames already, so they must not go through _adjust_frame_numbers
+    # Attach ball positions — WASB returns 0-indexed frames already
     if ball_positions:
         result.ball_positions = ball_positions
 
@@ -207,6 +182,14 @@ def main() -> None:
     parser.add_argument(
         "--keypoint-court", action="store_true",
         help="Use YOLO-pose keypoint court detection instead of DB calibration",
+    )
+    parser.add_argument(
+        "--skip-global-identity", action="store_true",
+        help="Skip global identity optimization (Step 4c) for A/B testing",
+    )
+    parser.add_argument(
+        "--skip-court-identity", action="store_true",
+        help="Skip court identity resolution (Step 4d) for A/B testing",
     )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
@@ -290,6 +273,8 @@ def main() -> None:
             stride=args.stride,
             enable_ball=not args.no_ball,
             keypoint_court_cache=keypoint_cache,
+            skip_global_identity=args.skip_global_identity,
+            skip_court_identity=args.skip_court_identity,
         )
         elapsed = time.time() - t0
 

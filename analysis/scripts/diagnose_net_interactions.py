@@ -18,8 +18,6 @@ import sys
 import time
 from collections import defaultdict
 
-import cv2
-
 from rallycut.court.calibration import CourtCalibrator
 from rallycut.evaluation.tracking.db import (
     TrackingEvaluationRally,
@@ -52,26 +50,6 @@ def _create_calibrator(
     calibrator.calibrate(image_corners)
     return calibrator
 
-
-def _adjust_frame_numbers(
-    result: PlayerTrackingResult,
-    start_ms: int,
-    video_path: str,
-) -> None:
-    cap = cv2.VideoCapture(video_path)
-    video_fps = cap.get(cv2.CAP_PROP_FPS)
-    if not video_fps:
-        video_fps = 30.0
-    cap.release()
-
-    start_frame = int((start_ms / 1000.0) * video_fps)
-    for pos in result.positions:
-        pos.frame_number -= start_frame
-    for pos in result.raw_positions:
-        pos.frame_number -= start_frame
-    if result.ball_positions:
-        for bp in result.ball_positions:
-            bp.frame_number -= start_frame
 
 
 def _get_idsw_frames(
@@ -116,7 +94,7 @@ def _retrack_rally(
         court_calibrator=calibrator,
     )
 
-    _adjust_frame_numbers(result, rally.start_ms, str(video_path))
+    # track_video() already normalizes frame numbers to 0-indexed rally-relative
     return result
 
 
@@ -138,6 +116,7 @@ def analyze_rally(
     # Detect net interactions (court-space, if calibrated)
     net_interactions = []
     if has_calibration:
+        assert calibrator is not None  # narrowed by has_calibration check
         config = CourtIdentityConfig(net_approach_distance=3.0)
         resolver = CourtIdentityResolver(
             calibrator,
