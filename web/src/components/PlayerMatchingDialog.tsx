@@ -188,32 +188,27 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
         if (cancelled) break;
         const entry = normalizedRallies![i];
 
-        // Find matching editor rally: prefer exact ID match, fall back to time overlap
+        // Use match analysis rally ID directly (it's already a backend UUID)
         const startSec = entry.startMs / 1000;
         const endSec = entry.endMs / 1000;
-        const rally = rallies.find((r) => r._backendId === entry.rallyId)
+
+        // Find editor rally for display timing (optional — match analysis times are fallback)
+        const editorRally = rallies.find((r) => r._backendId === entry.rallyId)
           ?? rallies.find((r) => {
-            // Match by time overlap (rally IDs may be stale after re-detection)
             const overlap = Math.min(r.end_time, endSec) - Math.max(r.start_time, startSec);
-            return overlap > 0.5; // >0.5s overlap
+            return overlap > 0.5;
           });
+        const seekStart = editorRally?.start_time ?? startSec;
 
-        // Use match analysis timing for seeking (always available), rally for backend ID
-        const seekStart = rally?.start_time ?? startSec;
-        const seekEnd = rally?.end_time ?? endSec;
-        const backendRallyId = rally?._backendId;
-
-        // Fetch tracking data from API (need a backend rally ID)
+        // Fetch tracking data from API
         let positions: ApiPlayerPosition[] = [];
         let rallyFps = 30;
-        if (backendRallyId) {
-          try {
-            const trackResp = await getPlayerTrack(backendRallyId);
-            positions = trackResp.positions ?? [];
-            if (trackResp.fps) rallyFps = trackResp.fps;
-          } catch {
-            // No tracking data for this rally
-          }
+        try {
+          const trackResp = await getPlayerTrack(entry.rallyId);
+          positions = trackResp.positions ?? [];
+          if (trackResp.fps) rallyFps = trackResp.fps;
+        } catch (err) {
+          console.warn(`Failed to fetch tracking for rally ${entry.rallyId}:`, err);
         }
 
         if (cancelled) break;
@@ -224,23 +219,17 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
           continue;
         }
 
-        // Seek to mid-rally
-        const midTime = (seekStart + seekEnd) / 2;
-        video.currentTime = midTime;
-        await new Promise<void>((resolve) => {
-          video.onseeked = () => resolve();
-        });
-
-        if (cancelled) break;
-
-        // Find frame closest to midTime (positions use rally-relative frameNumber)
-        const midFrame = Math.round((midTime - seekStart) * rallyFps);
-
-        // Group positions by trackId, find closest to midFrame
-        const trackIds = new Set(positions.map((p) => p.trackId));
         const currentAssignments = assignmentsRef.current;
+        const trackIds = new Set(positions.map((p) => p.trackId));
+
+        // For each track, find the position closest to mid-rally, seek video to that
+        // frame's time, and crop. Per-track seeking handles tracks with gaps at midpoint.
+        const midFrame = Math.round((endSec - startSec) / 2 * rallyFps);
 
         for (const trackId of trackIds) {
+          const pid = currentAssignments[entry.rallyId]?.[String(trackId)];
+          if (!pid) continue; // Not an assigned track
+
           const trackPositions = positions.filter((p) => p.trackId === trackId);
           let bestPos = trackPositions[0];
           let bestDist = Infinity;
@@ -252,7 +241,15 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
             }
           }
 
-          if (!bestPos || bestDist > rallyFps) continue; // Skip if no position within ~1s
+          if (!bestPos) continue;
+
+          // Seek video to this track's best frame time
+          const frameTimeSec = seekStart + bestPos.frameNumber / rallyFps;
+          video.currentTime = frameTimeSec;
+          await new Promise<void>((resolve) => {
+            video.onseeked = () => resolve();
+          });
+          if (cancelled) break;
 
           // bbox coords are center-based normalized: x,y = center, width,height = full size
           const sx = (bestPos.x - bestPos.width / 2) * vw;
@@ -264,12 +261,7 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
           ctx.drawImage(video, sx, sy, sw, sh, 0, 0, CROP_WIDTH, CROP_HEIGHT);
 
           const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-
-          // Key by rallyId + playerId (from assignment)
-          const pid = currentAssignments[entry.rallyId]?.[String(trackId)];
-          if (pid) {
-            cropMap.set(cellKey(entry.rallyId, pid), dataUrl);
-          }
+          cropMap.set(cellKey(entry.rallyId, pid), dataUrl);
         }
 
         setLoadingProgress(i + 1);
