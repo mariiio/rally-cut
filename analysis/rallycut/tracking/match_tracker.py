@@ -38,6 +38,7 @@ from rallycut.tracking.player_features import (
     PlayerAppearanceProfile,
     TrackAppearanceStats,
     compute_appearance_similarity,
+    compute_track_similarity,
     extract_appearance_features,
 )
 
@@ -351,6 +352,7 @@ class MatchPlayerTracker:
         # Step 4: Assign tracks to players
         # Side switch detection is disabled (all approaches produced 0 TP)
         side_switch_detected = False
+
         if self.rally_count <= 1:
             track_to_player = self._initialize_first_rally(
                 top_tracks, track_avg_y, track_court_sides
@@ -373,15 +375,14 @@ class MatchPlayerTracker:
         # Step 6: Compute confidence BEFORE updating profiles
         confidence = self._compute_assignment_confidence(track_stats, track_to_player)
 
-        # Step 7: Update player profiles
+        # Step 7: Update player profiles (gated on confidence)
         if self.rally_count <= 1:
             self._update_profiles(track_stats, track_to_player)
         elif confidence >= MIN_PROFILE_UPDATE_CONFIDENCE:
             self._update_profiles(track_stats, track_to_player)
         else:
             logger.info(
-                f"Skipping profile update: confidence {confidence:.2f} "
-                f"< {MIN_PROFILE_UPDATE_CONFIDENCE}"
+                f"Skipping profile update: confidence {confidence:.2f}"
             )
 
         # Step 8: Record server if detected (use serve_anchor as fallback)
@@ -862,13 +863,14 @@ class MatchPlayerTracker:
         self,
         initial_results: list[RallyTrackingResult],
     ) -> list[RallyTrackingResult]:
-        """Re-score all rallies using final accumulated profiles (Pass 2).
+        """Re-score all rallies using final profiles + global within-team voting.
 
-        Uses the final profiles from Pass 1 (richest signal) to re-run
-        the global Hungarian assignment for all rallies. Profiles are
-        frozen — no updates. No position continuity or within-team
-        refinement (those depend on sequential state that can propagate
-        errors when rebuilt from scratch).
+        Two-stage Pass 2:
+        1. Re-run cross-team assignment with final profiles (same as before)
+        2. Global within-team pairwise voting: for each team, compare raw
+           track stats across all rally pairs to find the globally consistent
+           within-team ordering (avoids profile corruption from wrong Pass 1
+           assignments)
 
         Args:
             initial_results: Results from Pass 1 forward pass.
@@ -887,6 +889,7 @@ class MatchPlayerTracker:
         if len(initial_results) <= 1:
             return initial_results
 
+        # Stage 1: Re-score cross-team assignment with final profiles
         refined: list[RallyTrackingResult] = []
         changes = 0
 
@@ -894,45 +897,30 @@ class MatchPlayerTracker:
             zip(self.stored_rally_data, initial_results)
         ):
             if i == 0:
-                # First rally: keep initial (deterministic Y-sort, no profiles)
                 refined.append(initial)
                 continue
 
-            # Restore the player→side mapping that was active during this
-            # rally in Pass 1. Without this, videos with side switches would
-            # use the final (post-all-switches) mapping, applying wrong side
-            # penalties to pre-switch rallies.
+            # Restore the player→side mapping from Pass 1 so side penalties
+            # are correct for pre-switch rallies.
             saved_side = self.state.current_side_assignment
             self.state.current_side_assignment = data.player_side_assignment
 
-            # Re-run assignment with final profiles (no position continuity
-            # in Pass 2 — position chain built from scratch can be wrong and
-            # override correct appearance-based assignments)
+            # No position continuity in Pass 2 — rebuilding the position
+            # chain from scratch can propagate errors.
             track_to_player = self._assign_tracks_to_players_global(
                 data.top_tracks,
                 data.track_stats,
                 data.track_court_sides,
             )
 
-            # Restore final side assignment
             self.state.current_side_assignment = saved_side
 
-            # Recompute confidence with final profiles
             confidence = self._compute_assignment_confidence(
                 data.track_stats, track_to_player
             )
 
-            # Check if assignment changed
             if track_to_player != initial.track_to_player:
                 changes += 1
-                logger.info(
-                    "Pass 2 changed rally %d: %s → %s (conf %.2f → %.2f)",
-                    i,
-                    initial.track_to_player,
-                    track_to_player,
-                    initial.assignment_confidence,
-                    confidence,
-                )
 
             refined.append(RallyTrackingResult(
                 rally_index=initial.rally_index,
@@ -943,11 +931,198 @@ class MatchPlayerTracker:
             ))
 
         if changes:
-            logger.info("Pass 2 changed %d/%d rallies", changes, len(refined))
-        else:
-            logger.info("Pass 2: no changes")
+            logger.info("Pass 2 stage 1 changed %d/%d rallies", changes, len(refined))
+
+        # Stage 2: Global within-team voting using raw track comparisons
+        refined = self._global_within_team_voting(refined)
 
         return refined
+
+    def _global_within_team_voting(
+        self,
+        results: list[RallyTrackingResult],
+    ) -> list[RallyTrackingResult]:
+        """Fix within-team assignments using global pairwise voting.
+
+        For each team, collects all rally track pairs and computes pairwise
+        "same vs swap" preferences using direct track-to-track comparison
+        (no accumulated profiles). Finds the globally consistent labeling
+        that maximizes agreement across all rally pairs.
+
+        This avoids the profile corruption cascade: even if Pass 1 got
+        rally 3 wrong, the raw track features are clean and can vote
+        correctly for the global ordering.
+        """
+        if len(results) < 3:
+            return results
+
+        swaps = 0
+        for team in [0, 1]:
+            team_player_ids = sorted(
+                pid for pid, t in self.state.current_side_assignment.items()
+                if t == team
+            )
+            if len(team_player_ids) != 2:
+                continue
+
+            p_lo, p_hi = team_player_ids  # e.g., (1, 2) or (3, 4)
+
+            # Collect per-rally track pairs for this team
+            # Each entry: (rally_index, track_for_p_lo, track_for_p_hi)
+            rally_pairs: list[tuple[int, int, int]] = []
+            for i, (data, result) in enumerate(
+                zip(self.stored_rally_data, results)
+            ):
+                # Find the two tracks assigned to this team's players
+                t_lo = None
+                t_hi = None
+                for tid, pid in result.track_to_player.items():
+                    if pid == p_lo:
+                        t_lo = tid
+                    elif pid == p_hi:
+                        t_hi = tid
+
+                if t_lo is not None and t_hi is not None:
+                    # Verify both have stats
+                    if t_lo in data.track_stats and t_hi in data.track_stats:
+                        rally_pairs.append((i, t_lo, t_hi))
+
+            if len(rally_pairs) < 3:
+                continue
+
+            # Build pairwise preference matrix
+            # preference[i][j] > 0 means rallies i and j prefer same ordering
+            n = len(rally_pairs)
+            preference = np.zeros((n, n))
+
+            for a in range(n):
+                ri_a, t_lo_a, t_hi_a = rally_pairs[a]
+                stats_lo_a = self.stored_rally_data[ri_a].track_stats[t_lo_a]
+                stats_hi_a = self.stored_rally_data[ri_a].track_stats[t_hi_a]
+
+                for b in range(a + 1, n):
+                    ri_b, t_lo_b, t_hi_b = rally_pairs[b]
+                    stats_lo_b = self.stored_rally_data[ri_b].track_stats[t_lo_b]
+                    stats_hi_b = self.stored_rally_data[ri_b].track_stats[t_hi_b]
+
+                    # Cost of "same ordering" (lo↔lo, hi↔hi)
+                    same_cost = (
+                        compute_track_similarity(stats_lo_a, stats_lo_b)
+                        + compute_track_similarity(stats_hi_a, stats_hi_b)
+                    )
+                    # Cost of "swapped ordering" (lo↔hi, hi↔lo)
+                    swap_cost = (
+                        compute_track_similarity(stats_lo_a, stats_hi_b)
+                        + compute_track_similarity(stats_hi_a, stats_lo_b)
+                    )
+
+                    # Positive = same ordering preferred
+                    pref = swap_cost - same_cost
+                    preference[a, b] = pref
+                    preference[b, a] = pref
+
+            # Iterative labeling: rally 0 is reference (label=0),
+            # each other rally labeled by weighted votes from all others.
+            # Converges to a globally consistent binary partition.
+            labels = np.zeros(n, dtype=int)  # 0 = same as ref, 1 = swapped
+            for _iteration in range(10):
+                changed = False
+                for k in range(1, n):
+                    # Sum weighted preferences: positive = vote for "same
+                    # label as j", negative = vote for "different label".
+                    # Flip sign when j is swapped (label=1) since preference
+                    # was computed relative to the original ordering.
+                    score = 0.0
+                    for j in range(n):
+                        if j == k:
+                            continue
+                        p = preference[k, j]
+                        if labels[j] == 1:
+                            p = -p
+                        score += p
+
+                    new_label = 0 if score >= 0 else 1
+                    if new_label != labels[k]:
+                        labels[k] = new_label
+                        changed = True
+
+                if not changed:
+                    break
+
+            # Check both orientations against accumulated profiles.
+            # Voting finds internally consistent labeling but can't
+            # determine which global orientation is correct. Use profiles
+            # (from stage 1) to pick the better orientation.
+            cost_current = 0.0
+            cost_flipped = 0.0
+            for idx in range(n):
+                ri, t_lo, t_hi = rally_pairs[idx]
+                data = self.stored_rally_data[ri]
+                # "current" orientation: label=0 → t_lo→p_lo, t_hi→p_hi
+                #                        label=1 → t_lo→p_hi, t_hi→p_lo
+                if labels[idx] == 0:
+                    c_lo, c_hi = t_lo, t_hi
+                else:
+                    c_lo, c_hi = t_hi, t_lo  # swapped
+
+                if p_lo in self.state.players and p_hi in self.state.players:
+                    cost_current += (
+                        compute_appearance_similarity(
+                            self.state.players[p_lo], data.track_stats[c_lo]
+                        )
+                        + compute_appearance_similarity(
+                            self.state.players[p_hi], data.track_stats[c_hi]
+                        )
+                    )
+                    cost_flipped += (
+                        compute_appearance_similarity(
+                            self.state.players[p_hi], data.track_stats[c_lo]
+                        )
+                        + compute_appearance_similarity(
+                            self.state.players[p_lo], data.track_stats[c_hi]
+                        )
+                    )
+
+            # If flipped orientation is better, flip all labels
+            if cost_flipped < cost_current:
+                labels = 1 - labels
+                logger.info(
+                    "Within-team vote: team %d flipped orientation "
+                    "(cost %.3f → %.3f)",
+                    team, cost_current, cost_flipped,
+                )
+
+            # Apply swaps where label=1
+            for idx in range(n):
+                if labels[idx] == 1:
+                    ri, t_lo, t_hi = rally_pairs[idx]
+                    result = results[ri]
+                    new_t2p = dict(result.track_to_player)
+                    new_t2p[t_lo] = p_hi
+                    new_t2p[t_hi] = p_lo
+                    results[ri] = RallyTrackingResult(
+                        rally_index=result.rally_index,
+                        track_to_player=new_t2p,
+                        server_player_id=result.server_player_id,
+                        side_switch_detected=result.side_switch_detected,
+                        assignment_confidence=result.assignment_confidence,
+                    )
+                    swaps += 1
+                    logger.info(
+                        "Within-team vote: rally %d team %d swapped "
+                        "(tracks %d↔%d for players %d↔%d)",
+                        ri, team, t_lo, t_hi, p_lo, p_hi,
+                    )
+
+        if swaps:
+            logger.info(
+                "Global within-team voting: %d swaps across %d rallies",
+                swaps, len(results),
+            )
+        else:
+            logger.info("Global within-team voting: no swaps")
+
+        return results
 
     def get_consistent_player_id(self, track_id: int) -> int | None:
         """

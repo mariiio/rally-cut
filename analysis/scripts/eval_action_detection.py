@@ -351,6 +351,130 @@ def build_confusion_matrix(
     return {k: dict(v) for k, v in matrix.items()}
 
 
+def _run_threshold_sweep(
+    rallies: list[RallyData],
+    args: argparse.Namespace,
+) -> None:
+    """Sweep classifier thresholds and report P/R/F1 tradeoff."""
+    from rallycut.tracking.ball_tracker import BallPosition as BallPos
+    from rallycut.tracking.contact_classifier import load_contact_classifier
+    from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
+
+    thresholds = [0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55]
+
+    # Load calibrators and match teams once
+    calibrators: dict[str, CourtCalibrator | None] = {}
+    video_ids = {r.video_id for r in rallies}
+    for vid in video_ids:
+        corners = load_court_calibration(vid)
+        if corners and len(corners) == 4:
+            cal = CourtCalibrator()
+            cal.calibrate([(c["x"], c["y"]) for c in corners])
+            calibrators[vid] = cal
+        else:
+            calibrators[vid] = None
+    match_teams_by_rally = _load_match_team_assignments(video_ids, min_confidence=0.70)
+
+    console.print(f"\n[bold]Threshold sweep on {len(rallies)} rallies[/bold]\n")
+
+    sweep_table = Table(title="Contact Classifier Threshold Sweep")
+    sweep_table.add_column("Threshold", justify="right")
+    sweep_table.add_column("TP", justify="right")
+    sweep_table.add_column("FP", justify="right")
+    sweep_table.add_column("FN", justify="right")
+    sweep_table.add_column("Precision", justify="right")
+    sweep_table.add_column("Recall", justify="right")
+    sweep_table.add_column("F1", justify="right")
+    sweep_table.add_column("Action Acc", justify="right")
+
+    for threshold in thresholds:
+        # Load classifier with this threshold
+        classifier = load_contact_classifier()
+        if classifier is None:
+            console.print("[red]No trained classifier found[/red]")
+            return
+        classifier.threshold = threshold
+
+        all_matches_sweep: list[MatchResult] = []
+        all_unmatched_sweep: list[dict] = []
+
+        for rally in rallies:
+            if not rally.ball_positions_json:
+                continue
+
+            ball_positions = [
+                BallPos(
+                    frame_number=bp["frameNumber"],
+                    x=bp["x"], y=bp["y"],
+                    confidence=bp.get("confidence", 1.0),
+                )
+                for bp in rally.ball_positions_json
+                if bp.get("x", 0) > 0 or bp.get("y", 0) > 0
+            ]
+
+            player_positions = []
+            if rally.positions_json:
+                player_positions = [
+                    PlayerPos(
+                        frame_number=pp["frameNumber"],
+                        track_id=pp["trackId"],
+                        x=pp["x"], y=pp["y"],
+                        width=pp["width"], height=pp["height"],
+                        confidence=pp.get("confidence", 1.0),
+                    )
+                    for pp in rally.positions_json
+                ]
+
+            contacts = detect_contacts(
+                ball_positions=ball_positions,
+                player_positions=player_positions,
+                net_y=rally.court_split_y,
+                frame_count=rally.frame_count or None,
+                classifier=classifier,
+                court_calibrator=calibrators.get(rally.video_id),
+            )
+
+            match_teams = match_teams_by_rally.get(rally.rally_id)
+            rally_actions = classify_rally_actions(
+                contacts, rally.rally_id,
+                match_team_assignments=match_teams,
+            )
+            pred_actions = [a.to_dict() for a in rally_actions.actions]
+            real_pred = [a for a in pred_actions if not a.get("isSynthetic")]
+
+            tolerance_frames = max(1, round(rally.fps * args.tolerance_ms / 1000))
+            avail_tids: set[int] | None = None
+            if rally.positions_json:
+                avail_tids = {pp["trackId"] for pp in rally.positions_json}
+
+            matches, unmatched = match_contacts(
+                rally.gt_labels, real_pred,
+                tolerance=tolerance_frames,
+                available_track_ids=avail_tids,
+            )
+            all_matches_sweep.extend(matches)
+            all_unmatched_sweep.extend(unmatched)
+
+        metrics = compute_metrics(all_matches_sweep, all_unmatched_sweep)
+        is_current = threshold == 0.50
+        style = "bold" if is_current else ""
+        sweep_table.add_row(
+            f"{threshold:.2f}" + (" *" if is_current else ""),
+            str(metrics["tp"]),
+            str(metrics["fp"]),
+            str(metrics["fn"]),
+            f"{metrics['precision']:.1%}",
+            f"{metrics['recall']:.1%}",
+            f"{metrics['f1']:.1%}",
+            f"{metrics['action_accuracy']:.1%}",
+            style=style,
+        )
+        console.print(f"  threshold={threshold:.2f}: F1={metrics['f1']:.1%} P={metrics['precision']:.1%} R={metrics['recall']:.1%}")
+
+    console.print(sweep_table)
+    console.print("\n[dim]* = current default threshold[/dim]")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate action detection vs ground truth")
     parser.add_argument("--rally", type=str, help="Specific rally ID to evaluate")
@@ -360,6 +484,7 @@ def main() -> None:
     parser.add_argument("--classifier", type=str, help="Path to trained contact classifier model")
     parser.add_argument("--no-classifier", action="store_true", help="Disable auto-loading of trained contact classifier (force hand-tuned gates)")
     parser.add_argument("--no-action-classifier", action="store_true", help="Disable learned action type classifier (force rule-based state machine)")
+    parser.add_argument("--sweep-thresholds", action="store_true", help="Sweep classifier thresholds [0.25-0.55] and report P/R/F1 tradeoff")
     args = parser.parse_args()
 
     # Build ContactDetectionConfig from overrides
@@ -388,6 +513,10 @@ def main() -> None:
     if not rallies:
         console.print("[red]No rallies found with action ground truth labels.[/red]")
         console.print("Label actions in the web editor first (Label Actions button).")
+        return
+
+    if args.sweep_thresholds:
+        _run_threshold_sweep(rallies, args)
         return
 
     # Load court calibrations per video for perspective-corrected player attribution
