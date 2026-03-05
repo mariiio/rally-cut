@@ -32,7 +32,6 @@ from scipy.optimize import linear_sum_assignment
 from rallycut.tracking.ball_features import ServerDetectionResult, detect_server
 from rallycut.tracking.identity_anchor import (
     ServeAnchor,
-    ServiceOrderState,
     detect_serve_anchor,
 )
 from rallycut.tracking.player_features import (
@@ -147,9 +146,6 @@ class MatchPlayerState:
     # Current side assignment (player_id -> team: 0=near, 1=far)
     current_side_assignment: dict[int, int] = field(default_factory=dict)
 
-    # History of which player served each rally (rally_index -> player_id)
-    serve_player_history: list[int] = field(default_factory=list)
-
     # Track to player ID assignments for current rally
     # track_id -> player_id
     current_assignments: dict[int, int] = field(default_factory=dict)
@@ -158,9 +154,6 @@ class MatchPlayerState:
     player_last_positions: dict[int, tuple[float, float]] = field(
         default_factory=dict
     )
-
-    # Service order tracking for alternation prediction
-    service_order: ServiceOrderState = field(default_factory=ServiceOrderState)
 
     def initialize_players(self) -> None:
         """Initialize 4 player profiles for beach volleyball."""
@@ -356,13 +349,13 @@ class MatchPlayerTracker:
         )
 
         # Step 4: Assign tracks to players
+        # Side switch detection is disabled (all approaches produced 0 TP)
+        side_switch_detected = False
         if self.rally_count <= 1:
             track_to_player = self._initialize_first_rally(
                 top_tracks, track_avg_y, track_court_sides
             )
-            side_switch_detected = False
         else:
-            side_switch_detected = False
             track_to_player = self._assign_tracks_to_players_global(
                 top_tracks, track_stats, track_court_sides,
                 early_positions=early_positions,
@@ -397,17 +390,6 @@ class MatchPlayerTracker:
             server_player_id = track_to_player.get(server_result.track_id)
         elif serve_anchor and serve_anchor.server_track_id >= 0:
             server_player_id = track_to_player.get(serve_anchor.server_track_id)
-
-        if server_player_id:
-            self.state.serve_player_history.append(server_player_id)
-            # Track service order for alternation prediction
-            server_team = self.state.current_side_assignment.get(
-                server_player_id, -1
-            )
-            if server_team >= 0 and serve_anchor:
-                self.state.service_order.record_serve(
-                    rally_index, server_team, serve_anchor.server_track_id
-                )
 
         # Store current assignments
         self.state.current_assignments = track_to_player

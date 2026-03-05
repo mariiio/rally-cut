@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import cv2
 import numpy as np
 
@@ -231,7 +233,7 @@ class TestHungarianAssignment:
         give the same physical player the same ID across rallies.
         """
         # Distinct appearances for each of 4 "physical players"
-        player_appearances = [
+        player_appearances: list[dict[str, Any]] = [
             # Player A: dark skin, tall, red shorts
             dict(skin_hsv=(15.0, 180.0, 120.0), height=0.18,
                  lower_hue=0.0, lower_sat=200.0, upper_hue=110.0, upper_sat=180.0),
@@ -297,7 +299,7 @@ class TestSideSwitchDetection:
     """Test side switch detection from global assignment."""
 
     def test_no_switch_on_first_rallies(self) -> None:
-        """Side switch should not be detected in first 2 rallies."""
+        """Side switch detection is disabled — always returns False."""
         tracker = MatchPlayerTracker()
         positions = _make_positions([10, 11, 20, 21], [0.7, 0.8, 0.3, 0.4])
         stats = {
@@ -317,7 +319,7 @@ class TestSideSwitchDetection:
         )
         assert not r1.side_switch_detected
 
-        # Rally 2: still too early (need >=3 rallies for stable profiles)
+        # Rally 2: also always False (detection disabled)
         stats2 = {
             30: _make_stats(30, skin_hsv=(15.0, 180.0, 120.0),
                             lower_hue=0.0, lower_sat=200.0),
@@ -727,8 +729,8 @@ class TestWithinTeamRefinement:
         assert len(result.track_to_player) == 4
         assert set(result.track_to_player.values()) == {1, 2, 3, 4}
 
-    def test_position_continuity_across_side_change(self) -> None:
-        """Position continuity is maintained across rallies without switch detection."""
+    def test_last_positions_populated_across_rallies(self) -> None:
+        """Player last positions are stored for position continuity."""
         tracker = MatchPlayerTracker()
 
         near_skin = (15.0, 180.0, 100.0)
@@ -976,7 +978,7 @@ class TestRefineAssignments:
         1-rally profiles) with the final 5-rally profiles.
         """
         # 4 distinct player appearances
-        appearances = [
+        appearances: list[dict[str, Any]] = [
             dict(skin_hsv=(15.0, 180.0, 120.0), height=0.18,
                  lower_hue=0.0, lower_sat=200.0, upper_hue=110.0, upper_sat=180.0),
             dict(skin_hsv=(25.0, 100.0, 200.0), height=0.12,
