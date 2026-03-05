@@ -147,9 +147,6 @@ class MatchPlayerState:
     # Current side assignment (player_id -> team: 0=near, 1=far)
     current_side_assignment: dict[int, int] = field(default_factory=dict)
 
-    # Rally indices where side switches were detected
-    side_switches: list[int] = field(default_factory=list)
-
     # History of which player served each rally (rally_index -> player_id)
     serve_player_history: list[int] = field(default_factory=list)
 
@@ -248,7 +245,6 @@ class StoredRallyData:
     track_court_sides: dict[int, int]
     early_positions: dict[int, tuple[float, float]]
     top_tracks: list[int]
-    player_positions: list[PlayerPosition]
     # Snapshot of player→side mapping at this rally (before any switch applied)
     player_side_assignment: dict[int, int] = field(default_factory=dict)
 
@@ -260,8 +256,11 @@ class MatchPlayerTracker:
     Maintains consistent player IDs (1-4) across rallies by:
     1. Extracting appearance features from each rally
     2. Matching tracks to player profiles using appearance similarity
-    3. Detecting side switches based on appearance mismatches
-    4. Updating profiles with new appearance data
+    3. Updating profiles with new appearance data
+
+    Note: Side switch detection is disabled — all tested approaches
+    (flipped-count, accumulated profiles, rally-to-rally histograms,
+    DP optimization) produced 0 true positives for beach volleyball.
     """
 
     def __init__(
@@ -358,38 +357,18 @@ class MatchPlayerTracker:
 
         # Step 4: Assign tracks to players
         if self.rally_count <= 1:
-            # First rally: deterministic assignment by Y position
             track_to_player = self._initialize_first_rally(
                 top_tracks, track_avg_y, track_court_sides
             )
             side_switch_detected = False
         else:
-            # Step 4a: Run penalty-free assignment for side switch detection.
-            # The side penalty would bias against cross-side matches, preventing
-            # switch detection when appearance isn't strong enough to overcome it.
-            unpenalized = self._assign_tracks_to_players_global(
-                top_tracks, track_stats, track_court_sides, use_side_penalty=False
-            )
-
-            # Step 4b: Check for side switch from unpenalized assignment
-            side_switch_detected = self._detect_side_switch_from_assignment(
-                unpenalized, track_court_sides
-            )
-
-            if side_switch_detected:
-                self._apply_side_switch()
-                self.state.side_switches.append(rally_index)
-                logger.info(f"Side switch detected at rally {rally_index}")
-
-            # Step 4c: Final assignment with side penalty + position continuity
+            side_switch_detected = False
             track_to_player = self._assign_tracks_to_players_global(
                 top_tracks, track_stats, track_court_sides,
                 early_positions=early_positions,
             )
 
-        # Step 5: Within-team refinement using position continuity
-        # (still useful as a safety net for cases where the cost matrix
-        # position signal wasn't strong enough)
+        # Step 5: Within-team refinement
         if self.rally_count > 1:
             track_to_player = self._refine_within_team(
                 track_to_player, player_positions, track_court_sides
@@ -398,13 +377,13 @@ class MatchPlayerTracker:
         # Store late-rally positions for next rally's continuity check
         self._store_last_positions(track_to_player, player_positions)
 
-        # Step 6: Compute confidence BEFORE updating profiles (avoids inflated scores)
+        # Step 6: Compute confidence BEFORE updating profiles
         confidence = self._compute_assignment_confidence(track_stats, track_to_player)
 
-        # Step 7: Update player profiles with new appearance data
-        # Always update on first rally (initialization). Gate subsequent
-        # rallies on confidence to prevent error propagation (drift).
-        if self.rally_count <= 1 or confidence >= MIN_PROFILE_UPDATE_CONFIDENCE:
+        # Step 7: Update player profiles
+        if self.rally_count <= 1:
+            self._update_profiles(track_stats, track_to_player)
+        elif confidence >= MIN_PROFILE_UPDATE_CONFIDENCE:
             self._update_profiles(track_stats, track_to_player)
         else:
             logger.info(
@@ -441,7 +420,6 @@ class MatchPlayerTracker:
             track_court_sides=track_court_sides,
             early_positions=early_positions,
             top_tracks=top_tracks,
-            player_positions=player_positions,
             player_side_assignment=dict(self.state.current_side_assignment),
         ))
 
@@ -581,11 +559,7 @@ class MatchPlayerTracker:
         track_avg_y: dict[int, float],
         track_court_sides: dict[int, int],
     ) -> dict[int, int]:
-        """Deterministic first-rally assignment sorted by Y within each team.
-
-        Lowest Y in near team -> P1, next -> P2.
-        Lowest Y in far team -> P3, next -> P4.
-        Eliminates dependency on dict/list ordering.
+        """First-rally assignment sorted by Y within each team.
 
         Args:
             track_ids: Top tracks to assign (up to 4).
@@ -593,7 +567,7 @@ class MatchPlayerTracker:
             track_court_sides: Track -> 0 (near) or 1 (far).
 
         Returns:
-            track_id -> player_id mapping.
+            track_id -> player_id mapping (Y-sorted default).
         """
         near_players = sorted(
             pid for pid, team in self.state.current_side_assignment.items()
@@ -614,6 +588,7 @@ class MatchPlayerTracker:
             key=lambda t: track_avg_y.get(t, 0.5),
         )
 
+        # Default Y-sorted assignment
         assignments: dict[int, int] = {}
         for i, tid in enumerate(near_tracks[:2]):
             if i < len(near_players):
@@ -755,64 +730,6 @@ class MatchPlayerTracker:
             ))
 
         return result
-
-    def _detect_side_switch_from_assignment(
-        self,
-        track_to_player: dict[int, int],
-        track_court_sides: dict[int, int],
-    ) -> bool:
-        """Detect side switch from global assignment result.
-
-        After global assignment, count how many players ended up on the
-        opposite side from their profile. If >=3 of 4 flipped -> switch.
-
-        Args:
-            track_to_player: Assignment from global Hungarian.
-            track_court_sides: Track -> 0 (near) or 1 (far).
-
-        Returns:
-            True if side switch detected.
-        """
-        if self.rally_count <= 2:
-            return False
-
-        if len(track_to_player) < 3:
-            return False
-
-        flipped = 0
-        total = 0
-        for tid, pid in track_to_player.items():
-            track_side = track_court_sides.get(tid)
-            player_expected_side = self.state.current_side_assignment.get(pid)
-            if track_side is None or player_expected_side is None:
-                continue
-            total += 1
-            if track_side != player_expected_side:
-                flipped += 1
-
-        if total >= 3 and flipped >= 3:
-            logger.info(
-                "Side switch detected: %d/%d players on opposite side",
-                flipped,
-                total,
-            )
-            return True
-
-        return False
-
-    def _apply_side_switch(self) -> None:
-        """Apply side switch by swapping team assignments."""
-        # Swap team assignments
-        for player_id in self.state.current_side_assignment:
-            current = self.state.current_side_assignment[player_id]
-            self.state.current_side_assignment[player_id] = 1 - current
-
-        # Update player profiles
-        for player_id, profile in self.state.players.items():
-            profile.team = 1 - profile.team
-
-        # Clear position continuity — invalid when teams swap court sides
-        self.state.player_last_positions.clear()
 
     def _refine_within_team(
         self,
@@ -1174,11 +1091,12 @@ def extract_rally_appearances(
             if not ret:
                 continue
 
+            frame_arr = np.asarray(frame, dtype=np.uint8)
+
             for tid, p in frame_requests[fn]:
                 bbox = (p.x, p.y, p.width, p.height)
                 features = extract_appearance_features(
-                    np.asarray(frame, dtype=np.uint8),
-                    tid, fn, bbox, frame_width, frame_height,
+                    frame_arr, tid, fn, bbox, frame_width, frame_height,
                 )
                 stats[tid].features.append(features)
     finally:
