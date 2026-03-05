@@ -336,17 +336,27 @@ def extract_appearance_features(
     features.skin_tone_hsv = skin_tone
     features.skin_pixel_count = skin_count
 
+    # Build skin+sand mask to exclude from clothing histograms.
+    # Without this, legs and beach sand dominate all histograms,
+    # making all players look nearly identical (0.87-0.90 similarity).
+    clothing_mask = _build_clothing_mask(hsv)
+
     # Extract HS histograms for clothing regions
-    # Upper body: 20-60% of bbox (t-shirt/jersey if wearing one, skin if not)
+    # Upper body: 20-55% of bbox (t-shirt/jersey)
     upper_top = int(bbox_h_px * 0.2)
-    upper_bottom = int(bbox_h_px * 0.6)
+    upper_bottom = int(bbox_h_px * 0.55)
     features.upper_body_hist = _extract_hs_histogram(
-        hsv[upper_top:upper_bottom, :]
+        hsv[upper_top:upper_bottom, :],
+        mask=clothing_mask[upper_top:upper_bottom, :],
     )
 
-    # Lower body: 60-100% of bbox (shorts/swimsuit — always visible)
-    lower_top = int(bbox_h_px * 0.6)
-    features.lower_body_hist = _extract_hs_histogram(hsv[lower_top:, :])
+    # Lower body: 50-78% of bbox (shorts/swimsuit, avoids legs below)
+    lower_top = int(bbox_h_px * 0.50)
+    lower_bottom = int(bbox_h_px * 0.78)
+    features.lower_body_hist = _extract_hs_histogram(
+        hsv[lower_top:lower_bottom, :],
+        mask=clothing_mask[lower_top:lower_bottom, :],
+    )
 
     return features
 
@@ -385,22 +395,71 @@ def _extract_skin_tone(hsv_roi: np.ndarray) -> tuple[tuple[float, float, float] 
     return (h_mean, s_mean, v_mean), skin_count
 
 
-def _extract_hs_histogram(hsv_roi: np.ndarray) -> np.ndarray | None:
+def _build_clothing_mask(hsv_roi: np.ndarray) -> np.ndarray:
+    """Build a mask that focuses on the central body column, excluding edges.
+
+    The center of the bbox contains the player's torso/shorts. The edges
+    contain background (sand, other players, court). Legs appear in the
+    lower portion but are narrower than the torso. Using the central 50%
+    of width captures clothing while avoiding most background contamination.
+
+    Also excludes very-warm-hue + low-saturation pixels which are reliably
+    sand/skin (not clothing). This conservative color filter avoids removing
+    light-colored clothing (white/grey have low saturation but different hues).
+
+    Args:
+        hsv_roi: HSV image of the full player bbox.
+
+    Returns:
+        Binary mask (255 = include, 0 = exclude) matching hsv_roi shape[:2].
+    """
+    h, w = hsv_roi.shape[:2]
+
+    # Spatial mask: central 50% of width (clothing region, avoids edges)
+    margin = w // 4
+    mask = np.zeros((h, w), dtype=np.uint8)
+    mask[:, margin:w - margin] = 255
+
+    # Conservative sand filter: only exclude very obvious sand pixels.
+    # Sand: warm hue (H=8-30), low saturation (S<50), bright (V>120).
+    # This is narrower than the full skin range to avoid catching
+    # light-colored clothing (white shorts: H~29, S~47, V~205).
+    sand_lower = np.array([8, 10, 120], dtype=np.uint8)
+    sand_upper = np.array([30, 50, 255], dtype=np.uint8)
+    sand_mask = cv2.inRange(hsv_roi, sand_lower, sand_upper)
+    not_sand = cv2.bitwise_not(sand_mask)
+    mask = np.asarray(cv2.bitwise_and(mask, not_sand), dtype=np.uint8)
+
+    return mask
+
+
+def _extract_hs_histogram(
+    hsv_roi: np.ndarray,
+    mask: np.ndarray | None = None,
+) -> np.ndarray | None:
     """Extract normalized HS histogram from an HSV region.
 
     Args:
         hsv_roi: HSV image region.
+        mask: Optional binary mask (255 = include pixel). If provided,
+            only masked pixels contribute to the histogram.
 
     Returns:
         Normalized HS histogram (float32, sum=1), or None if too few pixels.
     """
     if hsv_roi.size == 0:
         return None
-    if (hsv_roi.shape[0] * hsv_roi.shape[1]) < MIN_HIST_PIXELS:
+
+    if mask is not None:
+        pixel_count = int(cv2.countNonZero(mask))
+    else:
+        pixel_count = hsv_roi.shape[0] * hsv_roi.shape[1]
+
+    if pixel_count < MIN_HIST_PIXELS:
         return None
 
     hist = cv2.calcHist(
-        [hsv_roi], [0, 1], None, list(HS_BINS), HS_RANGES,
+        [hsv_roi], [0, 1], mask, list(HS_BINS), HS_RANGES,
     )
     cv2.normalize(hist, hist, alpha=1.0, norm_type=cv2.NORM_L1)
     return hist.astype(np.float32)
