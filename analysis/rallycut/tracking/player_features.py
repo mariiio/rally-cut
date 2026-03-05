@@ -55,7 +55,6 @@ class PlayerAppearanceFeatures:
 
     # Body proportions
     bbox_height: float = 0.0  # Normalized bbox height
-    bbox_aspect_ratio: float = 0.0  # width / height
 
 
 @dataclass
@@ -311,7 +310,6 @@ def extract_appearance_features(
         track_id=track_id,
         frame_number=frame_number,
         bbox_height=h,
-        bbox_aspect_ratio=w / h if h > 0 else 0,
     )
 
     # Extract player region
@@ -544,6 +542,47 @@ def compute_appearance_similarity(
     similarity = sum(w * s for w, s in scores) / total_weight
 
     return 1.0 - similarity  # Return cost (lower = better match)
+
+
+def compute_track_similarity(
+    stats_a: TrackAppearanceStats,
+    stats_b: TrackAppearanceStats,
+) -> float:
+    """Compute similarity cost between two track appearance stats.
+
+    Same cost formula as compute_appearance_similarity but works between
+    two raw TrackAppearanceStats (no accumulated profile needed).
+
+    Returns:
+        Cost (0-1, lower = more similar).
+    """
+    scores: list[tuple[float, float]] = []
+
+    lower_sim = _histogram_similarity(stats_a.avg_lower_hist, stats_b.avg_lower_hist)
+    if lower_sim is not None:
+        scores.append((_WEIGHT_LOWER_HIST, lower_sim))
+
+    upper_sim = _histogram_similarity(stats_a.avg_upper_hist, stats_b.avg_upper_hist)
+    if upper_sim is not None:
+        scores.append((_WEIGHT_UPPER_HIST, upper_sim))
+
+    if stats_a.avg_bbox_height > 0 and stats_b.avg_bbox_height > 0:
+        height_diff = abs(stats_a.avg_bbox_height - stats_b.avg_bbox_height)
+        height_score = max(0.0, 1.0 - height_diff / 0.10)
+        scores.append((_WEIGHT_HEIGHT, height_score))
+
+    if stats_a.avg_skin_tone_hsv is not None and stats_b.avg_skin_tone_hsv is not None:
+        skin_score = _hsv_similarity(
+            stats_a.avg_skin_tone_hsv, stats_b.avg_skin_tone_hsv,
+        )
+        scores.append((_WEIGHT_SKIN, skin_score))
+
+    if not scores:
+        return 1.0
+
+    total_weight = sum(w for w, _ in scores)
+    similarity = sum(w * s for w, s in scores) / total_weight
+    return 1.0 - similarity
 
 
 def _hsv_similarity(hsv1: tuple[float, float, float], hsv2: tuple[float, float, float]) -> float:

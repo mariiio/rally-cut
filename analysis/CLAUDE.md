@@ -467,13 +467,13 @@ Maintains consistent player IDs (1-4) across a match using appearance-based matc
 **How it works:**
 1. For each rally, sample ~12 video frames per primary track
 2. Extract appearance features: HS histograms for upper body (t-shirt) and lower body (shorts), skin tone HSV, body height
-3. Use Hungarian algorithm (`scipy.optimize.linear_sum_assignment`) to match tracks to accumulated player profiles
-4. Detect side switches when swapped assignment cost < 70% of normal cost (requires 3+ rallies)
-5. Update profiles with new appearance data after assignment
+3. **Pass 1:** Sequential Hungarian assignment matching tracks to accumulated player profiles, with position continuity and confidence-gated profile updates
+4. **Pass 2 stage 1:** Re-score all rallies with final profiles (frozen) for better cross-team assignment
+5. **Pass 2 stage 2:** Global within-team pairwise voting — compares raw track features across all rally pairs to find the globally consistent within-team ordering, avoiding profile corruption cascade
 
 **Cost function:** 35% lower body histogram + 25% upper body histogram + 25% height + 15% skin tone (lower = better match). Histograms use Bhattacharyya distance; missing features are skipped and weights renormalized.
 
-**Key files:** `tracking/player_features.py` (feature extraction, similarity), `tracking/match_tracker.py` (orchestration, Hungarian assignment, side switch detection), `evaluation/tracking/db.py` (`load_rallies_for_video`), `cli/commands/match_players.py` (CLI).
+**Key files:** `tracking/player_features.py` (feature extraction, similarity, `compute_track_similarity`), `tracking/match_tracker.py` (orchestration, Hungarian assignment, within-team voting), `evaluation/tracking/db.py` (`load_rallies_for_video`), `cli/commands/match_players.py` (CLI).
 
 ```bash
 uv run rallycut match-players <video-id> -o result.json

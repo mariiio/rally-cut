@@ -88,7 +88,6 @@ def _make_stats(
             upper_body_hist=upper_hist.copy(),
             lower_body_hist=lower_hist.copy(),
             bbox_height=height,
-            bbox_aspect_ratio=0.33,
         )
         stats.features.append(f)
     stats.compute_averages()
