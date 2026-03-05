@@ -406,8 +406,8 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
   const isLoading = loadingProgress < totalRallies;
 
   return (
-    <Dialog fullScreen open={open} onClose={onClose}>
-      <AppBar sx={{ position: 'relative', bgcolor: '#1a1a2e' }}>
+    <Dialog fullScreen open={open} onClose={onClose} PaperProps={{ sx: { display: 'flex', flexDirection: 'column' } }}>
+      <AppBar sx={{ position: 'sticky', top: 0, bgcolor: '#1a1a2e', zIndex: 1 }}>
         <Toolbar>
           <IconButton edge="start" color="inherit" onClick={onClose}><CloseIcon /></IconButton>
           <Typography sx={{ ml: 2, flex: 1 }} variant="h6">
@@ -433,7 +433,7 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
         </Toolbar>
       </AppBar>
 
-      <Box sx={{ p: 2, bgcolor: '#0f0f1a', minHeight: '100vh', overflow: 'auto' }}>
+      <Box sx={{ p: 2, bgcolor: '#0f0f1a', flex: 1, overflow: 'auto' }}>
         {/* Instructions */}
         <Typography variant="body2" sx={{ color: 'grey.500', mb: 2 }}>
           Click a player crop to select it, then click another in the same row to swap assignments.
