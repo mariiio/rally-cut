@@ -421,6 +421,12 @@ def _histogram_similarity(
     return max(0.0, 1.0 - dist)
 
 
+_WEIGHT_LOWER_HIST = 0.35
+_WEIGHT_UPPER_HIST = 0.25
+_WEIGHT_HEIGHT = 0.25
+_WEIGHT_SKIN = 0.15
+
+
 def compute_appearance_similarity(
     profile: PlayerAppearanceProfile,
     features: TrackAppearanceStats,
@@ -428,16 +434,13 @@ def compute_appearance_similarity(
     """
     Compute similarity between a player profile and track appearance.
 
-    Uses HS histograms for clothing regions (upper + lower body) as the
-    primary signal, with skin tone and height as supplementary features.
-
     Cost formula (lower = more similar):
         cost = 1.0 - weighted_similarity
 
-    Weights (when all features available):
-        35% lower body histogram (shorts — always visible)
-        25% upper body histogram (t-shirt/jersey — may be bare skin)
-        25% height (reliable for different-height players)
+    Weights:
+        35% lower body histogram
+        25% upper body histogram
+        25% height
         15% skin tone
 
     Missing features are skipped; remaining weights are renormalized.
@@ -451,28 +454,28 @@ def compute_appearance_similarity(
     """
     scores: list[tuple[float, float]] = []  # (weight, score) pairs
 
-    # Lower body histogram (shorts — most discriminative)
+    # Lower body histogram (shorts — most discriminative feature)
     lower_sim = _histogram_similarity(profile.avg_lower_hist, features.avg_lower_hist)
     if lower_sim is not None:
-        scores.append((0.35, lower_sim))
+        scores.append((_WEIGHT_LOWER_HIST, lower_sim))
 
     # Upper body histogram (t-shirt/jersey)
     upper_sim = _histogram_similarity(profile.avg_upper_hist, features.avg_upper_hist)
     if upper_sim is not None:
-        scores.append((0.25, upper_sim))
+        scores.append((_WEIGHT_UPPER_HIST, upper_sim))
 
     # Height similarity
     if profile.avg_bbox_height > 0 and features.avg_bbox_height > 0:
         height_diff = abs(profile.avg_bbox_height - features.avg_bbox_height)
         height_score = max(0.0, 1.0 - height_diff / 0.10)
-        scores.append((0.25, height_score))
+        scores.append((_WEIGHT_HEIGHT, height_score))
 
     # Skin tone similarity
     if profile.avg_skin_tone_hsv is not None and features.avg_skin_tone_hsv is not None:
         skin_score = _hsv_similarity(
             profile.avg_skin_tone_hsv, features.avg_skin_tone_hsv,
         )
-        scores.append((0.15, skin_score))
+        scores.append((_WEIGHT_SKIN, skin_score))
 
     if not scores:
         return 1.0  # No features → max cost (unknown)
