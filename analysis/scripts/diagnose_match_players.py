@@ -414,7 +414,9 @@ def _print_profile_discriminability(
                 stats_b.avg_skin_tone_hsv = profile_b.avg_skin_tone_hsv
                 stats_b.avg_upper_hist = profile_b.avg_upper_hist
                 stats_b.avg_lower_hist = profile_b.avg_lower_hist
-                stats_b.avg_bbox_height = profile_b.avg_bbox_height
+                stats_b.avg_lower_v_hist = profile_b.avg_lower_v_hist
+                stats_b.avg_upper_v_hist = profile_b.avg_upper_v_hist
+                stats_b.avg_dominant_color_hsv = profile_b.avg_dominant_color_hsv
                 cost = compute_appearance_similarity(profiles[pid_a], stats_b)
                 row += f"  {cost:.2f}"
             pass
@@ -430,7 +432,9 @@ def _print_profile_discriminability(
             stats_b.avg_skin_tone_hsv = profile_b.avg_skin_tone_hsv
             stats_b.avg_upper_hist = profile_b.avg_upper_hist
             stats_b.avg_lower_hist = profile_b.avg_lower_hist
-            stats_b.avg_bbox_height = profile_b.avg_bbox_height
+            stats_b.avg_lower_v_hist = profile_b.avg_lower_v_hist
+            stats_b.avg_upper_v_hist = profile_b.avg_upper_v_hist
+            stats_b.avg_dominant_color_hsv = profile_b.avg_dominant_color_hsv
             cost = compute_appearance_similarity(profiles[pa], stats_b)
             quality = "GOOD" if cost > 0.15 else "POOR" if cost > 0.05 else "BAD"
             print(
