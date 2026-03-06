@@ -326,12 +326,12 @@ def evaluate_tracking(
         # Per-rally table with extended metrics
         rally_table = Table(show_header=True, header_style="bold")
         rally_table.add_column("Rally")
-        rally_table.add_column("MOTA", justify="right")
         rally_table.add_column("HOTA", justify="right")
         rally_table.add_column("F1", justify="right")
-        rally_table.add_column("ID Sw", justify="right")
+        rally_table.add_column("IDsw", justify="right")
+        rally_table.add_column("Real", justify="right")  # Real identity switches
+        rally_table.add_column("ID Acc", justify="right")  # Identity accuracy
         rally_table.add_column("MT", justify="right")  # Mostly Tracked
-        rally_table.add_column("Frag", justify="right")  # Fragmentation
 
         for result in results:
             hota_str = "-"
@@ -339,19 +339,23 @@ def evaluate_tracking(
                 hota_str = f"{result.hota_metrics.hota:.1%}"
 
             mt_str = "-"
-            frag_str = "-"
             if result.track_quality:
                 mt_str = f"{result.track_quality.mostly_tracked}/{result.track_quality.gt_track_count}"
-                frag_str = str(result.track_quality.fragmentation)
+
+            real_str = "-"
+            id_acc_str = "-"
+            if result.identity_metrics:
+                real_str = str(result.identity_metrics.num_switches)
+                id_acc_str = f"{result.identity_metrics.identity_accuracy:.1%}"
 
             rally_table.add_row(
                 result.rally_id[:8] + "...",
-                f"{result.aggregate.mota:.1%}",
                 hota_str,
                 f"{result.aggregate.f1:.1%}",
                 str(result.aggregate.num_id_switches),
+                real_str,
+                id_acc_str,
                 mt_str,
-                frag_str,
             )
 
         console.print(rally_table)
@@ -928,6 +932,18 @@ def _display_aggregate_extended_metrics(results: list) -> None:
         console.print("\n[bold]Aggregate Position Accuracy[/bold]")
         console.print(f"  Mean Position Error: {weighted_mean * 100:.2f}%")
         console.print(f"  [dim]Based on {total_samples} matched pairs across {len(pm_results)} rallies[/dim]")
+
+    # Compute aggregate identity metrics
+    id_results = [r for r in results if r.identity_metrics]
+    if id_results:
+        total_switches = sum(r.identity_metrics.num_switches for r in id_results)
+        total_err = sum(r.identity_metrics.num_error_frames for r in id_results)
+        total_frames = sum(r.identity_metrics.num_total_frames for r in id_results)
+        accuracy = 1.0 - (total_err / total_frames) if total_frames > 0 else 1.0
+
+        console.print("\n[bold]Aggregate Identity[/bold]")
+        console.print(f"  Real Identity Switches: {total_switches}")
+        console.print(f"  Identity Accuracy: {accuracy:.1%} ({total_err} error frames / {total_frames})")
 
 
 def _display_ball_metrics(ball_metrics: BallMetrics) -> None:

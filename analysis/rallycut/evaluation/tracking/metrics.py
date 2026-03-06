@@ -231,6 +231,21 @@ class PositionMetrics:
 
 
 @dataclass
+class IdentityMetrics:
+    """Real identity switch metrics, immune to Hungarian matching noise.
+
+    Builds temporal segments of consistent pred→GT assignment in non-overlap
+    frames. A "real identity switch" is when a pred track's GT assignment
+    changes between two stable segments (≥5 frames each).
+    """
+
+    num_switches: int = 0  # Real identity switches (pred track follows different person)
+    num_error_frames: int = 0  # Frames after a switch where pred follows wrong person
+    num_total_frames: int = 0  # Total matched frames (all, including overlap)
+    identity_accuracy: float = 1.0  # 1 - error_frames / total_frames
+
+
+@dataclass
 class TrackingEvaluationResult:
     """Complete evaluation result with aggregate and per-entity breakdowns."""
 
@@ -244,6 +259,7 @@ class TrackingEvaluationResult:
     hota_metrics: HOTAMetrics | None = None
     track_quality: TrackQualityMetrics | None = None
     position_metrics: PositionMetrics | None = None
+    identity_metrics: IdentityMetrics | None = None
 
     @property
     def error_frames(self) -> list[int]:
@@ -326,6 +342,14 @@ class TrackingEvaluationResult:
                 "medianError": self.position_metrics.median_position_error,
                 "p90Error": self.position_metrics.p90_position_error,
                 "numSamples": self.position_metrics.num_position_samples,
+            }
+
+        if self.identity_metrics:
+            result["identity"] = {
+                "realSwitches": self.identity_metrics.num_switches,
+                "errorFrames": self.identity_metrics.num_error_frames,
+                "totalFrames": self.identity_metrics.num_total_frames,
+                "accuracy": self.identity_metrics.identity_accuracy,
             }
 
         return result
@@ -475,6 +499,12 @@ def evaluate_rally(
                 frame_metric.id_switches += 1
                 if gt_id in player_metrics:
                     player_metrics[gt_id].id_switches += 1
+                # Classify: fragmentation vs real swap
+                pred_ids_in_frame = {b[0] for b in pred_boxes}
+                if last_pred_id[gt_id] in pred_ids_in_frame:
+                    aggregate.num_real_swaps += 1
+                else:
+                    aggregate.num_fragmentations += 1
 
             last_pred_id[gt_id] = pred_id
 
@@ -519,6 +549,11 @@ def evaluate_rally(
         matches_by_frame,
     )
 
+    identity_metrics = compute_identity_metrics(
+        pred_by_frame,
+        matches_by_frame,
+    )
+
     return TrackingEvaluationResult(
         rally_id=rally_id,
         aggregate=aggregate,
@@ -528,6 +563,7 @@ def evaluate_rally(
         hota_metrics=hota_metrics,
         track_quality=track_quality,
         position_metrics=position_metrics,
+        identity_metrics=identity_metrics,
     )
 
 
@@ -730,6 +766,110 @@ def compute_position_metrics(
     )
 
 
+_OVERLAP_IOU_THRESHOLD = 0.05
+_MIN_SEGMENT_FRAMES = 5
+
+
+def compute_identity_metrics(
+    pred_by_frame: dict[int, list[tuple[int, float, float, float, float]]],
+    matches_by_frame: dict[int, list[tuple[int, int]]],
+) -> IdentityMetrics:
+    """Compute real identity switches using temporal segment analysis.
+
+    For each predicted track, builds segments of consistent GT assignment in
+    non-overlap frames. A real identity switch is when the GT assignment changes
+    between two stable segments (both >= MIN_SEGMENT_FRAMES).
+
+    This is immune to Hungarian matching noise during bbox overlap.
+    """
+    all_frames = sorted(matches_by_frame.keys())
+    if not all_frames:
+        return IdentityMetrics()
+
+    total_matched = sum(len(m) for m in matches_by_frame.values())
+
+    # Per-frame: pred→gt mapping + overlap flag
+    frame_info: list[tuple[int, dict[int, int], bool]] = []
+    for frame in all_frames:
+        pred_boxes = pred_by_frame.get(frame, [])
+        matches = matches_by_frame[frame]
+        p2g = {pred_id: gt_id for gt_id, pred_id in matches}
+
+        # Check pred-pred overlap
+        is_overlap = False
+        for i in range(len(pred_boxes)):
+            for j in range(i + 1, len(pred_boxes)):
+                iou = _compute_iou(
+                    (pred_boxes[i][1], pred_boxes[i][2], pred_boxes[i][3], pred_boxes[i][4]),
+                    (pred_boxes[j][1], pred_boxes[j][2], pred_boxes[j][3], pred_boxes[j][4]),
+                )
+                if iou > _OVERLAP_IOU_THRESHOLD:
+                    is_overlap = True
+                    break
+            if is_overlap:
+                break
+
+        frame_info.append((frame, p2g, is_overlap))
+
+    # Collect all pred IDs
+    pred_ids: set[int] = set()
+    for _, p2g, _ in frame_info:
+        pred_ids.update(p2g.keys())
+
+    total_switches = 0
+    total_error_frames = 0
+
+    for pred_id in pred_ids:
+        # Non-overlap assignments for this pred
+        clean: list[tuple[int, int]] = []  # (frame, gt_id)
+        for frame, p2g, is_overlap in frame_info:
+            if pred_id in p2g and not is_overlap:
+                clean.append((frame, p2g[pred_id]))
+
+        if len(clean) < _MIN_SEGMENT_FRAMES:
+            continue
+
+        # Build segments of consistent GT assignment
+        segments: list[tuple[int, int, int]] = []  # (gt_id, count, start_frame)
+        seg_gt = clean[0][1]
+        seg_count = 1
+        seg_start = clean[0][0]
+        for i in range(1, len(clean)):
+            _, gt_id = clean[i]
+            if gt_id == seg_gt:
+                seg_count += 1
+            else:
+                segments.append((seg_gt, seg_count, seg_start))
+                seg_gt = gt_id
+                seg_count = 1
+                seg_start = clean[i][0]
+        segments.append((seg_gt, seg_count, seg_start))
+
+        # Filter to real segments
+        real_segs = [s for s in segments if s[1] >= _MIN_SEGMENT_FRAMES]
+        if len(real_segs) <= 1:
+            continue
+
+        # Count switches
+        first_gt = real_segs[0][0]
+        for i in range(1, len(real_segs)):
+            if real_segs[i][0] != real_segs[i - 1][0]:
+                total_switches += 1
+                total_error_frames += sum(
+                    s[1] for s in real_segs[i:] if s[0] != first_gt
+                )
+                break  # Only count first switch per pred track
+
+    accuracy = 1.0 - (total_error_frames / total_matched) if total_matched > 0 else 1.0
+
+    return IdentityMetrics(
+        num_switches=total_switches,
+        num_error_frames=total_error_frames,
+        num_total_frames=total_matched,
+        identity_accuracy=accuracy,
+    )
+
+
 def aggregate_results(results: list[TrackingEvaluationResult]) -> MOTMetrics:
     """Aggregate multiple evaluation results into overall metrics.
 
@@ -748,5 +888,7 @@ def aggregate_results(results: list[TrackingEvaluationResult]) -> MOTMetrics:
         combined.num_misses += r.aggregate.num_misses
         combined.num_false_positives += r.aggregate.num_false_positives
         combined.num_id_switches += r.aggregate.num_id_switches
+        combined.num_fragmentations += r.aggregate.num_fragmentations
+        combined.num_real_swaps += r.aggregate.num_real_swaps
 
     return combined
