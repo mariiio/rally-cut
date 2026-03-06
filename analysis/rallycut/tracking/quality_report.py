@@ -54,11 +54,6 @@ class TrackingQualityReport:
     court_detected: bool = True  # default True = no court detection was attempted
     court_confidence: float = 0.0
 
-    # Court identity resolution
-    court_identity_interactions: int = 0  # Net interactions detected
-    court_identity_swaps: int = 0  # Swaps applied by court identity
-    uncertain_identity_count: int = 0  # Ambiguous interactions
-
     # Team classification
     team_classification_skipped: bool = False  # True when split_confidence != "high"
 
@@ -93,9 +88,6 @@ class TrackingQualityReport:
             "calibrationRecommended": self.calibration_recommended,
             "courtDetected": self.court_detected,
             "courtConfidence": self.court_confidence,
-            "courtIdentityInteractions": self.court_identity_interactions,
-            "courtIdentitySwaps": self.court_identity_swaps,
-            "uncertainIdentityCount": self.uncertain_identity_count,
             "teamClassificationSkipped": self.team_classification_skipped,
             "globalIdentitySegments": self.global_identity_segments,
             "globalIdentityRemapped": self.global_identity_remapped,
@@ -120,9 +112,6 @@ def compute_quality_report(
     appearance_link_count: int = 0,
     expected_players: int = 4,
     has_court_calibration: bool = False,
-    court_identity_interactions: int = 0,
-    court_identity_swaps: int = 0,
-    uncertain_identity_count: int = 0,
     court_detection_insights: CourtDetectionInsights | None = None,
     contact_readiness_issues: list[str] | None = None,
     stationary_bg_removed_count: int = 0,
@@ -146,9 +135,6 @@ def compute_quality_report(
         appearance_link_count: Number of tracklet appearance-based merges.
         expected_players: Expected number of court players.
         has_court_calibration: Whether court calibration is available.
-        court_identity_interactions: Number of net interactions detected.
-        court_identity_swaps: Number of swaps applied by court identity.
-        uncertain_identity_count: Number of ambiguous interactions.
         court_detection_insights: Court detection diagnostic info.
         contact_readiness_issues: Issues affecting contact detection readiness.
         stationary_bg_removed_count: Tracks removed by stationary background filter.
@@ -167,9 +153,6 @@ def compute_quality_report(
     report.color_split_count = color_split_count
     report.height_swap_count = height_swap_count
     report.appearance_link_count = appearance_link_count
-    report.court_identity_interactions = court_identity_interactions
-    report.court_identity_swaps = court_identity_swaps
-    report.uncertain_identity_count = uncertain_identity_count
     report.stationary_bg_removed_count = stationary_bg_removed_count
     report.global_identity_segments = global_identity_segments
     report.global_identity_remapped = global_identity_remapped

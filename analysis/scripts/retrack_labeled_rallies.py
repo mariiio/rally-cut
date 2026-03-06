@@ -101,7 +101,6 @@ def _retrack_rally(
     enable_ball: bool = True,
     keypoint_court_cache: dict[str, CourtCalibrator | None] | None = None,
     skip_global_identity: bool = False,
-    skip_court_identity: bool = False,
 ) -> PlayerTrackingResult | None:
     """Re-run tracking for a single rally."""
     # Get video file
@@ -148,7 +147,6 @@ def _retrack_rally(
         court_calibrator=calibrator,
         ball_positions=ball_positions,
         skip_global_identity=skip_global_identity,
-        skip_court_identity=skip_court_identity,
     )
 
     # track_video() already normalizes frame numbers to 0-indexed rally-relative
@@ -186,10 +184,6 @@ def main() -> None:
     parser.add_argument(
         "--skip-global-identity", action="store_true",
         help="Skip global identity optimization (Step 4c) for A/B testing",
-    )
-    parser.add_argument(
-        "--skip-court-identity", action="store_true",
-        help="Skip court identity resolution (Step 4d) for A/B testing",
     )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
@@ -274,7 +268,6 @@ def main() -> None:
             enable_ball=not args.no_ball,
             keypoint_court_cache=keypoint_cache,
             skip_global_identity=args.skip_global_identity,
-            skip_court_identity=args.skip_court_identity,
         )
         elapsed = time.time() - t0
 

@@ -24,9 +24,9 @@ import numpy as np
 if TYPE_CHECKING:
     from rallycut.court.calibration import CourtCalibrator
     from rallycut.court.detector import CourtDetectionInsights
+    from rallycut.tracking.appearance_descriptor import AppearanceDescriptorStore
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.color_repair import ColorHistogramStore
-    from rallycut.tracking.court_identity import SwapDecision
     from rallycut.tracking.player_filter import PlayerFilterConfig
     from rallycut.tracking.quality_report import TrackingQualityReport
 
@@ -623,11 +623,8 @@ class PlayerTrackingResult:
     # Color histogram store (for post-hoc analysis/diagnostics)
     color_store: ColorHistogramStore | None = None
 
-    # Uncertain identity windows from court-plane resolution
-    # Each tuple: (start_frame, end_frame, set of affected track IDs)
-    uncertain_identity_windows: list[tuple[int, int, set[int]]] = field(
-        default_factory=list
-    )
+    # Multi-region appearance descriptor store (for post-hoc analysis/diagnostics)
+    appearance_store: AppearanceDescriptorStore | None = None
 
     @property
     def avg_players_per_frame(self) -> float:
@@ -1167,7 +1164,6 @@ class PlayerTracker:
         court_calibrator: CourtCalibrator | None = None,
         court_detection_insights: CourtDetectionInsights | None = None,
         skip_global_identity: bool = False,
-        skip_court_identity: bool = False,
     ) -> PlayerTrackingResult:
         """
         Track players in a video segment.
@@ -1391,8 +1387,6 @@ class PlayerTracker:
             court_split_y: float | None = None
             primary_track_ids: list[int] = []
             filter_method: str | None = None
-            uncertain_windows: list[tuple[int, int, set[int]]] = []
-            court_decisions: list[SwapDecision] = []
 
             # Save raw positions before filtering (for parameter tuning)
             raw_positions = [
@@ -1606,42 +1600,6 @@ class PlayerTracker:
                             f"{global_result.skip_reason}"
                         )
 
-                # Step 4d: Court identity resolution
-                if (
-                    not skip_court_identity
-                    and court_calibrator is not None
-                    and court_calibrator.is_calibrated
-                    and len(primary_track_ids) >= 2
-                    and team_assignments
-                ):
-                    from rallycut.tracking.court_identity import (
-                        resolve_court_identity,
-                    )
-
-                    positions, num_court_swaps, court_decisions = (
-                        resolve_court_identity(
-                            positions,
-                            team_assignments,
-                            court_calibrator,
-                            video_width=video_width,
-                            video_height=video_height,
-                            color_store=color_store,
-                        )
-                    )
-                    if num_court_swaps > 0:
-                        logger.info(
-                            f"Court identity: "
-                            f"{num_court_swaps} swaps applied"
-                        )
-                    for d in court_decisions:
-                        if not d.confident:
-                            uncertain_windows.append((
-                                d.interaction.start_frame,
-                                d.interaction.end_frame,
-                                {d.interaction.track_a,
-                                 d.interaction.track_b},
-                            ))
-
             # Step 5: Compute quality report
             quality_report = None
             if filter_enabled:
@@ -1673,9 +1631,6 @@ class PlayerTracker:
                     height_swap_count=num_height_swaps,
                     appearance_link_count=num_appearance_links,
                     has_court_calibration=court_calibrator is not None,
-                    court_identity_interactions=len(court_decisions),
-                    court_identity_swaps=num_court_swaps,
-                    uncertain_identity_count=len(uncertain_windows),
                     court_detection_insights=court_detection_insights,
                     stationary_bg_removed_count=len(removed_bg_tracks),
                     global_identity_segments=num_global_segments,
@@ -1722,7 +1677,7 @@ class PlayerTracker:
                 quality_report=quality_report,
                 team_assignments=team_assignments,
                 color_store=color_store,
-                uncertain_identity_windows=uncertain_windows,
+                appearance_store=appearance_store,
             )
 
         finally:
