@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from rallycut.court.calibration import CourtCalibrator
     from rallycut.court.detector import CourtDetectionInsights
     from rallycut.tracking.ball_tracker import BallPosition
+    from rallycut.tracking.color_repair import ColorHistogramStore
     from rallycut.tracking.court_identity import SwapDecision
     from rallycut.tracking.player_filter import PlayerFilterConfig
     from rallycut.tracking.quality_report import TrackingQualityReport
@@ -618,6 +619,9 @@ class PlayerTrackingResult:
 
     # Quality report (set when filter_enabled=True and court_roi is set)
     quality_report: TrackingQualityReport | None = None
+
+    # Color histogram store (for post-hoc analysis/diagnostics)
+    color_store: ColorHistogramStore | None = None
 
     # Uncertain identity windows from court-plane resolution
     # Each tuple: (start_frame, end_frame, set of affected track IDs)
@@ -1484,6 +1488,11 @@ class PlayerTracker:
                 positions, id_mapping = stabilize_track_ids(
                     positions, config,
                 )
+                if id_mapping:
+                    if color_store is not None:
+                        color_store.remap_ids(id_mapping)
+                    if appearance_store is not None:
+                        appearance_store.remap_ids(id_mapping)
 
                 num_global_segments = 0
                 num_global_remapped = 0
@@ -1556,6 +1565,12 @@ class PlayerTracker:
                         optimize_global_identity,
                     )
 
+                    # Snapshot track IDs to sync color_store after
+                    pre_global = {
+                        (p.frame_number, id(p)): p.track_id
+                        for p in positions
+                    }
+
                     positions, global_result = optimize_global_identity(
                         positions,
                         team_assignments,
@@ -1565,6 +1580,20 @@ class PlayerTracker:
                     )
                     num_global_segments = global_result.num_segments
                     num_global_remapped = global_result.num_remapped
+
+                    # Sync color_store and appearance_store with any ID changes
+                    if global_result.num_remapped > 0:
+                        remap_keys: dict[tuple[int, int], int] = {}
+                        for p in positions:
+                            key = (p.frame_number, id(p))
+                            old_tid = pre_global.get(key)
+                            if old_tid is not None and old_tid != p.track_id:
+                                remap_keys[(old_tid, p.frame_number)] = p.track_id
+                        if remap_keys:
+                            if color_store is not None:
+                                color_store.remap_per_frame(remap_keys)
+                            if appearance_store is not None:
+                                appearance_store.remap_per_frame(remap_keys)
                     if not global_result.skipped:
                         logger.info(
                             f"Global identity: {global_result.num_segments} "
@@ -1673,6 +1702,10 @@ class PlayerTracker:
                 if ball_positions:
                     for bp in ball_positions:
                         bp.frame_number -= start_frame
+                if color_store is not None and color_store.has_data():
+                    color_store.shift_frames(-start_frame)
+                if appearance_store is not None and appearance_store.has_data():
+                    appearance_store.shift_frames(-start_frame)
 
             return PlayerTrackingResult(
                 positions=positions,
@@ -1688,6 +1721,7 @@ class PlayerTracker:
                 raw_positions=raw_positions,
                 quality_report=quality_report,
                 team_assignments=team_assignments,
+                color_store=color_store,
                 uncertain_identity_windows=uncertain_windows,
             )
 

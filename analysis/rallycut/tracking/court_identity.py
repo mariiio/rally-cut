@@ -111,6 +111,8 @@ class SwapDecision:
     swap_score: float
     no_swap_score: float
     confident: bool  # True if margin exceeds threshold
+    no_swap_hypothesis: IdentityHypothesis | None = None
+    swap_hypothesis: IdentityHypothesis | None = None
 
     @property
     def margin(self) -> float:
@@ -622,6 +624,8 @@ class CourtIdentityResolver:
             swap_score=swap_total,
             no_swap_score=no_swap_total,
             confident=confident,
+            no_swap_hypothesis=no_swap,
+            swap_hypothesis=swap,
         )
 
     def _score_side_of_net(

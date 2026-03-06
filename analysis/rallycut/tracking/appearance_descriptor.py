@@ -113,6 +113,43 @@ class AppearanceDescriptorStore:
         for fn, desc in b_entries.items():
             self._descriptors[(track_a, fn)] = desc
 
+    def remap_ids(self, id_mapping: dict[int, int]) -> None:
+        """Apply a bulk ID remapping (old_id -> new_id) to all descriptors."""
+        if not id_mapping:
+            return
+        keys_to_move = [
+            ((tid, fn), id_mapping[tid])
+            for (tid, fn) in self._descriptors
+            if tid in id_mapping
+        ]
+        for old_key, new_tid in keys_to_move:
+            desc = self._descriptors.pop(old_key)
+            self._descriptors[(new_tid, old_key[1])] = desc
+
+    def remap_per_frame(
+        self, remap_keys: dict[tuple[int, int], int],
+    ) -> None:
+        """Apply per-frame ID remapping: (old_track_id, frame) -> new_id."""
+        if not remap_keys:
+            return
+        keys_to_move = [
+            (key, remap_keys[key])
+            for key in list(self._descriptors)
+            if key in remap_keys
+        ]
+        for old_key, new_tid in keys_to_move:
+            desc = self._descriptors.pop(old_key)
+            self._descriptors[(new_tid, old_key[1])] = desc
+
+    def shift_frames(self, offset: int) -> None:
+        """Shift all frame numbers by offset (e.g., -start_frame for 0-basing)."""
+        if offset == 0:
+            return
+        new_descs: dict[tuple[int, int], MultiRegionDescriptor] = {}
+        for (tid, fn), desc in self._descriptors.items():
+            new_descs[(tid, fn + offset)] = desc
+        self._descriptors = new_descs
+
 
 def extract_multi_region_descriptor(
     frame: np.ndarray,
