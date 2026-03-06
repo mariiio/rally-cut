@@ -51,12 +51,15 @@ def _format_metrics(result: TrackingEvaluationResult) -> dict[str, float | int]:
     """Extract key metrics."""
     agg = result.aggregate
     hota = result.hota_metrics
+    id_m = result.identity_metrics
     return {
         "HOTA": hota.hota * 100 if hota else 0.0,
         "AssA": hota.assa * 100 if hota else 0.0,
         "MOTA": agg.mota * 100,
         "F1": agg.f1 * 100,
         "IDsw": agg.num_id_switches,
+        "RealSw": id_m.num_switches if id_m else 0,
+        "IDAcc": id_m.identity_accuracy * 100 if id_m else 100.0,
     }
 
 

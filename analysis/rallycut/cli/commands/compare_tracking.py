@@ -27,8 +27,9 @@ class MOTMetrics:
     num_false_positives: int = 0  # False positives
 
     # Tracking metrics
-    num_id_switches: int = 0  # ID switches
-    num_fragmentations: int = 0  # Track fragmentations
+    num_id_switches: int = 0  # ID switches (total = fragmentations + real_swaps)
+    num_fragmentations: int = 0  # IDsw where old pred track disappeared (track gap)
+    num_real_swaps: int = 0  # IDsw where both old+new pred tracks coexist (true identity swap)
 
     @property
     def precision(self) -> float:
