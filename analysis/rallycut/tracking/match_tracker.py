@@ -241,6 +241,71 @@ class StoredRallyData:
     top_tracks: list[int]
     # Snapshot of player→side mapping at this rally (before any switch applied)
     player_side_assignment: dict[int, int] = field(default_factory=dict)
+    # Ball trajectory serve direction: "near", "far", or "?" (unknown)
+    serve_direction: str = "?"
+
+
+def _team_match_cost(
+    tids_a: list[int],
+    stats_a: dict[int, TrackAppearanceStats],
+    tids_b: list[int],
+    stats_b: dict[int, TrackAppearanceStats],
+) -> float:
+    """Best-matching cost between two sets of tracks."""
+    if not tids_a or not tids_b:
+        return 1.0
+    if len(tids_a) == 1 and len(tids_b) == 1:
+        return compute_track_similarity(stats_a[tids_a[0]], stats_b[tids_b[0]])
+    if len(tids_a) >= 2 and len(tids_b) >= 2:
+        cost_ab = (
+            compute_track_similarity(stats_a[tids_a[0]], stats_b[tids_b[0]])
+            + compute_track_similarity(stats_a[tids_a[1]], stats_b[tids_b[1]])
+        )
+        cost_ba = (
+            compute_track_similarity(stats_a[tids_a[0]], stats_b[tids_b[1]])
+            + compute_track_similarity(stats_a[tids_a[1]], stats_b[tids_b[0]])
+        )
+        return min(cost_ab, cost_ba) / 2.0
+    return compute_track_similarity(stats_a[tids_a[0]], stats_b[tids_b[0]])
+
+
+def _detect_serve_direction(
+    ball_positions: list[BallPosition] | None,
+) -> str:
+    """Detect serve direction from ball trajectory in first ~45 frames.
+
+    Returns "near" if ball moves upward (near team served),
+    "far" if ball moves downward (far team served), "?" if unknown.
+    """
+    if not ball_positions:
+        return "?"
+
+    valid = sorted(
+        [b for b in ball_positions
+         if b.confidence >= 0.3 and not (b.x == 0.0 and b.y == 0.0)],
+        key=lambda b: b.frame_number,
+    )
+    if len(valid) < 5:
+        return "?"
+
+    # Use first 45 frames of ball data
+    first_frame = valid[0].frame_number
+    early = [b for b in valid if b.frame_number <= first_frame + 45]
+    if len(early) < 5:
+        return "?"
+
+    # Compare first half vs second half mean Y
+    mid = len(early) // 2
+    ys = [b.y for b in early]
+    y_start = float(np.mean(ys[:mid]))
+    y_end = float(np.mean(ys[mid:]))
+    dy = y_end - y_start
+
+    # Positive dy = ball moving down = far team served
+    # Negative dy = ball moving up = near team served
+    if abs(dy) < 0.01:
+        return "?"
+    return "near" if dy < 0 else "far"
 
 
 class MatchPlayerTracker:
@@ -252,9 +317,8 @@ class MatchPlayerTracker:
     2. Matching tracks to player profiles using appearance similarity
     3. Updating profiles with new appearance data
 
-    Note: Side switch detection is disabled — all tested approaches
-    (flipped-count, accumulated profiles, rally-to-rally histograms,
-    DP optimization) produced 0 true positives for beach volleyball.
+    Side switch detection uses combinatorial search over ball trajectory
+    direction candidates with normalized pairwise appearance scoring.
     """
 
     def __init__(
@@ -350,7 +414,7 @@ class MatchPlayerTracker:
         )
 
         # Step 4: Assign tracks to players
-        # Side switch detection is disabled (all approaches produced 0 TP)
+        # Side switch detection runs in Pass 2 (combinatorial search)
         side_switch_detected = False
 
         if self.rally_count <= 1:
@@ -398,12 +462,14 @@ class MatchPlayerTracker:
         # Store rally data for Pass 2 refinement.
         # Snapshot current_side_assignment so Pass 2 uses the correct
         # player→side mapping for this rally (not the final post-all-switches state).
+        serve_dir = _detect_serve_direction(ball_positions)
         self.stored_rally_data.append(StoredRallyData(
             track_stats=track_stats,
             track_court_sides=track_court_sides,
             early_positions=early_positions,
             top_tracks=top_tracks,
             player_side_assignment=dict(self.state.current_side_assignment),
+            serve_direction=serve_dir,
         ))
 
         return RallyTrackingResult(
@@ -859,18 +925,191 @@ class MatchPlayerTracker:
         avg_cost = sum(costs) / len(costs)
         return 1.0 - avg_cost
 
+    def _detect_side_switches_combinatorial(self) -> list[int]:
+        """Detect side switches via combinatorial search over serve direction.
+
+        Uses ball trajectory direction (near/far) to find candidate switch
+        points, then tries all 2^K combinations to find the orientation
+        pattern that minimizes total cross-team appearance cost.
+
+        Returns:
+            List of rally indices where side switches should be applied.
+            Empty if no switches detected or no improvement found.
+        """
+        n = len(self.stored_rally_data)
+        if n < 3:
+            return []
+
+        # Step 1: Get serve directions and find candidate switch points
+        serve_dirs = [d.serve_direction for d in self.stored_rally_data]
+
+        candidates: list[int] = []
+        prev_dir = None
+        for i, d in enumerate(serve_dirs):
+            if d != "?" and prev_dir is not None and prev_dir != "?":
+                if d == prev_dir:
+                    candidates.append(i)
+            if d != "?":
+                prev_dir = d
+
+        if not candidates:
+            logger.info("Side switch search: no candidates (all alternating)")
+            return []
+
+        # Cap at 6 candidates (2^6 = 64 combinations max)
+        if len(candidates) > 6:
+            logger.info(
+                "Side switch search: %d candidates, capping at 6",
+                len(candidates),
+            )
+            candidates = candidates[:6]
+
+        logger.info(
+            "Side switch search: %d candidates at %s",
+            len(candidates), candidates,
+        )
+
+        # Step 2: Build pairwise team preference matrix
+        # For each pair of rallies, compute preference for "same orientation"
+        # vs "opposite orientation" using raw track-to-track comparison.
+        # Preference > 0 means same orientation preferred.
+        preference = np.zeros((n, n))
+
+        for i in range(n):
+            di = self.stored_rally_data[i]
+            t0_i = [
+                tid for tid in di.top_tracks
+                if di.track_court_sides.get(tid) == 0
+                and tid in di.track_stats
+            ]
+            t1_i = [
+                tid for tid in di.top_tracks
+                if di.track_court_sides.get(tid) == 1
+                and tid in di.track_stats
+            ]
+            if not t0_i or not t1_i:
+                continue
+
+            for j in range(i + 1, n):
+                dj = self.stored_rally_data[j]
+                t0_j = [
+                    tid for tid in dj.top_tracks
+                    if dj.track_court_sides.get(tid) == 0
+                    and tid in dj.track_stats
+                ]
+                t1_j = [
+                    tid for tid in dj.top_tracks
+                    if dj.track_court_sides.get(tid) == 1
+                    and tid in dj.track_stats
+                ]
+                if not t0_j or not t1_j:
+                    continue
+
+                # Same orientation: near↔near + far↔far
+                same_cost = (
+                    _team_match_cost(t0_i, di.track_stats, t0_j, dj.track_stats)
+                    + _team_match_cost(t1_i, di.track_stats, t1_j, dj.track_stats)
+                )
+                # Cross orientation: near↔far + far↔near
+                cross_cost = (
+                    _team_match_cost(t0_i, di.track_stats, t1_j, dj.track_stats)
+                    + _team_match_cost(t1_i, di.track_stats, t0_j, dj.track_stats)
+                )
+                pref = cross_cost - same_cost
+                preference[i, j] = pref
+                preference[j, i] = pref
+
+        # Step 3: Normalize preferences to remove perspective baseline.
+        # Raw preferences are ALL positive because perspective dominates
+        # (near-side tracks always match better with near-side).
+        # Subtracting row/column means exposes the real signal:
+        # same-orientation pairs become positive, cross-orientation negative.
+        row_means = np.zeros(n)
+        row_counts = np.zeros(n)
+        for a in range(n):
+            for b in range(n):
+                if a != b and preference[a, b] != 0.0:
+                    row_means[a] += preference[a, b]
+                    row_counts[a] += 1
+        for a in range(n):
+            if row_counts[a] > 0:
+                row_means[a] /= row_counts[a]
+
+        norm_pref = np.zeros((n, n))
+        for a in range(n):
+            for b in range(a + 1, n):
+                if preference[a, b] == 0.0:
+                    continue
+                val = preference[a, b] - (row_means[a] + row_means[b]) / 2.0
+                norm_pref[a, b] = val
+                norm_pref[b, a] = val
+
+        # Score partition using normalized preferences.
+        # Each switch incurs a penalty (parsimony: prefer fewer switches).
+        # Sweep results: 0.5→64.3%, 1.0→66.0%, 1.5→66.0% (fewer FP), 2.0+ same TP
+        switch_penalty = 1.5
+
+        def score_partition(switch_set: set[int]) -> float:
+            """Score a partition defined by switch points."""
+            orientation = np.zeros(n, dtype=int)
+            flipped = False
+            for k in range(n):
+                if k in switch_set:
+                    flipped = not flipped
+                orientation[k] = 1 if flipped else 0
+
+            total = 0.0
+            for a in range(n):
+                for b in range(a + 1, n):
+                    if norm_pref[a, b] == 0.0:
+                        continue
+                    if orientation[a] == orientation[b]:
+                        total += norm_pref[a, b]
+                    else:
+                        total -= norm_pref[a, b]
+
+            total -= len(switch_set) * switch_penalty
+            return total
+
+        baseline_score = score_partition(set())
+
+        best_score = baseline_score
+        best_switches: list[int] = []
+        n_combos = 1 << len(candidates)
+
+        for mask in range(1, n_combos):
+            switch_set = {
+                candidates[j]
+                for j in range(len(candidates))
+                if mask & (1 << j)
+            }
+            score = score_partition(switch_set)
+            if score > best_score:
+                best_score = score
+                best_switches = sorted(switch_set)
+
+        if best_switches:
+            improvement = best_score - baseline_score
+            logger.info(
+                "Side switch search: switches at %s "
+                "(score %.3f → %.3f, +%.3f)",
+                best_switches, baseline_score, best_score, improvement,
+            )
+        else:
+            logger.info("Side switch search: no switches (baseline is best)")
+
+        return sorted(best_switches)
+
     def refine_assignments(
         self,
         initial_results: list[RallyTrackingResult],
     ) -> list[RallyTrackingResult]:
         """Re-score all rallies using final profiles + global within-team voting.
 
-        Two-stage Pass 2:
-        1. Re-run cross-team assignment with final profiles (same as before)
-        2. Global within-team pairwise voting: for each team, compare raw
-           track stats across all rally pairs to find the globally consistent
-           within-team ordering (avoids profile corruption from wrong Pass 1
-           assignments)
+        Three-stage Pass 2:
+        0. Combinatorial side switch detection using ball trajectory direction
+        1. Re-run cross-team assignment with final profiles
+        2. Global within-team pairwise voting
 
         Args:
             initial_results: Results from Pass 1 forward pass.
@@ -888,6 +1127,31 @@ class MatchPlayerTracker:
 
         if len(initial_results) <= 1:
             return initial_results
+
+        # Stage 0: Detect side switches and update stored side assignments
+        switches = self._detect_side_switches_combinatorial()
+        switch_set = set(switches)
+        if switches:
+            flipped = False
+            for i, data in enumerate(self.stored_rally_data):
+                if i in switch_set:
+                    flipped = not flipped
+                if flipped:
+                    data.player_side_assignment = {
+                        pid: (1 - team)
+                        for pid, team in data.player_side_assignment.items()
+                    }
+            # Mark switch results
+            for i in switches:
+                if i < len(initial_results):
+                    r = initial_results[i]
+                    initial_results[i] = RallyTrackingResult(
+                        rally_index=r.rally_index,
+                        track_to_player=r.track_to_player,
+                        server_player_id=r.server_player_id,
+                        side_switch_detected=True,
+                        assignment_confidence=r.assignment_confidence,
+                    )
 
         # Stage 1: Re-score cross-team assignment with final profiles
         refined: list[RallyTrackingResult] = []
