@@ -1636,11 +1636,16 @@ def detect_referee_tracks(
         # A track is likely a referee if:
         # - Near sideline AND (parallel mover OR low ball proximity OR low Y variance)
         # - OR outside ball range AND low ball proximity AND low Y variance
-        # - OR low Y variance AND positioned in sideline area (x <= 0.25 or x >= 0.75)
+        # - OR low Y variance AND stationary (low spread) AND positioned near sidelines
+        #   The spread check distinguishes true background objects (spread < 0.010)
+        #   from real players who have spread > 0.01 even in ready position.
         is_likely_referee = (
             (is_near_sideline and (is_parallel_mover or has_low_ball_proximity or has_low_y_variance))
             or (is_outside_ball_range and has_low_ball_proximity and has_low_y_variance)
-            or (has_low_y_variance and (stats.avg_x <= 0.25 or stats.avg_x >= 0.75))
+            or (has_low_y_variance
+                and stats.position_spread < config.stationary_bg_max_spread
+                and (stats.avg_x <= config.referee_sideline_threshold
+                     or stats.avg_x >= (1.0 - config.referee_sideline_threshold)))
         )
 
         if is_likely_referee:
@@ -1667,14 +1672,19 @@ def identify_primary_tracks(
     Identify primary tracks that are likely real court players.
 
     Hard filters (must pass all):
-    1. Not on sidelines (x within primary_sideline_threshold, default 0.10-0.90)
-    2. Not identified as referee
-    3. Minimum presence rate (default 20%)
-    4. Court presence >= threshold (if calibration available)
+    1. Not on sidelines (x within primary_sideline_threshold, default 0.05-0.95)
+    2. Minimum presence rate (default 20%)
+    3. Not identified as referee
 
     Soft filters (used for ranking, relaxed when needed):
+    - Court presence: tracks with low court presence get 0.5x stability penalty
+      but are not excluded, so they can still fill slots when needed
     - Stationary check: tracks with low spread AND no ball engagement are
       deprioritized but included as fallbacks when fewer than max_players active
+
+    Safety net: if fewer than max_players pass hard filters, re-admit the
+    best hard-rejected tracks (referee/low_presence). Sideline rejects are
+    never re-admitted.
 
     Selection prioritizes:
     1. Active tracks (moving or ball-engaged) with high stability
@@ -1691,6 +1701,7 @@ def identify_primary_tracks(
         Set of track IDs that are primary tracks (up to max_players).
     """
     primary: set[tuple[int, float]] = set()  # (track_id, stability_score)
+    hard_rejected: list[tuple[int, float, str]] = []  # (track_id, stability, reason)
     court_cfg = court_config or CourtFilterConfig()
     referees = referee_tracks or set()
 
@@ -1699,6 +1710,7 @@ def identify_primary_tracks(
         # Players are in the middle of the frame; referees stand on sides
         # Beach volleyball: players typically at x=0.25-0.75
         # Use configurable threshold for cameras angled toward court edges
+        # Sideline rejects are NEVER re-admitted (truly off-frame)
         sideline_min = config.primary_sideline_threshold
         sideline_max = 1.0 - config.primary_sideline_threshold
         if stats.avg_x < sideline_min or stats.avg_x > sideline_max:
@@ -1708,26 +1720,29 @@ def identify_primary_tracks(
             )
             continue
 
-        # HARD FILTER 1: Exclude tracks identified as referees
-        if track_id in referees or stats.is_likely_referee:
-            logger.debug(f"Track {track_id} excluded: identified as referee")
-            continue
-
-        # HARD FILTER 2: Court presence (if calibration available)
-        # Tracks with less than 50% court presence are definitively not players
-        if stats.has_court_stats:
-            if stats.court_presence_ratio < court_cfg.min_court_presence_ratio:
-                logger.info(
-                    f"Track {track_id} excluded: court_presence={stats.court_presence_ratio:.2f} "
-                    f"< {court_cfg.min_court_presence_ratio:.2f} (not on court)"
-                )
-                continue
-
         # Compute stability score using configurable weights
         stability = compute_stability_score(stats, config)
 
+        # SOFT PENALTY: Court presence (if calibration available)
+        # Low court presence deprioritizes the track but doesn't exclude it,
+        # so it can still fill the 4th slot when no better candidate exists.
+        if stats.has_court_stats:
+            if stats.court_presence_ratio < court_cfg.min_court_presence_ratio:
+                logger.info(
+                    f"Track {track_id} deprioritized: court_presence={stats.court_presence_ratio:.2f} "
+                    f"< {court_cfg.min_court_presence_ratio:.2f} (low court presence)"
+                )
+                stability *= 0.5
+
         # Must meet presence threshold (hard filter)
         if stats.presence_rate < config.min_presence_rate:
+            hard_rejected.append((track_id, stability, "low_presence"))
+            continue
+
+        # HARD FILTER 2: Referee detection
+        if track_id in referees or stats.is_likely_referee:
+            logger.debug(f"Track {track_id} excluded: identified as referee")
+            hard_rejected.append((track_id, stability, "referee"))
             continue
 
         # Track passes hard filters - add with stability score for later ranking
@@ -1785,19 +1800,19 @@ def identify_primary_tracks(
             )
             selected.append((tid, stab))
 
+    # Score by player behavior (ball proximity, movement, presence) for ranking
+    def _player_behavior_score(tid: int) -> float:
+        s = track_stats[tid]
+        spread_normalized = min(s.position_spread / 0.05, 1.0)
+        return (
+            0.5 * s.ball_proximity_score
+            + 0.3 * spread_normalized
+            + 0.2 * s.presence_rate
+        )
+
     # Apply max_players limit if we have too many
     if len(selected) > config.max_players:
-        # Score by player behavior (ball proximity, movement) rather than just stability
-        def player_score(tid: int) -> float:
-            s = track_stats[tid]
-            spread_normalized = min(s.position_spread / 0.05, 1.0)
-            return (
-                0.5 * s.ball_proximity_score
-                + 0.3 * spread_normalized
-                + 0.2 * s.presence_rate
-            )
-
-        scored = [(tid, player_score(tid)) for tid, _ in selected]
+        scored = [(tid, _player_behavior_score(tid)) for tid, _ in selected]
         scored.sort(key=lambda x: x[1], reverse=True)
 
         kept_ids = {tid for tid, _ in scored[:config.max_players]}
@@ -1815,6 +1830,21 @@ def identify_primary_tracks(
                 f"spread={s.position_spread:.4f}, presence={s.presence_rate:.2f}) [{status}]"
             )
         selected = [(tid, stab) for tid, stab in selected if tid in kept_ids]
+
+    # Safety net: re-admit hard-rejected tracks when we still have <max_players
+    # This handles edge cases where filters are too aggressive for unusual videos.
+    # Only referee/low_presence rejects are eligible; sideline rejects are never re-admitted.
+    if len(selected) < config.max_players and hard_rejected:
+        needed = config.max_players - len(selected)
+        hard_rejected.sort(
+            key=lambda entry: _player_behavior_score(entry[0]), reverse=True
+        )
+        for tid, stability, reason in hard_rejected[:needed]:
+            logger.warning(
+                f"Track {tid} RE-ADMITTED: rejected for '{reason}', "
+                f"only {len(selected)} passed hard filters"
+            )
+            selected.append((tid, stability))
 
     # Extract just the track IDs
     result: set[int] = {tid for tid, _ in selected}

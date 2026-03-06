@@ -337,16 +337,17 @@ Removes tracks with very low position variance (spread < 0.015) AND high presenc
 
 **Primary Track Identification:**
 1. **Hard filters** (must pass all):
-   - Not on sidelines (x between 0.20-0.80)
-   - Not identified as referee (sideline + low movement + no ball proximity)
+   - Not on sidelines (x between 0.05-0.95)
    - Minimum presence rate (>20% of frames)
-   - Court presence >50% (if calibration available)
+   - Not identified as referee (sideline + low movement + no ball proximity)
 2. **Soft filters** (for ranking):
+   - Court presence <50% penalizes stability by 0.5x (was a hard gate, now soft)
    - Stationary tracks (low spread + no ball engagement) are deprioritized but included as fallbacks
 3. **Selection priority**:
    - Active tracks (moving or ball-engaged) with high stability
    - Active tracks with lower stability (if needed)
    - Stationary tracks as fallback (if still need more players)
+4. **Safety net**: if <4 tracks pass hard filters, re-admit best hard-rejected tracks (referee/low_presence). Sideline rejects are never re-admitted.
 
 **Per-Frame Filtering:**
 1. Bbox size filter (removes small background detections, keeps primary tracks)
