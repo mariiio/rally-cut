@@ -926,11 +926,15 @@ class MatchPlayerTracker:
         return 1.0 - avg_cost
 
     def _detect_side_switches_combinatorial(self) -> list[int]:
-        """Detect side switches via combinatorial search over serve direction.
+        """Detect side switches via combinatorial search.
 
-        Uses ball trajectory direction (near/far) to find candidate switch
-        points, then tries all 2^K combinations to find the orientation
-        pattern that minimizes total cross-team appearance cost.
+        Generates candidate switch points from two sources:
+        1. Ball trajectory direction (consecutive same-direction serves)
+        2. Appearance preference sign change (adjacent rallies prefer
+           opposite orientation relative to their neighbors)
+
+        Tries all 2^K combinations of candidates, scoring each partition
+        using normalized pairwise team appearance preferences.
 
         Returns:
             List of rally indices where side switches should be applied.
@@ -940,36 +944,8 @@ class MatchPlayerTracker:
         if n < 3:
             return []
 
-        # Step 1: Get serve directions and find candidate switch points
-        serve_dirs = [d.serve_direction for d in self.stored_rally_data]
-
-        candidates: list[int] = []
-        prev_dir = None
-        for i, d in enumerate(serve_dirs):
-            if d != "?" and prev_dir is not None and prev_dir != "?":
-                if d == prev_dir:
-                    candidates.append(i)
-            if d != "?":
-                prev_dir = d
-
-        if not candidates:
-            logger.info("Side switch search: no candidates (all alternating)")
-            return []
-
-        # Cap at 6 candidates (2^6 = 64 combinations max)
-        if len(candidates) > 6:
-            logger.info(
-                "Side switch search: %d candidates, capping at 6",
-                len(candidates),
-            )
-            candidates = candidates[:6]
-
-        logger.info(
-            "Side switch search: %d candidates at %s",
-            len(candidates), candidates,
-        )
-
-        # Step 2: Build pairwise team preference matrix
+        # Step 1: Build pairwise team preference matrix (needed for both
+        # candidate generation and scoring).
         # For each pair of rallies, compute preference for "same orientation"
         # vs "opposite orientation" using raw track-to-track comparison.
         # Preference > 0 means same orientation preferred.
@@ -1019,7 +995,7 @@ class MatchPlayerTracker:
                 preference[i, j] = pref
                 preference[j, i] = pref
 
-        # Step 3: Normalize preferences to remove perspective baseline.
+        # Step 2: Normalize preferences to remove perspective baseline.
         # Raw preferences are ALL positive because perspective dominates
         # (near-side tracks always match better with near-side).
         # Subtracting row/column means exposes the real signal:
@@ -1044,9 +1020,62 @@ class MatchPlayerTracker:
                 norm_pref[a, b] = val
                 norm_pref[b, a] = val
 
-        # Score partition using normalized preferences.
+        # Step 3: Generate candidate switch points from two sources.
+        # Source A: Ball trajectory — consecutive same-direction serves.
+        serve_dirs = [d.serve_direction for d in self.stored_rally_data]
+        ball_candidates: list[int] = []
+        prev_dir = None
+        for i, d in enumerate(serve_dirs):
+            if d != "?" and prev_dir is not None and prev_dir != "?":
+                if d == prev_dir:
+                    ball_candidates.append(i)
+            if d != "?":
+                prev_dir = d
+
+        # Source B: Appearance — adjacent rallies where the average
+        # normalized preference with earlier rallies flips sign compared
+        # to the previous rally. This catches switches invisible to ball
+        # direction (e.g., alternating serves across a switch point).
+        appearance_candidates: list[int] = []
+        if n >= 4:
+            # For each rally, compute average norm_pref with all prior rallies
+            avg_pref_with_prior = np.zeros(n)
+            for k in range(1, n):
+                vals = [norm_pref[k, j] for j in range(k) if norm_pref[k, j] != 0.0]
+                if vals:
+                    avg_pref_with_prior[k] = float(np.mean(vals))
+
+            for k in range(2, n):
+                prev_val = avg_pref_with_prior[k - 1]
+                curr_val = avg_pref_with_prior[k]
+                # Sign flip with sufficient magnitude on both sides
+                if (prev_val > 0.01 and curr_val < -0.01) or (
+                    prev_val < -0.01 and curr_val > 0.01
+                ):
+                    appearance_candidates.append(k)
+
+        # Merge and deduplicate
+        candidates = sorted(set(ball_candidates) | set(appearance_candidates))
+
+        if not candidates:
+            logger.info("Side switch search: no candidates")
+            return []
+
+        # Cap at 6 candidates (2^6 = 64 combinations max)
+        if len(candidates) > 6:
+            logger.info(
+                "Side switch search: %d candidates, capping at 6",
+                len(candidates),
+            )
+            candidates = candidates[:6]
+
+        logger.info(
+            "Side switch search: %d candidates at %s (ball=%s, appearance=%s)",
+            len(candidates), candidates, ball_candidates, appearance_candidates,
+        )
+
+        # Step 4: Score partition using normalized preferences.
         # Each switch incurs a penalty (parsimony: prefer fewer switches).
-        # Sweep results: 0.5→64.3%, 1.0→66.0%, 1.5→66.0% (fewer FP), 2.0+ same TP
         switch_penalty = 1.5
 
         def score_partition(switch_set: set[int]) -> float:
