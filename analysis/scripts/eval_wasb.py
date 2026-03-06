@@ -42,7 +42,7 @@ from rallycut.evaluation.tracking.db import (
     get_video_path,
     load_labeled_rallies,
 )
-from rallycut.tracking.ball_filter import BallFilterConfig
+from rallycut.tracking.ball_filter import get_wasb_filter_config
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.wasb_model import (
     NUM_INPUT_FRAMES,
@@ -202,7 +202,7 @@ def main() -> None:
     # Collect results
     wasb_results: list[tuple[str, str, dict[str, float]]] = []
 
-    filter_config = BallFilterConfig()
+    filter_config = get_wasb_filter_config()
 
     total_wasb_time = 0.0
     total_frames = 0

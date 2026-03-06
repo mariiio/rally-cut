@@ -137,7 +137,7 @@ def run_fold(
     cache: FeatureCache,
     device: str,
     stride: int = DEFAULT_STRIDE,
-    min_segment_confidence: float = 0.0,
+    min_segment_confidence: float = 0.6,
     valley_threshold: float = 0.5,
     min_valley_duration: float = 2.0,
 ) -> FoldResult:
@@ -323,8 +323,8 @@ def main() -> None:
         help=f"Feature stride (default: {DEFAULT_STRIDE})",
     )
     parser.add_argument(
-        "--min-confidence", type=float, default=0.0,
-        help="Min avg probability to keep a segment (0 = disabled)",
+        "--min-confidence", type=float, default=0.6,
+        help="Min avg probability to keep a segment (production default: 0.6)",
     )
     parser.add_argument(
         "--valley-threshold", type=float, default=0.5,

@@ -975,6 +975,8 @@ class VideoCutter:
             fps=feature_fps,
             stride=stride,
             min_segment_confidence=0.6,
+            valley_threshold=0.5,
+            min_valley_duration=2.0,
         )
 
         logger.info(
