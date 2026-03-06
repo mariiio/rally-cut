@@ -361,6 +361,9 @@ def link_tracklets_by_appearance(
             tid = id_mapping[tid]
         return tid
 
+    # Build resolved mapping for all merged IDs
+    resolved_mapping = {tid: resolve(tid) for tid in id_mapping}
+
     # Apply remapping to positions
     remapped = 0
     for p in positions:
@@ -368,6 +371,11 @@ def link_tracklets_by_appearance(
         if canonical != p.track_id:
             p.track_id = canonical
             remapped += 1
+
+    # Apply remapping to color_store and appearance_store
+    color_store.remap_ids(resolved_mapping)
+    if appearance_store is not None:
+        appearance_store.remap_ids(resolved_mapping)
 
     logger.info(
         f"Tracklet linking: {num_merges} merges, "

@@ -137,6 +137,59 @@ class ColorHistogramStore:
         if any(tid == track_b for tid, _ in self._histograms):
             self._track_ids.add(track_b)
 
+    def remap_ids(self, id_mapping: dict[int, int]) -> None:
+        """Apply a bulk ID remapping (old_id -> new_id) to all histograms.
+
+        Used after stabilize_track_ids or tracklet linking to keep
+        histogram store in sync with position track IDs.
+        """
+        if not id_mapping:
+            return
+
+        keys_to_move: list[tuple[tuple[int, int], int]] = []
+        for (tid, fn) in self._histograms:
+            if tid in id_mapping:
+                keys_to_move.append(((tid, fn), id_mapping[tid]))
+
+        for old_key, new_tid in keys_to_move:
+            hist = self._histograms.pop(old_key)
+            self._histograms[(new_tid, old_key[1])] = hist
+
+        # Rebuild track_ids
+        self._track_ids = {tid for tid, _ in self._histograms}
+
+    def shift_frames(self, offset: int) -> None:
+        """Shift all frame numbers by offset (e.g., -start_frame for 0-basing)."""
+        if offset == 0:
+            return
+        new_histograms: dict[tuple[int, int], np.ndarray] = {}
+        for (tid, fn), hist in self._histograms.items():
+            new_histograms[(tid, fn + offset)] = hist
+        self._histograms = new_histograms
+
+    def remap_per_frame(
+        self, remap_keys: dict[tuple[int, int], int],
+    ) -> None:
+        """Apply per-frame ID remapping: (old_track_id, frame) -> new_id.
+
+        Used after global identity optimization where different frames
+        of the same track can map to different canonical IDs.
+        """
+        if not remap_keys:
+            return
+
+        keys_to_move: list[tuple[tuple[int, int], int]] = []
+        for key in list(self._histograms):
+            if key in remap_keys:
+                keys_to_move.append((key, remap_keys[key]))
+
+        for old_key, new_tid in keys_to_move:
+            hist = self._histograms.pop(old_key)
+            self._histograms[(new_tid, old_key[1])] = hist
+
+        # Rebuild track_ids
+        self._track_ids = {tid for tid, _ in self._histograms}
+
 
 def extract_shorts_histogram(
     frame: np.ndarray,
