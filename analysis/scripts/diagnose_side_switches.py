@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-from pathlib import Path
 
 import numpy as np
 
@@ -81,7 +80,6 @@ def main() -> None:
 
         # Run match-players to get track stats and team sides
         tracker = MatchPlayerTracker()
-        all_results = []
 
         for rally in rallies:
             track_stats = extract_rally_appearances(
@@ -92,14 +90,13 @@ def main() -> None:
                 end_ms=rally.end_ms,
                 num_samples=12,
             )
-            result = tracker.process_rally(
+            tracker.process_rally(
                 track_stats=track_stats,
                 player_positions=rally.positions,
                 ball_positions=rally.ball_positions,
                 court_split_y=rally.court_split_y,
                 team_assignments=rally.team_assignments,
             )
-            all_results.append(result)
 
         # Collect per-rally team track stats
         # For each rally: team 0 tracks (near), team 1 tracks (far)
@@ -289,16 +286,14 @@ def main() -> None:
                 serve_dirs.append((i, "?", 0.0))
                 continue
 
-            # Use first 30 frames of ball data
+            # Use first 45 frames of ball data
             early_ball = [b for b in valid_ball if b.frame_number <= valid_ball[0].frame_number + 45]
             if len(early_ball) < 5:
                 serve_dirs.append((i, "?", 0.0))
                 continue
 
-            # Compute net Y displacement (linear regression for robustness)
-            frames = np.array([b.frame_number for b in early_ball], dtype=float)
+            # Compute net Y displacement via first half vs second half mean
             ys = np.array([b.y for b in early_ball])
-            # Simple: first half vs second half mean
             mid = len(early_ball) // 2
             y_start = float(np.mean(ys[:mid]))
             y_end = float(np.mean(ys[mid:]))

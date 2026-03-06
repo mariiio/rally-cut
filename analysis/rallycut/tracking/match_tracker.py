@@ -1098,7 +1098,7 @@ class MatchPlayerTracker:
         else:
             logger.info("Side switch search: no switches (baseline is best)")
 
-        return sorted(best_switches)
+        return best_switches
 
     def refine_assignments(
         self,
