@@ -16,6 +16,8 @@ from rallycut.tracking.match_tracker import (
 from rallycut.tracking.player_features import (
     HS_BINS,
     HS_RANGES,
+    V_BINS,
+    V_RANGES,
     PlayerAppearanceFeatures,
     TrackAppearanceStats,
 )
@@ -65,19 +67,31 @@ def _make_histogram(dominant_hue: float, dominant_sat: float) -> np.ndarray:
     return hist.astype(np.float32)
 
 
+def _make_v_histogram(dominant_val: float) -> np.ndarray:
+    """Create a synthetic V histogram with a peak at the given V value."""
+    v = np.full((20, 20), int(dominant_val), dtype=np.uint8)
+    hsv = np.stack([np.zeros_like(v), np.zeros_like(v), v], axis=-1)
+    hist = cv2.calcHist([hsv], [2], None, [V_BINS], V_RANGES)
+    cv2.normalize(hist, hist, alpha=1.0, norm_type=cv2.NORM_L1)
+    return hist.astype(np.float32).flatten()
+
+
 def _make_stats(
     track_id: int,
     skin_hsv: tuple[float, float, float] = (20.0, 150.0, 180.0),
-    height: float = 0.15,
     num_features: int = 5,
     upper_hue: float = 20.0,
     upper_sat: float = 100.0,
     lower_hue: float = 100.0,
     lower_sat: float = 200.0,
+    *,
+    height: float = 0.15,  # Unused, kept for call-site compat
 ) -> TrackAppearanceStats:
     """Create TrackAppearanceStats with known feature values."""
     upper_hist = _make_histogram(upper_hue, upper_sat)
     lower_hist = _make_histogram(lower_hue, lower_sat)
+    upper_v_hist = _make_v_histogram(180.0)
+    lower_v_hist = _make_v_histogram(180.0)
     stats = TrackAppearanceStats(track_id=track_id)
     for i in range(num_features):
         f = PlayerAppearanceFeatures(
@@ -87,7 +101,9 @@ def _make_stats(
             skin_pixel_count=100,
             upper_body_hist=upper_hist.copy(),
             lower_body_hist=lower_hist.copy(),
-            bbox_height=height,
+            upper_body_v_hist=upper_v_hist.copy(),
+            lower_body_v_hist=lower_v_hist.copy(),
+            dominant_color_hsv=(float(lower_hue), float(lower_sat), 180.0),
         )
         stats.features.append(f)
     stats.compute_averages()

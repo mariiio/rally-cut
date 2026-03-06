@@ -466,13 +466,13 @@ Maintains consistent player IDs (1-4) across a match using appearance-based matc
 
 **How it works:**
 1. For each rally, sample ~12 video frames per primary track
-2. Extract appearance features: HS histograms for upper body (t-shirt) and lower body (shorts), skin tone HSV, body height
+2. Extract appearance features: HS + V histograms for upper body (t-shirt) and lower body (shorts), dominant clothing color, skin tone HSV — all with skin pixel exclusion
 3. **Pass 1:** Sequential Hungarian assignment matching tracks to accumulated player profiles, with position continuity and confidence-gated profile updates
 4. **Pass 2 stage 0:** Combinatorial side switch detection — uses ball trajectory direction to find candidate switch points, scores all 2^K combinations using normalized pairwise team appearance preferences
 5. **Pass 2 stage 1:** Re-score all rallies with final profiles (frozen) for better cross-team assignment
 6. **Pass 2 stage 2:** Global within-team pairwise voting — compares raw track features across all rally pairs to find the globally consistent within-team ordering, avoiding profile corruption cascade
 
-**Cost function:** 35% lower body histogram + 25% upper body histogram + 25% height + 15% skin tone (lower = better match). Histograms use Bhattacharyya distance; missing features are skipped and weights renormalized.
+**Cost function:** 35% lower HS histogram + 15% lower V histogram + 15% upper HS histogram + 10% upper V histogram + 10% skin tone + 15% dominant clothing color (lower = better match). Clothing histograms exclude skin pixels via tight HSV range. Bhattacharyya distance for histograms; missing features are skipped and weights renormalized.
 
 **Key files:** `tracking/player_features.py` (feature extraction, similarity, `compute_track_similarity`), `tracking/match_tracker.py` (orchestration, Hungarian assignment, within-team voting), `evaluation/tracking/db.py` (`load_rallies_for_video`), `cli/commands/match_players.py` (CLI).
 

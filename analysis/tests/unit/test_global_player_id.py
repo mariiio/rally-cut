@@ -15,6 +15,7 @@ import pytest
 from rallycut.tracking.player_features import (
     HS_BINS,
     HS_RANGES,
+    V_BINS,
     PlayerAppearanceProfile,
 )
 
@@ -47,6 +48,11 @@ class TestProfileSerialization:
 
     def test_full_profile_roundtrip(self) -> None:
         """Profile with all fields survives roundtrip."""
+        lower_v_hist = np.random.rand(V_BINS).astype(np.float32)
+        lower_v_hist /= lower_v_hist.sum()
+        upper_v_hist = np.random.rand(V_BINS).astype(np.float32)
+        upper_v_hist /= upper_v_hist.sum()
+
         profile = PlayerAppearanceProfile(
             player_id=3,
             team=1,
@@ -57,8 +63,12 @@ class TestProfileSerialization:
             upper_hist_count=30,
             avg_lower_hist=_make_histogram(100.0, 200.0),
             lower_hist_count=30,
-            avg_bbox_height=0.15,
-            height_sample_count=60,
+            avg_upper_v_hist=upper_v_hist,
+            upper_v_hist_count=25,
+            avg_lower_v_hist=lower_v_hist,
+            lower_v_hist_count=25,
+            avg_dominant_color_hsv=(100.0, 200.0, 180.0),
+            dominant_color_count=20,
         )
 
         d = profile.to_dict()
@@ -70,8 +80,9 @@ class TestProfileSerialization:
         assert restored.skin_sample_count == 50
         assert restored.upper_hist_count == 30
         assert restored.lower_hist_count == 30
-        assert restored.height_sample_count == 60
-        assert restored.avg_bbox_height == pytest.approx(0.15)
+        assert restored.upper_v_hist_count == 25
+        assert restored.lower_v_hist_count == 25
+        assert restored.dominant_color_count == 20
 
         # Skin tone
         assert restored.avg_skin_tone_hsv is not None
@@ -79,7 +90,7 @@ class TestProfileSerialization:
         assert restored.avg_skin_tone_hsv[1] == pytest.approx(140.0)
         assert restored.avg_skin_tone_hsv[2] == pytest.approx(170.0)
 
-        # Histograms shape and values
+        # HS histograms shape and values
         assert restored.avg_upper_hist is not None
         assert restored.avg_upper_hist.shape == HS_BINS
         assert restored.avg_upper_hist.dtype == np.float32
@@ -92,6 +103,25 @@ class TestProfileSerialization:
         np.testing.assert_allclose(
             restored.avg_lower_hist, profile.avg_lower_hist, atol=1e-6
         )
+
+        # V histograms
+        assert restored.avg_upper_v_hist is not None
+        assert restored.avg_upper_v_hist.shape == (V_BINS,)
+        np.testing.assert_allclose(
+            restored.avg_upper_v_hist, upper_v_hist, atol=1e-6
+        )
+
+        assert restored.avg_lower_v_hist is not None
+        assert restored.avg_lower_v_hist.shape == (V_BINS,)
+        np.testing.assert_allclose(
+            restored.avg_lower_v_hist, lower_v_hist, atol=1e-6
+        )
+
+        # Dominant color
+        assert restored.avg_dominant_color_hsv is not None
+        assert restored.avg_dominant_color_hsv[0] == pytest.approx(100.0)
+        assert restored.avg_dominant_color_hsv[1] == pytest.approx(200.0)
+        assert restored.avg_dominant_color_hsv[2] == pytest.approx(180.0)
 
     def test_to_dict_histogram_is_plain_list(self) -> None:
         """Histograms in to_dict output should be plain Python lists (JSON-safe)."""
