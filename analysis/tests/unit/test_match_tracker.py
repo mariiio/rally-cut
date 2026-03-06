@@ -1031,7 +1031,7 @@ class TestRefineAssignments:
             assert set(r.track_to_player.values()) == {1, 2, 3, 4}
 
     def test_refinement_preserves_first_rally(self) -> None:
-        """Pass 2 keeps first rally unchanged (deterministic Y-sort)."""
+        """Pass 2 re-scores first rally but result matches when features identical."""
         tracker = MatchPlayerTracker()
         results: list[RallyTrackingResult] = []
 

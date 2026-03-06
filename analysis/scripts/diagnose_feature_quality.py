@@ -199,11 +199,13 @@ def diagnose_video(video_id: str):
                 lower_v = _histogram_similarity(sa.avg_lower_v_hist, sb.avg_lower_v_hist)
                 skin = _hsv_similarity(sa.avg_skin_tone_hsv, sb.avg_skin_tone_hsv) if sa.avg_skin_tone_hsv and sb.avg_skin_tone_hsv else None
                 dc = _hsv_similarity(sa.avg_dominant_color_hsv, sb.avg_dominant_color_hsv) if sa.avg_dominant_color_hsv and sb.avg_dominant_color_hsv else None
-                return (f"lower={lower:.3f if lower else 'N/A'}, "
-                        f"upper={upper:.3f if upper else 'N/A'}, "
-                        f"lower_v={lower_v:.3f if lower_v else 'N/A'}, "
-                        f"skin={skin:.3f if skin else 'N/A'}, "
-                        f"dc={dc:.3f if dc else 'N/A'}")
+
+                def _fmt(v: float | None) -> str:
+                    return f"{v:.3f}" if v is not None else "N/A"
+
+                return (f"lower={_fmt(lower)}, upper={_fmt(upper)}, "
+                        f"lower_v={_fmt(lower_v)}, skin={_fmt(skin)}, "
+                        f"dc={_fmt(dc)}")
 
             print("\nSame-team (team 0, first 4 tracks):")
             for i, sa in enumerate(team0):
