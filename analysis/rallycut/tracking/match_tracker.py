@@ -1153,17 +1153,15 @@ class MatchPlayerTracker:
                         assignment_confidence=r.assignment_confidence,
                     )
 
-        # Stage 1: Re-score cross-team assignment with final profiles
+        # Stage 1: Re-score ALL rallies (including rally 0) with final profiles.
+        # Rally 0 was initialized by Y-sort only; re-scoring with accumulated
+        # profiles can fix cascade errors where the first rally was wrong.
         refined: list[RallyTrackingResult] = []
         changes = 0
 
         for i, (data, initial) in enumerate(
             zip(self.stored_rally_data, initial_results)
         ):
-            if i == 0:
-                refined.append(initial)
-                continue
-
             # Restore the player→side mapping from Pass 1 so side penalties
             # are correct for pre-switch rallies.
             saved_side = self.state.current_side_assignment
@@ -1285,13 +1283,14 @@ class MatchPlayerTracker:
                     preference[a, b] = pref
                     preference[b, a] = pref
 
-            # Iterative labeling: rally 0 is reference (label=0),
-            # each other rally labeled by weighted votes from all others.
-            # Converges to a globally consistent binary partition.
+            # Iterative labeling: all rallies vote against all others.
+            # Each rally's label (0=keep, 1=swap) converges to a globally
+            # consistent binary partition. The orientation check below
+            # resolves the global flip ambiguity using profiles.
             labels = np.zeros(n, dtype=int)  # 0 = same as ref, 1 = swapped
             for _iteration in range(10):
                 changed = False
-                for k in range(1, n):
+                for k in range(n):
                     # Sum weighted preferences: positive = vote for "same
                     # label as j", negative = vote for "different label".
                     # Flip sign when j is swapped (label=1) since preference
