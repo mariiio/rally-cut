@@ -24,6 +24,22 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class AugmentationConfig:
+    """Feature-space data augmentation for training."""
+
+    enabled: bool = False
+
+    # Gaussian noise on features
+    feature_noise_std: float = 0.0  # 0 = disabled, try 0.01
+
+    # Feature dropout (zero out random dimensions)
+    feature_dropout: float = 0.0  # 0 = disabled, try 0.1
+
+    # Random temporal crop (fraction of sequence to keep)
+    temporal_crop_min: float = 1.0  # 1.0 = disabled, try 0.7
+
+
+@dataclass
 class TemporalMaxerTrainingConfig:
     """Configuration for TemporalMaxer training."""
 
@@ -39,6 +55,12 @@ class TemporalMaxerTrainingConfig:
 
     # Loss
     tmse_weight: float = 0.15  # Smoothing loss weight
+    label_smoothing: float = 0.0  # 0 = disabled, try 0.05
+    focal_loss: bool = False  # Use focal loss instead of CE
+    focal_gamma: float = 2.0  # Focal loss gamma
+
+    # Augmentation
+    augmentation: AugmentationConfig = field(default_factory=AugmentationConfig)
 
     # Device
     device: str = "cpu"
@@ -69,15 +91,40 @@ class VideoSequenceDataset(Dataset):
         self,
         video_features: list[np.ndarray],
         video_labels: list[np.ndarray],
+        augmentation: AugmentationConfig | None = None,
     ) -> None:
         self.features = [torch.from_numpy(f).float() for f in video_features]
         self.labels = [torch.from_numpy(lbl).long() for lbl in video_labels]
+        self.aug = augmentation if augmentation and augmentation.enabled else None
 
     def __len__(self) -> int:
         return len(self.features)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        return self.features[idx], self.labels[idx]
+        features = self.features[idx]
+        labels = self.labels[idx]
+
+        if self.aug is not None:
+            # Temporal crop
+            if self.aug.temporal_crop_min < 1.0:
+                seq_len = len(features)
+                crop_len = random.randint(int(self.aug.temporal_crop_min * seq_len), seq_len)
+                start = random.randint(0, seq_len - crop_len)
+                features = features[start:start + crop_len]
+                labels = labels[start:start + crop_len]
+
+            # Gaussian feature noise
+            if self.aug.feature_noise_std > 0:
+                features = features + torch.randn_like(features) * self.aug.feature_noise_std
+
+            # Feature dropout
+            if self.aug.feature_dropout > 0:
+                mask = torch.bernoulli(
+                    torch.full_like(features, 1.0 - self.aug.feature_dropout)
+                )
+                features = features * mask
+
+        return features, labels
 
 
 def collate_video_sequences(
@@ -145,6 +192,35 @@ def compute_tmse_loss(logits: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     return tmse
 
 
+class FocalLoss(nn.Module):
+    """Focal loss for handling class imbalance and hard examples.
+
+    FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)
+    """
+
+    def __init__(
+        self,
+        weight: torch.Tensor | None = None,
+        gamma: float = 2.0,
+        reduction: str = "none",
+    ) -> None:
+        super().__init__()
+        self.weight = weight
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        ce_loss = nnf.cross_entropy(logits, targets, weight=self.weight, reduction="none")
+        pt = torch.exp(-ce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+
+        if self.reduction == "mean":
+            return focal_loss.mean()
+        elif self.reduction == "sum":
+            return focal_loss.sum()
+        return focal_loss
+
+
 class TemporalMaxerTrainer:
     """Trainer for TemporalMaxer model."""
 
@@ -183,7 +259,9 @@ class TemporalMaxerTrainer:
             torch.cuda.manual_seed(cfg.seed)
 
         # Create datasets
-        train_dataset = VideoSequenceDataset(train_features, train_labels)
+        train_dataset = VideoSequenceDataset(
+            train_features, train_labels, augmentation=cfg.augmentation,
+        )
         val_dataset = VideoSequenceDataset(val_features, val_labels)
 
         train_generator = torch.Generator().manual_seed(cfg.seed)
@@ -215,7 +293,14 @@ class TemporalMaxerTrainer:
         else:
             class_weights = torch.ones(2, dtype=torch.float32, device=device)
 
-        criterion = nn.CrossEntropyLoss(weight=class_weights, reduction="none")
+        criterion: nn.Module
+        if cfg.focal_loss:
+            criterion = FocalLoss(weight=class_weights, gamma=cfg.focal_gamma, reduction="none")
+        else:
+            criterion = nn.CrossEntropyLoss(
+                weight=class_weights, reduction="none",
+                label_smoothing=cfg.label_smoothing,
+            )
 
         optimizer = torch.optim.AdamW(
             model.parameters(),

@@ -61,6 +61,7 @@ class TemporalMaxerInference:
         min_segment_confidence: float = 0.6,
         valley_threshold: float = 0.5,
         min_valley_duration: float = 2.0,
+        tta_shifts: int = 0,
     ) -> TemporalMaxerResult:
         """Run full-sequence inference and extract segments.
 
@@ -87,15 +88,18 @@ class TemporalMaxerInference:
 
         assert features.shape[1] == 768, f"Expected 768-dim features, got {features.shape[1]}"
 
-        # Run forward pass
+        # Run forward pass (with optional TTA)
         features_t = torch.from_numpy(features).float().T.unsqueeze(0).to(self.device)
         # features_t shape: (1, feature_dim, T)
 
         with torch.no_grad():
-            logits = self.model(features_t)  # (1, 2, T)
-            probs = torch.softmax(logits, dim=1)  # (1, 2, T)
-            rally_probs = probs[0, 1].cpu().numpy()  # (T,) rally probability
-            predictions = logits.argmax(dim=1)[0].cpu().numpy()  # (T,)
+            if tta_shifts > 0:
+                rally_probs = self._predict_with_tta(features_t, tta_shifts)
+            else:
+                logits = self.model(features_t)  # (1, 2, T)
+                probs = torch.softmax(logits, dim=1)  # (1, 2, T)
+                rally_probs = probs[0, 1].cpu().numpy()  # (T,)
+            predictions = (rally_probs > 0.5).astype(np.int64)
 
         # Post-process predictions into segments
         window_duration = stride / fps
@@ -117,6 +121,47 @@ class TemporalMaxerInference:
             window_probs=rally_probs,
             window_predictions=predictions,
         )
+
+    def _predict_with_tta(
+        self,
+        features_t: torch.Tensor,
+        num_shifts: int,
+    ) -> np.ndarray:
+        """Test-time augmentation via temporal shifts.
+
+        Shifts features by ±1..num_shifts windows, runs inference on each,
+        un-shifts the probabilities, and averages.
+        """
+        T = features_t.shape[2]
+        all_probs: list[np.ndarray] = []
+
+        for shift in range(-num_shifts, num_shifts + 1):
+            if shift == 0:
+                shifted = features_t
+            else:
+                shifted = torch.roll(features_t, shift, dims=2)
+                # Zero out wrapped-around edges
+                if shift > 0:
+                    shifted[:, :, :shift] = 0
+                else:
+                    shifted[:, :, shift:] = 0
+
+            logits = self.model(shifted)
+            probs = torch.softmax(logits, dim=1)
+            rally_p = probs[0, 1].cpu().numpy()
+
+            # Un-shift
+            if shift != 0:
+                rally_p = np.roll(rally_p, -shift)
+                if shift > 0:
+                    rally_p[-shift:] = 0
+                else:
+                    rally_p[: abs(shift)] = 0
+
+            all_probs.append(rally_p)
+
+        avg: np.ndarray = np.mean(all_probs, axis=0)
+        return avg
 
     def _predictions_to_segments(
         self,

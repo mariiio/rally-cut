@@ -25,6 +25,7 @@ from rallycut.evaluation.matching import MatchingResult, match_rallies
 from rallycut.temporal.features import FeatureCache, generate_overlap_labels
 from rallycut.temporal.temporal_maxer.inference import TemporalMaxerInference
 from rallycut.temporal.temporal_maxer.training import (
+    AugmentationConfig,
     TemporalMaxerTrainer,
     TemporalMaxerTrainingConfig,
 )
@@ -140,6 +141,12 @@ def run_fold(
     min_segment_confidence: float = 0.6,
     valley_threshold: float = 0.5,
     min_valley_duration: float = 2.0,
+    augmentation: AugmentationConfig | None = None,
+    label_smoothing: float = 0.0,
+    focal_loss: bool = False,
+    focal_gamma: float = 2.0,
+    tta_shifts: int = 0,
+    num_seeds: int = 1,
 ) -> FoldResult:
     """Run a single LOO fold: train on N-1, evaluate on held-out."""
     print(
@@ -169,43 +176,76 @@ def run_fold(
 
     ho_features, ho_labels, ho_fps, ho_duration = held_out_data
 
-    # Train model in a temp directory (seed=42 for reproducibility)
-    config = TemporalMaxerTrainingConfig(
-        learning_rate=5e-4,
-        epochs=50,
-        batch_size=4,
-        patience=15,
-        device=device,
-        seed=42,
-    )
-
-    trainer = TemporalMaxerTrainer(config=config)
+    # Train model(s) in a temp directory
+    aug_cfg = augmentation or AugmentationConfig()
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        output_dir = Path(tmpdir)
         t0 = time.time()
-        # Train with no validation set (LOO uses held-out for evaluation, not early stopping)
-        # Pass empty val lists so trainer trains for all epochs
-        trainer.train(
-            train_features=train_features,
-            train_labels=train_labels,
-            val_features=[],
-            val_labels=[],
-            output_dir=output_dir,
-        )
-        train_time = time.time() - t0
 
-        # Run inference on held-out video
-        model_path = output_dir / "best_temporal_maxer.pt"
-        inference = TemporalMaxerInference(model_path, device="cpu")
-        result = inference.predict(
-            features=ho_features,
-            fps=ho_fps,
-            stride=stride,
-            min_segment_confidence=min_segment_confidence,
-            valley_threshold=valley_threshold,
-            min_valley_duration=min_valley_duration,
-        )
+        if num_seeds > 1:
+            # Multi-seed ensemble: train multiple models, average predictions
+            all_rally_probs: list[np.ndarray] = []
+            for seed_idx in range(num_seeds):
+                seed = 42 + seed_idx
+                config = TemporalMaxerTrainingConfig(
+                    learning_rate=5e-4, epochs=50, batch_size=4, patience=15,
+                    device=device, seed=seed,
+                    augmentation=aug_cfg, label_smoothing=label_smoothing,
+                    focal_loss=focal_loss, focal_gamma=focal_gamma,
+                )
+                trainer = TemporalMaxerTrainer(config=config)
+                seed_dir = Path(tmpdir) / f"seed_{seed}"
+                trainer.train(train_features, train_labels, [], [], seed_dir)
+
+                model_path = seed_dir / "best_temporal_maxer.pt"
+                inf = TemporalMaxerInference(model_path, device="cpu")
+                r = inf.predict(
+                    features=ho_features, fps=ho_fps, stride=stride,
+                    min_segment_confidence=0.0,  # Don't filter yet
+                    valley_threshold=0.0,  # Don't split yet
+                )
+                all_rally_probs.append(r.window_probs)
+
+            # Average probabilities and re-predict
+            avg_probs = np.mean(all_rally_probs, axis=0)
+            # Create a dummy inference for post-processing
+            inference = TemporalMaxerInference(
+                Path(tmpdir) / "seed_42" / "best_temporal_maxer.pt", device="cpu"
+            )
+            predictions = (avg_probs > 0.5).astype(np.int64)
+            from rallycut.temporal.temporal_maxer.inference import TemporalMaxerResult
+            result = TemporalMaxerResult(
+                segments=inference._predictions_to_segments(
+                    predictions, avg_probs, stride / ho_fps, 16 / ho_fps,
+                    1.0, 3.0, 60.0, min_segment_confidence,
+                    valley_threshold=valley_threshold,
+                    min_valley_duration=min_valley_duration,
+                ),
+                window_probs=avg_probs,
+                window_predictions=predictions,
+            )
+        else:
+            config = TemporalMaxerTrainingConfig(
+                learning_rate=5e-4, epochs=50, batch_size=4, patience=15,
+                device=device, seed=42,
+                augmentation=aug_cfg, label_smoothing=label_smoothing,
+                focal_loss=focal_loss, focal_gamma=focal_gamma,
+            )
+            trainer = TemporalMaxerTrainer(config=config)
+            output_dir = Path(tmpdir)
+            trainer.train(train_features, train_labels, [], [], output_dir)
+
+            model_path = output_dir / "best_temporal_maxer.pt"
+            inference = TemporalMaxerInference(model_path, device="cpu")
+            result = inference.predict(
+                features=ho_features, fps=ho_fps, stride=stride,
+                min_segment_confidence=min_segment_confidence,
+                valley_threshold=valley_threshold,
+                min_valley_duration=min_valley_duration,
+                tta_shifts=tta_shifts,
+            )
+
+        train_time = time.time() - t0
 
     # Match predictions against GT
     gt_segments = [
@@ -334,11 +374,60 @@ def main() -> None:
         "--min-valley-duration", type=float, default=2.0,
         help="Min valley duration in seconds to trigger split (default: 2.0)",
     )
+    # Augmentation options
+    parser.add_argument(
+        "--feature-noise", type=float, default=0.0,
+        help="Gaussian noise std on features (0 = disabled, try 0.01)",
+    )
+    parser.add_argument(
+        "--feature-dropout", type=float, default=0.0,
+        help="Feature dropout rate (0 = disabled, try 0.1)",
+    )
+    parser.add_argument(
+        "--temporal-crop", type=float, default=1.0,
+        help="Min temporal crop fraction (1.0 = disabled, try 0.7)",
+    )
+    # Loss options
+    parser.add_argument(
+        "--label-smoothing", type=float, default=0.0,
+        help="Label smoothing (0 = disabled, try 0.05)",
+    )
+    parser.add_argument(
+        "--focal-loss", action="store_true",
+        help="Use focal loss instead of cross-entropy",
+    )
+    parser.add_argument(
+        "--focal-gamma", type=float, default=2.0,
+        help="Focal loss gamma (default: 2.0)",
+    )
+    # TTA
+    parser.add_argument(
+        "--tta", type=int, default=0,
+        help="TTA temporal shifts (0 = disabled, try 2)",
+    )
+    # Multi-seed ensemble
+    parser.add_argument(
+        "--num-seeds", type=int, default=1,
+        help="Number of seeds for ensemble (1 = single model, try 3)",
+    )
     args = parser.parse_args()
     stride = args.stride
     min_confidence = args.min_confidence
     valley_threshold = args.valley_threshold
     min_valley_duration = args.min_valley_duration
+
+    # Build augmentation config
+    aug_enabled = (
+        args.feature_noise > 0
+        or args.feature_dropout > 0
+        or args.temporal_crop < 1.0
+    )
+    aug_config = AugmentationConfig(
+        enabled=aug_enabled,
+        feature_noise_std=args.feature_noise,
+        feature_dropout=args.feature_dropout,
+        temporal_crop_min=args.temporal_crop,
+    )
 
     total_start = time.time()
 
@@ -356,6 +445,23 @@ def main() -> None:
         print(f"Valley splitting: threshold={valley_threshold}, min_duration={min_valley_duration}s")
     else:
         print("Valley splitting: disabled")
+    if aug_enabled:
+        parts = []
+        if args.feature_noise > 0:
+            parts.append(f"noise={args.feature_noise}")
+        if args.feature_dropout > 0:
+            parts.append(f"dropout={args.feature_dropout}")
+        if args.temporal_crop < 1.0:
+            parts.append(f"crop_min={args.temporal_crop}")
+        print(f"Augmentation: {', '.join(parts)}")
+    if args.label_smoothing > 0:
+        print(f"Label smoothing: {args.label_smoothing}")
+    if args.focal_loss:
+        print(f"Focal loss: gamma={args.focal_gamma}")
+    if args.tta > 0:
+        print(f"TTA shifts: ±{args.tta}")
+    if args.num_seeds > 1:
+        print(f"Multi-seed ensemble: {args.num_seeds} seeds")
     print(f"Feature directory: {FEATURE_DIR}")
     print()
 
@@ -392,6 +498,12 @@ def main() -> None:
         fold = run_fold(
             i + 1, n, held_out, train_videos, cache, device, stride, min_confidence,
             valley_threshold, min_valley_duration,
+            augmentation=aug_config,
+            label_smoothing=args.label_smoothing,
+            focal_loss=args.focal_loss,
+            focal_gamma=args.focal_gamma,
+            tta_shifts=args.tta,
+            num_seeds=args.num_seeds,
         )
         fold_results.append(fold)
 
