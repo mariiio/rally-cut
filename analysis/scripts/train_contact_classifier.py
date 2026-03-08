@@ -32,6 +32,8 @@ from rallycut.tracking.contact_detector import (
     _compute_direction_change,
     _compute_trajectory_curvature,
     _compute_velocities,
+    _compute_velocity_ratio,
+    _count_consecutive_detections,
     _filter_noise_spikes,
     _find_deceleration_candidates,
     _find_inflection_candidates,
@@ -183,12 +185,6 @@ def extract_candidate_features(
         with_parabolic, net_crossing_frames, cfg.min_peak_distance_frames
     )
 
-    # Build source sets
-    velocity_peak_set = set(velocity_peak_frames)
-    inflection_set = set(inflection_frames)
-    parabolic_set = set(parabolic_frames)
-    deceleration_set = set(deceleration_frames)
-
     # Build velocity lookup
     velocity_lookup = dict(zip(frames, smoothed))
 
@@ -261,9 +257,6 @@ def extract_candidate_features(
         else:
             player_dist = float("inf")
 
-        has_player = player_dist <= cfg.player_contact_radius
-        net_zone = 0.08
-        is_at_net = abs(ball.y - estimated_net_y) < net_zone
         arc_residual = residual_by_frame.get(frame, 0.0)
 
         # New features
@@ -283,6 +276,15 @@ def extract_candidate_features(
         )
         ball_detection_density = n_with_ball / (2 * density_window + 1)
 
+        # Vertical velocity component
+        vel_y = velocities[frame][2] if frame in velocities else 0.0
+
+        # Velocity ratio: speed after / speed before
+        vel_ratio = _compute_velocity_ratio(velocities, frame, window=5)
+
+        # Consecutive ball detections around frame
+        consec = _count_consecutive_detections(ball_by_frame, frame)
+
         features = CandidateFeatures(
             frame=frame,
             velocity=velocity,
@@ -290,19 +292,16 @@ def extract_candidate_features(
             arc_fit_residual=arc_residual,
             acceleration=acceleration,
             trajectory_curvature=curvature,
+            velocity_y=vel_y,
+            velocity_ratio=vel_ratio,
             player_distance=player_dist,
-            has_player=has_player,
             ball_x=ball.x,
             ball_y=ball.y,
             ball_y_relative_net=ball.y - estimated_net_y,
-            is_at_net=is_at_net,
             is_net_crossing=is_net_cross,
             frames_since_last=frames_since_last,
-            is_velocity_peak=frame in velocity_peak_set,
-            is_inflection=frame in inflection_set,
-            is_deceleration=frame in deceleration_set,
-            is_parabolic=frame in parabolic_set,
             ball_detection_density=ball_detection_density,
+            consecutive_detections=consec,
             frames_since_rally_start=frame - first_frame,
         )
 
@@ -343,7 +342,20 @@ def main() -> None:
     parser.add_argument("--output", type=str, default="weights/contact_classifier/contact_classifier.pkl")
     parser.add_argument("--tolerance", type=int, default=5, help="Frame tolerance for GT matching")
     parser.add_argument("--positive-weight", type=float, default=1.0, help="Weight multiplier for positive samples (recall bias)")
+    parser.add_argument("--config", type=str, help="JSON config overrides for ContactDetectionConfig")
     args = parser.parse_args()
+
+    # Build ContactDetectionConfig from overrides
+    contact_config: ContactDetectionConfig | None = None
+    if args.config:
+        import json
+        try:
+            overrides = json.loads(args.config)
+        except json.JSONDecodeError as e:
+            console.print(f"[red]Invalid JSON in --config: {e}[/red]")
+            return
+        contact_config = ContactDetectionConfig(**overrides)
+        console.print(f"[bold]Config overrides:[/bold] {overrides}")
 
     rallies = load_rallies_with_action_gt()
     if not rallies:
@@ -364,7 +376,7 @@ def main() -> None:
     per_rally_table.add_column("GT Labels", justify="right")
 
     for rally in rallies:
-        features_list, candidate_frames = extract_candidate_features(rally)
+        features_list, candidate_frames = extract_candidate_features(rally, config=contact_config)
 
         if not features_list:
             per_rally_table.add_row(rally.rally_id[:8], "0", "0", "0", str(len(rally.gt_labels)))

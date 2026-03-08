@@ -7,13 +7,13 @@ Individual trajectory features (velocity, direction change, player distance)
 overlap between TP and FP in marginal distributions, but a learned model can
 exploit correlations between features to separate them.
 
-Features per candidate:
-- Ball velocity magnitude, direction change angle
-- Arc fit residual (from parabolic detection — key discriminator)
+Features per candidate (16 total):
+- Ball velocity magnitude, direction change angle, vertical velocity, speed ratio
+- Arc fit residual, acceleration, trajectory curvature
 - Player distance to nearest player
-- Ball (x, y) position, ball Y relative to net
-- Time since last candidate (frames)
-- Court side indicator
+- Ball (x, y) position, ball Y relative to net, net crossing flag
+- Time since last candidate (frames), frames since rally start
+- Ball detection density, consecutive detections
 
 Model: scikit-learn GradientBoostingClassifier. A simple ensemble model is
 appropriate for this dataset size and resistant to overfitting.
@@ -43,24 +43,20 @@ class CandidateFeatures:
     arc_fit_residual: float  # Parabolic arc fit residual (high = breaks parabola)
     acceleration: float  # Velocity change (second derivative) near candidate
     trajectory_curvature: float  # Curvature of ball path near candidate
+    velocity_y: float  # Vertical velocity component (positive = downward)
+    velocity_ratio: float  # Speed ratio after/before candidate (>1 = accelerating)
     # Player features
     player_distance: float  # Distance to nearest player (inf if no player)
-    has_player: bool  # Whether a player is within contact radius
     # Position features
     ball_x: float  # Ball X position (0-1)
     ball_y: float  # Ball Y position (0-1)
     ball_y_relative_net: float  # Ball Y minus net_y (negative = far side)
-    is_at_net: bool  # Whether ball is in net zone
     is_net_crossing: bool  # Ball crosses net_y within ±5 frames
     # Temporal features
     frames_since_last: int  # Frames since previous candidate (0 if first)
-    # Source flags
-    is_velocity_peak: bool
-    is_inflection: bool
-    is_parabolic: bool
-    is_deceleration: bool = False
-    # New features (v2)
+    # Detection quality
     ball_detection_density: float = 1.0  # fraction of frames with ball in ±10 window
+    consecutive_detections: int = 0  # consecutive ball detections around candidate
     frames_since_rally_start: int = 0  # frames from rally start (early = serve)
 
     def to_array(self) -> np.ndarray:
@@ -72,19 +68,16 @@ class CandidateFeatures:
             self.arc_fit_residual,
             self.acceleration,
             self.trajectory_curvature,
+            self.velocity_y,
+            self.velocity_ratio,
             player_dist,
-            float(self.has_player),
             self.ball_x,
             self.ball_y,
             self.ball_y_relative_net,
-            float(self.is_at_net),
             float(self.is_net_crossing),
             self.frames_since_last,
-            float(self.is_velocity_peak),
-            float(self.is_inflection),
-            float(self.is_parabolic),
-            float(self.is_deceleration),
             self.ball_detection_density,
+            self.consecutive_detections,
             self.frames_since_rally_start,
         ], dtype=np.float64)
 
@@ -96,19 +89,16 @@ class CandidateFeatures:
             "arc_fit_residual",
             "acceleration",
             "trajectory_curvature",
+            "velocity_y",
+            "velocity_ratio",
             "player_distance",
-            "has_player",
             "ball_x",
             "ball_y",
             "ball_y_relative_net",
-            "is_at_net",
             "is_net_crossing",
             "frames_since_last",
-            "is_velocity_peak",
-            "is_inflection",
-            "is_parabolic",
-            "is_deceleration",
             "ball_detection_density",
+            "consecutive_detections",
             "frames_since_rally_start",
         ]
 
