@@ -124,14 +124,13 @@ export function AnalysisPipeline({ hasRallies, isLocked }: AnalysisPipelineProps
   // Don't show for locked videos or when no match is active
   if (!activeMatchId || isLocked) return null;
 
-  // Idle — show "Analyze Match" button only when no rallies exist
+  // Idle — show "Analyze Match" or "Re-analyze" button
   if (phase === 'idle') {
-    // If video already has rallies and no pipeline is running, show nothing
-    // (detection button was already handled)
-    if (hasRallies) return null;
-
     return (
-      <Tooltip title="Detect rallies, track players, and generate match stats">
+      <Tooltip title={hasRallies
+        ? "Re-run court detection, player tracking, and match stats"
+        : "Detect rallies, track players, and generate match stats"
+      }>
         <Button
           data-tutorial="detect-rallies"
           size="small"
@@ -145,7 +144,7 @@ export function AnalysisPipeline({ hasRallies, isLocked }: AnalysisPipelineProps
             textTransform: 'none',
           }}
         >
-          Analyze Match
+          {hasRallies ? 'Re-analyze' : 'Analyze Match'}
         </Button>
       </Tooltip>
     );

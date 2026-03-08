@@ -98,17 +98,22 @@ export const useAnalysisStore = create<AnalysisState>()(
       },
 
       startAnalysis: async (videoId: string) => {
-        // Prevent re-entrance: skip if already running for this video
+        // Cancel any stuck pipeline before restarting
         const existing = get().pipelines[videoId];
         if (existing && existing.phase !== 'idle' && existing.phase !== 'done' && existing.phase !== 'error') {
-          return;
+          clearPollTimer(videoId);
         }
+        completingLock.delete(videoId);
+
+        // Capture generation marker — all updates in this run include it so
+        // concurrent/stale async callbacks can detect restarts.
+        const startedAt = Date.now();
 
         const update = (patch: Partial<AnalysisPipeline>) => {
           set((state) => ({
             pipelines: {
               ...state.pipelines,
-              [videoId]: { ...DEFAULT_PIPELINE, ...patch },
+              [videoId]: { ...DEFAULT_PIPELINE, ...patch, startedAt },
             },
           }));
         };
@@ -118,8 +123,6 @@ export const useAnalysisStore = create<AnalysisState>()(
           phase: 'quality_check',
           progress: 2,
           stepMessage: 'Checking your video...',
-          startedAt: Date.now(),
-          error: undefined,
         });
 
         // Step 1: Quality check
@@ -191,7 +194,18 @@ export const useAnalysisStore = create<AnalysisState>()(
         const pipeline = get().pipelines[videoId];
         if (!pipeline) return;
 
+        // Capture generation marker — if startAnalysis resets the pipeline while
+        // we're awaiting an API call, startedAt will change and we must bail out
+        // to avoid overwriting the fresh pipeline run.
+        const generation = pipeline.startedAt;
+
+        const isStale = () => {
+          const current = get().pipelines[videoId];
+          return !current || current.startedAt !== generation;
+        };
+
         const updatePipeline = (patch: Partial<AnalysisPipeline>) => {
+          if (isStale()) return; // Pipeline was restarted — don't overwrite
           set((state) => ({
             pipelines: {
               ...state.pipelines,
@@ -215,15 +229,17 @@ export const useAnalysisStore = create<AnalysisState>()(
           // Validate server state before blindly polling
           try {
             const status = await getDetectionStatus(videoId);
+            if (isStale()) return;
             if (status.job?.status === 'COMPLETED') {
               // Detection already finished — advance to tracking
               const pipelineStatus = await getAnalysisPipelineStatus(videoId);
+              if (isStale()) return;
               const ralliesFound = pipelineStatus.detection.ralliesFound;
               if (ralliesFound === 0) {
                 updatePipeline({ phase: 'done', progress: 100, stepMessage: 'No rallies found in this video', ralliesFound: 0 });
               } else {
                 updatePipeline({ phase: 'tracking', progress: 45, stepMessage: `Found ${ralliesFound} rallies! Starting player tracking...`, ralliesFound });
-                await startTracking(videoId, set, get);
+                if (!isStale()) await startTracking(videoId, set, get);
               }
               return;
             } else if (status.job?.status === 'FAILED') {
@@ -231,7 +247,7 @@ export const useAnalysisStore = create<AnalysisState>()(
               return;
             } else if (status.job?.status === 'RUNNING') {
               // Legitimate in-progress job — resume polling
-              pollDetection(videoId, set, get);
+              if (!isStale()) pollDetection(videoId, set, get);
             } else {
               // No job or unrecognized status — detection is not running
               stalePollCounts.delete(videoId);
@@ -239,29 +255,30 @@ export const useAnalysisStore = create<AnalysisState>()(
             }
           } catch {
             // API call failed — start polling, stale counter will catch permanent failures
-            pollDetection(videoId, set, get);
+            if (!isStale()) pollDetection(videoId, set, get);
           }
         } else if (pipeline.phase === 'tracking' && !pollTimers[videoId]) {
           try {
             const status = await getBatchTrackingStatus(videoId);
+            if (isStale()) return;
             if (status.status === 'completed') {
               updatePipeline({ phase: 'completing', progress: 90, stepMessage: 'Generating match stats...' });
-              await completeAnalysis(videoId, set);
+              if (!isStale()) await completeAnalysis(videoId, set, get);
               return;
             } else if (status.status === 'failed') {
               updatePipeline({ phase: 'error', error: status.error || 'Tracking failed', stepMessage: 'Tracking failed' });
               return;
             } else if (status.status === 'processing' || status.status === 'pending') {
-              pollTracking(videoId, set, get);
+              if (!isStale()) pollTracking(videoId, set, get);
             } else {
               stalePollCounts.delete(videoId);
               updatePipeline({ phase: 'error', error: 'Tracking is no longer running. Please try again.', stepMessage: 'Tracking not found' });
             }
           } catch {
-            pollTracking(videoId, set, get);
+            if (!isStale()) pollTracking(videoId, set, get);
           }
         } else if (pipeline.phase === 'completing') {
-          await completeAnalysis(videoId, set);
+          if (!isStale()) await completeAnalysis(videoId, set, get);
         }
       },
 
@@ -271,10 +288,22 @@ export const useAnalysisStore = create<AnalysisState>()(
     }),
     {
       name: 'rallycut-analysis',
-      version: 1,
+      version: 2,
+      migrate: () => ({ pipelines: {} }),
       partialize: (state) => ({
-        // Only persist pipeline state, not ephemeral UI
-        pipelines: state.pipelines,
+        // Only persist resumable in-progress pipelines. Terminal states
+        // (idle/done/error) are transient feedback. Quality phases are quick
+        // local API calls that can't be resumed — just restart on reload.
+        pipelines: Object.fromEntries(
+          Object.entries(state.pipelines).filter(
+            ([, p]) =>
+              p.phase !== 'idle' &&
+              p.phase !== 'done' &&
+              p.phase !== 'error' &&
+              p.phase !== 'quality_check' &&
+              p.phase !== 'quality_warning',
+          ),
+        ),
       }),
     },
   ),
@@ -449,28 +478,22 @@ async function startTracking(
   };
 
   try {
-    // Check if tracking is already complete
+    // Check if tracking is currently in progress (e.g. resumed after navigation)
     const status = await getBatchTrackingStatus(videoId);
-    if (status.status === 'completed') {
-      updatePipeline({
-        phase: 'completing',
-        progress: 90,
-        stepMessage: 'Generating match stats...',
-        trackingProgress: { completed: status.completedRallies ?? 0, total: status.totalRallies ?? 0 },
-      });
-      await completeAnalysis(videoId, set);
+
+    if (status.status === 'processing' || status.status === 'pending') {
+      // Already running — just poll for progress
+      pollTracking(videoId, set, get);
       return;
     }
 
-    if (status.status !== 'processing' && status.status !== 'pending') {
-      // Start batch tracking
-      const result = await trackAllRallies(videoId);
-      updatePipeline({
-        progress: 48,
-        stepMessage: `Tracking players (0 of ${result.totalRallies})...`,
-        trackingProgress: { completed: 0, total: result.totalRallies },
-      });
-    }
+    // Start a new batch tracking job (covers both first-run and re-analyze)
+    const result = await trackAllRallies(videoId);
+    updatePipeline({
+      progress: 48,
+      stepMessage: `Tracking players (0 of ${result.totalRallies})...`,
+      trackingProgress: { completed: 0, total: result.totalRallies },
+    });
 
     pollTracking(videoId, set, get);
   } catch (err) {
@@ -533,7 +556,7 @@ function pollTracking(
           },
         });
 
-        await completeAnalysis(videoId, set);
+        await completeAnalysis(videoId, set, get);
       } else if (status.status === 'failed') {
         clearPollTimer(videoId);
         updatePipeline({
@@ -574,12 +597,22 @@ function pollTracking(
 async function completeAnalysis(
   videoId: string,
   set: (fn: (state: AnalysisState) => Partial<AnalysisState>) => void,
+  get: () => AnalysisState,
 ) {
   // Prevent concurrent calls (resumeIfNeeded + pollTracking can race)
   if (completingLock.has(videoId)) return;
   completingLock.add(videoId);
 
+  // Capture generation to detect pipeline restarts during async work
+  const generation = get().pipelines[videoId]?.startedAt;
+
+  const isStale = () => {
+    const current = get().pipelines[videoId];
+    return !current || current.startedAt !== generation;
+  };
+
   const updatePipeline = (patch: Partial<AnalysisPipeline>) => {
+    if (isStale()) return;
     set((state) => ({
       pipelines: {
         ...state.pipelines,
@@ -591,9 +624,12 @@ async function completeAnalysis(
   try {
     // Wait a moment for match analysis to complete (auto-triggered by batch tracking)
     await new Promise((r) => setTimeout(r, 2000));
+    if (isStale()) return;
 
     const status = await getAnalysisPipelineStatus(videoId);
     const stats = await getMatchStatsApi(videoId);
+    if (isStale()) return;
+
     const playerCount = stats?.playerStats?.length ?? 0;
     const ralliesFound = status.detection.ralliesFound;
 
@@ -606,7 +642,7 @@ async function completeAnalysis(
     });
 
     // Show player naming dialog
-    if (playerCount > 0) {
+    if (playerCount > 0 && !isStale()) {
       set(() => ({ showPlayerNaming: videoId }));
     }
   } catch {
