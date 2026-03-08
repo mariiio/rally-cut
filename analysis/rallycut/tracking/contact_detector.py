@@ -782,6 +782,56 @@ def _compute_acceleration(
     return max_accel
 
 
+def _compute_velocity_ratio(
+    velocities: dict[int, tuple[float, float, float]],
+    frame: int,
+    window: int = 5,
+) -> float:
+    """Compute speed ratio after/before a candidate frame.
+
+    Returns after_speed / before_speed. Values > 1 mean ball accelerated
+    (e.g. attack), < 1 mean ball decelerated (e.g. receive/dig).
+    Returns 1.0 if insufficient data.
+    """
+    before_speeds = [
+        velocities[f][0] for f in range(frame - window, frame)
+        if f in velocities
+    ]
+    after_speeds = [
+        velocities[f][0] for f in range(frame + 1, frame + window + 1)
+        if f in velocities
+    ]
+    if not before_speeds or not after_speeds:
+        return 1.0
+    before_med = sorted(before_speeds)[len(before_speeds) // 2]
+    after_med = sorted(after_speeds)[len(after_speeds) // 2]
+    return (after_med + 0.001) / (before_med + 0.001)
+
+
+def _count_consecutive_detections(
+    ball_by_frame: dict[int, BallPosition],
+    frame: int,
+) -> int:
+    """Count consecutive ball detections around a candidate frame.
+
+    Counts the length of the contiguous run of ball detections containing
+    the candidate frame. Real contacts tend to occur within long continuous
+    trajectory segments; isolated detections are more likely noise.
+    """
+    count = 1  # the frame itself
+    # Count backward
+    f = frame - 1
+    while f in ball_by_frame:
+        count += 1
+        f -= 1
+    # Count forward
+    f = frame + 1
+    while f in ball_by_frame:
+        count += 1
+        f += 1
+    return count
+
+
 def _compute_trajectory_curvature(
     ball_by_frame: dict[int, BallPosition],
     frame: int,
@@ -1389,12 +1439,6 @@ def detect_contacts(
             n_proximity = len(proximity_frames)
             candidate_frames = sorted(candidate_set)
 
-    # Build sets for source tracking (used by classifier features)
-    velocity_peak_set = set(velocity_peak_frames)
-    inflection_set = set(inflection_frames)
-    parabolic_set = set(parabolic_frames)
-    deceleration_set = set(deceleration_frames)
-
     # Build velocity lookup for any frame
     velocity_lookup = dict(zip(frames, smoothed))
 
@@ -1480,12 +1524,6 @@ def detect_contacts(
         )
         prev_candidate_frame = frame
 
-        # Determine which source detected this candidate
-        is_vel_peak = frame in velocity_peak_set
-        is_infl = frame in inflection_set
-        is_para = frame in parabolic_set
-        is_decel = frame in deceleration_set
-
         if classifier is not None and classifier.is_trained:
             # Phase 3: Use learned classifier
             from rallycut.tracking.contact_classifier import CandidateFeatures
@@ -1498,6 +1536,15 @@ def detect_contacts(
             )
             ball_detection_density = n_with_ball / (2 * density_window + 1)
 
+            # Vertical velocity component
+            vel_y = velocities[frame][2] if frame in velocities else 0.0
+
+            # Velocity ratio: speed after / speed before candidate
+            vel_ratio = _compute_velocity_ratio(velocities, frame, window=5)
+
+            # Consecutive ball detections around candidate frame
+            consec = _count_consecutive_detections(ball_by_frame, frame)
+
             features = CandidateFeatures(
                 frame=frame,
                 velocity=velocity,
@@ -1505,19 +1552,16 @@ def detect_contacts(
                 arc_fit_residual=arc_residual,
                 acceleration=acceleration,
                 trajectory_curvature=curvature,
+                velocity_y=vel_y,
+                velocity_ratio=vel_ratio,
                 player_distance=player_dist,
-                has_player=has_player,
                 ball_x=ball.x,
                 ball_y=ball.y,
                 ball_y_relative_net=ball.y - estimated_net_y,
-                is_at_net=is_at_net,
                 is_net_crossing=is_net_cross,
                 frames_since_last=frames_since_last,
-                is_velocity_peak=is_vel_peak,
-                is_inflection=is_infl,
-                is_parabolic=is_para,
-                is_deceleration=is_decel,
                 ball_detection_density=ball_detection_density,
+                consecutive_detections=consec,
                 frames_since_rally_start=frame - first_frame,
             )
             results = classifier.predict([features])

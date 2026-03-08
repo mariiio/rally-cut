@@ -832,16 +832,15 @@ class TestCandidateFeatures:
             frame=10, velocity=0.02, direction_change_deg=45.0,
             arc_fit_residual=0.01, acceleration=0.005,
             trajectory_curvature=0.1,
-            player_distance=0.05, has_player=True,
+            velocity_y=0.01, velocity_ratio=1.2,
+            player_distance=0.05,
             ball_x=0.5, ball_y=0.6, ball_y_relative_net=0.1,
-            is_at_net=False, is_net_crossing=False,
+            is_net_crossing=False,
             frames_since_last=15,
-            is_velocity_peak=True, is_inflection=False,
-            is_parabolic=False,
         )
         arr = f.to_array()
-        assert arr.shape == (19,)
-        assert len(CandidateFeatures.feature_names()) == 19
+        assert arr.shape == (16,)
+        assert len(CandidateFeatures.feature_names()) == 16
 
     def test_infinite_player_distance_handled(self) -> None:
         """Infinite player distance maps to 1.0."""
@@ -849,41 +848,33 @@ class TestCandidateFeatures:
             frame=10, velocity=0.02, direction_change_deg=45.0,
             arc_fit_residual=0.0, acceleration=0.0,
             trajectory_curvature=0.0,
+            velocity_y=0.0, velocity_ratio=1.0,
             player_distance=float("inf"),
-            has_player=False, ball_x=0.5, ball_y=0.6,
-            ball_y_relative_net=0.1, is_at_net=False,
+            ball_x=0.5, ball_y=0.6,
+            ball_y_relative_net=0.1,
             is_net_crossing=False,
             frames_since_last=0,
-            is_velocity_peak=False, is_inflection=False,
-            is_parabolic=False,
         )
         arr = f.to_array()
-        # player_distance is index 5
-        assert arr[5] == 1.0
+        # player_distance is index 7
+        assert arr[7] == 1.0
         assert not np.any(np.isinf(arr))
 
     def test_boolean_features_as_float(self) -> None:
-        """Boolean features should be 0.0 or 1.0."""
+        """Boolean feature (is_net_crossing) should be 0.0 or 1.0."""
         f = CandidateFeatures(
             frame=10, velocity=0.02, direction_change_deg=45.0,
             arc_fit_residual=0.0, acceleration=0.0,
             trajectory_curvature=0.0,
+            velocity_y=0.0, velocity_ratio=1.0,
             player_distance=0.05,
-            has_player=True, ball_x=0.5, ball_y=0.6,
-            ball_y_relative_net=0.1, is_at_net=True,
+            ball_x=0.5, ball_y=0.6,
+            ball_y_relative_net=0.1,
             is_net_crossing=True,
             frames_since_last=0,
-            is_velocity_peak=True, is_inflection=False,
-            is_parabolic=True,
         )
         arr = f.to_array()
-        # has_player=1.0, is_at_net=1.0, is_net_crossing=1.0,
-        # is_velocity_peak=1.0, is_parabolic=1.0
-        assert arr[6] == 1.0   # has_player
-        assert arr[10] == 1.0  # is_at_net
         assert arr[11] == 1.0  # is_net_crossing
-        assert arr[13] == 1.0  # is_velocity_peak
-        assert arr[15] == 1.0  # is_parabolic
 
 
 class TestContactClassifier:
@@ -898,13 +889,12 @@ class TestContactClassifier:
             frame=10, velocity=0.02, direction_change_deg=45.0,
             arc_fit_residual=0.01, acceleration=0.005,
             trajectory_curvature=0.1,
+            velocity_y=0.01, velocity_ratio=1.0,
             player_distance=0.05,
-            has_player=True, ball_x=0.5, ball_y=0.6,
-            ball_y_relative_net=0.1, is_at_net=False,
+            ball_x=0.5, ball_y=0.6,
+            ball_y_relative_net=0.1,
             is_net_crossing=False,
             frames_since_last=0,
-            is_velocity_peak=True, is_inflection=False,
-            is_parabolic=False,
         )]
 
         results = clf.predict(features)
@@ -941,13 +931,12 @@ class TestContactClassifier:
             frame=10, velocity=0.6, direction_change_deg=60.0,
             arc_fit_residual=0.02, acceleration=0.01,
             trajectory_curvature=0.2,
+            velocity_y=0.01, velocity_ratio=1.5,
             player_distance=0.05,
-            has_player=True, ball_x=0.5, ball_y=0.6,
-            ball_y_relative_net=0.1, is_at_net=False,
+            ball_x=0.5, ball_y=0.6,
+            ball_y_relative_net=0.1,
             is_net_crossing=False,
             frames_since_last=15,
-            is_velocity_peak=True, is_inflection=False,
-            is_parabolic=False,
         )]
 
         results = clf.predict(features)
@@ -994,13 +983,12 @@ class TestContactClassifier:
             frame=10, velocity=0.5, direction_change_deg=45.0,
             arc_fit_residual=0.01, acceleration=0.005,
             trajectory_curvature=0.1,
+            velocity_y=0.01, velocity_ratio=1.0,
             player_distance=0.05,
-            has_player=True, ball_x=0.5, ball_y=0.6,
-            ball_y_relative_net=0.1, is_at_net=False,
+            ball_x=0.5, ball_y=0.6,
+            ball_y_relative_net=0.1,
             is_net_crossing=False,
             frames_since_last=15,
-            is_velocity_peak=True, is_inflection=False,
-            is_parabolic=False,
         )]
         r1 = clf.predict(features)
         r2 = loaded.predict(features)
