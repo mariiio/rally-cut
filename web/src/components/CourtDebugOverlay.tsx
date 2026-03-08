@@ -245,20 +245,13 @@ export function CourtDebugOverlay({
           zIndex: 12,
         }}
       >
-        {/* Team zone tints */}
-        {hasCorners && perspectiveNet ? (
+        {/* Team zone tints — only when actual court corners are available */}
+        {hasCorners && perspectiveNet && (
           <>
-            {/* Perspective-correct polygon zones following court shape */}
             <polygon points={farZonePoints} fill={TEAM_B_ZONE} />
             <polygon points={nearZonePoints} fill={TEAM_A_ZONE} />
           </>
-        ) : hasSplitY ? (
-          <>
-            {/* Horizontal fallback when no calibration corners */}
-            <rect x="0" y="0" width="100" height={splitYPct} fill={TEAM_B_ZONE} />
-            <rect x="0" y={splitYPct} width="100" height={100 - splitYPct} fill={TEAM_A_ZONE} />
-          </>
-        ) : null}
+        )}
 
         {/* Court polygon */}
         {hasCorners && (
