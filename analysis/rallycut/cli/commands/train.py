@@ -2475,7 +2475,7 @@ def train_temporal_maxer_cmd(
         "-o",
         help="Output directory for trained model",
     ),
-    stride: int = typer.Option(48, "--stride", "-s", help="Feature stride used for extraction"),
+    stride: int = typer.Option(24, "--stride", "-s", help="Feature stride used for extraction"),
     epochs: int = typer.Option(50, "--epochs", "-e", help="Maximum training epochs"),
     lr: float = typer.Option(5e-4, "--lr", help="Learning rate"),
     batch_size: int = typer.Option(4, "--batch-size", "-b", help="Batch size (video sequences)"),
@@ -2483,6 +2483,7 @@ def train_temporal_maxer_cmd(
     train_ratio: float = typer.Option(0.8, "--train-ratio", help="Train/val split ratio"),
     seed: int = typer.Option(42, "--seed", help="Random seed"),
     device: str = typer.Option("", "--device", help="Device (cpu/cuda/mps). Auto-detect if empty."),
+    feature_noise: float = typer.Option(0.01, "--feature-noise", help="Gaussian noise std on features (0=disabled)"),
 ) -> None:
     """Train TemporalMaxer TAS model on frozen encoder features.
 
@@ -2507,6 +2508,7 @@ def train_temporal_maxer_cmd(
         video_level_split,
     )
     from rallycut.temporal.temporal_maxer.training import (
+        AugmentationConfig,
         TemporalMaxerTrainer,
         TemporalMaxerTrainingConfig,
     )
@@ -2514,6 +2516,8 @@ def train_temporal_maxer_cmd(
     rprint("[bold]TemporalMaxer Training[/bold]")
     rprint(f"  Feature directory: {feature_dir}")
     rprint(f"  Stride: {stride}")
+    if feature_noise > 0:
+        rprint(f"  Feature noise: {feature_noise}")
     rprint()
 
     # Auto-detect device
@@ -2598,6 +2602,10 @@ def train_temporal_maxer_cmd(
     rprint(f"  Val: {len(val_features)} videos, {total_val_windows} windows")
 
     # Create config and train
+    aug_config = AugmentationConfig(
+        enabled=feature_noise > 0,
+        feature_noise_std=feature_noise,
+    )
     config = TemporalMaxerTrainingConfig(
         learning_rate=lr,
         epochs=epochs,
@@ -2605,6 +2613,7 @@ def train_temporal_maxer_cmd(
         patience=patience,
         device=device,
         seed=seed,
+        augmentation=aug_config,
     )
 
     rprint()
