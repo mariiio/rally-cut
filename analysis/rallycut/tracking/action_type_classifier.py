@@ -41,15 +41,12 @@ class ActionFeatures:
     ball_y: float
     ball_y_relative_net: float
     player_distance: float
-    is_at_net: float  # 1.0 / 0.0
-    court_side: float  # 1.0 = near, 0.0 = far
     arc_fit_residual: float
     confidence: float
 
     # Sequence context
     contact_index_in_rally: int
     contact_count_on_current_side: int  # 1-3
-    is_first_contact_on_side: float  # 1.0 / 0.0
 
     # Trajectory displacement
     post_contact_dy: float
@@ -59,10 +56,6 @@ class ActionFeatures:
     # Inter-contact
     frames_since_last_contact: int
     distance_from_last_contact: float
-
-    # Serve-specific
-    is_in_serve_window: float  # 1.0 / 0.0
-    is_at_baseline: float  # 1.0 / 0.0
 
     def to_array(self) -> np.ndarray:
         """Convert to numpy feature array for classifier input."""
@@ -74,20 +67,15 @@ class ActionFeatures:
             self.ball_y,
             self.ball_y_relative_net,
             player_dist,
-            self.is_at_net,
-            self.court_side,
             self.arc_fit_residual,
             self.confidence,
             float(self.contact_index_in_rally),
             float(self.contact_count_on_current_side),
-            self.is_first_contact_on_side,
             self.post_contact_dy,
             self.post_contact_dx,
             self.pre_contact_dy,
             float(self.frames_since_last_contact),
             self.distance_from_last_contact,
-            self.is_in_serve_window,
-            self.is_at_baseline,
         ], dtype=np.float64)
 
     @staticmethod
@@ -99,20 +87,15 @@ class ActionFeatures:
             "ball_y",
             "ball_y_relative_net",
             "player_distance",
-            "is_at_net",
-            "court_side",
             "arc_fit_residual",
             "confidence",
             "contact_index_in_rally",
             "contact_count_on_current_side",
-            "is_first_contact_on_side",
             "post_contact_dy",
             "post_contact_dx",
             "pre_contact_dy",
             "frames_since_last_contact",
             "distance_from_last_contact",
-            "is_in_serve_window",
-            "is_at_baseline",
         ]
 
 
@@ -224,7 +207,6 @@ def extract_action_features(
     ball_positions: list[BallPosition] | None,
     net_y: float,
     rally_start_frame: int = 0,
-    serve_window_frames: int = 60,
 ) -> ActionFeatures:
     """Compute features for a single contact for action classification.
 
@@ -235,7 +217,6 @@ def extract_action_features(
         ball_positions: Ball positions for trajectory features.
         net_y: Estimated net Y position.
         rally_start_frame: First frame of the rally.
-        serve_window_frames: Serve detection window size.
 
     Returns:
         ActionFeatures for this contact.
@@ -251,9 +232,6 @@ def extract_action_features(
     # Contact count on current side
     side_count = _count_contacts_on_side(all_contacts, index, ball_positions, net_y)
 
-    # Is first contact on this side?
-    is_first_on_side = side_count == 1
-
     # Inter-contact features
     if index > 0:
         prev = all_contacts[index - 1]
@@ -266,18 +244,6 @@ def extract_action_features(
         frames_since_last = 0
         dist_from_last = 0.0
 
-    # Serve-specific
-    is_in_serve_window = float(
-        (contact.frame - rally_start_frame) < serve_window_frames
-    )
-
-    # Dynamic baselines (same formula as _find_serve_index)
-    baseline_near = net_y + (1.0 - net_y) * 0.64
-    baseline_far = net_y * 0.36
-    is_at_baseline = float(
-        contact.ball_y >= baseline_near or contact.ball_y <= baseline_far
-    )
-
     return ActionFeatures(
         velocity=contact.velocity,
         direction_change_deg=contact.direction_change_deg,
@@ -285,20 +251,15 @@ def extract_action_features(
         ball_y=contact.ball_y,
         ball_y_relative_net=contact.ball_y - net_y,
         player_distance=contact.player_distance,
-        is_at_net=float(contact.is_at_net),
-        court_side=1.0 if contact.court_side == "near" else 0.0,
         arc_fit_residual=contact.arc_fit_residual,
         confidence=contact.confidence,
         contact_index_in_rally=index,
         contact_count_on_current_side=side_count,
-        is_first_contact_on_side=float(is_first_on_side),
         post_contact_dy=post_dy,
         post_contact_dx=post_dx,
         pre_contact_dy=pre_dy,
         frames_since_last_contact=frames_since_last,
         distance_from_last_contact=dist_from_last,
-        is_in_serve_window=is_in_serve_window,
-        is_at_baseline=is_at_baseline,
     )
 
 
