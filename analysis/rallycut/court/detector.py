@@ -122,13 +122,14 @@ class CourtDetectionResult:
     """Result of automatic court detection."""
 
     corners: list[dict[str, float]]  # 4 corners: near-left, near-right, far-right, far-left
-    confidence: float  # 0-1 quality score
+    confidence: float  # 0-1 quality score (reflects localization quality of ALL corners)
     detected_lines: list[DetectedLine] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     homography: np.ndarray | None = field(default=None, repr=False)
     fitting_method: str = "legacy"
     n_correspondences: int = 0
     reprojection_error: float = 0.0
+    per_corner_confidence: dict[str, float] = field(default_factory=dict)
 
     @property
     def is_valid(self) -> bool:
@@ -262,7 +263,7 @@ class CourtDetector:
         video_path: str | Path,
         start_frame: int | None = None,
         end_frame: int | None = None,
-        keypoint_confidence_threshold: float = 0.5,
+        keypoint_confidence_threshold: float = 0.4,
     ) -> CourtDetectionResult:
         """Detect court corners from a video.
 

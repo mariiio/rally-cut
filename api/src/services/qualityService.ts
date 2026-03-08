@@ -148,7 +148,8 @@ export async function assessVideoQuality(
   // Pre-migration rows (courtCalibrationSource = null) are treated as auto-saved
   // and can be overwritten — only explicit "manual" source is protected.
   let courtAutoSaved = false;
-  if (court && court.confidence > 0.7 && court.corners.length === 4) {
+  const cornersUsable = court && court.corners.length === 4 && areCornersReasonable(court.corners);
+  if (cornersUsable && court.confidence > 0.7) {
     courtAutoSaved = await prisma.$transaction(async (tx) => {
       const currentVideo = await tx.video.findUnique({
         where: { id: videoId },
@@ -168,6 +169,31 @@ export async function assessVideoQuality(
       console.log(`[QUALITY] Auto-saved court calibration for video ${videoId} (confidence: ${court.confidence.toFixed(2)})`);
       return true;
     });
+  } else if (court) {
+    // Detection ran but didn't meet the quality bar — clear any stale auto
+    // calibration that a previous (less strict) run may have saved.
+    // Manual calibrations are always preserved.
+    const cleared = await prisma.$transaction(async (tx) => {
+      const currentVideo = await tx.video.findUnique({
+        where: { id: videoId },
+        select: { courtCalibrationJson: true, courtCalibrationSource: true },
+      });
+      if (!currentVideo?.courtCalibrationJson || currentVideo.courtCalibrationSource === 'manual') {
+        return false;
+      }
+      await tx.video.update({
+        where: { id: videoId },
+        data: { courtCalibrationJson: Prisma.DbNull, courtCalibrationSource: null },
+      });
+      console.log(
+        `[QUALITY] Cleared stale auto-calibration for video ${videoId} ` +
+          `(new detection confidence: ${court.confidence.toFixed(2)})`,
+      );
+      return true;
+    });
+    if (cleared) {
+      console.log(`[QUALITY] Video ${videoId} will use per-rally auto-detection during tracking`);
+    }
   }
 
   // Save quality assessment to characteristicsJson (merge with existing)
@@ -356,6 +382,32 @@ export async function getPlayerMatchingGt(videoId: string, userId: string) {
   }
 
   return video.playerMatchingGtJson as Record<string, unknown> | null;
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/**
+ * Reject degenerate corners before auto-saving. Defense-in-depth: even if
+ * confidence is honest, don't persist corners that are wildly off-screen
+ * (e.g. (-0.2, 1.17)) — they produce near-full-frame ROIs that provide
+ * no filtering value.
+ */
+function areCornersReasonable(corners: Array<{ x: number; y: number }>): boolean {
+  // All corners must be within a generous margin of the frame.
+  // Legitimate off-screen corners (low camera angle) are at most ~0.15
+  // beyond the frame edge; anything beyond 0.3 is degenerate.
+  const MAX_MARGIN = 0.3;
+  for (const c of corners) {
+    if (c.x < -MAX_MARGIN || c.x > 1 + MAX_MARGIN || c.y < -MAX_MARGIN || c.y > 1 + MAX_MARGIN) {
+      console.log(
+        `[QUALITY] Corner (${c.x.toFixed(3)}, ${c.y.toFixed(3)}) too far off-screen — skipping auto-save`,
+      );
+      return false;
+    }
+  }
+  return true;
 }
 
 // ============================================================================

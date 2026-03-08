@@ -187,11 +187,21 @@ class CourtKeypointDetector:
             corners, diagnostics.per_corner_confidence,
         )
 
+        # Penalize confidence for unreliable corners. The bbox confidence
+        # (0.91) only means "a court exists" — it says nothing about corner
+        # localization. When near corners have ~0.001 keypoint confidence,
+        # the overall score must reflect that, otherwise consumers (e.g.
+        # quality service auto-save at 0.7) silently store bad calibrations.
+        confidence = self._penalize_confidence(
+            confidence, diagnostics.per_corner_confidence,
+        )
+
         return CourtDetectionResult(
             corners=corners,
             confidence=confidence,
             warnings=diagnostics.warnings,
             fitting_method="keypoint",
+            per_corner_confidence=diagnostics.per_corner_confidence,
         )
 
     @property
@@ -219,11 +229,13 @@ class CourtKeypointDetector:
         # Refine low-confidence near corners via perspective extrapolation
         per_corner_conf = dict(zip(CORNER_NAMES, result.kpt_confidences))
         corners = self._refine_near_corners(result.corners, per_corner_conf)
+        confidence = self._penalize_confidence(result.confidence, per_corner_conf)
 
         return CourtDetectionResult(
             corners=corners,
-            confidence=result.confidence,
+            confidence=confidence,
             fitting_method="keypoint",
+            per_corner_confidence=per_corner_conf,
         )
 
     def _sample_frames(
@@ -450,6 +462,33 @@ class CourtKeypointDetector:
             return corners
 
         return refined
+
+    # Minimum per-corner confidence to count as "reliable". Below this, the
+    # corner position is essentially a guess (keypoint invisible or off-screen).
+    _RELIABLE_CORNER_CONF = 0.5
+
+    @staticmethod
+    def _penalize_confidence(
+        bbox_confidence: float,
+        per_corner_confidence: dict[str, float],
+    ) -> float:
+        """Reduce overall confidence when individual corners are unreliable.
+
+        The bbox confidence says "a court exists" but not "all corners are
+        accurately localized". A detection with 2/4 reliable corners should
+        not get 0.91 confidence — that causes auto-save of bad calibrations.
+
+        Penalty: confidence * (reliable_count / 4). So 2 reliable corners
+        at 0.91 bbox → 0.91 * 0.5 = 0.455, which won't auto-save (< 0.7)
+        but will still be accepted for team classification (> 0.4).
+        """
+        if not per_corner_confidence:
+            return bbox_confidence
+        threshold = CourtKeypointDetector._RELIABLE_CORNER_CONF
+        reliable = sum(
+            1 for c in per_corner_confidence.values() if c >= threshold
+        )
+        return bbox_confidence * (reliable / 4.0)
 
     @staticmethod
     def _is_convex_quad(corners: list[dict[str, float]]) -> bool:

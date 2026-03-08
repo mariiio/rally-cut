@@ -149,6 +149,16 @@ def compute_court_roi_from_calibration(
     # near-corner extrapolation clips valid players.
     roi_y_max = max(roi_y_max, 0.95)
 
+    # Reject ROIs that cover too much of the frame — they provide no
+    # filtering value and indicate a bad calibration (e.g. off-screen
+    # near corners producing near-full-frame ROI).
+    roi_area = (roi_x_max - roi_x_min) * (roi_y_max - roi_y_min)
+    if roi_area > 0.90:
+        return None, (
+            f"Calibration ROI covers {roi_area:.0%} of frame "
+            "(near corners may be off-screen)"
+        )
+
     roi_points: list[tuple[float, float]] = [
         (roi_x_min, roi_y_min),  # top-left
         (roi_x_max, roi_y_min),  # top-right
