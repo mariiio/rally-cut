@@ -75,6 +75,8 @@ def detect_court(
             ],
             "warnings": result.warnings,
         }
+        if result.per_corner_confidence:
+            output["per_corner_confidence"] = result.per_corner_confidence
         print(json.dumps(output, indent=2))
         return
 
