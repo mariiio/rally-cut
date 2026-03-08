@@ -687,9 +687,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // Load camera edits and global settings into camera store
       useCameraStore.getState().loadCameraEdits(result.cameraEdits, result.globalCameraSettings);
 
-      // Hydrate court calibration from API if not already in local store
+      // Sync court calibration: hydrate from API, or clear stale local cache
       if (result.courtCalibration) {
         usePlayerTrackingStore.getState().hydrateCalibration(videoId, result.courtCalibration);
+      } else {
+        usePlayerTrackingStore.getState().clearLocalCalibration(videoId);
       }
 
       // Fetch current user info
@@ -853,9 +855,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         // Load camera edits and global settings into camera store
         useCameraStore.getState().loadCameraEdits(result.cameraEdits, result.globalCameraSettings);
 
-        // Hydrate court calibration from API if not already in local store
+        // Sync court calibration: hydrate from API, or clear stale local cache
         if (result.courtCalibration) {
           usePlayerTrackingStore.getState().hydrateCalibration(state.singleVideoId, result.courtCalibration);
+        } else {
+          usePlayerTrackingStore.getState().clearLocalCalibration(state.singleVideoId);
         }
 
         // Build updated session with fresh match data

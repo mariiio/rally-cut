@@ -92,6 +92,7 @@ interface PlayerTrackingState {
   setIsCalibrating: (value: boolean) => void;
   saveCalibration: (videoId: string, corners: Corner[]) => void;
   clearCalibration: (videoId: string) => void;
+  clearLocalCalibration: (videoId: string) => void;
   getCalibration: (videoId: string) => CourtCalibration | null;
   hydrateCalibration: (videoId: string, corners: Corner[]) => void;
   trackPlayersForRally: (rallyId: string, videoId: string, fallbackFps?: number) => Promise<void>;
@@ -264,6 +265,16 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
         // Fire-and-forget: clear from backend
         deleteCourtCalibration(videoId).catch((err) => {
           console.error('[PlayerTrackingStore] Failed to delete calibration from API:', err);
+        });
+      },
+
+      clearLocalCalibration: (videoId: string) => {
+        // Clear stale localStorage cache only — does NOT delete from backend.
+        // Used when DB returns null calibration to evict outdated local entries.
+        if (!get().calibrations[videoId]) return;
+        set((state) => {
+          const { [videoId]: _, ...rest } = state.calibrations;
+          return { calibrations: rest };
         });
       },
 
