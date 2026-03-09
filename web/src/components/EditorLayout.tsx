@@ -29,6 +29,7 @@ import { PlayerNamingDialog } from './PlayerNamingDialog';
 import { PlayerMatchingDialog } from './PlayerMatchingDialog';
 import { useEditorStore } from '@/stores/editorStore';
 import { useAnalysisStore } from '@/stores/analysisStore';
+import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { designTokens } from '@/app/theme';
 
@@ -66,6 +67,9 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
 
   // Get current match for quality banner
   const currentMatch = getActiveMatch();
+
+  // Court calibration state (need to allow overflow when dragging corners outside video)
+  const isCalibrating = usePlayerTrackingStore((s) => s.isCalibrating);
 
   // Panel collapse state
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
@@ -430,7 +434,7 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
             p: 3,
             minWidth: 0,
             position: 'relative',
-            overflow: 'hidden',
+            overflow: isCalibrating ? 'visible' : 'hidden',
           }}
         >
           {/* Video Container */}
@@ -441,6 +445,8 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
               maxHeight: '100%',
               display: 'flex',
               flexDirection: 'column',
+              overflow: isCalibrating ? 'visible' : 'hidden',
+              minHeight: 0,
             }}
           >
             <SessionLoadingProgress />
@@ -450,7 +456,9 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
             <VideoInsightsBanner currentMatch={currentMatch} />
             {/* Player tracking toolbar */}
             <PlayerTrackingToolbar onOpenPlayerMatching={currentMatch?.id ? () => setPlayerMatchingVideoId(currentMatch.id) : undefined} />
-            <VideoPlayer />
+            <Box sx={{ flex: 1, minHeight: 0 }}>
+              <VideoPlayer />
+            </Box>
           </Box>
         </Box>
 
