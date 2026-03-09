@@ -675,14 +675,15 @@ export function VideoPlayer() {
       ref={fullscreenContainerRef}
       sx={{
         width: '100%',
+        maxHeight: '100%',
         bgcolor: '#000',
         borderRadius: 2,
         position: 'relative',
         boxShadow: designTokens.colors.video.shadow,
         // Fixed 16:9 outer frame
         aspectRatio: '16/9',
-        // Clip video content at player boundaries (important for 9:16 mode where video extends beyond inner container)
-        overflow: 'hidden',
+        // Clip content (9:16 extends beyond), but allow overflow during calibration for corner dragging
+        overflow: isCalibrating ? 'visible' : 'hidden',
         // Premium border effect
         '&::before': {
           content: '""',
@@ -851,7 +852,7 @@ export function VideoPlayer() {
           aspectRatio: containerAspectRatio === '9/16' ? undefined : videoAspectRatio,
           maxWidth: '100%',
           // Allow video to extend beyond container in 9:16 mode so excluded areas are visible
-          overflow: containerAspectRatio === '9/16' ? 'visible' : 'hidden',
+          overflow: (containerAspectRatio === '9/16' || isCalibrating) ? 'visible' : 'hidden',
         }}
       >
         <Box
@@ -861,8 +862,8 @@ export function VideoPlayer() {
             inset: containerAspectRatio === '9/16' ? 0 : undefined,
             width: '100%',
             height: '100%',
-            // Allow video to extend beyond container in 9:16 mode
-            overflow: containerAspectRatio === '9/16' ? 'visible' : 'hidden',
+            // Allow video to extend beyond container in 9:16 mode, or during court calibration
+            overflow: (containerAspectRatio === '9/16' || isCalibrating) ? 'visible' : 'hidden',
           }}
         >
           <CameraOverlay containerRef={videoContainerRef} />
