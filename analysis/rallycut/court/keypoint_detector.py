@@ -183,7 +183,7 @@ class CourtKeypointDetector:
         )
 
         # Refine low-confidence near corners via perspective extrapolation
-        corners = self._refine_near_corners(
+        corners, vp_refined = self._refine_near_corners(
             corners, diagnostics.per_corner_confidence,
         )
 
@@ -192,8 +192,10 @@ class CourtKeypointDetector:
         # localization. When near corners have ~0.001 keypoint confidence,
         # the overall score must reflect that, otherwise consumers (e.g.
         # quality service auto-save at 0.7) silently store bad calibrations.
+        # VP-refined corners get partial credit since the extrapolation is
+        # geometrically grounded.
         confidence = self._penalize_confidence(
-            confidence, diagnostics.per_corner_confidence,
+            confidence, diagnostics.per_corner_confidence, vp_refined,
         )
 
         return CourtDetectionResult(
@@ -228,8 +230,8 @@ class CourtKeypointDetector:
 
         # Refine low-confidence near corners via perspective extrapolation
         per_corner_conf = dict(zip(CORNER_NAMES, result.kpt_confidences))
-        corners = self._refine_near_corners(result.corners, per_corner_conf)
-        confidence = self._penalize_confidence(result.confidence, per_corner_conf)
+        corners, vp_refined = self._refine_near_corners(result.corners, per_corner_conf)
+        confidence = self._penalize_confidence(result.confidence, per_corner_conf, vp_refined)
 
         return CourtDetectionResult(
             corners=corners,
@@ -357,7 +359,7 @@ class CourtKeypointDetector:
         corners: list[dict[str, float]],
         per_corner_confidence: dict[str, float],
         conf_threshold: float = 0.5,
-    ) -> list[dict[str, float]]:
+    ) -> tuple[list[dict[str, float]], set[str]]:
         """Replace low-confidence near corners with perspective-extrapolated positions.
 
         Uses the accurate far corners as anchors, derives the vanishing point from
@@ -373,17 +375,17 @@ class CourtKeypointDetector:
             conf_threshold: Below this, replace the near corner.
 
         Returns:
-            Refined corners (new list, original unchanged).
+            Tuple of (refined corners, set of refined corner names).
         """
         if len(corners) != 4:
-            return corners
+            return corners, set()
 
         nl_conf = per_corner_confidence.get("near-left", 1.0)
         nr_conf = per_corner_confidence.get("near-right", 1.0)
 
         # Skip if both near corners are confident
         if nl_conf >= conf_threshold and nr_conf >= conf_threshold:
-            return corners
+            return corners, set()
 
         # Extract corner positions as tuples
         near_left = (corners[0]["x"], corners[0]["y"])
@@ -396,7 +398,7 @@ class CourtKeypointDetector:
         vp = line_intersection(far_left, near_left, far_right, near_right)
         if vp is None:
             logger.debug("Sidelines are parallel — skipping near-corner refinement")
-            return corners
+            return corners, set()
 
         # Validate VP is above far baseline (perspective convergence upward)
         far_mid_y = (far_left[1] + far_right[1]) / 2.0
@@ -405,7 +407,7 @@ class CourtKeypointDetector:
                 "VP below far baseline (y=%.3f >= %.3f) — skipping refinement",
                 vp[1], far_mid_y,
             )
-            return corners
+            return corners, set()
 
         # Aspect ratio: court_length / court_width
         aspect_ratio = COURT_LENGTH / COURT_WIDTH  # 2.0
@@ -415,9 +417,10 @@ class CourtKeypointDetector:
             (far_right[0] - far_left[0]) ** 2 + (far_right[1] - far_left[1]) ** 2
         )
         if far_baseline_len < 0.01:
-            return corners
+            return corners, set()
 
         refined = list(corners)  # shallow copy of dicts
+        refined_names: set[str] = set()
 
         # Extrapolate low-confidence near-left
         if nl_conf < conf_threshold:
@@ -428,6 +431,7 @@ class CourtKeypointDetector:
                 t = -(far_baseline_len * aspect_ratio) / sl_len
                 nx, ny = far_left[0] + t * dx, far_left[1] + t * dy
                 refined[0] = {"x": round(nx, 6), "y": round(ny, 6)}
+                refined_names.add("near-left")
                 logger.info(
                     "Refined near-left: (%.3f, %.3f) → (%.3f, %.3f) [conf=%.3f]",
                     near_left[0], near_left[1], nx, ny, nl_conf,
@@ -442,6 +446,7 @@ class CourtKeypointDetector:
                 t = -(far_baseline_len * aspect_ratio) / sl_len
                 nx, ny = far_right[0] + t * dx, far_right[1] + t * dy
                 refined[1] = {"x": round(nx, 6), "y": round(ny, 6)}
+                refined_names.add("near-right")
                 logger.info(
                     "Refined near-right: (%.3f, %.3f) → (%.3f, %.3f) [conf=%.3f]",
                     near_right[0], near_right[1], nx, ny, nr_conf,
@@ -459,18 +464,24 @@ class CourtKeypointDetector:
         # Validate result is a convex quadrilateral; fall back if not
         if not self._is_convex_quad(refined):
             logger.warning("Refined corners not convex — falling back to original")
-            return corners
+            return corners, set()
 
-        return refined
+        return refined, refined_names
 
     # Minimum per-corner confidence to count as "reliable". Below this, the
     # corner position is essentially a guess (keypoint invisible or off-screen).
     _RELIABLE_CORNER_CONF = 0.5
 
+    # Partial credit for VP-refined corners in confidence penalty.
+    # VP extrapolation from high-confidence far corners + court aspect ratio
+    # is geometrically sound, so refined corners deserve partial trust.
+    _VP_REFINED_CREDIT = 0.80
+
     @staticmethod
     def _penalize_confidence(
         bbox_confidence: float,
         per_corner_confidence: dict[str, float],
+        vp_refined_corners: set[str] | None = None,
     ) -> float:
         """Reduce overall confidence when individual corners are unreliable.
 
@@ -478,17 +489,35 @@ class CourtKeypointDetector:
         accurately localized". A detection with 2/4 reliable corners should
         not get 0.91 confidence — that causes auto-save of bad calibrations.
 
-        Penalty: confidence * (reliable_count / 4). So 2 reliable corners
-        at 0.91 bbox → 0.91 * 0.5 = 0.455, which won't auto-save (< 0.7)
-        but will still be accepted for team classification (> 0.4).
+        VP-refined corners (where near corners were replaced by perspective
+        extrapolation from accurate far corners) get partial credit since
+        the extrapolation is geometrically grounded.
+
+        Penalty: confidence * (score / 4) where each corner contributes:
+        - 1.0 if keypoint confidence >= 0.5 (reliable)
+        - VP_REFINED_CREDIT (0.80) if VP-refined
+        - 0.0 otherwise
+
+        Examples:
+        - 4 reliable: 0.91 * 4/4 = 0.91 (no penalty)
+        - 2 reliable + 2 refined: 0.91 * (2 + 1.6)/4 = 0.91 * 0.90 = 0.82
+        - 2 reliable + 0 refined: 0.91 * 2/4 = 0.455 (blocks auto-save)
         """
         if not per_corner_confidence:
             return bbox_confidence
         threshold = CourtKeypointDetector._RELIABLE_CORNER_CONF
-        reliable = sum(
-            1 for c in per_corner_confidence.values() if c >= threshold
-        )
-        return bbox_confidence * (reliable / 4.0)
+        refined = vp_refined_corners or set()
+        credit = CourtKeypointDetector._VP_REFINED_CREDIT
+
+        score = 0.0
+        for name, conf in per_corner_confidence.items():
+            if conf >= threshold:
+                score += 1.0
+            elif name in refined:
+                score += credit
+            # else: 0.0
+
+        return bbox_confidence * (score / 4.0)
 
     @staticmethod
     def _is_convex_quad(corners: list[dict[str, float]]) -> bool:

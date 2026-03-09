@@ -135,7 +135,7 @@ export async function assessVideoQuality(
     if (quality.sceneComplexity.avgPeople > 8) {
       warnings.push('Crowded scene detected — spectators may interfere with tracking');
     }
-    if (quality.resolution.width < 1280) {
+    if (quality.resolution?.width < 1280) {
       warnings.push('Low video resolution — recording in 1080p or higher gives better results');
     }
     if (quality.sceneComplexity.avgPeople < 2) {
