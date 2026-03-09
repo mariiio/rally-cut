@@ -128,6 +128,14 @@ export const useAnalysisStore = create<AnalysisState>()(
         // Step 1: Quality check
         try {
           const qualityResult = await assessQuality(videoId);
+
+          // Hydrate court calibration if auto-saved during quality check.
+          // Use hydrateFromAutoSave to update the store without re-saving to API.
+          if (qualityResult.courtDetection.autoSaved && qualityResult.courtDetection.corners) {
+            const { usePlayerTrackingStore } = await import('@/stores/playerTrackingStore');
+            usePlayerTrackingStore.getState().hydrateFromAutoSave(videoId, qualityResult.courtDetection.corners);
+          }
+
           const hasWarnings = qualityResult.quality.warnings.length > 0;
 
           if (hasWarnings) {

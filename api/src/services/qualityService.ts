@@ -71,6 +71,7 @@ export interface AssessQualityResponse {
     detected: boolean;
     confidence: number;
     autoSaved: boolean;
+    corners?: Array<{ x: number; y: number }>;
   };
 }
 
@@ -228,6 +229,7 @@ export async function assessVideoQuality(
       detected: (court?.confidence ?? 0) > 0.7,
       confidence: court?.confidence ?? 0,
       autoSaved: courtAutoSaved,
+      corners: courtAutoSaved && court ? court.corners : undefined,
     },
   };
 }

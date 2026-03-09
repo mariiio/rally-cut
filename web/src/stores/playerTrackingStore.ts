@@ -95,6 +95,7 @@ interface PlayerTrackingState {
   clearLocalCalibration: (videoId: string) => void;
   getCalibration: (videoId: string) => CourtCalibration | null;
   hydrateCalibration: (videoId: string, corners: Corner[]) => void;
+  hydrateFromAutoSave: (videoId: string, corners: Corner[]) => void;
   trackPlayersForRally: (rallyId: string, videoId: string, fallbackFps?: number) => Promise<void>;
   loadPlayerTrack: (rallyId: string, fallbackFps?: number, forceRefresh?: boolean) => Promise<boolean>;
   swapTracks: (rallyId: string, trackA: number, trackB: number, fromFrame: number, fallbackFps?: number) => Promise<void>;
@@ -285,6 +286,20 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
       hydrateCalibration: (videoId: string, corners: Corner[]) => {
         // Only hydrate if not already in local store (local is authoritative cache)
         if (get().calibrations[videoId]) return;
+        set((state) => ({
+          calibrations: {
+            ...state.calibrations,
+            [videoId]: {
+              videoId,
+              corners,
+              savedAt: Date.now(),
+            },
+          },
+        }));
+      },
+
+      hydrateFromAutoSave: (videoId: string, corners: Corner[]) => {
+        // Always overwrite — auto-saved calibration from quality check
         set((state) => ({
           calibrations: {
             ...state.calibrations,
