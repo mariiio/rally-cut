@@ -24,6 +24,7 @@ import argparse
 import json
 import logging
 import random
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -198,7 +199,7 @@ def main() -> None:
         help="Output directory for dataset",
     )
     parser.add_argument(
-        "--frames-per-video", type=int, default=15,
+        "--frames-per-video", type=int, default=5,
         help="Number of frames to extract per video",
     )
     parser.add_argument(
@@ -220,6 +221,11 @@ def main() -> None:
     parser.add_argument(
         "--video-id", type=str,
         help="Export only a specific video",
+    )
+    parser.add_argument(
+        "--external-dir", type=Path, action="append", default=[],
+        help="Include external annotated images (from annotate_court_corners.py). "
+        "Can be specified multiple times. External images go into train split only.",
     )
     args = parser.parse_args()
 
@@ -320,6 +326,31 @@ def main() -> None:
             f"  [{vi+1}/{len(videos)}] {vid_id[:12]}  {split:5s}  "
             f"{exported} frames exported"
         )
+
+    # Merge external annotated images (train only)
+    external_count = 0
+    for ext_dir in args.external_dir:
+        ext_img_dir = ext_dir / "images" / "train"
+        ext_lbl_dir = ext_dir / "labels" / "train"
+        if not ext_img_dir.exists():
+            print(f"  External dir not found: {ext_img_dir}")
+            continue
+
+        for ext_img in sorted(ext_img_dir.glob("*.jpg")):
+            ext_lbl = ext_lbl_dir / f"{ext_img.stem}.txt"
+            if not ext_lbl.exists():
+                continue
+
+            # Copy to main dataset (train split)
+            dst_img = args.output_dir / "images" / "train" / ext_img.name
+            dst_lbl = args.output_dir / "labels" / "train" / ext_lbl.name
+
+            shutil.copy2(ext_img, dst_img)
+            shutil.copy2(ext_lbl, dst_lbl)
+            external_count += 1
+            total_frames += 1
+
+        print(f"  External: {ext_dir.name}  {external_count} images merged into train")
 
     # Write dataset YAML
     yaml_content = f"""# Court keypoint detection dataset
