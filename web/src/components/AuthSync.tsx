@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { useSession } from 'next-auth/react';
 import { useAuthStore } from '@/stores/authStore';
-import { refreshAuthToken, clearAuthToken } from '@/services/authToken';
+import { refreshAuthToken, clearAuthToken, signalAuthReady } from '@/services/authToken';
 import { API_BASE_URL, getHeaders, invalidateUserCache } from '@/services/api';
 
 /**
@@ -24,8 +24,9 @@ export function AuthSync() {
         name: session.user.name,
         image: session.user.image,
       });
-      // Fetch JWT for Express API calls
+      // Fetch JWT for Express API calls, then signal auth is ready
       refreshAuthToken().then(() => {
+        signalAuthReady();
         // After getting the JWT, try to link anonymous data
         if (!hasLinked.current) {
           hasLinked.current = true;
@@ -35,6 +36,7 @@ export function AuthSync() {
     } else if (status === 'unauthenticated') {
       clearUser();
       clearAuthToken();
+      signalAuthReady();
       hasLinked.current = false;
     }
   }, [session, status, setUser, clearUser]);
