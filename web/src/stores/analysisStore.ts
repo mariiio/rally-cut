@@ -56,6 +56,47 @@ interface AnalysisState {
   setShowPlayerNaming: (videoId: string | null) => void;
 }
 
+// ============================================================================
+// Shared types & helpers for pipeline step functions
+// ============================================================================
+
+type SetFn = (fn: (state: AnalysisState) => Partial<AnalysisState>) => void;
+type GetFn = () => AnalysisState;
+type PipelineUpdater = (patch: Partial<AnalysisPipeline>) => void;
+
+function makePipelineUpdater(videoId: string, set: SetFn): PipelineUpdater {
+  return (patch) =>
+    set((state) => ({
+      pipelines: {
+        ...state.pipelines,
+        [videoId]: { ...(state.pipelines[videoId] ?? DEFAULT_PIPELINE), ...patch },
+      },
+    }));
+}
+
+/**
+ * Advance the pipeline after detection is known to be complete.
+ * Fetches rally count and transitions to tracking or done.
+ * Returns true if advanced to tracking (caller should follow up with startTracking).
+ */
+async function advanceAfterDetection(
+  videoId: string,
+  updatePipeline: PipelineUpdater,
+): Promise<boolean> {
+  const status = await getAnalysisPipelineStatus(videoId);
+  const ralliesFound = status.detection.ralliesFound;
+  if (ralliesFound === 0) {
+    updatePipeline({ phase: 'done', progress: 100, stepMessage: 'No rallies found in this video', ralliesFound: 0 });
+    return false;
+  }
+  updatePipeline({ phase: 'tracking', progress: 45, stepMessage: `Found ${ralliesFound} rallies! Starting player tracking...`, ralliesFound });
+  return true;
+}
+
+// ============================================================================
+// Polling infrastructure
+// ============================================================================
+
 // Polling intervals stored outside React state.
 // On HMR re-evaluation, the previous module's timers become orphaned.
 // We store a reference on globalThis so we can clean up stale timers.
@@ -78,6 +119,7 @@ const completingLock = new Set<string>();
 const stalePollCounts = new Map<string, number>();
 const MAX_STALE_POLLS = 6; // 6 × 10s = 60s
 const STALE_TIMEOUT_MS = 30 * 60 * 1000; // 30 min absolute timeout
+const POLL_INTERVAL_MS = 10_000;
 
 function clearPollTimer(videoId: string) {
   if (pollTimers[videoId]) {
@@ -86,6 +128,32 @@ function clearPollTimer(videoId: string) {
   }
   stalePollCounts.delete(videoId);
 }
+
+/** Returns true (and errors the pipeline) if the pipeline started > 30 min ago. */
+function checkAbsoluteTimeout(videoId: string, pipeline: AnalysisPipeline, updatePipeline: PipelineUpdater, label: string): boolean {
+  if (pipeline.startedAt && Date.now() - pipeline.startedAt > STALE_TIMEOUT_MS) {
+    clearPollTimer(videoId);
+    updatePipeline({ phase: 'error', error: `${label} timed out. Please try again.`, stepMessage: `${label} timed out` });
+    return true;
+  }
+  return false;
+}
+
+/** Increment stale counter; error the pipeline if threshold reached. Returns true if errored. */
+function countStaleAndMaybeError(videoId: string, updatePipeline: PipelineUpdater, label: string): boolean {
+  const count = (stalePollCounts.get(videoId) ?? 0) + 1;
+  stalePollCounts.set(videoId, count);
+  if (count >= MAX_STALE_POLLS) {
+    clearPollTimer(videoId);
+    updatePipeline({ phase: 'error', error: `${label} does not appear to be running. Please try again.`, stepMessage: `${label} not found` });
+    return true;
+  }
+  return false;
+}
+
+// ============================================================================
+// Store
+// ============================================================================
 
 export const useAnalysisStore = create<AnalysisState>()(
   persist(
@@ -130,7 +198,6 @@ export const useAnalysisStore = create<AnalysisState>()(
           const qualityResult = await assessQuality(videoId);
 
           // Hydrate court calibration if auto-saved during quality check.
-          // Use hydrateFromAutoSave to update the store without re-saving to API.
           if (qualityResult.courtDetection.autoSaved && qualityResult.courtDetection.corners) {
             const { usePlayerTrackingStore } = await import('@/stores/playerTrackingStore');
             usePlayerTrackingStore.getState().hydrateFromAutoSave(videoId, qualityResult.courtDetection.corners);
@@ -203,8 +270,7 @@ export const useAnalysisStore = create<AnalysisState>()(
         if (!pipeline) return;
 
         // Capture generation marker — if startAnalysis resets the pipeline while
-        // we're awaiting an API call, startedAt will change and we must bail out
-        // to avoid overwriting the fresh pipeline run.
+        // we're awaiting an API call, startedAt will change and we must bail out.
         const generation = pipeline.startedAt;
 
         const isStale = () => {
@@ -212,79 +278,17 @@ export const useAnalysisStore = create<AnalysisState>()(
           return !current || current.startedAt !== generation;
         };
 
-        const updatePipeline = (patch: Partial<AnalysisPipeline>) => {
-          if (isStale()) return; // Pipeline was restarted — don't overwrite
-          set((state) => ({
-            pipelines: {
-              ...state.pipelines,
-              [videoId]: { ...(state.pipelines[videoId] ?? DEFAULT_PIPELINE), ...patch },
-            },
-          }));
+        const baseUpdate = makePipelineUpdater(videoId, set);
+        const updatePipeline: PipelineUpdater = (patch) => {
+          if (!isStale()) baseUpdate(patch);
         };
 
-        // Absolute staleness check: if pipeline started > 30 min ago, error out
-        if (pipeline.startedAt && Date.now() - pipeline.startedAt > STALE_TIMEOUT_MS) {
-          clearPollTimer(videoId);
-          updatePipeline({
-            phase: 'error',
-            error: 'Analysis timed out. Please try again.',
-            stepMessage: 'Analysis timed out',
-          });
-          return;
-        }
+        if (checkAbsoluteTimeout(videoId, pipeline, updatePipeline, 'Analysis')) return;
 
         if (pipeline.phase === 'detecting' && !pollTimers[videoId]) {
-          // Validate server state before blindly polling
-          try {
-            const status = await getDetectionStatus(videoId);
-            if (isStale()) return;
-            if (status.job?.status === 'COMPLETED') {
-              // Detection already finished — advance to tracking
-              const pipelineStatus = await getAnalysisPipelineStatus(videoId);
-              if (isStale()) return;
-              const ralliesFound = pipelineStatus.detection.ralliesFound;
-              if (ralliesFound === 0) {
-                updatePipeline({ phase: 'done', progress: 100, stepMessage: 'No rallies found in this video', ralliesFound: 0 });
-              } else {
-                updatePipeline({ phase: 'tracking', progress: 45, stepMessage: `Found ${ralliesFound} rallies! Starting player tracking...`, ralliesFound });
-                if (!isStale()) await startTracking(videoId, set, get);
-              }
-              return;
-            } else if (status.job?.status === 'FAILED') {
-              updatePipeline({ phase: 'error', error: status.job.errorMessage || 'Detection failed', stepMessage: 'Detection failed' });
-              return;
-            } else if (status.job?.status === 'RUNNING') {
-              // Legitimate in-progress job — resume polling
-              if (!isStale()) pollDetection(videoId, set, get);
-            } else {
-              // No job or unrecognized status — detection is not running
-              stalePollCounts.delete(videoId);
-              updatePipeline({ phase: 'error', error: 'Detection is no longer running. Please try again.', stepMessage: 'Detection not found' });
-            }
-          } catch {
-            // API call failed — start polling, stale counter will catch permanent failures
-            if (!isStale()) pollDetection(videoId, set, get);
-          }
+          await resumeDetecting(videoId, set, get, updatePipeline, isStale);
         } else if (pipeline.phase === 'tracking' && !pollTimers[videoId]) {
-          try {
-            const status = await getBatchTrackingStatus(videoId);
-            if (isStale()) return;
-            if (status.status === 'completed') {
-              updatePipeline({ phase: 'completing', progress: 90, stepMessage: 'Generating match stats...' });
-              if (!isStale()) await completeAnalysis(videoId, set, get);
-              return;
-            } else if (status.status === 'failed') {
-              updatePipeline({ phase: 'error', error: status.error || 'Tracking failed', stepMessage: 'Tracking failed' });
-              return;
-            } else if (status.status === 'processing' || status.status === 'pending') {
-              if (!isStale()) pollTracking(videoId, set, get);
-            } else {
-              stalePollCounts.delete(videoId);
-              updatePipeline({ phase: 'error', error: 'Tracking is no longer running. Please try again.', stepMessage: 'Tracking not found' });
-            }
-          } catch {
-            if (!isStale()) pollTracking(videoId, set, get);
-          }
+          await resumeTracking(videoId, set, get, updatePipeline, isStale);
         } else if (pipeline.phase === 'completing') {
           if (!isStale()) await completeAnalysis(videoId, set, get);
         }
@@ -321,43 +325,31 @@ export const useAnalysisStore = create<AnalysisState>()(
 // Pipeline step helpers (not part of store, but operate on it)
 // ============================================================================
 
-async function startDetection(
-  videoId: string,
-  set: (fn: (state: AnalysisState) => Partial<AnalysisState>) => void,
-  get: () => AnalysisState,
-) {
-  const updatePipeline = (patch: Partial<AnalysisPipeline>) => {
-    set((state) => ({
-      pipelines: {
-        ...state.pipelines,
-        [videoId]: { ...(state.pipelines[videoId] ?? DEFAULT_PIPELINE), ...patch },
-      },
-    }));
-  };
+async function startDetection(videoId: string, set: SetFn, get: GetFn) {
+  const updatePipeline = makePipelineUpdater(videoId, set);
 
   try {
     // First check if detection is already complete
     const pipelineStatus = await getAnalysisPipelineStatus(videoId);
     if (pipelineStatus.detection.status === 'completed' && pipelineStatus.detection.ralliesFound > 0) {
-      // Skip detection — already done
-      updatePipeline({
-        phase: 'tracking',
-        progress: 45,
-        stepMessage: `Found ${pipelineStatus.detection.ralliesFound} rallies! Starting player tracking...`,
-        ralliesFound: pipelineStatus.detection.ralliesFound,
-      });
-      await startTracking(videoId, set, get);
+      if (await advanceAfterDetection(videoId, updatePipeline)) {
+        await startTracking(videoId, set, get);
+      }
       return;
     }
 
     // Trigger detection
-    await triggerRallyDetection(videoId, 'beach');
-    updatePipeline({
-      progress: 10,
-      stepMessage: 'Analyzing video for rallies...',
-    });
+    const triggerResult = await triggerRallyDetection(videoId, 'beach');
 
-    // Start polling
+    // If detection was resolved instantly (e.g. content-hash cache hit), skip polling
+    if (triggerResult.status === 'completed') {
+      if (await advanceAfterDetection(videoId, updatePipeline)) {
+        await startTracking(videoId, set, get);
+      }
+      return;
+    }
+
+    updatePipeline({ progress: 10, stepMessage: 'Analyzing video for rallies...' });
     pollDetection(videoId, set, get);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Detection failed';
@@ -366,29 +358,13 @@ async function startDetection(
       pollDetection(videoId, set, get);
       return;
     }
-    updatePipeline({
-      phase: 'error',
-      error: message,
-      stepMessage: 'Detection failed',
-    });
+    updatePipeline({ phase: 'error', error: message, stepMessage: 'Detection failed' });
   }
 }
 
-function pollDetection(
-  videoId: string,
-  set: (fn: (state: AnalysisState) => Partial<AnalysisState>) => void,
-  get: () => AnalysisState,
-) {
+function pollDetection(videoId: string, set: SetFn, get: GetFn) {
   clearPollTimer(videoId);
-
-  const updatePipeline = (patch: Partial<AnalysisPipeline>) => {
-    set((state) => ({
-      pipelines: {
-        ...state.pipelines,
-        [videoId]: { ...(state.pipelines[videoId] ?? DEFAULT_PIPELINE), ...patch },
-      },
-    }));
-  };
+  const updatePipeline = makePipelineUpdater(videoId, set);
 
   pollTimers[videoId] = setInterval(async () => {
     try {
@@ -398,104 +374,47 @@ function pollDetection(
         return;
       }
 
-      // Absolute timeout: if pipeline started > 30 min ago, give up
-      if (pipeline.startedAt && Date.now() - pipeline.startedAt > STALE_TIMEOUT_MS) {
-        clearPollTimer(videoId);
-        updatePipeline({
-          phase: 'error',
-          error: 'Detection timed out. Please try again.',
-          stepMessage: 'Detection timed out',
-        });
-        return;
-      }
+      if (checkAbsoluteTimeout(videoId, pipeline, updatePipeline, 'Detection')) return;
 
       const status = await getDetectionStatus(videoId);
 
-      if (status.job?.status === 'COMPLETED') {
+      if (status.job?.status === 'COMPLETED' || (!status.job && status.status === 'DETECTED')) {
+        // Detection done — either job completed or resolved via content-hash cache
         clearPollTimer(videoId);
-
-        // Fetch rallies found count
-        const pipelineStatus = await getAnalysisPipelineStatus(videoId);
-        const ralliesFound = pipelineStatus.detection.ralliesFound;
-
-        if (ralliesFound === 0) {
-          updatePipeline({
-            phase: 'done',
-            progress: 100,
-            stepMessage: 'No rallies found in this video',
-            ralliesFound: 0,
-          });
-          return;
+        if (await advanceAfterDetection(videoId, updatePipeline)) {
+          await startTracking(videoId, set, get);
         }
-
-        updatePipeline({
-          phase: 'tracking',
-          progress: 45,
-          stepMessage: `Found ${ralliesFound} rallies! Starting player tracking...`,
-          ralliesFound,
-        });
-
-        await startTracking(videoId, set, get);
       } else if (status.job?.status === 'FAILED') {
         clearPollTimer(videoId);
-        updatePipeline({
-          phase: 'error',
-          error: status.job.errorMessage || 'Detection failed',
-          stepMessage: 'Detection failed',
-        });
-      } else if (status.job?.status === 'RUNNING') {
+        updatePipeline({ phase: 'error', error: status.job.errorMessage || 'Detection failed', stepMessage: 'Detection failed' });
+      } else if (status.job?.status === 'RUNNING' || status.job?.status === 'PENDING') {
         stalePollCounts.delete(videoId);
-        // Map detection progress (0-100) to pipeline progress (10-45)
         const detProgress = status.job.progress ?? 0;
         const progress = 10 + (detProgress / 100) * 35;
-        updatePipeline({
-          progress,
-          stepMessage: status.job.progressMessage || 'Analyzing video for rallies...',
-        });
+        const fallbackMessage = status.job.status === 'PENDING' ? 'Waiting for detection to start...' : 'Analyzing video for rallies...';
+        updatePipeline({ progress, stepMessage: status.job.progressMessage || fallbackMessage });
       } else {
-        // Unrecognized status (e.g. UPLOADED with no job) — count as stale
-        const count = (stalePollCounts.get(videoId) ?? 0) + 1;
-        stalePollCounts.set(videoId, count);
-        if (count >= MAX_STALE_POLLS) {
-          clearPollTimer(videoId);
-          updatePipeline({
-            phase: 'error',
-            error: 'Detection does not appear to be running. Please try again.',
-            stepMessage: 'Detection not found',
-          });
-        }
+        countStaleAndMaybeError(videoId, updatePipeline, 'Detection');
       }
     } catch {
       // Ignore poll errors, retry on next interval
     }
-  }, 10000);
+  }, POLL_INTERVAL_MS);
 }
 
-async function startTracking(
-  videoId: string,
-  set: (fn: (state: AnalysisState) => Partial<AnalysisState>) => void,
-  get: () => AnalysisState,
-) {
-  const updatePipeline = (patch: Partial<AnalysisPipeline>) => {
-    set((state) => ({
-      pipelines: {
-        ...state.pipelines,
-        [videoId]: { ...(state.pipelines[videoId] ?? DEFAULT_PIPELINE), ...patch },
-      },
-    }));
-  };
+async function startTracking(videoId: string, set: SetFn, get: GetFn) {
+  const updatePipeline = makePipelineUpdater(videoId, set);
 
   try {
     // Check if tracking is currently in progress (e.g. resumed after navigation)
     const status = await getBatchTrackingStatus(videoId);
 
     if (status.status === 'processing' || status.status === 'pending') {
-      // Already running — just poll for progress
       pollTracking(videoId, set, get);
       return;
     }
 
-    // Start a new batch tracking job (covers both first-run and re-analyze)
+    // Start a new batch tracking job
     const result = await trackAllRallies(videoId);
     updatePipeline({
       progress: 48,
@@ -506,29 +425,13 @@ async function startTracking(
     pollTracking(videoId, set, get);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Tracking failed';
-    updatePipeline({
-      phase: 'error',
-      error: message,
-      stepMessage: 'Tracking failed',
-    });
+    updatePipeline({ phase: 'error', error: message, stepMessage: 'Tracking failed' });
   }
 }
 
-function pollTracking(
-  videoId: string,
-  set: (fn: (state: AnalysisState) => Partial<AnalysisState>) => void,
-  get: () => AnalysisState,
-) {
+function pollTracking(videoId: string, set: SetFn, get: GetFn) {
   clearPollTimer(videoId);
-
-  const updatePipeline = (patch: Partial<AnalysisPipeline>) => {
-    set((state) => ({
-      pipelines: {
-        ...state.pipelines,
-        [videoId]: { ...(state.pipelines[videoId] ?? DEFAULT_PIPELINE), ...patch },
-      },
-    }));
-  };
+  const updatePipeline = makePipelineUpdater(videoId, set);
 
   pollTimers[videoId] = setInterval(async () => {
     try {
@@ -538,45 +441,26 @@ function pollTracking(
         return;
       }
 
-      // Absolute timeout: if pipeline started > 30 min ago, give up
-      if (pipeline.startedAt && Date.now() - pipeline.startedAt > STALE_TIMEOUT_MS) {
-        clearPollTimer(videoId);
-        updatePipeline({
-          phase: 'error',
-          error: 'Tracking timed out. Please try again.',
-          stepMessage: 'Tracking timed out',
-        });
-        return;
-      }
+      if (checkAbsoluteTimeout(videoId, pipeline, updatePipeline, 'Tracking')) return;
 
       const status = await getBatchTrackingStatus(videoId);
 
       if (status.status === 'completed') {
         clearPollTimer(videoId);
-
         updatePipeline({
           phase: 'completing',
           progress: 90,
           stepMessage: 'Generating match stats...',
-          trackingProgress: {
-            completed: status.completedRallies ?? 0,
-            total: status.totalRallies ?? 0,
-          },
+          trackingProgress: { completed: status.completedRallies ?? 0, total: status.totalRallies ?? 0 },
         });
-
         await completeAnalysis(videoId, set, get);
       } else if (status.status === 'failed') {
         clearPollTimer(videoId);
-        updatePipeline({
-          phase: 'error',
-          error: status.error || 'Tracking failed',
-          stepMessage: 'Tracking failed',
-        });
+        updatePipeline({ phase: 'error', error: status.error || 'Tracking failed', stepMessage: 'Tracking failed' });
       } else if (status.status === 'processing' || status.status === 'pending') {
         stalePollCounts.delete(videoId);
         const completed = status.completedRallies ?? 0;
         const total = status.totalRallies ?? 1;
-        // Map tracking progress (0-total) to pipeline progress (50-90)
         const progress = 50 + (completed / total) * 40;
         updatePipeline({
           progress,
@@ -584,49 +468,28 @@ function pollTracking(
           trackingProgress: { completed, total },
         });
       } else {
-        // Unrecognized status — count as stale
-        const count = (stalePollCounts.get(videoId) ?? 0) + 1;
-        stalePollCounts.set(videoId, count);
-        if (count >= MAX_STALE_POLLS) {
-          clearPollTimer(videoId);
-          updatePipeline({
-            phase: 'error',
-            error: 'Tracking does not appear to be running. Please try again.',
-            stepMessage: 'Tracking not found',
-          });
-        }
+        countStaleAndMaybeError(videoId, updatePipeline, 'Tracking');
       }
     } catch {
       // Ignore poll errors
     }
-  }, 10000);
+  }, POLL_INTERVAL_MS);
 }
 
-async function completeAnalysis(
-  videoId: string,
-  set: (fn: (state: AnalysisState) => Partial<AnalysisState>) => void,
-  get: () => AnalysisState,
-) {
+async function completeAnalysis(videoId: string, set: SetFn, get: GetFn) {
   // Prevent concurrent calls (resumeIfNeeded + pollTracking can race)
   if (completingLock.has(videoId)) return;
   completingLock.add(videoId);
 
   // Capture generation to detect pipeline restarts during async work
   const generation = get().pipelines[videoId]?.startedAt;
-
   const isStale = () => {
     const current = get().pipelines[videoId];
     return !current || current.startedAt !== generation;
   };
-
-  const updatePipeline = (patch: Partial<AnalysisPipeline>) => {
-    if (isStale()) return;
-    set((state) => ({
-      pipelines: {
-        ...state.pipelines,
-        [videoId]: { ...(state.pipelines[videoId] ?? DEFAULT_PIPELINE), ...patch },
-      },
-    }));
+  const baseUpdate = makePipelineUpdater(videoId, set);
+  const updatePipeline: PipelineUpdater = (patch) => {
+    if (!isStale()) baseUpdate(patch);
   };
 
   try {
@@ -655,12 +518,66 @@ async function completeAnalysis(
     }
   } catch {
     // Stats failed but tracking is done — still mark as done
-    updatePipeline({
-      phase: 'done',
-      progress: 100,
-      stepMessage: 'Analysis complete!',
-    });
+    updatePipeline({ phase: 'done', progress: 100, stepMessage: 'Analysis complete!' });
   } finally {
     completingLock.delete(videoId);
+  }
+}
+
+// ============================================================================
+// resumeIfNeeded sub-handlers (keep the main action readable)
+// ============================================================================
+
+async function resumeDetecting(
+  videoId: string,
+  set: SetFn,
+  get: GetFn,
+  updatePipeline: PipelineUpdater,
+  isStale: () => boolean,
+) {
+  try {
+    const status = await getDetectionStatus(videoId);
+    if (isStale()) return;
+
+    if (status.job?.status === 'COMPLETED' || (!status.job && status.status === 'DETECTED')) {
+      if (await advanceAfterDetection(videoId, updatePipeline)) {
+        if (!isStale()) await startTracking(videoId, set, get);
+      }
+    } else if (status.job?.status === 'FAILED') {
+      updatePipeline({ phase: 'error', error: status.job.errorMessage || 'Detection failed', stepMessage: 'Detection failed' });
+    } else if (status.job?.status === 'RUNNING' || status.job?.status === 'PENDING') {
+      if (!isStale()) pollDetection(videoId, set, get);
+    } else {
+      updatePipeline({ phase: 'error', error: 'Detection is no longer running. Please try again.', stepMessage: 'Detection not found' });
+    }
+  } catch {
+    // API call failed — start polling, stale counter will catch permanent failures
+    if (!isStale()) pollDetection(videoId, set, get);
+  }
+}
+
+async function resumeTracking(
+  videoId: string,
+  set: SetFn,
+  get: GetFn,
+  updatePipeline: PipelineUpdater,
+  isStale: () => boolean,
+) {
+  try {
+    const status = await getBatchTrackingStatus(videoId);
+    if (isStale()) return;
+
+    if (status.status === 'completed') {
+      updatePipeline({ phase: 'completing', progress: 90, stepMessage: 'Generating match stats...' });
+      if (!isStale()) await completeAnalysis(videoId, set, get);
+    } else if (status.status === 'failed') {
+      updatePipeline({ phase: 'error', error: status.error || 'Tracking failed', stepMessage: 'Tracking failed' });
+    } else if (status.status === 'processing' || status.status === 'pending') {
+      if (!isStale()) pollTracking(videoId, set, get);
+    } else {
+      updatePipeline({ phase: 'error', error: 'Tracking is no longer running. Please try again.', stepMessage: 'Tracking not found' });
+    }
+  } catch {
+    if (!isStale()) pollTracking(videoId, set, get);
   }
 }
