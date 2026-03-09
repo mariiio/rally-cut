@@ -400,7 +400,7 @@ class TestRefineNearCorners:
             "far-left": 0.998,
         }
 
-        refined = detector._refine_near_corners(corners, conf)
+        refined, refined_names = detector._refine_near_corners(corners, conf)
 
         # Near corners should move outward (wider X) and downward (larger Y)
         assert refined[0]["x"] < corners[0]["x"], "near-left should move left"
@@ -410,6 +410,8 @@ class TestRefineNearCorners:
         # Far corners unchanged
         assert refined[2] == corners[2]
         assert refined[3] == corners[3]
+        # Both near corners should be marked as refined
+        assert refined_names == {"near-left", "near-right"}
 
     def test_no_refinement_when_confident(self) -> None:
         """All corners high confidence — no changes."""
@@ -428,8 +430,9 @@ class TestRefineNearCorners:
             "far-left": 0.98,
         }
 
-        refined = detector._refine_near_corners(corners, conf)
+        refined, refined_names = detector._refine_near_corners(corners, conf)
         assert refined == corners
+        assert refined_names == set()
 
     def test_asymmetric_refinement(self) -> None:
         """One near corner good, one bad — only fix the bad one."""
@@ -448,13 +451,15 @@ class TestRefineNearCorners:
             "far-left": 0.998,
         }
 
-        refined = detector._refine_near_corners(corners, conf)
+        refined, refined_names = detector._refine_near_corners(corners, conf)
 
         # near-left unchanged (high confidence)
         assert refined[0] == corners[0]
         # near-right should be refined (moved outward/downward)
         assert refined[1] != corners[1]
         assert refined[1]["x"] > corners[1]["x"], "near-right should move right"
+        # Only near-right was refined
+        assert refined_names == {"near-right"}
 
     def test_vp_below_far_baseline_skips(self) -> None:
         """VP below far baseline means invalid geometry — skip refinement."""
@@ -474,9 +479,10 @@ class TestRefineNearCorners:
             "far-left": 0.99,
         }
 
-        refined = detector._refine_near_corners(corners, conf)
+        refined, refined_names = detector._refine_near_corners(corners, conf)
         # Should fall back to original (VP is below far baseline or parallel)
         assert refined == corners
+        assert refined_names == set()
 
     def test_offscreen_near_corners_clamped(self) -> None:
         """Refined near corners are clamped to max margin beyond frame."""
@@ -498,10 +504,11 @@ class TestRefineNearCorners:
             "far-left": 0.999,
         }
 
-        refined = detector._refine_near_corners(corners, conf)
+        refined, refined_names = detector._refine_near_corners(corners, conf)
 
         # Near corners should be clamped within [-margin, 1+margin]
         assert refined[0]["x"] >= -margin, f"near-left x={refined[0]['x']}"
         assert refined[0]["y"] <= 1.0 + margin, f"near-left y={refined[0]['y']}"
         assert refined[1]["x"] <= 1.0 + margin, f"near-right x={refined[1]['x']}"
         assert refined[1]["y"] <= 1.0 + margin, f"near-right y={refined[1]['y']}"
+        assert refined_names == {"near-left", "near-right"}
