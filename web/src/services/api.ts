@@ -3,7 +3,7 @@
  */
 
 import { getVisitorId } from '@/utils/visitorId';
-import { getAuthToken } from '@/services/authToken';
+import { getAuthToken, waitForAuthReady } from '@/services/authToken';
 import type { RallyCameraEdit } from '@/types/camera';
 import { createRallyId } from '@/utils/rallyId';
 import { mapApiKeyframes } from '@/utils/cameraKeyframe';
@@ -357,6 +357,11 @@ export interface FetchSessionResult {
 
 // API client functions
 export async function fetchSession(sessionId: string): Promise<FetchSessionResult> {
+  // Wait for auth initialization to avoid race condition where the request
+  // fires before the JWT is available, causing the backend to resolve a
+  // different (anonymous) user and return ACCESS_DENIED for the owner.
+  await waitForAuthReady();
+
   const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}`, {
     headers: getHeaders(),
     credentials: 'include', // Include cookies for CloudFront signed cookies
@@ -731,6 +736,8 @@ export interface FetchVideoEditorResult {
  * Transforms API response to frontend format with a single Match.
  */
 export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEditorResult> {
+  await waitForAuthReady();
+
   const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/editor`, {
     headers: getHeaders(),
     credentials: 'include',
