@@ -92,13 +92,28 @@ export async function assessVideoQuality(
     throw new NotFoundError('Video', videoId);
   }
 
-  // Download video to local temp file for CLI analysis
+  // Download video to local temp file for CLI analysis.
+  // Quality assessment uses proxy (720p is fine for resolution/scene checks).
+  // Court detection uses original — proxy resolution loses keypoint detail,
+  // dropping confidence below the auto-save threshold.
   await fs.mkdir(TEMP_DIR, { recursive: true });
   const suffix = `_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const videoPath = path.join(TEMP_DIR, `quality_${videoId}${suffix}${path.extname(video.filename || '.mp4')}`);
+  const ext = path.extname(video.filename || '.mp4');
+  const qualityVideoPath = path.join(TEMP_DIR, `quality_${videoId}${suffix}${ext}`);
+
+  const proxyKey = video.proxyS3Key ?? video.s3Key;
+  const originalKey = video.s3Key;
+  const needsSeparateOriginal = originalKey && originalKey !== proxyKey;
+  const courtVideoPath = needsSeparateOriginal
+    ? path.join(TEMP_DIR, `court_${videoId}${suffix}${ext}`)
+    : qualityVideoPath;
 
   try {
-    await downloadFromS3(video.proxyS3Key ?? video.s3Key, videoPath);
+    const downloads = [downloadFromS3(proxyKey, qualityVideoPath)];
+    if (needsSeparateOriginal) {
+      downloads.push(downloadFromS3(originalKey, courtVideoPath));
+    }
+    await Promise.all(downloads);
   } catch (downloadErr) {
     throw new Error(`Failed to download video for quality check: ${downloadErr}`);
   }
@@ -109,12 +124,15 @@ export async function assessVideoQuality(
 
   try {
     [qualityResult, courtResult] = await Promise.allSettled([
-      runQualityAssessmentCli(videoPath),
-      runCourtDetectionCli(videoPath),
+      runQualityAssessmentCli(qualityVideoPath),
+      runCourtDetectionCli(courtVideoPath),
     ]);
   } finally {
-    // Cleanup temp file
-    await fs.unlink(videoPath).catch(() => {});
+    // Cleanup temp files
+    await fs.unlink(qualityVideoPath).catch(() => {});
+    if (needsSeparateOriginal) {
+      await fs.unlink(courtVideoPath).catch(() => {});
+    }
   }
 
   const quality = qualityResult.status === 'fulfilled' ? qualityResult.value : null;
