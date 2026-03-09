@@ -24,6 +24,33 @@ import {
 import { triggerModalBatchTracking } from './modalTrackingService.js';
 import { runMatchAnalysis } from './matchAnalysisService.js';
 
+// A PROCESSING job older than this is considered stale (interrupted/crashed)
+const STALE_JOB_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+
+/**
+ * Mark stale PROCESSING/PENDING jobs as FAILED.
+ * A job is stale if it's been in PROCESSING/PENDING longer than STALE_JOB_TIMEOUT_MS.
+ * This handles cases where the server crashed or was restarted mid-tracking.
+ */
+async function expireStaleJobs(videoId: string): Promise<void> {
+  const cutoff = new Date(Date.now() - STALE_JOB_TIMEOUT_MS);
+  const { count } = await prisma.batchTrackingJob.updateMany({
+    where: {
+      videoId,
+      status: { in: ['PENDING', 'PROCESSING'] },
+      createdAt: { lt: cutoff },
+    },
+    data: {
+      status: 'FAILED',
+      completedAt: new Date(),
+      error: 'Timed out — job was interrupted or never completed',
+    },
+  });
+  if (count > 0) {
+    console.log(`[BATCH_TRACK] Expired ${count} stale job(s) for video ${videoId}`);
+  }
+}
+
 /**
  * Start batch tracking for all rallies in a video.
  * Returns immediately with job ID (fire-and-forget).
@@ -61,6 +88,9 @@ export async function trackAllRallies(
   if (!videoKey) {
     throw new ValidationError('Video has no accessible source');
   }
+
+  // Expire any stale jobs before checking for in-progress ones
+  await expireStaleJobs(videoId);
 
   // Check for existing in-progress batch job (atomic check-and-create)
   const job = await prisma.$transaction(async (tx) => {
@@ -288,6 +318,9 @@ export async function getBatchTrackingStatus(
   if (video.userId !== userId) {
     throw new ForbiddenError('You do not have permission to view batch tracking status for this video');
   }
+
+  // Expire stale jobs before reporting status
+  await expireStaleJobs(videoId);
 
   // Get the most recent batch job
   const job = await prisma.batchTrackingJob.findFirst({
