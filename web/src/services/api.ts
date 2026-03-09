@@ -2310,6 +2310,7 @@ export interface QualityAssessmentResult {
     detected: boolean;
     confidence: number;
     autoSaved: boolean;
+    corners?: Array<{ x: number; y: number }>;
   };
 }
 
