@@ -269,11 +269,27 @@ export async function getAnalysisPipelineStatus(
         ? 'idle'
         : video.status;
 
-  // Batch tracking status
-  const batchJob = await prisma.batchTrackingJob.findFirst({
+  // Batch tracking status (treat stale PROCESSING jobs as failed)
+  const STALE_JOB_TIMEOUT_MS = 30 * 60 * 1000;
+  let batchJob = await prisma.batchTrackingJob.findFirst({
     where: { videoId },
     orderBy: { createdAt: 'desc' },
   });
+  if (
+    batchJob &&
+    (batchJob.status === 'PROCESSING' || batchJob.status === 'PENDING') &&
+    Date.now() - batchJob.createdAt.getTime() > STALE_JOB_TIMEOUT_MS
+  ) {
+    // Auto-expire stale job
+    batchJob = await prisma.batchTrackingJob.update({
+      where: { id: batchJob.id },
+      data: {
+        status: 'FAILED',
+        completedAt: new Date(),
+        error: 'Timed out — job was interrupted or never completed',
+      },
+    });
+  }
 
   const trackedRallies = await prisma.rally.count({
     where: {
