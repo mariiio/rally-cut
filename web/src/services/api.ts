@@ -1112,6 +1112,8 @@ export async function getCurrentUser(): Promise<UserResponse> {
     return cachedUser;
   }
 
+  await waitForAuthReady();
+
   const response = await fetch(`${API_BASE_URL}/v1/me`, {
     headers: getHeaders(),
   });
