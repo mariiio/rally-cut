@@ -1059,20 +1059,24 @@ class MatchPlayerTracker:
                 ):
                     appearance_candidates.append(k)
 
-        # Merge and deduplicate
+        # Merge and deduplicate.
         candidates = sorted(set(ball_candidates) | set(appearance_candidates))
 
         if not candidates:
             logger.info("Side switch search: no candidates")
             return []
 
-        # Cap at 6 candidates (2^6 = 64 combinations max)
-        if len(candidates) > 6:
+        # Phase A cap: keep ≤8 candidates (2^8 = 256 combos).
+        # Phase B (after scoring) refines each switch ±1 for exact boundary.
+        if len(candidates) > 8:
             logger.info(
-                "Side switch search: %d candidates, capping at 6",
+                "Side switch search: %d candidates, capping at 8",
                 len(candidates),
             )
-            candidates = candidates[:6]
+            # Evenly-spaced selection to preserve coverage across the video
+            step = (len(candidates) - 1) / 7
+            indices = sorted({round(i * step) for i in range(8)})
+            candidates = [candidates[i] for i in indices]
 
         logger.info(
             "Side switch search: %d candidates at %s (ball=%s, appearance=%s)",
@@ -1114,6 +1118,18 @@ class MatchPlayerTracker:
         best_switches: list[int] = []
         n_combos = 1 << len(candidates)
 
+        # Build set of rally indices where serve direction actually changes
+        # (e.g., far→near). Used for tie-breaking: prefer switch points that
+        # align with observed direction changes.
+        direction_changes: set[int] = set()
+        for i in range(1, n):
+            if (
+                serve_dirs[i] != "?"
+                and serve_dirs[i - 1] != "?"
+                and serve_dirs[i] != serve_dirs[i - 1]
+            ):
+                direction_changes.add(i)
+
         for mask in range(1, n_combos):
             switch_set = {
                 candidates[j]
@@ -1121,11 +1137,80 @@ class MatchPlayerTracker:
                 if mask & (1 << j)
             }
             score = score_partition(switch_set)
-            if score > best_score:
+            if score > best_score or (
+                score == best_score
+                and len(switch_set & direction_changes)
+                > len(set(best_switches) & direction_changes)
+            ):
                 best_score = score
                 best_switches = sorted(switch_set)
 
         if best_switches:
+            improvement = best_score - baseline_score
+
+            # Post-validation: drop switches whose marginal contribution
+            # is too small. A FP switch can piggyback on a real TP switch
+            # that dominates the total score.
+            if len(best_switches) > 1:
+                validated: list[int] = []
+                for sw in best_switches:
+                    without = set(best_switches) - {sw}
+                    marginal = best_score - score_partition(without)
+                    if marginal > 0:
+                        validated.append(sw)
+                        logger.info(
+                            "  Switch %d: marginal=+%.3f (kept)", sw, marginal,
+                        )
+                    else:
+                        logger.info(
+                            "  Switch %d: marginal=%.3f (dropped)", sw, marginal,
+                        )
+                if len(validated) < len(best_switches):
+                    logger.info(
+                        "Side switch validation: %d→%d switches",
+                        len(best_switches), len(validated),
+                    )
+                    best_switches = validated
+                    # Recalculate score with validated set
+                    if best_switches:
+                        best_score = score_partition(set(best_switches))
+                    else:
+                        best_score = baseline_score
+
+            # Phase B: Refine each switch boundary ±1.
+            # Ball direction can trigger at rally k when the actual switch
+            # is at k±1. Try shifting each switch individually and keep
+            # the shift if it improves the score.
+            refined = list(best_switches)
+            for idx, sw in enumerate(refined):
+                best_local = sw
+                best_local_score = best_score
+                for delta in [-1, 1]:
+                    alt = sw + delta
+                    if alt < 1 or alt >= n:
+                        continue
+                    if alt in set(refined) - {sw}:
+                        continue  # Would duplicate another switch
+                    trial = set(refined)
+                    trial.discard(sw)
+                    trial.add(alt)
+                    trial_score = score_partition(trial)
+                    if trial_score > best_local_score or (
+                        trial_score == best_local_score
+                        and alt in direction_changes
+                        and sw not in direction_changes
+                    ):
+                        best_local = alt
+                        best_local_score = trial_score
+                if best_local != sw:
+                    logger.info(
+                        "  Refined switch %d → %d (+%.3f)",
+                        sw, best_local, best_local_score - best_score,
+                    )
+                    refined[idx] = best_local
+                    best_score = best_local_score
+            best_switches = sorted(refined)
+
             improvement = best_score - baseline_score
             logger.info(
                 "Side switch search: switches at %s "
