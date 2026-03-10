@@ -21,7 +21,7 @@ import numpy as np
 
 from rallycut.court.calibration import COURT_LENGTH, COURT_WIDTH
 from rallycut.court.detector import CourtDetectionResult
-from rallycut.court.line_geometry import line_intersection, point_line_distance
+from rallycut.court.line_geometry import harmonic_conjugate, line_intersection, point_line_distance
 
 logger = logging.getLogger(__name__)
 
@@ -404,39 +404,33 @@ class CourtKeypointDetector:
                 return result
 
         # Strategy 2: Fallback — VP from model's near-corner guesses
-        return self._refine_via_vp_fallback(corners, per_corner_confidence, conf_threshold)
+        return self._refine_via_vp_fallback(
+            corners, per_corner_confidence, conf_threshold, frame=frame,
+        )
 
-    def _refine_via_sideline_detection(
+    def _detect_sideline_vp(
         self,
         corners: list[dict[str, float]],
-        per_corner_confidence: dict[str, float],
-        conf_threshold: float,
         frame: np.ndarray,
-    ) -> tuple[list[dict[str, float]], set[str]] | None:
-        """Detect sidelines in the frame using Hough lines, compute VP from them.
+    ) -> tuple[float, float] | None:
+        """Detect sideline vanishing point from Hough lines in the frame.
 
-        The sidelines are typically the most visible court lines. By detecting
-        them directly from the image, we get a much better VP than using the
-        model's low-confidence near-corner guesses.
+        Looks for diagonal lines passing near the far corners, representing
+        the left and right sidelines. Returns their intersection (VP).
         """
         h, w = frame.shape[:2]
         far_left = (corners[3]["x"], corners[3]["y"])
         far_right = (corners[2]["x"], corners[2]["y"])
 
-        # Convert far corners to pixel coords
         fl_px = (int(far_left[0] * w), int(far_left[1] * h))
         fr_px = (int(far_right[0] * w), int(far_right[1] * h))
 
-        # Only look in the lower portion of the frame (below far baseline)
-        # where sidelines would be visible
         far_y_px = max(fl_px[1], fr_px[1])
-        roi_top = max(0, far_y_px - int(0.05 * h))  # slightly above far baseline
+        roi_top = max(0, far_y_px - int(0.05 * h))
 
-        # Edge detection on the ROI
         gray = cv2.cvtColor(frame[roi_top:], cv2.COLOR_BGR2GRAY)
         edges = cv2.Canny(gray, 50, 150, apertureSize=3)
 
-        # Hough line detection
         lines = cv2.HoughLinesP(
             edges, rho=1, theta=np.pi / 180, threshold=50,
             minLineLength=int(0.1 * w), maxLineGap=int(0.02 * w),
@@ -446,50 +440,35 @@ class CourtKeypointDetector:
             logger.debug("Sideline detection: insufficient lines found")
             return None
 
-        # Adjust line Y coordinates back to full frame
-        adjusted_lines = []
+        far_corner_threshold = 0.05 * max(w, h)
+        left_candidates: list[tuple[tuple[float, float], tuple[float, float]]] = []
+        right_candidates: list[tuple[tuple[float, float], tuple[float, float]]] = []
+
         for line in lines:
             x1, y1, x2, y2 = line[0]
-            adjusted_lines.append((x1, y1 + roi_top, x2, y2 + roi_top))
+            # Adjust Y back to full frame
+            y1 += roi_top
+            y2 += roi_top
 
-        # Filter for lines that could be sidelines:
-        # - Must be roughly diagonal (15-75 degrees from horizontal)
-        # - Must pass near a far corner
-        far_corner_threshold = 0.05 * max(w, h)  # 5% of image size
-
-        left_sideline_candidates = []
-        right_sideline_candidates = []
-
-        for x1, y1, x2, y2 in adjusted_lines:
-            # Check angle
-            dx, dy = x2 - x1, y2 - y1
-            angle = abs(math.degrees(math.atan2(dy, dx)))
+            angle = abs(math.degrees(math.atan2(y2 - y1, x2 - x1)))
             if angle < 15 or angle > 75:
                 continue
 
-            # Normalize to [0,1]
             p1 = (x1 / w, y1 / h)
             p2 = (x2 / w, y2 / h)
 
-            # Check proximity to far corners
-            dist_to_fl = point_line_distance(far_left, p1, p2) * max(w, h)
-            dist_to_fr = point_line_distance(far_right, p1, p2) * max(w, h)
+            if point_line_distance(far_left, p1, p2) * max(w, h) < far_corner_threshold:
+                left_candidates.append((p1, p2))
+            if point_line_distance(far_right, p1, p2) * max(w, h) < far_corner_threshold:
+                right_candidates.append((p1, p2))
 
-            if dist_to_fl < far_corner_threshold:
-                left_sideline_candidates.append((p1, p2))
-            if dist_to_fr < far_corner_threshold:
-                right_sideline_candidates.append((p1, p2))
-
-        if not left_sideline_candidates and not right_sideline_candidates:
+        if not left_candidates and not right_candidates:
             logger.debug("Sideline detection: no lines pass near far corners")
             return None
 
-        # Pick longest candidate from each side
-        left_line = self._longest_line(left_sideline_candidates)
-        right_line = self._longest_line(right_sideline_candidates)
+        left_line = self._longest_line(left_candidates)
+        right_line = self._longest_line(right_candidates)
 
-        # Require BOTH sidelines detected — mixing with model's low-confidence
-        # guesses introduces noise that's worse than the fallback VP
         if not left_line or not right_line:
             logger.debug(
                 "Sideline detection: need both sides (left=%s, right=%s)",
@@ -498,11 +477,9 @@ class CourtKeypointDetector:
             return None
 
         vp = line_intersection(left_line[0], left_line[1], right_line[0], right_line[1])
-
         if vp is None:
             return None
 
-        # Validate VP is above far baseline
         far_mid_y = (far_left[1] + far_right[1]) / 2.0
         if vp[1] >= far_mid_y:
             logger.debug("Sideline VP below far baseline — skipping")
@@ -510,23 +487,79 @@ class CourtKeypointDetector:
 
         logger.info(
             "Sideline detection: VP=(%.3f, %.3f) from %d left + %d right candidates",
-            vp[0], vp[1],
-            len(left_sideline_candidates), len(right_sideline_candidates),
+            vp[0], vp[1], len(left_candidates), len(right_candidates),
+        )
+        return vp
+
+    def _refine_with_vp(
+        self,
+        corners: list[dict[str, float]],
+        per_corner_confidence: dict[str, float],
+        conf_threshold: float,
+        vp: tuple[float, float],
+        frame: np.ndarray | None = None,
+    ) -> tuple[list[dict[str, float]], set[str]]:
+        """Refine near corners using a VP, with optional center line improvement.
+
+        Pipeline:
+        1. Compute VP-based extrapolation (aspect-ratio formula, always works)
+        2. If frame available, detect center line and try projectively correct
+           methods (homography, harmonic conjugate)
+        3. Accept improved result only if it agrees with the VP baseline
+
+        The agreement check prevents bad center line detections from causing
+        regressions — the result is always at least as good as VP extrapolation.
+        """
+        # Step 1: VP extrapolation as baseline
+        vp_result = self._extrapolate_from_vp(
+            corners, per_corner_confidence, conf_threshold, vp,
         )
 
-        # Now extrapolate near corners using this VP
-        return self._extrapolate_from_vp(corners, per_corner_confidence, conf_threshold, vp)
+        # Step 2: Try center line for projectively correct refinement
+        if frame is not None:
+            far_left = (corners[3]["x"], corners[3]["y"])
+            far_right = (corners[2]["x"], corners[2]["y"])
+            center_line = self._detect_center_line(frame, far_left, far_right)
+
+            if center_line is not None:
+                for method_name, method in [
+                    ("homography", self._refine_via_homography),
+                    ("harmonic conjugate", self._extrapolate_via_harmonic_conjugate),
+                ]:
+                    result = method(
+                        corners, per_corner_confidence, conf_threshold, vp, center_line,
+                    )
+                    if result is not None and self._agrees_with_baseline(
+                        result[0], vp_result[0], vp_result[1],
+                    ):
+                        logger.info("Refined near corners via %s", method_name)
+                        return result
+
+        return vp_result
+
+    def _refine_via_sideline_detection(
+        self,
+        corners: list[dict[str, float]],
+        per_corner_confidence: dict[str, float],
+        conf_threshold: float,
+        frame: np.ndarray,
+    ) -> tuple[list[dict[str, float]], set[str]] | None:
+        """Refine near corners using sideline VP detected from the frame."""
+        vp = self._detect_sideline_vp(corners, frame)
+        if vp is None:
+            return None
+        return self._refine_with_vp(
+            corners, per_corner_confidence, conf_threshold, vp, frame,
+        )
 
     def _refine_via_vp_fallback(
         self,
         corners: list[dict[str, float]],
         per_corner_confidence: dict[str, float],
         conf_threshold: float,
+        frame: np.ndarray | None = None,
     ) -> tuple[list[dict[str, float]], set[str]]:
-        """Original VP extrapolation using model's near-corner guesses.
-
-        Fallback when no frame is available or sideline detection fails.
-        """
+        """Refine near corners using VP from model's near-corner guesses."""
         near_left = (corners[0]["x"], corners[0]["y"])
         near_right = (corners[1]["x"], corners[1]["y"])
         far_right = (corners[2]["x"], corners[2]["y"])
@@ -540,7 +573,9 @@ class CourtKeypointDetector:
         if vp[1] >= far_mid_y:
             return corners, set()
 
-        return self._extrapolate_from_vp(corners, per_corner_confidence, conf_threshold, vp)
+        return self._refine_with_vp(
+            corners, per_corner_confidence, conf_threshold, vp, frame,
+        )
 
     def _extrapolate_from_vp(
         self,
@@ -600,6 +635,442 @@ class CourtKeypointDetector:
             return corners, set()
 
         return refined, refined_names
+
+    def _detect_center_line(
+        self,
+        frame: np.ndarray,
+        far_left: tuple[float, float],
+        far_right: tuple[float, float],
+    ) -> tuple[tuple[float, float], tuple[float, float]] | None:
+        """Detect the net/center line as a horizontal line in the frame.
+
+        Looks for the topmost wide horizontal line just below the far baseline.
+        Limited to 25% of frame height below the far baseline to avoid
+        picking up near-court lines or sand markings.
+
+        Args:
+            frame: BGR image.
+            far_left: Far-left corner (x, y) in normalized coords.
+            far_right: Far-right corner (x, y) in normalized coords.
+
+        Returns:
+            Two normalized points defining the center line, or None.
+        """
+        h, w = frame.shape[:2]
+
+        # ROI: from just above far baseline to limited depth below it.
+        # The net is always close to the far baseline in image space
+        # (perspective compresses the far half of the court).
+        # Limit to 25% of frame height below far baseline to avoid
+        # picking up near-court lines or sand markings.
+        far_y_px = int(max(far_left[1], far_right[1]) * h)
+        roi_top = max(0, far_y_px - int(0.02 * h))
+        roi_bottom = min(h, far_y_px + int(0.25 * h))
+
+        if roi_bottom <= roi_top + 10:
+            return None
+
+        roi = frame[roi_top:roi_bottom]
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+
+        # Hough line detection — look for horizontal lines
+        lines = cv2.HoughLinesP(
+            edges, rho=1, theta=np.pi / 180, threshold=40,
+            minLineLength=int(0.15 * w), maxLineGap=int(0.03 * w),
+        )
+
+        if lines is None or len(lines) == 0:
+            return None
+
+        far_baseline_width = abs(far_right[0] - far_left[0]) * w
+        min_span = 0.40 * far_baseline_width
+        far_y_norm = max(far_left[1], far_right[1])
+
+        # Collect qualifying horizontal lines, sort by Y (topmost first)
+        # The net is the topmost wide horizontal line below the far baseline
+        candidates: list[tuple[float, tuple[tuple[float, float], tuple[float, float]]]] = []
+
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+
+            # Check near-horizontal: angle < 15 degrees
+            dx, dy = x2 - x1, y2 - y1
+            angle = abs(math.degrees(math.atan2(dy, dx)))
+            if angle > 15 and angle < 165:
+                continue
+
+            # Check span
+            span = abs(x2 - x1)
+            if span < min_span:
+                continue
+
+            # Convert to full-frame normalized coords
+            ny1 = (y1 + roi_top) / h
+            ny2 = (y2 + roi_top) / h
+            mid_y = (ny1 + ny2) / 2.0
+
+            # Must be below far baseline
+            if mid_y < far_y_norm + 0.02:
+                continue
+
+            candidates.append((mid_y, ((x1 / w, ny1), (x2 / w, ny2))))
+
+        if not candidates:
+            return None
+
+        # Pick the topmost qualifying line (closest to far baseline = net)
+        candidates.sort(key=lambda c: c[0])
+        best_line = candidates[0][1]
+
+        logger.info(
+            "Center line detected: (%.3f, %.3f) → (%.3f, %.3f)",
+            best_line[0][0], best_line[0][1],
+            best_line[1][0], best_line[1][1],
+        )
+        return best_line
+
+    def _find_center_points(
+        self,
+        corners: list[dict[str, float]],
+        per_corner_confidence: dict[str, float],
+        conf_threshold: float,
+        vp: tuple[float, float],
+        center_line: tuple[tuple[float, float], tuple[float, float]],
+    ) -> tuple[tuple[float, float] | None, tuple[float, float] | None]:
+        """Find where each sideline intersects the center line.
+
+        Uses reliable near corners (if available) to define sideline directions
+        instead of the VP, which may be computed from bad near-corner guesses.
+
+        Strategy per side:
+        1. If the near corner on that side is reliable, use line(far, near)
+        2. Otherwise, use line(far, VP) (may be inaccurate)
+
+        Returns:
+            (center_left, center_right) — either or both may be None.
+        """
+        nl_conf = per_corner_confidence.get("near-left", 1.0)
+        nr_conf = per_corner_confidence.get("near-right", 1.0)
+        far_left = (corners[3]["x"], corners[3]["y"])
+        far_right = (corners[2]["x"], corners[2]["y"])
+        near_left = (corners[0]["x"], corners[0]["y"])
+        near_right = (corners[1]["x"], corners[1]["y"])
+        far_mid_y = (far_left[1] + far_right[1]) / 2.0
+
+        # Left sideline → center-left
+        if nl_conf >= conf_threshold:
+            # Reliable near-left: use actual sideline
+            center_left = line_intersection(
+                far_left, near_left, center_line[0], center_line[1],
+            )
+        else:
+            # Fallback: use VP direction
+            center_left = line_intersection(
+                far_left, vp, center_line[0], center_line[1],
+            )
+
+        # Right sideline → center-right
+        if nr_conf >= conf_threshold:
+            center_right = line_intersection(
+                far_right, near_right, center_line[0], center_line[1],
+            )
+        else:
+            center_right = line_intersection(
+                far_right, vp, center_line[0], center_line[1],
+            )
+
+        # Validate: center points must be below far baseline
+        if center_left is not None and center_left[1] < far_mid_y:
+            logger.debug(
+                "Center-left above far baseline (%.3f < %.3f)",
+                center_left[1], far_mid_y,
+            )
+            center_left = None
+        if center_right is not None and center_right[1] < far_mid_y:
+            logger.debug(
+                "Center-right above far baseline (%.3f < %.3f)",
+                center_right[1], far_mid_y,
+            )
+            center_right = None
+
+        return center_left, center_right
+
+    def _extrapolate_via_harmonic_conjugate(
+        self,
+        corners: list[dict[str, float]],
+        per_corner_confidence: dict[str, float],
+        conf_threshold: float,
+        vp: tuple[float, float],
+        center_line: tuple[tuple[float, float], tuple[float, float]],
+    ) -> tuple[list[dict[str, float]], set[str]] | None:
+        """Extrapolate near corners using the harmonic conjugate.
+
+        Uses center points (sideline-center line intersections) and the
+        harmonic conjugate to find projectively correct near corners.
+        """
+        nl_conf = per_corner_confidence.get("near-left", 1.0)
+        nr_conf = per_corner_confidence.get("near-right", 1.0)
+        far_left = (corners[3]["x"], corners[3]["y"])
+        far_right = (corners[2]["x"], corners[2]["y"])
+
+        center_left, center_right = self._find_center_points(
+            corners, per_corner_confidence, conf_threshold, vp, center_line,
+        )
+
+        refined = list(corners)
+        refined_names: set[str] = set()
+
+        if nl_conf < conf_threshold and center_left is not None:
+            near_left = harmonic_conjugate(far_left, center_left, vp)
+            refined[0] = {"x": round(near_left[0], 6), "y": round(near_left[1], 6)}
+            refined_names.add("near-left")
+            logger.info(
+                "Harmonic conjugate near-left: (%.3f, %.3f) → (%.3f, %.3f)",
+                corners[0]["x"], corners[0]["y"], near_left[0], near_left[1],
+            )
+
+        if nr_conf < conf_threshold and center_right is not None:
+            near_right = harmonic_conjugate(far_right, center_right, vp)
+            refined[1] = {"x": round(near_right[0], 6), "y": round(near_right[1], 6)}
+            refined_names.add("near-right")
+            logger.info(
+                "Harmonic conjugate near-right: (%.3f, %.3f) → (%.3f, %.3f)",
+                corners[1]["x"], corners[1]["y"], near_right[0], near_right[1],
+            )
+
+        if not refined_names:
+            return None
+
+        refined = self._clamp_near_corners(refined)
+        if not self._is_convex_quad(refined):
+            logger.warning("Harmonic conjugate corners not convex — skipping")
+            return None
+
+        if not self._validate_court_geometry(refined):
+            logger.warning("Harmonic conjugate corners fail geometry validation — skipping")
+            return None
+
+        return refined, refined_names
+
+    def _refine_via_homography(
+        self,
+        corners: list[dict[str, float]],
+        per_corner_confidence: dict[str, float],
+        conf_threshold: float,
+        vp: tuple[float, float],
+        center_line: tuple[tuple[float, float], tuple[float, float]],
+    ) -> tuple[list[dict[str, float]], set[str]] | None:
+        """Refine near corners via homography from correspondences.
+
+        Builds correspondences from reliable points:
+        - Far corners (always reliable from YOLO)
+        - Center points (sideline-center line intersections)
+        - Reliable near corners (if one side has high confidence)
+
+        Needs >= 4 correspondences to fit a homography.
+        """
+        nl_conf = per_corner_confidence.get("near-left", 1.0)
+        nr_conf = per_corner_confidence.get("near-right", 1.0)
+        far_left = (corners[3]["x"], corners[3]["y"])
+        far_right = (corners[2]["x"], corners[2]["y"])
+
+        center_left, center_right = self._find_center_points(
+            corners, per_corner_confidence, conf_threshold, vp, center_line,
+        )
+
+        # Build correspondences from reliable points
+        image_pts_list: list[list[float]] = []
+        court_pts_list: list[list[float]] = []
+
+        # Far corners (always reliable)
+        image_pts_list.append([far_left[0], far_left[1]])
+        court_pts_list.append([0.0, COURT_LENGTH])
+        image_pts_list.append([far_right[0], far_right[1]])
+        court_pts_list.append([COURT_WIDTH, COURT_LENGTH])
+
+        # Reliable near corners
+        if nl_conf >= conf_threshold:
+            nl = (corners[0]["x"], corners[0]["y"])
+            image_pts_list.append([nl[0], nl[1]])
+            court_pts_list.append([0.0, 0.0])
+        if nr_conf >= conf_threshold:
+            nr = (corners[1]["x"], corners[1]["y"])
+            image_pts_list.append([nr[0], nr[1]])
+            court_pts_list.append([COURT_WIDTH, 0.0])
+
+        # Center points
+        if center_left is not None:
+            image_pts_list.append([center_left[0], center_left[1]])
+            court_pts_list.append([0.0, COURT_LENGTH / 2])
+        if center_right is not None:
+            image_pts_list.append([center_right[0], center_right[1]])
+            court_pts_list.append([COURT_WIDTH, COURT_LENGTH / 2])
+
+        if len(image_pts_list) < 4:
+            logger.debug(
+                "Homography: only %d correspondences (need 4)", len(image_pts_list),
+            )
+            return None
+
+        image_pts = np.array(image_pts_list, dtype=np.float64)
+        court_pts = np.array(court_pts_list, dtype=np.float64)
+
+        # Fit homography: court-space → image-space
+        h_matrix, status = cv2.findHomography(court_pts, image_pts)
+        if h_matrix is None:
+            return None
+
+        # Check reprojection error on the input points
+        reproj = cv2.perspectiveTransform(
+            court_pts.reshape(-1, 1, 2), h_matrix,
+        ).reshape(-1, 2)
+        reproj_error = float(np.sqrt(((reproj - image_pts) ** 2).sum(axis=1)).mean())
+        if reproj_error > 0.02:
+            logger.debug(
+                "Homography reprojection error too high: %.4f", reproj_error,
+            )
+            return None
+
+        # Project all 4 court corners
+        all_court = np.array([
+            [0.0, 0.0],          # near-left
+            [COURT_WIDTH, 0.0],  # near-right
+            [COURT_WIDTH, COURT_LENGTH],  # far-right
+            [0.0, COURT_LENGTH],          # far-left
+        ], dtype=np.float64)
+
+        projected = cv2.perspectiveTransform(
+            all_court.reshape(-1, 1, 2), h_matrix,
+        ).reshape(-1, 2)
+
+        refined = list(corners)
+        refined_names: set[str] = set()
+
+        if nl_conf < conf_threshold:
+            refined[0] = {
+                "x": round(float(projected[0, 0]), 6),
+                "y": round(float(projected[0, 1]), 6),
+            }
+            refined_names.add("near-left")
+            logger.info(
+                "Homography near-left: (%.3f, %.3f) → (%.3f, %.3f)",
+                corners[0]["x"], corners[0]["y"],
+                projected[0, 0], projected[0, 1],
+            )
+
+        if nr_conf < conf_threshold:
+            refined[1] = {
+                "x": round(float(projected[1, 0]), 6),
+                "y": round(float(projected[1, 1]), 6),
+            }
+            refined_names.add("near-right")
+            logger.info(
+                "Homography near-right: (%.3f, %.3f) → (%.3f, %.3f)",
+                corners[1]["x"], corners[1]["y"],
+                projected[1, 0], projected[1, 1],
+            )
+
+        if not refined_names:
+            return None
+
+        refined = self._clamp_near_corners(refined)
+        if not self._is_convex_quad(refined):
+            logger.warning("Homography refined corners not convex — skipping")
+            return None
+
+        if not self._validate_court_geometry(refined):
+            logger.warning("Homography refined corners fail geometry validation — skipping")
+            return None
+
+        return refined, refined_names
+
+    # Max distance between homography/harmonic result and VP baseline
+    # for a near corner to be accepted. 0.15 = 15% of frame size.
+    # Generous enough for the harmonic conjugate to correct VP errors,
+    # tight enough to reject wrong center line detections.
+    _BASELINE_AGREEMENT_THRESHOLD = 0.15
+
+    @staticmethod
+    def _agrees_with_baseline(
+        candidate: list[dict[str, float]],
+        baseline: list[dict[str, float]],
+        refined_names: set[str],
+    ) -> bool:
+        """Check if candidate near corners agree with VP baseline result.
+
+        Only checks corners that were refined (in refined_names).
+        Returns True if all refined corners are within threshold distance.
+        """
+        threshold = CourtKeypointDetector._BASELINE_AGREEMENT_THRESHOLD
+        for i, name in [(0, "near-left"), (1, "near-right")]:
+            if name not in refined_names:
+                continue
+            dx = candidate[i]["x"] - baseline[i]["x"]
+            dy = candidate[i]["y"] - baseline[i]["y"]
+            dist = math.sqrt(dx * dx + dy * dy)
+            if dist > threshold:
+                logger.debug(
+                    "%s: candidate (%.3f, %.3f) too far from baseline "
+                    "(%.3f, %.3f), dist=%.3f > %.3f",
+                    name, candidate[i]["x"], candidate[i]["y"],
+                    baseline[i]["x"], baseline[i]["y"], dist, threshold,
+                )
+                return False
+        return True
+
+    @staticmethod
+    def _validate_court_geometry(corners: list[dict[str, float]]) -> bool:
+        """Validate that refined corners form a plausible perspective court.
+
+        Checks:
+        - Near baseline wider than far baseline (perspective constraint)
+        - Perspective ratio between 1.0 and 8.0
+        - Both sidelines converge upward (toward VP above court)
+        - Near corners below far corners in Y
+
+        Args:
+            corners: 4 corners [near-left, near-right, far-right, far-left].
+
+        Returns:
+            True if geometry is plausible.
+        """
+        if len(corners) != 4:
+            return False
+
+        nl = (corners[0]["x"], corners[0]["y"])
+        nr = (corners[1]["x"], corners[1]["y"])
+        fr = (corners[2]["x"], corners[2]["y"])
+        fl = (corners[3]["x"], corners[3]["y"])
+
+        near_width = abs(nr[0] - nl[0])
+        far_width = abs(fr[0] - fl[0])
+
+        # Near baseline must be wider (perspective)
+        if near_width < far_width * 0.95:
+            return False
+
+        # Perspective ratio check
+        if far_width > 0.01:
+            ratio = near_width / far_width
+            if ratio > 8.0:
+                return False
+
+        # Near corners must be below far corners in Y
+        near_mid_y = (nl[1] + nr[1]) / 2.0
+        far_mid_y = (fl[1] + fr[1]) / 2.0
+        if near_mid_y < far_mid_y + 0.05:
+            return False
+
+        # Sidelines should converge upward (left sideline goes left-to-right
+        # from near to far, right sideline goes right-to-left)
+        # Equivalently: far-left.x > near-left.x and far-right.x < near-right.x
+        if fl[0] < nl[0] - 0.02:
+            return False
+        if fr[0] > nr[0] + 0.02:
+            return False
+
+        return True
 
     def _clamp_near_corners(self, corners: list[dict[str, float]]) -> list[dict[str, float]]:
         """Clamp near corners to limit extrapolation overshoot."""
