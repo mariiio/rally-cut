@@ -62,6 +62,9 @@ class TemporalMaxerInference:
         valley_threshold: float = 0.5,
         min_valley_duration: float = 2.0,
         tta_shifts: int = 0,
+        rescue_min_avg_prob: float = 0.45,
+        rescue_min_windows: int = 3,
+        rescue_max_duration: float = 10.0,
     ) -> TemporalMaxerResult:
         """Run full-sequence inference and extract segments.
 
@@ -115,6 +118,21 @@ class TemporalMaxerInference:
             valley_threshold=valley_threshold,
             min_valley_duration=min_valley_duration,
         )
+
+        # Rescue pass: recover short rallies in gaps with weak but present signal
+        if rescue_min_avg_prob > 0:
+            rescued = self._rescue_short_rallies(
+                segments,
+                rally_probs,
+                window_duration,
+                rescue_min_avg_prob=rescue_min_avg_prob,
+                rescue_min_windows=rescue_min_windows,
+                rescue_min_duration=min_segment_duration,
+                rescue_max_duration=rescue_max_duration,
+            )
+            if rescued:
+                segments = sorted(segments + rescued)
+                logger.debug("Rescued %d short rallies", len(rescued))
 
         return TemporalMaxerResult(
             segments=segments,
@@ -257,6 +275,96 @@ class TemporalMaxerInference:
                 )
 
         return final
+
+    def _rescue_short_rallies(
+        self,
+        segments: list[tuple[float, float]],
+        probs: np.ndarray,
+        window_duration: float,
+        rescue_min_avg_prob: float,
+        rescue_min_windows: int,
+        rescue_min_duration: float,
+        rescue_max_duration: float,
+    ) -> list[tuple[float, float]]:
+        """Rescue short rallies missed by the primary detection pass.
+
+        Scans gaps between detected segments for contiguous windows where
+        the average probability exceeds rescue_min_avg_prob. These are
+        short rallies (aces, serves-to-net) where the model has weak but
+        present signal that didn't reach the primary threshold.
+        """
+        total_time = len(probs) * window_duration
+        rescued: list[tuple[float, float]] = []
+
+        # Build gap regions (time ranges not covered by detected segments)
+        gaps: list[tuple[float, float]] = []
+        prev_end = 0.0
+        for s, e in sorted(segments):
+            if s > prev_end:
+                gaps.append((prev_end, s))
+            prev_end = max(prev_end, e)
+        if prev_end < total_time:
+            gaps.append((prev_end, total_time))
+
+        for gap_s, gap_e in gaps:
+            si = max(0, int(gap_s / window_duration))
+            ei = min(len(probs), int(gap_e / window_duration) + 1)
+            gap_probs = probs[si:ei]
+            if len(gap_probs) == 0:
+                continue
+
+            # Per-window threshold matches avg threshold — each window in
+            # the run must individually meet the bar.
+            window_thresh = rescue_min_avg_prob
+
+            in_run = False
+            run_start = 0
+            for i in range(len(gap_probs)):
+                if gap_probs[i] >= window_thresh and not in_run:
+                    run_start = i
+                    in_run = True
+                elif gap_probs[i] < window_thresh and in_run:
+                    self._check_rescue_run(
+                        gap_probs, run_start, i, si, window_duration,
+                        rescue_min_avg_prob, rescue_min_windows,
+                        rescue_min_duration, rescue_max_duration, rescued,
+                    )
+                    in_run = False
+            if in_run:
+                self._check_rescue_run(
+                    gap_probs, run_start, len(gap_probs), si, window_duration,
+                    rescue_min_avg_prob, rescue_min_windows,
+                    rescue_min_duration, rescue_max_duration, rescued,
+                )
+
+        return rescued
+
+    @staticmethod
+    def _check_rescue_run(
+        gap_probs: np.ndarray,
+        run_start: int,
+        run_end: int,
+        gap_si: int,
+        window_duration: float,
+        min_avg_prob: float,
+        min_windows: int,
+        min_duration: float,
+        max_duration: float,
+        rescued: list[tuple[float, float]],
+    ) -> None:
+        """Check if a contiguous run qualifies as a rescued short rally."""
+        run_len = run_end - run_start
+        if run_len < min_windows:
+            return
+        run_probs = gap_probs[run_start:run_end]
+        avg_prob = float(run_probs.mean())
+        if avg_prob < min_avg_prob:
+            return
+        cand_s = (gap_si + run_start) * window_duration
+        cand_e = (gap_si + run_end) * window_duration
+        duration = cand_e - cand_s
+        if min_duration <= duration <= max_duration:
+            rescued.append((cand_s, cand_e))
 
     def _split_at_valleys(
         self,

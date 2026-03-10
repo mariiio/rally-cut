@@ -230,7 +230,11 @@ def print_fn_details(
     print(f"FN DETAILS ({len(all_fn_details)} missed rallies)")
     print(f"{'=' * 70}")
 
-    header = f"{'Video':<25} {'GT range':>15} {'Duration':>8} {'Best IoU':>9}"
+    has_probs = any("avg_prob" in d for d in all_fn_details)
+    if has_probs:
+        header = f"{'Video':<25} {'GT range':>15} {'Duration':>8} {'Best IoU':>9} {'AvgP':>6} {'MaxP':>6} {'Win':>4}"
+    else:
+        header = f"{'Video':<25} {'GT range':>15} {'Duration':>8} {'Best IoU':>9}"
     print(header)
     print("-" * len(header))
 
@@ -239,7 +243,25 @@ def print_fn_details(
         gt_range = f"{d['gt_start']:.1f}-{d['gt_end']:.1f}s"
         duration = f"{d['duration']:.1f}s"
         best_iou = f"{d['best_iou']:.2f}" if d["best_iou"] > 0 else "0.00"
-        print(f"{name:<25} {gt_range:>15} {duration:>8} {best_iou:>9}")
+        if has_probs and "avg_prob" in d:
+            avg_p = f"{d['avg_prob']:.3f}"
+            max_p = f"{d['max_prob']:.3f}"
+            wins = f"{d['num_windows']}"
+            print(f"{name:<25} {gt_range:>15} {duration:>8} {best_iou:>9} {avg_p:>6} {max_p:>6} {wins:>4}")
+        else:
+            print(f"{name:<25} {gt_range:>15} {duration:>8} {best_iou:>9}")
+
+    if has_probs:
+        fn_with_probs = [d for d in all_fn_details if "avg_prob" in d]
+        if fn_with_probs:
+            avg_probs = [d["avg_prob"] for d in fn_with_probs]
+            max_probs = [d["max_prob"] for d in fn_with_probs]
+            print(f"\n  FN prob stats: avg_prob mean={np.mean(avg_probs):.3f} median={np.median(avg_probs):.3f}")
+            print(f"                 max_prob mean={np.mean(max_probs):.3f} median={np.median(max_probs):.3f}")
+            # Bucket by max_prob
+            for thresh in [0.3, 0.4, 0.5, 0.6]:
+                count = sum(1 for p in max_probs if p >= thresh)
+                print(f"                 max_prob >= {thresh}: {count}/{len(max_probs)} ({count/len(max_probs)*100:.0f}%)")
 
 
 def print_confidence_comparison(
@@ -453,13 +475,17 @@ def analyze(
                 (compute_iou(gt_s, gt_e, pred_s, pred_e) for pred_s, pred_e in predictions),
                 default=0.0,
             )
-            all_fn_details.append({
+            # Extract raw probabilities in FN region
+            fn_conf = _segment_confidence(gt_s, gt_e, window_probs, window_duration)
+            fn_detail: dict[str, Any] = {
                 "filename": video.filename,
                 "gt_start": gt_s,
                 "gt_end": gt_e,
                 "duration": gt_e - gt_s,
                 "best_iou": best_iou,
-            })
+            }
+            fn_detail.update(fn_conf)
+            all_fn_details.append(fn_detail)
 
         elapsed = time.monotonic() - t_start
         v_p, v_r, v_f1 = _compute_f1(matching.true_positives, matching.false_positives, matching.false_negatives)
