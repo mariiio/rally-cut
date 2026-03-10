@@ -1,8 +1,12 @@
 """Court keypoint detection using YOLO11s-pose.
 
-Detects 4 court corners (near-left, near-right, far-right, far-left) from
-video frames using a fine-tuned YOLO-pose model. Handles off-screen near
-corners via bottom padding (same as training).
+Detects 6 court keypoints from video frames using a fine-tuned YOLO-pose model:
+  - 4 corners: near-left, near-right, far-right, far-left
+  - 2 center points: center-left, center-right (net-sideline intersections)
+
+Handles off-screen near corners via bottom padding (same as training).
+Center points are always visible in-frame and enable near-corner refinement
+via sideline projection (keeping raw Y, correcting X onto the sideline).
 
 Keypoint model is tried first by CourtDetector; falls back to classical
 pipeline if confidence is too low.
@@ -26,6 +30,7 @@ from rallycut.court.line_geometry import harmonic_conjugate, line_intersection, 
 logger = logging.getLogger(__name__)
 
 CORNER_NAMES = ["near-left", "near-right", "far-right", "far-left"]
+CENTER_NAMES = ["center-left", "center-right"]
 
 
 @dataclass
@@ -41,6 +46,8 @@ class CourtQualityDiagnostics:
     off_screen_corners: list[str]  # corner names where y > 1.0 (below frame)
     perspective_ratio: float  # near_width / far_width (>3 = extreme perspective)
     warnings: list[str]  # actionable quality warnings
+    center_points: list[dict[str, float]] | None = None  # aggregated center-left/right
+    center_confidences: dict[str, float] | None = None  # mean confidence per center point
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -54,6 +61,12 @@ class CourtQualityDiagnostics:
             "off_screen_corners": self.off_screen_corners,
             "perspective_ratio": round(self.perspective_ratio, 2),
             "warnings": self.warnings,
+            "center_points": [
+                {k: round(v, 6) for k, v in pt.items()} for pt in self.center_points
+            ] if self.center_points else None,
+            "center_confidences": {
+                k: round(v, 3) for k, v in self.center_confidences.items()
+            } if self.center_confidences else None,
         }
 
 DEFAULT_MODEL_PATH = (
@@ -95,7 +108,9 @@ class FrameKeypoints:
 
     corners: list[dict[str, float]]  # 4 corners [{x, y}] in original (unpadded) coords
     confidence: float  # bbox confidence
-    kpt_confidences: list[float]  # per-keypoint visibility/confidence
+    kpt_confidences: list[float]  # per-corner visibility/confidence (4 values)
+    center_points: list[dict[str, float]] | None = None  # 2 center points [{x, y}] (6-kpt model)
+    center_confidences: list[float] | None = None  # per-center-point confidence (2 values)
 
 
 class CourtKeypointDetector:
@@ -189,6 +204,8 @@ class CourtKeypointDetector:
         corners, vp_refined = self._refine_near_corners(
             corners, diagnostics.per_corner_confidence,
             frame=mid_frame,
+            center_points=diagnostics.center_points,
+            center_confidences=diagnostics.center_confidences,
         )
 
         # Penalize confidence for unreliable corners. The bbox confidence
@@ -234,8 +251,14 @@ class CourtKeypointDetector:
 
         # Refine low-confidence near corners via perspective extrapolation
         per_corner_conf = dict(zip(CORNER_NAMES, result.kpt_confidences))
+        center_pts = result.center_points
+        center_confs: dict[str, float] | None = None
+        if result.center_confidences is not None:
+            center_confs = dict(zip(CENTER_NAMES, result.center_confidences))
         corners, vp_refined = self._refine_near_corners(
             result.corners, per_corner_conf, frame=frame,
+            center_points=center_pts,
+            center_confidences=center_confs,
         )
         confidence = self._penalize_confidence(result.confidence, per_corner_conf, vp_refined)
 
@@ -323,8 +346,9 @@ class CourtKeypointDetector:
         kpt_xy = kpts.xy.cpu().numpy()[0]  # (n_kpts, 2)
         kpt_conf = kpts.conf.cpu().numpy()[0] if kpts.conf is not None else np.ones(len(kpt_xy))
 
-        if len(kpt_xy) != 4:
-            logger.warning(f"Expected 4 keypoints, got {len(kpt_xy)}")
+        n_kpts = len(kpt_xy)
+        if n_kpts not in (4, 6):
+            logger.warning(f"Expected 4 or 6 keypoints, got {n_kpts}")
             return None
 
         padded_h, padded_w = padded.shape[:2]
@@ -339,20 +363,36 @@ class CourtKeypointDetector:
             x_px, y_px = float(kpt_xy[i][0]), float(kpt_xy[i][1])
             kc = float(kpt_conf[i])
 
-            # Normalize to padded image
             x_norm = x_px / padded_w
             y_norm = y_px / padded_h
-
-            # Un-pad: reverse the scale_y = 1/(1+pad_ratio) applied during export
             y_orig = y_norm * (1.0 + self._pad_ratio)
 
             corners.append({"x": round(x_norm, 6), "y": round(y_orig, 6)})
             kpt_confidences.append(kc)
 
+        # Extract center points from 6-keypoint model
+        center_points: list[dict[str, float]] | None = None
+        center_confidences: list[float] | None = None
+        if n_kpts == 6:
+            center_points = []
+            center_confidences = []
+            for i in range(4, 6):
+                x_px, y_px = float(kpt_xy[i][0]), float(kpt_xy[i][1])
+                kc = float(kpt_conf[i])
+
+                x_norm = x_px / padded_w
+                y_norm = y_px / padded_h
+                y_orig = y_norm * (1.0 + self._pad_ratio)
+
+                center_points.append({"x": round(x_norm, 6), "y": round(y_orig, 6)})
+                center_confidences.append(kc)
+
         return FrameKeypoints(
             corners=corners,
             confidence=best_conf,
             kpt_confidences=kpt_confidences,
+            center_points=center_points,
+            center_confidences=center_confidences,
         )
 
     # Max extrapolation beyond [0, 1] range for near corners.
@@ -360,20 +400,27 @@ class CourtKeypointDetector:
     # 0.20 reduces regressions from 11→5 while keeping 33% MCD improvement.
     NEAR_CORNER_MAX_MARGIN = 0.20
 
+    # Minimum confidence to trust YOLO center points for refinement
+    _CENTER_POINT_MIN_CONF = 0.3
+
     def _refine_near_corners(
         self,
         corners: list[dict[str, float]],
         per_corner_confidence: dict[str, float],
         conf_threshold: float = 0.5,
         frame: np.ndarray | None = None,
+        center_points: list[dict[str, float]] | None = None,
+        center_confidences: dict[str, float] | None = None,
     ) -> tuple[list[dict[str, float]], set[str]]:
         """Replace low-confidence near corners using best available geometry.
 
         Strategy priority:
-        1. **Sideline detection from frame** (frame available): Detect sidelines
-           via Hough lines, compute VP from actual visible lines instead of the
-           model's low-confidence near-corner guesses.
-        2. **VP from model corners** (fallback): Uses the model's near-corner
+        1. **YOLO center points** (6-keypoint model): Use model-predicted
+           net-sideline intersections for sideline projection refinement.
+           Always visible in-frame, no Hough detection needed.
+        2. **Sideline detection from frame** (frame available): Detect sidelines
+           via Hough lines, compute VP from actual visible lines.
+        3. **VP from model corners** (fallback): Uses the model's near-corner
            guesses for VP computation. Less accurate but always works.
 
         Args:
@@ -381,6 +428,8 @@ class CourtKeypointDetector:
             per_corner_confidence: Mean confidence per corner name.
             conf_threshold: Below this, replace the near corner.
             frame: Optional BGR frame for sideline detection.
+            center_points: Optional aggregated center-left/right from 6-kpt model.
+            center_confidences: Optional confidence per center point name.
 
         Returns:
             Tuple of (refined corners, set of refined corner names).
@@ -395,7 +444,20 @@ class CourtKeypointDetector:
         if nl_conf >= conf_threshold and nr_conf >= conf_threshold:
             return corners, set()
 
-        # Strategy 1: Detect sidelines from the frame image
+        # Strategy 1: Use YOLO center points (6-keypoint model)
+        if center_points is not None and len(center_points) == 2:
+            cl_conf = (center_confidences or {}).get("center-left", 0.0)
+            cr_conf = (center_confidences or {}).get("center-right", 0.0)
+            min_conf = self._CENTER_POINT_MIN_CONF
+            if cl_conf >= min_conf and cr_conf >= min_conf:
+                result = self._refine_via_center_points(
+                    corners, per_corner_confidence, conf_threshold,
+                    center_points,
+                )
+                if result is not None:
+                    return result
+
+        # Strategy 2: Detect sidelines from the frame image
         if frame is not None:
             result = self._refine_via_sideline_detection(
                 corners, per_corner_confidence, conf_threshold, frame,
@@ -403,10 +465,121 @@ class CourtKeypointDetector:
             if result is not None:
                 return result
 
-        # Strategy 2: Fallback — VP from model's near-corner guesses
-        return self._refine_via_vp_fallback(
+        # Strategy 3: Fallback — VP from model's near-corner guesses.
+        # Guard against degenerate geometry (e.g. near-horizontal sidelines)
+        # where VP extrapolation can push near corners far from their raw
+        # positions. Keep raw if any refined corner moved > 30% of screen.
+        refined, refined_names = self._refine_via_vp_fallback(
             corners, per_corner_confidence, conf_threshold, frame=frame,
         )
+        if refined_names:
+            max_disp = max(
+                math.sqrt(
+                    (refined[i]["x"] - corners[i]["x"]) ** 2
+                    + (refined[i]["y"] - corners[i]["y"]) ** 2
+                )
+                for i in range(2)  # near-left, near-right
+                if CORNER_NAMES[i] in refined_names
+            )
+            if max_disp > 0.30:
+                logger.warning(
+                    "VP fallback displaced near corner by %.2f — keeping raw",
+                    max_disp,
+                )
+                return corners, set()
+        return refined, refined_names
+
+    def _refine_via_center_points(
+        self,
+        corners: list[dict[str, float]],
+        per_corner_confidence: dict[str, float],
+        conf_threshold: float,
+        center_points: list[dict[str, float]],
+    ) -> tuple[list[dict[str, float]], set[str]] | None:
+        """Refine near corners using YOLO-predicted center points.
+
+        Uses sidelines defined by high-confidence far corners and center
+        points to place near corners. For each near corner:
+
+        1. If the raw Y is plausible (between far baseline and frame edge),
+           project the raw point onto the sideline — keeping its depth but
+           correcting X to lie exactly on the line.
+        2. Otherwise, extrapolate via VP + aspect ratio (full replacement).
+        """
+        center_left = (center_points[0]["x"], center_points[0]["y"])
+        center_right = (center_points[1]["x"], center_points[1]["y"])
+        far_left = (corners[3]["x"], corners[3]["y"])
+        far_right = (corners[2]["x"], corners[2]["y"])
+
+        # Compute VP from center-point sidelines
+        vp = line_intersection(far_left, center_left, far_right, center_right)
+        if vp is None:
+            return None
+
+        far_mid_y = (far_left[1] + far_right[1]) / 2.0
+        if vp[1] >= far_mid_y:
+            logger.debug("Center-point VP below far baseline — skipping")
+            return None
+
+        # VP extrapolation as fallback for off-screen corners
+        vp_corners, vp_refined = self._extrapolate_from_vp(
+            corners, per_corner_confidence, conf_threshold, vp,
+        )
+
+        refined = list(corners)
+        refined_names: set[str] = set()
+
+        margin = self.NEAR_CORNER_MAX_MARGIN
+        for i, name in [(0, "near-left"), (1, "near-right")]:
+            if per_corner_confidence.get(name, 1.0) >= conf_threshold:
+                continue
+
+            raw_x = corners[i]["x"]
+            raw_y = corners[i]["y"]
+            far_pt = far_left if i == 0 else far_right
+            ctr_pt = center_left if i == 0 else center_right
+
+            # Is the raw Y plausible? (between far baseline and frame edge + margin)
+            raw_y_plausible = far_pt[1] + 0.05 < raw_y < 1.0 + margin
+
+            if raw_y_plausible:
+                # Project raw point onto the sideline at the same Y depth.
+                # Sideline: far_pt + t * (ctr_pt - far_pt), extended beyond.
+                dy_sl = ctr_pt[1] - far_pt[1]
+                if abs(dy_sl) > 1e-6:
+                    t = (raw_y - far_pt[1]) / dy_sl
+                    proj_x = far_pt[0] + t * (ctr_pt[0] - far_pt[0])
+                    refined[i] = {"x": round(proj_x, 6), "y": round(raw_y, 6)}
+                    refined_names.add(name)
+                    logger.info(
+                        "Sideline-projected %s: (%.3f,%.3f)→(%.3f,%.3f)",
+                        name, raw_x, raw_y, proj_x, raw_y,
+                    )
+                else:
+                    # Degenerate sideline, use VP fallback
+                    if name in vp_refined:
+                        refined[i] = vp_corners[i]
+                        refined_names.add(name)
+            else:
+                # Off-screen or implausible Y — use full VP extrapolation
+                if name in vp_refined:
+                    refined[i] = vp_corners[i]
+                    refined_names.add(name)
+                    logger.info(
+                        "VP-extrapolated %s: (%.3f,%.3f)→(%.3f,%.3f)",
+                        name, raw_x, raw_y,
+                        vp_corners[i]["x"], vp_corners[i]["y"],
+                    )
+
+        if not refined_names:
+            return corners, set()
+
+        refined = self._clamp_near_corners(refined)
+        if not self._is_convex_quad(refined):
+            logger.warning("Center-point refined corners not convex — skipping")
+            return None
+
+        return refined, refined_names
 
     def _detect_sideline_vp(
         self,
@@ -1284,7 +1457,8 @@ class CourtKeypointDetector:
         """Aggregate multi-frame detections via confidence-weighted median.
 
         For each corner, collects all predictions, removes outliers (>2σ from
-        median), and takes the weighted median using per-keypoint confidence.
+        median for corners, >1.5σ for center points), and takes the weighted
+        median using per-keypoint confidence.
 
         Returns:
             (corners, confidence, diagnostics) tuple.
@@ -1356,6 +1530,53 @@ class CourtKeypointDetector:
         diagnostics = self._build_diagnostics(corners, frame_results, n_total, n)
         diagnostics.per_corner_confidence = dict(zip(CORNER_NAMES, corner_confs))
         diagnostics.per_corner_std = dict(zip(CORNER_NAMES, corner_stds))
+
+        # Aggregate center points from 6-keypoint model
+        frames_with_centers = [
+            fr for fr in frame_results
+            if fr.center_points is not None and fr.center_confidences is not None
+        ]
+        if frames_with_centers:
+            nc = len(frames_with_centers)
+            center_x = np.zeros((nc, 2))
+            center_y = np.zeros((nc, 2))
+            center_conf = np.zeros((nc, 2))
+            for i, fr in enumerate(frames_with_centers):
+                assert fr.center_points is not None
+                assert fr.center_confidences is not None
+                for j in range(2):
+                    center_x[i, j] = fr.center_points[j]["x"]
+                    center_y[i, j] = fr.center_points[j]["y"]
+                    center_conf[i, j] = fr.center_confidences[j]
+
+            agg_centers = []
+            agg_center_confs = []
+            for j in range(2):
+                xs = center_x[:, j]
+                ys = center_y[:, j]
+                weights = center_conf[:, j]
+                agg_center_confs.append(float(np.mean(weights)))
+
+                # Tighter outlier filtering for center points (1.5σ vs 2σ for corners).
+                # Center points are always visible in-frame with ~0.99 confidence,
+                # so they cluster tightly — tighter gate prevents shadow/line artifacts.
+                med_x, med_y = float(np.median(xs)), float(np.median(ys))
+                dists = np.sqrt((xs - med_x) ** 2 + (ys - med_y) ** 2)
+                sigma = float(np.std(dists))
+                if sigma > 0:
+                    mask = dists <= 1.5 * sigma
+                    if mask.sum() >= 3:
+                        xs = xs[mask]
+                        ys = ys[mask]
+                        weights = weights[mask]
+
+                agg_centers.append({
+                    "x": round(float(_weighted_median(xs, weights)), 6),
+                    "y": round(float(_weighted_median(ys, weights)), 6),
+                })
+
+            diagnostics.center_points = agg_centers
+            diagnostics.center_confidences = dict(zip(CENTER_NAMES, agg_center_confs))
 
         # Check per-corner confidence for weak corners
         for name, conf in zip(CORNER_NAMES, corner_confs):

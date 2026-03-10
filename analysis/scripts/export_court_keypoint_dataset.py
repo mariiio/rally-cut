@@ -2,10 +2,13 @@
 """Export YOLO-pose training dataset for court keypoint detection.
 
 Extracts frames from videos with court calibration GT in the DB and creates
-a YOLO-pose format dataset with 4 keypoints (court corners).
+a YOLO-pose format dataset with 6 keypoints:
+  0: near-left, 1: near-right, 2: far-right, 3: far-left  (court corners)
+  4: center-left, 5: center-right  (net-sideline intersections)
 
-Corner order: near-left, near-right, far-right, far-left
-(matches CourtCalibrator input format)
+The net intersections are computed from the 4 GT corners via homography
+projection of court-space points (0, 8) and (8, 8) — the net is at the
+midpoint of the 16m court.
 
 Handles off-screen near corners by padding images at the bottom.
 
@@ -36,10 +39,71 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 logger = logging.getLogger(__name__)
 
-CORNER_NAMES = ["near-left", "near-right", "far-right", "far-left"]
+KEYPOINT_NAMES = [
+    "near-left", "near-right", "far-right", "far-left",  # corners
+    "center-left", "center-right",  # net-sideline intersections
+]
 
 # Horizontal flip swaps left/right pairs
-FLIP_IDX = [1, 0, 3, 2]
+FLIP_IDX = [1, 0, 3, 2, 5, 4]
+
+# Court dimensions for net intersection computation
+COURT_WIDTH = 8.0   # meters
+COURT_LENGTH = 16.0  # meters (8m per side, net at 8m)
+
+
+def compute_net_intersections(
+    corners: list[dict[str, float]],
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Compute net-sideline intersection points from 4 GT court corners.
+
+    Uses a homography from court-space to image-space. The net is at
+    court Y=8m (midpoint of the 16m court).
+
+    Args:
+        corners: [near-left, near-right, far-right, far-left] with {x, y}.
+
+    Returns:
+        (center_left, center_right) as {x, y} dicts in image-space coords.
+    """
+    # Court-space coordinates (origin at near-left corner)
+    # near-left=(0,0), near-right=(8,0), far-right=(8,16), far-left=(0,16)
+    court_pts = np.float32([
+        [0, 0],                        # near-left
+        [COURT_WIDTH, 0],              # near-right
+        [COURT_WIDTH, COURT_LENGTH],   # far-right
+        [0, COURT_LENGTH],             # far-left
+    ])
+
+    # Image-space coordinates from GT
+    image_pts = np.float32([
+        [corners[0]["x"], corners[0]["y"]],
+        [corners[1]["x"], corners[1]["y"]],
+        [corners[2]["x"], corners[2]["y"]],
+        [corners[3]["x"], corners[3]["y"]],
+    ])
+
+    # Compute homography: court → image
+    H, _ = cv2.findHomography(court_pts, image_pts)
+    if H is None:
+        # Fallback: simple linear interpolation along sidelines
+        # center = midpoint of each sideline in image space (approximate)
+        cl_x = (corners[0]["x"] + corners[3]["x"]) / 2
+        cl_y = (corners[0]["y"] + corners[3]["y"]) / 2
+        cr_x = (corners[1]["x"] + corners[2]["x"]) / 2
+        cr_y = (corners[1]["y"] + corners[2]["y"]) / 2
+        return {"x": cl_x, "y": cl_y}, {"x": cr_x, "y": cr_y}
+
+    # Project net intersection points: (0, 8) and (8, 8)
+    net_pts_court = np.float32([[0, COURT_LENGTH / 2], [COURT_WIDTH, COURT_LENGTH / 2]])
+    net_pts_court_h = np.hstack([net_pts_court, np.ones((2, 1))]).T  # 3x2
+    projected = H @ net_pts_court_h  # 3x2
+    projected /= projected[2:3, :]  # normalize by w
+
+    center_left = {"x": float(projected[0, 0]), "y": float(projected[1, 0])}
+    center_right = {"x": float(projected[0, 1]), "y": float(projected[1, 1])}
+
+    return center_left, center_right
 
 
 def load_calibrated_videos() -> list[dict[str, Any]]:
@@ -121,15 +185,16 @@ def pad_frame_bottom(frame: np.ndarray, pad_ratio: float) -> np.ndarray:
     return np.vstack([frame, padding])
 
 
-def corners_to_yolo_pose(
-    corners: list[dict[str, float]],
+def keypoints_to_yolo_pose(
+    keypoints_raw: list[dict[str, float]],
     orig_height: int,
     pad_ratio: float,
 ) -> str | None:
-    """Convert 4 court corners to YOLO-pose annotation format.
+    """Convert 6 court keypoints to YOLO-pose annotation format.
 
     Args:
-        corners: 4 corners [{x, y}] in normalized coords (may exceed [0,1]).
+        keypoints_raw: 6 keypoints [{x, y}] in normalized coords (may exceed [0,1]).
+            Order: near-left, near-right, far-right, far-left, center-left, center-right.
         orig_height: Original image height before padding.
         pad_ratio: Bottom padding ratio applied.
 
@@ -141,9 +206,9 @@ def corners_to_yolo_pose(
     scale_y = 1.0 / (1.0 + pad_ratio)
 
     keypoints = []
-    for i, corner in enumerate(corners):
-        x = corner["x"]
-        y = corner["y"] * scale_y  # Rescale to padded image
+    for kp in keypoints_raw:
+        x = kp["x"]
+        y = kp["y"] * scale_y  # Rescale to padded image
 
         # Determine visibility
         # scale_y marks boundary between original image and padding in padded coords
@@ -151,20 +216,18 @@ def corners_to_yolo_pose(
         if 0 <= x <= 1 and 0 <= y <= scale_y:
             vis = 2
         elif 0 <= x <= 1 and y <= 1.0:
-            # In padded area — labeled but not visible in original image
-            vis = 1
+            vis = 1  # In padded area
         else:
-            # Beyond padded canvas
-            vis = 0
+            vis = 0  # Beyond padded canvas
 
         # Clamp to [0, 1] for YOLO format
         x_clamped = max(0.0, min(1.0, x))
         y_clamped = max(0.0, min(1.0, y))
         keypoints.append((x_clamped, y_clamped, vis))
 
-    # Compute bounding box from corners (in padded space)
-    xs = [c["x"] for c in corners]
-    ys = [c["y"] * scale_y for c in corners]
+    # Compute bounding box from ALL keypoints (in padded space)
+    xs = [kp["x"] for kp in keypoints_raw]
+    ys = [kp["y"] * scale_y for kp in keypoints_raw]
 
     # Clamp bbox to [0, 1]
     x_min = max(0.0, min(xs))
@@ -172,7 +235,6 @@ def corners_to_yolo_pose(
     y_min = max(0.0, min(ys))
     y_max = min(1.0, max(ys))
 
-    # Bbox center + size
     cx = (x_min + x_max) / 2
     cy = (y_min + y_max) / 2
     bw = x_max - x_min
@@ -300,13 +362,17 @@ def main() -> None:
         # Extract frames
         frames = extract_frames(video_path, args.frames_per_video, args.seed + vi)
 
+        # Compute net-sideline intersection points from GT corners
+        center_left, center_right = compute_net_intersections(corners)
+        all_keypoints = corners + [center_left, center_right]  # 6 keypoints
+
         exported = 0
         for fi, frame in enumerate(frames):
             # Pad frame
             padded = pad_frame_bottom(frame, args.pad_ratio)
 
             # Create annotation
-            label = corners_to_yolo_pose(corners, frame.shape[0], args.pad_ratio)
+            label = keypoints_to_yolo_pose(all_keypoints, frame.shape[0], args.pad_ratio)
             if label is None:
                 total_skipped += 1
                 continue
@@ -361,8 +427,8 @@ path: {args.output_dir.resolve()}
 train: images/train
 val: images/val
 
-kpt_shape: [4, 3]  # 4 keypoints (corners), 3 dims (x, y, visibility)
-flip_idx: {FLIP_IDX}  # near-left<->near-right, far-left<->far-right
+kpt_shape: [6, 3]  # 6 keypoints, 3 dims (x, y, visibility)
+flip_idx: {FLIP_IDX}  # left<->right pairs: NL-NR, FL-FR, CL-CR
 
 names:
   0: court

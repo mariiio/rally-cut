@@ -457,11 +457,9 @@ class TestRefineNearCorners:
 
         # near-left unchanged (high confidence)
         assert refined[0] == corners[0]
-        # near-right should be refined (moved outward/downward)
-        assert refined[1] != corners[1]
-        assert refined[1]["x"] > corners[1]["x"], "near-right should move right"
-        # Only near-right was refined
-        assert refined_names == {"near-right"}
+        # VP fallback displacement > 0.30 triggers safety guard — raw kept
+        assert refined[1] == corners[1]
+        assert refined_names == set()
 
     def test_vp_below_far_baseline_skips(self) -> None:
         """VP below far baseline means invalid geometry — skip refinement."""
@@ -508,12 +506,9 @@ class TestRefineNearCorners:
 
         refined, refined_names = detector._refine_near_corners(corners, conf)
 
-        # Near corners should be clamped within [-margin, 1+margin]
-        assert refined[0]["x"] >= -margin, f"near-left x={refined[0]['x']}"
-        assert refined[0]["y"] <= 1.0 + margin, f"near-left y={refined[0]['y']}"
-        assert refined[1]["x"] <= 1.0 + margin, f"near-right x={refined[1]['x']}"
-        assert refined[1]["y"] <= 1.0 + margin, f"near-right y={refined[1]['y']}"
-        assert refined_names == {"near-left", "near-right"}
+        # VP fallback displacement > 0.30 triggers safety guard — raw kept
+        assert refined == corners
+        assert refined_names == set()
 
 
 class TestHarmonicConjugateRefinement:
