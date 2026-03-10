@@ -928,13 +928,16 @@ class MatchPlayerTracker:
     def _detect_side_switches_combinatorial(self) -> list[int]:
         """Detect side switches via combinatorial search.
 
-        Generates candidate switch points from two sources:
-        1. Ball trajectory direction (consecutive same-direction serves)
-        2. Appearance preference sign change (adjacent rallies prefer
-           opposite orientation relative to their neighbors)
+        Two-phase approach:
+          Phase A: Generate candidate switch points from ball trajectory
+            direction and appearance preference sign changes. Try all 2^K
+            combinations (K≤8), scoring by normalized pairwise team
+            appearance preferences with parsimony penalty.
+          Phase B: Refine each detected switch ±1 rally, keeping shifts
+            that improve the score or align with serve direction changes.
 
-        Tries all 2^K combinations of candidates, scoring each partition
-        using normalized pairwise team appearance preferences.
+        Also validates multi-switch results by checking each switch has
+        positive marginal contribution (prevents FP piggybacking on TP).
 
         Returns:
             List of rally indices where side switches should be applied.
@@ -1118,18 +1121,6 @@ class MatchPlayerTracker:
         best_switches: list[int] = []
         n_combos = 1 << len(candidates)
 
-        # Build set of rally indices where serve direction actually changes
-        # (e.g., far→near). Used for tie-breaking: prefer switch points that
-        # align with observed direction changes.
-        direction_changes: set[int] = set()
-        for i in range(1, n):
-            if (
-                serve_dirs[i] != "?"
-                and serve_dirs[i - 1] != "?"
-                and serve_dirs[i] != serve_dirs[i - 1]
-            ):
-                direction_changes.add(i)
-
         for mask in range(1, n_combos):
             switch_set = {
                 candidates[j]
@@ -1137,17 +1128,11 @@ class MatchPlayerTracker:
                 if mask & (1 << j)
             }
             score = score_partition(switch_set)
-            if score > best_score or (
-                score == best_score
-                and len(switch_set & direction_changes)
-                > len(set(best_switches) & direction_changes)
-            ):
+            if score > best_score:
                 best_score = score
                 best_switches = sorted(switch_set)
 
         if best_switches:
-            improvement = best_score - baseline_score
-
             # Post-validation: drop switches whose marginal contribution
             # is too small. A FP switch can piggyback on a real TP switch
             # that dominates the total score.
@@ -1171,29 +1156,38 @@ class MatchPlayerTracker:
                         len(best_switches), len(validated),
                     )
                     best_switches = validated
-                    # Recalculate score with validated set
-                    if best_switches:
-                        best_score = score_partition(set(best_switches))
-                    else:
-                        best_score = baseline_score
+                    if not best_switches:
+                        logger.info("Side switch search: all switches dropped")
+                        return []
+                    best_score = score_partition(set(best_switches))
+
+            # Build set of rally indices where serve direction changes
+            # (used for Phase B tie-breaking only).
+            direction_changes: set[int] = set()
+            for i in range(1, n):
+                if (
+                    serve_dirs[i] != "?"
+                    and serve_dirs[i - 1] != "?"
+                    and serve_dirs[i] != serve_dirs[i - 1]
+                ):
+                    direction_changes.add(i)
 
             # Phase B: Refine each switch boundary ±1.
             # Ball direction can trigger at rally k when the actual switch
             # is at k±1. Try shifting each switch individually and keep
-            # the shift if it improves the score.
+            # the shift if it improves the score (or aligns with a serve
+            # direction change on tie).
             refined = list(best_switches)
-            for idx, sw in enumerate(refined):
+            for idx in range(len(refined)):
+                sw = refined[idx]
+                others = {refined[j] for j in range(len(refined)) if j != idx}
                 best_local = sw
                 best_local_score = best_score
                 for delta in [-1, 1]:
                     alt = sw + delta
-                    if alt < 1 or alt >= n:
+                    if alt < 1 or alt >= n or alt in others:
                         continue
-                    if alt in set(refined) - {sw}:
-                        continue  # Would duplicate another switch
-                    trial = set(refined)
-                    trial.discard(sw)
-                    trial.add(alt)
+                    trial = others | {alt}
                     trial_score = score_partition(trial)
                     if trial_score > best_local_score or (
                         trial_score == best_local_score
