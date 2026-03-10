@@ -21,7 +21,7 @@ import numpy as np
 
 from rallycut.court.calibration import COURT_LENGTH, COURT_WIDTH
 from rallycut.court.detector import CourtDetectionResult
-from rallycut.court.line_geometry import line_intersection
+from rallycut.court.line_geometry import line_intersection, point_line_distance
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +168,9 @@ class CourtKeypointDetector:
             if result is not None:
                 frame_results.append(result)
 
+        # Keep a representative frame for sideline detection
+        mid_frame = frames[len(frames) // 2] if frames else None
+
         n_sampled = len(frames)
 
         if not frame_results:
@@ -185,6 +188,7 @@ class CourtKeypointDetector:
         # Refine low-confidence near corners via perspective extrapolation
         corners, vp_refined = self._refine_near_corners(
             corners, diagnostics.per_corner_confidence,
+            frame=mid_frame,
         )
 
         # Penalize confidence for unreliable corners. The bbox confidence
@@ -230,7 +234,9 @@ class CourtKeypointDetector:
 
         # Refine low-confidence near corners via perspective extrapolation
         per_corner_conf = dict(zip(CORNER_NAMES, result.kpt_confidences))
-        corners, vp_refined = self._refine_near_corners(result.corners, per_corner_conf)
+        corners, vp_refined = self._refine_near_corners(
+            result.corners, per_corner_conf, frame=frame,
+        )
         confidence = self._penalize_confidence(result.confidence, per_corner_conf, vp_refined)
 
         return CourtDetectionResult(
@@ -359,20 +365,22 @@ class CourtKeypointDetector:
         corners: list[dict[str, float]],
         per_corner_confidence: dict[str, float],
         conf_threshold: float = 0.5,
+        frame: np.ndarray | None = None,
     ) -> tuple[list[dict[str, float]], set[str]]:
-        """Replace low-confidence near corners with perspective-extrapolated positions.
+        """Replace low-confidence near corners using best available geometry.
 
-        Uses the accurate far corners as anchors, derives the vanishing point from
-        sideline directions, and extrapolates near corners using the known court
-        aspect ratio (16m/8m = 2.0). Same math as classical detector Strategy 3.
-
-        Extrapolated positions are clamped to NEAR_CORNER_MAX_MARGIN beyond the
-        frame to prevent overshoot when GT corners are just slightly off-screen.
+        Strategy priority:
+        1. **Sideline detection from frame** (frame available): Detect sidelines
+           via Hough lines, compute VP from actual visible lines instead of the
+           model's low-confidence near-corner guesses.
+        2. **VP from model corners** (fallback): Uses the model's near-corner
+           guesses for VP computation. Less accurate but always works.
 
         Args:
             corners: 4 corners [near-left, near-right, far-right, far-left].
             per_corner_confidence: Mean confidence per corner name.
             conf_threshold: Below this, replace the near corner.
+            frame: Optional BGR frame for sideline detection.
 
         Returns:
             Tuple of (refined corners, set of refined corner names).
@@ -387,42 +395,177 @@ class CourtKeypointDetector:
         if nl_conf >= conf_threshold and nr_conf >= conf_threshold:
             return corners, set()
 
-        # Extract corner positions as tuples
+        # Strategy 1: Detect sidelines from the frame image
+        if frame is not None:
+            result = self._refine_via_sideline_detection(
+                corners, per_corner_confidence, conf_threshold, frame,
+            )
+            if result is not None:
+                return result
+
+        # Strategy 2: Fallback — VP from model's near-corner guesses
+        return self._refine_via_vp_fallback(corners, per_corner_confidence, conf_threshold)
+
+    def _refine_via_sideline_detection(
+        self,
+        corners: list[dict[str, float]],
+        per_corner_confidence: dict[str, float],
+        conf_threshold: float,
+        frame: np.ndarray,
+    ) -> tuple[list[dict[str, float]], set[str]] | None:
+        """Detect sidelines in the frame using Hough lines, compute VP from them.
+
+        The sidelines are typically the most visible court lines. By detecting
+        them directly from the image, we get a much better VP than using the
+        model's low-confidence near-corner guesses.
+        """
+        h, w = frame.shape[:2]
+        far_left = (corners[3]["x"], corners[3]["y"])
+        far_right = (corners[2]["x"], corners[2]["y"])
+
+        # Convert far corners to pixel coords
+        fl_px = (int(far_left[0] * w), int(far_left[1] * h))
+        fr_px = (int(far_right[0] * w), int(far_right[1] * h))
+
+        # Only look in the lower portion of the frame (below far baseline)
+        # where sidelines would be visible
+        far_y_px = max(fl_px[1], fr_px[1])
+        roi_top = max(0, far_y_px - int(0.05 * h))  # slightly above far baseline
+
+        # Edge detection on the ROI
+        gray = cv2.cvtColor(frame[roi_top:], cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+
+        # Hough line detection
+        lines = cv2.HoughLinesP(
+            edges, rho=1, theta=np.pi / 180, threshold=50,
+            minLineLength=int(0.1 * w), maxLineGap=int(0.02 * w),
+        )
+
+        if lines is None or len(lines) < 2:
+            logger.debug("Sideline detection: insufficient lines found")
+            return None
+
+        # Adjust line Y coordinates back to full frame
+        adjusted_lines = []
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            adjusted_lines.append((x1, y1 + roi_top, x2, y2 + roi_top))
+
+        # Filter for lines that could be sidelines:
+        # - Must be roughly diagonal (15-75 degrees from horizontal)
+        # - Must pass near a far corner
+        far_corner_threshold = 0.05 * max(w, h)  # 5% of image size
+
+        left_sideline_candidates = []
+        right_sideline_candidates = []
+
+        for x1, y1, x2, y2 in adjusted_lines:
+            # Check angle
+            dx, dy = x2 - x1, y2 - y1
+            angle = abs(math.degrees(math.atan2(dy, dx)))
+            if angle < 15 or angle > 75:
+                continue
+
+            # Normalize to [0,1]
+            p1 = (x1 / w, y1 / h)
+            p2 = (x2 / w, y2 / h)
+
+            # Check proximity to far corners
+            dist_to_fl = point_line_distance(far_left, p1, p2) * max(w, h)
+            dist_to_fr = point_line_distance(far_right, p1, p2) * max(w, h)
+
+            if dist_to_fl < far_corner_threshold:
+                left_sideline_candidates.append((p1, p2))
+            if dist_to_fr < far_corner_threshold:
+                right_sideline_candidates.append((p1, p2))
+
+        if not left_sideline_candidates and not right_sideline_candidates:
+            logger.debug("Sideline detection: no lines pass near far corners")
+            return None
+
+        # Pick longest candidate from each side
+        left_line = self._longest_line(left_sideline_candidates)
+        right_line = self._longest_line(right_sideline_candidates)
+
+        # Require BOTH sidelines detected — mixing with model's low-confidence
+        # guesses introduces noise that's worse than the fallback VP
+        if not left_line or not right_line:
+            logger.debug(
+                "Sideline detection: need both sides (left=%s, right=%s)",
+                bool(left_line), bool(right_line),
+            )
+            return None
+
+        vp = line_intersection(left_line[0], left_line[1], right_line[0], right_line[1])
+
+        if vp is None:
+            return None
+
+        # Validate VP is above far baseline
+        far_mid_y = (far_left[1] + far_right[1]) / 2.0
+        if vp[1] >= far_mid_y:
+            logger.debug("Sideline VP below far baseline — skipping")
+            return None
+
+        logger.info(
+            "Sideline detection: VP=(%.3f, %.3f) from %d left + %d right candidates",
+            vp[0], vp[1],
+            len(left_sideline_candidates), len(right_sideline_candidates),
+        )
+
+        # Now extrapolate near corners using this VP
+        return self._extrapolate_from_vp(corners, per_corner_confidence, conf_threshold, vp)
+
+    def _refine_via_vp_fallback(
+        self,
+        corners: list[dict[str, float]],
+        per_corner_confidence: dict[str, float],
+        conf_threshold: float,
+    ) -> tuple[list[dict[str, float]], set[str]]:
+        """Original VP extrapolation using model's near-corner guesses.
+
+        Fallback when no frame is available or sideline detection fails.
+        """
         near_left = (corners[0]["x"], corners[0]["y"])
         near_right = (corners[1]["x"], corners[1]["y"])
         far_right = (corners[2]["x"], corners[2]["y"])
         far_left = (corners[3]["x"], corners[3]["y"])
 
-        # Compute vanishing point from sideline convergence
-        # Left sideline: far_left → near_left, Right sideline: far_right → near_right
         vp = line_intersection(far_left, near_left, far_right, near_right)
         if vp is None:
-            logger.debug("Sidelines are parallel — skipping near-corner refinement")
             return corners, set()
 
-        # Validate VP is above far baseline (perspective convergence upward)
         far_mid_y = (far_left[1] + far_right[1]) / 2.0
         if vp[1] >= far_mid_y:
-            logger.debug(
-                "VP below far baseline (y=%.3f >= %.3f) — skipping refinement",
-                vp[1], far_mid_y,
-            )
             return corners, set()
 
-        # Aspect ratio: court_length / court_width
-        aspect_ratio = COURT_LENGTH / COURT_WIDTH  # 2.0
+        return self._extrapolate_from_vp(corners, per_corner_confidence, conf_threshold, vp)
 
-        # Far baseline length (in normalized image coords)
+    def _extrapolate_from_vp(
+        self,
+        corners: list[dict[str, float]],
+        per_corner_confidence: dict[str, float],
+        conf_threshold: float,
+        vp: tuple[float, float],
+    ) -> tuple[list[dict[str, float]], set[str]]:
+        """Extrapolate low-confidence near corners from a vanishing point."""
+        nl_conf = per_corner_confidence.get("near-left", 1.0)
+        nr_conf = per_corner_confidence.get("near-right", 1.0)
+
+        far_right = (corners[2]["x"], corners[2]["y"])
+        far_left = (corners[3]["x"], corners[3]["y"])
+
+        aspect_ratio = COURT_LENGTH / COURT_WIDTH
         far_baseline_len = math.sqrt(
             (far_right[0] - far_left[0]) ** 2 + (far_right[1] - far_left[1]) ** 2
         )
         if far_baseline_len < 0.01:
             return corners, set()
 
-        refined = list(corners)  # shallow copy of dicts
+        refined = list(corners)
         refined_names: set[str] = set()
 
-        # Extrapolate low-confidence near-left
         if nl_conf < conf_threshold:
             dx = vp[0] - far_left[0]
             dy = vp[1] - far_left[1]
@@ -433,11 +576,10 @@ class CourtKeypointDetector:
                 refined[0] = {"x": round(nx, 6), "y": round(ny, 6)}
                 refined_names.add("near-left")
                 logger.info(
-                    "Refined near-left: (%.3f, %.3f) → (%.3f, %.3f) [conf=%.3f]",
-                    near_left[0], near_left[1], nx, ny, nl_conf,
+                    "VP refined near-left: (%.3f, %.3f) → (%.3f, %.3f)",
+                    corners[0]["x"], corners[0]["y"], nx, ny,
                 )
 
-        # Extrapolate low-confidence near-right
         if nr_conf < conf_threshold:
             dx = vp[0] - far_right[0]
             dy = vp[1] - far_right[1]
@@ -448,25 +590,40 @@ class CourtKeypointDetector:
                 refined[1] = {"x": round(nx, 6), "y": round(ny, 6)}
                 refined_names.add("near-right")
                 logger.info(
-                    "Refined near-right: (%.3f, %.3f) → (%.3f, %.3f) [conf=%.3f]",
-                    near_right[0], near_right[1], nx, ny, nr_conf,
+                    "VP refined near-right: (%.3f, %.3f) → (%.3f, %.3f)",
+                    corners[1]["x"], corners[1]["y"], nx, ny,
                 )
 
-        # Clamp near corners to limit extrapolation overshoot
+        refined = self._clamp_near_corners(refined)
+        if not self._is_convex_quad(refined):
+            logger.warning("VP refined corners not convex — falling back to original")
+            return corners, set()
+
+        return refined, refined_names
+
+    def _clamp_near_corners(self, corners: list[dict[str, float]]) -> list[dict[str, float]]:
+        """Clamp near corners to limit extrapolation overshoot."""
         margin = self.NEAR_CORNER_MAX_MARGIN
-        for i in (0, 1):  # near-left, near-right
+        refined = list(corners)
+        for i in (0, 1):
             c = refined[i]
             cx = max(-margin, min(1.0 + margin, c["x"]))
             cy = max(-margin, min(1.0 + margin, c["y"]))
             if cx != c["x"] or cy != c["y"]:
                 refined[i] = {"x": round(cx, 6), "y": round(cy, 6)}
+        return refined
 
-        # Validate result is a convex quadrilateral; fall back if not
-        if not self._is_convex_quad(refined):
-            logger.warning("Refined corners not convex — falling back to original")
-            return corners, set()
-
-        return refined, refined_names
+    @staticmethod
+    def _longest_line(
+        candidates: list[tuple[tuple[float, float], tuple[float, float]]],
+    ) -> tuple[tuple[float, float], tuple[float, float]] | None:
+        """Pick the longest line segment from candidates."""
+        if not candidates:
+            return None
+        return max(
+            candidates,
+            key=lambda c: math.hypot(c[1][0] - c[0][0], c[1][1] - c[0][1]),
+        )
 
     # Minimum per-corner confidence to count as "reliable". Below this, the
     # corner position is essentially a guess (keypoint invisible or off-screen).
