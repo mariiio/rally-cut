@@ -1045,6 +1045,11 @@ class MatchPlayerTracker:
                 if vals:
                     avg_pref_with_prior[k] = float(np.mean(vals))
 
+            # Rally 1 special case: if strongly negative with rally 0,
+            # it's a candidate for early switch (loop below starts at k=2).
+            if avg_pref_with_prior[1] < -0.01:
+                appearance_candidates.append(1)
+
             for k in range(2, n):
                 prev_val = avg_pref_with_prior[k - 1]
                 curr_val = avg_pref_with_prior[k]
@@ -1076,7 +1081,10 @@ class MatchPlayerTracker:
 
         # Step 4: Score partition using normalized preferences.
         # Each switch incurs a penalty (parsimony: prefer fewer switches).
-        switch_penalty = 1.5
+        # Sweep (23 videos): 1.0 = best accuracy (82.9%), 1.4-1.5 = best
+        # switch F1 (68.6%). 1.0 catches short-match switches (vuvu, vivi)
+        # with acceptable FP rate (8 FPs vs 4 at 1.5).
+        switch_penalty = globals().get("_SWITCH_PENALTY_OVERRIDE") or 1.0
 
         def score_partition(switch_set: set[int]) -> float:
             """Score a partition defined by switch points."""
