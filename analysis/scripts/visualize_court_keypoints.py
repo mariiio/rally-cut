@@ -31,14 +31,22 @@ CORNER_COLORS = [
 GT_COLOR = (255, 255, 0)  # cyan for GT
 
 
+CENTER_COLORS = [
+    (255, 0, 255),  # center-left: magenta
+    (0, 255, 255),  # center-right: yellow
+]
+CENTER_NAMES_VIS = ["center-left", "center-right"]
+
+
 def draw_court(
     frame: np.ndarray,
     corners: list[dict[str, float]],
     color: tuple[int, ...] = (0, 255, 255),
     label: str = "",
     gt_corners: list[dict[str, float]] | None = None,
+    center_points: list[dict[str, float]] | None = None,
 ) -> np.ndarray:
-    """Draw court corners and polygon on frame."""
+    """Draw court corners, center points, and polygon on frame."""
     h, w = frame.shape[:2]
     vis = frame.copy()
 
@@ -85,6 +93,22 @@ def draw_court(
             vis, txt, (px + 12, py + 5),
             cv2.FONT_HERSHEY_SIMPLEX, 0.5, CORNER_COLORS[i], 2, cv2.LINE_AA,
         )
+
+    # Draw center points (net-sideline intersections)
+    if center_points and len(center_points) == 2:
+        for i, c in enumerate(center_points):
+            px, py = int(c["x"] * w), int(c["y"] * h)
+            cv2.circle(vis, (px, py), 7, CENTER_COLORS[i], -1, cv2.LINE_AA)
+            cv2.circle(vis, (px, py), 7, (255, 255, 255), 2, cv2.LINE_AA)
+            txt = f"{CENTER_NAMES_VIS[i]}"
+            cv2.putText(
+                vis, txt, (px + 10, py - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, CENTER_COLORS[i], 2, cv2.LINE_AA,
+            )
+        # Draw center line between the two points
+        cl = (int(center_points[0]["x"] * w), int(center_points[0]["y"] * h))
+        cr = (int(center_points[1]["x"] * w), int(center_points[1]["y"] * h))
+        cv2.line(vis, cl, cr, (255, 255, 255), 2, cv2.LINE_AA)
 
     if label:
         cv2.putText(
@@ -157,9 +181,11 @@ def main() -> None:
             continue
 
         result = detector.detect(video_path, n_frames=args.n_frames)
+        diag = detector.last_diagnostics
 
         label = f"Keypoint conf={result.confidence:.3f}"
-        vis = draw_court(frame, result.corners, (0, 255, 255), label, gt_corners)
+        center_pts = diag.center_points if diag else None
+        vis = draw_court(frame, result.corners, (0, 255, 255), label, gt_corners, center_pts)
 
         out_path = args.output_dir / f"{vid_label}_keypoints.jpg"
         cv2.imwrite(str(out_path), vis)

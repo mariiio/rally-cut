@@ -2,13 +2,15 @@
 """Train YOLO11s-pose model for court keypoint detection.
 
 Fine-tunes yolo11s-pose (COCO person-pose pretrained) on beach volleyball
-court corners. Predicts 4 keypoints: near-left, near-right, far-right, far-left.
+court keypoints. Predicts 6 keypoints:
+  0: near-left, 1: near-right, 2: far-right, 3: far-left (corners)
+  4: center-left, 5: center-right (net-sideline intersections)
 
 Requires dataset exported by export_court_keypoint_dataset.py.
 
 Usage:
     uv run python scripts/train_court_keypoint_model.py
-    uv run python scripts/train_court_keypoint_model.py --data datasets/court_keypoints/court_keypoints.yaml
+    uv run python scripts/train_court_keypoint_model.py --data datasets/court_keypoints_v3/court_keypoints.yaml
     uv run python scripts/train_court_keypoint_model.py --epochs 200
     uv run python scripts/train_court_keypoint_model.py --no-freeze  # Train full model
 """
@@ -82,7 +84,7 @@ def main() -> None:
         )
     else:
         model = YOLO("yolo11s-pose.pt")
-        print("Loaded yolo11s-pose.pt (COCO pretrained, 17 kpts → fine-tune to 4 kpts)")
+        print("Loaded yolo11s-pose.pt (COCO pretrained, 17 kpts → fine-tune to 6 kpts)")
         print(f"Dataset: {args.data}")
         print(f"Epochs: {args.epochs}, Batch: {args.batch}, Image size: {args.imgsz}")
         print(f"Freeze backbone: {not args.no_freeze}, Device: {device}")
