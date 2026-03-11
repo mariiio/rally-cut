@@ -267,30 +267,69 @@ export const useAnalysisStore = create<AnalysisState>()(
 
       resumeIfNeeded: async (videoId: string) => {
         const pipeline = get().pipelines[videoId];
-        if (!pipeline) return;
+        const phase = pipeline?.phase ?? 'idle';
 
-        // Capture generation marker — if startAnalysis resets the pipeline while
-        // we're awaiting an API call, startedAt will change and we must bail out.
-        const generation = pipeline.startedAt;
+        // Don't interfere with active polling
+        if (pollTimers[videoId]) return;
 
-        const isStale = () => {
+        // For persisted in-progress phases, resume from local state
+        if (pipeline && phase !== 'idle') {
+          const generation = pipeline.startedAt;
+          const isStale = () => {
+            const current = get().pipelines[videoId];
+            return !current || current.startedAt !== generation;
+          };
+
+          const baseUpdate = makePipelineUpdater(videoId, set);
+          const updatePipeline: PipelineUpdater = (patch) => {
+            if (!isStale()) baseUpdate(patch);
+          };
+
+          if (checkAbsoluteTimeout(videoId, pipeline, updatePipeline, 'Analysis')) return;
+
+          if (phase === 'detecting') {
+            await resumeDetecting(videoId, set, get, updatePipeline, isStale);
+          } else if (phase === 'tracking') {
+            await resumeTracking(videoId, set, get, updatePipeline, isStale);
+          } else if (phase === 'completing') {
+            if (!isStale()) await completeAnalysis(videoId, set, get);
+          }
+          return;
+        }
+
+        // For idle/missing pipeline, check backend for active processing.
+        // Catches page reloads during non-persisted phases (quality_check)
+        // where the backend is still running.
+        try {
+          const status = await getAnalysisPipelineStatus(videoId);
+          // Re-check — startAnalysis may have fired while we were awaiting
           const current = get().pipelines[videoId];
-          return !current || current.startedAt !== generation;
-        };
+          if (current && current.phase !== 'idle') return;
 
-        const baseUpdate = makePipelineUpdater(videoId, set);
-        const updatePipeline: PipelineUpdater = (patch) => {
-          if (!isStale()) baseUpdate(patch);
-        };
+          const updatePipeline = makePipelineUpdater(videoId, set);
 
-        if (checkAbsoluteTimeout(videoId, pipeline, updatePipeline, 'Analysis')) return;
-
-        if (pipeline.phase === 'detecting' && !pollTimers[videoId]) {
-          await resumeDetecting(videoId, set, get, updatePipeline, isStale);
-        } else if (pipeline.phase === 'tracking' && !pollTimers[videoId]) {
-          await resumeTracking(videoId, set, get, updatePipeline, isStale);
-        } else if (pipeline.phase === 'completing') {
-          if (!isStale()) await completeAnalysis(videoId, set, get);
+          if (status.detection.status === 'processing') {
+            updatePipeline({
+              phase: 'detecting',
+              progress: 15,
+              stepMessage: 'Analyzing video for rallies...',
+              startedAt: Date.now(),
+            });
+            pollDetection(videoId, set, get);
+          } else if (status.tracking.status === 'processing' || status.tracking.status === 'pending') {
+            const completed = status.tracking.completed ?? 0;
+            const total = Math.max(status.tracking.total ?? 1, 1);
+            updatePipeline({
+              phase: 'tracking',
+              progress: 50 + (completed / total) * 40,
+              stepMessage: `Tracking players (rally ${completed + 1} of ${total})...`,
+              trackingProgress: { completed, total },
+              startedAt: Date.now(),
+            });
+            pollTracking(videoId, set, get);
+          }
+        } catch {
+          // Non-critical — if backend is unreachable, stay idle
         }
       },
 
