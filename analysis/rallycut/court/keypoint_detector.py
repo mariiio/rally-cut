@@ -501,9 +501,7 @@ class CourtKeypointDetector:
         Uses sidelines defined by high-confidence far corners and center
         points to place near corners. For each near corner:
 
-        1. If the raw Y is plausible (between far baseline and frame edge),
-           project the raw point onto the sideline — keeping its depth but
-           correcting X to lie exactly on the line.
+        1. If raw Y is plausible, project onto sideline (keep Y, fix X).
         2. Otherwise, extrapolate via VP + aspect ratio (full replacement).
         """
         center_left = (center_points[0]["x"], center_points[0]["y"])
@@ -539,12 +537,9 @@ class CourtKeypointDetector:
             far_pt = far_left if i == 0 else far_right
             ctr_pt = center_left if i == 0 else center_right
 
-            # Is the raw Y plausible? (between far baseline and frame edge + margin)
+            # Sideline projection (keep raw Y, fix X)
             raw_y_plausible = far_pt[1] + 0.05 < raw_y < 1.0 + margin
-
             if raw_y_plausible:
-                # Project raw point onto the sideline at the same Y depth.
-                # Sideline: far_pt + t * (ctr_pt - far_pt), extended beyond.
                 dy_sl = ctr_pt[1] - far_pt[1]
                 if abs(dy_sl) > 1e-6:
                     t = (raw_y - far_pt[1]) / dy_sl
@@ -556,7 +551,6 @@ class CourtKeypointDetector:
                         name, raw_x, raw_y, proj_x, raw_y,
                     )
                 else:
-                    # Degenerate sideline, use VP fallback
                     if name in vp_refined:
                         refined[i] = vp_corners[i]
                         refined_names.add(name)

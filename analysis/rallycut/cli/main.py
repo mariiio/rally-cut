@@ -16,6 +16,7 @@ from rallycut.cli.commands.match_players import match_players as match_players_c
 from rallycut.cli.commands.profile import profile as profile_command
 from rallycut.cli.commands.reattribute_actions import reattribute_actions_cmd
 from rallycut.cli.commands.remap_track_ids import remap_track_ids_cmd
+from rallycut.cli.commands.repair_identities import repair_identities_cmd
 from rallycut.cli.commands.track_player import track_players as track_players_command
 from rallycut.cli.commands.train import app as train_app
 
@@ -38,6 +39,7 @@ app.command(name="assess-quality")(assess_quality_command)
 app.command(name="compute-match-stats")(compute_match_stats_cmd)
 app.command(name="reattribute-actions")(reattribute_actions_cmd)
 app.command(name="remap-track-ids")(remap_track_ids_cmd)
+app.command(name="repair-identities")(repair_identities_cmd)
 app.add_typer(evaluate_tracking_app, name="evaluate-tracking")
 app.add_typer(label_app, name="label")
 app.add_typer(evaluate_app, name="evaluate")

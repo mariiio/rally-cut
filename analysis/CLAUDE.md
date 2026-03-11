@@ -121,6 +121,8 @@ uv run rallycut match-players <video-id>                 # Assign consistent pla
 uv run rallycut match-players <video-id> -o result.json  # Export assignments to JSON
 uv run rallycut match-players <video-id> --num-samples 20  # More frames per track (default: 12)
 uv run rallycut match-players <video-id> -q              # Quiet mode
+uv run rallycut repair-identities <video-id>             # Fix within-rally ID switches using match profiles
+uv run rallycut repair-identities <video-id> --dry-run   # Preview repairs without updating DB
 uv run rallycut remap-track-ids <video-id>               # Remap stored track IDs to player IDs
 uv run rallycut remap-track-ids <video-id> --dry-run     # Preview changes without updating DB
 uv run rallycut reattribute-actions <video-id>           # Re-attribute actions using match-level teams
