@@ -169,6 +169,7 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
   - If not set: processes locally on CPU (~6 FPS, blocks API server)
   - Modal path sends per-rally webhooks (`/v1/webhooks/tracking-rally-complete`) for progressive DB updates
   - Batch completion webhook (`/v1/webhooks/tracking-batch-complete`) triggers match analysis
+  - **Match analysis pipeline**: match-players → repair-identities → remap-track-ids → reattribute-actions → compute-match-stats (all best-effort, non-fatal)
 
 ### Label Studio Integration (Ground Truth)
 - `GET /v1/rallies/:id/label-studio` → status (hasTrackingData, hasGroundTruth, taskId)
