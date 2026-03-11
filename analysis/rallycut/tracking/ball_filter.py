@@ -26,9 +26,10 @@ logger = logging.getLogger(__name__)
 class BallFilterConfig:
     """Configuration for ball temporal filtering.
 
-    Raw filter pipeline applies motion energy filtering, stationarity detection,
-    segment pruning, oscillation pruning, outlier removal, blip removal, and
-    interpolation to detector positions.
+    WASB pipeline: exit ghost detection, segment pruning (with chain-based
+    anchor pruning), outlier removal, and interpolation. Legacy stages
+    (motion energy, stationarity, oscillation, blip) are available but
+    disabled for WASB. See get_wasb_filter_config() for production preset.
     """
 
     # Interpolation for missing frames
@@ -45,6 +46,12 @@ class BallFilterConfig:
     segment_jump_threshold: float = 0.20  # 20% of screen to split segments
     min_segment_frames: int = 15  # Segments shorter than this are discarded
     min_output_confidence: float = 0.05  # Drop positions below this confidence
+    # Max frame gap within a single trajectory segment. Detections separated
+    # by more than this many frames are treated as separate segments even if
+    # spatially close. Larger than max_interpolation_gap (which controls gap
+    # filling) because segmentation is about trajectory continuity, not
+    # position fabrication. 15 frames ≈ 0.5s at 30fps.
+    max_segment_gap: int = 15
 
     # Oscillation pruning (detects cluster-based player-locking after ball exits)
     # The detector can lock onto two players and alternate with high confidence
@@ -88,6 +95,21 @@ class BallFilterConfig:
 
     # Outlier removal tuning
     outlier_min_speed: float = 0.02  # 2% of screen/frame — below this, skip reversal check
+
+    # Chain-based anchor pruning: max temporal gap for connecting two anchors
+    # into the same trajectory chain. Segments not connected to the main chain
+    # are non-ball objects (pigeons, cars, player hands). Separate from
+    # max_interpolation_gap because chain connectivity should be generous
+    # (recognize the ball's path) while interpolation should be tight (don't
+    # fabricate positions over long gaps). 30 frames ≈ 1s at 30fps.
+    max_chain_gap: int = 30
+
+    # Preserve large disconnected anchors: segments this long are almost
+    # certainly real ball trajectory even if disconnected from the main chain
+    # (e.g., ball went off-screen for several seconds and came back).
+    # Short disconnected anchors (< this) are noise (cars, pigeons, player
+    # lock-on). 30 frames ≈ 1s at 30fps.
+    min_disconnected_anchor_frames: int = 30
 
     # Motion energy filter (removes false positives at stationary positions)
     # Real ball in flight creates temporal intensity change. False positives
@@ -134,14 +156,11 @@ def get_wasb_filter_config() -> BallFilterConfig:
     """Get optimized BallFilterConfig for fine-tuned WASB-only output.
 
     The fine-tuned WASB model produces clean positions that don't need
-    aggressive filtering. Grid search on 9 GT rallies (Feb 2026):
-    - Unfiltered: 90.3% match, 36.9px error
-    - Optimal: 90.9% match, 23.4px error
-    - Key: blip removal HURTS (-1.1%), oscillation ZERO, light filter wins
-
-    Compared to default unfiltered:
-    - Unfiltered: 90.3% match, 36.9px error
-    - Filtered: 90.9% match, 23.4px error (+0.6pp match, -13.5px error)
+    aggressive filtering. Light filter with chain-based pruning is optimal.
+    Grid search on 16 GT rallies (Mar 2026):
+    - Key: blip removal HURTS, oscillation ZERO, light filter wins
+    - Segment pruning + chain-based anchor pruning + outlier + interpolation
+    - Motion energy, stationarity, oscillation, blip: all disabled
     """
     return BallFilterConfig(
         # Segment pruning (removes false segments at boundaries)
@@ -173,17 +192,18 @@ def get_wasb_filter_config() -> BallFilterConfig:
 class BallTemporalFilter:
     """Ball tracking temporal filter with multi-stage post-processing pipeline.
 
-    Pipeline order:
-    1. Motion energy filter (remove false positives at static positions)
-    2. Stationarity filter (remove player lock-on runs)
-    3. Exit ghost detection (on raw data, before pruning)
-    4. Segment pruning (split at jumps, discard short fragments)
-    5. Exit ghost removal (apply detected ranges to pruned data)
-    6. Oscillation pruning (trim cluster-based A-B-A-B tails)
-    7. Outlier removal (clean flickering within real segments)
-    8. Blip removal (remove multi-frame false positives)
-    9. Re-prune (clean up fragments exposed by outlier/blip removal)
-    10. Interpolation (fill small gaps with linear interpolation)
+    Active WASB pipeline (stages enabled via get_wasb_filter_config):
+    1. Exit ghost detection (on raw data, before pruning)
+    2. Segment pruning: split at jumps, chain-based anchor pruning,
+       short-segment recovery near anchors
+    3. Exit ghost removal (apply detected ranges to pruned data)
+    4. Outlier removal (clean flickering/reversals within real segments)
+    5. Re-prune (clean up fragments exposed by outlier removal)
+    6. Interpolation (fill small gaps with linear interpolation)
+
+    Legacy stages (in ball_filter_legacy.py, disabled for WASB):
+    - Motion energy filter, stationarity filter, oscillation pruning,
+      blip removal — loaded on demand when their enable_* flags are True.
     """
 
     def __init__(self, config: BallFilterConfig | None = None):
@@ -193,18 +213,10 @@ class BallTemporalFilter:
         self,
         positions: list["BallPosition"],
     ) -> list["BallPosition"]:
-        """
-        Filter a complete list of ball positions through the raw pipeline.
+        """Filter ball positions through the post-processing pipeline.
 
-        Pipeline order: motion energy filter, stationarity filter, exit ghost
-        detection, segment pruning, exit ghost removal, oscillation pruning,
-        outlier removal, blip removal, re-prune, interpolation.
-
-        Args:
-            positions: List of raw ball positions from detector
-
-        Returns:
-            List of filtered ball positions
+        See class docstring for pipeline order. Stages are conditionally
+        enabled via BallFilterConfig flags.
         """
         if not positions:
             return []
@@ -224,17 +236,9 @@ class BallTemporalFilter:
         motion_energy_count = 0
         stationarity_count = 0
 
-        # Pipeline:
-        # 0. motion energy filter (remove FP at static positions)
-        # 0.5. stationarity filter (remove player lock-on runs)
-        # 1. detect exit ghost frame ranges (on raw data, before pruning)
-        # 2. segment pruning (splits at jumps, discards short fragments)
-        # 3. apply exit ghost removal (remove ghost ranges from pruned data)
-        #    Two-phase: detect on raw to see edge-approach evidence that
-        #    segment pruning would discard, apply to pruned to avoid cascade.
-        # 4. oscillation pruning (trims A-B-A-B tails from player-locking)
-        # 5. outlier removal (cleans flickering within real segments)
-        # 6. re-prune (after outlier removal may fragment segments)
+        # Pipeline stages (see class docstring for overview).
+        # Ghost detection is two-phase: detect on raw data to preserve
+        # edge-approach evidence, apply to pruned data to avoid cascade.
         if self.config.enable_motion_energy_filter:
             from rallycut.tracking.ball_filter_legacy import motion_energy_filter
 
@@ -413,29 +417,23 @@ class BallTemporalFilter:
         positions: list["BallPosition"],
         ghost_ranges: list[tuple[int, int]] | None = None,
     ) -> list["BallPosition"]:
-        """Remove short disconnected segments from the trajectory.
+        """Remove false segments and non-ball objects from the trajectory.
 
-        The ball detector often outputs consistent false detections at the start
-        and end of rallies (before it has enough temporal context, or after the
-        ball leaves the frame). These form short trajectory segments that are
-        spatially disconnected from the main ball trajectory.
-
-        The detector also interleaves single-frame false positives (jumping to
-        player positions) within real trajectory regions. This creates many
-        tiny real-trajectory fragments separated by false jumps. To handle
-        this, short segments that are spatially close to an anchor (long)
-        segment are kept rather than discarded.
-
-        This method:
-        1. Drops very low confidence positions (zero-confidence placeholders)
-        2. Splits the trajectory into segments at large position jumps
-        3. Identifies anchor segments (long enough to be reliable trajectory),
-           then removes false anchors: ghost-overlapping (3b), false start/tail
-           (3c), and spatial outliers (3d). Removed anchors are excluded from
-           recovery in step 4.
-        4. Keeps non-anchor segments whose centroid is close to an anchor endpoint
-           (unless the segment was explicitly removed as an outlier in step 3)
-        5. Discards remaining segments (false detections)
+        Steps:
+        1. Drop zero-confidence placeholders
+        2. Split trajectory at large position jumps or frame gaps
+        3. Identify anchors (segments >= min_segment_frames), then:
+           3b. Exclude ghost-overlapping anchors
+           3c. Remove false start/tail anchors (detector warmup)
+           3d. Chain-based pruning: build trajectory chain from longest
+               anchor, greedily extend via endpoint proximity + velocity
+               extrapolation. Disconnected anchors are non-ball objects
+               (pigeons, cars), except large ones (>= min_disconnected_
+               anchor_frames) which are preserved as real ball after
+               long off-screen gaps.
+        4. Recover short segments near anchor endpoints (real fragments
+           between interleaved false positives)
+        5. Discard remaining segments
         """
         if len(positions) < 2:
             return positions
@@ -464,7 +462,7 @@ class BallTemporalFilter:
             # Split on large spatial jump or large frame gap.
             # Uses raw distance (not velocity): a 20% screen jump is a
             # segment boundary regardless of how many frames it spans.
-            if dist > threshold or frame_gap > 15:
+            if dist > threshold or frame_gap > self.config.max_segment_gap:
                 segments.append([curr])
             else:
                 segments[-1].append(curr)
@@ -564,344 +562,160 @@ class BallTemporalFilter:
                         f"{len(second_last_seg)})"
                     )
 
-        # Step 3d: Remove spatial outlier anchors.
-        # WASB can detect non-ball objects (pigeons, cars, player hands) that
-        # form long-enough segments to qualify as anchors. These create visible
-        # "teleporting" artifacts. For each anchor, compute leave-one-out
-        # weighted centroid of all other anchors; if the anchor's centroid is
-        # far from the rest, it's tracking a different object.
-        # Exception: anchors whose start/end connects to another anchor's
-        # end/start are trajectory continuations (ball traversing the court)
-        # and must be preserved even if the centroid is far away.
+        # Step 3d: Chain-based anchor pruning.
+        #
+        # The ball trajectory is a connected path: each segment's endpoint
+        # is near the next segment's start. Non-ball objects (pigeons, cars,
+        # player hands) create segments that are spatially disconnected from
+        # this path. We build a trajectory chain from the longest anchor and
+        # greedily extend it; any anchor NOT in the chain is an outlier.
+        #
+        # Connection check uses two methods (either connects):
+        #   A) Raw endpoint proximity: endpoint distance < threshold
+        #   B) Velocity extrapolation: the "from" segment's end velocity
+        #      predicts an expected position N frames later; if the "to"
+        #      segment's start is near this expected position, it connects.
+        #      This handles fast-moving balls where the gap between segments
+        #      causes a large raw displacement (ball moved during the gap).
         if len(anchor_indices) >= 3:
-            outlier_removed: set[int] = set()
-
-            # Pre-compute centroids, endpoints, and spatial spread for
-            # all anchor segments.
-            seg_centroids: dict[int, tuple[float, float]] = {}
+            # Pre-compute endpoints and velocities for all anchors.
             seg_endpoints: dict[int, tuple[float, float, float, float]] = {}
-            seg_spread: dict[int, float] = {}
-            # Velocity at segment start/end (average displacement over
-            # last/first 3 confident positions). None if < 3 positions.
-            seg_start_velocity: dict[int, tuple[float, float] | None] = {}
             seg_end_velocity: dict[int, tuple[float, float] | None] = {}
             for i in anchor_indices:
                 seg = segments[i]
-                seg_confident = [p for p in seg if p.confidence > 0]
-                pts = seg_confident if seg_confident else seg
-                xs = [p.x for p in pts]
-                ys = [p.y for p in pts]
-                seg_centroids[i] = (
-                    float(np.mean(xs)),
-                    float(np.mean(ys)),
-                )
+                pts = [p for p in seg if p.confidence > 0] or seg
                 seg_endpoints[i] = (
                     pts[0].x, pts[0].y, pts[-1].x, pts[-1].y,
                 )
-                # Minimum extent across X and Y: a ball traversal arcs
-                # across the court in both dimensions, while pigeons/cars
-                # drift along one axis only. Uses segment_jump_threshold
-                # (0.20 = 20% of screen) — the ball must move ≥20% in
-                # BOTH dimensions to qualify as a court traversal.
-                seg_spread[i] = float(min(
-                    max(xs) - min(xs), max(ys) - min(ys),
-                ))
-                # Compute endpoint velocities (average direction over
-                # last/first 3 confident positions).
                 if len(pts) >= 3:
-                    # End velocity: average displacement over last 3 pts
-                    dvx = pts[-1].x - pts[-3].x
-                    dvy = pts[-1].y - pts[-3].y
-                    seg_end_velocity[i] = (dvx / 2, dvy / 2)
-                    # Start velocity: average displacement over first 3
-                    dvx = pts[2].x - pts[0].x
-                    dvy = pts[2].y - pts[0].y
-                    seg_start_velocity[i] = (dvx / 2, dvy / 2)
+                    seg_end_velocity[i] = (
+                        (pts[-1].x - pts[-3].x) / 2,
+                        (pts[-1].y - pts[-3].y) / 2,
+                    )
                 else:
                     seg_end_velocity[i] = None
-                    seg_start_velocity[i] = None
 
-            max_continuation_gap = self.config.max_interpolation_gap * 3
+            max_gap = self.config.max_chain_gap
 
-            def _is_trajectory_continuation(
-                idx: int, active: set[int],
+            edge_zone = self.config.exit_edge_zone
+
+            def _connects(
+                from_idx: int, to_idx: int,
             ) -> bool:
-                """Check if anchor is a ball trajectory continuation.
+                """Check if to_idx continues the trajectory from from_idx.
 
-                Two-check OR:
-                  A) Large 2D spread + endpoint within threshold (cross-
-                     court arcs that move in both X and Y).
-                  B) Temporal adjacency + endpoint within threshold +
-                     directional coherence (horizontal/vertical exits
-                     where spread is small in one dimension but the
-                     segment continues in the same direction).
+                from_idx's end → to_idx's start. Requires temporal adjacency
+                (gap <= max_chain_gap) and spatial connectivity via either:
+                  A) Raw endpoint distance < threshold, OR
+                  B) Velocity-extrapolated distance < threshold (the ball
+                     was moving fast and covered ground during the gap).
+                Directional coherence: when raw distance >= threshold/2,
+                require the bridge direction to align with end velocity
+                (dot product >= 0). Skipped when very close (bounces
+                reverse velocity but proximity proves same trajectory).
 
-                A segment drifting along one axis (pigeon, car) or
-                compact in both (player hand) is NOT protected unless
-                it also passes check B.
+                Edge-exit relaxation: when a segment ends near a frame
+                edge (within exit_edge_zone), the ball likely exited and
+                re-entered. Use 1.5x distance threshold since the ball
+                travels off-screen during the gap.
                 """
-                threshold_sq = threshold * threshold
-                sx, sy, ex, ey = seg_endpoints[idx]
-                seg_start_frame = segments[idx][0].frame_number
-                seg_end_frame = segments[idx][-1].frame_number
+                _, _, fex, fey = seg_endpoints[from_idx]
+                tsx, tsy, _, _ = seg_endpoints[to_idx]
+                from_end = segments[from_idx][-1].frame_number
+                to_start = segments[to_idx][0].frame_number
+                gap = abs(to_start - from_end)
+                if gap > max_gap:
+                    return False
 
-                for j in active:
-                    if j == idx:
-                        continue
-                    osx, osy, oex, oey = seg_endpoints[j]
+                raw_dist = float(np.sqrt(
+                    (tsx - fex) ** 2 + (tsy - fey) ** 2,
+                ))
+                vel = seg_end_velocity.get(from_idx)
 
-                    # Test both connectivity directions:
-                    # (a) this start ← other end (this follows other)
-                    # (b) this end → other start (other follows this)
-                    connections = [
-                        (
-                            (sx - oex) ** 2 + (sy - oey) ** 2,
-                            seg_end_velocity[j],  # other's end vel
-                            oex, oey, sx, sy,  # bridge: other end → this start
-                            segments[j][-1].frame_number,
-                            seg_start_frame,
-                        ),
-                        (
-                            (ex - osx) ** 2 + (ey - osy) ** 2,
-                            seg_end_velocity[idx],  # this end vel
-                            ex, ey, osx, osy,  # bridge: this end → other start
-                            seg_end_frame,
-                            segments[j][0].frame_number,
-                        ),
-                    ]
+                # Edge-exit relaxation: use larger threshold when
+                # endpoint is near a frame edge (ball exit+re-entry)
+                near_edge = (
+                    fex < edge_zone or fex > 1 - edge_zone
+                    or fey < edge_zone or fey > 1 - edge_zone
+                )
+                effective_threshold = threshold * 1.5 if near_edge else threshold
 
-                    for (
-                        dist_sq, vel, bx0, by0, bx1, by1,
-                        from_frame, to_frame,
-                    ) in connections:
-                        if dist_sq >= threshold_sq:
-                            continue
+                # Check A: raw endpoint proximity
+                if raw_dist < effective_threshold:
+                    # Directional coherence for medium distances
+                    if raw_dist >= threshold / 2 and vel is not None:
+                        dot = vel[0] * (tsx - fex) + vel[1] * (tsy - fey)
+                        if dot < 0:
+                            return False
+                    return True
 
-                        # Check A: large 2D spread (existing check)
-                        if seg_spread[idx] >= threshold:
-                            return True
-
-                        # Check B: temporal + directional coherence
-                        frame_gap = abs(to_frame - from_frame)
-                        if frame_gap > max_continuation_gap:
-                            continue
-                        # Directional coherence: dot product of the
-                        # neighbor's end velocity and bridge vector ≥ 0
-                        if vel is not None:
-                            bridge_dx = bx1 - bx0
-                            bridge_dy = by1 - by0
-                            dot = vel[0] * bridge_dx + vel[1] * bridge_dy
-                            if dot >= 0:
-                                return True
-                        else:
-                            # No velocity info — fall back to spatial
-                            # proximity alone (temporal guard is enough)
-                            return True
+                # Check B: velocity extrapolation
+                # If the ball was moving at the end of from_idx, predict
+                # where it would be after `gap` frames. Connect if the
+                # actual start of to_idx is near the prediction.
+                if vel is not None and gap > 0:
+                    expected_x = fex + vel[0] * gap
+                    expected_y = fey + vel[1] * gap
+                    extrap_dist = float(np.sqrt(
+                        (tsx - expected_x) ** 2
+                        + (tsy - expected_y) ** 2
+                    ))
+                    if extrap_dist < effective_threshold:
+                        return True
 
                 return False
 
-            while True:
-                active = anchor_indices - outlier_removed
-                if len(active) <= 2:
-                    break
+            # Build chain from longest anchor
+            sorted_by_len = sorted(
+                anchor_indices,
+                key=lambda i: len(segments[i]),
+                reverse=True,
+            )
+            chain: set[int] = {sorted_by_len[0]}
 
-                # Compute leave-one-out distances
-                candidates: list[tuple[int, float]] = []
-                for i in active:
-                    others = active - {i}
-                    total_w = sum(len(segments[j]) for j in others)
-                    cx = sum(
-                        len(segments[j]) * seg_centroids[j][0] for j in others
-                    ) / total_w
-                    cy = sum(
-                        len(segments[j]) * seg_centroids[j][1] for j in others
-                    ) / total_w
-                    mx, my = seg_centroids[i]
-                    dist = float(np.sqrt((mx - cx) ** 2 + (my - cy) ** 2))
-                    if dist > threshold:
-                        # Skip if this is a real ball traversal: large
-                        # spatial spread AND endpoint connects to another
-                        # anchor. A compact cluster (pigeon, player hand)
-                        # with a coincidental endpoint near another anchor
-                        # is NOT protected.
-                        if _is_trajectory_continuation(i, active):
-                            logger.info(
-                                f"Spatial outlier: keeping trajectory "
-                                f"[{segments[i][0].frame_number}-"
-                                f"{segments[i][-1].frame_number}] "
-                                f"(centroid dist={dist:.3f}, "
-                                f"spread={seg_spread[i]:.3f}, "
-                                f"endpoint within {threshold})"
-                            )
-                            continue
-                        candidates.append((i, dist))
+            # Greedily extend in both temporal directions
+            changed = True
+            while changed:
+                changed = False
+                for candidate in sorted(anchor_indices - chain):
+                    for ch_idx in list(chain):
+                        # candidate follows chain member
+                        if _connects(ch_idx, candidate):
+                            chain.add(candidate)
+                            changed = True
+                            break
+                        # chain member follows candidate
+                        if _connects(candidate, ch_idx):
+                            chain.add(candidate)
+                            changed = True
+                            break
+                    if changed:
+                        break
 
-                if not candidates:
-                    break
-
-                # Remove all outliers this round (largest distance first),
-                # but always keep at least 2 anchors. Batch removal is
-                # intentional: secondary clusters (e.g. two player-hand
-                # segments) should be removed together in one pass.
-                candidates.sort(key=lambda c: c[1], reverse=True)
-                max_remove = len(active) - 2
-                for idx, dist in candidates[:max_remove]:
-                    outlier_removed.add(idx)
-
-            if outlier_removed:
-                for i in sorted(outlier_removed):
+            # Remove anchors not in the chain, but preserve large
+            # disconnected segments (likely real ball after long gap)
+            min_keep = self.config.min_disconnected_anchor_frames
+            non_chain = anchor_indices - chain
+            if non_chain:
+                for i in sorted(non_chain):
                     seg = segments[i]
-                    cx, cy = seg_centroids[i]
-                    logger.info(
-                        f"Spatial outlier: removed anchor "
-                        f"[{seg[0].frame_number}-{seg[-1].frame_number}] "
-                        f"({len(seg)} frames, centroid=({cx:.3f}, {cy:.3f}))"
-                    )
-                anchor_indices -= outlier_removed
-                excluded_segments |= outlier_removed
-
-            # Step 3e: Remove post-trajectory false segments.
-            # After the ball exits the frame, the detector can produce
-            # false segments at player positions that form a self-
-            # reinforcing cluster surviving outlier removal. Build a
-            # trajectory chain from the longest anchor and prune anchors
-            # temporally AFTER the chain that are both spatially and
-            # directionally disconnected.
-            if len(anchor_indices) >= 3:
-                # Build chain starting from longest surviving anchor
-                sorted_by_len = sorted(
-                    anchor_indices,
-                    key=lambda i: len(segments[i]),
-                    reverse=True,
-                )
-                chain: set[int] = {sorted_by_len[0]}
-
-                # Greedily extend forward/backward
-                changed = True
-                while changed:
-                    changed = False
-                    for candidate in sorted(anchor_indices - chain):
-                        c_seg = segments[candidate]
-                        c_start = c_seg[0].frame_number
-                        c_end = c_seg[-1].frame_number
-                        # Compute candidate velocity/endpoints if not
-                        # already in the pre-computed dicts (can happen
-                        # if anchors changed since pre-computation)
-                        if candidate not in seg_endpoints:
-                            cpts = [
-                                p for p in c_seg if p.confidence > 0
-                            ] or c_seg
-                            seg_endpoints[candidate] = (
-                                cpts[0].x, cpts[0].y,
-                                cpts[-1].x, cpts[-1].y,
-                            )
-                        csx, csy, cex, cey = seg_endpoints[candidate]
-
-                        for ch_idx in list(chain):
-                            osx, osy, oex, oey = seg_endpoints[ch_idx]
-                            ch_start = segments[ch_idx][0].frame_number
-                            ch_end = segments[ch_idx][-1].frame_number
-
-                            # candidate follows chain member
-                            dist = np.sqrt(
-                                (csx - oex) ** 2 + (csy - oey) ** 2,
-                            )
-                            gap = abs(c_start - ch_end)
-                            if (
-                                dist < threshold
-                                and gap <= max_continuation_gap
-                            ):
-                                # Skip directional check when very
-                                # close — ball bounces reverse velocity
-                                # but proximity proves same trajectory
-                                if dist >= threshold / 2:
-                                    vel = seg_end_velocity.get(ch_idx)
-                                    if vel is not None:
-                                        bdx = csx - oex
-                                        bdy = csy - oey
-                                        dot = (
-                                            vel[0] * bdx + vel[1] * bdy
-                                        )
-                                        if dot < 0:
-                                            continue
-                                chain.add(candidate)
-                                changed = True
-                                break
-
-                            # chain member follows candidate
-                            dist = np.sqrt(
-                                (osx - cex) ** 2 + (osy - cey) ** 2,
-                            )
-                            gap = abs(ch_start - c_end)
-                            if (
-                                dist < threshold
-                                and gap <= max_continuation_gap
-                            ):
-                                if dist >= threshold / 2:
-                                    vel = seg_end_velocity.get(candidate)
-                                    if vel is not None:
-                                        bdx = osx - cex
-                                        bdy = osy - cey
-                                        dot = (
-                                            vel[0] * bdx + vel[1] * bdy
-                                        )
-                                        if dot < 0:
-                                            continue
-                                chain.add(candidate)
-                                changed = True
-                                break
-
-                # Prune post-chain anchors that are disconnected
-                chain_end_frame = max(
-                    segments[i][-1].frame_number for i in chain
-                )
-                # Get the chain endpoint (last position of last segment)
-                chain_end_idx = max(
-                    chain,
-                    key=lambda i: segments[i][-1].frame_number,
-                )
-                _, _, cex, cey = seg_endpoints[chain_end_idx]
-                chain_end_vel = seg_end_velocity.get(chain_end_idx)
-
-                post_chain_removed: set[int] = set()
-                for i in sorted(anchor_indices - chain):
-                    seg_start = segments[i][0].frame_number
-                    if seg_start <= chain_end_frame:
-                        continue  # Not temporally after chain
-                    sx, sy, _, _ = seg_endpoints[i]
-                    dist = float(np.sqrt(
-                        (sx - cex) ** 2 + (sy - cey) ** 2,
-                    ))
-                    if dist < threshold:
-                        continue  # Spatially close — could be real
-
-                    # Directional check: negative dot = opposite dir
-                    if chain_end_vel is not None:
-                        bdx = sx - cex
-                        bdy = sy - cey
-                        dot = (
-                            chain_end_vel[0] * bdx
-                            + chain_end_vel[1] * bdy
-                        )
-                        if dot >= 0:
-                            continue  # Same direction — keep
-                    else:
-                        continue  # No velocity — can't determine
-
-                    post_chain_removed.add(i)
-
-                if post_chain_removed:
-                    for i in sorted(post_chain_removed):
-                        seg = segments[i]
+                    if len(seg) >= min_keep:
                         logger.info(
-                            f"Post-trajectory: removed anchor "
-                            f"[{seg[0].frame_number}-"
-                            f"{seg[-1].frame_number}] "
-                            f"({len(seg)} frames, post-chain "
-                            f"at dist={float(np.sqrt((seg_endpoints[i][0] - cex) ** 2 + (seg_endpoints[i][1] - cey) ** 2)):.3f})"
+                            f"Chain pruning: keeping large disconnected "
+                            f"anchor [{seg[0].frame_number}-"
+                            f"{seg[-1].frame_number}] ({len(seg)} frames "
+                            f">= {min_keep}, likely real ball)"
                         )
-                    anchor_indices -= post_chain_removed
-                    excluded_segments |= post_chain_removed
+                    else:
+                        logger.info(
+                            f"Chain pruning: removed disconnected anchor "
+                            f"[{seg[0].frame_number}-"
+                            f"{seg[-1].frame_number}] ({len(seg)} frames, "
+                            f"not connected to trajectory chain of "
+                            f"{len(chain)} segments)"
+                        )
+                        anchor_indices.discard(i)
+                        excluded_segments.add(i)
 
         # Step 4: Keep short segments whose centroid is close to an anchor endpoint.
         # These are real trajectory fragments between interleaved false positives.
@@ -1196,6 +1010,10 @@ class BallTemporalFilter:
             pos = pos_by_frame[frame]
 
             # Check 1: Edge detection (positions at screen boundaries)
+            # Note: WASB outputs confidence as 0.0 or 1.0, so the < 0.8
+            # gate means this check only fires for non-WASB detectors with
+            # continuous confidence values. For WASB, all surviving positions
+            # have conf=1.0 and this is effectively a no-op.
             margin = self.config.edge_margin
             is_edge = (
                 pos.x < margin or pos.x > (1 - margin) or
@@ -1203,8 +1021,6 @@ class BallTemporalFilter:
             )
 
             if is_edge:
-                # Only mark as outlier if confidence is low-medium
-                # High confidence edge positions might be legitimate (ball at edge)
                 if pos.confidence < 0.8:
                     outlier_frames.add(frame)
                     continue

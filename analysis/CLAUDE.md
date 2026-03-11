@@ -386,8 +386,7 @@ The heatmap threshold is 0.3 (optimal for beach volleyball). The filter pipeline
 - **Interleaved false positives**: Single-frame false detections (jumping to player positions) within real trajectory regions. Anchor-proximity recovery keeps real fragments and discards distant false positive clusters.
 - **Oscillating false detections**: After ball exits frame, the detector can lock onto two players and alternate between them. Oscillation pruning uses spatial clustering to detect this pattern. A transition rate ≥25% over 12+ frames triggers trimming.
 - **Exit ghost detections**: When the ball exits the frame, false detections smoothly drift from the exit point toward a player position. Detected by physics: ball approaching a screen edge with velocity > 0.8%/frame MUST exit — any reversal is impossible. Ghost regions capped at 30 frames — longer continuous detections indicate real ball re-entry, not ghost drift.
-- **Non-ball object segments (pigeons, cars, player hands)**: WASB can detect non-ball objects that form long segments qualifying as anchors, creating "teleporting" artifacts. Spatial outlier removal (Step 3d) uses iterative leave-one-out weighted centroid analysis to identify and remove anchors whose centroids are far (>segment_jump_threshold) from the rest. Exception: anchors are preserved as trajectory continuations via two-check OR: (A) large 2D spread + endpoint connectivity, OR (B) temporal adjacency + endpoint connectivity + directional coherence (velocity dot product ≥ 0). Check B handles horizontal/vertical exits where spread is small in one dimension.
-- **Post-trajectory false segments**: After ball exits frame, detector can produce false anchor clusters at player positions that survive outlier removal by reinforcing each other. Step 3e builds a trajectory chain from the longest anchor, greedily extends via spatial proximity + directional coherence, then prunes anchors temporally after the chain that are spatially far AND directionally opposite. Chain extension skips the directional check when endpoints are within `segment_jump_threshold/2` — ball bounces naturally reverse velocity but close proximity proves same trajectory.
+- **Non-ball object segments (pigeons, cars, player hands)**: WASB can detect non-ball objects that form segments qualifying as anchors. Chain-based trajectory pruning (Step 3e) builds the real ball trajectory by starting from the longest anchor and greedily extending via endpoint proximity + velocity extrapolation. Non-chain anchors are pruned as non-ball objects. Edge-exit relaxation applies 1.5x distance threshold when a segment endpoint is near the frame edge (ball exit+re-entry pattern). Large disconnected anchors (≥`min_disconnected_anchor_frames`) are preserved even if disconnected from the chain — long continuous detections are real ball, not false positives.
 - **Hovering false detections**: After ball exits frame, the detector can lock onto a single player position. Detected by checking short segments where positions lie within 5% of screen of their centroid.
 - **Trajectory blips**: Brief lock-on to a player position for 2-5 consecutive frames mid-trajectory. Blip removal uses distant trajectory context with a two-pass approach.
 - **Missing frames**: Linear interpolation fills small gaps (up to 10 frames) between detections.
@@ -398,9 +397,12 @@ The heatmap threshold is 0.3 (optimal for beach volleyball). The filter pipeline
 - `enable_stationarity_filter=False`: Detect and remove player lock-on (12+ frames within 0.5% spread). Default off
 - `stationarity_min_frames=12`: Minimum consecutive frames to flag as stationary (~0.4s at 30fps)
 - `stationarity_max_spread=0.005`: Maximum spread from centroid (0.5% of screen, ~10px at 1920px)
-- `enable_segment_pruning=True`: Remove short disconnected false segments
+- `enable_segment_pruning=True`: Remove short disconnected false segments via chain-based trajectory analysis
 - `segment_jump_threshold=0.20`: Position jump threshold to split segments (20% of screen)
-- `min_segment_frames=15`: Minimum frames to keep a segment
+- `max_segment_gap=15`: Max frame gap within a segment before splitting
+- `min_segment_frames=8`: Minimum frames to keep a segment (WASB default; 15 for legacy)
+- `max_chain_gap=30`: Max frame gap for chain extension between anchors
+- `min_disconnected_anchor_frames=30`: Preserve large disconnected anchors (≥30 frames = real ball)
 - `min_output_confidence=0.05`: Drop zero-confidence placeholders from output
 - `enable_exit_ghost_removal=True`: Remove physics-impossible reversals near screen edges
 - `exit_edge_zone=0.10`: Screen edge zone (10%) for exit approach detection

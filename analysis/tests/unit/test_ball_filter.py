@@ -1648,45 +1648,45 @@ class TestSpatialOutlierAnchorRemoval:
         )
 
     def test_pigeon_segment_removed(self) -> None:
-        """A pigeon drifting horizontally at top of frame should be removed.
+        """A short pigeon segment disconnected from the chain is removed.
 
-        Pigeon moves left-to-right in X but stays at constant Y ~0.10.
-        Its centroid is far enough from the real ball anchors, and its
-        min-extent (Y) is tiny — no trajectory continuation protection.
+        Chain-based pruning identifies the pigeon as disconnected from the
+        ball trajectory. At 20 frames it's an anchor (>= min_segment_frames=15)
+        but below min_disconnected_anchor_frames (30), so it gets pruned.
         """
         filt = BallTemporalFilter(self._pruning_config())
         positions: list[BallPosition] = []
 
-        # Pigeon: 30 frames drifting right at top (large X-extent, tiny Y-extent)
-        for i in range(30):
+        # Pigeon: 20 frames drifting right at top of frame
+        for i in range(20):
             positions.append(_make_pos(i, 0.20 + i * 0.015, 0.10 + i * 0.001))
 
         # Gap
-        for i in range(30, 35):
+        for i in range(20, 25):
             positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
 
         # Real ball anchor 1: 50 frames at center
-        for i in range(35, 85):
+        for i in range(25, 75):
             positions.append(_make_pos(i, 0.45 + i * 0.002, 0.40 + i * 0.001))
 
         # Gap
-        for i in range(85, 90):
+        for i in range(75, 80):
             positions.append(_make_pos(i, 0.0, 0.0, conf=0.0))
 
         # Real ball anchor 2: 50 frames at center-right
-        for i in range(90, 140):
+        for i in range(80, 130):
             positions.append(_make_pos(i, 0.50 + i * 0.001, 0.35 - i * 0.001))
 
         result = filt.filter_batch(positions)
         confident = [p for p in result if p.confidence > 0]
 
-        # Pigeon should be removed — no confident detections in frames 0-29
-        pigeon_frames = [p for p in confident if p.frame_number < 30]
+        # Pigeon should be removed — no confident detections in frames 0-19
+        pigeon_frames = [p for p in confident if p.frame_number < 20]
         assert len(pigeon_frames) == 0, (
             f"Pigeon segment should be removed, got {len(pigeon_frames)} frames"
         )
         # Real ball should survive
-        ball_frames = [p for p in confident if p.frame_number >= 35]
+        ball_frames = [p for p in confident if p.frame_number >= 25]
         assert len(ball_frames) > 0, "Real ball segments should survive"
 
     def test_player_hand_compact_segment_removed(self) -> None:
