@@ -93,12 +93,14 @@ export function AnalysisPipeline({ hasRallies, isLocked }: AnalysisPipelineProps
 
   const phase = pipeline?.phase ?? 'idle';
 
-  // Resume polling on mount if pipeline is in-progress
+  // On mount or match change, resume any in-progress pipeline.
+  // Handles both persisted phases (detecting/tracking) and backend-only
+  // processing (page reloaded during non-persisted quality_check phase).
   useEffect(() => {
-    if (activeMatchId && (phase === 'detecting' || phase === 'tracking' || phase === 'completing')) {
+    if (activeMatchId) {
       resumeIfNeeded(activeMatchId);
     }
-  }, [activeMatchId, phase, resumeIfNeeded]);
+  }, [activeMatchId, resumeIfNeeded]);
 
   const handleStart = useCallback(() => {
     if (!activeMatchId) return;
