@@ -146,7 +146,7 @@ async function extractVideoSegment(
       '-ss', startSeconds.toString(), // Input-level seeking (fast, uses HTTP range requests)
       '-i', videoUrl,
       '-t', durationSeconds.toString(),
-      '-c', 'copy',  // Stream copy — no re-encoding (~2s vs ~2min)
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '18',  // Re-encode for frame-accurate cuts (avoids keyframe misalignment)
       '-an', // No audio needed for player tracking
       '-y',
       outputPath,
@@ -485,7 +485,7 @@ export async function extractVideoSegmentFromLocal(
       '-ss', startSeconds.toString(),
       '-i', localVideoPath,
       '-t', durationSeconds.toString(),
-      '-c', 'copy',  // Stream copy — no re-encoding
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '18',  // Re-encode for frame-accurate cuts (avoids keyframe misalignment)
       '-an',
       '-y',
       outputPath,
