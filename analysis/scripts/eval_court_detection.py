@@ -811,6 +811,22 @@ def main() -> None:
                 ret, frame = cap.read()
                 if ret and frame is not None:
                     debug_frame = detector.create_debug_image(frame, result)
+                    dh, dw = debug_frame.shape[:2]
+                    # Overlay GT corners in cyan
+                    gt_pts = [(c["x"], c["y"]) for c in gt_corners]
+                    gt_labels = ["NL", "NR", "FR", "FL"]
+                    for gi in range(4):
+                        gp1 = gt_pts[gi]
+                        gp2 = gt_pts[(gi + 1) % 4]
+                        gx1, gy1 = int(gp1[0] * dw), int(gp1[1] * dh)
+                        gx2, gy2 = int(gp2[0] * dw), int(gp2[1] * dh)
+                        cv2.line(debug_frame, (gx1, gy1), (gx2, gy2), (255, 255, 0), 2)
+                        cv2.circle(debug_frame, (gx1, gy1), 6, (255, 255, 0), -1)
+                        cv2.putText(
+                            debug_frame, f"GT-{gt_labels[gi]}",
+                            (gx1 + 12, gy1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1,
+                        )
                     out_path = debug_dir / f"{vid_id[:12]}_court_debug.jpg"
                     cv2.imwrite(str(out_path), debug_frame)
                 cap.release()
@@ -830,7 +846,7 @@ def main() -> None:
         # Print quality diagnostics for keypoint model
         if args.keypoint and kp_detector is not None and kp_detector.last_diagnostics is not None:
             diag = kp_detector.last_diagnostics
-            print(f"\n  Quality Diagnostics (last video):")
+            print("\n  Quality Diagnostics (last video):")
             print(f"    Detection rate: {diag.detection_rate:.0%}")
             print(f"    Perspective ratio: {diag.perspective_ratio:.2f}")
             if diag.off_screen_corners:
