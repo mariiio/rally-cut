@@ -302,13 +302,13 @@ def _track_single_rally(
         output_fd, output_path = tempfile.mkstemp(suffix=".json")
         os.close(output_fd)
 
-        # Extract segment with FFmpeg (stream copy — no re-encoding needed for tracking)
+        # Extract segment with FFmpeg (re-encode for frame-accurate cuts, avoids keyframe misalignment)
         ffmpeg_cmd = [
             "ffmpeg",
             "-ss", str(start_s),
             "-i", video_path,
             "-t", str(duration_s),
-            "-c:v", "copy",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
             "-an",
             "-y",
             segment_path,
