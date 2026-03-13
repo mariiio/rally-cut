@@ -225,14 +225,14 @@ def prune_oscillating(
     rate_threshold = config.oscillation_reversal_rate
 
     # Step 1: Split into contiguous segments (gap > 5 frames)
-    segments: list[list["BallPosition"]] = [[positions[0]]]
+    segments: list[list[BallPosition]] = [[positions[0]]]
     for i in range(1, len(positions)):
         if positions[i].frame_number - positions[i - 1].frame_number > 5:
             segments.append([positions[i]])
         else:
             segments[-1].append(positions[i])
 
-    result: list["BallPosition"] = []
+    result: list[BallPosition] = []
     max_gap = config.max_interpolation_gap
     hover_radius = config.segment_jump_threshold / 4
     prev_end_frame: int | None = None

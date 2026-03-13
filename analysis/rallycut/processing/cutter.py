@@ -1113,8 +1113,8 @@ class VideoCutter:
                 )
             elif not self._has_cached_features(content_hash):
                 logger.info(
-                    "No cached features - using heuristics. For 92%% LOO F1, run: "
-                    "rallycut train extract-features --stride 24"
+                    "No cached features - using heuristics. For best results, run: "
+                    "rallycut train extract-features --stride 12"
                 )
             else:
                 logger.info(

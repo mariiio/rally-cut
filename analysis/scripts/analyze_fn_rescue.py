@@ -28,7 +28,7 @@ from rallycut.evaluation.video_resolver import VideoResolver
 from rallycut.temporal.features import FeatureCache
 from rallycut.temporal.temporal_maxer.inference import TemporalMaxerInference
 
-STRIDE = 24
+STRIDE = 12
 MODEL_PATH = Path("weights/temporal_maxer/best_temporal_maxer.pt")
 
 
@@ -244,7 +244,7 @@ def main() -> None:
     new_fp = [e for e in all_entries if not e["is_tp"]]
 
     print(f"\n{'='*70}")
-    print(f"RESCUE PASS RESULTS (prob-only)")
+    print("RESCUE PASS RESULTS (prob-only)")
     print(f"{'='*70}")
     print(f"Original: TP={total_tp} FP={total_fp_orig} FN={total_fn}")
     print(f"Candidates: {len(all_entries)} ({len(rescued)} TP, {len(new_fp)} FP)")
@@ -259,7 +259,7 @@ def main() -> None:
         fp_motion = [e["motion"] for e in new_fp if e["motion"] is not None]
 
         print(f"\n{'='*70}")
-        print(f"MOTION ENERGY DISTRIBUTIONS")
+        print("MOTION ENERGY DISTRIBUTIONS")
         print(f"{'='*70}")
         if tp_motion:
             arr = np.array(tp_motion)
@@ -289,7 +289,7 @@ def main() -> None:
 
         # Print all candidates sorted by motion
         print(f"\n{'='*70}")
-        print(f"ALL CANDIDATES (sorted by motion energy)")
+        print("ALL CANDIDATES (sorted by motion energy)")
         print(f"{'='*70}")
         for e in sorted(all_entries, key=lambda x: x.get("motion") or 0, reverse=True):
             label = "TP" if e["is_tp"] else "FP"

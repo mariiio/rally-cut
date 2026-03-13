@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-STRIDE = 24
+STRIDE = 12
 
 
 def _compute_f1(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
@@ -300,7 +300,7 @@ def print_confidence_comparison(
 
     # Show per-segment detail for FPs (usually few)
     if fp_with_conf:
-        print(f"\n  FP detail:")
+        print("\n  FP detail:")
         header = f"    {'Video':<25} {'Range':>14} {'Dur':>5} {'AvgP':>5} {'MaxP':>5} {'MinP':>5} {'Win':>4}"
         print(header)
         for d in sorted(fp_with_conf, key=lambda x: x["avg_prob"]):
@@ -314,7 +314,7 @@ def print_confidence_comparison(
 
     # Threshold analysis: what avg_prob threshold would separate FPs from TPs?
     if tp_with_conf and fp_with_conf:
-        print(f"\n  Threshold analysis (avg_prob):")
+        print("\n  Threshold analysis (avg_prob):")
         tp_avg = np.array([d["avg_prob"] for d in tp_with_conf])
         fp_avg = np.array([d["avg_prob"] for d in fp_with_conf])
         for thresh in [0.5, 0.6, 0.7, 0.8, 0.9]:
@@ -354,7 +354,7 @@ def print_gt_duration_stats(
 
     # Short rally breakdown
     short_counts = [(t, int(np.sum(durations < t))) for t in [3, 4, 5, 6, 8, 10]]
-    print(f"\n  Short rally counts:")
+    print("\n  Short rally counts:")
     for t, c in short_counts:
         print(f"    < {t:>2}s: {c:>3} ({c / len(durations):.1%})")
 

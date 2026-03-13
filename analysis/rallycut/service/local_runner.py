@@ -24,13 +24,13 @@ from pathlib import Path
 
 import httpx
 
+from rallycut.service.s3_utils import create_s3_client, download_from_s3
+
 # Configure logging so detection/cutter diagnostics are visible
 logging.basicConfig(
     level=logging.INFO,
     format="[LOCAL] %(name)s: %(message)s",
 )
-
-from rallycut.service.s3_utils import create_s3_client, download_from_s3
 
 
 def send_progress(callback_url: str, webhook_secret: str | None, job_id: str, progress: float, message: str) -> None:

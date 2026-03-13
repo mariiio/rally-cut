@@ -2475,7 +2475,7 @@ def train_temporal_maxer_cmd(
         "-o",
         help="Output directory for trained model",
     ),
-    stride: int = typer.Option(24, "--stride", "-s", help="Feature stride used for extraction"),
+    stride: int = typer.Option(12, "--stride", "-s", help="Feature stride used for extraction"),
     epochs: int = typer.Option(50, "--epochs", "-e", help="Maximum training epochs"),
     lr: float = typer.Option(5e-4, "--lr", help="Learning rate"),
     batch_size: int = typer.Option(4, "--batch-size", "-b", help="Batch size (video sequences)"),

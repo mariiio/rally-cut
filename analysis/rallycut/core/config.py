@@ -135,7 +135,7 @@ class GameStateConfig(BaseModel):
 
     window_size: int = 16
     analysis_size: tuple[int, int] = (224, 224)
-    stride: int = 24  # Stride=24 detects short rallies (<6s) that stride=48 misses (+4pp LOO F1)
+    stride: int = 12  # Stride=12 gives +1.6pp LOO F1 over stride=24 (finer temporal resolution)
     batch_size: int = 8
     # Temporal smoothing: fix isolated classification errors with median filter
     # Disabled by default as it can remove valid sparse detections

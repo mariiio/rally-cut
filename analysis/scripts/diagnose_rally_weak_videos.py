@@ -37,7 +37,7 @@ from rallycut.temporal.temporal_maxer.training import (
 
 logging.basicConfig(level=logging.WARNING)
 
-DEFAULT_STRIDE = 24
+DEFAULT_STRIDE = 12
 FEATURE_DIR = Path("training_data/features")
 WEAK_VIDEOS = ["muchi", "matahtach", "machi", "mechi"]
 
@@ -171,7 +171,7 @@ def diagnose_video(
     # Load data
     held_data = load_video_data(video, cache, stride)
     if held_data is None:
-        print(f"  SKIP: no cached features")
+        print("  SKIP: no cached features")
         return
 
     ho_features, ho_labels, ho_fps, ho_duration = held_data
