@@ -42,10 +42,10 @@ uv run python scripts/audit_ball_filter.py                 # Ablation + sensitiv
 ```bash
 cd analysis
 
-# Train-on-all eval (29 videos, ~2min)
+# Train-on-all eval (41 videos, 368 GT, ~2min)
 uv run rallycut evaluate --temporal-maxer
 
-# Leave-one-out CV (29-fold, ~30min — run in background)
+# Leave-one-out CV (41-fold, ~30min — run in background)
 uv run python scripts/loo_cv_temporal_maxer.py
 
 # Boundary analysis
@@ -74,7 +74,7 @@ from rallycut.evaluation.tracking.db import load_labeled_rallies
 rallies = load_labeled_rallies(rally_id="1bfcbc4f", ball_gt_only=True)
 ```
 
-16 labeled rallies with validated ball GT. 29 videos with rally GT labels.
+16 labeled rallies with validated ball GT. 41 videos with rally GT labels (368 rallies).
 
 ## Cached Positions
 

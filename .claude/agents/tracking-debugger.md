@@ -22,7 +22,7 @@ You diagnose and fix ball/player tracking issues in the RallyCut pipeline. You r
 ## Ball Filter Pipeline Order
 
 1. **Motion energy filter** — zeroes positions with low temporal change (stationary FPs)
-2. **Stationarity filter** — removes consecutive frames within tight spread (player lock-on). Default off, enabled in ensemble mode
+2. **Stationarity filter** — removes consecutive frames within tight spread (player lock-on). Default off
 3. **Exit ghost detection** — detect on raw data (preserves edge-approach evidence)
 4. **Segment pruning** — split at large jumps, discard short fragments, recover short segments near anchors
 5. **Exit ghost removal** — apply detected ghosts to post-pruned data
@@ -42,15 +42,6 @@ uv run python scripts/diagnose_ball_tracking.py --rally <rally-id>
 uv run python scripts/diagnose_ball_tracking.py --all
 ```
 
-## Source-Aware Logic
-
-WASB positions have `motion_energy >= 1.0` (sentinel value). Source-aware filter protections:
-- Halved min_segment_frames for WASB segments
-- Wider recovery proximity (75% of jump threshold)
-- WASB-preferred neighbors in outlier detection
-- Oscillation pruning skips windows with WASB positions
-- WASB positions protected from outlier/blip/oscillation removal
-
 ## Debugging Methodology
 
 1. **Load GT**: `load_labeled_rallies(rally_id=..., ball_gt_only=True)`
@@ -65,9 +56,7 @@ WASB positions have `motion_energy >= 1.0` (sentinel value). Source-aware filter
 | File | Purpose |
 |------|---------|
 | `tracking/ball_filter.py` | Main filter pipeline |
-| `tracking/ball_tracker.py` | VballNet tracker |
-| `tracking/wasb_model.py` | WASB HRNet tracker |
-| `tracking/ball_ensemble.py` | Ensemble (WASB + VballNet) |
+| `tracking/wasb_model.py` | WASB HRNet ball tracker |
 | `evaluation/tracking/ball_metrics.py` | Match rate, error metrics |
 | `scripts/diagnose_ball_tracking.py` | Stage-by-stage diagnostic |
-| `scripts/eval_ensemble.py` | 9-rally ensemble evaluation |
+| `scripts/eval_wasb.py` | 16-rally WASB evaluation |

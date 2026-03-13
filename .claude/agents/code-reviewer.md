@@ -4,7 +4,7 @@ description: Review code quality, run linters, check types, and audit for securi
 model: sonnet
 allowed-tools: Read, Grep, Glob, Bash
 memory: project
-skills: code-quality
+skills: pre-commit
 ---
 
 # Code Reviewer
@@ -71,17 +71,13 @@ Report issues as a checklist with severity:
 
 ```bash
 # Python
-uv run mypy rallycut/
-uv run ruff check rallycut/
-uv run pytest tests
+cd analysis && uv run mypy rallycut/ && uv run ruff check rallycut/ && uv run pytest tests
 
 # API
-cd api && npx tsc --noEmit
-cd api && npm run test
+cd api && npx tsc --noEmit && npm run test
 
 # Web
-cd web && npx tsc --noEmit
-cd web && npm run lint
+cd web && npx tsc --noEmit && npm run lint
 ```
 
 ## Key Conventions (from CLAUDE.md files)
