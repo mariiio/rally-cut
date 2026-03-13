@@ -4,7 +4,7 @@ description: Run ML evaluations, ball tracking experiments, filter tuning, and m
 model: sonnet
 allowed-tools: Bash, Read, Grep, Glob
 memory: project
-skills: test-runner, video-analysis
+skills: pre-commit, video-analysis
 ---
 
 # ML Experimenter
@@ -18,25 +18,26 @@ You run ML experiments and evaluations for the RallyCut volleyball analysis pipe
 ## Evaluation Scripts
 
 ```bash
-# Ball tracking (ensemble — default and best)
-uv run python scripts/eval_ensemble.py           # 9-rally ensemble eval
-uv run python scripts/eval_wasb.py               # WASB-only eval
-uv run python scripts/eval_tracknet.py           # TrackNet eval
+cd analysis
+
+# Ball tracking (WASB — sole ball tracker)
+uv run python scripts/eval_wasb.py               # 16-rally WASB eval
 
 # Diagnostic (stage-by-stage pipeline analysis)
 uv run python scripts/diagnose_ball_tracking.py   # Per-stage metrics
 
 # Filter tuning
 uv run python scripts/audit_ball_filter.py        # Ablation + sensitivity
-uv run python scripts/tune_ensemble_filter.py     # Grid search ensemble filter
+uv run rallycut evaluate-tracking tune-ball-filter --all  # Grid search
 
-# Rally detection
-uv run rallycut evaluate                           # TemporalMaxer eval
-uv run rallycut evaluate --binary-head             # Binary head eval
+# Rally detection (41 videos, 368 GT)
+uv run rallycut evaluate --temporal-maxer          # TemporalMaxer eval
+uv run python scripts/loo_cv_temporal_maxer.py     # LOO CV (~30min)
 
-# Player tracking
+# Player tracking (16 labeled rallies)
 uv run rallycut evaluate-tracking --all            # All labeled rallies
 uv run rallycut evaluate-tracking --all --ball-only  # Ball metrics only
+uv run python scripts/retrack_labeled_rallies.py --stride 2  # Re-track
 ```
 
 ## Ground Truth Loading
@@ -49,7 +50,6 @@ rallies = load_labeled_rallies(rally_id="...", ball_gt_only=True)
 ## Cached Positions
 
 - Ball grid search: `~/.cache/rallycut/ball_grid_search/`
-- Ensemble grid search: `~/.cache/rallycut/ensemble_grid_search/`
 
 ## Reporting Rules
 

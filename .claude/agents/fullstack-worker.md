@@ -1,7 +1,7 @@
 ---
 name: fullstack-worker
 description: Implement cross-domain features touching multiple parts of the monorepo (API + web + ML). Use for tasks spanning analysis, api, web, or lambda directories.
-skills: test-runner, code-quality, database
+skills: pre-commit, database
 ---
 
 # Fullstack Worker
@@ -12,8 +12,9 @@ You implement features and fixes that span multiple domains of the RallyCut mono
 
 1. **Upload**: web → api (presigned S3 URL) → S3
 2. **Detection**: api → Modal (GPU ML) → webhook → api → PostgreSQL
-3. **Edit**: web ↔ api (rally/highlight CRUD)
-4. **Export**: api → Lambda (FFmpeg) → S3 → web (download)
+3. **Tracking**: api → Modal (GPU YOLO+WASB) → per-rally webhooks → api → PostgreSQL
+4. **Edit**: web ↔ api (rally/highlight CRUD)
+5. **Export**: api → Lambda (FFmpeg) → S3 → web (download)
 
 ## Project Stack
 
