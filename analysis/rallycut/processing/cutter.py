@@ -20,6 +20,8 @@ from rallycut.processing.exporter import FFmpegExporter
 if TYPE_CHECKING:
     from pathlib import Path as PathType
 
+    import numpy
+
     from rallycut.analysis.game_state import GameStateAnalyzer
     from rallycut.core.proxy import ProxyGenerator
     from rallycut.temporal.features import FeatureCache
@@ -66,6 +68,8 @@ class VideoCutter:
         ball_validation: bool = False,  # Enable ball-based FP filtering
         ball_boundary_refinement: bool = False,  # Enable ball-based boundary refinement
         ball_fast_mode: bool = True,  # Use aggressive optimizations (subsample + early exit)
+        # Ball fusion: recover short rallies the model is uncertain about
+        ball_fusion: bool = False,  # Enable ball density fusion for FN recovery
     ):
         config = get_config()
         self.device = device or config.device
@@ -101,6 +105,7 @@ class VideoCutter:
         self.ball_validation = ball_validation
         self.ball_boundary_refinement = ball_boundary_refinement
         self.ball_fast_mode = ball_fast_mode
+        self.ball_fusion = ball_fusion
 
         self._analyzer: GameStateAnalyzer | None = None
         self._proxy_generator: ProxyGenerator | None = None
@@ -427,6 +432,181 @@ class VideoCutter:
         )
 
         return refined_segments
+
+    def _apply_ball_fusion(
+        self,
+        input_path: Path,
+        segments: list[tuple[float, float]],
+        window_probs: numpy.ndarray,
+        window_duration: float,
+        video_duration: float,
+    ) -> list[tuple[float, float]]:
+        """Recover short missed rallies using ball density + model confidence.
+
+        Scans gaps between detected segments for regions where:
+        1. The model has moderate confidence (avg prob >= 0.40) — it "almost" detected a rally
+        2. Ball detection density is high (>= 0.30 for >= 2s) — confirming ball activity
+
+        Only runs WASB on candidate gaps (typically 0-3 per video, <12s each),
+        making this very efficient compared to full-video ball detection.
+
+        Args:
+            input_path: Path to video file.
+            segments: Current detected segments (start_s, end_s).
+            window_probs: Per-window rally probabilities from TemporalMaxer.
+            window_duration: Duration of each prediction window in seconds.
+            video_duration: Total video duration in seconds.
+
+        Returns:
+            Updated segment list with any recovered rallies added.
+        """
+        import numpy as np
+
+        # Fusion parameters (tuned via sweep on 3 worst-FN videos)
+        PROB_GATE = 0.40  # Min avg model probability in gap
+        DENSITY_THRESHOLD = 0.3  # Min ball detection density
+        MIN_DENSE_SECONDS = 2.0  # Min contiguous dense seconds
+        MAX_CANDIDATE_DURATION = 12.0  # Max candidate rally duration
+        DENSITY_WINDOW_S = 2.0  # Sliding window for density computation
+        WASB_CONF_THRESHOLD = 0.3  # WASB confidence threshold
+
+        # Find gaps between segments
+        sorted_segs = sorted(segments)
+        gaps: list[tuple[float, float]] = []
+        prev_end = 0.0
+        for s, e in sorted_segs:
+            if s > prev_end:
+                gaps.append((prev_end, s))
+            prev_end = max(prev_end, e)
+        if prev_end < video_duration:
+            gaps.append((prev_end, video_duration))
+
+        # Filter gaps by model confidence — only consider gaps where
+        # the model has some signal (prob >= PROB_GATE)
+        candidate_gaps: list[tuple[float, float, float]] = []  # (start, end, avg_prob)
+        for gap_s, gap_e in gaps:
+            gap_dur = gap_e - gap_s
+            if gap_dur < MIN_DENSE_SECONDS or gap_dur > MAX_CANDIDATE_DURATION * 2:
+                continue
+
+            w_start = max(0, int(gap_s / window_duration))
+            w_end = min(len(window_probs), int(gap_e / window_duration) + 1)
+            if w_end <= w_start:
+                continue
+
+            gap_probs = window_probs[w_start:w_end]
+            avg_prob = float(gap_probs.mean())
+
+            if avg_prob >= PROB_GATE:
+                candidate_gaps.append((gap_s, gap_e, avg_prob))
+
+        if not candidate_gaps:
+            logger.debug(
+                "Ball fusion: no candidate gaps pass prob gate %.2f (%d gaps checked)",
+                PROB_GATE, len(gaps),
+            )
+            return segments
+
+        logger.info(
+            "Ball fusion: %d candidate gaps (of %d total) pass prob gate %.2f",
+            len(candidate_gaps), len(gaps), PROB_GATE,
+        )
+
+        # Run WASB only on candidate gaps
+        ball_tracker = self._get_ball_tracker()
+
+        # Use proxy video if available for faster processing
+        proxy_path = input_path
+        if self.use_proxy:
+            proxy_gen = self._get_proxy_generator()
+            with Video(input_path) as video:
+                source_fps = video.info.fps
+            proxy_path, _ = proxy_gen.get_or_create(input_path, source_fps, None)
+
+        recovered: list[tuple[float, float]] = []
+
+        for gap_s, gap_e, avg_prob in candidate_gaps:
+            # Add small buffer around the gap for WASB context
+            track_start_ms = max(0, int((gap_s - 1.0) * 1000))
+            track_end_ms = int((gap_e + 1.0) * 1000)
+
+            try:
+                result = ball_tracker.track_video(
+                    video_path=proxy_path,
+                    start_ms=track_start_ms,
+                    end_ms=track_end_ms,
+                    enable_filtering=False,
+                )
+            except Exception:
+                logger.warning(
+                    "Ball fusion: WASB failed on gap %.1f-%.1fs, skipping",
+                    gap_s, gap_e,
+                )
+                continue
+
+            if result.frame_count == 0:
+                continue
+
+            # Build per-frame confidence array
+            confidences = np.zeros(result.frame_count, dtype=np.float32)
+            for p in result.positions:
+                if 0 <= p.frame_number < result.frame_count:
+                    confidences[p.frame_number] = p.confidence
+
+            # Compute density curve
+            fps = result.video_fps
+            window_frames = max(1, int(DENSITY_WINDOW_S * fps))
+            half_win = window_frames // 2
+            detected = (confidences >= WASB_CONF_THRESHOLD).astype(np.float32)
+            cumsum = np.concatenate([[0.0], np.cumsum(detected)])
+            duration_s = len(confidences) / fps
+            n_seconds = int(np.ceil(duration_s))
+
+            density = np.zeros(n_seconds, dtype=np.float32)
+            for sec in range(n_seconds):
+                center_frame = int((sec + 0.5) * fps)
+                start = max(0, center_frame - half_win)
+                end = min(len(detected), start + window_frames)
+                if end > start:
+                    density[sec] = (cumsum[end] - cumsum[start]) / (end - start)
+
+            # Check for contiguous dense region within the gap
+            # Map gap bounds to density array indices (relative to track start)
+            buffer_s = (gap_s - track_start_ms / 1000)
+            gap_density_start = max(0, int(buffer_s))
+            gap_density_end = min(len(density), int(buffer_s + (gap_e - gap_s)) + 1)
+
+            if gap_density_end <= gap_density_start:
+                continue
+
+            gap_density = density[gap_density_start:gap_density_end]
+            dense_seconds = int((gap_density >= DENSITY_THRESHOLD).sum())
+
+            if dense_seconds >= MIN_DENSE_SECONDS:
+                # Find the dense region bounds (trim to dense part)
+                dense_mask = gap_density >= DENSITY_THRESHOLD
+                first_dense = int(np.argmax(dense_mask))
+                last_dense = len(dense_mask) - 1 - int(np.argmax(dense_mask[::-1]))
+
+                rally_start = gap_s + first_dense
+                rally_end = gap_s + last_dense + 1
+                rally_dur = rally_end - rally_start
+
+                if MIN_DENSE_SECONDS <= rally_dur <= MAX_CANDIDATE_DURATION:
+                    avg_density = float(gap_density[first_dense:last_dense + 1].mean())
+                    recovered.append((rally_start, rally_end))
+                    logger.info(
+                        "Ball fusion: recovered rally %.1f-%.1fs "
+                        "(%.1fs, prob=%.2f, density=%.2f, dense=%ds)",
+                        rally_start, rally_end, rally_dur,
+                        avg_prob, avg_density, dense_seconds,
+                    )
+
+        if recovered:
+            logger.info("Ball fusion: recovered %d rallies", len(recovered))
+            return sorted(segments + recovered)
+
+        return segments
 
     def _apply_confidence_extension(
         self, results: list[GameStateResult]
@@ -994,6 +1174,21 @@ class VideoCutter:
             progress_callback(0.85, "Converting segments...")
 
         raw_segments = result.segments
+
+        # Apply ball fusion: recover short missed rallies using ball density
+        if self.ball_fusion and result.window_probs is not None:
+            if progress_callback:
+                progress_callback(0.86, "Ball fusion: scanning for missed rallies...")
+
+            window_duration = stride / feature_fps
+            video_duration = source_frame_count / source_fps
+            raw_segments = self._apply_ball_fusion(
+                input_path,
+                raw_segments,
+                result.window_probs,
+                window_duration,
+                video_duration,
+            )
 
         # Apply ball-based validation if enabled (Phase 1: False Positive Filtering)
         if self.ball_validation and raw_segments:
