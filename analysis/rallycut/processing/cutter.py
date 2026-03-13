@@ -462,10 +462,10 @@ class VideoCutter:
         """
         import numpy as np
 
-        # Fusion parameters (tuned via sweep on 3 worst-FN videos)
+        # Fusion parameters (tuned via sweep on 41 GT videos)
         PROB_GATE = 0.40  # Min avg model probability in gap
-        DENSITY_THRESHOLD = 0.3  # Min ball detection density
-        MIN_DENSE_SECONDS = 2.0  # Min contiguous dense seconds
+        DENSITY_THRESHOLD = 0.4  # Min ball detection density
+        MIN_DENSE_SECONDS = 3.0  # Min contiguous dense seconds
         MAX_CANDIDATE_DURATION = 12.0  # Max candidate rally duration
         DENSITY_WINDOW_S = 2.0  # Sliding window for density computation
         WASB_CONF_THRESHOLD = 0.3  # WASB confidence threshold
