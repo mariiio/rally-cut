@@ -13,13 +13,13 @@ Volleyball video analysis CLI. Uses ML (VideoMAE) to detect game states and remo
 ```bash
 # Core commands (TemporalMaxer is default when model+features exist)
 uv run rallycut cut <video.mp4>                 # Auto-selects best pipeline
-uv run rallycut cut <video.mp4> --temporal-maxer # Force TemporalMaxer (92% LOO F1)
+uv run rallycut cut <video.mp4> --temporal-maxer # Force TemporalMaxer (94% LOO F1)
 uv run rallycut cut <video.mp4> --heuristics    # Force heuristics (57% F1)
 uv run rallycut cut <video.mp4> --model beach   # Use beach volleyball model
 uv run rallycut profile <video.mp4>             # Performance profiling
 
 # Pre-extract features (optional — TemporalMaxer auto-extracts on first run)
-uv run rallycut train extract-features --stride 24
+uv run rallycut train extract-features --stride 12
 
 # Useful options for cut
 uv run rallycut cut video.mp4 --debug           # Timeline visualization + diagnostics
@@ -53,7 +53,7 @@ uv run rallycut train export-dataset --name beach_v3  # Export all labeled data 
 uv run rallycut train push --name beach_v3            # Back up to S3 (deduplicates videos)
 
 # Step 2a: Retrain TemporalMaxer (fast, local, recommended first)
-uv run rallycut train extract-features --stride 24    # Extract features for new videos
+uv run rallycut train extract-features --stride 12    # Extract features for new videos
 uv run rallycut train temporal-maxer --epochs 50      # Retrain TemporalMaxer
 
 # Step 2b: Fine-tune VideoMAE (slow, GPU required, only if needed)
@@ -100,15 +100,15 @@ uv run rallycut train wasb-modal --download         # Download fine-tuned model 
 uv run python scripts/eval_wasb.py                  # Evaluate WASB
 uv run rallycut train wasb-modal --cleanup          # Delete from Modal volume
 
-# TemporalMaxer training (92% LOO F1 at IoU=0.4)
+# TemporalMaxer training (94% LOO F1 at IoU=0.4)
 uv run rallycut train export-dataset --name beach_v3  # Export labeled data
-uv run rallycut train extract-features --stride 24    # Extract VideoMAE features
+uv run rallycut train extract-features --stride 12    # Extract VideoMAE features
 uv run rallycut train temporal-maxer --epochs 50      # Train TemporalMaxer TAS model
 # Model saved to weights/temporal_maxer/best_temporal_maxer.pt
 
 # Evaluation
 uv run rallycut evaluate                              # Evaluate (auto-selects TemporalMaxer)
-uv run rallycut evaluate --temporal-maxer             # Force TemporalMaxer (92% LOO F1)
+uv run rallycut evaluate --temporal-maxer             # Force TemporalMaxer (94% LOO F1)
 uv run rallycut evaluate --heuristics                 # Force heuristics evaluation (57% F1)
 uv run rallycut evaluate --model beach --iou 0.5      # Evaluate beach model
 
@@ -182,7 +182,7 @@ Nested Pydantic config with YAML/env var support. Key sections:
 
 | Section | Key Settings |
 |---------|-------------|
-| `game_state` | `stride=24` (frames between samples), `window_size=16`, `batch_size=8` |
+| `game_state` | `stride=12` (frames between samples), `window_size=16`, `batch_size=8` |
 | `segment` | `min_play_duration=1.0`, `min_gap=5.0`, `rally_continuation=2.0` |
 | `proxy` | 480p@30fps normalized for faster ML |
 
@@ -220,10 +220,10 @@ Two detection pipelines are available:
 
 | Pipeline | F1 (IoU=0.5) | F1 (IoU=0.4) | Overmerge | Command |
 |----------|--------------|--------------|-----------|---------|
-| TemporalMaxer (default) | 87.9% (LOO) | 91.9% (LOO) | 0% | `rallycut cut video.mp4 --temporal-maxer` |
+| TemporalMaxer (default) | - | 93.8% (LOO) | 0% | `rallycut cut video.mp4 --temporal-maxer` |
 | Heuristics (fallback) | 57% | - | ~10% | `rallycut cut video.mp4 --heuristics` |
 
-**Note:** IoU=0.4 better reflects detection accuracy when labeling marks serve toss start (model detects ~2s later when play begins). TemporalMaxer's F1 is honest leave-one-video-out CV (stride=24, 29 videos).
+**Note:** IoU=0.4 better reflects detection accuracy when labeling marks serve toss start (model detects ~2s later when play begins). TemporalMaxer's F1 is honest leave-one-video-out CV (stride=12, 41 videos).
 
 **Pipeline auto-selection:**
 1. If `--temporal-maxer` flag: use TemporalMaxer (auto-extracts features if not cached)
@@ -235,7 +235,7 @@ Two detection pipelines are available:
 **Enabling best pipeline (local):**
 ```bash
 # Train TemporalMaxer (features auto-extracted on first run, or pre-extract for speed)
-uv run rallycut train extract-features --stride 24  # Optional: pre-extract for faster first run
+uv run rallycut train extract-features --stride 12  # Optional: pre-extract for faster first run
 uv run rallycut train temporal-maxer --epochs 50
 ```
 

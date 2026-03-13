@@ -62,8 +62,8 @@ class TemporalMaxerInference:
         valley_threshold: float = 0.5,
         min_valley_duration: float = 2.0,
         tta_shifts: int = 0,
-        rescue_min_avg_prob: float = 0.45,
-        rescue_min_windows: int = 3,
+        rescue_min_avg_prob: float = 0.50,
+        rescue_min_windows: int = 6,
         rescue_max_duration: float = 10.0,
     ) -> TemporalMaxerResult:
         """Run full-sequence inference and extract segments.
@@ -150,7 +150,6 @@ class TemporalMaxerInference:
         Shifts features by ±1..num_shifts windows, runs inference on each,
         un-shifts the probabilities, and averages.
         """
-        T = features_t.shape[2]
         all_probs: list[np.ndarray] = []
 
         for shift in range(-num_shifts, num_shifts + 1):

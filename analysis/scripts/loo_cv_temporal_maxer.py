@@ -33,7 +33,7 @@ from rallycut.temporal.temporal_maxer.training import (
 # Suppress noisy training/library logs
 logging.basicConfig(level=logging.WARNING)
 
-DEFAULT_STRIDE = 24
+DEFAULT_STRIDE = 12
 FEATURE_DIR = Path("training_data/features")
 
 
@@ -141,6 +141,7 @@ def run_fold(
     min_segment_confidence: float = 0.6,
     valley_threshold: float = 0.5,
     min_valley_duration: float = 2.0,
+    rescue_min_avg_prob: float = 0.50,
     augmentation: AugmentationConfig | None = None,
     label_smoothing: float = 0.0,
     focal_loss: bool = False,
@@ -243,6 +244,7 @@ def run_fold(
                 valley_threshold=valley_threshold,
                 min_valley_duration=min_valley_duration,
                 tta_shifts=tta_shifts,
+                rescue_min_avg_prob=rescue_min_avg_prob,
             )
 
         train_time = time.time() - t0
@@ -367,6 +369,10 @@ def main() -> None:
         help="Min avg probability to keep a segment (production default: 0.6)",
     )
     parser.add_argument(
+        "--rescue-prob", type=float, default=0.50,
+        help="Rescue pass min avg prob (0 = disabled, default: 0.50)",
+    )
+    parser.add_argument(
         "--valley-threshold", type=float, default=0.5,
         help="Split segments at sustained prob valleys below this (0 = disabled)",
     )
@@ -441,6 +447,7 @@ def main() -> None:
     print(f"Feature stride: {stride}")
     if min_confidence > 0:
         print(f"Min segment confidence: {min_confidence}")
+    print(f"Rescue pass: {'disabled' if args.rescue_prob == 0 else f'min_avg_prob={args.rescue_prob}'}")
     if valley_threshold > 0:
         print(f"Valley splitting: threshold={valley_threshold}, min_duration={min_valley_duration}s")
     else:
@@ -497,7 +504,7 @@ def main() -> None:
         train_videos = [v for j, v in enumerate(videos) if j != i]
         fold = run_fold(
             i + 1, n, held_out, train_videos, cache, device, stride, min_confidence,
-            valley_threshold, min_valley_duration,
+            valley_threshold, min_valley_duration, rescue_min_avg_prob=args.rescue_prob,
             augmentation=aug_config,
             label_smoothing=args.label_smoothing,
             focal_loss=args.focal_loss,

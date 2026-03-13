@@ -1417,7 +1417,6 @@ class PlayerTracker:
             num_height_swaps = 0
             num_color_splits = 0
             num_appearance_links = 0
-            num_court_swaps = 0
 
             # Team classification (populated during filtering)
             team_assignments: dict[int, int] = {}

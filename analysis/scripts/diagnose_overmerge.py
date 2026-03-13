@@ -25,7 +25,7 @@ from rallycut.evaluation.ground_truth import load_evaluation_videos
 from rallycut.temporal.features import FeatureCache
 from rallycut.temporal.temporal_maxer.inference import TemporalMaxerInference
 
-STRIDE = 24
+STRIDE = 12
 
 
 def main() -> None:

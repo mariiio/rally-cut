@@ -20,7 +20,6 @@ from rallycut.core.video import Video
 
 if TYPE_CHECKING:
     from lib.volleyball_ml.video_mae import GameStateClassifier
-
     from rallycut.evaluation.ground_truth import EvaluationVideo, GroundTruthRally
 
 
