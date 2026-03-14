@@ -20,6 +20,8 @@ from rallycut.processing.exporter import FFmpegExporter
 if TYPE_CHECKING:
     from pathlib import Path as PathType
 
+    import numpy as np
+
     from rallycut.analysis.game_state import GameStateAnalyzer
     from rallycut.core.proxy import ProxyGenerator
     from rallycut.temporal.features import FeatureCache
@@ -157,6 +159,39 @@ class VideoCutter:
             # Use default cache dir (~/.cache/rallycut/features/)
             self._feature_cache = FeatureCacheImpl()
         return self._feature_cache
+
+    def _load_ball_density_for_hash(
+        self, content_hash: str | None,
+    ) -> tuple[np.ndarray, float] | None:
+        """Load ball density for a video by content hash.
+
+        Maps content_hash → video_id via database, then loads cached NPZ.
+        Returns None gracefully if density is not available.
+        """
+        if content_hash is None:
+            return None
+        try:
+            from rallycut.temporal.ball_features import DEFAULT_BALL_DENSITY_DIR, load_ball_density
+
+            density_dir = DEFAULT_BALL_DENSITY_DIR
+            if not density_dir.is_absolute():
+                density_dir = Path(__file__).parent.parent.parent / density_dir
+            if not density_dir.exists():
+                return None
+
+            # Map content_hash → video_id via database
+            from rallycut.evaluation.db import get_connection
+
+            with get_connection() as conn:
+                row = conn.execute(
+                    "SELECT id FROM videos WHERE content_hash = %s LIMIT 1",
+                    (content_hash,),
+                ).fetchone()
+            if row is None:
+                return None
+            return load_ball_density(str(row[0]), density_dir)
+        except Exception:
+            return None
 
     def _get_ball_tracker(self) -> WASBBallTracker:
         """Lazy load ball tracker."""
@@ -959,6 +994,40 @@ class VideoCutter:
         else:
             features, cached_metadata = cached
             feature_fps = cached_metadata.fps
+
+        # Combine with ball features if model expects them
+        expected_dim = inference.model.config.feature_dim
+        if expected_dim > features.shape[1]:
+            ball_dim = expected_dim - features.shape[1]
+            try:
+                from rallycut.temporal.ball_features import (
+                    BALL_FEATURE_DIM,
+                    combine_features,
+                    extract_ball_features,
+                )
+
+                if ball_dim == BALL_FEATURE_DIM:
+                    # Try loading cached ball density (keyed by content_hash → video_id)
+                    ball_data = self._load_ball_density_for_hash(content_hash)
+                    if ball_data is not None:
+                        confs, ball_fps = ball_data
+                        ball_feats = extract_ball_features(
+                            confs, ball_fps,
+                            feature_fps=feature_fps, stride=stride,
+                        )
+                        features = combine_features(features, ball_feats)
+                        logger.info("TemporalMaxer: combined with ball features (%d-dim)", ball_dim)
+            except Exception:
+                logger.debug("Ball feature loading failed, using zero-padded features")
+
+            # Zero-pad if still short (model trained with dropout handles this)
+            if features.shape[1] < expected_dim:
+                import numpy as np
+
+                pad_width = expected_dim - features.shape[1]
+                padding = np.zeros((features.shape[0], pad_width), dtype=features.dtype)
+                features = np.concatenate([features, padding], axis=1)
+                logger.info("TemporalMaxer: zero-padded features to %d-dim", expected_dim)
 
         logger.info(
             "TemporalMaxer: features=%s, shape=%s, stride=%d, source=%s, "

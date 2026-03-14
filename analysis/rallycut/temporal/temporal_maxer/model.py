@@ -17,7 +17,7 @@ from torch.nn import functional as nnf
 class TemporalMaxerConfig:
     """Configuration for TemporalMaxer model."""
 
-    feature_dim: int = 768  # Input feature dimension (VideoMAE base)
+    feature_dim: int = 768  # 768 for VideoMAE-only, 773 with ball features
     hidden_dim: int = 768  # Hidden dimension (same as feature dim)
     num_classes: int = 2  # rally / no_rally
     num_layers: int = 4  # Temporal pyramid depth
