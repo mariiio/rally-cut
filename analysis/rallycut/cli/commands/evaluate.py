@@ -263,9 +263,6 @@ def _apply_temporal_maxer(
     stride: int,
     feature_cache_dir: Path | None = None,
     temporal_maxer_model_path: Path | None = None,
-    ball_fusion: bool = False,
-    video_path: Path | None = None,
-    video_duration: float | None = None,
 ) -> list | None:
     """Apply TemporalMaxer TAS model to cached features.
 
@@ -274,9 +271,6 @@ def _apply_temporal_maxer(
         stride: Analysis stride in frames.
         feature_cache_dir: Directory containing cached features.
         temporal_maxer_model_path: Path to TemporalMaxer model (optional).
-        ball_fusion: Enable ball density fusion for FN recovery.
-        video_path: Path to video (required if ball_fusion=True).
-        video_duration: Video duration in seconds (required if ball_fusion=True).
 
     Returns:
         List of TimeSegment objects, or None if features/model not found.
@@ -312,20 +306,6 @@ def _apply_temporal_maxer(
     result = inference.predict(features=features, fps=metadata.fps, stride=stride)
 
     raw_segments = result.segments
-
-    # Apply ball fusion if enabled
-    if ball_fusion and video_path is not None and video_duration is not None:
-        from rallycut.processing.cutter import VideoCutter
-
-        cutter = VideoCutter(ball_fusion=True)
-        window_duration = stride / metadata.fps
-        raw_segments = cutter._apply_ball_fusion(
-            video_path,
-            raw_segments,
-            result.window_probs,
-            window_duration,
-            video_duration,
-        )
 
     # Convert to TimeSegments
     segments = []
@@ -491,7 +471,6 @@ def _run_evaluation(
     use_heuristics: bool = False,
     ball_validation: bool = False,
     ball_boundary: bool = False,
-    ball_fusion: bool = False,
     ball_fast: bool = True,
     progress: Progress | None = None,
     task_id: TaskID | None = None,
@@ -535,19 +514,9 @@ def _run_evaluation(
         segments = None
 
         if use_temporal_maxer or not use_heuristics:
-            # Resolve video path if needed for ball fusion or ball tracking
-            fusion_video_path = None
-            fusion_video_duration = None
-            if ball_fusion:
-                fusion_video_path = resolver.resolve(video.s3_key, video.content_hash)
-                fusion_video_duration = video.duration_seconds
-
             # TemporalMaxer TAS model (explicit or auto-selection)
             segments = _apply_temporal_maxer(
                 video.content_hash, stride, feature_cache_dir,
-                ball_fusion=ball_fusion,
-                video_path=fusion_video_path,
-                video_duration=fusion_video_duration,
             )
             if segments is not None and (ball_validation or ball_boundary):
                 video_path = resolver.resolve(video.s3_key, video.content_hash)
@@ -735,13 +704,6 @@ def evaluate(
             help="Ball-based boundary refinement (disabled by default: hurts IoU=0.5 F1 by 2.7%%)",
         ),
     ] = False,
-    ball_fusion: Annotated[
-        bool,
-        typer.Option(
-            "--ball-fusion/--no-ball-fusion",
-            help="Recover missed short rallies using ball density + model confidence",
-        ),
-    ] = False,
     ball_fast: Annotated[
         bool,
         typer.Option(
@@ -789,14 +751,12 @@ def evaluate(
         )
 
     # Show ball validation info
-    if ball_validation or ball_boundary or ball_fusion:
+    if ball_validation or ball_boundary:
         ball_features = []
         if ball_validation:
             ball_features.append("FP filtering")
         if ball_boundary:
             ball_features.append("boundary refinement")
-        if ball_fusion:
-            ball_features.append("FN recovery")
         ball_mode = "fast" if ball_fast else "standard"
         console.print(
             f"Ball tracking: [cyan]{', '.join(ball_features)} ({ball_mode} mode)[/cyan]"
@@ -977,7 +937,6 @@ def evaluate(
             use_heuristics=use_heuristics,
             ball_validation=ball_validation,
             ball_boundary=ball_boundary,
-            ball_fusion=ball_fusion,
             ball_fast=ball_fast,
             progress=progress,
             task_id=task,
