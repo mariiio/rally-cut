@@ -62,7 +62,8 @@ POSITION_WEIGHT = 0.30
 
 # Minimum assignment confidence to update profiles. Below this threshold,
 # profile updates are skipped to prevent error propagation (drift).
-MIN_PROFILE_UPDATE_CONFIDENCE = 0.55
+# Tuned via grid search on 28 GT videos: 0.80 → 85.8% vs 0.55 → 84.4%.
+MIN_PROFILE_UPDATE_CONFIDENCE = 0.80
 
 
 def build_match_team_assignments(
