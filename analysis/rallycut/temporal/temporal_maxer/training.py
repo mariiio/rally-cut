@@ -38,6 +38,11 @@ class AugmentationConfig:
     # Random temporal crop (fraction of sequence to keep)
     temporal_crop_min: float = 1.0  # 1.0 = disabled, try 0.7
 
+    # Modality dropout: zero out auxiliary features (e.g. ball features)
+    # with this probability per sample. Forces model to not over-rely on them.
+    ball_feature_dropout: float = 0.0  # 0 = disabled, try 0.5
+    ball_feature_dim: int = 0  # number of trailing dims that are ball features
+
 
 @dataclass
 class TemporalMaxerTrainingConfig:
@@ -124,6 +129,14 @@ class VideoSequenceDataset(Dataset):
                 )
                 features = features * mask
 
+            # Ball feature (modality) dropout: zero out all ball feature dims
+            if (
+                self.aug.ball_feature_dropout > 0
+                and self.aug.ball_feature_dim > 0
+                and random.random() < self.aug.ball_feature_dropout
+            ):
+                features[:, -self.aug.ball_feature_dim:] = 0.0
+
         return features, labels
 
 
@@ -140,7 +153,7 @@ def collate_video_sequences(
     """
     if not batch:
         return (
-            torch.zeros(0, 768, 0),
+            torch.zeros(0, 0, 0),
             torch.zeros(0, 0, dtype=torch.long),
             torch.zeros(0, 1, 0),
         )
@@ -238,9 +251,9 @@ class TemporalMaxerTrainer:
         """Train TemporalMaxer model.
 
         Args:
-            train_features: List of (seq_len, 768) feature arrays per video.
+            train_features: List of (seq_len, feature_dim) feature arrays per video.
             train_labels: List of (seq_len,) binary label arrays per video.
-            val_features: List of (seq_len, 768) feature arrays per video.
+            val_features: List of (seq_len, feature_dim) feature arrays per video.
             val_labels: List of (seq_len,) binary label arrays per video.
             output_dir: Directory to save model and results.
 

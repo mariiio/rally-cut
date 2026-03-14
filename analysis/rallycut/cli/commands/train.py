@@ -2484,15 +2484,18 @@ def train_temporal_maxer_cmd(
     seed: int = typer.Option(42, "--seed", help="Random seed"),
     device: str = typer.Option("", "--device", help="Device (cpu/cuda/mps). Auto-detect if empty."),
     feature_noise: float = typer.Option(0.01, "--feature-noise", help="Gaussian noise std on features (0=disabled)"),
+    ball_features: bool = typer.Option(True, "--ball-features/--no-ball-features", help="Use ball trajectory features"),
+    ball_feature_dropout: float = typer.Option(0.5, "--ball-feature-dropout", help="Ball feature modality dropout rate"),
 ) -> None:
     """Train TemporalMaxer TAS model on frozen encoder features.
 
     Trains a temporal action segmentation model on pre-extracted VideoMAE
-    features using full video sequences. Achieves 75% F1 at IoU=0.4 (LOO CV).
+    features (with optional ball trajectory features) using full video
+    sequences. Achieves 95% F1 at IoU=0.4 (LOO CV).
 
     Examples:
         # Extract features first (if not done)
-        rallycut train extract-features --stride 48
+        rallycut train extract-features --stride 12
 
         # Train TemporalMaxer
         rallycut train temporal-maxer --epochs 50
@@ -2507,6 +2510,7 @@ def train_temporal_maxer_cmd(
         generate_overlap_labels,
         video_level_split,
     )
+    from rallycut.temporal.temporal_maxer.model import TemporalMaxerConfig
     from rallycut.temporal.temporal_maxer.training import (
         AugmentationConfig,
         TemporalMaxerTrainer,
@@ -2518,6 +2522,26 @@ def train_temporal_maxer_cmd(
     rprint(f"  Stride: {stride}")
     if feature_noise > 0:
         rprint(f"  Feature noise: {feature_noise}")
+
+    # Ball features setup
+    ball_density_dir: Path | None = None
+    feature_dim = 768
+    ball_feat_dim = 0
+    if ball_features:
+        from rallycut.temporal.ball_features import BALL_FEATURE_DIM, DEFAULT_BALL_DENSITY_DIR
+
+        ball_density_dir = DEFAULT_BALL_DENSITY_DIR
+        if ball_density_dir.exists():
+            n_cached = len(list(ball_density_dir.glob("*.npz")))
+            feature_dim = 768 + BALL_FEATURE_DIM
+            ball_feat_dim = BALL_FEATURE_DIM
+            rprint(f"  Ball features: [green]enabled[/green] ({n_cached} density files, dim={feature_dim})")
+            if ball_feature_dropout > 0:
+                rprint(f"  Ball feature dropout: {ball_feature_dropout}")
+        else:
+            rprint("  Ball features: [yellow]disabled[/yellow] (no density cache)")
+            ball_density_dir = None
+
     rprint()
 
     # Auto-detect device
@@ -2576,6 +2600,24 @@ def train_temporal_maxer_cmd(
             if cached_data is None:
                 continue
             features, metadata = cached_data
+
+            # Combine with ball features if available
+            if ball_density_dir is not None:
+                from rallycut.temporal.ball_features import (
+                    combine_features,
+                    extract_ball_features,
+                    load_ball_density,
+                )
+
+                ball_data = load_ball_density(video.id, ball_density_dir)
+                if ball_data is not None:
+                    confs, ball_fps = ball_data
+                    ball_feats = extract_ball_features(
+                        confs, ball_fps,
+                        feature_fps=metadata.fps, stride=stride,
+                    )
+                    features = combine_features(features, ball_feats)
+
             duration_ms = int(metadata.duration_seconds * 1000)
             labels = generate_overlap_labels(
                 rallies=video.ground_truth_rallies,
@@ -2602,11 +2644,15 @@ def train_temporal_maxer_cmd(
     rprint(f"  Val: {len(val_features)} videos, {total_val_windows} windows")
 
     # Create config and train
+    aug_enabled = feature_noise > 0 or (ball_feat_dim > 0 and ball_feature_dropout > 0)
     aug_config = AugmentationConfig(
-        enabled=feature_noise > 0,
+        enabled=aug_enabled,
         feature_noise_std=feature_noise,
+        ball_feature_dropout=ball_feature_dropout if ball_feat_dim > 0 else 0.0,
+        ball_feature_dim=ball_feat_dim,
     )
     config = TemporalMaxerTrainingConfig(
+        model_config=TemporalMaxerConfig(feature_dim=feature_dim),
         learning_rate=lr,
         epochs=epochs,
         batch_size=batch_size,

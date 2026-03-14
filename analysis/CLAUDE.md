@@ -13,7 +13,7 @@ Volleyball video analysis CLI. Uses ML (VideoMAE) to detect game states and remo
 ```bash
 # Core commands (TemporalMaxer is default when model+features exist)
 uv run rallycut cut <video.mp4>                 # Auto-selects best pipeline
-uv run rallycut cut <video.mp4> --temporal-maxer # Force TemporalMaxer (94% LOO F1)
+uv run rallycut cut <video.mp4> --temporal-maxer # Force TemporalMaxer (95% LOO F1)
 uv run rallycut cut <video.mp4> --heuristics    # Force heuristics (57% F1)
 uv run rallycut cut <video.mp4> --model beach   # Use beach volleyball model
 uv run rallycut profile <video.mp4>             # Performance profiling
@@ -100,7 +100,7 @@ uv run rallycut train wasb-modal --download         # Download fine-tuned model 
 uv run python scripts/eval_wasb.py                  # Evaluate WASB
 uv run rallycut train wasb-modal --cleanup          # Delete from Modal volume
 
-# TemporalMaxer training (94% LOO F1 at IoU=0.4)
+# TemporalMaxer training (95% LOO F1 at IoU=0.4)
 uv run rallycut train export-dataset --name beach_v3  # Export labeled data
 uv run rallycut train extract-features --stride 12    # Extract VideoMAE features
 uv run rallycut train temporal-maxer --epochs 50      # Train TemporalMaxer TAS model
@@ -108,7 +108,7 @@ uv run rallycut train temporal-maxer --epochs 50      # Train TemporalMaxer TAS 
 
 # Evaluation
 uv run rallycut evaluate                              # Evaluate (auto-selects TemporalMaxer)
-uv run rallycut evaluate --temporal-maxer             # Force TemporalMaxer (94% LOO F1)
+uv run rallycut evaluate --temporal-maxer             # Force TemporalMaxer (95% LOO F1)
 uv run rallycut evaluate --heuristics                 # Force heuristics evaluation (57% F1)
 uv run rallycut evaluate --model beach --iou 0.5      # Evaluate beach model
 
@@ -220,7 +220,7 @@ Two detection pipelines are available:
 
 | Pipeline | F1 (IoU=0.5) | F1 (IoU=0.4) | Overmerge | Command |
 |----------|--------------|--------------|-----------|---------|
-| TemporalMaxer (default) | - | 93.8% (LOO) | 0% | `rallycut cut video.mp4 --temporal-maxer` |
+| TemporalMaxer (default) | - | 95.2% (LOO) | 0% | `rallycut cut video.mp4 --temporal-maxer` |
 | Heuristics (fallback) | 57% | - | ~10% | `rallycut cut video.mp4 --heuristics` |
 
 **Note:** IoU=0.4 better reflects detection accuracy when labeling marks serve toss start (model detects ~2s later when play begins). TemporalMaxer's F1 is honest leave-one-video-out CV (stride=12, 41 videos).

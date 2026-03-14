@@ -24,6 +24,7 @@ from rallycut.evaluation.ground_truth import EvaluationVideo, load_evaluation_vi
 from rallycut.evaluation.matching import MatchingResult, match_rallies
 from rallycut.temporal.features import FeatureCache, generate_overlap_labels
 from rallycut.temporal.temporal_maxer.inference import TemporalMaxerInference
+from rallycut.temporal.temporal_maxer.model import TemporalMaxerConfig
 from rallycut.temporal.temporal_maxer.training import (
     AugmentationConfig,
     TemporalMaxerTrainer,
@@ -107,6 +108,7 @@ def load_video_data(
     video: EvaluationVideo,
     cache: FeatureCache,
     stride: int,
+    ball_density_dir: Path | None = None,
 ) -> tuple[np.ndarray, np.ndarray, float, float] | None:
     """Load features and generate labels for a single video.
 
@@ -117,6 +119,24 @@ def load_video_data(
         return None
 
     features, metadata = cached_data
+
+    # Optionally combine with ball trajectory features
+    if ball_density_dir is not None:
+        from rallycut.temporal.ball_features import (
+            combine_features,
+            extract_ball_features,
+            load_ball_density,
+        )
+
+        ball_data = load_ball_density(video.id, ball_density_dir)
+        if ball_data is not None:
+            confs, ball_fps = ball_data
+            ball_feats = extract_ball_features(
+                confs, ball_fps,
+                feature_fps=metadata.fps, stride=stride,
+            )
+            features = combine_features(features, ball_feats)
+
     duration_ms = int(metadata.duration_seconds * 1000)
     labels = generate_overlap_labels(
         rallies=video.ground_truth_rallies,
@@ -148,6 +168,8 @@ def run_fold(
     focal_gamma: float = 2.0,
     tta_shifts: int = 0,
     num_seeds: int = 1,
+    ball_density_dir: Path | None = None,
+    feature_dim: int = 768,
 ) -> FoldResult:
     """Run a single LOO fold: train on N-1, evaluate on held-out."""
     print(
@@ -159,13 +181,13 @@ def run_fold(
     train_features: list[np.ndarray] = []
     train_labels: list[np.ndarray] = []
     for video in train_videos:
-        data = load_video_data(video, cache, stride)
+        data = load_video_data(video, cache, stride, ball_density_dir)
         if data is not None:
             train_features.append(data[0])
             train_labels.append(data[1])
 
     # Load held-out data
-    held_out_data = load_video_data(held_out, cache, stride)
+    held_out_data = load_video_data(held_out, cache, stride, ball_density_dir)
     if held_out_data is None:
         print(f"  WARNING: No cached features for held-out video {held_out.filename}")
         return FoldResult(
@@ -189,6 +211,7 @@ def run_fold(
             for seed_idx in range(num_seeds):
                 seed = 42 + seed_idx
                 config = TemporalMaxerTrainingConfig(
+                    model_config=TemporalMaxerConfig(feature_dim=feature_dim),
                     learning_rate=5e-4, epochs=50, batch_size=4, patience=15,
                     device=device, seed=seed,
                     augmentation=aug_cfg, label_smoothing=label_smoothing,
@@ -227,6 +250,7 @@ def run_fold(
             )
         else:
             config = TemporalMaxerTrainingConfig(
+                model_config=TemporalMaxerConfig(feature_dim=feature_dim),
                 learning_rate=5e-4, epochs=50, batch_size=4, patience=15,
                 device=device, seed=42,
                 augmentation=aug_cfg, label_smoothing=label_smoothing,
@@ -418,6 +442,15 @@ def main() -> None:
         "--num-seeds", type=int, default=1,
         help="Number of seeds for ensemble (1 = single model, try 3)",
     )
+    # Ball features
+    parser.add_argument(
+        "--ball-features", action="store_true",
+        help="Concatenate ball trajectory features with VideoMAE features",
+    )
+    parser.add_argument(
+        "--ball-feature-dropout", type=float, default=0.0,
+        help="Modality dropout rate for ball features (0 = disabled, try 0.5)",
+    )
     args = parser.parse_args()
     stride = args.stride
     min_confidence = args.min_confidence
@@ -429,12 +462,15 @@ def main() -> None:
         args.feature_noise > 0
         or args.feature_dropout > 0
         or args.temporal_crop < 1.0
+        or args.ball_feature_dropout > 0
     )
     aug_config = AugmentationConfig(
         enabled=aug_enabled,
         feature_noise_std=args.feature_noise,
         feature_dropout=args.feature_dropout,
         temporal_crop_min=args.temporal_crop,
+        ball_feature_dropout=args.ball_feature_dropout,
+        ball_feature_dim=0,  # Set below if ball features enabled
     )
 
     total_start = time.time()
@@ -462,7 +498,8 @@ def main() -> None:
             parts.append(f"dropout={args.feature_dropout}")
         if args.temporal_crop < 1.0:
             parts.append(f"crop_min={args.temporal_crop}")
-        print(f"Augmentation: {', '.join(parts)}")
+        if parts:
+            print(f"Augmentation: {', '.join(parts)}")
     if args.label_smoothing > 0:
         print(f"Label smoothing: {args.label_smoothing}")
     if args.focal_loss:
@@ -471,6 +508,24 @@ def main() -> None:
         print(f"TTA shifts: ±{args.tta}")
     if args.num_seeds > 1:
         print(f"Multi-seed ensemble: {args.num_seeds} seeds")
+
+    # Ball features setup
+    ball_density_dir: Path | None = None
+    feature_dim = 768
+    if args.ball_features:
+        from rallycut.temporal.ball_features import BALL_FEATURE_DIM, DEFAULT_BALL_DENSITY_DIR
+
+        ball_density_dir = DEFAULT_BALL_DENSITY_DIR
+        if not ball_density_dir.exists():
+            print("ERROR: Ball density dir not found. Run extract_ball_density.py first.")
+            sys.exit(1)
+        feature_dim = 768 + BALL_FEATURE_DIM
+        aug_config.ball_feature_dim = BALL_FEATURE_DIM
+        n_cached = len(list(ball_density_dir.glob("*.npz")))
+        print(f"Ball features: ENABLED ({n_cached} density files, dim={feature_dim})")
+        if args.ball_feature_dropout > 0:
+            print(f"Ball feature dropout: {args.ball_feature_dropout}")
+
     print(f"Feature directory: {FEATURE_DIR}")
     print()
 
@@ -513,6 +568,8 @@ def main() -> None:
             focal_gamma=args.focal_gamma,
             tta_shifts=args.tta,
             num_seeds=args.num_seeds,
+            ball_density_dir=ball_density_dir,
+            feature_dim=feature_dim,
         )
         fold_results.append(fold)
 
