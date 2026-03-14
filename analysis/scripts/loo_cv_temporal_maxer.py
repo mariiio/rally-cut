@@ -249,11 +249,13 @@ def run_fold(
 
         train_time = time.time() - t0
 
+    raw_segments = result.segments
+
     # Match predictions against GT
     gt_segments = [
         (r.start_seconds, r.end_seconds) for r in held_out.ground_truth_rallies
     ]
-    pred_segments = result.segments
+    pred_segments = raw_segments
     window_duration = stride / ho_fps
 
     # Match at IoU=0.4

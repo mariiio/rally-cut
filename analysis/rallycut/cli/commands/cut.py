@@ -243,11 +243,6 @@ def cut(  # noqa: C901
         "--ball-boundary/--no-ball-boundary",
         help="Ball-based boundary refinement (improves start/end accuracy)",
     ),
-    ball_fusion: bool = typer.Option(
-        False,
-        "--ball-fusion/--no-ball-fusion",
-        help="Recover missed short rallies using ball density + model confidence",
-    ),
     ball_fast: bool = typer.Option(
         True,
         "--ball-fast/--ball-no-fast",
@@ -351,7 +346,6 @@ def cut(  # noqa: C901
         use_heuristics=heuristics,
         ball_validation=ball_validation,
         ball_boundary_refinement=ball_boundary,
-        ball_fusion=ball_fusion,
         ball_fast_mode=ball_fast,
     )
 
@@ -364,14 +358,12 @@ def cut(  # noqa: C901
         console.print("[dim]Auto-selecting pipeline based on cached features...[/dim]")
 
     # Show ball validation info
-    if ball_validation or ball_boundary or ball_fusion:
+    if ball_validation or ball_boundary:
         ball_features = []
         if ball_validation:
             ball_features.append("FP filtering")
         if ball_boundary:
             ball_features.append("boundary refinement")
-        if ball_fusion:
-            ball_features.append("FN recovery")
         ball_mode = "fast" if ball_fast else "standard"
         console.print(
             f"[cyan]Ball tracking enabled:[/cyan] {', '.join(ball_features)} ({ball_mode} mode)"
