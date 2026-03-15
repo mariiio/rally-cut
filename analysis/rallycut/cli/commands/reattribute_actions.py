@@ -100,7 +100,7 @@ def reattribute_actions_cmd(
         help="Video ID to re-attribute actions for",
     ),
     min_confidence: float = typer.Option(
-        0.70,
+        0.80,
         "--min-confidence",
         help="Minimum match confidence to use team assignments",
     ),
