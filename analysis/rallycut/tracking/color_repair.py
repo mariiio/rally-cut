@@ -386,8 +386,9 @@ def detect_convergence_periods(
     positions: list[PlayerPosition],
     iou_threshold: float = DEFAULT_IOU_THRESHOLD,
     min_duration: int = DEFAULT_MIN_OVERLAP_FRAMES,
+    proximity_threshold: float | None = None,
 ) -> list[ConvergencePeriod]:
-    """Detect periods where two tracks have sustained bbox overlap.
+    """Detect periods where two tracks have sustained bbox overlap or proximity.
 
     These are the moments where BoT-SORT is most likely to swap track IDs
     (players crossing at the net).
@@ -396,6 +397,10 @@ def detect_convergence_periods(
         positions: All player positions.
         iou_threshold: Minimum IoU to count as overlapping.
         min_duration: Minimum consecutive frames of overlap.
+        proximity_threshold: Optional centroid distance threshold. When set,
+            pairs are also considered converging if their centroid distance
+            is below this value. Useful for net interactions where players
+            are close but bboxes don't overlap (opposite sides of net).
 
     Returns:
         List of convergence periods found.
@@ -422,8 +427,11 @@ def detect_convergence_periods(
         for i in range(len(frame_pos)):
             for j in range(i + 1, len(frame_pos)):
                 a, b = frame_pos[i], frame_pos[j]
-                iou = _compute_iou(a, b)
-                if iou > iou_threshold:
+                converging = _compute_iou(a, b) > iou_threshold
+                if not converging and proximity_threshold is not None:
+                    dist = ((a.x - b.x) ** 2 + (a.y - b.y) ** 2) ** 0.5
+                    converging = dist < proximity_threshold
+                if converging:
                     pair_key = (min(a.track_id, b.track_id), max(a.track_id, b.track_id))
                     overlapping_pairs.add(pair_key)
 

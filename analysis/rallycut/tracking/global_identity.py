@@ -152,11 +152,6 @@ def optimize_global_identity(
         result.skip_reason = "no cross-team interactions"
         return positions, result
 
-    # Check if tracks are already clean (skip gate)
-    if _tracks_are_clean(positions, team_assignments):
-        result.skip_reason = "tracks already clean"
-        return positions, result
-
     # Phase A: Extract segments by splitting at interaction boundaries
     segments = _extract_segments(positions, interactions, team_assignments)
 
@@ -256,12 +251,25 @@ def optimize_global_identity(
     return positions, result
 
 
+# Centroid distance threshold for net interactions.
+# Players on opposite sides of the net are close (centroid dist < 0.10)
+# but their bboxes rarely overlap (IoU ~0). This catches those cases.
+PROXIMITY_THRESHOLD = 0.10
+
+
 def _detect_cross_team_interactions(
     positions: list[PlayerPosition],
     team_assignments: dict[int, int],
 ) -> list[ConvergencePeriod]:
-    """Detect convergence periods between tracks on different teams."""
-    all_periods = detect_convergence_periods(positions)
+    """Detect convergence periods between tracks on different teams.
+
+    Uses both IoU overlap and centroid proximity to detect net interactions.
+    Beach volleyball net interactions often have players close together
+    but on opposite sides of the net, so IoU alone misses them.
+    """
+    all_periods = detect_convergence_periods(
+        positions, proximity_threshold=PROXIMITY_THRESHOLD,
+    )
     cross_team: list[ConvergencePeriod] = []
     for period in all_periods:
         team_a = team_assignments.get(period.track_a)
