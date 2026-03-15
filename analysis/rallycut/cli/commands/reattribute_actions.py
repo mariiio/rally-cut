@@ -126,7 +126,7 @@ def reattribute_actions_cmd(
         rallycut reattribute-actions abc123 --dry-run
     """
     from rallycut.evaluation.tracking.db import get_connection
-    from rallycut.tracking.action_classifier import reattribute_players
+    from rallycut.tracking.action_classifier import _team_label, reattribute_players
 
     # Load match analysis
     with get_connection() as conn:
@@ -145,13 +145,16 @@ def reattribute_actions_cmd(
         raise typer.Exit(1)
 
     match_analysis = cast(dict[str, Any], row[0])
-    teams_by_rally = build_match_team_assignments(match_analysis, min_confidence)
 
-    if not teams_by_rally:
+    # Build team assignments at two confidence levels:
+    # - all_teams (conf >= 0): used for stamping teamAssignments on all rallies
+    # - reattrib_teams (conf >= min_confidence): used for player re-attribution
+    all_teams = build_match_team_assignments(match_analysis, min_confidence=0.0)
+    reattrib_teams = build_match_team_assignments(match_analysis, min_confidence)
+
+    if not all_teams:
         if not quiet:
-            console.print(
-                f"[yellow]No rallies with confidence >= {min_confidence:.2f}[/yellow]"
-            )
+            console.print("[yellow]No rallies with match teams[/yellow]")
         return
 
     if not quiet:
@@ -159,12 +162,13 @@ def reattribute_actions_cmd(
             f"[bold]Re-attributing actions[/bold] for video {video_id[:8]}..."
         )
         console.print(
-            f"  {len(teams_by_rally)} rallies with match teams "
+            f"  {len(all_teams)} rallies with match teams, "
+            f"{len(reattrib_teams)} eligible for re-attribution "
             f"(conf >= {min_confidence:.2f})"
         )
 
-    # Load contacts + actions for eligible rallies
-    rally_ids = list(teams_by_rally.keys())
+    # Load contacts + actions for all rallies with match teams
+    rally_ids = list(all_teams.keys())
     placeholders = ", ".join(["%s"] * len(rally_ids))
     query = f"""
         SELECT r.id, pt.id, pt.contacts_json, pt.actions_json
@@ -190,47 +194,51 @@ def reattribute_actions_cmd(
         contacts_data = cast(dict[str, Any], contacts_json_val)
         actions_data = cast(dict[str, Any], actions_json_val)
 
-        team_assignments = teams_by_rally.get(rally_id)
+        team_assignments = all_teams.get(rally_id)
         if not team_assignments:
             continue
 
         contacts = _reconstruct_contacts(contacts_data)
         actions = _reconstruct_actions(actions_data)
 
-        if not contacts or not actions:
-            continue
-
-        # Check if any contacts have player_candidates
-        has_candidates = any(c.player_candidates for c in contacts)
-        if not has_candidates:
-            if not quiet:
-                console.print(
-                    f"  [dim]{rally_id[:8]}: no player_candidates stored "
-                    "(re-track to populate)[/dim]"
-                )
-            continue
-
-        # Count changes by comparing before/after
-        original_track_ids = [a.player_track_id for a in actions]
-        reattribute_players(actions, contacts, team_assignments)
-        n_changed = sum(
-            1 for orig, act in zip(original_track_ids, actions)
-            if orig != act.player_track_id
-        )
+        # Re-attribute players if high-confidence and contacts have candidates
+        reattrib_ta = reattrib_teams.get(rally_id)
+        has_candidates = contacts and any(c.player_candidates for c in contacts)
+        n_changed = 0
+        if reattrib_ta and has_candidates and actions:
+            original_track_ids = [a.player_track_id for a in actions]
+            reattribute_players(actions, contacts, reattrib_ta)
+            n_changed = sum(
+                1 for orig, act in zip(original_track_ids, actions)
+                if orig != act.player_track_id
+            )
 
         total_actions += len(actions)
         total_reattributed += n_changed
 
-        if n_changed > 0:
-            new_actions_data = _serialize_actions(actions, actions_data)
-            updated_tracks.append((pt_id, json.dumps(new_actions_data)))
+        # Always stamp match-level teamAssignments and per-action team labels
+        # (the original tracking may not have had court calibration)
+        new_actions_data = _serialize_actions(actions, actions_data)
+        new_actions_data["teamAssignments"] = {
+            str(tid): ("A" if team == 0 else "B")
+            for tid, team in team_assignments.items()
+        }
+        for a in new_actions_data.get("actions", []):
+            tid = a.get("playerTrackId", -1)
+            if tid >= 0:
+                a["team"] = _team_label(tid, team_assignments)
+            elif a.get("courtSide") in ("near", "far"):
+                a["team"] = "A" if a["courtSide"] == "near" else "B"
 
+        updated_tracks.append((pt_id, json.dumps(new_actions_data)))
+
+        if n_changed > 0:
             if not quiet:
                 console.print(
                     f"  {rally_id[:8]}: {n_changed}/{len(actions)} actions re-attributed"
                 )
         elif not quiet:
-            console.print(f"  [dim]{rally_id[:8]}: no changes[/dim]")
+            console.print(f"  [dim]{rally_id[:8]}: no changes (teams stamped)[/dim]")
 
     # Summary
     if not quiet:
