@@ -251,7 +251,7 @@ def optimize_global_identity(
     return positions, result
 
 
-# Centroid distance threshold for net interactions.
+# Centroid distance threshold for net interactions (same as convergence_swap.py).
 # Players on opposite sides of the net are close (centroid dist < 0.10)
 # but their bboxes rarely overlap (IoU ~0). This catches those cases.
 PROXIMITY_THRESHOLD = 0.10
@@ -277,60 +277,6 @@ def _detect_cross_team_interactions(
         if team_a is not None and team_b is not None and team_a != team_b:
             cross_team.append(period)
     return cross_team
-
-
-def _tracks_are_clean(
-    positions: list[PlayerPosition],
-    team_assignments: dict[int, int],
-    min_frames: int = 20,
-) -> bool:
-    """Check if tracks are already clean (no optimization needed).
-
-    Clean = at most 2 tracks per team with >=min_frames each,
-    and no same-team temporal overlap.
-    """
-    # Count frames per track
-    track_frames: dict[int, int] = defaultdict(int)
-    for p in positions:
-        if p.track_id >= 0:
-            track_frames[p.track_id] += 1
-
-    # Significant tracks per team
-    team_tracks: dict[int, list[int]] = defaultdict(list)
-    for tid, count in track_frames.items():
-        if count >= min_frames:
-            team = team_assignments.get(tid)
-            if team is not None:
-                team_tracks[team].append(tid)
-
-    # More than 2 significant tracks on either team = not clean
-    for team_id in (0, 1):
-        if len(team_tracks.get(team_id, [])) > 2:
-            return False
-
-    # Check for same-team temporal overlap
-    track_ranges: dict[int, tuple[int, int]] = {}
-    for p in positions:
-        if p.track_id >= 0:
-            if p.track_id not in track_ranges:
-                track_ranges[p.track_id] = (p.frame_number, p.frame_number)
-            else:
-                old_min, old_max = track_ranges[p.track_id]
-                track_ranges[p.track_id] = (
-                    min(old_min, p.frame_number),
-                    max(old_max, p.frame_number),
-                )
-
-    for team_id in (0, 1):
-        tids = team_tracks.get(team_id, [])
-        if len(tids) == 2:
-            r0 = track_ranges.get(tids[0])
-            r1 = track_ranges.get(tids[1])
-            if r0 is not None and r1 is not None:
-                if r0[0] <= r1[1] and r1[0] <= r0[1]:
-                    return False
-
-    return True
 
 
 def _validate_no_temporal_overlaps(
