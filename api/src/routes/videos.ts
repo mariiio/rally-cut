@@ -46,7 +46,7 @@ import {
 import { queueVideoProcessing } from "../services/processingService.js";
 import { trackAllRallies, getBatchTrackingStatus } from "../services/batchTrackingService.js";
 import { getMatchAnalysis, getMatchStats } from "../services/matchAnalysisService.js";
-import { assessVideoQuality, getAnalysisPipelineStatus, savePlayerNames, savePlayerMatchingGt, getPlayerMatchingGt } from "../services/qualityService.js";
+import { assessVideoQuality, getAnalysisPipelineStatus, savePlayerMatchingGt, getPlayerMatchingGt } from "../services/qualityService.js";
 
 // Calibration corners can be outside 0-1 if dragged outside video bounds
 const calibrationCornerSchema = z.object({
@@ -772,28 +772,6 @@ router.get(
   }
 );
 
-/**
- * PUT /v1/videos/:id/player-names
- * Save player name assignments.
- */
-router.put(
-  "/v1/videos/:id/player-names",
-  requireUser,
-  validateRequest({
-    params: z.object({ id: uuidSchema }),
-    body: z.object({
-      names: z.record(z.string(), z.string().max(100)),
-    }),
-  }),
-  async (req, res, next) => {
-    try {
-      const result = await savePlayerNames(req.params.id, req.userId!, req.body.names);
-      res.json(result);
-    } catch (error) {
-      next(error);
-    }
-  }
-);
 
 /**
  * GET /v1/videos/:id/player-matching-gt

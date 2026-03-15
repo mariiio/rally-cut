@@ -44,16 +44,12 @@ const DEFAULT_PIPELINE: AnalysisPipeline = {
 interface AnalysisState {
   pipelines: Record<string, AnalysisPipeline>;
 
-  // Show player naming dialog
-  showPlayerNaming: string | null; // videoId or null
-
   // Actions
   getPipeline: (videoId: string) => AnalysisPipeline;
   startAnalysis: (videoId: string) => Promise<void>;
   dismissWarnings: (videoId: string) => void;
   cancelAnalysis: (videoId: string) => void;
   resumeIfNeeded: (videoId: string) => Promise<void>;
-  setShowPlayerNaming: (videoId: string | null) => void;
 }
 
 // ============================================================================
@@ -159,7 +155,6 @@ export const useAnalysisStore = create<AnalysisState>()(
   persist(
     (set, get) => ({
       pipelines: {},
-      showPlayerNaming: null,
 
       getPipeline: (videoId: string) => {
         return get().pipelines[videoId] ?? DEFAULT_PIPELINE;
@@ -333,9 +328,6 @@ export const useAnalysisStore = create<AnalysisState>()(
         }
       },
 
-      setShowPlayerNaming: (videoId: string | null) => {
-        set({ showPlayerNaming: videoId });
-      },
     }),
     {
       name: 'rallycut-analysis',
@@ -551,10 +543,6 @@ async function completeAnalysis(videoId: string, set: SetFn, get: GetFn) {
       playerCount,
     });
 
-    // Show player naming dialog
-    if (playerCount > 0 && !isStale()) {
-      set(() => ({ showPlayerNaming: videoId }));
-    }
   } catch {
     // Stats failed but tracking is done — still mark as done
     updatePipeline({ phase: 'done', progress: 100, stepMessage: 'Analysis complete!' });

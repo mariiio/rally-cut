@@ -41,7 +41,6 @@ src/
 │   ├── OriginalQualityBanner # FREE tier upgrade prompt (7-day quality warning)
 │   ├── VideoInsightsBanner # Auto-detected quality insights (camera distance, complex scene, calibration recommendation)
 │   ├── AnalysisPipeline # "Analyze Match" button + progress UI (quality → detect → track → stats)
-│   └── PlayerNamingDialog # Post-tracking dialog to name players
 ├── stores/           # Zustand stores (see below)
 ├── services/
 │   ├── api.ts        # REST client

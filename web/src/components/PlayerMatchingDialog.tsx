@@ -29,7 +29,7 @@ import {
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 
-// Player colors matching PlayerNamingDialog + PlayerOverlay
+// Player colors matching PlayerOverlay
 const TRACK_COLORS = ['#4caf50', '#2196f3', '#ff9800', '#9c27b0'];
 const PLAYER_LABELS = ['P1', 'P2', 'P3', 'P4'];
 

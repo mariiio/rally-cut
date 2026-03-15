@@ -2369,26 +2369,6 @@ export async function getAnalysisPipelineStatus(videoId: string): Promise<Pipeli
   return response.json();
 }
 
-/**
- * Save player name assignments for a video.
- */
-export async function savePlayerNamesApi(
-  videoId: string,
-  names: Record<string, string>,
-): Promise<{ success: boolean }> {
-  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/player-names`, {
-    method: 'PUT',
-    headers: getHeaders('application/json'),
-    body: JSON.stringify({ names }),
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error?.message || `Failed to save player names: ${response.status}`);
-  }
-
-  return response.json();
-}
 
 // ============================================================================
 // Player Matching Ground Truth
