@@ -1499,6 +1499,7 @@ class PlayerTracker:
 
                 num_global_segments = 0
                 num_global_remapped = 0
+                num_convergence_swaps = 0
 
                 player_filter = PlayerFilter(
                     ball_positions=ball_positions,
@@ -1617,7 +1618,7 @@ class PlayerTracker:
                         detect_convergence_swaps,
                     )
 
-                    positions, _num_convergence_swaps = (
+                    positions, num_convergence_swaps = (
                         detect_convergence_swaps(
                             positions,
                             primary_track_ids,
@@ -1662,6 +1663,7 @@ class PlayerTracker:
                     stationary_bg_removed_count=len(removed_bg_tracks),
                     global_identity_segments=num_global_segments,
                     global_identity_remapped=num_global_remapped,
+                    convergence_swaps_fixed=num_convergence_swaps,
                     team_classification_skipped=split_confidence != "high",
                 )
 

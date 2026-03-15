@@ -60,6 +60,7 @@ class TrackingQualityReport:
     # Global identity optimization
     global_identity_segments: int = 0  # Segments after splitting at interactions
     global_identity_remapped: int = 0  # Positions remapped to canonical IDs
+    convergence_swaps_fixed: int = 0  # Cross-team swaps fixed at convergence points
 
     # Contact detection readiness
     contact_readiness_score: float = 0.0  # 0-1, decreases per issue
@@ -91,6 +92,7 @@ class TrackingQualityReport:
             "teamClassificationSkipped": self.team_classification_skipped,
             "globalIdentitySegments": self.global_identity_segments,
             "globalIdentityRemapped": self.global_identity_remapped,
+            "convergenceSwapsFixed": self.convergence_swaps_fixed,
             "contactReadinessScore": self.contact_readiness_score,
             "contactReadinessIssues": self.contact_readiness_issues,
             "trackabilityScore": self.trackability_score,
@@ -117,6 +119,7 @@ def compute_quality_report(
     stationary_bg_removed_count: int = 0,
     global_identity_segments: int = 0,
     global_identity_remapped: int = 0,
+    convergence_swaps_fixed: int = 0,
     team_classification_skipped: bool = False,
 ) -> TrackingQualityReport:
     """Compute a tracking quality report from tracking results.
@@ -156,6 +159,7 @@ def compute_quality_report(
     report.stationary_bg_removed_count = stationary_bg_removed_count
     report.global_identity_segments = global_identity_segments
     report.global_identity_remapped = global_identity_remapped
+    report.convergence_swaps_fixed = convergence_swaps_fixed
     report.team_classification_skipped = team_classification_skipped
 
     duration_sec = frame_count / video_fps if video_fps > 0 else 0.0
