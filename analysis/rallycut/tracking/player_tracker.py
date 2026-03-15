@@ -1609,20 +1609,21 @@ class PlayerTracker:
                             f"{global_result.skip_reason}"
                         )
 
-                # Step 4d: Court-side repair for cross-team switches
-                # Uses both self-computed and upstream court splits.
+                # Step 4d: Convergence-anchored swap detection
+                # Checks each net interaction for cross-team ID swaps
+                # using court-side, bbox size, and appearance signals.
                 if len(primary_track_ids) >= 4:
-                    from rallycut.tracking.court_side_repair import (
-                        repair_cross_team_court_violations,
+                    from rallycut.tracking.convergence_swap import (
+                        detect_convergence_swaps,
                     )
 
-                    positions, _num_court_repairs = (
-                        repair_cross_team_court_violations(
+                    positions, _num_convergence_swaps = (
+                        detect_convergence_swaps(
                             positions,
                             primary_track_ids,
                             color_store=color_store,
-                            upstream_court_split_y=split_y,
-                            upstream_team_assignments=team_assignments,
+                            upstream_split_y=split_y,
+                            upstream_teams=team_assignments,
                         )
                     )
 
