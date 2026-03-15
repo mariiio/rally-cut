@@ -3,26 +3,22 @@
  *
  * Flow:
  * 1. POST /v1/videos/:id/track-all-rallies → creates BatchTrackingJob, returns 202
- * 2. Background: downloads video once, iterates rallies, extracts segments locally
+ * 2. Local: spawns detached worker process (survives API restarts from tsx watch)
+ *    Modal: triggers remote batch tracking via webhook
  * 3. Each rally tracked sequentially (shares Python model warmup across rallies)
  * 4. Frontend polls GET /v1/videos/:id/batch-tracking-status for progress
  * 5. On completion, auto-triggers match analysis (cross-rally player matching)
  */
 
-import fs from 'fs/promises';
+import { spawn } from 'child_process';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 import { env } from '../config/env.js';
 import { prisma } from '../lib/prisma.js';
 import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errorHandler.js';
-import {
-  downloadVideoToLocal,
-  trackRallyFromLocalVideo,
-  TEMP_DIR,
-  type CalibrationCorner,
-} from './playerTrackingService.js';
+import type { CalibrationCorner } from './playerTrackingService.js';
 import { triggerModalBatchTracking } from './modalTrackingService.js';
-import { runMatchAnalysis } from './matchAnalysisService.js';
 
 // A job with no progress for this long is considered stale (API crashed, FFmpeg hung, etc.).
 // Uses lastProgressAt (updated per rally), not createdAt, so long-running jobs with
@@ -162,24 +158,8 @@ export async function trackAllRallies(
       }
     });
   } else {
-    // Local CPU path
-    processBatchTracking(job.id, videoId, videoKey, video.rallies, video.fps ?? undefined, calibrationCorners).catch(
-      async (error) => {
-        console.error(`[BATCH_TRACK] Fatal error in batch job ${job.id}:`, error);
-        try {
-          await prisma.batchTrackingJob.update({
-            where: { id: job.id },
-            data: {
-              status: 'FAILED',
-              completedAt: new Date(),
-              error: error instanceof Error ? error.message : String(error),
-            },
-          });
-        } catch {
-          // If even the DB update fails, we can't do anything
-        }
-      }
-    );
+    // Local CPU path: spawn detached worker process that survives API restarts
+    spawnBatchWorker(job.id);
   }
 
   console.log(`[BATCH_TRACK] Started batch job ${job.id}: ${video.rallies.length} rallies for video ${videoId}`);
@@ -187,141 +167,40 @@ export async function trackAllRallies(
   return { jobId: job.id, totalRallies: video.rallies.length };
 }
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 /**
- * Background batch processing. Downloads video once, iterates rallies.
+ * Spawn the batch tracking worker as a detached child process.
+ * The worker reads job config from DB and processes rallies independently.
+ * Survives API restarts (tsx watch) because the process is detached + unref'd.
  */
-async function processBatchTracking(
-  jobId: string,
-  videoId: string,
-  videoKey: string,
-  rallies: Array<{ id: string; startMs: number; endMs: number }>,
-  videoFps?: number,
-  calibrationCorners?: CalibrationCorner[],
-): Promise<void> {
-  await fs.mkdir(TEMP_DIR, { recursive: true });
-  const localVideoPath = path.join(TEMP_DIR, `batch_${jobId}_full.mp4`);
+function spawnBatchWorker(jobId: string): void {
+  const workerScript = path.resolve(__dirname, '../scripts/batchTrack.ts');
+  const tsxBin = path.resolve(__dirname, '../../node_modules/.bin/tsx');
 
-  try {
-    // Mark job as processing
-    await prisma.batchTrackingJob.update({
-      where: { id: jobId },
-      data: { status: 'PROCESSING', lastProgressAt: new Date() },
-    });
+  const child = spawn(tsxBin, [workerScript, jobId], {
+    cwd: path.resolve(__dirname, '../..'),
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
+    env: { ...process.env },
+  });
 
-    // Download full video once
-    console.log(`[BATCH_TRACK] Downloading video ${videoKey} to local...`);
-    await downloadVideoToLocal(videoKey, localVideoPath);
-    console.log(`[BATCH_TRACK] Video downloaded to ${localVideoPath}`);
+  child.stdout?.on('data', (data: Buffer) => {
+    const line = data.toString().trim();
+    if (line) console.log(line);
+  });
+  child.stderr?.on('data', (data: Buffer) => {
+    const line = data.toString().trim();
+    if (line) console.error(line);
+  });
 
-    // Reset any zombie PROCESSING player_tracks from crashed previous runs
-    const { count: resetCount } = await prisma.playerTrack.updateMany({
-      where: {
-        rallyId: { in: rallies.map((r) => r.id) },
-        status: 'PROCESSING',
-      },
-      data: { status: 'PENDING' },
-    });
-    if (resetCount > 0) {
-      console.log(`[BATCH_TRACK] Reset ${resetCount} zombie PROCESSING player_track(s) to PENDING`);
-    }
+  child.on('error', (error) => {
+    console.error(`[BATCH_TRACK] Failed to spawn worker for job ${jobId}:`, error);
+  });
 
-    // Check which rallies are already completed (skip re-tracking)
-    const completedTracks = await prisma.playerTrack.findMany({
-      where: {
-        rallyId: { in: rallies.map((r) => r.id) },
-        status: 'COMPLETED',
-      },
-      select: { rallyId: true },
-    });
-    const alreadyCompleted = new Set(completedTracks.map((t) => t.rallyId));
-
-    let completedCount = alreadyCompleted.size;
-    let failedCount = 0;
-
-    if (alreadyCompleted.size > 0) {
-      console.log(`[BATCH_TRACK] Skipping ${alreadyCompleted.size} already-completed rallies`);
-    }
-
-    // Process each rally sequentially
-    for (const rally of rallies) {
-      // Skip already-completed rallies
-      if (alreadyCompleted.has(rally.id)) {
-        continue;
-      }
-
-      // Update current rally + heartbeat
-      await prisma.batchTrackingJob.update({
-        where: { id: jobId },
-        data: { currentRallyId: rally.id, lastProgressAt: new Date() },
-      });
-
-      try {
-        const result = await trackRallyFromLocalVideo(
-          rally.id,
-          videoId,
-          localVideoPath,
-          rally.startMs,
-          rally.endMs,
-          videoFps,
-          calibrationCorners,
-        );
-
-        if (result.status === 'completed') {
-          completedCount++;
-        } else {
-          failedCount++;
-        }
-      } catch (error) {
-        console.error(`[BATCH_TRACK] Rally ${rally.id} threw:`, error);
-        failedCount++;
-      }
-
-      // Update progress + heartbeat
-      await prisma.batchTrackingJob.update({
-        where: { id: jobId },
-        data: {
-          completedRallies: completedCount,
-          failedRallies: failedCount,
-          lastProgressAt: new Date(),
-        },
-      });
-    }
-
-    // Mark batch job as complete
-    await prisma.batchTrackingJob.update({
-      where: { id: jobId },
-      data: {
-        status: failedCount === rallies.length ? 'FAILED' : 'COMPLETED',
-        completedAt: new Date(),
-        currentRallyId: null,
-        error: failedCount > 0 ? `${failedCount}/${rallies.length} rallies failed` : null,
-      },
-    });
-
-    console.log(`[BATCH_TRACK] Job ${jobId} done: ${completedCount} completed, ${failedCount} failed`);
-
-    // Auto-trigger match analysis if any rallies succeeded
-    if (completedCount > 0) {
-      try {
-        await runMatchAnalysis(videoId);
-      } catch (error) {
-        console.error(`[BATCH_TRACK] Match analysis failed for video ${videoId}:`, error);
-      }
-    }
-  } catch (error) {
-    console.error(`[BATCH_TRACK] Job ${jobId} failed:`, error);
-    await prisma.batchTrackingJob.update({
-      where: { id: jobId },
-      data: {
-        status: 'FAILED',
-        completedAt: new Date(),
-        error: error instanceof Error ? error.message : String(error),
-      },
-    });
-  } finally {
-    // Clean up downloaded video
-    await fs.unlink(localVideoPath).catch(() => {});
-  }
+  // Detach — API process can exit without killing the worker
+  child.unref();
 }
 
 /**
