@@ -142,10 +142,7 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
   - Auto-saves court calibration if confidence > 0.7
   - Returns quality warnings + court detection result
 - `GET /v1/videos/:id/analysis-pipeline-status` → unified pipeline status (quality, detection, tracking, stats)
-- `PUT /v1/videos/:id/player-names` → save player name assignments
-  - Body: `{ names: Record<string, string> }` - track ID → name mapping
-  - Stored in `Video.matchAnalysisJson.playerNames`
-- **Service**: `qualityService.ts` handles quality assessment, court detection, pipeline status, player names
+- **Service**: `qualityService.ts` handles quality assessment, court detection, pipeline status
 
 ### Court Calibration
 - `PUT /v1/videos/:id/court-calibration` → save 4 corner points (persisted per video)

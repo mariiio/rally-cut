@@ -346,35 +346,6 @@ export async function getAnalysisPipelineStatus(
   };
 }
 
-/**
- * Save player names to matchAnalysisJson.
- */
-export async function savePlayerNames(
-  videoId: string,
-  userId: string,
-  names: Record<string, string>,
-) {
-  const video = await prisma.video.findFirst({
-    where: { id: videoId, userId, deletedAt: null },
-  });
-
-  if (!video) {
-    throw new NotFoundError('Video', videoId);
-  }
-
-  const existing = (video.matchAnalysisJson as Record<string, unknown>) ?? {};
-  await prisma.video.update({
-    where: { id: videoId },
-    data: {
-      matchAnalysisJson: {
-        ...existing,
-        playerNames: names,
-      } as unknown as Prisma.InputJsonValue,
-    },
-  });
-
-  return { success: true };
-}
 
 /**
  * Save player matching ground truth labels.

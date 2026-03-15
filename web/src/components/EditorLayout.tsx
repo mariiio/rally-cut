@@ -25,7 +25,6 @@ import { TutorialProvider, TutorialContext } from './tutorial';
 import { PlayerTrackingToolbar } from './PlayerTrackingToolbar';
 import { VideoInsightsBanner } from './VideoInsightsBanner';
 import { MatchStatsPanel } from './MatchStatsPanel';
-import { PlayerNamingDialog } from './PlayerNamingDialog';
 import { PlayerMatchingDialog } from './PlayerMatchingDialog';
 import { useEditorStore } from '@/stores/editorStore';
 import { useAnalysisStore } from '@/stores/analysisStore';
@@ -79,8 +78,6 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
   const [playerMatchingVideoId, setPlayerMatchingVideoId] = useState<string | null>(null);
 
   // Analysis pipeline state
-  const showPlayerNaming = useAnalysisStore((s) => s.showPlayerNaming);
-  const setShowPlayerNaming = useAnalysisStore((s) => s.setShowPlayerNaming);
   const analysisPipeline = useAnalysisStore((s) =>
     currentMatch?.id ? s.getPipeline(currentMatch.id) : null,
   );
@@ -506,15 +503,6 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
         }}
         onNameSet={handleNameSet}
       />
-
-      {/* Player Naming Dialog (after analysis completes) */}
-      {showPlayerNaming && (
-        <PlayerNamingDialog
-          open={true}
-          videoId={showPlayerNaming}
-          onClose={() => setShowPlayerNaming(null)}
-        />
-      )}
 
       {/* Player Matching GT Dialog */}
       {playerMatchingVideoId && (
