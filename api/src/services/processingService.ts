@@ -1,4 +1,4 @@
-import { ProcessingStatus } from "@prisma/client";
+import { Prisma, ProcessingStatus } from "@prisma/client";
 import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 import { spawn } from "child_process";
 import fs from "fs/promises";
@@ -103,7 +103,7 @@ export async function generatePosterImmediate(
     // Run early quality assessment (YOLO on sample frames, ~2-3s)
     let qualityAssessment: Record<string, unknown> | undefined;
     try {
-      qualityAssessment = await runQualityAssessment(inputPath);
+      qualityAssessment = await runQualityAssessment(inputPath) ?? undefined;
       if (qualityAssessment) {
         console.log(`[POSTER] Video ${videoId} quality: ${qualityAssessment.expectedQuality} (${(qualityAssessment.warnings as string[])?.length ?? 0} warnings)`);
       }
@@ -151,8 +151,8 @@ export async function generatePosterImmediate(
     if (qualityAssessment) {
       mergedCharacteristics = {
         ...(mergedCharacteristics ?? {}),
-        ...(qualityAssessment.cameraDistance && { cameraDistance: qualityAssessment.cameraDistance }),
-        ...(qualityAssessment.sceneComplexity && { sceneComplexity: qualityAssessment.sceneComplexity }),
+        ...(qualityAssessment.cameraDistance ? { cameraDistance: qualityAssessment.cameraDistance } : {}),
+        ...(qualityAssessment.sceneComplexity ? { sceneComplexity: qualityAssessment.sceneComplexity } : {}),
         expectedQuality: qualityAssessment.expectedQuality,
         uploadWarnings: qualityAssessment.warnings,
         version: 1,
@@ -168,7 +168,7 @@ export async function generatePosterImmediate(
         ...(fps !== null && { fps }),
         ...(width !== null && { width }),
         ...(height !== null && { height }),
-        ...(mergedCharacteristics && { characteristicsJson: mergedCharacteristics }),
+        ...(mergedCharacteristics && { characteristicsJson: mergedCharacteristics as Prisma.InputJsonValue }),
       },
     });
 

@@ -2220,7 +2220,7 @@ export interface MatchStats {
   avgContactsPerRally: number;
   sideOutRate: number;
   playerStats: Array<{
-    trackId: number;
+    playerId: number;
     team: string;
     serves: number;
     receives: number;

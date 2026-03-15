@@ -61,7 +61,7 @@ class AttackPower(str, Enum):
 class PlayerStats:
     """Statistics for a single player across a match or set."""
 
-    track_id: int
+    player_id: int
     team: str = "unknown"  # "A" (near court), "B" (far court), or "unknown"
     # Action counts
     serves: int = 0
@@ -138,7 +138,7 @@ class PlayerStats:
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
-            "trackId": self.track_id,
+            "playerId": self.player_id,
             "team": self.team,
             "serves": self.serves,
             "receives": self.receives,
@@ -220,7 +220,7 @@ class RallyStats:
     serving_side: str  # "near" or "far"
     # Outcome attribution (populated when score progression is available)
     terminal_action: str = "unknown"  # Last action type before point ends
-    terminal_player_track_id: int = -1  # Player who made the terminal action
+    terminal_player_id: int = -1  # Player who made the terminal action
     point_winner: str = "unknown"  # "A", "B", or "unknown"
     # Advanced per-rally stats
     serve_outcome: str = "unknown"  # ServeOutcome value
@@ -245,7 +245,7 @@ class RallyStats:
         }
         if self.terminal_action != "unknown":
             d["terminalAction"] = self.terminal_action
-            d["terminalPlayerTrackId"] = self.terminal_player_track_id
+            d["terminalPlayerId"] = self.terminal_player_id
         if self.point_winner != "unknown":
             d["pointWinner"] = self.point_winner
         if self.serve_outcome != "unknown":
@@ -455,7 +455,7 @@ class MatchStats:
 
 def compute_player_movement(
     positions: list[PlayerPosition],
-    track_id: int,
+    player_id: int,
     video_width: int = 1920,
     video_height: int = 1080,
     calibrator: CourtCalibrator | None = None,
@@ -464,7 +464,7 @@ def compute_player_movement(
 
     Args:
         positions: All player positions.
-        track_id: Track ID to compute movement for.
+        player_id: Player ID to compute movement for.
         video_width: Video width for pixel conversion.
         video_height: Video height for pixel conversion.
         calibrator: Optional court calibrator for real-world distance.
@@ -473,7 +473,7 @@ def compute_player_movement(
         (distance_px, distance_m, avg_speed_px_per_frame)
     """
     track_pos = sorted(
-        [p for p in positions if p.track_id == track_id],
+        [p for p in positions if p.track_id == player_id],
         key=lambda p: p.frame_number,
     )
 
@@ -521,14 +521,14 @@ def compute_player_movement(
 
 def compute_position_heatmap(
     positions: list[PlayerPosition],
-    track_id: int,
+    player_id: int,
     grid_size: int = 10,
 ) -> list[list[float]]:
     """Compute position heatmap for a player on a grid.
 
     Args:
         positions: All player positions.
-        track_id: Track ID.
+        player_id: Player ID.
         grid_size: Grid resolution (default 10x10).
 
     Returns:
@@ -536,7 +536,7 @@ def compute_position_heatmap(
     """
     grid = np.zeros((grid_size, grid_size), dtype=np.float64)
 
-    track_pos = [p for p in positions if p.track_id == track_id]
+    track_pos = [p for p in positions if p.track_id == player_id]
     if not track_pos:
         return grid.tolist()
 
@@ -650,15 +650,15 @@ def _attribute_outcomes(
     for rs in rally_stats:
         if rs.point_winner == "unknown" or rs.terminal_action == "unknown":
             continue
-        if rs.terminal_player_track_id < 0:
+        if rs.terminal_player_id < 0:
             continue
 
-        player = player_stats_map.get(rs.terminal_player_track_id)
+        player = player_stats_map.get(rs.terminal_player_id)
         if not player:
             continue
 
         # Determine terminal player's team
-        team_int = team_assignments.get(rs.terminal_player_track_id)
+        team_int = team_assignments.get(rs.terminal_player_id)
         player_team = "A" if team_int == 0 else "B" if team_int == 1 else "unknown"
         if player_team == "unknown":
             continue
@@ -1755,23 +1755,23 @@ def compute_match_stats(
     court_split_y = _get_court_split_y(rally_actions_list)
     player_x_bounds = _get_player_x_bounds(player_positions)
 
-    # Collect all unique track IDs from actions
-    all_track_ids: set[int] = set()
+    # Collect all unique player IDs from actions
+    all_player_ids: set[int] = set()
     for ra in rally_actions_list:
         for action in ra.actions:
             if action.player_track_id >= 0:
-                all_track_ids.add(action.player_track_id)
+                all_player_ids.add(action.player_track_id)
 
-    # Also add track IDs from player positions (may have players without actions)
-    track_frame_counts: dict[int, int] = {}
+    # Also add player IDs from player positions (may have players without actions)
+    player_frame_counts: dict[int, int] = {}
     for p in player_positions:
         if p.track_id >= 0:
-            track_frame_counts[p.track_id] = track_frame_counts.get(p.track_id, 0) + 1
+            player_frame_counts[p.track_id] = player_frame_counts.get(p.track_id, 0) + 1
 
-    # Keep top 4 tracks by frame count (beach volleyball = 4 players)
-    sorted_tracks = sorted(track_frame_counts.items(), key=lambda x: -x[1])
-    for track_id, _ in sorted_tracks[:4]:
-        all_track_ids.add(track_id)
+    # Keep top 4 by frame count (beach volleyball = 4 players)
+    sorted_tracks = sorted(player_frame_counts.items(), key=lambda x: -x[1])
+    for player_id, _ in sorted_tracks[:4]:
+        all_player_ids.add(player_id)
 
     # Build a merged team_assignments from all rallies
     merged_team_assignments: dict[int, int] = {}
@@ -1818,16 +1818,16 @@ def compute_match_stats(
         )
 
     # Compute per-player stats
-    for track_id in sorted(all_track_ids):
+    for player_id in sorted(all_player_ids):
         # Derive team from merged assignments
-        team_int = merged_team_assignments.get(track_id)
+        team_int = merged_team_assignments.get(player_id)
         team_label = "A" if team_int == 0 else "B" if team_int == 1 else "unknown"
-        player = PlayerStats(track_id=track_id, team=team_label)
+        player = PlayerStats(player_id=player_id, team=team_label)
 
         # Count actions
         for ra in rally_actions_list:
             for action in ra.actions:
-                if action.player_track_id != track_id:
+                if action.player_track_id != player_id:
                     continue
                 if action.action_type == ActionType.SERVE:
                     player.serves += 1
@@ -1844,14 +1844,14 @@ def compute_match_stats(
 
         # Compute movement
         dist_px, dist_m, avg_speed = compute_player_movement(
-            player_positions, track_id, video_width, video_height, calibrator
+            player_positions, player_id, video_width, video_height, calibrator
         )
         player.total_distance_px = dist_px
         player.total_distance_m = dist_m
         player.avg_speed_px_per_frame = avg_speed
 
         # Compute court side and position heatmap
-        track_pos = [p for p in player_positions if p.track_id == track_id]
+        track_pos = [p for p in player_positions if p.track_id == player_id]
         player.num_frames = len(track_pos)
 
         if track_pos:
@@ -1862,7 +1862,7 @@ def compute_match_stats(
             player.time_far_court_pct = 1.0 - player.time_near_court_pct
 
         player.position_heatmap = compute_position_heatmap(
-            player_positions, track_id
+            player_positions, player_id
         )
 
         # Compute per-player matching confidence: average confidence
@@ -1870,7 +1870,7 @@ def compute_match_stats(
         player_rally_confs: list[float] = []
         for ra in rally_actions_list:
             has_action = any(
-                a.player_track_id == track_id for a in ra.actions
+                a.player_track_id == player_id for a in ra.actions
             )
             if has_action and ra.rally_id in rally_confidence:
                 player_rally_confs.append(rally_confidence[ra.rally_id])
@@ -1924,7 +1924,7 @@ def compute_match_stats(
             max_rally_velocity=max_velocity,
             serving_side=serving_side,
             terminal_action=terminal_action,
-            terminal_player_track_id=terminal_player,
+            terminal_player_id=terminal_player,
             net_crossings=_count_net_crossings(ra),
             contact_sequence_valid=_validate_contact_sequence(ra),
         ))
@@ -1981,7 +1981,7 @@ def compute_match_stats(
     }
     # Build player_stats lookup by track_id
     player_stats_map: dict[int, PlayerStats] = {
-        p.track_id: p for p in stats.player_stats
+        p.player_id: p for p in stats.player_stats
     }
     _attribute_outcomes(
         stats.rally_stats, rally_actions_map,
@@ -1995,7 +1995,7 @@ def compute_match_stats(
             continue
         ts = TeamStats(
             team=team_label,
-            player_ids=[p.track_id for p in team_players],
+            player_ids=[p.player_id for p in team_players],
             serves=sum(p.serves for p in team_players),
             receives=sum(p.receives for p in team_players),
             sets=sum(p.sets for p in team_players),
@@ -2295,9 +2295,9 @@ def compute_match_stats(
             for rs in stats.rally_stats:
                 if rs.rally_id not in close_rally_ids:
                     continue
-                if rs.terminal_action != "attack" or rs.terminal_player_track_id < 0:
+                if rs.terminal_action != "attack" or rs.terminal_player_id < 0:
                     continue
-                tid = rs.terminal_player_track_id
+                tid = rs.terminal_player_id
                 clutch_attacks[tid] = clutch_attacks.get(tid, 0) + 1
                 t_int = merged_team_assignments.get(tid)
                 t_team = "A" if t_int == 0 else "B" if t_int == 1 else "unknown"
