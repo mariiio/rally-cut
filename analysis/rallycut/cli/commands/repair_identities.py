@@ -123,16 +123,16 @@ def repair_identities_cmd(
             )
             rows = cur.fetchall()
 
-    rally_data: dict[str, tuple[int, int, Any]] = {}
+    rally_data: dict[str, tuple[int, str, Any]] = {}
     for r in rows:
         rally_data[str(r[0])] = (
             int(cast(int, r[1])),
-            int(cast(int, r[2])),
+            str(r[2]),  # pt.id is UUID
             r[3],
         )
 
     total_repairs = 0
-    updates: list[tuple[int, str]] = []  # (pt_id, new_positions_json)
+    updates: list[tuple[str, str]] = []  # (pt_id, new_positions_json)
 
     for rally_entry in rally_entries:
         rid = rally_entry.get("rallyId") or rally_entry.get("rally_id", "")
