@@ -1500,21 +1500,65 @@ def propagate_court_side(actions: list[ClassifiedAction]) -> list[ClassifiedActi
     return actions
 
 
+def _reattribute_server_exclusion(
+    actions: list[ClassifiedAction],
+    contacts: list[Contact],
+) -> int:
+    """Exclude server from receive attribution (no team data needed).
+
+    Finds the serve action, then checks all RECEIVE actions. If a receive
+    is attributed to the server, re-attributes to next-best candidate.
+    This catches receives created by repair_action_sequence after the
+    inline server exclusion already ran.
+
+    Returns number of re-attributed actions.
+    """
+    serve_tid = -1
+    for a in actions:
+        if a.action_type == ActionType.SERVE and a.player_track_id >= 0:
+            serve_tid = a.player_track_id
+            break
+
+    if serve_tid < 0:
+        return 0
+
+    contact_by_frame: dict[int, Contact] = {c.frame: c for c in contacts}
+    n_fixed = 0
+
+    for action in actions:
+        if action.action_type != ActionType.RECEIVE:
+            continue
+        if action.player_track_id != serve_tid:
+            continue
+
+        contact = contact_by_frame.get(action.frame)
+        if contact is None or not contact.player_candidates:
+            continue
+
+        for cand_tid, _cand_dist in contact.player_candidates:
+            if cand_tid != serve_tid:
+                action.player_track_id = cand_tid
+                n_fixed += 1
+                break
+
+    return n_fixed
+
+
 def reattribute_players(
     actions: list[ClassifiedAction],
     contacts: list[Contact],
     team_assignments: dict[int, int] | None,
     max_distance_ratio: float = 1.5,
 ) -> list[ClassifiedAction]:
-    """Re-assign player attribution using team signal after action classification.
+    """Re-assign player attribution using type-aware rules and team signal.
 
-    For each action where the assigned player is on the WRONG team for the court
-    side, check if a candidate on the CORRECT team exists within max_distance_ratio
-    of the nearest distance. If so, re-assign.
-
-    This should only be called with high-confidence team assignments (e.g. from
-    match-level cross-rally matching with confidence >= 0.70). Low-confidence
-    teams cause more regressions than fixes.
+    Two passes:
+    1. Server exclusion (no team data needed): ensures RECEIVE actions are
+       not attributed to the server. Catches cases missed by the inline
+       check (e.g. receives created by repair_action_sequence).
+    2. Team-based re-attribution (requires team data): for actions where
+       the assigned player is on the wrong team for the court side,
+       re-assigns to a correct-team candidate within distance cap.
 
     Args:
         actions: Classified actions to potentially re-attribute.
@@ -1523,6 +1567,14 @@ def reattribute_players(
         max_distance_ratio: Maximum distance ratio for candidate (1.5 = candidate
             can be up to 50% farther than current player).
     """
+    # Pass 1: server exclusion (always runs, no team data needed)
+    n_server_fixes = _reattribute_server_exclusion(actions, contacts)
+    if n_server_fixes > 0:
+        logger.info(
+            "Server exclusion: re-attributed %d receive(s)", n_server_fixes,
+        )
+
+    # Pass 2: team-based re-attribution (requires team data)
     if not team_assignments:
         return actions
 
