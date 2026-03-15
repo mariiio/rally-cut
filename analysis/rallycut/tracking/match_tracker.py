@@ -490,7 +490,8 @@ class MatchPlayerTracker:
     ) -> tuple[dict[int, float], dict[int, int]]:
         """Classify tracks into near/far court with soft labels.
 
-        Priority: team_assignments (from tracking pipeline) > court_split_y > median.
+        Priority: team_assignments (from tracking pipeline's bbox-size
+        clustering) > court_split_y > median Y split.
 
         Args:
             track_stats: Appearance stats per track.

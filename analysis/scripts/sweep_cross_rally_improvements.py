@@ -19,10 +19,9 @@ import argparse
 import itertools
 import logging
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
-
-import numpy as np
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -48,6 +47,8 @@ class VideoData:
     rally_court_split_y: list[float | None]
     rally_team_assignments: list[dict[int, int] | None]
     rally_primary_track_ids: list[list[int]]
+    # Court calibration corners (optional)
+    court_calibration_corners: list[tuple[float, float]] | None = None
 
 
 def _find_best_permutation(
@@ -87,7 +88,39 @@ def _find_best_permutation(
 # Data collection (single video-read pass)
 # ---------------------------------------------------------------------------
 
-def collect_data(video_id_filter: str | None = None) -> list[VideoData]:
+CACHE_PATH = Path(__file__).parent.parent / "outputs" / "sweep_track_features.pkl"
+
+
+def collect_data(
+    video_id_filter: str | None = None,
+    use_cache: bool = True,
+) -> list[VideoData]:
+    """Extract track features for all GT videos, with pickle caching.
+
+    First call extracts from video (~10 min) and saves to disk.
+    Subsequent calls load from cache (~1 sec).
+    """
+    import pickle
+
+    if use_cache and not video_id_filter and CACHE_PATH.exists():
+        print(f"Loading cached features from {CACHE_PATH.name}...")
+        with open(CACHE_PATH, "rb") as f:
+            return pickle.load(f)
+
+    results = _collect_data_impl(video_id_filter)
+
+    # Cache if full dataset (no filter)
+    if use_cache and not video_id_filter and results:
+        CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(CACHE_PATH, "wb") as f:
+            pickle.dump(results, f)
+        size_mb = CACHE_PATH.stat().st_size / 1024 / 1024
+        print(f"Cached to {CACHE_PATH.name} ({size_mb:.1f} MB)")
+
+    return results
+
+
+def _collect_data_impl(video_id_filter: str | None = None) -> list[VideoData]:
     """Extract track features for all GT videos (one-time video read)."""
     from rallycut.evaluation.db import get_connection
     from rallycut.evaluation.tracking.db import get_video_path, load_rallies_for_video
@@ -96,14 +129,14 @@ def collect_data(video_id_filter: str | None = None) -> list[VideoData]:
     with get_connection() as conn:
         with conn.cursor() as cur:
             query = """
-                SELECT id, player_matching_gt_json
+                SELECT id, player_matching_gt_json, court_calibration_json
                 FROM videos WHERE player_matching_gt_json IS NOT NULL
                 ORDER BY name
             """
             params: list[str] = []
             if video_id_filter:
                 query = """
-                    SELECT id, player_matching_gt_json
+                    SELECT id, player_matching_gt_json, court_calibration_json
                     FROM videos WHERE player_matching_gt_json IS NOT NULL
                     AND id LIKE %s ORDER BY name
                 """
@@ -120,6 +153,7 @@ def collect_data(video_id_filter: str | None = None) -> list[VideoData]:
     for row_idx, row in enumerate(rows):
         vid = str(row[0])
         gt_data = cast(dict[str, Any], row[1])
+        cal_json = row[2]  # court_calibration_json
         gt_rallies_raw = gt_data.get("rallies", {})
         gt_rallies: dict[str, dict[str, int]] = {
             rid: {str(k): int(v) for k, v in mapping.items()}
@@ -128,6 +162,11 @@ def collect_data(video_id_filter: str | None = None) -> list[VideoData]:
         gt_switches = gt_data.get(
             "sideSwitches", gt_data.get("side_switches", [])
         )
+
+        # Parse court calibration corners
+        court_cal_corners: list[tuple[float, float]] | None = None
+        if cal_json and isinstance(cal_json, list) and len(cal_json) == 4:
+            court_cal_corners = [(c["x"], c["y"]) for c in cal_json]
 
         rallies = load_rallies_for_video(vid)
         if not rallies:
@@ -181,6 +220,7 @@ def collect_data(video_id_filter: str | None = None) -> list[VideoData]:
             rally_court_split_y=rally_court_split_y,
             rally_team_assignments=rally_team_assignments,
             rally_primary_track_ids=rally_primary_track_ids,
+            court_calibration_corners=court_cal_corners,
         ))
 
     return results
@@ -190,6 +230,7 @@ def run_matching(
     vd: VideoData,
     weights: dict[str, float] | None = None,
     bootstrap_from: int = 0,
+    use_calibrator: bool = False,
 ) -> tuple[dict[str, dict[str, int]], list[Any], list[Any], dict[int, Any]]:
     """Run match-players pipeline on pre-extracted data.
 
@@ -198,6 +239,7 @@ def run_matching(
         weights: Optional weight overrides for feature similarity.
         bootstrap_from: If >0, use first N rallies to build profiles,
             then re-score all rallies with frozen profiles.
+        use_calibrator: If True, load court calibration for side classification.
 
     Returns:
         (pred_rallies, rally_results, stored_rally_data, player_profiles)
@@ -222,7 +264,17 @@ def run_matching(
                 setattr(pf, attr, weights[key])
 
     try:
-        tracker = MatchPlayerTracker(collect_diagnostics=True)
+        # Optionally load court calibrator
+        calibrator = None
+        if use_calibrator and vd.court_calibration_corners:
+            from rallycut.court.calibration import CourtCalibrator
+
+            calibrator = CourtCalibrator()
+            calibrator.calibrate(vd.court_calibration_corners)
+
+        tracker = MatchPlayerTracker(
+            calibrator=calibrator, collect_diagnostics=True,
+        )
         initial_results = []
 
         for i in range(len(vd.rally_ids)):
@@ -317,7 +369,7 @@ def analysis_1(all_data: list[VideoData]) -> None:
 
         print(f"  {vd.video_id[:8]}: processed")
 
-    print(f"\n--- Cross-Team Error Root Cause ---")
+    print("\n--- Cross-Team Error Root Cause ---")
     print(f"Total cross-team errors: {total_cross_errors}")
     print(f"  Court side CORRECT (appearance confusion): {court_side_correct}")
     print(f"  Court side WRONG (side misclassification): {court_side_wrong}")
@@ -445,7 +497,7 @@ def analysis_2(all_data: list[VideoData]) -> None:
 
     # Sort by accuracy
     results.sort(key=lambda x: -x[3])
-    print(f"\n--- Ranking ---")
+    print("\n--- Ranking ---")
     print(f"{'Config':<25} {'Correct':>8} {'Total':>6} {'Acc':>7} {'Delta':>7}")
     print("-" * 58)
     for name, correct, total, acc in results:
@@ -468,7 +520,6 @@ def analysis_3(all_data: list[VideoData]) -> None:
     # refine_assignments. But let's test: what if we skip profile updates
     # for the first N rallies, then build profiles only from rally N onward?
 
-    from rallycut.tracking.match_tracker import MatchPlayerTracker
 
     # Test different MIN_PROFILE_UPDATE_CONFIDENCE thresholds
     import rallycut.tracking.match_tracker as mt
@@ -510,7 +561,7 @@ def analysis_3(all_data: list[VideoData]) -> None:
     mt.MIN_PROFILE_UPDATE_CONFIDENCE = original_min_conf
 
     # Test SIDE_PENALTY sensitivity
-    print(f"\nSide penalty sensitivity:")
+    print("\nSide penalty sensitivity:")
     original_side_penalty = mt.SIDE_PENALTY
 
     penalty_values = [0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.40]
@@ -535,7 +586,7 @@ def analysis_3(all_data: list[VideoData]) -> None:
     mt.SIDE_PENALTY = original_side_penalty
 
     # Test POSITION_WEIGHT sensitivity
-    print(f"\nPosition weight sensitivity:")
+    print("\nPosition weight sensitivity:")
     original_pos_weight = mt.POSITION_WEIGHT
 
     pos_values = [0.0, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60]
@@ -560,7 +611,7 @@ def analysis_3(all_data: list[VideoData]) -> None:
     mt.POSITION_WEIGHT = original_pos_weight
 
     # Test switch penalty sensitivity
-    print(f"\nSwitch penalty sensitivity:")
+    print("\nSwitch penalty sensitivity:")
 
     switch_values = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
 

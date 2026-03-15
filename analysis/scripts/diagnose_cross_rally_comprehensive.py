@@ -23,10 +23,8 @@ import argparse
 import itertools
 import logging
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, cast
-
-import numpy as np
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -377,7 +375,6 @@ def section_b(all_results: list[VideoResult]) -> None:
 
     from rallycut.tracking.match_tracker import (
         MatchPlayerTracker,
-        RallyTrackingResult,
     )
 
     total_errors_detected = 0
@@ -458,9 +455,9 @@ def section_b(all_results: list[VideoResult]) -> None:
         elif delta < 0:
             print(f"    -> Perfect switches WORSE by {-delta} (switch detection helped)")
         else:
-            print(f"    -> No difference")
+            print("    -> No difference")
 
-    print(f"\n--- Summary ---")
+    print("\n--- Summary ---")
     print(f"Videos with GT switches: {videos_with_switches}")
     print(f"Total errors (detected switches): {total_errors_detected}")
     print(f"Total errors (perfect switches):  {total_errors_perfect}")
@@ -483,10 +480,6 @@ def section_c(all_results: list[VideoResult]) -> None:
     print("SECTION C: Per-Video Deep Dive (worst 3)")
     print("=" * 70)
 
-    from rallycut.tracking.player_features import (
-        TrackAppearanceStats,
-        compute_appearance_similarity,
-    )
 
     # Sort by accuracy, take worst 3
     sorted_videos = sorted(all_results, key=lambda v: v.accuracy)
@@ -508,8 +501,6 @@ def section_c(all_results: list[VideoResult]) -> None:
             if rid not in vr.gt_rallies:
                 continue
 
-            gt = vr.gt_rallies[rid]
-            pred = vr.pred_rallies.get(rid, {})
             rally_assignments = [
                 a for a in vr.assignments
                 if a.rally_id == rid
@@ -798,7 +789,7 @@ def section_f(all_results: list[VideoResult]) -> None:
     print(f"Errors: {total_errors} ({within_errors} within-team, {cross_errors} cross-team)")
 
     # Recommendation 1: Confidence gating
-    print(f"\n1. CONFIDENCE GATING")
+    print("\n1. CONFIDENCE GATING")
     for threshold in [0.65, 0.70, 0.75]:
         above = [a for a in all_assignments if a.confidence >= threshold]
         if not above:
@@ -813,7 +804,7 @@ def section_f(all_results: list[VideoResult]) -> None:
         )
 
     # Recommendation 2: Error concentration
-    print(f"\n2. ERROR CONCENTRATION")
+    print("\n2. ERROR CONCENTRATION")
     sorted_videos = sorted(all_results, key=lambda v: v.accuracy)
     worst_3 = sorted_videos[:3]
     worst_3_errors = sum(
@@ -829,7 +820,7 @@ def section_f(all_results: list[VideoResult]) -> None:
         print(f"     {vr.video_id[:8]}: {vr.accuracy:.1f}% ({errs} errors)")
 
     # Recommendation 3: Rally index
-    print(f"\n3. EARLY vs LATE RALLIES")
+    print("\n3. EARLY vs LATE RALLIES")
     early = [a for a in all_assignments if a.rally_index <= 4]
     late = [a for a in all_assignments if a.rally_index > 4]
     if early and late:
@@ -843,7 +834,7 @@ def section_f(all_results: list[VideoResult]) -> None:
             print(f"   -> Profile drift detected (-{early_acc - late_acc:.1f}pp)")
 
     # Recommendation 4: Error type focus
-    print(f"\n4. ERROR TYPE FOCUS")
+    print("\n4. ERROR TYPE FOCUS")
     if cross_errors > within_errors:
         print(
             f"   Cross-team errors dominate ({cross_errors} vs {within_errors}). "
@@ -856,7 +847,7 @@ def section_f(all_results: list[VideoResult]) -> None:
         )
 
     # Recommendation 5: Margin analysis
-    print(f"\n5. MARGIN ANALYSIS")
+    print("\n5. MARGIN ANALYSIS")
     low_margin_errors = [
         a for a in all_assignments if not a.correct and a.margin < 0.05
     ]

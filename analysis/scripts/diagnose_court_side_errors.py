@@ -265,11 +265,11 @@ def main() -> None:
 
     # Summary
     print(f"\n{'=' * 70}")
-    print(f"COURT-SIDE MISCLASSIFICATION ROOT CAUSE")
+    print("COURT-SIDE MISCLASSIFICATION ROOT CAUSE")
     print(f"{'=' * 70}")
     print(f"\nTotal cross-team errors: {total_cross_errors}")
 
-    print(f"\n--- Classification source used for error tracks ---")
+    print("\n--- Classification source used for error tracks ---")
     for source, count in sorted(source_counts.items(), key=lambda x: -x[1]):
         misclass = source_error_counts.get(source, 0)
         print(
@@ -277,7 +277,7 @@ def main() -> None:
             f"({misclass} with wrong side = {misclass / count * 100:.0f}%)"
         )
 
-    print(f"\n--- Would team_assignments have been correct? ---")
+    print("\n--- Would team_assignments have been correct? ---")
     ta_total = team_assign_available_correct + team_assign_available_wrong
     print(f"  Available & correct: {team_assign_available_correct}")
     print(f"  Available & wrong:   {team_assign_available_wrong}")
@@ -288,7 +288,7 @@ def main() -> None:
             f"{team_assign_available_correct / ta_total * 100:.1f}%"
         )
 
-    print(f"\n--- Would court_split_y have been correct? ---")
+    print("\n--- Would court_split_y have been correct? ---")
     csy_total = court_split_y_correct + court_split_y_wrong
     print(f"  Correct: {court_split_y_correct}")
     print(f"  Wrong:   {court_split_y_wrong}")
@@ -300,7 +300,7 @@ def main() -> None:
         )
 
     # Show worst videos
-    print(f"\n--- Per-video cross-team error details ---")
+    print("\n--- Per-video cross-team error details ---")
     video_details.sort(key=lambda x: -x[1])
     for vid, count, errors in video_details[:8]:
         print(f"\n  {vid[:8]}: {count} cross-team errors")
