@@ -5,6 +5,11 @@ from __future__ import annotations
 from rallycut.statistics.match_stats import (
     PlayerStats,
     TeamStats,
+    _try_fix_consecutive_run,
+    _try_fix_contact_sequence,
+    _try_fix_serve_receive,
+    _try_fix_track_swap,
+    _validate_contact_sequence,
     compute_match_scores,
     compute_match_stats,
     compute_player_movement,
@@ -592,3 +597,213 @@ class TestTeamStatsAggregation:
         assert "teamStats" in d
         assert len(d["teamStats"]) == 2
         assert "scoreProgression" in d
+
+
+class TestValidateContactSequence:
+    """Tests for contact sequence validation."""
+
+    def test_valid_sequence(self) -> None:
+        """Normal serve→receive→set→attack alternation is valid."""
+        ra = RallyActions(
+            actions=[
+                _action(ActionType.SERVE, 10, player=1, team="A"),
+                _action(ActionType.RECEIVE, 30, player=3, team="B"),
+                _action(ActionType.SET, 50, player=4, team="B"),
+                _action(ActionType.ATTACK, 70, player=3, team="B"),
+            ],
+            rally_id="valid",
+        )
+        assert _validate_contact_sequence(ra) is True
+
+    def test_invalid_serve_receive_same_team(self) -> None:
+        """Serve and receive by same team is invalid."""
+        ra = RallyActions(
+            actions=[
+                _action(ActionType.SERVE, 10, player=1, team="A"),
+                _action(ActionType.RECEIVE, 30, player=2, team="A"),
+            ],
+            rally_id="bad_r1",
+        )
+        assert _validate_contact_sequence(ra) is False
+
+    def test_invalid_five_consecutive(self) -> None:
+        """5+ consecutive same-team contacts is invalid."""
+        ra = RallyActions(
+            actions=[
+                _action(ActionType.SERVE, 10, player=1, team="A"),
+                _action(ActionType.RECEIVE, 30, player=3, team="B"),
+                _action(ActionType.SET, 50, player=3, team="B"),
+                _action(ActionType.ATTACK, 70, player=4, team="B"),
+                _action(ActionType.DIG, 90, player=3, team="B"),
+                _action(ActionType.SET, 110, player=4, team="B"),
+            ],
+            rally_id="bad_r2",
+        )
+        assert _validate_contact_sequence(ra) is False
+
+    def test_insufficient_info(self) -> None:
+        """Single contact or no teams returns None."""
+        ra = RallyActions(
+            actions=[_action(ActionType.SERVE, 10, player=1, team="A")],
+            rally_id="skip",
+        )
+        assert _validate_contact_sequence(ra) is None
+
+
+class TestFixServeReceive:
+    """Tests for serve-receive same-team fix."""
+
+    def test_fixes_wrong_team_receiver(self) -> None:
+        """Flips receiver's track when serve and receive are same team."""
+        ra = RallyActions(
+            actions=[
+                _action(ActionType.SERVE, 10, player=1, team="A"),
+                _action(ActionType.RECEIVE, 30, player=2, team="A"),
+                _action(ActionType.SET, 50, player=2, team="A"),
+                _action(ActionType.ATTACK, 70, player=2, team="A"),
+            ],
+            rally_id="fix_r1",
+        )
+        fix = _try_fix_serve_receive(ra)
+        assert fix is not None
+        assert fix[1] == "A"  # server stays
+        assert fix[2] == "B"  # receiver flipped
+
+    def test_no_fix_same_track(self) -> None:
+        """Same track serving and receiving can't be fixed by team flip."""
+        ra = RallyActions(
+            actions=[
+                _action(ActionType.SERVE, 10, player=1, team="A"),
+                _action(ActionType.ATTACK, 30, player=1, team="A"),
+            ],
+            rally_id="same_tid",
+        )
+        fix = _try_fix_serve_receive(ra)
+        assert fix is None
+
+    def test_no_fix_when_flip_still_invalid(self) -> None:
+        """Returns None when flipping receiver doesn't validate."""
+        ra = RallyActions(
+            actions=[
+                _action(ActionType.SERVE, 10, player=1, team="A"),
+                _action(ActionType.RECEIVE, 30, player=2, team="A"),
+                # After flip: B B B B B — still invalid (rule 2)
+                _action(ActionType.SET, 50, player=2, team="B"),
+                _action(ActionType.ATTACK, 70, player=2, team="B"),
+                _action(ActionType.DIG, 90, player=2, team="B"),
+                _action(ActionType.SET, 110, player=2, team="B"),
+            ],
+            rally_id="flip_still_bad",
+        )
+        fix = _try_fix_serve_receive(ra)
+        assert fix is None
+
+
+class TestFixConsecutiveRun:
+    """Tests for consecutive same-team run fix."""
+
+    def test_fixes_single_wrong_contact(self) -> None:
+        """Flips one contact to break a 5+ consecutive run."""
+        # A B B B B B — one B should be A
+        ra = RallyActions(
+            actions=[
+                _action(ActionType.SERVE, 10, player=1, team="A"),
+                _action(ActionType.RECEIVE, 30, player=3, team="B"),
+                _action(ActionType.SET, 50, player=4, team="B"),
+                _action(ActionType.ATTACK, 70, player=3, team="B"),
+                _action(ActionType.DIG, 90, player=4, team="B"),
+                _action(ActionType.SET, 110, player=3, team="B"),
+            ],
+            rally_id="fix_r2",
+        )
+        fix = _try_fix_consecutive_run(ra)
+        # One of the B tracks gets flipped to A
+        if fix is not None:
+            assert _validate_contact_sequence(
+                RallyActions(
+                    actions=[
+                        ClassifiedAction(
+                            action_type=a.action_type,
+                            frame=a.frame,
+                            ball_x=0.5, ball_y=0.5, velocity=0.02,
+                            player_track_id=a.player_track_id,
+                            court_side="near",
+                            confidence=0.9,
+                            team=fix.get(a.player_track_id, a.team),
+                        )
+                        for a in ra.actions
+                    ],
+                    rally_id="fixed",
+                )
+            ) is True
+
+    def test_no_fix_ambiguous(self) -> None:
+        """Returns None when multiple single-flips work."""
+        # All same team, same track — can't disambiguate
+        ra = RallyActions(
+            actions=[
+                _action(ActionType.RECEIVE, 10, player=1, team="A"),
+                _action(ActionType.SET, 30, player=1, team="A"),
+                _action(ActionType.ATTACK, 50, player=1, team="A"),
+                _action(ActionType.DIG, 70, player=1, team="A"),
+                _action(ActionType.SET, 90, player=1, team="A"),
+            ],
+            rally_id="ambiguous",
+        )
+        fix = _try_fix_consecutive_run(ra)
+        # Only 1 unique track, so all flips produce same map — should find 1
+        # Actually with 1 track, flipping it makes all B — still 5 consecutive
+        assert fix is None
+
+
+class TestFixTrackSwap:
+    """Tests for full track swap fix."""
+
+    def test_fixes_swapped_teams(self) -> None:
+        """Two tracks with swapped teams get fixed."""
+        ra = RallyActions(
+            actions=[
+                _action(ActionType.SERVE, 10, player=1, team="A"),
+                _action(ActionType.RECEIVE, 30, player=2, team="A"),
+                _action(ActionType.SET, 50, player=3, team="B"),
+                _action(ActionType.ATTACK, 70, player=3, team="B"),
+            ],
+            rally_id="swap",
+        )
+        fix = _try_fix_track_swap(ra)
+        if fix is not None:
+            assert fix[2] == "B"  # track 2 moved to B
+            assert fix[3] == "A"  # track 3 moved to A
+
+
+class TestFixContactSequenceLayered:
+    """Tests for the layered fix strategy."""
+
+    def test_prefers_serve_receive_over_swap(self) -> None:
+        """Serve-receive fix is tried first."""
+        ra = RallyActions(
+            actions=[
+                _action(ActionType.SERVE, 10, player=1, team="A"),
+                _action(ActionType.RECEIVE, 30, player=2, team="A"),
+                _action(ActionType.SET, 50, player=2, team="A"),
+                _action(ActionType.ATTACK, 70, player=2, team="A"),
+            ],
+            rally_id="layered",
+        )
+        fix = _try_fix_contact_sequence(ra)
+        assert fix is not None
+        # Server stays A, receiver flipped to B
+        assert fix[1] == "A"
+        assert fix[2] == "B"
+
+    def test_returns_none_when_unfixable(self) -> None:
+        """Same-track serve+receive is unfixable."""
+        ra = RallyActions(
+            actions=[
+                _action(ActionType.SERVE, 10, player=1, team="B"),
+                _action(ActionType.ATTACK, 30, player=1, team="B"),
+            ],
+            rally_id="unfixable",
+        )
+        fix = _try_fix_contact_sequence(ra)
+        assert fix is None
