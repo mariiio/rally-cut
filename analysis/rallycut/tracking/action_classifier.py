@@ -522,6 +522,7 @@ class ActionClassifier:
         actions: list[ClassifiedAction] = []
         serve_detected = False
         serve_side: str | None = None  # Court side of the serve
+        serve_track_id: int = -1  # Track ID of the server
         receive_detected = False  # Whether receive has been classified
         current_side: str | None = None  # Side with possession
         contact_count_on_side = 0
@@ -660,6 +661,7 @@ class ActionClassifier:
                         )
                         serve_detected = True
                         serve_side = contact.court_side
+                        serve_track_id = contact.player_track_id
                         current_side = contact.court_side
                         contact_count_on_side = 1
                     else:
@@ -702,6 +704,18 @@ class ActionClassifier:
                 receive_detected = True
                 current_side = contact.court_side
                 contact_count_on_side = 1
+
+                # Server can't receive their own serve — re-attribute to
+                # next-nearest candidate if the nearest player is the server.
+                if (
+                    contact.player_track_id == serve_track_id
+                    and serve_track_id >= 0
+                    and contact.player_candidates
+                ):
+                    for cand_tid, _cand_dist in contact.player_candidates:
+                        if cand_tid != serve_track_id:
+                            contact.player_track_id = cand_tid
+                            break
 
             elif contact_count_on_side == 1:
                 # First contact on this side (after initial receive)
@@ -819,6 +833,7 @@ class ActionClassifier:
 
         serve_detected = False
         serve_side: str | None = None
+        serve_track_id: int = -1
         receive_detected = False
         last_action_type: ActionType | None = None
 
@@ -914,6 +929,7 @@ class ActionClassifier:
                     ))
                     serve_detected = True
                     serve_side = contact.court_side
+                    serve_track_id = contact.player_track_id
                     last_action_type = ActionType.SERVE
                     continue
                 else:
@@ -958,13 +974,26 @@ class ActionClassifier:
                         contact_sequence.net_y,
                     )
                 if contact.court_side != serve_side or crossed_net is True:
+                    # Server can't receive their own serve — re-attribute to
+                    # next-nearest candidate if the nearest player is the server.
+                    recv_track_id = contact.player_track_id
+                    if (
+                        recv_track_id == serve_track_id
+                        and serve_track_id >= 0
+                        and contact.player_candidates
+                    ):
+                        for cand_tid, _cand_dist in contact.player_candidates:
+                            if cand_tid != serve_track_id:
+                                recv_track_id = cand_tid
+                                break
+
                     actions.append(ClassifiedAction(
                         action_type=ActionType.RECEIVE,
                         frame=contact.frame,
                         ball_x=contact.ball_x,
                         ball_y=contact.ball_y,
                         velocity=contact.velocity,
-                        player_track_id=contact.player_track_id,
+                        player_track_id=recv_track_id,
                         court_side=contact.court_side,
                         confidence=self.config.high_confidence,
                     ))

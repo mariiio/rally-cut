@@ -1460,3 +1460,69 @@ class TestCircuitBreaker:
             ActionType.SERVE, ActionType.RECEIVE,
             ActionType.SET, ActionType.ATTACK,
         ]
+
+
+class TestServerExclusion:
+    """Tests for server can't receive their own serve."""
+
+    def test_receive_reattributed_away_from_server(self) -> None:
+        """When nearest player at receive is the server, pick next candidate."""
+        serve_contact = _contact(10, ball_y=0.7, velocity=0.03, court_side="near",
+                                 player_track_id=1)
+        recv_contact = _contact(40, ball_y=0.3, velocity=0.02, court_side="far",
+                                player_track_id=1)
+        # Server is tid=1, but candidate tid=3 is available
+        recv_contact.player_candidates = [(1, 0.05), (3, 0.08)]
+
+        seq = ContactSequence(
+            contacts=[serve_contact, recv_contact],
+            net_y=0.5,
+            rally_start_frame=0,
+        )
+        classifier = ActionClassifier()
+        result = classifier.classify_rally(seq)
+
+        serve_action = next(a for a in result.actions if a.action_type == ActionType.SERVE)
+        recv_action = next(a for a in result.actions if a.action_type == ActionType.RECEIVE)
+
+        assert serve_action.player_track_id == 1
+        assert recv_action.player_track_id == 3  # Re-attributed away from server
+
+    def test_receive_keeps_attribution_when_different_player(self) -> None:
+        """When nearest player at receive is NOT the server, keep it."""
+        serve_contact = _contact(10, ball_y=0.7, velocity=0.03, court_side="near",
+                                 player_track_id=1)
+        recv_contact = _contact(40, ball_y=0.3, velocity=0.02, court_side="far",
+                                player_track_id=3)
+        recv_contact.player_candidates = [(3, 0.05), (1, 0.10)]
+
+        seq = ContactSequence(
+            contacts=[serve_contact, recv_contact],
+            net_y=0.5,
+            rally_start_frame=0,
+        )
+        classifier = ActionClassifier()
+        result = classifier.classify_rally(seq)
+
+        recv_action = next(a for a in result.actions if a.action_type == ActionType.RECEIVE)
+        assert recv_action.player_track_id == 3  # Unchanged
+
+    def test_receive_no_candidates_keeps_server(self) -> None:
+        """When no candidates available, keep server attribution (graceful)."""
+        serve_contact = _contact(10, ball_y=0.7, velocity=0.03, court_side="near",
+                                 player_track_id=1)
+        recv_contact = _contact(40, ball_y=0.3, velocity=0.02, court_side="far",
+                                player_track_id=1)
+        # No candidates — can't re-attribute
+        recv_contact.player_candidates = []
+
+        seq = ContactSequence(
+            contacts=[serve_contact, recv_contact],
+            net_y=0.5,
+            rally_start_frame=0,
+        )
+        classifier = ActionClassifier()
+        result = classifier.classify_rally(seq)
+
+        recv_action = next(a for a in result.actions if a.action_type == ActionType.RECEIVE)
+        assert recv_action.player_track_id == 1  # Kept (no alternatives)
