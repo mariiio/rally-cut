@@ -169,10 +169,11 @@ async function main() {
     }
 
     // Mark batch job as complete
+    const attemptedCount = rallies.length - alreadyCompleted.size;
     await prisma.batchTrackingJob.update({
       where: { id: jobId },
       data: {
-        status: failedCount === rallies.length ? 'FAILED' : 'COMPLETED',
+        status: attemptedCount > 0 && failedCount === attemptedCount ? 'FAILED' : 'COMPLETED',
         completedAt: new Date(),
         currentRallyId: null,
         error: failedCount > 0 ? `${failedCount}/${rallies.length} rallies failed` : null,

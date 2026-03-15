@@ -1835,7 +1835,7 @@ export interface ActionsData {
   numContacts: number;
   actionSequence: string[];
   actions: ActionInfo[];
-  teamAssignments?: Record<string, string>;  // trackId → "A"|"B"
+  teamAssignments?: Record<string, string>;  // playerId → "A"|"B"
   servingTeam?: string;
 }
 

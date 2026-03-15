@@ -11,6 +11,9 @@
  */
 
 import { spawn } from 'child_process';
+import { createWriteStream } from 'fs';
+import fs from 'fs/promises';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -179,20 +182,19 @@ function spawnBatchWorker(jobId: string): void {
   const workerScript = path.resolve(__dirname, '../scripts/batchTrack.ts');
   const tsxBin = path.resolve(__dirname, '../../node_modules/.bin/tsx');
 
+  // Write worker logs to a file — can't pipe to the API process because
+  // when tsx watch restarts the API, the pipe breaks and SIGPIPE kills
+  // the worker (defeating the whole purpose of detaching).
+  const logDir = path.join(os.tmpdir(), 'rallycut-batch-tracking');
+  fs.mkdir(logDir, { recursive: true }).catch(() => {});
+  const logPath = path.join(logDir, `batch_${jobId}.log`);
+  const logStream = createWriteStream(logPath, { flags: 'a' });
+
   const child = spawn(tsxBin, [workerScript, jobId], {
     cwd: path.resolve(__dirname, '../..'),
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', logStream, logStream],
     detached: true,
     env: { ...process.env },
-  });
-
-  child.stdout?.on('data', (data: Buffer) => {
-    const line = data.toString().trim();
-    if (line) console.log(line);
-  });
-  child.stderr?.on('data', (data: Buffer) => {
-    const line = data.toString().trim();
-    if (line) console.error(line);
   });
 
   child.on('error', (error) => {
@@ -201,6 +203,7 @@ function spawnBatchWorker(jobId: string): void {
 
   // Detach — API process can exit without killing the worker
   child.unref();
+  console.log(`[BATCH_TRACK] Worker spawned for job ${jobId}, logs at ${logPath}`);
 }
 
 /**
