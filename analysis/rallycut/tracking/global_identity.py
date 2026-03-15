@@ -48,10 +48,11 @@ MIN_SEGMENT_FRAMES = 5  # Shorter than track filters (20/50) to capture fine-gra
 MIN_ANCHOR_BHATTACHARYYA = 0.20  # Minimum distance between same-team anchors
 
 # Cost function weights (must sum to 1.0)
-WEIGHT_APPEARANCE = 0.50
-WEIGHT_SPATIAL = 0.25
+WEIGHT_APPEARANCE = 0.40
+WEIGHT_SPATIAL = 0.15
 WEIGHT_BBOX_SIZE = 0.10
 WEIGHT_MULTI_REGION = 0.15
+WEIGHT_COURT_SIDE = 0.20
 SPATIAL_NORMALIZER = 0.30  # Euclidean distance normalization
 
 # Assignment
@@ -216,6 +217,7 @@ def optimize_global_identity(
         remapped = _assign_segments_to_profiles(
             positions, team_segs, team_profiles,
             color_store, appearance_store,
+            court_split_y=court_split_y,
         )
         total_remapped += remapped
 
@@ -619,13 +621,15 @@ def _compute_assignment_cost(
     seg_multi_desc: MultiRegionDescriptor | None,
     profile_multi_desc: MultiRegionDescriptor | None,
     compute_multi_region_distance_fn: Callable[..., float] | None,
+    court_split_y: float | None = None,
 ) -> float:
     """Compute cost of assigning a segment to a player profile.
 
     Lower cost = better match. Pre-computed histograms and multi-region
     descriptors are passed in to avoid redundant computation.
 
-    Weights: appearance 0.50, spatial 0.25, bbox_size 0.10, multi_region 0.15 (sum 1.0).
+    Weights: appearance 0.40, court_side 0.20, spatial 0.15,
+             multi_region 0.15, bbox_size 0.10 (sum 1.0).
     """
     cost = 0.0
 
@@ -639,14 +643,38 @@ def _compute_assignment_cost(
     else:
         cost += WEIGHT_APPEARANCE * 0.5  # neutral penalty
 
-    # 2. Spatial cost (segment centroid vs profile centroid)
+    # 2. Court-side cost (same/opposite side of court_split_y)
+    if court_split_y is not None:
+        _, seg_y = segment.centroid
+        profile_y = profile.centroid[1]
+        seg_side = seg_y > court_split_y  # True = near side
+        profile_side = profile_y > court_split_y
+        if seg_side == profile_side:
+            # Same side — low cost, graduated by distance from split
+            dist_from_split = min(
+                abs(seg_y - court_split_y), abs(profile_y - court_split_y)
+            )
+            # Closer to split = less confident, cost up to 0.3
+            court_cost = 0.3 * max(0.0, 1.0 - dist_from_split / 0.15)
+        else:
+            # Opposite sides — high cost, graduated by how far past split
+            dist_past = min(
+                abs(seg_y - court_split_y), abs(profile_y - court_split_y)
+            )
+            # Farther past split = more confident it's wrong, cost 0.7-1.0
+            court_cost = 0.7 + 0.3 * min(dist_past / 0.15, 1.0)
+        cost += WEIGHT_COURT_SIDE * court_cost
+    else:
+        cost += WEIGHT_COURT_SIDE * 0.5  # neutral
+
+    # 3. Spatial cost (segment centroid vs profile centroid)
     sx, sy = segment.centroid
     px, py = profile.centroid
     spatial_dist = math.sqrt((sx - px) ** 2 + (sy - py) ** 2)
     spatial_cost = min(spatial_dist / SPATIAL_NORMALIZER, 1.0)
     cost += WEIGHT_SPATIAL * spatial_cost
 
-    # 3. Bbox size similarity (log ratio, saturates at ~7x difference)
+    # 4. Bbox size similarity (log ratio, saturates at ~7x difference)
     if profile.mean_bbox_area > 0 and segment.mean_bbox_area > 0:
         area_ratio = segment.mean_bbox_area / profile.mean_bbox_area
         size_cost = abs(math.log(max(area_ratio, 0.01))) / 2.0
@@ -655,7 +683,7 @@ def _compute_assignment_cost(
         size_cost = 0.5
     cost += WEIGHT_BBOX_SIZE * size_cost
 
-    # 4. Multi-region appearance (when available)
+    # 5. Multi-region appearance (when available)
     multi_cost = 0.5  # default neutral
     if (
         seg_multi_desc is not None
@@ -702,6 +730,7 @@ def _assign_segments_to_profiles(
     profiles: list[PlayerProfile],
     color_store: ColorHistogramStore,
     appearance_store: AppearanceDescriptorStore | None,
+    court_split_y: float | None = None,
 ) -> int:
     """Assign each segment to its best-matching player profile.
 
@@ -752,6 +781,7 @@ def _assign_segments_to_profiles(
                 seg, profile,
                 seg_histograms[i], seg_multi_descs[i], profile_multi_descs[j],
                 compute_multi_region_distance_fn,
+                court_split_y=court_split_y,
             )
 
     # Greedy assignment: each segment picks its lowest-cost profile
