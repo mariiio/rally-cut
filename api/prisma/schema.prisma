@@ -479,6 +479,7 @@ model BatchTrackingJob {
   currentRallyId   String?             @map("current_rally_id")
   error            String?
   createdAt        DateTime            @default(now()) @map("created_at")
+  lastProgressAt   DateTime            @default(now()) @map("last_progress_at")
   completedAt      DateTime?           @map("completed_at")
   video            Video               @relation(fields: [videoId], references: [id], onDelete: Cascade)
 

@@ -24,26 +24,28 @@ import {
 import { triggerModalBatchTracking } from './modalTrackingService.js';
 import { runMatchAnalysis } from './matchAnalysisService.js';
 
-// A PROCESSING job older than this is considered stale (interrupted/crashed)
-const STALE_JOB_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+// A job with no progress for this long is considered stale (API crashed, FFmpeg hung, etc.).
+// Uses lastProgressAt (updated per rally), not createdAt, so long-running jobs with
+// steady progress are never incorrectly expired.
+const STALE_PROGRESS_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes without progress
 
 /**
  * Mark stale PROCESSING/PENDING jobs as FAILED.
- * A job is stale if it's been in PROCESSING/PENDING longer than STALE_JOB_TIMEOUT_MS.
+ * A job is stale if lastProgressAt hasn't been updated within STALE_PROGRESS_TIMEOUT_MS.
  * This handles cases where the server crashed or was restarted mid-tracking.
  */
 async function expireStaleJobs(videoId: string): Promise<void> {
-  const cutoff = new Date(Date.now() - STALE_JOB_TIMEOUT_MS);
+  const cutoff = new Date(Date.now() - STALE_PROGRESS_TIMEOUT_MS);
   const { count } = await prisma.batchTrackingJob.updateMany({
     where: {
       videoId,
       status: { in: ['PENDING', 'PROCESSING'] },
-      createdAt: { lt: cutoff },
+      lastProgressAt: { lt: cutoff },
     },
     data: {
       status: 'FAILED',
       completedAt: new Date(),
-      error: 'Timed out — job was interrupted or never completed',
+      error: 'Timed out — no progress for 10 minutes (server likely restarted)',
     },
   });
   if (count > 0) {
@@ -136,7 +138,7 @@ export async function trackAllRallies(
     console.log(`[BATCH_TRACK] Using Modal GPU for batch job ${job.id}`);
     await prisma.batchTrackingJob.update({
       where: { id: job.id },
-      data: { status: 'PROCESSING' },
+      data: { status: 'PROCESSING', lastProgressAt: new Date() },
     });
     triggerModalBatchTracking({
       batchJobId: job.id,
@@ -203,7 +205,7 @@ async function processBatchTracking(
     // Mark job as processing
     await prisma.batchTrackingJob.update({
       where: { id: jobId },
-      data: { status: 'PROCESSING' },
+      data: { status: 'PROCESSING', lastProgressAt: new Date() },
     });
 
     // Download full video once
@@ -211,15 +213,46 @@ async function processBatchTracking(
     await downloadVideoToLocal(videoKey, localVideoPath);
     console.log(`[BATCH_TRACK] Video downloaded to ${localVideoPath}`);
 
-    let completedCount = 0;
+    // Reset any zombie PROCESSING player_tracks from crashed previous runs
+    const { count: resetCount } = await prisma.playerTrack.updateMany({
+      where: {
+        rallyId: { in: rallies.map((r) => r.id) },
+        status: 'PROCESSING',
+      },
+      data: { status: 'PENDING' },
+    });
+    if (resetCount > 0) {
+      console.log(`[BATCH_TRACK] Reset ${resetCount} zombie PROCESSING player_track(s) to PENDING`);
+    }
+
+    // Check which rallies are already completed (skip re-tracking)
+    const completedTracks = await prisma.playerTrack.findMany({
+      where: {
+        rallyId: { in: rallies.map((r) => r.id) },
+        status: 'COMPLETED',
+      },
+      select: { rallyId: true },
+    });
+    const alreadyCompleted = new Set(completedTracks.map((t) => t.rallyId));
+
+    let completedCount = alreadyCompleted.size;
     let failedCount = 0;
+
+    if (alreadyCompleted.size > 0) {
+      console.log(`[BATCH_TRACK] Skipping ${alreadyCompleted.size} already-completed rallies`);
+    }
 
     // Process each rally sequentially
     for (const rally of rallies) {
-      // Update current rally
+      // Skip already-completed rallies
+      if (alreadyCompleted.has(rally.id)) {
+        continue;
+      }
+
+      // Update current rally + heartbeat
       await prisma.batchTrackingJob.update({
         where: { id: jobId },
-        data: { currentRallyId: rally.id },
+        data: { currentRallyId: rally.id, lastProgressAt: new Date() },
       });
 
       try {
@@ -243,12 +276,13 @@ async function processBatchTracking(
         failedCount++;
       }
 
-      // Update progress
+      // Update progress + heartbeat
       await prisma.batchTrackingJob.update({
         where: { id: jobId },
         data: {
           completedRallies: completedCount,
           failedRallies: failedCount,
+          lastProgressAt: new Date(),
         },
       });
     }

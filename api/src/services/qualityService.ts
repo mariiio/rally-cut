@@ -290,7 +290,7 @@ export async function getAnalysisPipelineStatus(
         : video.status;
 
   // Batch tracking status (treat stale PROCESSING jobs as failed)
-  const STALE_JOB_TIMEOUT_MS = 30 * 60 * 1000;
+  const STALE_JOB_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes without progress
   let batchJob = await prisma.batchTrackingJob.findFirst({
     where: { videoId },
     orderBy: { createdAt: 'desc' },
@@ -298,7 +298,7 @@ export async function getAnalysisPipelineStatus(
   if (
     batchJob &&
     (batchJob.status === 'PROCESSING' || batchJob.status === 'PENDING') &&
-    Date.now() - batchJob.createdAt.getTime() > STALE_JOB_TIMEOUT_MS
+    Date.now() - batchJob.lastProgressAt.getTime() > STALE_JOB_TIMEOUT_MS
   ) {
     // Auto-expire stale job
     batchJob = await prisma.batchTrackingJob.update({

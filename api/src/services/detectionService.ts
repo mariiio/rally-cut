@@ -683,7 +683,7 @@ export async function handleDetectionComplete(payload: DetectionPayload) {
  */
 export async function cleanupStaleJobs(): Promise<void> {
   const DETECTION_TIMEOUT_MS = 45 * 60 * 1000; // 45 minutes
-  const BATCH_TRACKING_TIMEOUT_MS = 90 * 60 * 1000; // 90 minutes
+  const BATCH_TRACKING_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes without progress
   const now = new Date();
 
   // Clean up stale detection jobs
@@ -728,7 +728,7 @@ export async function cleanupStaleJobs(): Promise<void> {
   const staleBatchJobs = await prisma.batchTrackingJob.updateMany({
     where: {
       status: { in: ["PENDING", "PROCESSING"] },
-      createdAt: { lt: staleBatchCutoff },
+      lastProgressAt: { lt: staleBatchCutoff },
     },
     data: {
       status: "FAILED",

@@ -481,6 +481,11 @@ export async function extractVideoSegmentFromLocal(
   outputPath: string
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (fn: () => void) => {
+      if (!settled) { settled = true; fn(); }
+    };
+
     const args = [
       '-ss', startSeconds.toString(),
       '-i', localVideoPath,
@@ -495,20 +500,28 @@ export async function extractVideoSegmentFromLocal(
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
+    // Timeout: 2 minutes per segment (even a 60s segment re-encodes in under 30s)
+    const timer = setTimeout(() => {
+      ffmpeg.kill('SIGKILL');
+      settle(() => reject(new Error(`FFmpeg segment extraction timed out after 120s`)));
+    }, 2 * 60 * 1000);
+
     let stderr = '';
     ffmpeg.stderr?.on('data', (data: Buffer) => {
       stderr += data.toString();
     });
 
     ffmpeg.on('error', (error) => {
-      reject(new Error(`FFmpeg failed to start: ${error.message}`));
+      clearTimeout(timer);
+      settle(() => reject(new Error(`FFmpeg failed to start: ${error.message}`)));
     });
 
     ffmpeg.on('exit', (code) => {
+      clearTimeout(timer);
       if (code === 0) {
-        resolve();
+        settle(() => resolve());
       } else {
-        reject(new Error(`FFmpeg exited with code ${code}: ${stderr.slice(-500)}`));
+        settle(() => reject(new Error(`FFmpeg exited with code ${code}: ${stderr.slice(-500)}`)));
       }
     });
   });

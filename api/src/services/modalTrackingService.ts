@@ -100,10 +100,10 @@ export async function handleTrackingRallyComplete(
     // Use the shared save function (same DB write path as local tracking)
     await saveTrackingResult(rally_id, video_id, trackerResult, 0);
 
-    // Increment completed count
+    // Increment completed count + heartbeat
     await prisma.batchTrackingJob.update({
       where: { id: batch_job_id },
-      data: { completedRallies: { increment: 1 }, currentRallyId: rally_id },
+      data: { completedRallies: { increment: 1 }, currentRallyId: rally_id, lastProgressAt: new Date() },
     });
   } else {
     // Mark rally as failed
@@ -122,7 +122,7 @@ export async function handleTrackingRallyComplete(
 
     await prisma.batchTrackingJob.update({
       where: { id: batch_job_id },
-      data: { failedRallies: { increment: 1 }, currentRallyId: rally_id },
+      data: { failedRallies: { increment: 1 }, currentRallyId: rally_id, lastProgressAt: new Date() },
     });
   }
 
