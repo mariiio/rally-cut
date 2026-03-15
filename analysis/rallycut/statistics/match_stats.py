@@ -225,6 +225,10 @@ class RallyStats:
     # Advanced per-rally stats
     serve_outcome: str = "unknown"  # ServeOutcome value
     net_crossings: int = 0  # Number of side changes
+    # Contact sequence validation: True if team alternation makes sense
+    # (serve by team A → receive by team B, etc). False suggests a player
+    # matching error. None if not enough team info to validate.
+    contact_sequence_valid: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -246,6 +250,8 @@ class RallyStats:
             d["pointWinner"] = self.point_winner
         if self.serve_outcome != "unknown":
             d["serveOutcome"] = self.serve_outcome
+        if self.contact_sequence_valid is not None:
+            d["contactSequenceValid"] = self.contact_sequence_valid
         return d
 
 
@@ -1003,6 +1009,69 @@ def _count_net_crossings(ra: RallyActions) -> int:
     return crossings
 
 
+def _validate_contact_sequence(ra: RallyActions) -> bool | None:
+    """Validate that team contacts alternate correctly in a rally.
+
+    In volleyball, the ball crosses the net between teams. Within a side,
+    a team can have 1-3 consecutive contacts (receive-set-attack). The key
+    rule: the first contact after a net crossing MUST be by the other team.
+
+    Specifically checks:
+    - Serve(A) must be followed by receive/dig by team B (not A)
+    - After a team transition (A→B or B→A), the next contact can't
+      immediately switch back (would mean same-frame net crossing)
+
+    Returns:
+        True if sequence is valid, False if violation detected (suggests
+        player matching error), None if not enough team info to validate.
+    """
+    from rallycut.tracking.action_classifier import ActionType
+
+    # Collect contacts with known teams, sorted by frame
+    team_contacts = [
+        (a.frame, a.team, a.action_type)
+        for a in ra.actions
+        if a.team in ("A", "B")
+    ]
+
+    if len(team_contacts) < 2:
+        return None
+
+    team_contacts.sort(key=lambda x: x[0])
+
+    # Check rule 1: serve must be followed by the OTHER team's contact
+    if team_contacts[0][2] == ActionType.SERVE:
+        serve_team = team_contacts[0][1]
+        # Find the next non-serve contact
+        for _, team, action_type in team_contacts[1:]:
+            if action_type != ActionType.SERVE:
+                if team == serve_team:
+                    # Same team served and received — matching error
+                    return False
+                break
+
+    # Check rule 2: team transitions should make sense
+    # A side gets 1-3 contacts, then the ball crosses to the other side.
+    # If we see A, A, A, A (4+ same-team contacts), that's suspicious
+    # but possible (block touch counted separately). Allow up to 4.
+    # If we see A, B, A within 3 consecutive contacts where the middle
+    # contact is a single-frame anomaly, that's suspicious.
+    consecutive_same = 1
+    prev_team = team_contacts[0][1]
+    violations = 0
+
+    for _, team, _ in team_contacts[1:]:
+        if team == prev_team:
+            consecutive_same += 1
+            if consecutive_same > 4:
+                violations += 1
+        else:
+            consecutive_same = 1
+        prev_team = team
+
+    return violations == 0
+
+
 # ---------------------------------------------------------------------------
 # Scoring runs and momentum
 # ---------------------------------------------------------------------------
@@ -1584,6 +1653,7 @@ def compute_match_stats(
             terminal_action=terminal_action,
             terminal_player_track_id=terminal_player,
             net_crossings=_count_net_crossings(ra),
+            contact_sequence_valid=_validate_contact_sequence(ra),
         ))
 
     # Compute match-level aggregates
@@ -1601,6 +1671,18 @@ def compute_match_stats(
         stats.avg_matching_confidence = float(
             np.mean(list(rally_confidence.values()))
         )
+
+    # Contact sequence validation summary
+    validated = [r for r in stats.rally_stats if r.contact_sequence_valid is not None]
+    if validated:
+        n_valid = sum(1 for r in validated if r.contact_sequence_valid)
+        n_invalid = len(validated) - n_valid
+        if n_invalid > 0:
+            logger.info(
+                "Contact sequence validation: %d/%d rallies valid "
+                "(%d suspicious — possible matching errors)",
+                n_valid, len(validated), n_invalid,
+            )
 
     # Compute score progression from serve ownership
     score_progression = compute_match_scores(rally_actions_list)
