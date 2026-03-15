@@ -1609,6 +1609,23 @@ class PlayerTracker:
                             f"{global_result.skip_reason}"
                         )
 
+                # Step 4d: Court-side repair for cross-team switches
+                # Uses both self-computed and upstream court splits.
+                if len(primary_track_ids) >= 4:
+                    from rallycut.tracking.court_side_repair import (
+                        repair_cross_team_court_violations,
+                    )
+
+                    positions, _num_court_repairs = (
+                        repair_cross_team_court_violations(
+                            positions,
+                            primary_track_ids,
+                            color_store=color_store,
+                            upstream_court_split_y=split_y,
+                            upstream_team_assignments=team_assignments,
+                        )
+                    )
+
             # Step 5: Compute quality report
             quality_report = None
             if filter_enabled:
