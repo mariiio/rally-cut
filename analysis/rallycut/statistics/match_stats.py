@@ -119,6 +119,8 @@ class PlayerStats:
     # Frames active
     num_frames: int = 0
     court_side: str = "unknown"  # Primary court side ("near" or "far")
+    # Cross-rally matching confidence (0-1, average across rallies with actions)
+    matching_confidence: float = 0.0
 
     @property
     def total_actions(self) -> int:
@@ -159,6 +161,7 @@ class PlayerStats:
             "avgSpeedPxPerFrame": round(self.avg_speed_px_per_frame, 4),
             "numFrames": self.num_frames,
             "courtSide": self.court_side,
+            "matchingConfidence": round(self.matching_confidence, 3),
         }
         if self.total_distance_m > 0:
             result["totalDistanceM"] = round(self.total_distance_m, 1)
@@ -410,6 +413,8 @@ class MatchStats:
     final_score_a: int = 0
     final_score_b: int = 0
     momentum_shifts: int = 0  # Times scoring momentum changes teams
+    # Cross-rally matching confidence (average across all rallies)
+    avg_matching_confidence: float = 0.0
     # Calibration
     is_calibrated: bool = False
     # Video metadata
@@ -426,6 +431,7 @@ class MatchStats:
             "avgContactsPerRally": round(self.avg_contacts_per_rally, 1),
             "sideOutRate": round(self.side_out_rate, 3),
             "isCalibrated": self.is_calibrated,
+            "avgMatchingConfidence": round(self.avg_matching_confidence, 3),
             "playerStats": [p.to_dict() for p in self.player_stats],
             "rallyStats": [r.to_dict() for r in self.rally_stats],
         }
@@ -1457,6 +1463,18 @@ def compute_match_stats(
     for ra in rally_actions_list:
         merged_team_assignments.update(ra.team_assignments)
 
+    # Build per-rally assignment confidence from match_analysis
+    rally_confidence: dict[str, float] = {}
+    if match_analysis and isinstance(match_analysis.get("rallies"), list):
+        for rally_info in match_analysis["rallies"]:
+            rid = rally_info.get("rallyId", rally_info.get("rally_id", ""))
+            conf = rally_info.get(
+                "assignmentConfidence",
+                rally_info.get("assignment_confidence", 0.0),
+            )
+            if rid:
+                rally_confidence[rid] = float(conf)
+
     # Compute per-player stats
     for track_id in sorted(all_track_ids):
         # Derive team from merged assignments
@@ -1504,6 +1522,18 @@ def compute_match_stats(
         player.position_heatmap = compute_position_heatmap(
             player_positions, track_id
         )
+
+        # Compute per-player matching confidence: average confidence
+        # across rallies where this player has actions.
+        player_rally_confs: list[float] = []
+        for ra in rally_actions_list:
+            has_action = any(
+                a.player_track_id == track_id for a in ra.actions
+            )
+            if has_action and ra.rally_id in rally_confidence:
+                player_rally_confs.append(rally_confidence[ra.rally_id])
+        if player_rally_confs:
+            player.matching_confidence = float(np.mean(player_rally_confs))
 
         stats.player_stats.append(player)
 
@@ -1565,6 +1595,12 @@ def compute_match_stats(
         stats.avg_rally_duration_s = float(np.mean(durations))
         stats.longest_rally_duration_s = max(durations)
         stats.avg_contacts_per_rally = stats.total_contacts / stats.total_rallies
+
+    # Average matching confidence across all rallies
+    if rally_confidence:
+        stats.avg_matching_confidence = float(
+            np.mean(list(rally_confidence.values()))
+        )
 
     # Compute score progression from serve ownership
     score_progression = compute_match_scores(rally_actions_list)
