@@ -126,12 +126,12 @@ function PlayerStatsTable({ stats, playerNames }: { stats: MatchStats; playerNam
           </TableHead>
           <TableBody>
             {players.map((p) => {
-              const name = playerNames[String(p.trackId)];
+              const name = playerNames[String(p.playerId)];
               return (
-              <TableRow key={p.trackId}>
+              <TableRow key={p.playerId}>
                 <TableCell>
                   <Chip
-                    label={name || `T${p.trackId}`}
+                    label={name || `P${p.playerId}`}
                     size="small"
                     color={p.team === 'A' ? 'primary' : p.team === 'B' ? 'secondary' : 'default'}
                     sx={{ height: 18, fontSize: '0.65rem' }}

@@ -48,7 +48,7 @@ export interface MatchStatsResult {
   avgContactsPerRally: number;
   sideOutRate: number;
   playerStats: Array<{
-    trackId: number;
+    playerId: number;
     team: string;
     serves: number;
     receives: number;
@@ -94,7 +94,7 @@ export interface MatchStatsResult {
     numContacts: number;
     actionSequence: string[];
     terminalAction?: string;
-    terminalPlayerTrackId?: number;
+    terminalPlayerId?: number;
     pointWinner?: string;
     servingSide: string;
   }>;
@@ -523,5 +523,21 @@ export async function getMatchStats(
     throw new ForbiddenError('You do not have permission to view match stats for this video');
   }
 
-  return (video.matchStatsJson as unknown as MatchStatsResult) ?? null;
+  const stats = (video.matchStatsJson as unknown as MatchStatsResult) ?? null;
+  if (stats) {
+    // Normalize old DB rows that used trackId → playerId
+    for (const p of stats.playerStats ?? []) {
+      if (!('playerId' in p) && 'trackId' in p) {
+        (p as any).playerId = (p as any).trackId;
+        delete (p as any).trackId;
+      }
+    }
+    for (const r of stats.rallyStats ?? []) {
+      if (!('terminalPlayerId' in r) && 'terminalPlayerTrackId' in r) {
+        (r as any).terminalPlayerId = (r as any).terminalPlayerTrackId;
+        delete (r as any).terminalPlayerTrackId;
+      }
+    }
+  }
+  return stats;
 }

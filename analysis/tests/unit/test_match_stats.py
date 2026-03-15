@@ -59,14 +59,14 @@ class TestPlayerStats:
 
     def test_total_actions(self) -> None:
         """total_actions sums all action counts."""
-        ps = PlayerStats(track_id=1, serves=2, receives=3, sets=1, attacks=4, blocks=1, digs=2)
+        ps = PlayerStats(player_id=1, serves=2, receives=3, sets=1, attacks=4, blocks=1, digs=2)
         assert ps.total_actions == 13
 
     def test_to_dict(self) -> None:
         """to_dict produces expected keys."""
-        ps = PlayerStats(track_id=1, serves=2, attacks=3)
+        ps = PlayerStats(player_id=1, serves=2, attacks=3)
         d = ps.to_dict()
-        assert d["trackId"] == 1
+        assert d["playerId"] == 1
         assert d["serves"] == 2
         assert d["attacks"] == 3
         assert d["totalActions"] == 5
@@ -124,14 +124,14 @@ class TestComputePositionHeatmap:
 
     def test_empty_track(self) -> None:
         """Empty positions return zero grid."""
-        heatmap = compute_position_heatmap([], track_id=1)
+        heatmap = compute_position_heatmap([], player_id=1)
         assert len(heatmap) == 10
         assert all(all(v == 0.0 for v in row) for row in heatmap)
 
     def test_single_position_concentrated(self) -> None:
         """Single position creates single cell with 1.0."""
         positions = [_pp(0, 1, 0.5, 0.5)]
-        heatmap = compute_position_heatmap(positions, track_id=1)
+        heatmap = compute_position_heatmap(positions, player_id=1)
         total = sum(sum(row) for row in heatmap)
         assert abs(total - 1.0) < 0.001  # Normalized to 1.0
 
@@ -141,7 +141,7 @@ class TestComputePositionHeatmap:
             _pp(0, 1, 0.1, 0.1),
             _pp(1, 1, 0.9, 0.9),
         ]
-        heatmap = compute_position_heatmap(positions, track_id=1)
+        heatmap = compute_position_heatmap(positions, player_id=1)
         total = sum(sum(row) for row in heatmap)
         assert abs(total - 1.0) < 0.001
         # Two cells should each have 0.5
@@ -154,7 +154,7 @@ class TestComputePositionHeatmap:
             _pp(0, 1, 0.5, 0.5),
             _pp(0, 2, 0.1, 0.1),
         ]
-        heatmap = compute_position_heatmap(positions, track_id=1)
+        heatmap = compute_position_heatmap(positions, player_id=1)
         # Only one position counted
         non_zero = sum(1 for row in heatmap for v in row if v > 0)
         assert non_zero == 1
@@ -202,7 +202,7 @@ class TestComputeMatchStats:
         positions = self._make_player_positions()
         stats = compute_match_stats(actions, positions)
 
-        player_map = {p.track_id: p for p in stats.player_stats}
+        player_map = {p.player_id: p for p in stats.player_stats}
         assert player_map[1].serves == 1
         assert player_map[1].sets == 1
         assert player_map[3].serves == 1
@@ -239,7 +239,7 @@ class TestComputeMatchStats:
         positions = self._make_player_positions()
         stats = compute_match_stats(actions, positions)
 
-        player_map = {p.track_id: p for p in stats.player_stats}
+        player_map = {p.player_id: p for p in stats.player_stats}
         assert player_map[1].court_side == "near"  # y=0.7
         assert player_map[3].court_side == "far"   # y=0.3
 
@@ -537,7 +537,7 @@ class TestTeamStatsAggregation:
         stats = compute_match_stats([rally], positions)
 
         # Check player team labels
-        player_map = {p.track_id: p for p in stats.player_stats}
+        player_map = {p.player_id: p for p in stats.player_stats}
         assert player_map[1].team == "A"
         assert player_map[2].team == "A"
         assert player_map[3].team == "B"
