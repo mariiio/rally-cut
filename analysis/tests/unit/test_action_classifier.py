@@ -16,7 +16,9 @@ from rallycut.tracking.action_classifier import (
     _infer_serve_side,
     _is_ball_on_serve_side,
     _make_synthetic_serve,
+    _reattribute_server_exclusion,
     classify_rally_actions,
+    reattribute_players,
     repair_action_sequence,
 )
 from rallycut.tracking.ball_tracker import BallPosition
@@ -1526,3 +1528,66 @@ class TestServerExclusion:
 
         recv_action = next(a for a in result.actions if a.action_type == ActionType.RECEIVE)
         assert recv_action.player_track_id == 1  # Kept (no alternatives)
+
+
+class TestReattributeServerExclusion:
+    """Tests for post-classification server exclusion pass."""
+
+    def _ca(
+        self, action_type: ActionType, frame: int,
+        player: int = 1, court_side: str = "near",
+    ) -> ClassifiedAction:
+        return ClassifiedAction(
+            action_type=action_type, frame=frame,
+            ball_x=0.5, ball_y=0.5, velocity=0.02,
+            player_track_id=player, court_side=court_side,
+            confidence=0.9,
+        )
+
+    def test_fixes_receive_with_server_tid(self) -> None:
+        """Post-pass catches receive attributed to server."""
+        actions = [
+            self._ca(ActionType.SERVE, 10, player=1, court_side="near"),
+            self._ca(ActionType.RECEIVE, 40, player=1, court_side="far"),
+        ]
+        contacts = [
+            _contact(10, player_track_id=1),
+            _contact(40, player_track_id=1),
+        ]
+        contacts[1].player_candidates = [(1, 0.05), (3, 0.08)]
+
+        n = _reattribute_server_exclusion(actions, contacts)
+        assert n == 1
+        assert actions[1].player_track_id == 3
+
+    def test_no_change_when_different_player(self) -> None:
+        """No change when receive already has different player."""
+        actions = [
+            self._ca(ActionType.SERVE, 10, player=1, court_side="near"),
+            self._ca(ActionType.RECEIVE, 40, player=3, court_side="far"),
+        ]
+        contacts = [
+            _contact(10, player_track_id=1),
+            _contact(40, player_track_id=3),
+        ]
+        contacts[1].player_candidates = [(3, 0.05), (1, 0.10)]
+
+        n = _reattribute_server_exclusion(actions, contacts)
+        assert n == 0
+        assert actions[1].player_track_id == 3
+
+    def test_works_without_team_data(self) -> None:
+        """Server exclusion works via reattribute_players even without teams."""
+        actions = [
+            self._ca(ActionType.SERVE, 10, player=1, court_side="near"),
+            self._ca(ActionType.RECEIVE, 40, player=1, court_side="far"),
+        ]
+        contacts = [
+            _contact(10, player_track_id=1),
+            _contact(40, player_track_id=1),
+        ]
+        contacts[1].player_candidates = [(1, 0.05), (3, 0.08)]
+
+        # Call reattribute_players with no team data — server exclusion still fires
+        reattribute_players(actions, contacts, team_assignments=None)
+        assert actions[1].player_track_id == 3
