@@ -1791,9 +1791,9 @@ def compute_match_stats(
                 rally_confidence[rid] = float(conf)
 
     # Contact sequence correction: for rallies with invalid team
-    # alternation, try swapping one cross-team track pair. If exactly
-    # one swap fixes the sequence, apply the corrected team labels.
-    # This uses volleyball rules (not appearance) to fix matching errors.
+    # alternation, apply layered fix strategy (serve-receive flip →
+    # consecutive-run flip → track swap). Only applies when exactly one
+    # fix is unambiguous. Uses volleyball rules, not appearance.
     corrections_applied = 0
     for ra in rally_actions_list:
         if _validate_contact_sequence(ra) is False:

@@ -751,8 +751,7 @@ class TestFixConsecutiveRun:
             rally_id="ambiguous",
         )
         fix = _try_fix_consecutive_run(ra)
-        # Only 1 unique track, so all flips produce same map — should find 1
-        # Actually with 1 track, flipping it makes all B — still 5 consecutive
+        # Only 1 unique track — flipping it makes all B, still 5+ consecutive.
         assert fix is None
 
 

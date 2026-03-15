@@ -540,6 +540,7 @@ class ActionClassifier:
         for i, contact in enumerate(contacts):
             action_type = ActionType.UNKNOWN
             confidence = self.config.low_confidence
+            player_tid = contact.player_track_id
 
             # Check for block (must be at net, immediately after opponent's attack)
             if (
@@ -707,14 +708,16 @@ class ActionClassifier:
 
                 # Server can't receive their own serve — re-attribute to
                 # next-nearest candidate if the nearest player is the server.
+                # Use local variable to avoid mutating the Contact object.
+                player_tid = contact.player_track_id
                 if (
-                    contact.player_track_id == serve_track_id
+                    player_tid == serve_track_id
                     and serve_track_id >= 0
                     and contact.player_candidates
                 ):
                     for cand_tid, _cand_dist in contact.player_candidates:
                         if cand_tid != serve_track_id:
-                            contact.player_track_id = cand_tid
+                            player_tid = cand_tid
                             break
 
             elif contact_count_on_side == 1:
@@ -743,7 +746,7 @@ class ActionClassifier:
                 ball_x=contact.ball_x,
                 ball_y=contact.ball_y,
                 velocity=contact.velocity,
-                player_track_id=contact.player_track_id,
+                player_track_id=player_tid,
                 court_side=contact.court_side,
                 confidence=confidence,
             ))
