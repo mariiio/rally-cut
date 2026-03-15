@@ -1114,7 +1114,146 @@ def _validate_with_teams(
     return True
 
 
-def _try_fix_contact_sequence(ra: RallyActions) -> dict[int, str] | None:
+def _try_fix_serve_receive(ra: RallyActions) -> dict[int, str] | None:
+    """Fix serve-receive same-team violations (Rule 1).
+
+    In volleyball, the serve is always received by the other team. If
+    serve(A) is followed by a non-serve contact also on team A, the
+    receiver's team must be wrong. This is the highest-confidence fix
+    because it's a hard volleyball rule, not a heuristic.
+
+    Strategy: flip the receiver's track to the other team and validate.
+    Only applies when the receiver is on a *different* track than the
+    server (same-track serve+receive is an attribution error we can't
+    fix by team flipping).
+
+    Returns:
+        Corrected {track_id: team_label} mapping, or None if not applicable.
+    """
+    from rallycut.tracking.action_classifier import ActionType
+
+    team_contacts = [
+        (a.frame, a.team, a.action_type, a.player_track_id)
+        for a in ra.actions
+        if a.team in ("A", "B")
+    ]
+    if len(team_contacts) < 2:
+        return None
+
+    team_contacts.sort(key=lambda x: x[0])
+
+    # Check rule 1: serve team == next non-serve team
+    if team_contacts[0][2] != ActionType.SERVE:
+        return None
+
+    serve_team = team_contacts[0][1]
+    serve_tid = team_contacts[0][3]
+    receiver_tid: int | None = None
+
+    for _, team, action_type, tid in team_contacts[1:]:
+        if action_type != ActionType.SERVE:
+            if team == serve_team and tid != serve_tid:
+                receiver_tid = tid
+            break
+
+    if receiver_tid is None:
+        return None
+
+    # Build map with the receiver's track flipped
+    current_map: dict[int, str] = {}
+    for a in ra.actions:
+        if a.player_track_id >= 0 and a.team in ("A", "B"):
+            current_map[a.player_track_id] = a.team
+
+    trial = dict(current_map)
+    other_team = "B" if serve_team == "A" else "A"
+    trial[receiver_tid] = other_team
+
+    result = _validate_with_teams(ra.actions, trial)
+    if result is True:
+        return trial
+
+    return None
+
+
+def _try_fix_consecutive_run(ra: RallyActions) -> dict[int, str] | None:
+    """Fix 5+ consecutive same-team violations (Rule 2).
+
+    When a team has 5+ consecutive contacts, one contact likely has the
+    wrong team. Try flipping each contact's track to the other team one
+    at a time and check if the sequence becomes valid.
+
+    Only applies the fix when exactly one single-contact flip resolves
+    all violations (unambiguous correction).
+
+    Returns:
+        Corrected {track_id: team_label} mapping, or None if no unique fix.
+    """
+    team_contacts = [
+        (a.frame, a.team, a.action_type, a.player_track_id)
+        for a in ra.actions
+        if a.team in ("A", "B")
+    ]
+    if len(team_contacts) < 5:
+        return None
+
+    team_contacts.sort(key=lambda x: x[0])
+
+    # Build current track→team mapping
+    current_map: dict[int, str] = {}
+    for a in ra.actions:
+        if a.player_track_id >= 0 and a.team in ("A", "B"):
+            current_map[a.player_track_id] = a.team
+
+    # Find contacts in consecutive runs > 4
+    candidates: set[int] = set()
+    consecutive = 1
+    prev_team = team_contacts[0][1]
+    run_start = 0
+
+    for i, (_, team, _, _) in enumerate(team_contacts[1:], 1):
+        if team == prev_team:
+            consecutive += 1
+            if consecutive > 4:
+                # All contacts in this run are candidates for flipping
+                for j in range(run_start, i + 1):
+                    candidates.add(j)
+        else:
+            consecutive = 1
+            run_start = i
+        prev_team = team
+
+    if not candidates:
+        return None
+
+    # Try flipping each candidate contact's track individually
+    valid_fixes: list[dict[int, str]] = []
+    seen_maps: set[tuple[tuple[int, str], ...]] = set()
+
+    for idx in candidates:
+        tid = team_contacts[idx][3]
+        other_team = "B" if team_contacts[idx][1] == "A" else "A"
+
+        trial = dict(current_map)
+        trial[tid] = other_team
+
+        # Deduplicate: same track may appear multiple times in the run
+        key = tuple(sorted(trial.items()))
+        if key in seen_maps:
+            continue
+        seen_maps.add(key)
+
+        result = _validate_with_teams(ra.actions, trial)
+        if result is True:
+            valid_fixes.append(trial)
+
+    if len(valid_fixes) == 1:
+        return valid_fixes[0]
+
+    return None
+
+
+def _try_fix_track_swap(ra: RallyActions) -> dict[int, str] | None:
     """Try to fix an invalid contact sequence by swapping cross-team tracks.
 
     For each pair of tracks from different teams, try swapping their team
@@ -1159,6 +1298,24 @@ def _try_fix_contact_sequence(ra: RallyActions) -> dict[int, str] | None:
 
     # Multiple fixes or no fix — ambiguous, don't correct
     return None
+
+
+def _try_fix_contact_sequence(ra: RallyActions) -> dict[int, str] | None:
+    """Try to fix an invalid contact sequence using layered strategies.
+
+    Strategies are tried in order of confidence:
+    1. Serve-receive fix — flip receiver's team (volleyball rule guarantee)
+    2. Consecutive-run fix — flip one contact in a 5+ same-team run
+    3. Track swap — swap one cross-team track pair (original approach)
+
+    Returns:
+        Corrected {track_id: team_label} mapping, or None if no fix found.
+    """
+    return (
+        _try_fix_serve_receive(ra)
+        or _try_fix_consecutive_run(ra)
+        or _try_fix_track_swap(ra)
+    )
 
 
 # ---------------------------------------------------------------------------
