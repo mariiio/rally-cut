@@ -491,8 +491,6 @@ class MatchPlayerTracker:
         """Classify tracks into near/far court with soft labels.
 
         Priority: team_assignments (from tracking pipeline) > court_split_y > median.
-        team_assignments are reliable because they use bbox size clustering
-        (near players have larger bboxes), not Y position alone.
 
         Args:
             track_stats: Appearance stats per track.
@@ -930,10 +928,11 @@ class MatchPlayerTracker:
         """Detect side switches via combinatorial search.
 
         Two-phase approach:
-          Phase A: Generate candidate switch points from ball trajectory
-            direction and appearance preference sign changes. Try all 2^K
-            combinations (K≤8), scoring by normalized pairwise team
-            appearance preferences with parsimony penalty.
+          Phase A: Dense candidate search — every rally position is a
+            candidate. Appearance preference sign changes are used to
+            prioritize when >8 candidates. Try all 2^K combinations
+            (K≤8), scoring by normalized pairwise team appearance
+            preferences with parsimony penalty.
           Phase B: Refine each detected switch ±1 rally, keeping shifts
             that improve the score or align with serve direction changes.
 
@@ -948,8 +947,7 @@ class MatchPlayerTracker:
         if n < 3:
             return []
 
-        # Step 1: Build pairwise team preference matrix (needed for both
-        # candidate generation and scoring).
+        # Step 1: Build pairwise team preference matrix.
         # For each pair of rallies, compute preference for "same orientation"
         # vs "opposite orientation" using raw track-to-track comparison.
         # Preference > 0 means same orientation preferred.
@@ -1024,67 +1022,55 @@ class MatchPlayerTracker:
                 norm_pref[a, b] = val
                 norm_pref[b, a] = val
 
-        # Step 3: Generate candidate switch points from two sources.
-        # Source A: Ball trajectory — consecutive same-direction serves.
-        serve_dirs = [d.serve_direction for d in self.stored_rally_data]
-        ball_candidates: list[int] = []
-        prev_dir = None
-        for i, d in enumerate(serve_dirs):
-            if d != "?" and prev_dir is not None and prev_dir != "?":
-                if d == prev_dir:
-                    ball_candidates.append(i)
-            if d != "?":
-                prev_dir = d
+        # Step 3: Dense candidate generation — every rally is a candidate.
+        # The scorer handles filtering; no need to predict switch positions.
+        # When >8 candidates, prioritize appearance sign changes for coverage.
+        candidates = list(range(1, n))
 
-        # Source B: Appearance — adjacent rallies where the average
-        # normalized preference with earlier rallies flips sign compared
-        # to the previous rally. This catches switches invisible to ball
-        # direction (e.g., alternating serves across a switch point).
-        appearance_candidates: list[int] = []
-        if n >= 4:
-            # For each rally, compute average norm_pref with all prior rallies
-            avg_pref_with_prior = np.zeros(n)
-            for k in range(1, n):
-                vals = [norm_pref[k, j] for j in range(k) if norm_pref[k, j] != 0.0]
-                if vals:
-                    avg_pref_with_prior[k] = float(np.mean(vals))
-
-            # Rally 1 special case: if strongly negative with rally 0,
-            # it's a candidate for early switch (loop below starts at k=2).
-            if avg_pref_with_prior[1] < -0.01:
-                appearance_candidates.append(1)
-
-            for k in range(2, n):
-                prev_val = avg_pref_with_prior[k - 1]
-                curr_val = avg_pref_with_prior[k]
-                # Sign flip with sufficient magnitude on both sides
-                if (prev_val > 0.01 and curr_val < -0.01) or (
-                    prev_val < -0.01 and curr_val > 0.01
-                ):
-                    appearance_candidates.append(k)
-
-        # Merge and deduplicate.
-        candidates = sorted(set(ball_candidates) | set(appearance_candidates))
-
-        if not candidates:
-            logger.info("Side switch search: no candidates")
-            return []
-
-        # Phase A cap: keep ≤8 candidates (2^8 = 256 combos).
-        # Phase B (after scoring) refines each switch ±1 for exact boundary.
         if len(candidates) > 8:
-            logger.info(
-                "Side switch search: %d candidates, capping at 8",
-                len(candidates),
-            )
-            # Evenly-spaced selection to preserve coverage across the video
-            step = (len(candidates) - 1) / 7
-            indices = sorted({round(i * step) for i in range(8)})
-            candidates = [candidates[i] for i in indices]
+            # Prioritize appearance-based candidates (sign changes in
+            # normalized preference with prior rallies).
+            priority: list[int] = []
+            if n >= 4:
+                avg_pref_with_prior = np.zeros(n)
+                for k in range(1, n):
+                    vals = [
+                        norm_pref[k, j]
+                        for j in range(k) if norm_pref[k, j] != 0.0
+                    ]
+                    if vals:
+                        avg_pref_with_prior[k] = float(np.mean(vals))
+
+                if avg_pref_with_prior[1] < -0.01:
+                    priority.append(1)
+
+                for k in range(2, n):
+                    prev_val = avg_pref_with_prior[k - 1]
+                    curr_val = avg_pref_with_prior[k]
+                    if (prev_val > 0.01 and curr_val < -0.01) or (
+                        prev_val < -0.01 and curr_val > 0.01
+                    ):
+                        priority.append(k)
+
+            # Fill remaining slots with evenly-spaced positions
+            remaining = [c for c in candidates if c not in set(priority)]
+            if len(priority) >= 8:
+                candidates = priority[:8]
+            else:
+                slots = 8 - len(priority)
+                if remaining:
+                    step = max(1, (len(remaining) - 1) / max(1, slots - 1))
+                    indices = sorted({min(round(i * step), len(remaining) - 1)
+                                      for i in range(slots)})
+                    candidates = sorted(
+                        set(priority) | {remaining[i] for i in indices}
+                    )
+                else:
+                    candidates = priority[:8]
 
         logger.info(
-            "Side switch search: %d candidates at %s (ball=%s, appearance=%s)",
-            len(candidates), candidates, ball_candidates, appearance_candidates,
+            "Side switch search: %d candidates at %s",
+            len(candidates), candidates,
         )
 
         # Step 4: Score partition using normalized preferences.
@@ -1164,6 +1150,7 @@ class MatchPlayerTracker:
 
             # Build set of rally indices where serve direction changes
             # (used for Phase B tie-breaking only).
+            serve_dirs = [d.serve_direction for d in self.stored_rally_data]
             direction_changes: set[int] = set()
             for i in range(1, n):
                 if (
