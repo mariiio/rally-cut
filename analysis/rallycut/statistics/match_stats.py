@@ -1755,23 +1755,35 @@ def compute_match_stats(
     court_split_y = _get_court_split_y(rally_actions_list)
     player_x_bounds = _get_player_x_bounds(player_positions)
 
-    # Collect all unique player IDs from actions
-    all_player_ids: set[int] = set()
-    for ra in rally_actions_list:
-        for action in ra.actions:
-            if action.player_track_id >= 0:
-                all_player_ids.add(action.player_track_id)
+    # Determine the set of valid player IDs.
+    # After the remap pipeline, global player IDs are always 1-4.
+    # Stray unmapped tracker IDs (e.g. 101, 17) come from brief extra
+    # detections and should be excluded from stats.
+    has_remap = match_analysis is not None and isinstance(
+        match_analysis.get("rallies"), list,
+    )
+    if has_remap:
+        # Post-remap: only include the canonical player IDs 1-4
+        all_player_ids: set[int] = {1, 2, 3, 4}
+    else:
+        # No remap (single-rally or pre-match-analysis): discover from data
+        all_player_ids = set()
+        for ra in rally_actions_list:
+            for action in ra.actions:
+                if action.player_track_id >= 0:
+                    all_player_ids.add(action.player_track_id)
 
-    # Also add player IDs from player positions (may have players without actions)
-    player_frame_counts: dict[int, int] = {}
-    for p in player_positions:
-        if p.track_id >= 0:
-            player_frame_counts[p.track_id] = player_frame_counts.get(p.track_id, 0) + 1
+        player_frame_counts: dict[int, int] = {}
+        for p in player_positions:
+            if p.track_id >= 0:
+                player_frame_counts[p.track_id] = (
+                    player_frame_counts.get(p.track_id, 0) + 1
+                )
 
-    # Keep top 4 by frame count (beach volleyball = 4 players)
-    sorted_tracks = sorted(player_frame_counts.items(), key=lambda x: -x[1])
-    for player_id, _ in sorted_tracks[:4]:
-        all_player_ids.add(player_id)
+        # Keep top 4 by frame count (beach volleyball = 4 players)
+        sorted_tracks = sorted(player_frame_counts.items(), key=lambda x: -x[1])
+        for player_id, _ in sorted_tracks[:4]:
+            all_player_ids.add(player_id)
 
     # Build a merged team_assignments from all rallies
     merged_team_assignments: dict[int, int] = {}
