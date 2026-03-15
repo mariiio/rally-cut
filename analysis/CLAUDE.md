@@ -472,8 +472,8 @@ Maintains consistent player IDs (1-4) across a match using appearance-based matc
 **How it works:**
 1. For each rally, sample ~12 video frames per primary track
 2. Extract appearance features: HS + V histograms for upper body (t-shirt) and lower body (shorts), dominant clothing color, skin tone HSV — all with skin pixel exclusion
-3. **Pass 1:** Sequential Hungarian assignment matching tracks to accumulated player profiles, with position continuity and confidence-gated profile updates
-4. **Pass 2 stage 0:** Combinatorial side switch detection — uses ball trajectory direction to find candidate switch points, scores all 2^K combinations using normalized pairwise team appearance preferences
+3. **Pass 1:** Sequential Hungarian assignment matching tracks to accumulated player profiles, with position continuity and confidence-gated profile updates (gate=0.80)
+4. **Pass 2 stage 0:** Combinatorial side switch detection — dense candidate search with appearance-based prioritization, scores all 2^K combinations using normalized pairwise team appearance preferences, Phase B refinement uses serve direction changes as tiebreaker
 5. **Pass 2 stage 1:** Re-score all rallies with final profiles (frozen) for better cross-team assignment
 6. **Pass 2 stage 2:** Global within-team pairwise voting — compares raw track features across all rally pairs to find the globally consistent within-team ordering, avoiding profile corruption cascade
 
