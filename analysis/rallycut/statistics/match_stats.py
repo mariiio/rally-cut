@@ -1072,6 +1072,95 @@ def _validate_contact_sequence(ra: RallyActions) -> bool | None:
     return violations == 0
 
 
+def _validate_with_teams(
+    actions: list[ClassifiedAction],
+    team_map: dict[int, str],
+) -> bool | None:
+    """Validate contact sequence with a given track→team mapping."""
+    from rallycut.tracking.action_classifier import ActionType
+
+    team_contacts = [
+        (a.frame, team_map.get(a.player_track_id, "unknown"), a.action_type)
+        for a in actions
+        if team_map.get(a.player_track_id, "unknown") in ("A", "B")
+    ]
+
+    if len(team_contacts) < 2:
+        return None
+
+    team_contacts.sort(key=lambda x: x[0])
+
+    # Serve → next contact must be other team
+    if team_contacts[0][2] == ActionType.SERVE:
+        serve_team = team_contacts[0][1]
+        for _, team, action_type in team_contacts[1:]:
+            if action_type != ActionType.SERVE:
+                if team == serve_team:
+                    return False
+                break
+
+    # No 5+ consecutive same-team contacts
+    consecutive = 1
+    prev_team = team_contacts[0][1]
+    for _, team, _ in team_contacts[1:]:
+        if team == prev_team:
+            consecutive += 1
+            if consecutive > 4:
+                return False
+        else:
+            consecutive = 1
+        prev_team = team
+
+    return True
+
+
+def _try_fix_contact_sequence(ra: RallyActions) -> dict[int, str] | None:
+    """Try to fix an invalid contact sequence by swapping cross-team tracks.
+
+    For each pair of tracks from different teams, try swapping their team
+    assignments and check if the contact sequence becomes valid. If exactly
+    one swap fixes the sequence, return the corrected track→team mapping.
+
+    Returns:
+        Corrected {track_id: team_label} mapping, or None if no unique fix.
+    """
+    # Build current track→team mapping
+    current_map: dict[int, str] = {}
+    for a in ra.actions:
+        if a.player_track_id >= 0 and a.team in ("A", "B"):
+            current_map[a.player_track_id] = a.team
+
+    if len(current_map) < 3:
+        return None
+
+    team_a = [tid for tid, t in current_map.items() if t == "A"]
+    team_b = [tid for tid, t in current_map.items() if t == "B"]
+
+    if not team_a or not team_b:
+        return None
+
+    # Try all cross-team single swaps
+    valid_fixes: list[dict[int, str]] = []
+
+    for tid_a in team_a:
+        for tid_b in team_b:
+            # Swap tid_a and tid_b's teams
+            trial = dict(current_map)
+            trial[tid_a] = "B"
+            trial[tid_b] = "A"
+
+            result = _validate_with_teams(ra.actions, trial)
+            if result is True:
+                valid_fixes.append(trial)
+
+    if len(valid_fixes) == 1:
+        # Exactly one swap fixes the sequence — high confidence
+        return valid_fixes[0]
+
+    # Multiple fixes or no fix — ambiguous, don't correct
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Scoring runs and momentum
 # ---------------------------------------------------------------------------
@@ -1543,6 +1632,33 @@ def compute_match_stats(
             )
             if rid:
                 rally_confidence[rid] = float(conf)
+
+    # Contact sequence correction: for rallies with invalid team
+    # alternation, try swapping one cross-team track pair. If exactly
+    # one swap fixes the sequence, apply the corrected team labels.
+    # This uses volleyball rules (not appearance) to fix matching errors.
+    corrections_applied = 0
+    for ra in rally_actions_list:
+        if _validate_contact_sequence(ra) is False:
+            fix = _try_fix_contact_sequence(ra)
+            if fix is not None:
+                # Apply corrected team labels to actions
+                for action in ra.actions:
+                    if action.player_track_id in fix:
+                        action.team = fix[action.player_track_id]
+                # Update team_assignments for this rally
+                for tid, team_label in fix.items():
+                    ra.team_assignments[tid] = 0 if team_label == "A" else 1
+                corrections_applied += 1
+
+    if corrections_applied:
+        # Rebuild merged team assignments after corrections
+        merged_team_assignments.clear()
+        for ra in rally_actions_list:
+            merged_team_assignments.update(ra.team_assignments)
+        logger.info(
+            "Contact sequence correction: fixed %d rallies", corrections_applied,
+        )
 
     # Compute per-player stats
     for track_id in sorted(all_track_ids):
