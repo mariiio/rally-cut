@@ -207,9 +207,24 @@ export async function triggerRallyDetection(
   }
 
   if (video.status !== VideoStatus.UPLOADED) {
-    throw new ConflictError(
-      `Video must be in UPLOADED status to trigger detection (current: ${video.status})`
-    );
+    // Allow re-detection on DETECTED videos with no rallies (e.g. user deleted them)
+    if (video.status === VideoStatus.DETECTED) {
+      const rallyCount = await prisma.rally.count({ where: { videoId } });
+      if (rallyCount === 0) {
+        await prisma.video.update({
+          where: { id: videoId },
+          data: { status: VideoStatus.UPLOADED },
+        });
+      } else {
+        throw new ConflictError(
+          `Video already has ${rallyCount} detected rallies. Delete them first to re-run detection.`
+        );
+      }
+    } else {
+      throw new ConflictError(
+        `Video must be in UPLOADED status to trigger detection (current: ${video.status})`
+      );
+    }
   }
 
   // Check duration against tier limit

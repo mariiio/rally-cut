@@ -360,7 +360,7 @@ async function startDetection(videoId: string, set: SetFn, get: GetFn) {
   const updatePipeline = makePipelineUpdater(videoId, set);
 
   try {
-    // First check if detection is already complete
+    // If detection already complete with rallies, skip to tracking
     const pipelineStatus = await getAnalysisPipelineStatus(videoId);
     if (pipelineStatus.detection.status === 'completed' && pipelineStatus.detection.ralliesFound > 0) {
       if (await advanceAfterDetection(videoId, updatePipeline)) {
@@ -368,6 +368,7 @@ async function startDetection(videoId: string, set: SetFn, get: GetFn) {
       }
       return;
     }
+    // If detection "complete" but 0 rallies (user deleted them), fall through to re-trigger
 
     // Trigger detection
     const triggerResult = await triggerRallyDetection(videoId, 'beach');
