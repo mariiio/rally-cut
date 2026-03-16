@@ -191,13 +191,9 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
         const startSec = entry.startMs / 1000;
         const endSec = entry.endMs / 1000;
 
-        // Find editor rally for display timing (optional — match analysis times are fallback)
-        const editorRally = rallies.find((r) => r._backendId === entry.rallyId)
-          ?? rallies.find((r) => {
-            const overlap = Math.min(r.end_time, endSec) - Math.max(r.start_time, startSec);
-            return overlap > 0.5;
-          });
-        const seekStart = editorRally?.start_time ?? startSec;
+        // Always use backend startMs as seek origin — tracking frame numbers
+        // are relative to the segment extracted at startMs, not the editor rally time
+        const seekStart = startSec;
 
         // Fetch tracking data from API
         let positions: ApiPlayerPosition[] = [];
@@ -245,21 +241,20 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
           }
         }
 
-        // For each track, find the position closest to mid-rally, seek video to that
-        // frame's time, and crop. Per-track seeking handles tracks with gaps at midpoint.
-        const midFrame = Math.round((endSec - startSec) / 2 * rallyFps);
-
         for (const trackId of trackIds) {
           const pid = effectiveMapping[trackId];
           if (!pid) continue; // Not an assigned track
 
+          // Pick the frame where this player's bbox is largest (most visible).
+          // For near-side players this is similar to midpoint; for far-side
+          // players it finds the moment they're closest to the camera.
           const trackPositions = positions.filter((p) => p.trackId === trackId);
           let bestPos = trackPositions[0];
-          let bestDist = Infinity;
+          let bestArea = 0;
           for (const pos of trackPositions) {
-            const dist = Math.abs(pos.frameNumber - midFrame);
-            if (dist < bestDist) {
-              bestDist = dist;
+            const area = pos.width * pos.height;
+            if (area > bestArea) {
+              bestArea = area;
               bestPos = pos;
             }
           }
@@ -275,10 +270,14 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
           if (cancelled) break;
 
           // bbox coords are center-based normalized: x,y = center, width,height = full size
-          const sx = (bestPos.x - bestPos.width / 2) * vw;
-          const sy = (bestPos.y - bestPos.height / 2) * vh;
-          const sw = bestPos.width * vw;
-          const sh = bestPos.height * vh;
+          // Add padding so small/far-side players have more context visible
+          const pad = bestArea < 0.01 ? 0.5 : bestArea < 0.03 ? 0.25 : 0;
+          const bw = bestPos.width * (1 + pad);
+          const bh = bestPos.height * (1 + pad);
+          const sx = Math.max(0, (bestPos.x - bw / 2)) * vw;
+          const sy = Math.max(0, (bestPos.y - bh / 2)) * vh;
+          const sw = Math.min(bw * vw, vw - sx);
+          const sh = Math.min(bh * vh, vh - sy);
 
           ctx.clearRect(0, 0, CROP_WIDTH, CROP_HEIGHT);
           ctx.drawImage(video, sx, sy, sw, sh, 0, 0, CROP_WIDTH, CROP_HEIGHT);
