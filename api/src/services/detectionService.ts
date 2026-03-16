@@ -210,6 +210,7 @@ export async function triggerRallyDetection(
     // Allow re-detection on DETECTED videos — clear existing rallies and reset
     if (video.status === VideoStatus.DETECTED) {
       await prisma.rally.deleteMany({ where: { videoId } });
+      await prisma.batchTrackingJob.deleteMany({ where: { videoId } });
       await prisma.video.update({
         where: { id: videoId },
         data: { status: VideoStatus.UPLOADED },
