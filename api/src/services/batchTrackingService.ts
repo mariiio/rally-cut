@@ -11,7 +11,7 @@
  */
 
 import { spawn } from 'child_process';
-import { createWriteStream } from 'fs';
+import { mkdirSync, openSync } from 'fs';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
@@ -186,13 +186,13 @@ function spawnBatchWorker(jobId: string): void {
   // when tsx watch restarts the API, the pipe breaks and SIGPIPE kills
   // the worker (defeating the whole purpose of detaching).
   const logDir = path.join(os.tmpdir(), 'rallycut-batch-tracking');
-  fs.mkdir(logDir, { recursive: true }).catch(() => {});
+  mkdirSync(logDir, { recursive: true });
   const logPath = path.join(logDir, `batch_${jobId}.log`);
-  const logStream = createWriteStream(logPath, { flags: 'a' });
+  const logFd = openSync(logPath, 'a');
 
   const child = spawn(tsxBin, [workerScript, jobId], {
     cwd: path.resolve(__dirname, '../..'),
-    stdio: ['ignore', logStream, logStream],
+    stdio: ['ignore', logFd, logFd],
     detached: true,
     env: { ...process.env },
   });
