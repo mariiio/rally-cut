@@ -241,25 +241,7 @@ uv run rallycut train temporal-maxer --epochs 50
 
 ## Processing Heuristics
 
-The heuristics pipeline applies three post-processing heuristics to fix ML errors:
-
-1. **Confidence extension**: Extends PLAY segments at boundaries where `play_confidence > threshold`
-2. **Rally continuation**: Bridges NO_PLAY gaps within a rally (fixes mid-rally false negatives)
-3. **Density filtering**: Removes segments with sparse active windows (filters noise)
-
-**Model-specific thresholds:**
-
-| Parameter | Indoor | Beach |
-|-----------|--------|-------|
-| `min_play_duration` | 1.0s | 1.0s |
-| `rally_continuation_seconds` | 2.0s | 1.5s |
-| `boundary_confidence_threshold` | 0.35 | 0.4 |
-| `min_active_density` | 0.25 | 0.3 |
-| `min_gap_seconds` | 5.0s | 3.0s |
-
-Beach heuristics are tuned to be more discriminative (higher thresholds) to prevent over-merging of rallies.
-
-See `processing/cutter.py` and `core/config.py` for implementation.
+Fallback pipeline (57% F1) applies confidence extension, rally continuation, and density filtering. Model-specific thresholds in `MODEL_PRESETS` (`core/config.py`). Beach uses stricter thresholds to prevent over-merging. See `processing/cutter.py`.
 
 ## Cloud Services (Modal)
 
@@ -296,194 +278,25 @@ Uses YOLO for person detection with BoT-SORT for temporal tracking. BoT-SORT wit
 | yolo11m | 2.4 | 77.0% | 82.4% | 89.4% | Mid-recall regression, slow |
 | yolov8n@640 | 15.3 | 74.1% | 79.2% | 55.3% | Fastest, lowest accuracy |
 
-**Tracker Options:**
-| Tracker | ID | Strengths | Use Case |
-|---------|-----|-----------|----------|
-| **BoT-SORT** | `botsort` (default) | ReID for identity consistency, reduced ID switches | Recommended for all videos |
-| **ByteTrack** | `bytetrack` | Simpler, faster | Legacy compatibility |
-
-**Preprocessing Options:**
-| Method | ID | Description | Use Case |
-|--------|-----|-------------|----------|
-| None | `none` (default) | No preprocessing | Most videos |
-| CLAHE | `clahe` | Contrast enhancement via LAB color space | High-contrast sand backgrounds (tested, not beneficial) |
+Default tracker is BoT-SORT (ReID enabled). ByteTrack available as `--tracker bytetrack` (legacy).
 
 ```bash
-# Default tracking (yolo11s + BoT-SORT)
-uv run rallycut track-players video.mp4
-
-# Use nano model for faster tracking (lower accuracy)
-uv run rallycut track-players video.mp4 --yolo-model yolov8n
-
-# Use ByteTrack instead of BoT-SORT
-uv run rallycut track-players video.mp4 --tracker bytetrack
-
-# Tune filter parameters for edge cases
-uv run rallycut track-players video.mp4 --min-bbox-area 0.002 --min-bbox-height 0.06
-
-# Use court calibration for ROI masking + team classification
-uv run rallycut track-players video.mp4 --calibration '[{"x":0.1,"y":0.8},{"x":0.9,"y":0.8},{"x":0.7,"y":0.5},{"x":0.3,"y":0.5}]'
-# Explicit calibration ROI (also available: default, adaptive)
-uv run rallycut track-players video.mp4 --calibration '...' --court-roi calibration
-
-# Compare YOLO model sizes
-uv run rallycut evaluate-tracking compare-yolo-models --all
+uv run rallycut track-players video.mp4                          # Default (yolo11s + BoT-SORT)
+uv run rallycut track-players video.mp4 --yolo-model yolov8n     # Faster, lower accuracy
+uv run rallycut track-players video.mp4 --calibration '[...]'    # Court calibration for ROI + teams
 ```
 
 ## Player Tracking Filtering
 
-Multi-stage filtering to identify active players and exclude non-players. See `tracking/player_filter.py`.
+Multi-stage filtering to identify 4 active players and exclude non-players. Key insight: positively identify players by volleyball behaviors (ball engagement, court coverage, movement) rather than detecting "non-players". Includes stationary background removal, primary track identification with hard/soft filters and safety net, per-frame filtering, and track merging. See `tracking/player_filter.py`.
 
-**Pre-step: Stationary Background Removal:**
-Removes tracks with very low position variance (spread < 0.015) AND high presence (>80% of frames) before any post-processing. Background objects (signs, equipment) are always detected but never move; real players in ready position have ~55% presence.
+## Ball Tracking
 
-**Primary Track Identification:**
-1. **Hard filters** (must pass all):
-   - Not on sidelines (x between 0.05-0.95)
-   - Minimum presence rate (>20% of frames)
-   - Not identified as referee (sideline + low movement + no ball proximity)
-2. **Soft filters** (for ranking):
-   - Court presence <50% penalizes stability by 0.5x (was a hard gate, now soft)
-   - Stationary tracks (low spread + no ball engagement) are deprioritized but included as fallbacks
-3. **Selection priority**:
-   - Active tracks (moving or ball-engaged) with high stability
-   - Active tracks with lower stability (if needed)
-   - Stationary tracks as fallback (if still need more players)
-4. **Safety net**: if <4 tracks pass hard filters, re-admit best hard-rejected tracks (referee/low_presence). Sideline rejects are never re-admitted.
-
-**Per-Frame Filtering:**
-1. Bbox size filter (removes small background detections, keeps primary tracks)
-2. Play area filter (convex hull of ball positions, keeps primary tracks)
-3. Distractor/referee/stationary filter (hard 4-player constraint removes non-primary tracks coexisting with all players; excludes referees and stationary tracks)
-4. Two-team selection (2 players per court side by Y position)
-
-**Key insight:** Positively identify players by volleyball behaviors (ball engagement, court coverage, movement) rather than detecting "non-players".
-
-## Track Merging
-
-Merges fragmented tracker IDs using velocity prediction and position/size similarity. Thresholds are video-agnostic (seconds, normalized coordinates). BoT-SORT's ReID reduces fragmentation by maintaining identity through brief occlusions. See `tracking/player_filter.py`.
-
-## Ball Tracking Filtering
-
-Multi-stage temporal filter for ball tracking. Default raw mode applies motion energy filtering, stationarity detection, segment pruning, oscillation/blip removal, and interpolation. See `tracking/ball_filter.py`.
-
-### Ball Tracking Model
-
-WASB HRNet is the sole ball tracking model. WASB (BMVC 2023) is an HRNet fine-tuned on beach volleyball pseudo-labels. Uses ONNX+CoreML on Apple Silicon (auto-exported from PyTorch on first use). Achieves **86.4% match rate** at 29.2px error, 33 FPS on ONNX+CoreML.
-
-```python
-from rallycut.tracking import create_ball_tracker
-
-tracker = create_ball_tracker()  # WASB (only option)
-```
-
-The heatmap threshold is 0.3 (optimal for beach volleyball). The filter pipeline maximizes detection rate and match rate through post-processing (segment pruning, outlier removal, blip removal, interpolation).
-
-**Problems solved:**
-- **False positives at static positions**: The detector can detect stationary players as the ball. The motion energy filter (step 0) computes temporal intensity change in a 15x15 patch around each detection. Positions with `motion_energy < 0.02` are zeroed out.
-- **Player lock-on (stationarity)**: WASB can lock onto a player position for 12+ consecutive frames, producing nearly identical coordinates (spread < 0.5% of screen). The stationarity filter uses a sliding window to detect and zero these blocks. Default off.
-- **False segments at rally boundaries**: The detector outputs false detections at rally start/end. Segment pruning splits the trajectory at large position jumps (>20% screen) and discards short fragments (<15 frames). Short fragments spatially close to an anchor segment are recovered.
-- **Interleaved false positives**: Single-frame false detections (jumping to player positions) within real trajectory regions. Anchor-proximity recovery keeps real fragments and discards distant false positive clusters.
-- **Oscillating false detections**: After ball exits frame, the detector can lock onto two players and alternate between them. Oscillation pruning uses spatial clustering to detect this pattern. A transition rate ≥25% over 12+ frames triggers trimming.
-- **Exit ghost detections**: When the ball exits the frame, false detections smoothly drift from the exit point toward a player position. Detected by physics: ball approaching a screen edge with velocity > 0.8%/frame MUST exit — any reversal is impossible. Ghost regions capped at 30 frames — longer continuous detections indicate real ball re-entry, not ghost drift.
-- **Non-ball object segments (pigeons, cars, player hands)**: WASB can detect non-ball objects that form segments qualifying as anchors. Chain-based trajectory pruning (Step 3e) builds the real ball trajectory by starting from the longest anchor and greedily extending via endpoint proximity + velocity extrapolation. Non-chain anchors are pruned as non-ball objects. Edge-exit relaxation applies 1.5x distance threshold when a segment endpoint is near the frame edge (ball exit+re-entry pattern). Large disconnected anchors (≥`min_disconnected_anchor_frames`) are preserved even if disconnected from the chain — long continuous detections are real ball, not false positives.
-- **Hovering false detections**: After ball exits frame, the detector can lock onto a single player position. Detected by checking short segments where positions lie within 5% of screen of their centroid.
-- **Trajectory blips**: Brief lock-on to a player position for 2-5 consecutive frames mid-trajectory. Blip removal uses distant trajectory context with a two-pass approach.
-- **Missing frames**: Linear interpolation fills small gaps (up to 10 frames) between detections.
-
-**Key parameters (BallFilterConfig):**
-- `enable_motion_energy_filter=True`: Remove false positives at static positions (low temporal change)
-- `motion_energy_threshold=0.02`: Motion energy below this = likely false positive (zeroed)
-- `enable_stationarity_filter=False`: Detect and remove player lock-on (12+ frames within 0.5% spread). Default off
-- `stationarity_min_frames=12`: Minimum consecutive frames to flag as stationary (~0.4s at 30fps)
-- `stationarity_max_spread=0.005`: Maximum spread from centroid (0.5% of screen, ~10px at 1920px)
-- `enable_segment_pruning=True`: Remove short disconnected false segments via chain-based trajectory analysis
-- `segment_jump_threshold=0.20`: Position jump threshold to split segments (20% of screen)
-- `max_segment_gap=15`: Max frame gap within a segment before splitting
-- `min_segment_frames=8`: Minimum frames to keep a segment (WASB default; 15 for legacy)
-- `max_chain_gap=30`: Max frame gap for chain extension between anchors
-- `min_disconnected_anchor_frames=30`: Preserve large disconnected anchors (≥30 frames = real ball)
-- `min_output_confidence=0.05`: Drop zero-confidence placeholders from output
-- `enable_exit_ghost_removal=True`: Remove physics-impossible reversals near screen edges
-- `exit_edge_zone=0.10`: Screen edge zone (10%) for exit approach detection
-- `exit_approach_frames=3`: Min consecutive frames approaching edge before reversal triggers
-- `exit_min_approach_speed=0.008`: Min per-frame speed toward edge (~0.8% of screen)
-- `exit_max_ghost_frames=30`: Max ghost region duration (~1s at 30fps); longer = real ball re-entry
-- `enable_oscillation_pruning=True`: Detect and trim cluster-based oscillation patterns
-- `min_oscillation_frames=12`: Sliding window size for cluster transition rate detection
-- `oscillation_reversal_rate=0.25`: Cluster transition rate threshold to trigger pruning
-- `oscillation_min_displacement=0.03`: Min pole distance (3% of screen) to detect oscillation
-- `enable_outlier_removal=True`: Removes flickering and edge artifacts (runs after pruning)
-- `enable_blip_removal=True`: Remove multi-frame trajectory blips (consecutive false positives at player positions)
-- `blip_context_min_frames=5`: Min frame distance for distant context neighbors
-- `blip_max_deviation=0.15`: Max deviation from interpolated trajectory (15% of screen)
-- `enable_interpolation=True`: Fill missing frames with linear interpolation
-- `max_interpolation_gap=10`: Max frames to interpolate (larger gaps left empty)
-
-**Usage:**
-```python
-# Default: raw mode with segment pruning (best detection/match rate)
-result = tracker.track_video(video_path)
-
-# Disable filtering entirely for raw comparison
-result = tracker.track_video(video_path, enable_filtering=False)
-
-# Keep raw positions for debugging
-result = tracker.track_video(video_path, preserve_raw=True)
-print(result.raw_positions)  # Original detections before filtering
-```
-
-**Grid search for optimal parameters:**
-```bash
-# Segment pruning grid search
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid segment-pruning
-
-# Oscillation pruning grid search
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid oscillation
-
-# Outlier removal grid search
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid outlier
-
-# WASB grid search
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid wasb -o results.json
-```
-
-### Frame Offset Auto-Detection
-
-Different videos require different frame offsets due to FPS variations (29.97 vs 30.0) and ground truth labeling timing. The evaluation automatically detects the optimal offset (0-5 frames) per video.
-
-```python
-from rallycut.evaluation.tracking.ball_metrics import find_optimal_frame_offset
-
-# Find best offset for aligning predictions with ground truth
-best_offset, match_rate = find_optimal_frame_offset(
-    ground_truth=gt_positions,
-    predictions=ball_positions,
-    video_width=1920,
-    video_height=1080,
-)
-print(f"Optimal offset: +{best_offset} frames ({match_rate*100:.1f}% match)")
-```
+WASB HRNet is the sole ball tracker (86.4% match rate, 33 FPS ONNX+CoreML). Multi-stage temporal filter handles false positives (static positions, player lock-on, oscillation, exit ghosts, non-ball objects, trajectory blips) and interpolates gaps. All parameters and filter stages are in `BallFilterConfig` in `tracking/ball_filter.py`.
 
 ## Cross-Rally Player Consistency
 
-Maintains consistent player IDs (1-4) across a match using appearance-based matching.
-
-**How it works:**
-1. For each rally, sample ~12 video frames per primary track
-2. Extract appearance features: HS + V histograms for upper body (t-shirt) and lower body (shorts), dominant clothing color, skin tone HSV — all with skin pixel exclusion
-3. **Pass 1:** Sequential Hungarian assignment matching tracks to accumulated player profiles, with position continuity and confidence-gated profile updates (gate=0.80)
-4. **Pass 2 stage 0:** Combinatorial side switch detection — dense candidate search with appearance-based prioritization, scores all 2^K combinations using normalized pairwise team appearance preferences, Phase B refinement uses serve direction changes as tiebreaker
-5. **Pass 2 stage 1:** Re-score all rallies with final profiles (frozen) for better cross-team assignment
-6. **Pass 2 stage 2:** Global within-team pairwise voting — compares raw track features across all rally pairs to find the globally consistent within-team ordering, avoiding profile corruption cascade
-
-**Cost function:** 35% lower HS histogram + 15% lower V histogram + 15% upper HS histogram + 10% upper V histogram + 10% skin tone + 15% dominant clothing color (lower = better match). Clothing histograms exclude skin pixels via tight HSV range. Bhattacharyya distance for histograms; missing features are skipped and weights renormalized.
-
-**Key files:** `tracking/player_features.py` (feature extraction, similarity, `compute_track_similarity`), `tracking/match_tracker.py` (orchestration, Hungarian assignment, within-team voting), `evaluation/tracking/db.py` (`load_rallies_for_video`), `cli/commands/match_players.py` (CLI).
-
-```bash
-uv run rallycut match-players <video-id> -o result.json
-```
+Maintains consistent player IDs (1-4) across a match via appearance-based Hungarian assignment (2 passes). Features: upper/lower body color histograms, dominant clothing color, skin tone. Includes side switch detection and global within-team voting. See `tracking/match_tracker.py` and `tracking/player_features.py`.
 
 ## Ground Truth Labeling
 
@@ -503,57 +316,14 @@ uv run rallycut label save 123 -o ground_truth.json
 uv run rallycut compare-tracking tracking.json ground_truth.json
 
 # Evaluate from database (after ground truth is synced)
-uv run rallycut evaluate-tracking --all              # Evaluate all labeled rallies
-uv run rallycut evaluate-tracking -r <rally-id>      # Evaluate specific rally
-uv run rallycut evaluate-tracking -v <video-id>      # Evaluate all in video
-uv run rallycut evaluate-tracking --all --per-player # Show per-player breakdown
-uv run rallycut evaluate-tracking --all -e           # Show error analysis
-uv run rallycut evaluate-tracking --all -o out.json  # Export metrics to JSON
+uv run rallycut evaluate-tracking --all              # All labeled rallies (player metrics)
+uv run rallycut evaluate-tracking --all --ball-only  # Ball tracking metrics only
+uv run rallycut evaluate-tracking -r <rally-id>      # Specific rally
 
-# Ball tracking evaluation
-uv run rallycut evaluate-tracking --all --ball-only      # Ball tracking metrics only
-uv run rallycut evaluate-tracking -r <rally-id> -b       # Ball eval for specific rally
-uv run rallycut evaluate-tracking --all -b -o ball.json  # Export ball metrics to JSON
-
-# Grid search for optimal player filter parameters
-uv run rallycut evaluate-tracking tune-filter --all --cache-only  # Cache raw positions (one-time)
-uv run rallycut evaluate-tracking tune-filter --all --grid quick  # Quick grid search
-uv run rallycut evaluate-tracking tune-filter --all --grid farside  # Far-side player optimization
-uv run rallycut evaluate-tracking tune-filter --all --grid relaxed  # Comprehensive relaxation
-uv run rallycut evaluate-tracking tune-filter --all --grid full --min-rally-f1 0.70  # Full search with constraint
-uv run rallycut evaluate-tracking tune-filter --all -o results.json  # Export full results
-
-# Grid search for optimal ball filter parameters
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid segment-pruning  # Segment pruning (18 configs)
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid oscillation     # Oscillation pruning (18 configs)
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid outlier         # Outlier removal + exit detection (18 configs)
-uv run rallycut evaluate-tracking tune-ball-filter --all --grid wasb            # WASB search
-uv run rallycut evaluate-tracking tune-ball-filter --all -o ball.json           # Export results
+# Grid search for filter parameters (use --help for grid options)
+uv run rallycut evaluate-tracking tune-filter --all --grid quick
+uv run rallycut evaluate-tracking tune-ball-filter --all --grid segment-pruning
 ```
-
-| Command | Purpose |
-|---------|---------|
-| `rallycut label open` | Open video with pre-filled predictions |
-| `rallycut label save` | Export annotations as ground truth JSON |
-| `rallycut compare-tracking` | Compute MOT metrics from JSON files |
-| `rallycut evaluate-tracking` | Evaluate player tracking from database |
-| `rallycut evaluate-tracking --ball-only` | Evaluate ball tracking with detailed metrics |
-| `rallycut evaluate-tracking tune-filter` | Grid search for optimal PlayerFilterConfig parameters |
-| `rallycut evaluate-tracking tune-ball-filter` | Grid search for optimal BallFilterConfig parameters |
-
-**Player tracking metrics:**
-- MOTA: Multi-Object Tracking Accuracy (combines FP, FN, ID switches)
-- HOTA: Higher Order Tracking Accuracy (balances detection and association)
-- DetA: Detection Accuracy (how well detections match GT)
-- AssA: Association Accuracy (ID consistency across frames)
-- Mostly Tracked (MT): GT tracks tracked >80% of their lifespan
-- Fragmentation: GT tracks split into multiple prediction tracks
-
-**Ball tracking metrics (`--ball-only`):**
-- Detection Rate: % of GT frames with ball detected
-- Match Rate: % of GT frames with ball within 50px threshold
-- Mean/Median/P90 Error: Position error in pixels
-- Accuracy <20px/<50px: % of detections within threshold
 
 
 ## Code Style
