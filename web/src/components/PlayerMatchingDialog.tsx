@@ -187,13 +187,9 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
         if (cancelled) break;
         const entry = normalizedRallies![i];
 
-        // Use match analysis rally ID directly (it's already a backend UUID)
-        const startSec = entry.startMs / 1000;
-        const endSec = entry.endMs / 1000;
-
         // Always use backend startMs as seek origin — tracking frame numbers
         // are relative to the segment extracted at startMs, not the editor rally time
-        const seekStart = startSec;
+        const seekStart = entry.startMs / 1000;
 
         // Fetch tracking data from API
         let positions: ApiPlayerPosition[] = [];
@@ -298,7 +294,7 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
       video.src = '';
       videoRef.current = null;
     };
-  }, [normalizedRallies, effectiveVideoUrl, open, rallies]);
+  }, [normalizedRallies, effectiveVideoUrl, open]);
 
   // Handle cell click
   const handleCellClick = useCallback((rallyId: string, pid: number) => {
