@@ -113,7 +113,14 @@ export interface MatchStatsResult {
  * Run cross-rally player matching for a video.
  * Called automatically after batch tracking completes.
  */
-export async function runMatchAnalysis(videoId: string): Promise<MatchAnalysisResult | null> {
+export type ProgressCallback = (step: string, index: number, total: number) => void;
+
+export async function runMatchAnalysis(
+  videoId: string,
+  onProgress?: ProgressCallback,
+): Promise<MatchAnalysisResult | null> {
+  const report = onProgress ?? (() => {});
+
   // Check that video has tracked rallies
   const trackedRallies = await prisma.rally.findMany({
     where: {
@@ -135,6 +142,7 @@ export async function runMatchAnalysis(videoId: string): Promise<MatchAnalysisRe
   const outputPath = path.join(TEMP_DIR, `match_${videoId}.json`);
 
   try {
+    report('Matching players across rallies...', 1, 5);
     const result = await runMatchPlayersCli(videoId, outputPath);
 
     // Persist to database
@@ -149,6 +157,7 @@ export async function runMatchAnalysis(videoId: string): Promise<MatchAnalysisRe
 
     // Repair within-rally identity switches using match-level profiles
     // (best-effort — don't fail the whole pipeline)
+    report('Repairing identity switches...', 2, 5);
     try {
       await repairIdentities(videoId);
     } catch (repairError) {
@@ -157,6 +166,7 @@ export async function runMatchAnalysis(videoId: string): Promise<MatchAnalysisRe
 
     // Remap per-rally track IDs to consistent player IDs (1-4)
     // (best-effort — don't fail the whole pipeline)
+    report('Remapping track IDs...', 3, 5);
     try {
       await remapTrackIds(videoId);
     } catch (remapError) {
@@ -165,6 +175,7 @@ export async function runMatchAnalysis(videoId: string): Promise<MatchAnalysisRe
 
     // Re-attribute player actions using match-level team identity
     // (best-effort — don't fail the whole pipeline)
+    report('Classifying actions...', 4, 5);
     try {
       await reattributeActions(videoId);
     } catch (reattribError) {
@@ -172,6 +183,7 @@ export async function runMatchAnalysis(videoId: string): Promise<MatchAnalysisRe
     }
 
     // Also compute match stats (best-effort — don't fail the whole pipeline)
+    report('Computing match stats...', 5, 5);
     try {
       await computeAndSaveMatchStats(videoId);
     } catch (statsError) {

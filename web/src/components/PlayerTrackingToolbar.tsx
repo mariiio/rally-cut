@@ -6,7 +6,6 @@ import CloseIcon from '@mui/icons-material/Close';
 import CropFreeIcon from '@mui/icons-material/CropFree';
 import GridOnIcon from '@mui/icons-material/GridOn';
 import PersonSearchIcon from '@mui/icons-material/PersonSearch';
-import PlaylistPlayIcon from '@mui/icons-material/PlaylistPlay';
 import SportsVolleyballIcon from '@mui/icons-material/SportsVolleyball';
 import EditIcon from '@mui/icons-material/Edit';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
@@ -87,8 +86,6 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching }: PlayerTrackingTo
     saveActionGroundTruth,
     removeActionLabel,
     batchTracking,
-    trackAllRalliesForVideo,
-    pollBatchTrackingStatus,
   } = usePlayerTrackingStore();
 
   const currentTime = usePlayerStore((state) => state.currentTime);
@@ -140,14 +137,8 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching }: PlayerTrackingTo
     checkLabelStudioStatus();
   }, [backendRallyId, hasTrackingData]);
 
-  // Resume polling on mount if batch was in progress
   const batchStatus = activeMatchId ? batchTracking[activeMatchId] : undefined;
   const isBatchActive = batchStatus?.status === 'pending' || batchStatus?.status === 'processing';
-  useEffect(() => {
-    if (activeMatchId && isBatchActive) {
-      pollBatchTrackingStatus(activeMatchId, fps);
-    }
-  }, [activeMatchId, isBatchActive, fps, pollBatchTrackingStatus]);
 
   // Player number mapping: sorted trackIds → 1-based display numbers
   const playerNumberMap = useMemo(() => {
@@ -330,10 +321,6 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching }: PlayerTrackingTo
     }
   };
 
-  const handleTrackAllRallies = async () => {
-    if (!activeMatchId) return;
-    await trackAllRalliesForVideo(activeMatchId);
-  };
 
   const hasBallPositions = !!trackData?.ballPositions?.length;
 
@@ -416,31 +403,10 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching }: PlayerTrackingTo
                   : isLoadingTrackData
                     ? 'Loading...'
                     : hasTrackingData
-                      ? 'Re-track'
-                      : 'Track Players'}
+                      ? 'Re-track Rally'
+                      : 'Track Rally'}
               </Button>
             )}
-
-            <Tooltip title="Track all rallies in this video (batch processing)">
-              <span>
-                <Button
-                  size="small"
-                  variant={isBatchActive ? 'contained' : 'outlined'}
-                  startIcon={
-                    isBatchActive
-                      ? <CircularProgress size={16} />
-                      : <PlaylistPlayIcon />
-                  }
-                  onClick={handleTrackAllRallies}
-                  disabled={isBatchActive || isTrackingRally}
-                  color={isBatchActive ? 'warning' : 'primary'}
-                >
-                  {isBatchActive
-                    ? `Tracking ${batchStatus?.completedRallies ?? 0}/${batchStatus?.totalRallies ?? '?'}`
-                    : 'Track All'}
-                </Button>
-              </span>
-            </Tooltip>
 
             {onOpenPlayerMatching && (
               <Tooltip title="Label cross-rally player matching ground truth">
@@ -585,46 +551,6 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching }: PlayerTrackingTo
         )}
       </Box>
 
-      {/* Batch Tracking Status */}
-      {batchStatus && batchStatus.status !== 'idle' && (
-        <Box sx={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 0.75,
-          mt: 0.75,
-          px: 0.5,
-          py: 0.25,
-          borderRadius: 1,
-          bgcolor: batchStatus.status === 'failed' ? 'error.dark' : batchStatus.status === 'completed' ? 'success.dark' : 'action.hover',
-        }}>
-          {isBatchActive && <CircularProgress size={14} sx={{ color: 'warning.main' }} />}
-          <Typography variant="caption" sx={{ color: batchStatus.status === 'failed' || batchStatus.status === 'completed' ? 'white' : 'text.secondary' }}>
-            {batchStatus.status === 'completed'
-              ? `All ${batchStatus.totalRallies} rallies tracked${batchStatus.failedRallies ? ` (${batchStatus.failedRallies} failed)` : ''}`
-              : batchStatus.status === 'failed'
-                ? `Batch tracking failed: ${batchStatus.error ?? 'Unknown error'}`
-                : `Tracking rally ${(batchStatus.completedRallies ?? 0) + (batchStatus.failedRallies ?? 0) + 1} of ${batchStatus.totalRallies ?? '?'}...`}
-          </Typography>
-          {batchStatus.rallyStatuses && isBatchActive && (
-            <Box sx={{ display: 'flex', gap: 0.25, ml: 'auto' }}>
-              {batchStatus.rallyStatuses.map((rs) => (
-                <Box
-                  key={rs.rallyId}
-                  sx={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: '50%',
-                    bgcolor: rs.status === 'COMPLETED' ? 'success.main'
-                      : rs.status === 'FAILED' ? 'error.main'
-                      : rs.status === 'PROCESSING' ? 'warning.main'
-                      : 'action.disabled',
-                  }}
-                />
-              ))}
-            </Box>
-          )}
-        </Box>
-      )}
 
       {/* Calibration Recommendation Prompt */}
       {activeMatchId && !hasCalibration && !isCalibrating

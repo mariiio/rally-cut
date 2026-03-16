@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useCallback, useState, useEffect, useRef } from 'react';
-import { Box, Typography, IconButton, Stack, Tooltip, Popover, Button, CircularProgress } from '@mui/material';
+import { Box, Typography, IconButton, Stack, Tooltip, Popover, Button, CircularProgress, Divider } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from '@mui/icons-material/Pause';
 import SkipPreviousIcon from '@mui/icons-material/SkipPrevious';
@@ -20,6 +20,8 @@ import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import ZoomInIcon from '@mui/icons-material/ZoomIn';
 import ZoomOutIcon from '@mui/icons-material/ZoomOut';
+import PlaylistPlayIcon from '@mui/icons-material/PlaylistPlay';
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import {
   Timeline as TimelineEditor,
   TimelineRow,
@@ -30,8 +32,10 @@ import {
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useCameraStore } from '@/stores/cameraStore';
+import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { formatTimeShort, formatTime } from '@/utils/timeFormat';
 import { useAnalysisStore } from '@/stores/analysisStore';
+import { runMatchAnalysis } from '@/services/api';
 import { AnalysisPipeline } from './AnalysisPipeline';
 
 // Custom effect for rally segments
@@ -166,6 +170,26 @@ export function Timeline() {
   const timelineRef = useRef<TimelineState>(null);
   const timelineContainerRef = useRef<HTMLDivElement>(null);
   const [isDraggingCursor, setIsDraggingCursor] = useState(false);
+
+  // Match-level tracking controls
+  const {
+    batchTracking,
+    trackAllRalliesForVideo,
+    pollBatchTrackingStatus,
+  } = usePlayerTrackingStore();
+  const [isRunningAnalysis, setIsRunningAnalysis] = useState(false);
+  const [analysisStep, setAnalysisStep] = useState('');
+  const [analysisResult, setAnalysisResult] = useState<'success' | 'error' | null>(null);
+  const batchStatus = activeMatchId ? batchTracking[activeMatchId] : undefined;
+  const isBatchActive = batchStatus?.status === 'pending' || batchStatus?.status === 'processing';
+  const fps = activeMatch?.video?.fps ?? 30;
+
+  // Resume batch polling on mount if batch was in progress
+  useEffect(() => {
+    if (activeMatchId && isBatchActive) {
+      pollBatchTrackingStatus(activeMatchId, fps);
+    }
+  }, [activeMatchId, isBatchActive, fps, pollBatchTrackingStatus]);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [hotkeysAnchorEl, setHotkeysAnchorEl] = useState<HTMLButtonElement | null>(null);
   const [speedAnchorEl, setSpeedAnchorEl] = useState<HTMLElement | null>(null);
@@ -1275,10 +1299,80 @@ export function Timeline() {
               </Button>
             </Stack>
           ) : (
-            <AnalysisPipeline
-              hasRallies={videoDetectionStatus === 'DETECTED' || (rallies?.length ?? 0) > 0}
-              isLocked={isLocked}
-            />
+            <Stack direction="row" alignItems="center" spacing={0.75}>
+              <AnalysisPipeline
+                hasRallies={videoDetectionStatus === 'DETECTED' || (rallies?.length ?? 0) > 0}
+                isLocked={isLocked}
+              />
+              {!isLocked && (rallies?.length ?? 0) > 0 && (
+                <>
+                  <Divider orientation="vertical" flexItem />
+                  <Tooltip title="Track all rallies in this video">
+                    <span>
+                      <Button
+                        size="small"
+                        variant={isBatchActive ? 'contained' : 'outlined'}
+                        startIcon={isBatchActive ? <CircularProgress size={14} /> : <PlaylistPlayIcon sx={{ fontSize: 16 }} />}
+                        onClick={() => activeMatchId && trackAllRalliesForVideo(activeMatchId)}
+                        disabled={isBatchActive}
+                        color={isBatchActive ? 'warning' : 'primary'}
+                        sx={{ fontSize: 12, py: 0.25, textTransform: 'none' }}
+                      >
+                        {isBatchActive
+                          ? `${batchStatus?.completedRallies ?? 0}/${batchStatus?.totalRallies ?? '?'}`
+                          : 'Track All'}
+                      </Button>
+                    </span>
+                  </Tooltip>
+                  <Tooltip title={isRunningAnalysis && analysisStep
+                    ? analysisStep
+                    : "Re-run player matching, actions, and stats (without re-tracking)"
+                  }>
+                    <span>
+                      <Button
+                        size="small"
+                        variant={analysisResult === 'success' ? 'contained' : 'outlined'}
+                        startIcon={isRunningAnalysis ? <CircularProgress size={14} /> : <AutoFixHighIcon sx={{ fontSize: 16 }} />}
+                        disabled={isRunningAnalysis || isBatchActive}
+                        color={analysisResult === 'success' ? 'success' : analysisResult === 'error' ? 'error' : 'primary'}
+                        onClick={async () => {
+                          if (!activeMatchId) return;
+                          setIsRunningAnalysis(true);
+                          setAnalysisResult(null);
+                          setAnalysisStep('Starting...');
+                          try {
+                            await runMatchAnalysis(activeMatchId, (progress) => {
+                              if (progress.step !== 'done') {
+                                setAnalysisStep(progress.step);
+                              }
+                            });
+                            setAnalysisResult('success');
+                            setAnalysisStep('');
+                            setTimeout(() => setAnalysisResult(null), 4000);
+                          } catch (error) {
+                            console.error('Failed to run match analysis:', error);
+                            setAnalysisResult('error');
+                            setAnalysisStep('');
+                            setTimeout(() => setAnalysisResult(null), 4000);
+                          } finally {
+                            setIsRunningAnalysis(false);
+                          }
+                        }}
+                        sx={{ fontSize: 12, py: 0.25, textTransform: 'none' }}
+                      >
+                        {isRunningAnalysis
+                          ? analysisStep || 'Updating...'
+                          : analysisResult === 'success'
+                            ? 'Stats Updated'
+                            : analysisResult === 'error'
+                              ? 'Failed'
+                              : 'Update Stats'}
+                      </Button>
+                    </span>
+                  </Tooltip>
+                </>
+              )}
+            </Stack>
           )}
         </Stack>
 

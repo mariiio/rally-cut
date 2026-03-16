@@ -2208,6 +2208,55 @@ export async function getMatchAnalysis(videoId: string): Promise<MatchAnalysis |
   return data.status === 'not_available' ? null : data;
 }
 
+/**
+ * Trigger the match analysis pipeline (player matching, ID repair, action re-attribution, stats).
+ * Does NOT re-track — uses existing tracking data.
+ */
+export interface MatchAnalysisProgress {
+  step: string;
+  index: number;
+  total: number;
+}
+
+export async function runMatchAnalysis(
+  videoId: string,
+  onProgress?: (progress: MatchAnalysisProgress) => void,
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/run-match-analysis`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || error.error || `Failed to run match analysis: ${response.status}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) return;
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try {
+          const data = JSON.parse(line.slice(6));
+          onProgress?.(data);
+        } catch { /* ignore parse errors */ }
+      }
+    }
+  }
+}
+
 // ============================================================================
 // Match Statistics
 // ============================================================================

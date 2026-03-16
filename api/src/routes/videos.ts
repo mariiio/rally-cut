@@ -45,7 +45,7 @@ import {
 } from "../services/videoService.js";
 import { queueVideoProcessing } from "../services/processingService.js";
 import { trackAllRallies, getBatchTrackingStatus } from "../services/batchTrackingService.js";
-import { getMatchAnalysis, getMatchStats } from "../services/matchAnalysisService.js";
+import { getMatchAnalysis, getMatchStats, runMatchAnalysis, type ProgressCallback } from "../services/matchAnalysisService.js";
 import { assessVideoQuality, getAnalysisPipelineStatus, savePlayerMatchingGt, getPlayerMatchingGt } from "../services/qualityService.js";
 
 // Calibration corners can be outside 0-1 if dragged outside video bounds
@@ -701,6 +701,42 @@ router.get(
     try {
       const analysis = await getMatchAnalysis(req.params.id, req.userId!);
       res.json(analysis ?? { status: 'not_available' });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /v1/videos/:id/run-match-analysis
+ * Re-run the post-tracking match analysis pipeline without re-tracking.
+ * Runs: match-players → repair-identities → remap-track-ids → reattribute-actions → compute-match-stats
+ */
+router.post(
+  "/v1/videos/:id/run-match-analysis",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      const video = await prisma.video.findUnique({ where: { id: req.params.id } });
+      if (!video) { res.status(404).json({ error: 'Video not found' }); return; }
+      if (video.userId !== req.userId) { res.status(403).json({ error: 'Forbidden' }); return; }
+
+      // Stream progress via SSE
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders();
+
+      const onProgress: ProgressCallback = (step, index, total) => {
+        res.write(`data: ${JSON.stringify({ step, index, total })}\n\n`);
+      };
+
+      const result = await runMatchAnalysis(req.params.id, onProgress);
+      res.write(`data: ${JSON.stringify({ step: 'done', index: 5, total: 5, result })}\n\n`);
+      res.end();
     } catch (error) {
       next(error);
     }
