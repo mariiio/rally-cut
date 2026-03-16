@@ -220,7 +220,7 @@ Two detection pipelines are available:
 
 | Pipeline | F1 (IoU=0.5) | F1 (IoU=0.4) | Overmerge | Command |
 |----------|--------------|--------------|-----------|---------|
-| TemporalMaxer (default) | - | 95.2% (LOO) | 0% | `rallycut cut video.mp4 --temporal-maxer` |
+| TemporalMaxer (default) | - | 94.0% (LOO) | 0% | `rallycut cut video.mp4 --temporal-maxer` |
 | Heuristics (fallback) | 57% | - | ~10% | `rallycut cut video.mp4 --heuristics` |
 
 **Note:** IoU=0.4 better reflects detection accuracy when labeling marks serve toss start (model detects ~2s later when play begins). TemporalMaxer's F1 is honest leave-one-video-out CV (stride=12, 43 videos).
