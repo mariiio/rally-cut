@@ -263,6 +263,7 @@ def _apply_temporal_maxer(
     stride: int,
     feature_cache_dir: Path | None = None,
     temporal_maxer_model_path: Path | None = None,
+    video_id: str | None = None,
 ) -> list | None:
     """Apply TemporalMaxer TAS model to cached features.
 
@@ -271,10 +272,13 @@ def _apply_temporal_maxer(
         stride: Analysis stride in frames.
         feature_cache_dir: Directory containing cached features.
         temporal_maxer_model_path: Path to TemporalMaxer model (optional).
+        video_id: Database video ID for loading ball density features.
 
     Returns:
         List of TimeSegment objects, or None if features/model not found.
     """
+    import numpy as np
+
     from rallycut.core.config import get_config
     from rallycut.core.models import GameState, TimeSegment
     from rallycut.temporal.features import FeatureCache
@@ -301,8 +305,32 @@ def _apply_temporal_maxer(
 
     features, metadata = cached_data
 
-    # Run inference
+    # Fuse ball features if model expects them (773-dim = 768 VideoMAE + 5 ball)
     inference = TemporalMaxerInference(model_path, device="cpu")
+    expected_dim = inference.model.config.feature_dim
+    if features.shape[1] < expected_dim and video_id is not None:
+        from rallycut.temporal.ball_features import (
+            combine_features,
+            extract_ball_features,
+            load_ball_density,
+        )
+
+        ball_data = load_ball_density(video_id)
+        if ball_data is not None:
+            confs, ball_fps = ball_data
+            ball_feats = extract_ball_features(
+                confs, ball_fps,
+                feature_fps=metadata.fps, stride=stride,
+            )
+            features = combine_features(features, ball_feats)
+
+        # Zero-pad if ball density not available (model trained with 50% dropout)
+        if features.shape[1] < expected_dim:
+            pad_width = expected_dim - features.shape[1]
+            padding = np.zeros((features.shape[0], pad_width), dtype=features.dtype)
+            features = np.concatenate([features, padding], axis=1)
+
+    # Run inference
     result = inference.predict(features=features, fps=metadata.fps, stride=stride)
 
     raw_segments = result.segments
@@ -517,6 +545,7 @@ def _run_evaluation(
             # TemporalMaxer TAS model (explicit or auto-selection)
             segments = _apply_temporal_maxer(
                 video.content_hash, stride, feature_cache_dir,
+                video_id=video.id,
             )
             if segments is not None and (ball_validation or ball_boundary):
                 video_path = resolver.resolve(video.s3_key, video.content_hash)
