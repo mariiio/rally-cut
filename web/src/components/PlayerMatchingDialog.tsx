@@ -266,10 +266,11 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
           if (cancelled) break;
 
           // bbox coords are center-based normalized: x,y = center, width,height = full size
-          // Add padding so small/far-side players have more context visible
-          const pad = bestArea < 0.01 ? 0.5 : bestArea < 0.03 ? 0.25 : 0;
-          const bw = bestPos.width * (1 + pad);
-          const bh = bestPos.height * (1 + pad);
+          // Ensure minimum crop size so far-side players are visible in context
+          const MIN_CROP_W = 0.08; // ~100px on 1280w — enough to see a person
+          const MIN_CROP_H = 0.28; // ~200px on 720h
+          const bw = Math.max(bestPos.width * 1.15, MIN_CROP_W);
+          const bh = Math.max(bestPos.height * 1.15, MIN_CROP_H);
           const sx = Math.max(0, (bestPos.x - bw / 2)) * vw;
           const sy = Math.max(0, (bestPos.y - bh / 2)) * vh;
           const sw = Math.min(bw * vw, vw - sx);
