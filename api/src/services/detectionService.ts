@@ -284,31 +284,36 @@ export async function triggerRallyDetection(
 
       if (existing !== null) {
         if (existing.status === DetectionJobStatus.COMPLETED) {
-          // Reuse cached results from completed job
-          const rallies = existing.video.rallies.map((r, index) => ({
-            videoId,
-            startMs: r.startMs,
-            endMs: r.endMs,
-            confidence: r.confidence,
-            order: index,
-          }));
+          const sourceRallies = existing.video.rallies;
 
-          await tx.rally.createMany({ data: rallies });
+          if (sourceRallies.length > 0) {
+            // Reuse cached results from completed job
+            const rallies = sourceRallies.map((r, index) => ({
+              videoId,
+              startMs: r.startMs,
+              endMs: r.endMs,
+              confidence: r.confidence,
+              order: index,
+            }));
+
+            await tx.rally.createMany({ data: rallies });
+            await tx.video.update({
+              where: { id: videoId },
+              data: { status: VideoStatus.DETECTED },
+            });
+
+            return { job: null, existingJob: existing, cached: true };
+          }
+          // Source rallies were deleted — skip cache, create a new job below
+        } else {
+          // Job is PENDING or RUNNING - link this video to the existing job
           await tx.video.update({
             where: { id: videoId },
-            data: { status: VideoStatus.DETECTED },
+            data: { status: VideoStatus.DETECTING },
           });
 
-          return { job: null, existingJob: existing, cached: true };
+          return { job: null, existingJob: existing, cached: false };
         }
-
-        // Job is PENDING or RUNNING - link this video to the existing job
-        await tx.video.update({
-          where: { id: videoId },
-          data: { status: VideoStatus.DETECTING },
-        });
-
-        return { job: null, existingJob: existing, cached: false };
       }
 
       // No existing job - create new one atomically within same transaction
