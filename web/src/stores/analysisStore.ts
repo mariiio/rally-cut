@@ -438,15 +438,8 @@ async function startTracking(videoId: string, set: SetFn, get: GetFn) {
   const updatePipeline = makePipelineUpdater(videoId, set);
 
   try {
-    // Check if tracking is currently in progress (e.g. resumed after navigation)
-    const status = await getBatchTrackingStatus(videoId);
-
-    if (status.status === 'processing' || status.status === 'pending') {
-      pollTracking(videoId, set, get);
-      return;
-    }
-
-    // Start a new batch tracking job
+    // Always call trackAllRallies — it handles dedup internally
+    // (returns existing job if rally count unchanged, creates new one otherwise)
     const result = await trackAllRallies(videoId);
     updatePipeline({
       progress: 48,

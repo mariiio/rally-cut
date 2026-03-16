@@ -130,6 +130,16 @@ async function main() {
         continue;
       }
 
+      // Check if job was cancelled (e.g. user re-analyzed with different rallies)
+      const currentJob = await prisma.batchTrackingJob.findUnique({
+        where: { id: jobId },
+        select: { status: true },
+      });
+      if (!currentJob || currentJob.status === 'FAILED') {
+        console.log(`[BATCH_WORKER] Job ${jobId} was cancelled, stopping`);
+        break;
+      }
+
       // Update current rally + heartbeat
       await prisma.batchTrackingJob.update({
         where: { id: jobId },

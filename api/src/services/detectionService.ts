@@ -207,14 +207,19 @@ export async function triggerRallyDetection(
   }
 
   if (video.status !== VideoStatus.UPLOADED) {
-    // Allow re-detection on DETECTED videos — clear existing rallies and reset
+    // Allow re-detection on DETECTED videos — clear existing data and reset
     if (video.status === VideoStatus.DETECTED) {
-      await prisma.rally.deleteMany({ where: { videoId } });
-      await prisma.batchTrackingJob.deleteMany({ where: { videoId } });
-      await prisma.video.update({
-        where: { id: videoId },
-        data: { status: VideoStatus.UPLOADED },
-      });
+      await prisma.$transaction([
+        prisma.rally.deleteMany({ where: { videoId } }),
+        prisma.batchTrackingJob.updateMany({
+          where: { videoId },
+          data: { status: 'FAILED', completedAt: new Date(), error: 'Cancelled — re-running detection' },
+        }),
+        prisma.video.update({
+          where: { id: videoId },
+          data: { status: VideoStatus.UPLOADED },
+        }),
+      ]);
     } else {
       throw new ConflictError(
         `Video must be in UPLOADED status to trigger detection (current: ${video.status})`

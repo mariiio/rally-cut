@@ -103,7 +103,20 @@ export async function trackAllRallies(
     });
 
     if (existingJob) {
-      return existingJob;
+      // If rally count changed (user edited rallies then re-analyzed),
+      // cancel the stale job and create a fresh one
+      if (existingJob.totalRallies !== video.rallies.length) {
+        await tx.batchTrackingJob.update({
+          where: { id: existingJob.id },
+          data: {
+            status: 'FAILED',
+            completedAt: new Date(),
+            error: 'Cancelled — rally count changed, re-analyzing',
+          },
+        });
+      } else {
+        return existingJob;
+      }
     }
 
     return tx.batchTrackingJob.create({
