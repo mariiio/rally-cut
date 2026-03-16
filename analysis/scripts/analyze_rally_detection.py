@@ -27,6 +27,12 @@ import numpy as np
 
 from rallycut.evaluation.ground_truth import load_evaluation_videos
 from rallycut.evaluation.matching import RallyMatch, compute_iou, match_rallies
+from rallycut.temporal.ball_features import (
+    BALL_FEATURE_DIM,
+    combine_features,
+    extract_ball_features,
+    load_ball_density,
+)
 from rallycut.temporal.features import FeatureCache
 from rallycut.temporal.temporal_maxer.inference import TemporalMaxerInference
 
@@ -80,6 +86,14 @@ def _edge_to_edge_gap(
     return 0.0
 
 
+def _load_ball_density_for_video(video_id: str) -> tuple[np.ndarray, float] | None:
+    """Load ball density for a video by ID."""
+    density_dir = Path("training_data/ball_density")
+    if not density_dir.exists():
+        return None
+    return load_ball_density(video_id, density_dir)
+
+
 def run_inference_for_video(
     inference: TemporalMaxerInference,
     feature_cache: FeatureCache,
@@ -96,6 +110,26 @@ def run_inference_for_video(
         return None
 
     features, metadata = cached_data
+
+    # Combine with ball features if model expects them (same logic as cutter.py)
+    expected_dim = inference.model.config.feature_dim
+    if expected_dim > features.shape[1]:
+        ball_dim = expected_dim - features.shape[1]
+        if ball_dim == BALL_FEATURE_DIM:
+            ball_data = _load_ball_density_for_video(video.id)
+            if ball_data is not None:
+                confs, ball_fps = ball_data
+                ball_feats = extract_ball_features(
+                    confs, ball_fps, feature_fps=metadata.fps, stride=STRIDE,
+                )
+                features = combine_features(features, ball_feats)
+
+        # Zero-pad if still short (model trained with modality dropout handles this)
+        if features.shape[1] < expected_dim:
+            pad_width = expected_dim - features.shape[1]
+            padding = np.zeros((features.shape[0], pad_width), dtype=features.dtype)
+            features = np.concatenate([features, padding], axis=1)
+
     result = inference.predict(
         features=features, fps=metadata.fps, stride=STRIDE,
         valley_threshold=valley_threshold,

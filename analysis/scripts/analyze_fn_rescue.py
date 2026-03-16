@@ -25,6 +25,12 @@ import numpy as np
 from rallycut.evaluation.ground_truth import EvaluationVideo, load_evaluation_videos
 from rallycut.evaluation.matching import compute_iou, match_rallies
 from rallycut.evaluation.video_resolver import VideoResolver
+from rallycut.temporal.ball_features import (
+    BALL_FEATURE_DIM,
+    combine_features,
+    extract_ball_features,
+    load_ball_density,
+)
 from rallycut.temporal.features import FeatureCache
 from rallycut.temporal.temporal_maxer.inference import TemporalMaxerInference
 
@@ -187,6 +193,25 @@ def main() -> None:
             continue
 
         features, meta = cached_data
+
+        # Combine with ball features if model expects them
+        expected_dim = inference.model.config.feature_dim
+        if expected_dim > features.shape[1]:
+            ball_dim = expected_dim - features.shape[1]
+            ball_density_dir = Path("training_data/ball_density")
+            if ball_dim == BALL_FEATURE_DIM and ball_density_dir.exists():
+                ball_data = load_ball_density(v.id, ball_density_dir)
+                if ball_data is not None:
+                    confs, ball_fps = ball_data
+                    ball_feats = extract_ball_features(
+                        confs, ball_fps, feature_fps=meta.fps, stride=STRIDE,
+                    )
+                    features = combine_features(features, ball_feats)
+            if features.shape[1] < expected_dim:
+                pad_width = expected_dim - features.shape[1]
+                padding = np.zeros((features.shape[0], pad_width), dtype=features.dtype)
+                features = np.concatenate([features, padding], axis=1)
+
         result = inference.predict(features=features, fps=meta.fps, stride=STRIDE)
         probs = result.window_probs
         segments = result.segments

@@ -28,6 +28,12 @@ import numpy as np
 
 from rallycut.evaluation.ground_truth import EvaluationVideo, load_evaluation_videos
 from rallycut.evaluation.matching import compute_iou, match_rallies
+from rallycut.temporal.ball_features import (
+    BALL_FEATURE_DIM,
+    combine_features,
+    extract_ball_features,
+    load_ball_density,
+)
 from rallycut.temporal.features import FeatureCache, generate_overlap_labels
 from rallycut.temporal.temporal_maxer.inference import TemporalMaxerInference
 from rallycut.temporal.temporal_maxer.training import (
@@ -56,11 +62,30 @@ def load_video_data(
     video: EvaluationVideo,
     cache: FeatureCache,
     stride: int,
+    feature_dim: int = 773,
 ) -> tuple[np.ndarray, np.ndarray, float, float] | None:
     cached_data = cache.get(video.content_hash, stride=stride)
     if cached_data is None:
         return None
     features, metadata = cached_data
+
+    # Combine with ball features if needed, zero-pad if unavailable
+    if features.shape[1] < feature_dim:
+        ball_density_dir = Path("training_data/ball_density")
+        ball_dim = feature_dim - features.shape[1]
+        if ball_dim == BALL_FEATURE_DIM and ball_density_dir.exists():
+            ball_data = load_ball_density(video.id, ball_density_dir)
+            if ball_data is not None:
+                confs, ball_fps = ball_data
+                ball_feats = extract_ball_features(
+                    confs, ball_fps, feature_fps=metadata.fps, stride=stride,
+                )
+                features = combine_features(features, ball_feats)
+        if features.shape[1] < feature_dim:
+            pad_width = feature_dim - features.shape[1]
+            padding = np.zeros((features.shape[0], pad_width), dtype=features.dtype)
+            features = np.concatenate([features, padding], axis=1)
+
     duration_ms = int(metadata.duration_seconds * 1000)
     labels = generate_overlap_labels(
         rallies=video.ground_truth_rallies,

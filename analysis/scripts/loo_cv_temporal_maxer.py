@@ -109,6 +109,7 @@ def load_video_data(
     cache: FeatureCache,
     stride: int,
     ball_density_dir: Path | None = None,
+    feature_dim: int = 768,
 ) -> tuple[np.ndarray, np.ndarray, float, float] | None:
     """Load features and generate labels for a single video.
 
@@ -136,6 +137,12 @@ def load_video_data(
                 feature_fps=metadata.fps, stride=stride,
             )
             features = combine_features(features, ball_feats)
+
+        # Zero-pad if ball density not available (modality dropout handles this)
+        if features.shape[1] < feature_dim:
+            pad_width = feature_dim - features.shape[1]
+            padding = np.zeros((features.shape[0], pad_width), dtype=features.dtype)
+            features = np.concatenate([features, padding], axis=1)
 
     duration_ms = int(metadata.duration_seconds * 1000)
     labels = generate_overlap_labels(
@@ -181,13 +188,13 @@ def run_fold(
     train_features: list[np.ndarray] = []
     train_labels: list[np.ndarray] = []
     for video in train_videos:
-        data = load_video_data(video, cache, stride, ball_density_dir)
+        data = load_video_data(video, cache, stride, ball_density_dir, feature_dim)
         if data is not None:
             train_features.append(data[0])
             train_labels.append(data[1])
 
     # Load held-out data
-    held_out_data = load_video_data(held_out, cache, stride, ball_density_dir)
+    held_out_data = load_video_data(held_out, cache, stride, ball_density_dir, feature_dim)
     if held_out_data is None:
         print(f"  WARNING: No cached features for held-out video {held_out.filename}")
         return FoldResult(

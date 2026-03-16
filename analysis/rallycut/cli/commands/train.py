@@ -2618,6 +2618,12 @@ def train_temporal_maxer_cmd(
                     )
                     features = combine_features(features, ball_feats)
 
+                # Zero-pad if ball density not available (modality dropout handles this)
+                if features.shape[1] < feature_dim:
+                    pad_width = feature_dim - features.shape[1]
+                    padding = np.zeros((features.shape[0], pad_width), dtype=features.dtype)
+                    features = np.concatenate([features, padding], axis=1)
+
             duration_ms = int(metadata.duration_seconds * 1000)
             labels = generate_overlap_labels(
                 rallies=video.ground_truth_rallies,
