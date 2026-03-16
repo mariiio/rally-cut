@@ -577,6 +577,7 @@ enum RejectionReason {
   INSUFFICIENT_WINDOWS
   TOO_SHORT
   SPARSE_DENSITY
+  BALL_PASS
 }
 
 enum DetectionJobStatus {

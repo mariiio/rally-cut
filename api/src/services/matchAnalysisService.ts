@@ -121,6 +121,14 @@ export async function runMatchAnalysis(
 ): Promise<MatchAnalysisResult | null> {
   const report = onProgress ?? (() => {});
 
+  // Step 0: Validate tracked rallies — demote ball-pass false positives
+  report('Validating tracked rallies...', 1, 6);
+  try {
+    await validateTrackedRallies(videoId);
+  } catch (valError) {
+    console.error(`[MATCH_ANALYSIS] Rally validation failed (non-fatal):`, valError);
+  }
+
   // Check that video has tracked rallies
   const trackedRallies = await prisma.rally.findMany({
     where: {
@@ -142,7 +150,7 @@ export async function runMatchAnalysis(
   const outputPath = path.join(TEMP_DIR, `match_${videoId}.json`);
 
   try {
-    report('Matching players across rallies...', 1, 5);
+    report('Matching players across rallies...', 2, 6);
     const result = await runMatchPlayersCli(videoId, outputPath);
 
     // Persist to database
@@ -157,7 +165,7 @@ export async function runMatchAnalysis(
 
     // Repair within-rally identity switches using match-level profiles
     // (best-effort — don't fail the whole pipeline)
-    report('Repairing identity switches...', 2, 5);
+    report('Repairing identity switches...', 3, 6);
     try {
       await repairIdentities(videoId);
     } catch (repairError) {
@@ -166,7 +174,7 @@ export async function runMatchAnalysis(
 
     // Remap per-rally track IDs to consistent player IDs (1-4)
     // (best-effort — don't fail the whole pipeline)
-    report('Remapping track IDs...', 3, 5);
+    report('Remapping track IDs...', 4, 6);
     try {
       await remapTrackIds(videoId);
     } catch (remapError) {
@@ -175,7 +183,7 @@ export async function runMatchAnalysis(
 
     // Re-attribute player actions using match-level team identity
     // (best-effort — don't fail the whole pipeline)
-    report('Classifying actions...', 4, 5);
+    report('Classifying actions...', 5, 6);
     try {
       await reattributeActions(videoId);
     } catch (reattribError) {
@@ -183,7 +191,7 @@ export async function runMatchAnalysis(
     }
 
     // Also compute match stats (best-effort — don't fail the whole pipeline)
-    report('Computing match stats...', 5, 5);
+    report('Computing match stats...', 6, 6);
     try {
       await computeAndSaveMatchStats(videoId);
     } catch (statsError) {
@@ -196,6 +204,97 @@ export async function runMatchAnalysis(
     return null;
   } finally {
     await fs.unlink(outputPath).catch(() => {});
+  }
+}
+
+/**
+ * Validate tracked rallies and demote ball-pass false positives.
+ *
+ * A "disqualification score" accumulates from failing volleyball-semantic criteria.
+ * Rally demoted to SUGGESTED (rejectionReason=BALL_PASS) only when score >= 4,
+ * requiring multiple signals to agree.
+ *
+ * Safety gates (skip validation entirely):
+ * - Ball detection rate < 15% → tracking data unreliable
+ * - User-modified rally (has scoreA/scoreB/notes/servingTeam)
+ * - Rally already SUGGESTED
+ */
+async function validateTrackedRallies(videoId: string): Promise<void> {
+  const rallies = await prisma.rally.findMany({
+    where: {
+      videoId,
+      status: 'CONFIRMED',
+      playerTrack: { status: 'COMPLETED' },
+    },
+    include: { playerTrack: true },
+    orderBy: { startMs: 'asc' },
+  });
+
+  const toDemote: Array<{ id: string; score: number; contactCount: number; hasServe: boolean; durationS: number }> = [];
+
+  for (const rally of rallies) {
+    // Safety gate: skip user-modified rallies
+    if (rally.scoreA != null || rally.scoreB != null || rally.notes != null || rally.servingTeam != null) {
+      continue;
+    }
+
+    const pt = rally.playerTrack;
+    if (!pt) continue;
+
+    // Safety gate: skip if ball detection rate is too low (tracking unreliable)
+    const qualityReport = pt.qualityReportJson as Record<string, unknown> | null;
+    const detectionRate = qualityReport?.detectionRate as number | undefined
+      ?? pt.detectionRate as number | undefined;
+    if (detectionRate != null && detectionRate < 0.15) {
+      continue;
+    }
+
+    // Extract signals from tracking data
+    const contactsData = pt.contactsJson as { contacts?: Array<{ isValidated?: boolean }> } | null;
+    const validatedContacts = (contactsData?.contacts ?? []).filter(c => c.isValidated !== false);
+    const contactCount = validatedContacts.length;
+
+    const actionsData = pt.actionsJson as {
+      actions?: Array<{ action?: string }>;
+      actionSequence?: string[];
+    } | null;
+    const actionSequence = actionsData?.actionSequence ?? [];
+    const hasServe = actionSequence.some(a => a === 'serve')
+      || (actionsData?.actions ?? []).some(a => a.action === 'serve');
+
+    const durationS = (rally.endMs - rally.startMs) / 1000;
+
+    // Compute disqualification score
+    let score = 0;
+    if (contactCount === 0) score += 3;
+    else if (contactCount === 1) score += 1;
+    if (!hasServe) score += 2;
+    if (durationS < 6 && contactCount < 2) score += 1;
+
+    if (score >= 4) {
+      toDemote.push({ id: rally.id, score, contactCount, hasServe, durationS });
+    }
+  }
+
+  if (toDemote.length > 0) {
+    // Batch update in a single transaction
+    await prisma.$transaction(
+      toDemote.map(r =>
+        prisma.rally.update({
+          where: { id: r.id },
+          data: { status: 'SUGGESTED', rejectionReason: 'BALL_PASS' },
+        }),
+      ),
+    );
+
+    for (const r of toDemote) {
+      console.log(
+        `[RALLY_VALIDATION] Demoted rally ${r.id} (score=${r.score}, contacts=${r.contactCount}, serve=${r.hasServe}, dur=${r.durationS.toFixed(1)}s)`,
+      );
+    }
+    console.log(`[RALLY_VALIDATION] Demoted ${toDemote.length}/${rallies.length} rallies as ball passes for video ${videoId}`);
+  } else {
+    console.log(`[RALLY_VALIDATION] All ${rallies.length} rallies passed validation for video ${videoId}`);
   }
 }
 

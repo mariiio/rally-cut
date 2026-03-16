@@ -735,7 +735,7 @@ router.post(
       };
 
       const result = await runMatchAnalysis(req.params.id, onProgress);
-      res.write(`data: ${JSON.stringify({ step: 'done', index: 5, total: 5, result })}\n\n`);
+      res.write(`data: ${JSON.stringify({ step: 'done', index: 6, total: 6, result })}\n\n`);
       res.end();
     } catch (error) {
       next(error);
