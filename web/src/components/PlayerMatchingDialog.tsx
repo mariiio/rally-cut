@@ -159,7 +159,6 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
 
     let cancelled = false;
     const video = document.createElement('video');
-    video.crossOrigin = 'anonymous';
     video.preload = 'auto';
     video.muted = true;
     videoRef.current = video;
@@ -168,7 +167,7 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
     let untracked = 0;
 
     async function extractCrops() {
-      // Wait for video metadata
+      // Wait for video metadata — try without crossOrigin first (same-origin proxy)
       video.src = effectiveVideoUrl!;
       await new Promise<void>((resolve, reject) => {
         video.onloadedmetadata = () => resolve();
@@ -203,10 +202,12 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
         // Fetch tracking data from API
         let positions: ApiPlayerPosition[] = [];
         let rallyFps = 30;
+        let primaryTrackIds: number[] | undefined;
         try {
           const trackResp = await getPlayerTrack(entry.rallyId);
           positions = trackResp.positions ?? [];
           if (trackResp.fps) rallyFps = trackResp.fps;
+          primaryTrackIds = trackResp.primaryTrackIds;
         } catch (err) {
           console.warn(`Failed to fetch tracking for rally ${entry.rallyId}:`, err);
         }
@@ -221,13 +222,35 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
 
         const currentAssignments = assignmentsRef.current;
         const trackIds = new Set(positions.map((p) => p.trackId));
+        const rallyAssignment = currentAssignments[entry.rallyId] ?? {};
+
+        // Build effective mapping: match analysis is authoritative, but for
+        // primary tracks not in the assignment (stale IDs), assign to free slots
+        const usedPids = new Set<number>();
+        const effectiveMapping: Record<number, number> = {};
+        for (const [tidStr, pid] of Object.entries(rallyAssignment)) {
+          const tid = Number(tidStr);
+          if (trackIds.has(tid)) {
+            effectiveMapping[tid] = pid;
+            usedPids.add(pid);
+          }
+        }
+        if (primaryTrackIds) {
+          for (const tid of primaryTrackIds) {
+            if (trackIds.has(tid) && !effectiveMapping[tid]) {
+              for (let p = 1; p <= 4; p++) {
+                if (!usedPids.has(p)) { effectiveMapping[tid] = p; usedPids.add(p); break; }
+              }
+            }
+          }
+        }
 
         // For each track, find the position closest to mid-rally, seek video to that
         // frame's time, and crop. Per-track seeking handles tracks with gaps at midpoint.
         const midFrame = Math.round((endSec - startSec) / 2 * rallyFps);
 
         for (const trackId of trackIds) {
-          const pid = currentAssignments[entry.rallyId]?.[String(trackId)];
+          const pid = effectiveMapping[trackId];
           if (!pid) continue; // Not an assigned track
 
           const trackPositions = positions.filter((p) => p.trackId === trackId);
