@@ -207,19 +207,13 @@ export async function triggerRallyDetection(
   }
 
   if (video.status !== VideoStatus.UPLOADED) {
-    // Allow re-detection on DETECTED videos with no rallies (e.g. user deleted them)
+    // Allow re-detection on DETECTED videos — clear existing rallies and reset
     if (video.status === VideoStatus.DETECTED) {
-      const rallyCount = await prisma.rally.count({ where: { videoId } });
-      if (rallyCount === 0) {
-        await prisma.video.update({
-          where: { id: videoId },
-          data: { status: VideoStatus.UPLOADED },
-        });
-      } else {
-        throw new ConflictError(
-          `Video already has ${rallyCount} detected rallies. Delete them first to re-run detection.`
-        );
-      }
+      await prisma.rally.deleteMany({ where: { videoId } });
+      await prisma.video.update({
+        where: { id: videoId },
+        data: { status: VideoStatus.UPLOADED },
+      });
     } else {
       throw new ConflictError(
         `Video must be in UPLOADED status to trigger detection (current: ${video.status})`
@@ -265,11 +259,12 @@ export async function triggerRallyDetection(
   // requests both pass the "no existing job" check and create duplicates
   const { job, existingJob, cached } = await prisma.$transaction(
     async (tx) => {
-      // Check for existing job with same contentHash (completed, pending, or running)
-      // This prevents duplicate ML processing for the same content
+      // Check for existing job with same contentHash on a DIFFERENT video.
+      // Same-video re-detection should always re-run ML (user may have edited rallies).
       const existing = await tx.rallyDetectionJob.findFirst({
         where: {
           contentHash: video.contentHash,
+          videoId: { not: videoId },
           status: { in: [DetectionJobStatus.COMPLETED, DetectionJobStatus.PENDING, DetectionJobStatus.RUNNING] },
         },
         include: {
