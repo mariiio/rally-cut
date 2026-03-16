@@ -57,6 +57,9 @@ interface ContactInfo {
   directionChangeDeg: number;
   playerTrackId: number;
   playerDistance: number;
+  playerCandidates?: [number, number | null][];
+  arcFitResidual?: number;
+  confidence?: number;
   courtSide: string;
   isAtNet: boolean;
   isValidated: boolean;
@@ -80,6 +83,7 @@ interface ActionInfo {
   courtSide: string;
   confidence: number;
   team: string;  // "A" (near court), "B" (far court), or "unknown"
+  isSynthetic?: boolean;
 }
 
 interface ActionsData {
@@ -406,6 +410,9 @@ async function runPlayerTracker(
             directionChangeDeg: c.directionChangeDeg,
             playerTrackId: c.playerTrackId,
             playerDistance: c.playerDistance,
+            playerCandidates: c.playerCandidates,
+            arcFitResidual: c.arcFitResidual,
+            confidence: c.confidence,
             courtSide: c.courtSide,
             isAtNet: c.isAtNet,
             isValidated: c.isValidated,
@@ -426,6 +433,7 @@ async function runPlayerTracker(
             courtSide: a.courtSide,
             confidence: a.confidence,
             team: a.team || 'unknown',
+            ...(a.isSynthetic ? { isSynthetic: true } : {}),
           })),
           teamAssignments: result.actions.teamAssignments,
           servingTeam: result.actions.servingTeam,
