@@ -935,14 +935,18 @@ class MatchPlayerTracker:
     def _detect_side_switches_combinatorial(self) -> list[int]:
         """Detect side switches via combinatorial search.
 
-        Two-phase approach:
+        Two-phase approach with physical constraints:
           Phase A: Dense candidate search — every rally position is a
-            candidate. Appearance preference sign changes are used to
-            prioritize when >8 candidates. Try all 2^K combinations
-            (K≤8), scoring by normalized pairwise team appearance
-            preferences with parsimony penalty.
+            candidate, excluding positions with inter-rally gap < 8s
+            (physical constraint: walking across the court takes ≥11s).
+            Appearance sign changes are prioritized when >8 candidates.
+            Try all 2^K valid combinations (K≤8), requiring minimum
+            spacing of 4 rallies between switches (beach volleyball
+            switches every 5-7 points). Score by normalized pairwise
+            team appearance preferences with parsimony penalty.
           Phase B: Refine each detected switch ±1 rally, keeping shifts
             that improve the score or align with serve direction changes.
+            Both gap and spacing constraints enforced during refinement.
 
         Also validates multi-switch results by checking each switch has
         positive marginal contribution (prevents FP piggybacking on TP).
@@ -1034,7 +1038,7 @@ class MatchPlayerTracker:
         # excluding positions where the inter-rally gap is too short for a
         # physical side switch. Players must walk ~16m across the court (≥11s).
         # Threshold set conservatively at 8s (3.3s below the minimum observed
-        # GT switch gap of 11.3s across 25 labeled switches in 31 videos).
+        # GT switch gap of 11.3s across 57 labeled switches in 46 videos).
         min_switch_gap_ms = 8_000
         excluded_by_gap: set[int] = set()
         for k in range(1, n):
@@ -1129,6 +1133,22 @@ class MatchPlayerTracker:
             total -= len(switch_set) * switch_penalty
             return total
 
+        # Minimum spacing between consecutive switches. Beach volleyball
+        # switches sides every 7 points (sets 1-2) or 5 (set 3). Minimum
+        # observed GT spacing is 6 rallies across 46 videos. Threshold of
+        # 4 is conservative (2 below min observed).
+        min_switch_spacing = 4
+
+        def has_valid_spacing(switches: set[int]) -> bool:
+            """Check that all switches are >= min_switch_spacing apart."""
+            if len(switches) < 2:
+                return True
+            s = sorted(switches)
+            return all(
+                s[i + 1] - s[i] >= min_switch_spacing
+                for i in range(len(s) - 1)
+            )
+
         baseline_score = score_partition(set())
 
         best_score = baseline_score
@@ -1141,6 +1161,8 @@ class MatchPlayerTracker:
                 for j in range(len(candidates))
                 if mask & (1 << j)
             }
+            if not has_valid_spacing(switch_set):
+                continue
             score = score_partition(switch_set)
             if score > best_score:
                 best_score = score
@@ -1205,6 +1227,8 @@ class MatchPlayerTracker:
                     if alt in excluded_by_gap:
                         continue
                     trial = others | {alt}
+                    if not has_valid_spacing(trial):
+                        continue
                     trial_score = score_partition(trial)
                     if trial_score > best_local_score or (
                         trial_score == best_local_score
