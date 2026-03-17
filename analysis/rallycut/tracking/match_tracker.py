@@ -244,6 +244,9 @@ class StoredRallyData:
     player_side_assignment: dict[int, int] = field(default_factory=dict)
     # Ball trajectory serve direction: "near", "far", or "?" (unknown)
     serve_direction: str = "?"
+    # Rally timing (for inter-rally gap calculation in switch detection)
+    start_ms: int = 0
+    end_ms: int = 0
 
 
 def _team_match_cost(
@@ -350,6 +353,8 @@ class MatchPlayerTracker:
         ball_positions: list[BallPosition] | None = None,
         court_split_y: float | None = None,
         team_assignments: dict[int, int] | None = None,
+        start_ms: int = 0,
+        end_ms: int = 0,
     ) -> RallyTrackingResult:
         """
         Process a single rally and assign consistent player IDs.
@@ -471,6 +476,8 @@ class MatchPlayerTracker:
             top_tracks=top_tracks,
             player_side_assignment=dict(self.state.current_side_assignment),
             serve_direction=serve_dir,
+            start_ms=start_ms,
+            end_ms=end_ms,
         ))
 
         return RallyTrackingResult(
@@ -1023,10 +1030,29 @@ class MatchPlayerTracker:
                 norm_pref[a, b] = val
                 norm_pref[b, a] = val
 
-        # Step 3: Dense candidate generation — every rally is a candidate.
-        # The scorer handles filtering; no need to predict switch positions.
-        # When >8 candidates, prioritize appearance sign changes for coverage.
-        candidates = list(range(1, n))
+        # Step 3: Dense candidate generation — every rally is a candidate,
+        # excluding positions where the inter-rally gap is too short for a
+        # physical side switch. Players must walk ~16m across the court (≥11s).
+        # Threshold set conservatively at 8s (3.3s below the minimum observed
+        # GT switch gap of 11.3s across 25 labeled switches in 31 videos).
+        min_switch_gap_ms = 8_000
+        excluded_by_gap: set[int] = set()
+        for k in range(1, n):
+            gap_ms = (
+                self.stored_rally_data[k].start_ms
+                - self.stored_rally_data[k - 1].end_ms
+            )
+            if 0 < gap_ms < min_switch_gap_ms:
+                excluded_by_gap.add(k)
+        if excluded_by_gap:
+            logger.info(
+                "Side switch: excluded %d positions with gap < %.0fs: %s",
+                len(excluded_by_gap),
+                min_switch_gap_ms / 1000,
+                sorted(excluded_by_gap),
+            )
+
+        candidates = [k for k in range(1, n) if k not in excluded_by_gap]
 
         if len(candidates) > 8:
             # Prioritize appearance-based candidates (sign changes in
@@ -1175,6 +1201,8 @@ class MatchPlayerTracker:
                 for delta in [-1, 1]:
                     alt = sw + delta
                     if alt < 1 or alt >= n or alt in others:
+                        continue
+                    if alt in excluded_by_gap:
                         continue
                     trial = others | {alt}
                     trial_score = score_partition(trial)
@@ -1686,6 +1714,8 @@ def match_players_across_rallies(
             ball_positions=rally.ball_positions,
             court_split_y=rally.court_split_y,
             team_assignments=rally.team_assignments,
+            start_ms=rally.start_ms,
+            end_ms=rally.end_ms,
         )
 
         results.append(result)
