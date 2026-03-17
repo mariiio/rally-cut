@@ -497,7 +497,7 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
               const overlap = Math.min(r.end_time, endSec) - Math.max(r.start_time, startSec);
               return overlap > 0.5;
             });
-          const isSideSwitch = sideSwitches.includes(rallyIndex);
+          const isSideSwitch = sideSwitches.includes(entry.rallyIndex);
           const rowAssignment = assignments[entry.rallyId] || {};
 
           return (
@@ -509,7 +509,7 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
                     label="Side Switch"
                     size="small"
                     sx={{ bgcolor: '#ff9800', color: 'white', cursor: 'pointer' }}
-                    onClick={() => handleToggleSideSwitch(rallyIndex)}
+                    onClick={() => handleToggleSideSwitch(entry.rallyIndex)}
                   />
                 </Divider>
               )}
@@ -559,7 +559,7 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
                         height: 20,
                         cursor: 'pointer',
                       }}
-                      onClick={() => handleToggleSideSwitch(rallyIndex)}
+                      onClick={() => handleToggleSideSwitch(entry.rallyIndex)}
                     />
                   </Tooltip>
                 </Box>
