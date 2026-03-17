@@ -261,6 +261,8 @@ async function validateTrackedRallies(videoId: string): Promise<void> {
     const actionSequence = actionsData?.actionSequence ?? [];
     const hasServe = actionSequence.some(a => a === 'serve')
       || (actionsData?.actions ?? []).some(a => a.action === 'serve');
+    const hasReceive = actionSequence.some(a => a === 'receive')
+      || (actionsData?.actions ?? []).some(a => a.action === 'receive');
 
     const durationS = (rally.endMs - rally.startMs) / 1000;
 
@@ -269,6 +271,7 @@ async function validateTrackedRallies(videoId: string): Promise<void> {
     if (contactCount === 0) score += 3;
     else if (contactCount === 1) score += 1;
     if (!hasServe) score += 2;
+    if (!hasReceive) score += 1;
     if (durationS < 6 && contactCount < 2) score += 1;
 
     if (score >= 4) {
