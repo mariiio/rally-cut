@@ -45,17 +45,9 @@ def validate_rally(rally: dict) -> tuple[int, list[str]]:
         score += 1
         reasons.append("1 contact (+1)")
 
-    has_receive = any(a == "receive" for a in action_seq) or any(
-        a.get("action") == "receive" for a in actions_list
-    )
-
     if not has_serve:
         score += 2
         reasons.append("no serve (+2)")
-
-    if not has_receive:
-        score += 1
-        reasons.append("no receive (+1)")
 
     if duration_s < 6 and contact_count < 2:
         score += 1
