@@ -1744,5 +1744,87 @@
         "end_ms": 187368
       }
     ]
+  },
+  {
+    "video_id": "7d77980f-3006-40e0-adc0-db491a5bb659",
+    "filename": "tata.mp4",
+    "rallies": [
+      {
+        "start_ms": 0,
+        "end_ms": 30133
+      },
+      {
+        "start_ms": 62200,
+        "end_ms": 72733
+      },
+      {
+        "start_ms": 124200,
+        "end_ms": 142733
+      },
+      {
+        "start_ms": 174200,
+        "end_ms": 187733
+      },
+      {
+        "start_ms": 209400,
+        "end_ms": 223933
+      },
+      {
+        "start_ms": 269400,
+        "end_ms": 287133
+      },
+      {
+        "start_ms": 304400,
+        "end_ms": 319333
+      },
+      {
+        "start_ms": 349400,
+        "end_ms": 362333
+      },
+      {
+        "start_ms": 383800,
+        "end_ms": 391633
+      },
+      {
+        "start_ms": 402200,
+        "end_ms": 413633
+      },
+      {
+        "start_ms": 456200,
+        "end_ms": 471533
+      },
+      {
+        "start_ms": 516600,
+        "end_ms": 539633
+      },
+      {
+        "start_ms": 560200,
+        "end_ms": 579933
+      },
+      {
+        "start_ms": 591000,
+        "end_ms": 600433
+      },
+      {
+        "start_ms": 612933,
+        "end_ms": 618933
+      },
+      {
+        "start_ms": 635400,
+        "end_ms": 647133
+      },
+      {
+        "start_ms": 664600,
+        "end_ms": 684733
+      },
+      {
+        "start_ms": 699400,
+        "end_ms": 710833
+      },
+      {
+        "start_ms": 725800,
+        "end_ms": 734733
+      }
+    ]
   }
 ]
