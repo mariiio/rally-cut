@@ -1628,7 +1628,18 @@ class PlayerTracker:
                         )
                     )
 
-            # Step 5: Compute quality report
+            # Step 5: Interpolate detection gaps for primary tracks
+            num_interpolated = 0
+            if filter_enabled and primary_track_ids:
+                from rallycut.tracking.player_filter import interpolate_player_gaps
+
+                positions, num_interpolated = interpolate_player_gaps(
+                    positions,
+                    primary_track_ids,
+                    config=filter_config,
+                )
+
+            # Step 6: Compute quality report
             quality_report = None
             if filter_enabled:
                 from rallycut.tracking.quality_report import compute_quality_report
@@ -1665,6 +1676,7 @@ class PlayerTracker:
                     global_identity_remapped=num_global_remapped,
                     convergence_swaps_fixed=num_convergence_swaps,
                     team_classification_skipped=split_confidence != "high",
+                    interpolated_position_count=num_interpolated,
                 )
 
             processing_time_ms = (time.time() - start_time) * 1000

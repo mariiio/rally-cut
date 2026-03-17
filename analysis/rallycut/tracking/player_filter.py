@@ -183,6 +183,14 @@ class PlayerFilterConfig:
     stationary_bg_min_detections: int = 50  # Minimum detections to be considered
     stationary_bg_min_presence: float = 0.80  # Must be present in 80%+ of frames (background = always there)
 
+    # Gap interpolation for primary tracks
+    # Fills short detection gaps with linearly interpolated positions.
+    # Far-court players are missed ~20-25% of frames by YOLO; interpolation recovers
+    # these gaps when the same track reappears within max_interpolation_gap frames.
+    enable_interpolation: bool = True
+    max_interpolation_gap: int = 30  # Max gap in frames to interpolate (~1s at 30fps)
+    interpolated_confidence: float = 0.5  # Confidence assigned to interpolated positions
+
 
 @dataclass
 class CourtFilterConfig:
@@ -244,167 +252,6 @@ def compute_stability_score(stats: TrackStats, config: PlayerFilterConfig) -> fl
         + stats.ball_proximity_score * config.ball_proximity_weight
     )
     return score
-
-
-@dataclass
-class CombinedScoreWeights:
-    """Weights for combined player scoring.
-
-    Different weight configurations for different data availability scenarios.
-    """
-
-    length: float = 0.10
-    court_presence: float = 0.20
-    interior_ratio: float = 0.15
-    ball_proximity: float = 0.20
-    ball_reactivity: float = 0.15
-    ball_zone: float = 0.10
-    position_spread: float = 0.10
-
-
-# Pre-defined weight configurations for different data scenarios
-WEIGHTS_FULL_DATA = CombinedScoreWeights(
-    length=0.10,
-    court_presence=0.20,
-    interior_ratio=0.15,
-    ball_proximity=0.20,
-    ball_reactivity=0.15,
-    ball_zone=0.10,
-    position_spread=0.10,
-)
-
-WEIGHTS_NO_CALIBRATION = CombinedScoreWeights(
-    length=0.20,
-    court_presence=0.0,  # No calibration
-    interior_ratio=0.0,  # No calibration
-    ball_proximity=0.30,
-    ball_reactivity=0.25,
-    ball_zone=0.15,
-    position_spread=0.10,
-)
-
-WEIGHTS_NO_BALL = CombinedScoreWeights(
-    length=0.20,
-    court_presence=0.30,
-    interior_ratio=0.25,
-    ball_proximity=0.0,  # No ball data
-    ball_reactivity=0.0,  # No ball data
-    ball_zone=0.0,  # No ball data
-    position_spread=0.25,
-)
-
-WEIGHTS_MINIMAL = CombinedScoreWeights(
-    length=1.0,  # Only length available
-    court_presence=0.0,
-    interior_ratio=0.0,
-    ball_proximity=0.0,
-    ball_reactivity=0.0,
-    ball_zone=0.0,
-    position_spread=0.0,
-)
-
-
-@dataclass
-class CombinedScoreInputs:
-    """Inputs for combined player scoring.
-
-    All scores should be normalized to 0-1 range.
-    """
-
-    track_id: int
-    length_score: float = 0.0  # Fraction of frames track is present
-    court_presence: float = 0.0  # Fraction of positions inside court bounds
-    interior_ratio: float = 0.0  # Fraction of positions in court interior
-    ball_proximity: float = 0.0  # Fraction of appearances near ball
-    ball_reactivity: float = 0.0  # Correlation with ball movement
-    ball_zone: float = 0.0  # Position relative to ball trajectory zones
-    position_spread: float = 0.0  # Movement spread (normalized)
-
-    # Data availability flags
-    has_calibration: bool = False
-    has_ball_data: bool = False
-
-
-def compute_combined_score(
-    inputs: CombinedScoreInputs,
-    weights: CombinedScoreWeights | None = None,
-) -> float:
-    """
-    Compute combined player identification score.
-
-    Uses different weight configurations based on data availability:
-    - Full data (calibration + ball): All features weighted
-    - No calibration: Ball-focused scoring
-    - No ball data: Court-focused scoring
-    - Neither: Length only
-
-    Args:
-        inputs: Score inputs for a single track.
-        weights: Optional custom weights (auto-selects if None).
-
-    Returns:
-        Combined score (0-1, higher = more likely to be a player).
-    """
-    # Auto-select weights based on data availability
-    if weights is None:
-        if inputs.has_calibration and inputs.has_ball_data:
-            weights = WEIGHTS_FULL_DATA
-        elif inputs.has_ball_data:
-            weights = WEIGHTS_NO_CALIBRATION
-        elif inputs.has_calibration:
-            weights = WEIGHTS_NO_BALL
-        else:
-            weights = WEIGHTS_MINIMAL
-
-    score = (
-        weights.length * inputs.length_score
-        + weights.court_presence * inputs.court_presence
-        + weights.interior_ratio * inputs.interior_ratio
-        + weights.ball_proximity * inputs.ball_proximity
-        + weights.ball_reactivity * inputs.ball_reactivity
-        + weights.ball_zone * inputs.ball_zone
-        + weights.position_spread * inputs.position_spread
-    )
-
-    return min(1.0, max(0.0, score))
-
-
-def build_score_inputs_from_track_stats(
-    stats: TrackStats,
-    has_calibration: bool = False,
-    has_ball_data: bool = False,
-    ball_reactivity: float = 0.0,
-    ball_zone: float = 0.0,
-) -> CombinedScoreInputs:
-    """
-    Build CombinedScoreInputs from TrackStats.
-
-    Args:
-        stats: Track statistics from compute_track_stats().
-        has_calibration: Whether court calibration is available.
-        has_ball_data: Whether ball tracking data is available.
-        ball_reactivity: Ball reactivity score (from ball_features.py).
-        ball_zone: Ball zone score (from ball_features.py).
-
-    Returns:
-        CombinedScoreInputs ready for compute_combined_score().
-    """
-    # Normalize position spread to 0-1 range
-    # Typical player spread: 0.02-0.10, use 0.10 as max
-    spread_normalized = min(stats.position_spread / 0.10, 1.0)
-
-    return CombinedScoreInputs(
-        track_id=stats.track_id,
-        length_score=stats.presence_rate,
-        court_presence=stats.court_presence_ratio if stats.has_court_stats else 0.0,
-        interior_ratio=stats.interior_ratio if stats.has_court_stats else 0.0,
-        ball_proximity=stats.ball_proximity_score,
-        ball_reactivity=ball_reactivity,
-        ball_zone=ball_zone,
-        position_spread=spread_normalized,
-        has_calibration=has_calibration,
-        has_ball_data=has_ball_data,
-    )
 
 
 def compute_court_position_stats(
@@ -761,49 +608,6 @@ def _find_net_from_ball_crossings(
         return float(np.median(crossing_ys))
 
     return None
-
-
-def identify_teams_by_court_side(
-    track_stats: dict[int, TrackStats],
-    net_y: float,
-    min_side_fraction: float = 0.60,
-) -> tuple[set[int], set[int]]:
-    """
-    Identify teams by where players spend most of their time.
-
-    Beach volleyball players stay primarily on one side of the net.
-    A player belongs to a team if they spend 60%+ of their time on that side.
-
-    Args:
-        track_stats: Statistics for each track (must have avg_y).
-        net_y: Y-coordinate of the net (0-1).
-        min_side_fraction: Minimum fraction of time on one side (default 60%).
-
-    Returns:
-        Tuple of (near_team, far_team) sets of track IDs.
-        Near team: y > net_y (closer to camera)
-        Far team: y <= net_y (further from camera)
-    """
-    near_team: set[int] = set()
-    far_team: set[int] = set()
-
-    for track_id, stats in track_stats.items():
-        if stats.is_likely_referee:
-            continue
-
-        # Determine which side the player is primarily on
-        # Since we only have avg_y, use that (could be improved with per-frame analysis)
-        if stats.avg_y > net_y:
-            near_team.add(track_id)
-        else:
-            far_team.add(track_id)
-
-    logger.debug(
-        f"Team identification by court side (net_y={net_y:.2f}): "
-        f"near={len(near_team)}, far={len(far_team)}"
-    )
-
-    return near_team, far_team
 
 
 def classify_teams(
@@ -2504,3 +2308,77 @@ class PlayerFilter:
         if self.use_ball_filtering and self.play_area is not None:
             methods.append("play_area")
         return "+".join(methods)
+
+
+def interpolate_player_gaps(
+    positions: list[PlayerPosition],
+    primary_track_ids: set[int] | list[int],
+    config: PlayerFilterConfig | None = None,
+) -> tuple[list[PlayerPosition], int]:
+    """Interpolate detection gaps for primary player tracks.
+
+    When YOLO misses a player for a few frames (common for far-court players),
+    linearly interpolates position and bbox between the last known and next known
+    detection. Only interpolates for identified primary tracks.
+
+    Args:
+        positions: Filtered player positions (may contain non-primary tracks).
+        primary_track_ids: Set of track IDs identified as primary players.
+        config: Filter config (uses defaults if None).
+
+    Returns:
+        Tuple of (positions with interpolated entries added, count of interpolated).
+    """
+    cfg = config or PlayerFilterConfig()
+    if not cfg.enable_interpolation or not positions or not primary_track_ids:
+        return positions, 0
+
+    max_gap = cfg.max_interpolation_gap
+    interp_conf = cfg.interpolated_confidence
+
+    # Build per-track frame map for primary tracks only
+    primary_set = set(primary_track_ids)
+    track_positions: dict[int, dict[int, PlayerPosition]] = {}
+    for p in positions:
+        if p.track_id in primary_set:
+            track_positions.setdefault(p.track_id, {})[p.frame_number] = p
+
+    interpolated: list[PlayerPosition] = []
+
+    for track_id, frame_map in track_positions.items():
+        frames = sorted(frame_map.keys())
+        if len(frames) < 2:
+            continue
+
+        for i in range(len(frames) - 1):
+            f1, f2 = frames[i], frames[i + 1]
+            gap = f2 - f1
+
+            if gap <= 1 or gap > max_gap:
+                continue
+
+            p1, p2 = frame_map[f1], frame_map[f2]
+
+            for f in range(f1 + 1, f2):
+                t = (f - f1) / gap
+                interpolated.append(PlayerPosition(
+                    frame_number=f,
+                    track_id=track_id,
+                    x=p1.x + t * (p2.x - p1.x),
+                    y=p1.y + t * (p2.y - p1.y),
+                    width=p1.width + t * (p2.width - p1.width),
+                    height=p1.height + t * (p2.height - p1.height),
+                    confidence=interp_conf,
+                ))
+
+    if interpolated:
+        logger.info(
+            f"Interpolated {len(interpolated)} positions across "
+            f"{len(track_positions)} primary tracks "
+            f"(max_gap={max_gap} frames)"
+        )
+        result = positions + interpolated
+        result.sort(key=lambda p: (p.frame_number, p.track_id))
+        return result, len(interpolated)
+
+    return positions, 0
