@@ -1584,6 +1584,23 @@ def detect_contacts(
         if not is_validated:
             continue
 
+        # Sequential attribution fix: when the nearest player is the same as
+        # the previous contact AND a close alternative exists, prefer the
+        # alternative. In volleyball, the same player rarely touches the ball
+        # consecutively. Applied AFTER validation to preserve the contact
+        # classifier's feature distribution (player_distance unchanged).
+        if (
+            track_id >= 0
+            and contacts
+            and track_id == contacts[-1].player_track_id
+            and len(candidates) >= 2
+        ):
+            _, d1, _ = candidates[0]
+            alt_tid, d2, _alt_y = candidates[1]
+            margin = d2 - d1
+            if margin < 0.05 and alt_tid != track_id:
+                track_id = alt_tid
+
         contacts.append(Contact(
             frame=frame,
             ball_x=ball.x,
