@@ -38,6 +38,14 @@ MIN_HIST_PIXELS = 200  # Minimum pixels for reliable histogram
 V_BINS = 16
 V_RANGES = [0, 256]
 
+# EMA decay factor for profile updates.
+# 0.0 = use equal-weight running average (legacy behavior).
+# >0.0 = exponential moving average where new sample gets weight=alpha.
+# Effective memory window ≈ 1/alpha rallies (e.g. 0.10 ≈ 10 rally window).
+# Tuned via grid search on 46 GT videos: α=0.10 → 86.7% (+1.3pp) with
+# near-zero drift (early 86.9% vs late 86.6%) vs baseline drift of +4.6pp.
+PROFILE_EMA_ALPHA: float = 0.10
+
 # Tighter skin range for clothing mask — avoids removing red/orange clothing.
 # Real skin: H=5-20, moderate S (40-170), moderate V (70-230).
 # Red clothing: H~0-5 or S>180. Orange: H>15 + S>170.
@@ -168,14 +176,28 @@ class PlayerAppearanceProfile:
             profile.avg_dominant_color_hsv = (float(dc[0]), float(dc[1]), float(dc[2]))
         return profile
 
+    def _ema_weight(self, sample_count: int) -> float:
+        """Compute update weight for a new sample.
+
+        With EMA (PROFILE_EMA_ALPHA > 0), returns a fixed weight so recent
+        samples dominate. With alpha=0 (legacy), returns 1/(count+1) for
+        equal-weight running average.
+        """
+        if PROFILE_EMA_ALPHA > 0:
+            # First sample always gets weight=1 (initialization)
+            if sample_count == 0:
+                return 1.0
+            return PROFILE_EMA_ALPHA
+        return 1.0 / (sample_count + 1)
+
     def update_from_features(self, features: PlayerAppearanceFeatures) -> None:
         """Update profile with new appearance features."""
-        # Update skin tone (running average, equal weight per sample)
+        # Update skin tone
         if features.skin_tone_hsv is not None and features.skin_pixel_count >= MIN_SKIN_PIXELS:
             if self.avg_skin_tone_hsv is None:
                 self.avg_skin_tone_hsv = features.skin_tone_hsv
             else:
-                weight = 1.0 / (self.skin_sample_count + 1)
+                weight = self._ema_weight(self.skin_sample_count)
                 h1, s1, v1 = self.avg_skin_tone_hsv
                 h2, s2, v2 = features.skin_tone_hsv
                 h_new = _circular_mean(h1, h2, weight)
@@ -184,24 +206,24 @@ class PlayerAppearanceProfile:
                 self.avg_skin_tone_hsv = (h_new, s_new, v_new)
             self.skin_sample_count += 1
 
-        # Update upper body histogram (equal-weight running average)
+        # Update upper body histogram
         if features.upper_body_hist is not None:
             if self.avg_upper_hist is None:
                 self.avg_upper_hist = features.upper_body_hist.copy()
             else:
-                weight = 1.0 / (self.upper_hist_count + 1)
+                weight = self._ema_weight(self.upper_hist_count)
                 self.avg_upper_hist = (
                     self.avg_upper_hist * (1 - weight)
                     + features.upper_body_hist * weight
                 )
             self.upper_hist_count += 1
 
-        # Update lower body histogram (equal-weight running average)
+        # Update lower body histogram
         if features.lower_body_hist is not None:
             if self.avg_lower_hist is None:
                 self.avg_lower_hist = features.lower_body_hist.copy()
             else:
-                weight = 1.0 / (self.lower_hist_count + 1)
+                weight = self._ema_weight(self.lower_hist_count)
                 self.avg_lower_hist = (
                     self.avg_lower_hist * (1 - weight)
                     + features.lower_body_hist * weight
@@ -213,7 +235,7 @@ class PlayerAppearanceProfile:
             if self.avg_upper_v_hist is None:
                 self.avg_upper_v_hist = features.upper_body_v_hist.copy()
             else:
-                weight = 1.0 / (self.upper_v_hist_count + 1)
+                weight = self._ema_weight(self.upper_v_hist_count)
                 self.avg_upper_v_hist = (
                     self.avg_upper_v_hist * (1 - weight)
                     + features.upper_body_v_hist * weight
@@ -225,7 +247,7 @@ class PlayerAppearanceProfile:
             if self.avg_lower_v_hist is None:
                 self.avg_lower_v_hist = features.lower_body_v_hist.copy()
             else:
-                weight = 1.0 / (self.lower_v_hist_count + 1)
+                weight = self._ema_weight(self.lower_v_hist_count)
                 self.avg_lower_v_hist = (
                     self.avg_lower_v_hist * (1 - weight)
                     + features.lower_body_v_hist * weight
@@ -237,7 +259,7 @@ class PlayerAppearanceProfile:
             if self.avg_dominant_color_hsv is None:
                 self.avg_dominant_color_hsv = features.dominant_color_hsv
             else:
-                weight = 1.0 / (self.dominant_color_count + 1)
+                weight = self._ema_weight(self.dominant_color_count)
                 h1, s1, v1 = self.avg_dominant_color_hsv
                 h2, s2, v2 = features.dominant_color_hsv
                 h_new = _circular_mean(h1, h2, weight)
