@@ -338,7 +338,7 @@ def label_candidates(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train contact classifier")
-    parser.add_argument("--threshold", type=float, default=0.45, help="Classifier threshold (default: 0.45, end-to-end optimal)")
+    parser.add_argument("--threshold", type=float, default=0.35, help="Classifier threshold (default: 0.35, end-to-end optimal)")
     parser.add_argument("--output", type=str, default="weights/contact_classifier/contact_classifier.pkl")
     parser.add_argument("--tolerance", type=int, default=5, help="Frame tolerance for GT matching")
     parser.add_argument("--positive-weight", type=float, default=1.0, help="Weight multiplier for positive samples (recall bias)")
@@ -470,7 +470,7 @@ def main() -> None:
     console.print(sweep_table)
     console.print(f"\n[bold]Best LOO threshold: {best_threshold:.2f} (LOO F1: {best_f1:.1%})[/bold]")
 
-    # Use end-to-end optimal threshold (0.45) rather than LOO optimal.
+    # Use end-to-end optimal threshold (0.35) rather than LOO optimal.
     # LOO measures classifier accuracy on candidates; end-to-end measures
     # full pipeline F1 including candidate generation + action classification.
     # Run eval_action_detection.py --sweep-thresholds to re-validate.
