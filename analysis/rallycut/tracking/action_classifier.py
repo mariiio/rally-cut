@@ -616,11 +616,13 @@ class ActionClassifier:
                 last_action_type = ActionType.UNKNOWN
                 continue
 
-            # Handle possession changes: check ball trajectory crossing.
-            # _ball_crossed_net returns True/False/None (tri-state):
-            #   True  = confirmed crossing → reset counter
-            #   False = confirmed no crossing → trust trajectory over court_side
-            #   None  = insufficient data → fall back to court_side comparison
+            # Handle possession changes.
+            # _ball_crossed_net detects ball Y crossing net_y (high precision
+            # but only 6% recall — the ball arcs OVER the net in image coords).
+            # When it confirms a crossing (True), trust it. Otherwise, fall
+            # back to court_side comparison — don't let an unreliable False
+            # override court_side, which would drag the touch counter error
+            # forward through subsequent contacts.
             crossed_net: bool | None = None
             if ball_positions and i > 0 and current_side is not None:
                 crossed_net = _ball_crossed_net(
@@ -633,14 +635,11 @@ class ActionClassifier:
                 current_side = contact.court_side
                 contact_count_on_side = 0
             elif contact.court_side != current_side:
-                if crossed_net is False:
-                    # Confirmed no crossing — trust trajectory, keep counter.
-                    pass
-                else:
-                    # crossed_net is None (insufficient data or no ball_positions)
-                    # Fall back to court_side comparison
-                    current_side = contact.court_side
-                    contact_count_on_side = 0
+                # Court side changed — trust it. _ball_crossed_net False is
+                # unreliable (misses 90% of real crossings due to camera
+                # perspective), so we don't let it override court_side.
+                current_side = contact.court_side
+                contact_count_on_side = 0
 
             contact_count_on_side += 1
 
