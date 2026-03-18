@@ -456,7 +456,7 @@ def _run_threshold_sweep(
             all_unmatched_sweep.extend(unmatched)
 
         metrics = compute_metrics(all_matches_sweep, all_unmatched_sweep)
-        is_current = threshold == 0.50
+        is_current = threshold == 0.35
         style = "bold" if is_current else ""
         sweep_table.add_row(
             f"{threshold:.2f}" + (" *" if is_current else ""),
