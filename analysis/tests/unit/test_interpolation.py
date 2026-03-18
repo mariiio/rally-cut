@@ -1,12 +1,11 @@
-"""Tests for player gap interpolation."""
+"""Tests for player gap interpolation and missing player recovery."""
 
 from __future__ import annotations
-
-import pytest
 
 from rallycut.tracking.player_filter import (
     PlayerFilterConfig,
     interpolate_player_gaps,
+    recover_missing_players,
 )
 from rallycut.tracking.player_tracker import PlayerPosition
 
@@ -160,3 +159,100 @@ class TestInterpolatePlayerGaps:
         assert len(originals) == 2
         assert originals[0].x == 0.2
         assert originals[1].x == 0.5
+
+
+class TestRecoverMissingPlayers:
+    """Tests for recover_missing_players."""
+
+    def _make_positions(
+        self, track_id: int, frames: range, x: float = 0.5, y: float = 0.5
+    ) -> list[PlayerPosition]:
+        """Create positions for a track across given frames."""
+        return [
+            PlayerPosition(
+                frame_number=f, track_id=track_id,
+                x=x + 0.001 * (f % 10), y=y + 0.001 * (f % 10),
+                width=0.08, height=0.15, confidence=0.9,
+            )
+            for f in frames
+        ]
+
+    def test_no_recovery_needed(self) -> None:
+        """No recovery when already at max_players."""
+        pipeline = self._make_positions(1, range(100)) + self._make_positions(2, range(100))
+        pipeline += self._make_positions(3, range(100)) + self._make_positions(4, range(100))
+        raw = list(pipeline)
+        result, ids, count = recover_missing_players(
+            pipeline, raw, {1, 2, 3, 4}, 100,
+        )
+        assert count == 0
+        assert len(ids) == 4
+
+    def test_recovers_missing_track(self) -> None:
+        """Recovers a track present in raw but missing from pipeline."""
+        # Pipeline has 3 players at distinct positions
+        pipeline = (
+            self._make_positions(1, range(100), x=0.3, y=0.7)
+            + self._make_positions(2, range(100), x=0.7, y=0.7)
+            + self._make_positions(3, range(100), x=0.4, y=0.3)
+        )
+        # Raw has the same 3 plus a 4th at a distinct position
+        raw = list(pipeline) + self._make_positions(4, range(100), x=0.6, y=0.3)
+        result, ids, count = recover_missing_players(
+            pipeline, raw, {1, 2, 3}, 100,
+        )
+        assert count == 1
+        assert 4 in ids
+        assert len(ids) == 4
+
+    def test_rejects_duplicate_track(self) -> None:
+        """Doesn't recover a track that overlaps with existing primary."""
+        pipeline = (
+            self._make_positions(1, range(100), x=0.3, y=0.5)
+            + self._make_positions(2, range(100), x=0.7, y=0.5)
+            + self._make_positions(3, range(100), x=0.5, y=0.3)
+        )
+        # Track 4 is at same position as track 3 (duplicate detection)
+        raw = list(pipeline) + self._make_positions(4, range(100), x=0.5, y=0.3)
+        result, ids, count = recover_missing_players(
+            pipeline, raw, {1, 2, 3}, 100,
+        )
+        assert count == 0
+        assert len(ids) == 3
+
+    def test_rejects_sideline_track(self) -> None:
+        """Doesn't recover tracks on sidelines."""
+        pipeline = (
+            self._make_positions(1, range(100), x=0.3, y=0.5)
+            + self._make_positions(2, range(100), x=0.7, y=0.5)
+            + self._make_positions(3, range(100), x=0.5, y=0.3)
+        )
+        # Track 4 is on the sideline (x=0.02)
+        raw = list(pipeline) + self._make_positions(4, range(100), x=0.02, y=0.5)
+        result, ids, count = recover_missing_players(
+            pipeline, raw, {1, 2, 3}, 100,
+        )
+        assert count == 0
+
+    def test_rejects_low_presence_track(self) -> None:
+        """Doesn't recover tracks with very low presence."""
+        config = PlayerFilterConfig(min_presence_rate=0.20)
+        pipeline = (
+            self._make_positions(1, range(100), x=0.3, y=0.5)
+            + self._make_positions(2, range(100), x=0.7, y=0.5)
+            + self._make_positions(3, range(100), x=0.5, y=0.3)
+        )
+        # Track 4 only in 5% of frames
+        raw = list(pipeline) + self._make_positions(4, range(5), x=0.6, y=0.3)
+        result, ids, count = recover_missing_players(
+            pipeline, raw, {1, 2, 3}, 100, config=config,
+        )
+        assert count == 0
+
+    def test_empty_raw_positions(self) -> None:
+        pipeline = self._make_positions(1, range(10))
+        result, ids, count = recover_missing_players(
+            pipeline, [], {1}, 10,
+        )
+        assert count == 0
+        assert result == pipeline

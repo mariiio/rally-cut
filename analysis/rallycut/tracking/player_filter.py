@@ -2382,3 +2382,143 @@ def interpolate_player_gaps(
         return result, len(interpolated)
 
     return positions, 0
+
+
+def recover_missing_players(
+    pipeline_positions: list[PlayerPosition],
+    raw_positions: list[PlayerPosition],
+    primary_track_ids: set[int] | list[int],
+    total_frames: int,
+    ball_positions: list[BallPosition] | None = None,
+    config: PlayerFilterConfig | None = None,
+) -> tuple[list[PlayerPosition], set[int], int]:
+    """Recover players lost during intermediate pipeline steps.
+
+    When the pipeline produces <max_players primary tracks but the raw YOLO
+    detections show >=max_players concurrent people, a valid player was lost
+    during track splitting/merging/stabilization. This function identifies
+    the best raw track to recover.
+
+    Recovery criteria for a raw track:
+    - Not already represented in pipeline output (spatially distinct)
+    - Present in >=20% of frames (min_presence_rate)
+    - Reasonable bbox size (>= min_bbox_area)
+    - Not on sidelines
+
+    Args:
+        pipeline_positions: Positions after pipeline filtering (primary tracks only).
+        raw_positions: Original YOLO+BoT-SORT detections (pre-pipeline).
+        primary_track_ids: Currently selected primary track IDs.
+        total_frames: Total frames in the rally.
+        ball_positions: Ball positions for proximity scoring.
+        config: Filter configuration.
+
+    Returns:
+        Tuple of (updated positions, updated primary_ids, count of recovered tracks).
+    """
+    cfg = config or PlayerFilterConfig()
+    primary_set = set(primary_track_ids)
+
+    if len(primary_set) >= cfg.max_players or not raw_positions:
+        return pipeline_positions, primary_set, 0
+
+    needed = cfg.max_players - len(primary_set)
+
+    # Build per-frame position map for existing primary tracks
+    primary_by_frame: dict[int, list[PlayerPosition]] = {}
+    for p in pipeline_positions:
+        if p.track_id in primary_set:
+            primary_by_frame.setdefault(p.frame_number, []).append(p)
+
+    # Get raw track stats
+    raw_stats = compute_track_stats(raw_positions, total_frames)
+
+    if ball_positions:
+        prox = compute_ball_proximity_scores(raw_positions, ball_positions, cfg)
+        for tid, score in prox.items():
+            if tid in raw_stats:
+                raw_stats[tid].ball_proximity_score = score
+
+    # Build per-track positions from raw
+    raw_track_positions: dict[int, dict[int, PlayerPosition]] = {}
+    for p in raw_positions:
+        raw_track_positions.setdefault(p.track_id, {})[p.frame_number] = p
+
+    # Find candidate tracks: not already in primary set, pass basic filters
+    candidates: list[tuple[int, float]] = []  # (track_id, score)
+
+    for tid, stats in raw_stats.items():
+        # Skip tracks already in primary set
+        if tid in primary_set:
+            continue
+
+        # Hard filters (same as identify_primary_tracks)
+        sideline_min = cfg.primary_sideline_threshold
+        if stats.avg_x < sideline_min or stats.avg_x > (1.0 - sideline_min):
+            continue
+        if stats.presence_rate < cfg.min_presence_rate:
+            continue
+        if stats.avg_bbox_area < cfg.min_bbox_area:
+            continue
+
+        # Check spatial distinctness: must not overlap with existing primaries
+        # For each frame, compute distance to the nearest primary track.
+        # If the median nearest-distance is <0.03, this is the same person.
+        frame_map = raw_track_positions.get(tid, {})
+        nearest_distances: list[float] = []
+        for frame_num, raw_pos in frame_map.items():
+            if frame_num in primary_by_frame:
+                frame_min = min(
+                    (
+                        (raw_pos.x - pp.x) ** 2
+                        + (raw_pos.y - pp.y) ** 2
+                    ) ** 0.5
+                    for pp in primary_by_frame[frame_num]
+                )
+                nearest_distances.append(frame_min)
+
+        if nearest_distances:
+            median_nearest = float(np.median(nearest_distances))
+            if median_nearest < 0.03:
+                # Too close to an existing primary — likely same player
+                continue
+        else:
+            # No overlapping frames — can't verify distinctness
+            continue
+
+        # Score: same behavior score used by identify_primary_tracks
+        spread_normalized = min(stats.position_spread / 0.05, 1.0)
+        score = (
+            0.5 * stats.ball_proximity_score
+            + 0.3 * spread_normalized
+            + 0.2 * stats.presence_rate
+        )
+        candidates.append((tid, score))
+
+    if not candidates:
+        return pipeline_positions, primary_set, 0
+
+    # Select best candidates
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    recovered_positions: list[PlayerPosition] = []
+    recovered_count = 0
+
+    for tid, score in candidates[:needed]:
+        frame_map = raw_track_positions[tid]
+        for p in frame_map.values():
+            recovered_positions.append(p)
+        primary_set.add(tid)
+        recovered_count += 1
+        logger.info(
+            f"Recovered track {tid} from raw positions: "
+            f"presence={raw_stats[tid].presence_rate:.2f}, "
+            f"area={raw_stats[tid].avg_bbox_area:.4f}, "
+            f"score={score:.3f}"
+        )
+
+    if recovered_positions:
+        result = pipeline_positions + recovered_positions
+        result.sort(key=lambda p: (p.frame_number, p.track_id))
+        return result, primary_set, recovered_count
+
+    return pipeline_positions, primary_set, 0

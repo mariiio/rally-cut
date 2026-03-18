@@ -1516,6 +1516,32 @@ class PlayerTracker:
                 court_split_y = player_filter.court_split_y
                 primary_track_ids = sorted(player_filter.primary_tracks)
 
+                # Step 2b: Recover players lost during intermediate pipeline steps
+                # If <max_players primary tracks found but raw detections show
+                # more concurrent people, a valid player was lost during
+                # track splitting/merging. Recover from raw positions.
+                num_recovered = 0
+                if len(primary_track_ids) < config.max_players and raw_positions:
+                    from rallycut.tracking.player_filter import recover_missing_players
+
+                    positions, recovered_primary_set, num_recovered = (
+                        recover_missing_players(
+                            pipeline_positions=positions,
+                            raw_positions=raw_positions,
+                            primary_track_ids=player_filter.primary_tracks,
+                            total_frames=total_frames_in_range,
+                            ball_positions=ball_positions,
+                            config=config,
+                        )
+                    )
+                    if num_recovered > 0:
+                        player_filter.primary_tracks = recovered_primary_set
+                        primary_track_ids = sorted(recovered_primary_set)
+                        logger.info(
+                            f"Recovered {num_recovered} players from raw: "
+                            f"primary tracks now {primary_track_ids}"
+                        )
+
                 # Step 3: Group positions by frame
                 frames: dict[int, list[PlayerPosition]] = {}
                 for p in positions:
