@@ -329,6 +329,39 @@ def _find_nearest_player(
     return best_track_id, best_distance, best_player_y
 
 
+def _depth_scale_at_y(
+    y: float,
+    court_calibrator: CourtCalibrator | None,
+) -> float:
+    """Compute perspective depth scaling factor at a given image Y position.
+
+    Uses court corner geometry to estimate how much image-space distances
+    are compressed at this Y position. Far-court positions (low Y) have
+    higher compression (scale > 1), near-court (high Y) have scale ≈ 1.
+
+    Returns 1.0 if no calibration is available.
+    """
+    if court_calibrator is None or not court_calibrator.is_calibrated:
+        return 1.0
+    homography = court_calibrator.homography
+    if homography is None or len(homography.image_corners) != 4:
+        return 1.0
+
+    corners = homography.image_corners
+    near_y = (corners[0][1] + corners[1][1]) / 2
+    far_y = (corners[2][1] + corners[3][1]) / 2
+    near_w = abs(corners[1][0] - corners[0][0])
+    far_w = abs(corners[2][0] - corners[3][0])
+
+    if near_y <= far_y or near_w <= 0 or far_w <= 0:
+        return 1.0
+
+    # Interpolate court width at this Y position
+    t = max(0.0, min(1.0, (y - far_y) / (near_y - far_y)))
+    width_at_y = far_w + t * (near_w - far_w)
+    return near_w / width_at_y if width_at_y > 0 else 1.0
+
+
 def _find_nearest_players(
     frame: int,
     ball_x: float,
@@ -338,25 +371,21 @@ def _find_nearest_players(
     max_candidates: int = 4,
     court_calibrator: CourtCalibrator | None = None,
 ) -> list[tuple[int, float, float]]:
-    """Find nearest players to ball, ranked by distance.
+    """Find nearest players to ball, ranked by perspective-corrected distance.
 
-    When court_calibrator is available, ranks by court-space distance
-    (perspective-corrected). Returns image-space distances for compatibility
-    with classifier features (classifier trained on image-space player_distance).
+    Ranks candidates by depth-scaled distance: image-space distance
+    multiplied by a perspective correction factor derived from the court
+    corners. Far-court distances are scaled up (they appear artificially
+    small due to perspective compression). This is numerically stable
+    unlike full homography inversion, and works for all calibrated videos.
+
+    Returns image-space distances for compatibility with classifier features
+    (classifier trained on image-space player_distance).
 
     Returns:
         List of (track_id, image_distance, player_center_y), sorted by
-        court-space distance (when available) or image-space distance.
-        Returns up to max_candidates entries. Empty if no players found.
+        depth-corrected distance. Up to max_candidates entries.
     """
-    # Pre-compute ball court position
-    ball_court: tuple[float, float] | None = None
-    if court_calibrator is not None and court_calibrator.is_calibrated:
-        try:
-            ball_court = court_calibrator.image_to_court((ball_x, ball_y), 1, 1)
-        except Exception:
-            pass
-
     # Best distances per track (a track may appear in multiple frames)
     # track_id → (rank_dist, img_dist, center_y)
     best_per_track: dict[int, tuple[float, float, float]] = {}
@@ -370,18 +399,11 @@ def _find_nearest_players(
 
         img_dist = math.sqrt((ball_x - player_x) ** 2 + (ball_y - player_y) ** 2)
 
-        rank_dist = img_dist
-        if ball_court is not None:
-            try:
-                pc = court_calibrator.image_to_court((player_x, player_y), 1, 1)  # type: ignore[union-attr]
-                rank_dist = math.sqrt(
-                    (ball_court[0] - pc[0]) ** 2 + (ball_court[1] - pc[1]) ** 2
-                )
-            except Exception:
-                # Court projection failed for this player — skip to avoid
-                # mixing court-space (meters) with image-space (normalized)
-                # across frames of the same track.
-                continue
+        # Rank by depth-corrected distance: scale by perspective at player Y.
+        # Far-court players get higher corrected distances, preventing them
+        # from winning the nearest-player race due to perspective compression.
+        scale = _depth_scale_at_y(player_y, court_calibrator)
+        rank_dist = img_dist * scale
 
         if p.track_id not in best_per_track or rank_dist < best_per_track[p.track_id][0]:
             best_per_track[p.track_id] = (rank_dist, img_dist, p.y)
@@ -1483,7 +1505,9 @@ def detect_contacts(
             track_id = -1
             player_dist = float("inf")
 
-        # Find ranked candidates (wider window — for post-classification re-attribution)
+        # Find ranked candidates using depth-corrected distance for re-attribution.
+        # Perspective compression makes far-court players appear closer than they
+        # are; depth scaling corrects this (median 3.9x far-to-near ratio).
         candidates: list[tuple[int, float, float]] = []
         if player_positions:
             candidates = _find_nearest_players(
