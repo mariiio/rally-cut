@@ -297,7 +297,7 @@ class ContactClassifier:
 
         classifier = cls(
             model=data["model"],
-            threshold=data.get("threshold", 0.5),
+            threshold=data.get("threshold", 0.35),
         )
         classifier._feature_names = data.get(
             "feature_names", CandidateFeatures.feature_names()

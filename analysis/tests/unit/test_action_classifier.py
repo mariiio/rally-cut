@@ -576,17 +576,18 @@ class TestServeReceiveDisambiguation:
 class TestTrajectoryPossession:
     """Tests for trajectory-authoritative possession tracking."""
 
-    def test_fp_near_net_doesnt_reset_counter_with_trajectory(self) -> None:
-        """FP contact near net with different court_side doesn't reset if no crossing."""
+    def test_court_side_change_resets_counter(self) -> None:
+        """Court side change resets touch counter even if ball trajectory is ambiguous."""
         contacts = [
             _contact(frame=5, ball_y=0.85, court_side="near"),   # Serve
             _contact(frame=30, ball_y=0.3, court_side="far"),    # Receive
             _contact(frame=45, ball_y=0.25, court_side="far"),   # Set (2nd)
-            # FP near net tagged as "near" side, but ball didn't cross net
+            # Contact near net tagged as "near" side — court_side change resets counter
             _contact(frame=52, ball_y=0.48, court_side="near"),
-            _contact(frame=60, ball_y=0.35, court_side="far"),   # Should be attack (3rd+)
+            _contact(frame=60, ball_y=0.35, court_side="far"),   # After reset
         ]
-        # Ball stays on far side between contacts 45-60 (no crossing)
+        # Ball stays on far side between contacts 45-60 (no crossing detected
+        # by _ball_crossed_net, but court_side changed — trust court_side)
         ball_positions = [
             _bp(46, 0.28), _bp(47, 0.30), _bp(48, 0.33),
             _bp(49, 0.36), _bp(50, 0.38), _bp(51, 0.40),
@@ -602,11 +603,10 @@ class TestTrajectoryPossession:
         assert result.actions[0].action_type == ActionType.SERVE
         assert result.actions[1].action_type == ActionType.RECEIVE
         assert result.actions[2].action_type == ActionType.SET
-        # FP at net: trajectory says no crossing, so counter keeps incrementing
-        # Contact 3 (index 3) is still on far side in the state machine's view
-        assert result.actions[3].action_type == ActionType.ATTACK
-        # Contact 4 (index 4): safety valve resets at >3 contacts (beach max 3)
-        assert result.actions[4].action_type == ActionType.DIG
+        # Court side changed to "near" → counter reset → 1st touch = dig
+        # (repair_action_sequence may adjust consecutive digs to dig→set)
+        assert result.actions[3].action_type == ActionType.DIG
+        assert result.actions[4].action_type == ActionType.SET
 
     def test_safety_valve_at_4_contacts(self) -> None:
         """After 4 contacts on same side with trajectory, force possession change."""
