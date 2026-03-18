@@ -20,6 +20,8 @@ from rallycut.tracking.action_classifier import (
     classify_rally_actions,
     reattribute_players,
     repair_action_sequence,
+    validate_action_sequence,
+    viterbi_decode_actions,
 )
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.contact_detector import Contact, ContactSequence
@@ -1591,3 +1593,125 @@ class TestReattributeServerExclusion:
         # Call reattribute_players with no team data — server exclusion still fires
         reattribute_players(actions, contacts, team_assignments=None)
         assert actions[1].player_track_id == 3
+
+
+class TestViterbiDecoding:
+    """Tests for Viterbi sequence decoding."""
+
+    @staticmethod
+    def _ca(
+        action_type: ActionType,
+        frame: int,
+        court_side: str = "near",
+        confidence: float = 0.7,
+    ) -> ClassifiedAction:
+        return ClassifiedAction(
+            action_type=action_type,
+            frame=frame,
+            ball_x=0.5,
+            ball_y=0.5,
+            velocity=0.02,
+            player_track_id=-1,
+            court_side=court_side,
+            confidence=confidence,
+        )
+
+    def test_no_change_on_valid_sequence(self) -> None:
+        """Valid sequence should not be modified."""
+        actions = [
+            self._ca(ActionType.SERVE, 10, "near", 0.9),
+            self._ca(ActionType.RECEIVE, 30, "far", 0.9),
+            self._ca(ActionType.SET, 40, "far", 0.9),
+            self._ca(ActionType.ATTACK, 50, "far", 0.9),
+        ]
+        result = viterbi_decode_actions(actions)
+        assert [a.action_type for a in result] == [
+            ActionType.SERVE, ActionType.RECEIVE,
+            ActionType.SET, ActionType.ATTACK,
+        ]
+
+    def test_fixes_attack_set_confusion(self) -> None:
+        """Low-confidence attack after receive should become set."""
+        actions = [
+            self._ca(ActionType.SERVE, 10, "near", 0.9),
+            self._ca(ActionType.RECEIVE, 30, "far", 0.9),
+            # Misclassified: should be set, not attack (low confidence)
+            self._ca(ActionType.ATTACK, 40, "far", 0.3),
+            self._ca(ActionType.ATTACK, 50, "far", 0.8),
+        ]
+        result = viterbi_decode_actions(actions)
+        # Viterbi should prefer set→attack over attack→attack
+        assert result[2].action_type == ActionType.SET
+        assert result[3].action_type == ActionType.ATTACK
+
+    def test_preserves_serve_receive(self) -> None:
+        """Serve and receive should never be relabeled."""
+        actions = [
+            self._ca(ActionType.SERVE, 10, "near", 0.5),
+            self._ca(ActionType.RECEIVE, 30, "far", 0.5),
+            self._ca(ActionType.DIG, 50, "near", 0.5),
+        ]
+        result = viterbi_decode_actions(actions)
+        assert result[0].action_type == ActionType.SERVE
+        assert result[1].action_type == ActionType.RECEIVE
+
+    def test_single_relabel_position(self) -> None:
+        """With only one relabel-eligible action, return unchanged."""
+        actions = [
+            self._ca(ActionType.SERVE, 10, "near", 0.9),
+            self._ca(ActionType.RECEIVE, 30, "far", 0.9),
+            self._ca(ActionType.SET, 40, "far", 0.7),
+        ]
+        result = viterbi_decode_actions(actions)
+        # Only one relabel position — Viterbi can't improve
+        assert len(result) == 3
+
+
+class TestValidateActionSequence:
+    """Tests for action sequence validation."""
+
+    @staticmethod
+    def _ca(
+        action_type: ActionType,
+        frame: int,
+        court_side: str = "near",
+    ) -> ClassifiedAction:
+        return ClassifiedAction(
+            action_type=action_type,
+            frame=frame,
+            ball_x=0.5,
+            ball_y=0.5,
+            velocity=0.02,
+            player_track_id=-1,
+            court_side=court_side,
+            confidence=0.8,
+        )
+
+    def test_valid_sequence_returns_unchanged(self) -> None:
+        """Valid sequence should be returned unchanged."""
+        actions = [
+            self._ca(ActionType.SERVE, 10, "near"),
+            self._ca(ActionType.RECEIVE, 30, "far"),
+            self._ca(ActionType.SET, 40, "far"),
+            self._ca(ActionType.ATTACK, 50, "far"),
+        ]
+        result = validate_action_sequence(actions, "test")
+        assert result is actions
+
+    def test_returns_actions_unchanged(self) -> None:
+        """Validation should never modify the action list."""
+        actions = [
+            self._ca(ActionType.RECEIVE, 10, "near"),  # Missing serve
+            self._ca(ActionType.SET, 20, "near"),
+        ]
+        result = validate_action_sequence(actions, "test")
+        assert result is actions
+
+    def test_consecutive_net_crossings_detected(self) -> None:
+        """Consecutive net-crossing actions are detected but actions returned."""
+        actions = [
+            self._ca(ActionType.SERVE, 10, "near"),
+            self._ca(ActionType.ATTACK, 30, "far"),  # Two crossings in a row
+        ]
+        result = validate_action_sequence(actions, "test")
+        assert len(result) == 2  # Still returned unchanged

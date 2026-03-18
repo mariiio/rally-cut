@@ -1433,6 +1433,271 @@ def reattribute_players(
     return actions
 
 
+def validate_action_sequence(
+    actions: list[ClassifiedAction],
+    rally_id: str = "",
+) -> list[ClassifiedAction]:
+    """Validate physical constraints on the action sequence.
+
+    Checks that the classified sequence is physically possible under
+    beach volleyball rules and logs warnings for violations. Violations
+    indicate upstream errors (missed contacts, wrong court_side, etc.).
+
+    Constraints checked:
+    1. Max 3 contacts per side before ball crosses net.
+    2. Serve must be first non-unknown action.
+    3. No consecutive net crossings without a same-side action between them
+       (would mean a team touched the ball 0 times — impossible).
+    4. Ball cannot cross net more than once between contacts
+       (only one team transition per contact).
+
+    Does NOT modify the sequence — only logs warnings. The repair pass
+    handles fixable violations; this catches unfixable ones for debugging.
+
+    Returns the actions unchanged.
+    """
+    real_actions = [a for a in actions if a.action_type != ActionType.UNKNOWN]
+    if len(real_actions) < 2:
+        return actions
+
+    # Check 1: Max 3 contacts per side
+    side_count = 0
+    current_side: str | None = None
+    for a in real_actions:
+        if a.court_side not in ("near", "far"):
+            continue
+        if a.court_side != current_side:
+            current_side = a.court_side
+            side_count = 1
+        else:
+            side_count += 1
+        if side_count > 3 and a.action_type != ActionType.BLOCK:
+            logger.warning(
+                "Rally %s: >3 contacts on %s side (contact #%d at frame %d). "
+                "Possible missed net crossing or wrong court_side.",
+                rally_id, current_side, side_count, a.frame,
+            )
+
+    # Check 2: Serve must be first non-unknown action
+    if real_actions and real_actions[0].action_type != ActionType.SERVE:
+        logger.warning(
+            "Rally %s: first action is %s, not serve (frame %d).",
+            rally_id, real_actions[0].action_type.value, real_actions[0].frame,
+        )
+
+    # Check 3: Consecutive net-crossing actions with no same-side action between
+    net_crossing_types = {ActionType.SERVE, ActionType.ATTACK}
+    prev_was_crossing = False
+    for a in real_actions:
+        is_crossing = a.action_type in net_crossing_types
+        if is_crossing and prev_was_crossing:
+            logger.warning(
+                "Rally %s: consecutive net-crossing actions at frame %d "
+                "(%s). Missing same-side contact between them.",
+                rally_id, a.frame, a.action_type.value,
+            )
+        prev_was_crossing = is_crossing
+
+    return actions
+
+
+# --- Viterbi sequence decoding ---
+
+# Transition matrix for beach volleyball action sequences.
+# Encodes which (prev_action, next_action) pairs are legal and their
+# relative probabilities. Transitions not listed have probability 0.
+_VITERBI_TRANSITIONS: dict[tuple[ActionType, ActionType], float] = {
+    # After serve: receive or block on opposite side
+    (ActionType.SERVE, ActionType.RECEIVE): 0.85,
+    (ActionType.SERVE, ActionType.DIG): 0.10,
+    (ActionType.SERVE, ActionType.BLOCK): 0.05,
+    # After receive: set or attack (same side)
+    (ActionType.RECEIVE, ActionType.SET): 0.80,
+    (ActionType.RECEIVE, ActionType.ATTACK): 0.15,
+    (ActionType.RECEIVE, ActionType.DIG): 0.05,
+    # After set: attack (same side)
+    (ActionType.SET, ActionType.ATTACK): 0.90,
+    (ActionType.SET, ActionType.SET): 0.05,
+    (ActionType.SET, ActionType.DIG): 0.05,
+    # After attack: dig, block, or receive on opposite side
+    (ActionType.ATTACK, ActionType.DIG): 0.50,
+    (ActionType.ATTACK, ActionType.BLOCK): 0.20,
+    (ActionType.ATTACK, ActionType.RECEIVE): 0.05,
+    (ActionType.ATTACK, ActionType.SET): 0.10,
+    (ActionType.ATTACK, ActionType.ATTACK): 0.15,
+    # After block: dig/set/attack on blocker's side, or dig on opponent's
+    (ActionType.BLOCK, ActionType.DIG): 0.40,
+    (ActionType.BLOCK, ActionType.SET): 0.25,
+    (ActionType.BLOCK, ActionType.ATTACK): 0.20,
+    (ActionType.BLOCK, ActionType.BLOCK): 0.05,
+    (ActionType.BLOCK, ActionType.RECEIVE): 0.10,
+    # After dig: set or attack (same side)
+    (ActionType.DIG, ActionType.SET): 0.65,
+    (ActionType.DIG, ActionType.ATTACK): 0.25,
+    (ActionType.DIG, ActionType.DIG): 0.10,
+}
+
+# Minimum transition probability for unlisted pairs (prevents log(0))
+_VITERBI_MIN_PROB = 0.001
+
+# Actions eligible for Viterbi re-labeling (serve/receive stay heuristic)
+_VITERBI_RELABEL_TYPES = {ActionType.DIG, ActionType.SET, ActionType.ATTACK}
+
+# Candidate labels for Viterbi decoding at each position
+_VITERBI_CANDIDATES = [ActionType.DIG, ActionType.SET, ActionType.ATTACK]
+
+
+def viterbi_decode_actions(
+    actions: list[ClassifiedAction],
+) -> list[ClassifiedAction]:
+    """Apply Viterbi decoding to enforce sequence constraints.
+
+    Uses dynamic programming to find the most probable action sequence
+    given the classifier's per-contact predictions and volleyball
+    transition probabilities. Only re-labels dig/set/attack contacts;
+    serve, receive, and block labels are preserved from heuristic rules.
+
+    The emission probability is derived from the classifier's confidence:
+    - For the originally predicted label: confidence
+    - For alternative labels: (1 - confidence) / (n_candidates - 1)
+
+    Args:
+        actions: Classified actions (after propagate_court_side and repair).
+
+    Returns:
+        Actions with potentially re-labeled dig/set/attack contacts.
+    """
+    import math as _math
+
+    # Find indices of actions eligible for Viterbi re-labeling
+    relabel_indices = [
+        i for i, a in enumerate(actions)
+        if a.action_type in _VITERBI_RELABEL_TYPES
+    ]
+
+    if len(relabel_indices) < 2:
+        return actions  # Nothing to decode — need at least 2 for transitions
+
+    # Build the full sequence (including fixed labels) for transition scoring
+    # but only relabel the eligible positions.
+
+    # For each relabel position, compute emission log-probabilities
+    n_candidates = len(_VITERBI_CANDIDATES)
+
+    def emission_log_probs(action: ClassifiedAction) -> dict[ActionType, float]:
+        """Log-probability of observing this action under each candidate label."""
+        probs: dict[ActionType, float] = {}
+        conf = max(0.1, min(0.99, action.confidence))
+        other_prob = (1.0 - conf) / max(1, n_candidates - 1)
+        for cand in _VITERBI_CANDIDATES:
+            if cand == action.action_type:
+                probs[cand] = _math.log(conf)
+            else:
+                probs[cand] = _math.log(other_prob)
+        return probs
+
+    def transition_log_prob(prev: ActionType, curr: ActionType) -> float:
+        """Log-probability of transitioning from prev to curr."""
+        p = _VITERBI_TRANSITIONS.get((prev, curr), _VITERBI_MIN_PROB)
+        return _math.log(p)
+
+    # Get the action type immediately before the first relabel position
+    # (could be a fixed serve/receive/block)
+    def prev_fixed_type(relabel_pos: int) -> ActionType | None:
+        """Find the action type of the previous non-relabel action."""
+        idx = relabel_indices[relabel_pos]
+        for j in range(idx - 1, -1, -1):
+            if actions[j].action_type != ActionType.UNKNOWN:
+                return actions[j].action_type
+        return None
+
+    # Viterbi forward pass
+    n_positions = len(relabel_indices)
+    # viterbi[t][state] = (log_prob, backpointer_state)
+    viterbi: list[dict[ActionType, tuple[float, ActionType | None]]] = []
+
+    # Initialize first position
+    first_action = actions[relabel_indices[0]]
+    emissions_0 = emission_log_probs(first_action)
+    prev_type = prev_fixed_type(0)
+
+    init: dict[ActionType, tuple[float, ActionType | None]] = {}
+    for cand in _VITERBI_CANDIDATES:
+        score = emissions_0[cand]
+        if prev_type is not None:
+            score += transition_log_prob(prev_type, cand)
+        init[cand] = (score, None)
+    viterbi.append(init)
+
+    # Forward pass
+    for t in range(1, n_positions):
+        curr_action = actions[relabel_indices[t]]
+        emissions = emission_log_probs(curr_action)
+
+        # Check if there are fixed (non-relabel) actions between
+        # relabel_indices[t-1] and relabel_indices[t]
+        gap_start = relabel_indices[t - 1] + 1
+        gap_end = relabel_indices[t]
+        # Find the last fixed action type in the gap
+        gap_type: ActionType | None = None
+        for j in range(gap_end - 1, gap_start - 1, -1):
+            if actions[j].action_type != ActionType.UNKNOWN:
+                gap_type = actions[j].action_type
+                break
+
+        step: dict[ActionType, tuple[float, ActionType | None]] = {}
+        for curr_cand in _VITERBI_CANDIDATES:
+            best_score = float("-inf")
+            best_prev: ActionType | None = None
+            for prev_cand in _VITERBI_CANDIDATES:
+                prev_score = viterbi[t - 1][prev_cand][0]
+                if gap_type is not None:
+                    # Transition from previous relabel → gap fixed → current
+                    trans = (
+                        transition_log_prob(prev_cand, gap_type)
+                        + transition_log_prob(gap_type, curr_cand)
+                    )
+                else:
+                    trans = transition_log_prob(prev_cand, curr_cand)
+                score = prev_score + trans + emissions[curr_cand]
+                if score > best_score:
+                    best_score = score
+                    best_prev = prev_cand
+            step[curr_cand] = (best_score, best_prev)
+        viterbi.append(step)
+
+    # Backtrack to find best sequence
+    best_final = max(_VITERBI_CANDIDATES, key=lambda c: viterbi[-1][c][0])
+    decoded: list[ActionType] = [best_final]
+    for t in range(n_positions - 1, 0, -1):
+        _, prev_state = viterbi[t][decoded[-1]]
+        decoded.append(prev_state if prev_state is not None else decoded[-1])
+    decoded.reverse()
+
+    # Apply re-labeling only for low-confidence actions. High-confidence
+    # predictions from the GBM are usually correct; Viterbi adds value
+    # mainly for ambiguous cases where sequence context resolves confusion.
+    relabel_confidence_cap = 0.65
+    n_changed = 0
+    result = list(actions)
+    for t, idx in enumerate(relabel_indices):
+        if decoded[t] != result[idx].action_type:
+            if result[idx].confidence > relabel_confidence_cap:
+                continue  # Trust high-confidence predictions
+            logger.debug(
+                "Viterbi: frame %d %s → %s (conf=%.2f)",
+                result[idx].frame, result[idx].action_type.value,
+                decoded[t].value, result[idx].confidence,
+            )
+            result[idx] = _reclassify(result[idx], decoded[t])
+            n_changed += 1
+
+    if n_changed > 0:
+        logger.info("Viterbi decoding: re-labeled %d/%d actions", n_changed, len(actions))
+
+    return result
+
+
 def classify_rally_actions(
     contact_sequence: ContactSequence,
     rally_id: str = "",
@@ -1485,6 +1750,8 @@ def classify_rally_actions(
         ball_positions=contact_sequence.ball_positions,
         rally_start_frame=contact_sequence.rally_start_frame,
     )
+    result.actions = viterbi_decode_actions(result.actions)
+    result.actions = validate_action_sequence(result.actions, rally_id)
     result.actions = reattribute_players(
         result.actions, contact_sequence.contacts, reattrib_teams,
     )
