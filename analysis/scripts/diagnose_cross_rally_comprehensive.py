@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Comprehensive cross-rally player matching diagnosis.
 
-Re-runs match-players on all 23 GT videos with diagnostics collection,
-then produces a structured report with 6 analysis sections:
+Re-runs match-players on all GT videos with diagnostics collection,
+then produces a structured report with 8 analysis sections:
   A: Confidence vs Accuracy
   B: Side Switch Cascade Impact
   C: Per-Video Deep Dive (worst 3)
   D: Profile Quality Over Time
   E: Feature Contribution Analysis
   F: Optimization Summary
+  G: GT Quality Audit
+  H: Delta Comparison (vs previous baseline)
 
 Usage:
     cd analysis
@@ -72,6 +74,8 @@ class VideoResult:
     pred_rallies: dict[str, dict[str, int]]
     rally_id_order: list[str]
     gt_switches: list[int]
+    # Raw GT metadata for quality audit
+    all_pred_track_ids: dict[str, set[int]]  # rally_id -> set of predicted track IDs
 
 
 # ---------------------------------------------------------------------------
@@ -213,10 +217,13 @@ def collect_data(video_id_filter: str | None = None) -> list[VideoResult]:
         # Build predictions
         pred_rallies: dict[str, dict[str, int]] = {}
         rally_id_order: list[str] = []
+        all_pred_track_ids: dict[str, set[int]] = {}
         for rally, rr in zip(rallies, refined_results):
             rid = rally.rally_id
             rally_id_order.append(rid)
             pred_rallies[rid] = {str(k): v for k, v in rr.track_to_player.items()}
+            # Collect all track IDs present in predictions for this rally
+            all_pred_track_ids[rid] = set(rr.track_to_player.keys())
 
         best_perm, correct, total = _find_best_permutation(gt_rallies, pred_rallies)
         accuracy = correct / total * 100 if total > 0 else 0
@@ -284,6 +291,7 @@ def collect_data(video_id_filter: str | None = None) -> list[VideoResult]:
             pred_rallies=pred_rallies,
             rally_id_order=rally_id_order,
             gt_switches=gt_switches,
+            all_pred_track_ids=all_pred_track_ids,
         ))
 
     return results
@@ -865,6 +873,184 @@ def section_f(all_results: list[VideoResult]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Section G: GT Quality Audit
+# ---------------------------------------------------------------------------
+
+def section_g(all_results: list[VideoResult]) -> None:
+    print("\n" + "=" * 70)
+    print("SECTION G: GT Quality Audit")
+    print("=" * 70)
+
+    print(f"\n{'Video':<10} {'GTRly':>6} {'<4asgn':>7} {'DupID':>6} {'Stale':>6} "
+          f"{'Orphan':>7} {'SwOK':>5} {'Acc':>7} {'Quality'}")
+    print("-" * 78)
+
+    total_issues = 0
+    suspect_videos: list[str] = []
+
+    for vr in all_results:
+        issues: list[str] = []
+        n_gt_rallies = len(vr.gt_rallies)
+
+        # 1. Rallies with < 4 player assignments (incomplete labeling)
+        incomplete = 0
+        for rid, mapping in vr.gt_rallies.items():
+            player_ids_used = set(mapping.values())
+            if len(player_ids_used) < 4:
+                incomplete += 1
+        if incomplete > 0:
+            issues.append(f"{incomplete} incomplete")
+
+        # 2. Duplicate player IDs in a single rally
+        duplicates = 0
+        for rid, mapping in vr.gt_rallies.items():
+            pid_counts: dict[int, int] = {}
+            for pid in mapping.values():
+                pid_counts[pid] = pid_counts.get(pid, 0) + 1
+            if any(c > 1 for c in pid_counts.values()):
+                duplicates += 1
+        if duplicates > 0:
+            issues.append(f"{duplicates} dup-IDs")
+
+        # 3. Stale track IDs (GT references tracks not in current predictions)
+        stale = 0
+        for rid, mapping in vr.gt_rallies.items():
+            if rid not in vr.all_pred_track_ids:
+                continue
+            pred_tids = vr.all_pred_track_ids[rid]
+            for tid_str in mapping:
+                if int(tid_str) not in pred_tids:
+                    stale += 1
+        if stale > 0:
+            issues.append(f"{stale} stale-trk")
+
+        # 4. Orphaned GT rallies (not in rally_id_order)
+        orphaned = 0
+        rally_set = set(vr.rally_id_order)
+        for rid in vr.gt_rallies:
+            if rid not in rally_set:
+                orphaned += 1
+        if orphaned > 0:
+            issues.append(f"{orphaned} orphaned")
+
+        # 5. Side switch validation
+        sw_ok = True
+        if vr.gt_switches:
+            max_idx = len(vr.rally_id_order) - 1
+            for sw in vr.gt_switches:
+                if sw < 0 or sw > max_idx:
+                    sw_ok = False
+                    break
+            # Check spacing >= 4
+            sorted_sw = sorted(vr.gt_switches)
+            for i in range(1, len(sorted_sw)):
+                if sorted_sw[i] - sorted_sw[i - 1] < 4:
+                    sw_ok = False
+                    break
+        if not sw_ok:
+            issues.append("bad-switch")
+
+        # 6. Low accuracy = suspect GT
+        is_suspect = vr.accuracy < 60.0 and vr.total >= 4
+
+        quality = "OK" if not issues else "; ".join(issues)
+        if is_suspect:
+            quality = "SUSPECT " + quality
+            suspect_videos.append(vr.video_id[:8])
+
+        total_issues += len(issues)
+
+        print(
+            f"{vr.video_id[:8]:<10} {n_gt_rallies:>6} {incomplete:>7} {duplicates:>6} "
+            f"{stale:>6} {orphaned:>7} {'Y' if sw_ok else 'N':>5} "
+            f"{vr.accuracy:>6.1f}% {quality}"
+        )
+
+    print(f"\nTotal videos: {len(all_results)}, videos with issues: "
+          f"{sum(1 for vr in all_results if vr.accuracy < 60.0 or any(True for rid, m in vr.gt_rallies.items() if len(set(m.values())) < 4))}")
+    if suspect_videos:
+        print(f"Suspect GT (accuracy < 60%): {', '.join(suspect_videos)}")
+    else:
+        print("No suspect GT videos (all >= 60% accuracy)")
+
+
+# ---------------------------------------------------------------------------
+# Section H: Delta Comparison (vs previous baseline)
+# ---------------------------------------------------------------------------
+
+# Previous baseline (hardcoded from prior evaluation)
+_BASELINE_VIDEOS = 28
+_BASELINE_ASSIGNMENTS = 838
+_BASELINE_ACCURACY = 85.8
+_BASELINE_CROSS_TEAM_ERRORS = 80
+_BASELINE_WITHIN_TEAM_ERRORS = 39
+
+
+def section_h(all_results: list[VideoResult]) -> None:
+    print("\n" + "=" * 70)
+    print("SECTION H: Delta Comparison vs Previous Baseline")
+    print("=" * 70)
+
+    all_assignments: list[AssignmentRecord] = []
+    for vr in all_results:
+        all_assignments.extend(vr.assignments)
+
+    total = len(all_assignments)
+    total_correct = sum(1 for a in all_assignments if a.correct)
+    total_errors = total - total_correct
+    cross_errors = sum(1 for a in all_assignments if a.error_type == "cross-team")
+    within_errors = sum(1 for a in all_assignments if a.error_type == "within-team")
+    accuracy = total_correct / total * 100 if total > 0 else 0
+
+    baseline_errors = _BASELINE_CROSS_TEAM_ERRORS + _BASELINE_WITHIN_TEAM_ERRORS
+
+    # Comparison table
+    print(f"\n{'Metric':<25} {'Baseline':>12} {'Current':>12} {'Delta':>12}")
+    print("-" * 65)
+    print(f"{'Videos':<25} {_BASELINE_VIDEOS:>12} {len(all_results):>12} "
+          f"{len(all_results) - _BASELINE_VIDEOS:>+12}")
+    print(f"{'Assignments':<25} {_BASELINE_ASSIGNMENTS:>12} {total:>12} "
+          f"{total - _BASELINE_ASSIGNMENTS:>+12}")
+    print(f"{'Accuracy':<25} {_BASELINE_ACCURACY:>11.1f}% {accuracy:>11.1f}% "
+          f"{accuracy - _BASELINE_ACCURACY:>+11.1f}%")
+    print(f"{'Total errors':<25} {baseline_errors:>12} {total_errors:>12} "
+          f"{total_errors - baseline_errors:>+12}")
+    print(f"{'Cross-team errors':<25} {_BASELINE_CROSS_TEAM_ERRORS:>12} {cross_errors:>12} "
+          f"{cross_errors - _BASELINE_CROSS_TEAM_ERRORS:>+12}")
+    print(f"{'Within-team errors':<25} {_BASELINE_WITHIN_TEAM_ERRORS:>12} {within_errors:>12} "
+          f"{within_errors - _BASELINE_WITHIN_TEAM_ERRORS:>+12}")
+
+    # Try to identify which videos are "new" vs "original corpus"
+    # We can't know exactly which 28 videos were in the baseline, but we can
+    # show per-video accuracy sorted to help identify patterns
+    print(f"\n--- Per-Video Accuracy (sorted) ---\n")
+    print(f"{'Video':<10} {'Correct':>8} {'Total':>6} {'Accuracy':>9} {'Cross':>6} {'Within':>7}")
+    print("-" * 52)
+
+    sorted_videos = sorted(all_results, key=lambda v: v.accuracy)
+    for vr in sorted_videos:
+        v_cross = sum(1 for a in vr.assignments if a.error_type == "cross-team")
+        v_within = sum(1 for a in vr.assignments if a.error_type == "within-team")
+        print(
+            f"{vr.video_id[:8]:<10} {vr.correct:>8} {vr.total:>6} "
+            f"{vr.accuracy:>8.1f}% {v_cross:>6} {v_within:>7}"
+        )
+
+    # Summary interpretation
+    print(f"\n--- Interpretation ---")
+    if accuracy > _BASELINE_ACCURACY:
+        print(f"Accuracy improved by {accuracy - _BASELINE_ACCURACY:+.1f}pp")
+    elif accuracy < _BASELINE_ACCURACY:
+        print(f"Accuracy dropped by {accuracy - _BASELINE_ACCURACY:+.1f}pp")
+    else:
+        print("Accuracy unchanged")
+
+    if len(all_results) > _BASELINE_VIDEOS:
+        n_new = len(all_results) - _BASELINE_VIDEOS
+        print(f"{n_new} new video(s) added to GT corpus")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -874,8 +1060,8 @@ def main() -> None:
     )
     parser.add_argument("--video-id", type=str, help="Analyze single video")
     parser.add_argument(
-        "--sections", type=str, default="a,b,c,d,e,f",
-        help="Comma-separated sections to run (default: a,b,c,d,e,f)",
+        "--sections", type=str, default="a,b,c,d,e,f,g,h",
+        help="Comma-separated sections to run (default: a,b,c,d,e,f,g,h)",
     )
     args = parser.parse_args()
 
@@ -894,6 +1080,8 @@ def main() -> None:
     agg_acc = total_correct / total_assignments * 100 if total_assignments > 0 else 0
     print(f"\nAggregate: {total_correct}/{total_assignments} = {agg_acc:.1f}%")
 
+    if "g" in sections:
+        section_g(all_results)
     if "a" in sections:
         section_a(all_results)
     if "b" in sections:
@@ -906,6 +1094,8 @@ def main() -> None:
         section_e(all_results)
     if "f" in sections:
         section_f(all_results)
+    if "h" in sections:
+        section_h(all_results)
 
 
 if __name__ == "__main__":
