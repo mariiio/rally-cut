@@ -1644,6 +1644,21 @@ class TestViterbiDecoding:
         assert result[2].action_type == ActionType.SET
         assert result[3].action_type == ActionType.ATTACK
 
+    def test_high_confidence_not_relabeled(self) -> None:
+        """High-confidence actions should not be relabeled even if sequence suggests otherwise."""
+        actions = [
+            self._ca(ActionType.SERVE, 10, "near", 0.9),
+            self._ca(ActionType.RECEIVE, 30, "far", 0.9),
+            # High-confidence attack after receive — Viterbi prefers set here
+            # but confidence cap (0.65) should prevent relabeling
+            self._ca(ActionType.ATTACK, 40, "far", 0.8),
+            self._ca(ActionType.ATTACK, 50, "far", 0.8),
+        ]
+        result = viterbi_decode_actions(actions)
+        # Both attacks should stay — confidence 0.8 > 0.65 cap
+        assert result[2].action_type == ActionType.ATTACK
+        assert result[3].action_type == ActionType.ATTACK
+
     def test_preserves_serve_receive(self) -> None:
         """Serve and receive should never be relabeled."""
         actions = [

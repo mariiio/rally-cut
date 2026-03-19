@@ -1448,8 +1448,6 @@ def validate_action_sequence(
     2. Serve must be first non-unknown action.
     3. No consecutive net crossings without a same-side action between them
        (would mean a team touched the ball 0 times — impossible).
-    4. Ball cannot cross net more than once between contacts
-       (only one team transition per contact).
 
     Does NOT modify the sequence — only logs warnings. The repair pass
     handles fixable violations; this catches unfixable ones for debugging.
@@ -1546,6 +1544,10 @@ _VITERBI_RELABEL_TYPES = {ActionType.DIG, ActionType.SET, ActionType.ATTACK}
 # Candidate labels for Viterbi decoding at each position
 _VITERBI_CANDIDATES = [ActionType.DIG, ActionType.SET, ActionType.ATTACK]
 
+# Only relabel actions below this confidence — high-confidence GBM
+# predictions are usually correct, Viterbi helps ambiguous cases.
+_VITERBI_RELABEL_CONFIDENCE_CAP = 0.65
+
 
 def viterbi_decode_actions(
     actions: list[ClassifiedAction],
@@ -1567,8 +1569,6 @@ def viterbi_decode_actions(
     Returns:
         Actions with potentially re-labeled dig/set/attack contacts.
     """
-    import math as _math
-
     # Find indices of actions eligible for Viterbi re-labeling
     relabel_indices = [
         i for i, a in enumerate(actions)
@@ -1591,15 +1591,15 @@ def viterbi_decode_actions(
         other_prob = (1.0 - conf) / max(1, n_candidates - 1)
         for cand in _VITERBI_CANDIDATES:
             if cand == action.action_type:
-                probs[cand] = _math.log(conf)
+                probs[cand] = math.log(conf)
             else:
-                probs[cand] = _math.log(other_prob)
+                probs[cand] = math.log(other_prob)
         return probs
 
     def transition_log_prob(prev: ActionType, curr: ActionType) -> float:
         """Log-probability of transitioning from prev to curr."""
         p = _VITERBI_TRANSITIONS.get((prev, curr), _VITERBI_MIN_PROB)
-        return _math.log(p)
+        return math.log(p)
 
     # Get the action type immediately before the first relabel position
     # (could be a fixed serve/receive/block)
@@ -1674,15 +1674,12 @@ def viterbi_decode_actions(
         decoded.append(prev_state if prev_state is not None else decoded[-1])
     decoded.reverse()
 
-    # Apply re-labeling only for low-confidence actions. High-confidence
-    # predictions from the GBM are usually correct; Viterbi adds value
-    # mainly for ambiguous cases where sequence context resolves confusion.
-    relabel_confidence_cap = 0.65
+    # Apply re-labeling only for low-confidence actions.
     n_changed = 0
     result = list(actions)
     for t, idx in enumerate(relabel_indices):
         if decoded[t] != result[idx].action_type:
-            if result[idx].confidence > relabel_confidence_cap:
+            if result[idx].confidence > _VITERBI_RELABEL_CONFIDENCE_CAP:
                 continue  # Trust high-confidence predictions
             logger.debug(
                 "Viterbi: frame %d %s → %s (conf=%.2f)",
