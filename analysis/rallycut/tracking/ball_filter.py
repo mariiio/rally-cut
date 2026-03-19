@@ -614,13 +614,18 @@ class BallTemporalFilter:
         # this path. We build a trajectory chain from the longest anchor and
         # greedily extend it; any anchor NOT in the chain is an outlier.
         #
-        # Connection check uses two methods (either connects):
+        # Connection check uses three methods (any connects):
         #   A) Raw endpoint proximity: endpoint distance < threshold
         #   B) Velocity extrapolation: the "from" segment's end velocity
         #      predicts an expected position N frames later; if the "to"
         #      segment's start is near this expected position, it connects.
         #      This handles fast-moving balls where the gap between segments
         #      causes a large raw displacement (ball moved during the gap).
+        #   C) Detection desert: if the gap between segments has very few
+        #      detections (< 15% of gap frames), the ball was off-screen.
+        #      The next segment is the same ball re-entering, regardless of
+        #      spatial position. This handles ball exit+re-entry where the
+        #      ball reappears at a different screen position.
         if len(anchor_indices) >= 3:
             # Pre-compute endpoints and velocities for all anchors.
             seg_endpoints: dict[int, tuple[float, float, float, float]] = {}
@@ -643,6 +648,31 @@ class BallTemporalFilter:
 
             edge_zone = self.config.exit_edge_zone
 
+            # Precompute frame→detection map for desert detection.
+            # A "detection desert" (few detections over many frames) means
+            # the ball was off-screen during the gap.
+            _detected_frames: set[int] = {p.frame_number for p in confident}
+            _desert_max_density = 0.15  # <15% = desert (ball off-screen)
+            _desert_min_gap = 10  # Only check gaps >= 10 frames
+            _desert_min_confidence = 0.50  # Both segments need high confidence
+
+            def _is_detection_desert(from_frame: int, to_frame: int) -> bool:
+                """Check if the gap between two frames is a detection desert.
+
+                A desert has very few detections relative to the gap length,
+                indicating the ball was off-screen. This is distinct from
+                gaps where detections exist at other positions (different
+                objects being tracked).
+                """
+                gap_len = to_frame - from_frame
+                if gap_len < _desert_min_gap:
+                    return False
+                gap_detections = sum(
+                    1 for f in range(from_frame + 1, to_frame)
+                    if f in _detected_frames
+                )
+                return gap_detections / gap_len < _desert_max_density
+
             def _connects(
                 from_idx: int, to_idx: int,
             ) -> bool:
@@ -653,6 +683,8 @@ class BallTemporalFilter:
                   A) Raw endpoint distance < threshold, OR
                   B) Velocity-extrapolated distance < threshold (the ball
                      was moving fast and covered ground during the gap).
+                  C) Detection desert: very few detections in the gap,
+                     meaning ball was off-screen and re-entered.
                 Directional coherence: when raw distance >= threshold/2,
                 require the bridge direction to align with end velocity
                 (dot product >= 0). Skipped when very close (bounces
@@ -669,6 +701,20 @@ class BallTemporalFilter:
                 to_start = segments[to_idx][0].frame_number
                 gap = abs(to_start - from_end)
                 if gap > max_gap:
+                    # Even beyond max_gap, allow connection across detection
+                    # deserts — the ball went off-screen and came back.
+                    if _is_detection_desert(from_end, to_start):
+                        from_conf = float(np.median(
+                            [p.confidence for p in segments[from_idx]]
+                        ))
+                        to_conf = float(np.median(
+                            [p.confidence for p in segments[to_idx]]
+                        ))
+                        if (
+                            from_conf >= _desert_min_confidence
+                            and to_conf >= _desert_min_confidence
+                        ):
+                            return True
                     return False
 
                 raw_dist = float(np.sqrt(
