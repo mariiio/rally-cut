@@ -32,6 +32,14 @@ class BallFilterConfig:
     disabled for WASB. See get_wasb_filter_config() for production preset.
     """
 
+    # Warmup protection: preserve high-confidence detections in the first
+    # N frames from all pruning stages. Serves happen near rally start and
+    # create large spatial discontinuities (ball crosses net) that segment
+    # pruning, chain pruning, and outlier removal all reject. High-confidence
+    # early detections are almost certainly real ball (clean scene, no blur).
+    warmup_protect_frames: int = 0  # 0 = disabled, >0 = protect first N frames
+    warmup_protect_confidence: float = 0.50  # Min confidence to protect
+
     # Interpolation for missing frames
     enable_interpolation: bool = True
     max_interpolation_gap: int = 10  # Max frames to interpolate (larger gaps left empty)
@@ -163,6 +171,12 @@ def get_wasb_filter_config() -> BallFilterConfig:
     - Motion energy, stationarity, oscillation, blip: all disabled
     """
     return BallFilterConfig(
+        # Warmup protection: preserve serve-toss detections in first ~4s.
+        # WASB detects serve tosses with high confidence but segment/chain
+        # pruning kills them (ball crosses net = spatial discontinuity).
+        # 120 frames covers ~95% of serves (median serve at frame 64).
+        warmup_protect_frames=120,
+        warmup_protect_confidence=0.50,
         # Segment pruning (removes false segments at boundaries)
         enable_segment_pruning=True,
         segment_jump_threshold=0.20,
@@ -224,6 +238,16 @@ class BallTemporalFilter:
         # Sort by frame number to ensure temporal order
         sorted_positions = sorted(positions, key=lambda p: p.frame_number)
         filtered = list(sorted_positions)
+
+        # Warmup protection: save high-confidence early detections before
+        # filtering. These will be re-injected after all stages if removed.
+        warmup_protected: dict[int, BallPosition] = {}
+        wp_frames = self.config.warmup_protect_frames
+        wp_conf = self.config.warmup_protect_confidence
+        if wp_frames > 0:
+            for p in filtered:
+                if p.frame_number < wp_frames and p.confidence >= wp_conf:
+                    warmup_protected[p.frame_number] = p
 
         # Track counts for logging
         input_count = len(filtered)
@@ -318,6 +342,24 @@ class BallTemporalFilter:
             if reprune_count > 0:
                 pruned_count += reprune_count
 
+        # Re-inject warmup-protected detections that were removed by
+        # filter stages. These are high-confidence early detections
+        # (e.g. serve toss) that get killed by segment/chain/outlier
+        # pruning due to net-crossing spatial discontinuities.
+        warmup_restored = 0
+        if warmup_protected:
+            surviving_frames = {p.frame_number for p in filtered}
+            for frame, bp in sorted(warmup_protected.items()):
+                if frame not in surviving_frames:
+                    filtered.append(bp)
+                    warmup_restored += 1
+            if warmup_restored > 0:
+                filtered.sort(key=lambda p: p.frame_number)
+                logger.info(
+                    f"Warmup protection: restored {warmup_restored} "
+                    f"high-confidence detections in first {wp_frames} frames"
+                )
+
         # Interpolation: fill small gaps
         before_interp_count = len(filtered)
         if self.config.enable_interpolation:
@@ -341,6 +383,8 @@ class BallTemporalFilter:
                 parts.append(f"-{blip_count} blips")
             if oscillation_count > 0:
                 parts.append(f"-{oscillation_count} oscillating")
+            if warmup_restored > 0:
+                parts.append(f"+{warmup_restored} warmup-protected")
             if interp_count > 0:
                 parts.append(f"+{interp_count} interpolated")
             logger.info(", ".join(parts))
