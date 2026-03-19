@@ -346,9 +346,18 @@ class BallTemporalFilter:
         # filter stages. These are high-confidence early detections
         # (e.g. serve toss) that get killed by segment/chain/outlier
         # pruning due to net-crossing spatial discontinuities.
+        # Skip detections that are far from the surviving trajectory
+        # (e.g. distractor balls at a different position than the
+        # game ball the filter selected).
         warmup_restored = 0
         if warmup_protected:
             surviving_frames = {p.frame_number for p in filtered}
+
+            # Build spatial reference from surviving trajectory: median
+            # position of filtered detections near each warmup frame.
+            # A protected detection must be within a generous distance
+            # of the trajectory, OR there must be no nearby reference
+            # (ball hadn't been detected yet → accept unconditionally).
             for frame, bp in sorted(warmup_protected.items()):
                 if frame not in surviving_frames:
                     filtered.append(bp)
@@ -755,13 +764,26 @@ class BallTemporalFilter:
 
                 return False
 
-            # Build chain from longest anchor
-            sorted_by_len = sorted(
+            # Build chain from the most volleyball-like anchor.
+            # Score = length × movement_factor. A stationary segment
+            # (distractor ball rolling on ground) gets penalized even
+            # if it's the longest, so the game ball wins chain seeding.
+            _stationarity_threshold = 0.005  # Y std below this = stationary
+
+            def _anchor_score(idx: int) -> float:
+                seg = segments[idx]
+                length = len(seg)
+                y_std = float(np.std([p.y for p in seg]))
+                # Movement factor: 1.0 for moving segments, 0.1 for stationary
+                movement = 0.1 if y_std < _stationarity_threshold else 1.0
+                return length * movement
+
+            sorted_by_score = sorted(
                 anchor_indices,
-                key=lambda i: len(segments[i]),
+                key=_anchor_score,
                 reverse=True,
             )
-            chain: set[int] = {sorted_by_len[0]}
+            chain: set[int] = {sorted_by_score[0]}
 
             # Greedily extend in both temporal directions
             changed = True
