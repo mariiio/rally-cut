@@ -353,6 +353,7 @@ class RallyScoreState:
     score_b: int
     serving_team: str  # "A" or "B"
     point_winner: str  # "A", "B", or "unknown"
+    serve_source: str = "detected"  # "detected" or "inferred"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -361,6 +362,7 @@ class RallyScoreState:
             "scoreB": self.score_b,
             "servingTeam": self.serving_team,
             "pointWinner": self.point_winner,
+            "serveSource": self.serve_source,
         }
 
 
@@ -419,6 +421,8 @@ class MatchStats:
     final_score_a: int = 0
     final_score_b: int = 0
     momentum_shifts: int = 0  # Times scoring momentum changes teams
+    # Fraction of serves that were detected (not inferred)
+    score_confidence: float = 1.0
     # Cross-rally matching confidence (average across all rallies)
     avg_matching_confidence: float = 0.0
     # Calibration
@@ -448,6 +452,7 @@ class MatchStats:
             d["finalScoreA"] = self.final_score_a
             d["finalScoreB"] = self.final_score_b
             d["momentumShifts"] = self.momentum_shifts
+            d["scoreConfidence"] = round(self.score_confidence, 3)
         if self.duo_stats:
             d["duoStats"] = [ds.to_dict() for ds in self.duo_stats]
         return d
@@ -553,18 +558,131 @@ def compute_position_heatmap(
     return grid.tolist()
 
 
+def _fill_serve_gaps(
+    serving_data: list[tuple[str, str | None]],
+) -> list[tuple[str, str, str]]:
+    """Infer serving team for rallies where serve detection is missing.
+
+    Args:
+        serving_data: (rally_id, serving_team_or_None) in match order.
+
+    Returns:
+        (rally_id, serving_team, source) where source is "detected" or "inferred".
+    """
+    result: list[tuple[str, str, str]] = []
+    for rally_id, serving in serving_data:
+        if serving:
+            result.append((rally_id, serving, "detected"))
+        else:
+            result.append((rally_id, "", "inferred"))
+
+    # Fill gaps by looking at known serves before/after each gap
+    i = 0
+    n = len(result)
+    while i < n:
+        if result[i][1] != "":
+            i += 1
+            continue
+
+        # Find gap bounds
+        gap_start = i
+        while i < n and result[i][1] == "":
+            i += 1
+        gap_end = i  # exclusive
+
+        pre_team = result[gap_start - 1][1] if gap_start > 0 else None
+        post_team = result[gap_end][1] if gap_end < n else None
+
+        if pre_team and post_team:
+            # Bounded gap
+            if pre_team == post_team:
+                # Same team on both sides — they kept serving through the gap
+                fill_team = pre_team
+                for j in range(gap_start, gap_end):
+                    result[j] = (result[j][0], fill_team, "inferred")
+            else:
+                gap_len = gap_end - gap_start
+                if gap_len == 1:
+                    # Single-rally gap: pre-gap team served this rally,
+                    # change happens at the gap boundary
+                    result[gap_start] = (
+                        result[gap_start][0], pre_team, "inferred",
+                    )
+                else:
+                    # Multi-rally gap: alternate from pre-gap team
+                    teams = [pre_team, post_team]
+                    for j in range(gap_start, gap_end):
+                        result[j] = (
+                            result[j][0], teams[(j - gap_start) % 2], "inferred",
+                        )
+        elif pre_team:
+            # Trailing gap: carry forward
+            for j in range(gap_start, gap_end):
+                result[j] = (result[j][0], pre_team, "inferred")
+        elif post_team:
+            # Leading gap: carry back
+            for j in range(gap_start, gap_end):
+                result[j] = (result[j][0], post_team, "inferred")
+        # else: no known serves at all — leave empty (will be filtered)
+
+    return [(rid, team, src) for rid, team, src in result if team != ""]
+
+
+def _resolve_last_rally(
+    score_a: int,
+    score_b: int,
+    set_target: int = 21,
+) -> str | None:
+    """Try to resolve the last rally's winner using volleyball set rules.
+
+    Beach volleyball sets end at ``set_target`` (default 21), win by 2.
+    Returns the winner if exactly one of the two candidate final scores
+    (A+1,B) or (A,B+1) is a valid set-ending score.
+
+    Args:
+        score_a: Team A's score before the last rally.
+        score_b: Team B's score before the last rally.
+        set_target: Points needed to win the set (21 for sets 1-2, 15 for set 3).
+
+    Returns:
+        "A", "B", or None if ambiguous.
+    """
+    def _is_valid_set_end(sa: int, sb: int) -> bool:
+        """Check if (sa, sb) is a valid set-ending score."""
+        high, low = max(sa, sb), min(sa, sb)
+        if high < set_target:
+            return False
+        # Win by 2
+        return high - low >= 2
+
+    # Two candidates: A won last rally or B won last rally
+    cand_a = (score_a + 1, score_b)
+    cand_b = (score_a, score_b + 1)
+    a_valid = _is_valid_set_end(*cand_a)
+    b_valid = _is_valid_set_end(*cand_b)
+
+    if a_valid and not b_valid:
+        return "A"
+    if b_valid and not a_valid:
+        return "B"
+    # Both valid (deuce) or neither valid (partial recording)
+    return None
+
+
 def compute_match_scores(
     rally_actions_list: list[RallyActions],
+    set_target: int = 21,
 ) -> list[RallyScoreState]:
     """Compute running scores from serve ownership across consecutive rallies.
 
-    Volleyball rule: the winner of the previous rally serves next.
-    - If serving team changes between rallies → previous rally won by new server.
-    - If serving team stays the same → they scored (side-out failed).
-    - Last rally's winner is unknown (no next-rally info).
+    Multi-phase pipeline:
+    1. Extract serves, filling gaps where serve detection is missing.
+    2. Forward pass: attribute points from serve changes.
+    3. Resolve last rally using volleyball set rules.
 
     Args:
         rally_actions_list: Classified actions for each rally (in match order).
+        set_target: Points needed to win the set (21 for beach, 25 for indoor).
 
     Returns:
         List of RallyScoreState with running scores.
@@ -573,33 +691,34 @@ def compute_match_scores(
     score_a = 0
     score_b = 0
 
-    # Extract serving team per rally
-    serving_teams: list[tuple[str, str]] = []  # (rally_id, serving_team)
-    for ra in rally_actions_list:
-        serving = ra.serving_team
-        if serving:
-            serving_teams.append((ra.rally_id, serving))
+    # Phase 1: Extract serving team per rally (including None for missing)
+    raw_serving: list[tuple[str, str | None]] = [
+        (ra.rally_id, ra.serving_team) for ra in rally_actions_list
+    ]
 
-    skipped = len(rally_actions_list) - len(serving_teams)
-    if skipped > 0:
-        logger.warning(
-            "Skipped %d/%d rallies with unknown serving team for score computation",
-            skipped, len(rally_actions_list),
-        )
+    # Fill serve gaps
+    serving_teams = _fill_serve_gaps(raw_serving)
 
     if not serving_teams:
         return scores
 
-    for i, (rally_id, serving) in enumerate(serving_teams):
+    n_inferred = sum(1 for _, _, src in serving_teams if src == "inferred")
+    if n_inferred > 0:
+        logger.info(
+            "Inferred serving team for %d/%d rallies (%.0f%% detected)",
+            n_inferred, len(serving_teams),
+            100 * (1 - n_inferred / len(serving_teams)),
+        )
+
+    # Phase 2: Forward pass — attribute points from serve changes
+    for i, (rally_id, serving, source) in enumerate(serving_teams):
         point_winner = "unknown"
 
         if i < len(serving_teams) - 1:
             next_serving = serving_teams[i + 1][1]
             if next_serving != serving:
-                # Server changed → new server won the previous point
                 point_winner = next_serving
             else:
-                # Same server → they scored (side-out failed for opponent)
                 point_winner = serving
 
         if point_winner == "A":
@@ -613,7 +732,21 @@ def compute_match_scores(
             score_b=score_b,
             serving_team=serving,
             point_winner=point_winner,
+            serve_source=source,
         ))
+
+    # Phase 3: Resolve last rally using volleyball set rules
+    if scores and scores[-1].point_winner == "unknown":
+        last = scores[-1]
+        winner = _resolve_last_rally(
+            last.score_a, last.score_b, set_target,
+        )
+        if winner:
+            if winner == "A":
+                last.score_a += 1
+            else:
+                last.score_b += 1
+            last.point_winner = winner
 
     return scores
 
@@ -1979,6 +2112,10 @@ def compute_match_stats(
         last = score_progression[-1]
         stats.final_score_a = last.score_a
         stats.final_score_b = last.score_b
+        n_detected = sum(
+            1 for s in score_progression if s.serve_source == "detected"
+        )
+        stats.score_confidence = n_detected / len(score_progression)
         for sp in score_progression:
             point_winner_map[sp.rally_id] = sp.point_winner
 

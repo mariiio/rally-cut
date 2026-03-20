@@ -2322,9 +2322,11 @@ export interface MatchStats {
     scoreB: number;
     servingTeam: string;
     pointWinner: string;
+    serveSource?: string;
   }>;
   finalScoreA?: number;
   finalScoreB?: number;
+  scoreConfidence?: number;
 }
 
 /**

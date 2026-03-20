@@ -5,6 +5,8 @@ from __future__ import annotations
 from rallycut.statistics.match_stats import (
     PlayerStats,
     TeamStats,
+    _fill_serve_gaps,
+    _resolve_last_rally,
     _try_fix_consecutive_run,
     _try_fix_contact_sequence,
     _try_fix_serve_receive,
@@ -440,7 +442,7 @@ class TestComputeMatchScores:
         assert scores[1].point_winner == "A"
         assert scores[1].score_a == 1
         assert scores[1].score_b == 1
-        # Rally 3: last rally → winner unknown
+        # Rally 3: last rally → unknown (score 1-1, not a valid set end)
         assert scores[2].point_winner == "unknown"
         assert scores[2].score_a == 1
         assert scores[2].score_b == 1
@@ -464,8 +466,8 @@ class TestComputeMatchScores:
         assert scores[0].score_a == 1
         assert scores[0].score_b == 0
 
-    def test_missing_serve_skipped(self) -> None:
-        """Rallies without serving_team are skipped in scoring."""
+    def test_missing_serve_gap_filled(self) -> None:
+        """Rallies without serving_team get inferred serve from neighbors."""
         rallies = [
             RallyActions(
                 actions=[_action(ActionType.SERVE, 5, player=1, team="A")],
@@ -481,12 +483,19 @@ class TestComputeMatchScores:
             ),
         ]
         scores = compute_match_scores(rallies)
-        # Only 2 rallies with known serving team
-        assert len(scores) == 2
+        # All 3 rallies now included (gap filled)
+        assert len(scores) == 3
         assert scores[0].rally_id == "r1"
-        assert scores[0].point_winner == "B"  # B serves next
-        assert scores[1].rally_id == "r3"
-        assert scores[1].point_winner == "unknown"  # Last rally
+        assert scores[0].serve_source == "detected"
+        # Gap rally inferred as A (pre-gap team), A→A means A scored r1
+        assert scores[0].point_winner == "A"
+        assert scores[1].rally_id == "r2"
+        assert scores[1].serve_source == "inferred"
+        assert scores[1].serving_team == "A"
+        # A→B change means B won r2
+        assert scores[1].point_winner == "B"
+        assert scores[2].rally_id == "r3"
+        assert scores[2].serve_source == "detected"
 
     def test_empty_rallies(self) -> None:
         """Empty rally list returns empty scores."""
@@ -494,7 +503,7 @@ class TestComputeMatchScores:
         assert scores == []
 
     def test_single_rally(self) -> None:
-        """Single rally has unknown winner (no next rally)."""
+        """Single rally has unknown winner (no next rally, score 0-0)."""
         rallies = [
             RallyActions(
                 actions=[_action(ActionType.SERVE, 5, player=1, team="A")],
@@ -506,6 +515,105 @@ class TestComputeMatchScores:
         assert scores[0].point_winner == "unknown"
         assert scores[0].score_a == 0
         assert scores[0].score_b == 0
+
+
+class TestFillServeGaps:
+    """Tests for serve gap inference."""
+
+    def test_no_gaps(self) -> None:
+        """All serves detected, no changes."""
+        data = [("r1", "A"), ("r2", "B"), ("r3", "A")]
+        result = _fill_serve_gaps(data)
+        assert len(result) == 3
+        assert all(src == "detected" for _, _, src in result)
+
+    def test_single_gap_bounded(self) -> None:
+        """Single-rally gap between different teams uses pre-gap team."""
+        data: list[tuple[str, str | None]] = [("r1", "A"), ("r2", None), ("r3", "B")]
+        result = _fill_serve_gaps(data)
+        assert len(result) == 3
+        assert result[1] == ("r2", "A", "inferred")
+
+    def test_gap_same_team_both_sides(self) -> None:
+        """Gap with same team on both sides fills with that team."""
+        data: list[tuple[str, str | None]] = [
+            ("r1", "A"), ("r2", None), ("r3", None), ("r4", "A"),
+        ]
+        result = _fill_serve_gaps(data)
+        assert result[1][1] == "A"
+        assert result[2][1] == "A"
+
+    def test_leading_gap(self) -> None:
+        """Leading gap carries back from first known serve."""
+        data: list[tuple[str, str | None]] = [("r1", None), ("r2", None), ("r3", "B")]
+        result = _fill_serve_gaps(data)
+        assert result[0][1] == "B"
+        assert result[1][1] == "B"
+        assert all(src == "inferred" for _, _, src in result[:2])
+
+    def test_trailing_gap(self) -> None:
+        """Trailing gap carries forward from last known serve."""
+        data: list[tuple[str, str | None]] = [("r1", "A"), ("r2", None), ("r3", None)]
+        result = _fill_serve_gaps(data)
+        assert result[1][1] == "A"
+        assert result[2][1] == "A"
+
+    def test_all_none(self) -> None:
+        """All serves missing returns empty (no info to infer from)."""
+        data: list[tuple[str, str | None]] = [("r1", None), ("r2", None)]
+        result = _fill_serve_gaps(data)
+        assert result == []
+
+    def test_multi_gap_different_teams(self) -> None:
+        """Multi-rally gap between different teams alternates from pre-gap."""
+        data: list[tuple[str, str | None]] = [
+            ("r1", "A"), ("r2", None), ("r3", None), ("r4", "B"),
+        ]
+        result = _fill_serve_gaps(data)
+        # Alternates from A: r2=A, r3=B
+        assert result[1][1] == "A"
+        assert result[2][1] == "B"
+
+    def test_multi_gap_three_rallies(self) -> None:
+        """Gap of 3 rallies between different teams alternates correctly."""
+        data: list[tuple[str, str | None]] = [
+            ("r1", "A"), ("r2", None), ("r3", None), ("r4", None), ("r5", "B"),
+        ]
+        result = _fill_serve_gaps(data)
+        # Alternates from A: r2=A, r3=B, r4=A
+        assert result[1] == ("r2", "A", "inferred")
+        assert result[2] == ("r3", "B", "inferred")
+        assert result[3] == ("r4", "A", "inferred")
+
+
+class TestResolveLastRally:
+    """Tests for last rally resolution using volleyball set rules."""
+
+    def test_clean_win_team_a(self) -> None:
+        """Score 20-18, only A winning gives valid set end (21-18)."""
+        assert _resolve_last_rally(20, 18) == "A"
+
+    def test_clean_win_team_b(self) -> None:
+        """Score 15-20, only B winning gives valid set end (15-21)."""
+        assert _resolve_last_rally(15, 20) == "B"
+
+    def test_partial_recording(self) -> None:
+        """Score 10-8, neither candidate is a valid set end."""
+        assert _resolve_last_rally(10, 8) is None
+
+    def test_deuce_ambiguous(self) -> None:
+        """Score 20-20, both 21-20 candidates invalid (not win by 2)."""
+        # Neither 21-20 nor 20-21 wins by 2 → None
+        assert _resolve_last_rally(20, 20) is None
+
+    def test_deuce_win_by_two(self) -> None:
+        """Score 21-20, only team at 21 can reach 22-20 (win by 2)."""
+        assert _resolve_last_rally(21, 20) == "A"
+
+    def test_custom_set_target(self) -> None:
+        """Third-set target of 15."""
+        assert _resolve_last_rally(14, 12, set_target=15) == "A"
+        assert _resolve_last_rally(10, 8, set_target=15) is None
 
 
 class TestTeamStatsAggregation:

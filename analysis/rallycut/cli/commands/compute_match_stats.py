@@ -37,6 +37,7 @@ def _load_rally_actions_and_positions(
     from rallycut.tracking.player_tracker import PlayerPosition
 
     # Load rally-level data (actions, positions, ball positions)
+    # Only include CONFIRMED rallies — skip rejected ones (BALL_PASS, TOO_SHORT)
     rally_query = """
         SELECT
             r.id as rally_id,
@@ -49,6 +50,7 @@ def _load_rally_actions_and_positions(
         WHERE r.video_id = %s
           AND pt.positions_json IS NOT NULL
           AND pt.actions_json IS NOT NULL
+          AND (r.status = 'CONFIRMED' OR r.status IS NULL)
         ORDER BY r.start_ms
     """
 
