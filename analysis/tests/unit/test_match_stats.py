@@ -610,6 +610,12 @@ class TestResolveLastRally:
         """Score 21-20, only team at 21 can reach 22-20 (win by 2)."""
         assert _resolve_last_rally(21, 20) == "A"
 
+    def test_both_valid_leading_team_wins(self) -> None:
+        """Score 27-11: both candidates valid, leading team (A) won."""
+        assert _resolve_last_rally(27, 11) == "A"
+        # Symmetric: B leading
+        assert _resolve_last_rally(11, 27) == "B"
+
     def test_custom_set_target(self) -> None:
         """Third-set target of 15."""
         assert _resolve_last_rally(14, 12, set_target=15) == "A"

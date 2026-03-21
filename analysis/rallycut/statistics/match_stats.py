@@ -665,7 +665,13 @@ def _resolve_last_rally(
         return "A"
     if b_valid and not a_valid:
         return "B"
-    # Both valid (deuce) or neither valid (partial recording)
+    if a_valid and b_valid:
+        # Both valid — the leading team won (they reached the target first)
+        if score_a > score_b:
+            return "A"
+        if score_b > score_a:
+            return "B"
+    # Neither valid (partial recording) or exact tie (shouldn't happen)
     return None
 
 
