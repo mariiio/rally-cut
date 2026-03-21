@@ -13,7 +13,7 @@ import {
   SessionManifest,
 } from '@/types/rally';
 import { usePlayerStore } from './playerStore';
-import { fetchSession as fetchSessionFromApi, fetchVideoForEditor, getCurrentUser, getConfirmationStatus, AccessDeniedError, type CameraEditMap, type GlobalCameraSettingsMap } from '@/services/api';
+import { fetchSession as fetchSessionFromApi, fetchVideoForEditor, getCurrentUser, getConfirmationStatus, AccessDeniedError, type CameraEditMap, type GlobalCameraSettingsMap, type CourtCalibrationMap } from '@/services/api';
 import { usePlayerTrackingStore } from './playerTrackingStore';
 import { useCameraStore } from './cameraStore';
 import type { RallyCameraEdit } from '@/types/camera';
@@ -164,7 +164,7 @@ interface EditorState {
   singleVideoId: string | null;
 
   // Session cache (for back navigation)
-  sessionCache: Record<string, { session: Session; cameraEdits: CameraEditMap; globalCameraSettings: GlobalCameraSettingsMap; timestamp: number }>;
+  sessionCache: Record<string, { session: Session; cameraEdits: CameraEditMap; globalCameraSettings: GlobalCameraSettingsMap; courtCalibrations: CourtCalibrationMap; timestamp: number }>;
   invalidateSessionCache: (sessionId?: string) => void;
 
   // Session actions
@@ -367,11 +367,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (useApi) {
         // Check session cache first (for back navigation)
         const cached = get().sessionCache[sessionId];
-        let result: { session: Session; cameraEdits: CameraEditMap; globalCameraSettings: GlobalCameraSettingsMap };
+        let result: { session: Session; cameraEdits: CameraEditMap; globalCameraSettings: GlobalCameraSettingsMap; courtCalibrations: CourtCalibrationMap };
 
         if (cached && Date.now() - cached.timestamp < SESSION_CACHE_TTL) {
           // Use cached data
-          result = { session: cached.session, cameraEdits: cached.cameraEdits, globalCameraSettings: cached.globalCameraSettings };
+          result = { session: cached.session, cameraEdits: cached.cameraEdits, globalCameraSettings: cached.globalCameraSettings, courtCalibrations: cached.courtCalibrations ?? {} };
         } else {
           // Fetch from backend API
           result = await fetchSessionFromApi(sessionId);
@@ -384,6 +384,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 session: result.session,
                 cameraEdits: result.cameraEdits,
                 globalCameraSettings: result.globalCameraSettings,
+                courtCalibrations: result.courtCalibrations,
                 timestamp: Date.now(),
               },
             },
@@ -395,6 +396,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         // Load camera edits and global settings into camera store (migration handled by loadCameraEdits)
         // Pass raw data - loadCameraEdits will migrate old format if needed
         useCameraStore.getState().loadCameraEdits(result.cameraEdits, result.globalCameraSettings);
+
+        // Sync court calibrations for all videos
+        const trackingStore = usePlayerTrackingStore.getState();
+        for (const [videoId, corners] of Object.entries(result.courtCalibrations)) {
+          trackingStore.hydrateCalibration(videoId, corners);
+        }
+        // Clear stale local calibrations for videos that no longer have DB calibration
+        for (const match of result.session.matches) {
+          if (!result.courtCalibrations[match.id]) {
+            trackingStore.clearLocalCalibration(match.id);
+          }
+        }
 
         // Update progress
         set({

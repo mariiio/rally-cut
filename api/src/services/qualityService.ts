@@ -164,8 +164,6 @@ export async function assessVideoQuality(
 
   // Auto-save court calibration if confident, but never overwrite manual calibration.
   // Uses transaction to prevent TOCTOU race between read and write.
-  // Pre-migration rows (courtCalibrationSource = null) are treated as auto-saved
-  // and can be overwritten — only explicit "manual" source is protected.
   let courtAutoSaved = false;
   const cornersUsable = court && court.corners.length === 4 && areCornersReasonable(court.corners);
   if (cornersUsable && court.confidence > 0.7) {

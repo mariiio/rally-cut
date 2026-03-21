@@ -110,6 +110,7 @@ interface ApiVideo {
   createdAt: string;
   qualityDowngradedAt?: string | null;
   characteristicsJson?: VideoCharacteristics | null;
+  courtCalibrationJson?: Array<{ x: number; y: number }> | null;
 }
 
 interface ApiCameraKeyframe {
@@ -348,11 +349,25 @@ function extractGlobalCameraSettings(apiSession: ApiSession): GlobalCameraSettin
   return result;
 }
 
+function extractCourtCalibrations(apiSession: ApiSession): CourtCalibrationMap {
+  const result: CourtCalibrationMap = {};
+  for (const video of apiSession.videos) {
+    if (video.courtCalibrationJson) {
+      result[video.id] = video.courtCalibrationJson;
+    }
+  }
+  return result;
+}
+
 // Session fetch result including camera edits
+// Court calibrations extracted from session response, keyed by videoId
+export type CourtCalibrationMap = Record<string, Array<{ x: number; y: number }>>;
+
 export interface FetchSessionResult {
   session: Session;
   cameraEdits: CameraEditMap;
   globalCameraSettings: GlobalCameraSettingsMap;
+  courtCalibrations: CourtCalibrationMap;
 }
 
 // API client functions
@@ -387,14 +402,16 @@ export async function fetchSession(sessionId: string): Promise<FetchSessionResul
   // Get CloudFront domain from env if available
   const cloudfrontDomain = process.env.NEXT_PUBLIC_CLOUDFRONT_DOMAIN;
 
-  // Extract camera edits and global settings before transforming
+  // Extract camera edits, global settings, and court calibrations before transforming
   const cameraEdits = extractCameraEdits(apiSession);
   const globalCameraSettings = extractGlobalCameraSettings(apiSession);
+  const courtCalibrations = extractCourtCalibrations(apiSession);
 
   return {
     session: apiSessionToFrontend(apiSession, cloudfrontDomain),
     cameraEdits,
     globalCameraSettings,
+    courtCalibrations,
   };
 }
 
