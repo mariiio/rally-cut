@@ -631,29 +631,31 @@ def _fill_serve_gaps(
 def _resolve_last_rally(
     score_a: int,
     score_b: int,
-    set_target: int = 21,
 ) -> str | None:
     """Try to resolve the last rally's winner using volleyball set rules.
 
-    Beach volleyball sets end at ``set_target`` (default 21), win by 2.
-    Returns the winner if exactly one of the two candidate final scores
-    (A+1,B) or (A,B+1) is a valid set-ending score.
+    Beach volleyball sets end at 21 (sets 1-2) or 15 (set 3), win by 2.
+    Since we don't know which set is being played, we try both targets.
+    Returns the winner if exactly one candidate final score is a valid
+    set-ending score under any target.
+
+    Tolerant of imperfect rally counts — doesn't assume score sum equals
+    total rallies (replayed points, missed rallies, etc. can cause drift).
 
     Args:
         score_a: Team A's score before the last rally.
         score_b: Team B's score before the last rally.
-        set_target: Points needed to win the set (21 for sets 1-2, 15 for set 3).
 
     Returns:
         "A", "B", or None if ambiguous.
     """
     def _is_valid_set_end(sa: int, sb: int) -> bool:
-        """Check if (sa, sb) is a valid set-ending score."""
+        """Check if (sa, sb) is a valid set-ending score for any target."""
         high, low = max(sa, sb), min(sa, sb)
-        if high < set_target:
+        if high - low < 2:
             return False
-        # Win by 2
-        return high - low >= 2
+        # Valid if winner reached any standard target (15 or 21)
+        return high >= 15
 
     # Two candidates: A won last rally or B won last rally
     cand_a = (score_a + 1, score_b)
@@ -671,24 +673,22 @@ def _resolve_last_rally(
             return "A"
         if score_b > score_a:
             return "B"
-    # Neither valid (partial recording) or exact tie (shouldn't happen)
+    # Neither valid (partial recording) or exact tie
     return None
 
 
 def compute_match_scores(
     rally_actions_list: list[RallyActions],
-    set_target: int = 21,
 ) -> list[RallyScoreState]:
     """Compute running scores from serve ownership across consecutive rallies.
 
     Multi-phase pipeline:
     1. Extract serves, filling gaps where serve detection is missing.
     2. Forward pass: attribute points from serve changes.
-    3. Resolve last rally using volleyball set rules.
+    3. Resolve last rally using volleyball set rules (15 or 21, win by 2).
 
     Args:
         rally_actions_list: Classified actions for each rally (in match order).
-        set_target: Points needed to win the set (21 for beach, 25 for indoor).
 
     Returns:
         List of RallyScoreState with running scores.
@@ -745,7 +745,7 @@ def compute_match_scores(
     if scores and scores[-1].point_winner == "unknown":
         last = scores[-1]
         winner = _resolve_last_rally(
-            last.score_a, last.score_b, set_target,
+            last.score_a, last.score_b,
         )
         if winner:
             if winner == "A":

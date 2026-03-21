@@ -616,10 +616,13 @@ class TestResolveLastRally:
         # Symmetric: B leading
         assert _resolve_last_rally(11, 27) == "B"
 
-    def test_custom_set_target(self) -> None:
-        """Third-set target of 15."""
-        assert _resolve_last_rally(14, 12, set_target=15) == "A"
-        assert _resolve_last_rally(10, 8, set_target=15) is None
+    def test_third_set_target_15(self) -> None:
+        """Score 14-12 resolves as A winning (15-12 is valid set 3 end)."""
+        assert _resolve_last_rally(14, 12) == "A"
+
+    def test_below_any_target(self) -> None:
+        """Score 10-8: neither candidate reaches 15, unresolvable."""
+        assert _resolve_last_rally(10, 8) is None
 
 
 class TestTeamStatsAggregation:
