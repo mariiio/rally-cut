@@ -1341,21 +1341,76 @@ def _reattribute_server_exclusion(
     return n_fixed
 
 
+def _reattribute_reid(
+    actions: list[ClassifiedAction],
+    contact_by_frame: dict[int, Contact],
+    reid_predictions: dict[int, dict[str, Any]],
+    reid_min_margin: float,
+) -> list[ClassifiedAction]:
+    """Pass 3: Re-attribute using fine-tuned ReID classifier predictions.
+
+    For each contact where the classifier confidently identifies a different
+    player than proximity, re-attribute the action.
+    """
+    n_reid = 0
+    for action in actions:
+        if action.player_track_id < 0:
+            continue
+
+        reid_pred = reid_predictions.get(action.frame)
+        if not reid_pred:
+            continue
+
+        best_tid = reid_pred.get("best_tid", -1)
+        margin = reid_pred.get("margin", 0.0)
+
+        if best_tid < 0 or best_tid == action.player_track_id:
+            continue
+
+        if margin < reid_min_margin:
+            continue
+
+        # Verify the candidate is in the contact's player list
+        contact = contact_by_frame.get(action.frame)
+        if contact is None:
+            continue
+        cand_tids = {tid for tid, _ in contact.player_candidates}
+        if best_tid not in cand_tids:
+            continue
+
+        logger.debug(
+            "ReID re-attribute frame %d: track %d -> track %d (margin %.3f)",
+            action.frame, action.player_track_id, best_tid, margin,
+        )
+        action.player_track_id = best_tid
+        n_reid += 1
+
+    if n_reid > 0:
+        logger.info("ReID re-attributed %d/%d actions", n_reid, len(actions))
+
+    return actions
+
+
 def reattribute_players(
     actions: list[ClassifiedAction],
     contacts: list[Contact],
     team_assignments: dict[int, int] | None,
     max_distance_ratio: float = 1.5,
+    reid_predictions: dict[int, dict[str, Any]] | None = None,
+    reid_min_margin: float = 0.15,
 ) -> list[ClassifiedAction]:
     """Re-assign player attribution using type-aware rules and team signal.
 
-    Two passes:
+    Three passes:
     1. Server exclusion (no team data needed): ensures RECEIVE actions are
        not attributed to the server. Catches cases missed by the inline
        check (e.g. receives created by repair_action_sequence).
     2. Team-based re-attribution (requires team data): for actions where
        the assigned player is on the wrong team for the court side,
        re-assigns to a correct-team candidate within distance cap.
+    3. ReID re-attribution (requires reid_predictions): for each contact,
+       if the fine-tuned classifier is confident that a different candidate
+       is the correct player, re-attribute.
 
     Args:
         actions: Classified actions to potentially re-attribute.
@@ -1363,6 +1418,9 @@ def reattribute_players(
         team_assignments: Map of track_id → team (0=near, 1=far).
         max_distance_ratio: Maximum distance ratio for candidate (1.5 = candidate
             can be up to 50% farther than current player).
+        reid_predictions: Map of contact frame → {track_id: player_id} predicted
+            by the fine-tuned ReID classifier. When provided, enables Pass 3.
+        reid_min_margin: Minimum probability margin for ReID re-attribution.
     """
     # Pass 1: server exclusion (always runs, no team data needed)
     n_server_fixes = _reattribute_server_exclusion(actions, contacts)
@@ -1371,11 +1429,15 @@ def reattribute_players(
             "Server exclusion: re-attributed %d receive(s)", n_server_fixes,
         )
 
+    contact_by_frame: dict[int, Contact] = {c.frame: c for c in contacts}
+
     # Pass 2: team-based re-attribution (requires team data)
     if not team_assignments:
+        # Skip Pass 2 but still run Pass 3 (ReID) if available
+        if reid_predictions:
+            return _reattribute_reid(actions, contact_by_frame, reid_predictions, reid_min_margin)
         return actions
 
-    contact_by_frame: dict[int, Contact] = {c.frame: c for c in contacts}
     side_to_team = {"near": 0, "far": 1}
     n_reattributed = 0
 
@@ -1429,6 +1491,10 @@ def reattribute_players(
     if n_reattributed > 0:
         logger.info("Re-attributed %d/%d actions using team signal",
                      n_reattributed, len(actions))
+
+    # Pass 3: ReID re-attribution (requires reid_predictions)
+    if reid_predictions:
+        _reattribute_reid(actions, contact_by_frame, reid_predictions, reid_min_margin)
 
     return actions
 

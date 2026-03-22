@@ -15,6 +15,91 @@ from rallycut.cli.utils import handle_errors
 console = Console()
 
 
+def _load_db_reference_crops(
+    video_id: str,
+    video_path: Path,
+    quiet: bool,
+) -> tuple[None, Any]:
+    """Load reference crops from DB and build frozen HSV profiles.
+
+    Returns:
+        (None, reference_profiles). First element reserved for future use.
+        reference_profiles is None if no crops found.
+    """
+    from rallycut.evaluation.db import get_connection
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT player_id, frame_ms, bbox_x, bbox_y, bbox_w, bbox_h
+                   FROM player_reference_crops
+                   WHERE video_id = %s
+                   ORDER BY player_id, created_at""",
+                [video_id],
+            )
+            crop_rows = cur.fetchall()
+
+    if not crop_rows:
+        return None, None
+
+    crop_infos: list[dict[str, Any]] = []
+    for r in crop_rows:
+        pid_val, fms_val, bx_val, by_val, bw_val, bh_val = r
+        crop_infos.append({
+            "player_id": pid_val, "frame_ms": fms_val,
+            "bbox_x": bx_val, "bbox_y": by_val,
+            "bbox_w": bw_val, "bbox_h": bh_val,
+        })
+
+    import cv2
+    import numpy as np
+
+    from rallycut.tracking.player_features import (
+        build_profiles_from_crops,
+        extract_appearance_features,
+    )
+
+    # Build HSV profiles from reference crops (existing appearance pipeline).
+    # Extract features from video at stored coordinates for best quality.
+    cap = cv2.VideoCapture(str(video_path))
+    fw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    fh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    features_by_player: dict[int, list[Any]] = {}
+    for info in sorted(crop_infos, key=lambda c: int(c["frame_ms"])):
+        pid = int(info["player_id"])
+        frame_ms = int(info["frame_ms"])
+
+        if fw > 0:
+            cap.set(cv2.CAP_PROP_POS_MSEC, float(frame_ms))
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                frame_arr: Any = np.asarray(frame)
+                features = extract_appearance_features(
+                    frame=frame_arr,
+                    track_id=0,
+                    frame_number=0,
+                    bbox=(
+                        float(info["bbox_x"]), float(info["bbox_y"]),
+                        float(info["bbox_w"]), float(info["bbox_h"]),
+                    ),
+                    frame_width=fw,
+                    frame_height=fh,
+                )
+                features_by_player.setdefault(pid, []).append(features)
+
+    cap.release()
+    reference_profiles = build_profiles_from_crops(features_by_player)
+
+    if not quiet:
+        for pid in sorted(reference_profiles):
+            n = len(features_by_player.get(pid, []))
+            console.print(f"  Reference profile P{pid}: {n} crop(s)")
+        console.print()
+
+    return None, reference_profiles
+
+
 def _reverse_rally_positions(
     rally: Any,
     inverse: dict[int, int],
@@ -159,8 +244,15 @@ def match_players(
         console.print(f"  Video: {video_path.name}")
         console.print()
 
-    # Load reference crop profiles if provided
+    # Load reference crop profiles: from JSON file, or from DB
     reference_profiles = None
+
+    # Try DB reference crops first (unless JSON file is explicitly provided)
+    if reference_crops_json is None:
+        _, reference_profiles = _load_db_reference_crops(
+            video_id, video_path, quiet,
+        )
+
     if reference_crops_json is not None:
         import cv2
         import numpy as np

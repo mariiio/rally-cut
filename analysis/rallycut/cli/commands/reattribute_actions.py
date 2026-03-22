@@ -93,6 +93,173 @@ def _serialize_actions(
     return result
 
 
+def _train_reid_classifier(
+    video_id: str,
+    quiet: bool = False,
+) -> Any:
+    """Train a ReID classifier on reference crops if available.
+
+    Returns the trained PlayerReIDClassifier, or None if no crops.
+    """
+    from rallycut.evaluation.tracking.db import get_connection, get_video_path
+
+    # Check for reference crops
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT player_id, frame_ms, bbox_x, bbox_y, bbox_w, bbox_h
+                   FROM player_reference_crops
+                   WHERE video_id = %s
+                   ORDER BY player_id, created_at""",
+                [video_id],
+            )
+            crop_rows = cur.fetchall()
+
+    if not crop_rows:
+        return None
+
+    crop_infos = [
+        {
+            "player_id": r[0], "frame_ms": r[1],
+            "bbox_x": r[2], "bbox_y": r[3],
+            "bbox_w": r[4], "bbox_h": r[5],
+        }
+        for r in crop_rows
+    ]
+
+    video_path = get_video_path(video_id)
+    if video_path is None:
+        return None
+
+    from rallycut.tracking.reid_embeddings import (
+        PlayerReIDClassifier,
+        extract_crops_from_video,
+    )
+
+    crops_by_player = extract_crops_from_video(video_path, crop_infos)
+    if len(crops_by_player) < 2:
+        return None
+
+    classifier = PlayerReIDClassifier()
+    stats = classifier.train(crops_by_player)
+
+    if not quiet:
+        n_crops = sum(len(c) for c in crops_by_player.values())
+        console.print(
+            f"  ReID classifier: {n_crops} crops → "
+            f"{len(crops_by_player)} players, train_acc={stats['train_acc']:.0%}"
+        )
+
+    return classifier
+
+
+def _compute_reid_predictions(
+    classifier: Any,
+    video_cap: Any,
+    contacts: list[Contact],
+    positions_json: list[dict],
+    track_to_player: dict[int, int],
+    start_ms: int,
+    video_fps: float,
+) -> dict[int, dict[str, Any]]:
+    """Compute ReID predictions for each contact frame.
+
+    Returns:
+        {contact_frame: {"best_tid": int, "margin": float}}
+    """
+    import cv2
+    import numpy as np
+
+    pos_by_frame_track: dict[tuple[int, int], dict] = {}
+    for pp in positions_json:
+        pos_by_frame_track[(pp["frameNumber"], pp["trackId"])] = pp
+
+    rally_start_frame = int(start_ms / 1000.0 * video_fps)
+    predictions: dict[int, dict[str, Any]] = {}
+
+    for contact in contacts:
+        if not contact.player_candidates or len(contact.player_candidates) < 2:
+            continue
+
+        # Extract candidate crops
+        candidate_info: list[tuple[int, int, np.ndarray]] = []  # (tid, pid, crop)
+
+        for cand_tid, _dist in contact.player_candidates:
+            cand_pid = track_to_player.get(cand_tid, -1)
+            if cand_pid < 0:
+                continue
+
+            # Find position near contact frame
+            best_pos = None
+            for delta in range(6):
+                for fn in [contact.frame + delta, contact.frame - delta]:
+                    if fn < 0:
+                        continue
+                    pos = pos_by_frame_track.get((fn, cand_tid))
+                    if pos is not None:
+                        best_pos = pos
+                        break
+                if best_pos is not None:
+                    break
+
+            if best_pos is None:
+                continue
+
+            abs_fn = rally_start_frame + best_pos["frameNumber"]
+            video_cap.set(cv2.CAP_PROP_POS_FRAMES, abs_fn)
+            ret, frame = video_cap.read()
+            if not ret or frame is None:
+                continue
+
+            h, w = frame.shape[:2]
+            bx, by, bw, bh = best_pos["x"], best_pos["y"], best_pos["width"], best_pos["height"]
+            x1 = max(0, int((bx - bw / 2) * w))
+            y1 = max(0, int((by - bh / 2) * h))
+            x2 = min(w, int((bx + bw / 2) * w))
+            y2 = min(h, int((by + bh / 2) * h))
+
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            crop = frame[y1:y2, x1:x2]
+            if crop.size == 0 or crop.shape[0] < 16 or crop.shape[1] < 8:
+                continue
+
+            candidate_info.append((cand_tid, cand_pid, crop))
+
+        if len(candidate_info) < 2:
+            continue
+
+        # Classify all candidates
+        crops = [c[2] for c in candidate_info]
+        probs_list = classifier.predict(crops)
+
+        # For each candidate, find the player_id with highest probability
+        # Then pick the best overall assignment
+        best_tid = -1
+        best_prob = -1.0
+        second_prob = -1.0
+
+        for idx, (cand_tid, cand_pid, _crop) in enumerate(candidate_info):
+            # Get the probability that this candidate IS player cand_pid
+            prob = probs_list[idx].get(cand_pid, 0.0)
+            if prob > best_prob:
+                second_prob = best_prob
+                best_prob = prob
+                best_tid = cand_tid
+            elif prob > second_prob:
+                second_prob = prob
+
+        margin = best_prob - second_prob if second_prob >= 0 else 0.0
+
+        predictions[contact.frame] = {
+            "best_tid": best_tid,
+            "margin": margin,
+        }
+
+    return predictions
+
+
 @handle_errors
 def reattribute_actions_cmd(
     video_id: str = typer.Argument(
@@ -125,7 +292,7 @@ def reattribute_actions_cmd(
         rallycut reattribute-actions abc123
         rallycut reattribute-actions abc123 --dry-run
     """
-    from rallycut.evaluation.tracking.db import get_connection
+    from rallycut.evaluation.tracking.db import get_connection, get_video_path
     from rallycut.tracking.action_classifier import _team_label, reattribute_players
 
     # Load match analysis
@@ -167,11 +334,15 @@ def reattribute_actions_cmd(
             f"(conf >= {min_confidence:.2f})"
         )
 
+    # Train ReID classifier if reference crops are available
+    reid_classifier = _train_reid_classifier(video_id, quiet)
+
     # Load contacts + actions for all rallies with match teams
     rally_ids = list(all_teams.keys())
     placeholders = ", ".join(["%s"] * len(rally_ids))
     query = f"""
-        SELECT r.id, pt.id, pt.contacts_json, pt.actions_json
+        SELECT r.id, pt.id, pt.contacts_json, pt.actions_json,
+               pt.positions_json, r.start_ms
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
         WHERE r.id IN ({placeholders})
@@ -184,11 +355,32 @@ def reattribute_actions_cmd(
             cur.execute(query, rally_ids)
             rows = cur.fetchall()
 
+    # Build track_to_player mapping from match analysis for ReID
+    track_to_player_by_rally: dict[str, dict[int, int]] = {}
+    for rally_entry in match_analysis.get("rallies", []):
+        rid = rally_entry.get("rallyId") or rally_entry.get("rally_id", "")
+        t2p = rally_entry.get("trackToPlayer") or rally_entry.get("track_to_player", {})
+        if rid and t2p:
+            track_to_player_by_rally[rid] = {int(k): int(v) for k, v in t2p.items()}
+
     total_reattributed = 0
     total_actions = 0
     updated_tracks: list[tuple[int, str]] = []  # (pt_id, new_actions_json)
 
-    for rally_id_val, pt_id_val, contacts_json_val, actions_json_val in rows:
+    # Open video for ReID crop extraction (if classifier is available)
+    video_cap = None
+    video_fps = 30.0
+    if reid_classifier is not None:
+        video_path = get_video_path(video_id)
+        if video_path is not None:
+            import cv2
+            video_cap = cv2.VideoCapture(str(video_path))
+            if video_cap.isOpened():
+                video_fps = video_cap.get(cv2.CAP_PROP_FPS) or 30.0
+            else:
+                video_cap = None
+
+    for rally_id_val, pt_id_val, contacts_json_val, actions_json_val, positions_json_val, start_ms_val in rows:
         rally_id = str(rally_id_val)
         pt_id = cast(int, pt_id_val)
         contacts_data = cast(dict[str, Any], contacts_json_val)
@@ -201,13 +393,27 @@ def reattribute_actions_cmd(
         contacts = _reconstruct_contacts(contacts_data)
         actions = _reconstruct_actions(actions_data)
 
+        # Build ReID predictions for this rally if classifier available
+        reid_predictions: dict[int, dict[str, Any]] | None = None
+        if reid_classifier is not None and video_cap is not None and positions_json_val:
+            t2p = track_to_player_by_rally.get(rally_id, {})
+            if t2p:
+                reid_predictions = _compute_reid_predictions(
+                    reid_classifier, video_cap, contacts,
+                    positions_json_val, t2p,  # type: ignore[arg-type]
+                    start_ms=start_ms_val or 0, video_fps=video_fps,  # type: ignore[arg-type]
+                )
+
         # Re-attribute players if high-confidence and contacts have candidates
         reattrib_ta = reattrib_teams.get(rally_id)
         has_candidates = contacts and any(c.player_candidates for c in contacts)
         n_changed = 0
         if reattrib_ta and has_candidates and actions:
             original_track_ids = [a.player_track_id for a in actions]
-            reattribute_players(actions, contacts, reattrib_ta)
+            reattribute_players(
+                actions, contacts, reattrib_ta,
+                reid_predictions=reid_predictions,
+            )
             n_changed = sum(
                 1 for orig, act in zip(original_track_ids, actions)
                 if orig != act.player_track_id
@@ -239,6 +445,9 @@ def reattribute_actions_cmd(
                 )
         elif not quiet:
             console.print(f"  [dim]{rally_id[:8]}: no changes (teams stamped)[/dim]")
+
+    if video_cap is not None:
+        video_cap.release()
 
     # Summary
     if not quiet:
