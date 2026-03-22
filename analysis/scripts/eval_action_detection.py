@@ -24,6 +24,7 @@ import json
 import time
 from collections import defaultdict
 from dataclasses import dataclass
+from typing import Any
 
 from rich.console import Console
 from rich.table import Table
@@ -60,6 +61,7 @@ class RallyData:
     frame_count: int
     fps: float
     court_split_y: float | None
+    start_ms: int = 0
 
 
 def load_rallies_with_action_gt(
@@ -86,7 +88,8 @@ def load_rallies_with_action_gt(
             pt.actions_json,
             pt.frame_count,
             pt.fps,
-            pt.court_split_y
+            pt.court_split_y,
+            r.start_ms
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
         WHERE {where_sql}
@@ -112,6 +115,7 @@ def load_rallies_with_action_gt(
                     frame_count,
                     fps,
                     court_split_y,
+                    start_ms_val,
                 ) = row
 
                 gt_labels = []
@@ -136,6 +140,7 @@ def load_rallies_with_action_gt(
                     frame_count=frame_count or 0,
                     fps=fps or 30.0,
                     court_split_y=court_split_y,
+                    start_ms=start_ms_val or 0,
                 ))
 
     return results
@@ -179,6 +184,224 @@ def _load_match_team_assignments(
     return result
 
 
+def _load_track_to_player_maps(
+    video_ids: set[str],
+) -> dict[str, dict[int, int]]:
+    """Load track_to_player maps from match_analysis_json (all confidences).
+
+    Returns rally_id -> {track_id: player_id (1-4)}.
+    """
+    if not video_ids:
+        return {}
+
+    placeholders = ", ".join(["%s"] * len(video_ids))
+    query = f"""
+        SELECT id, match_analysis_json
+        FROM videos
+        WHERE id IN ({placeholders})
+          AND match_analysis_json IS NOT NULL
+    """
+
+    result: dict[str, dict[int, int]] = {}
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, list(video_ids))
+            rows = cur.fetchall()
+
+    for _video_id_val, ma_json in rows:
+        if not isinstance(ma_json, dict):
+            continue
+        for rally_entry in ma_json.get("rallies", []):
+            rid = rally_entry.get("rallyId") or rally_entry.get("rally_id", "")
+            t2p = rally_entry.get("trackToPlayer") or rally_entry.get(
+                "track_to_player", {}
+            )
+            if rid and t2p:
+                result[rid] = {int(k): int(v) for k, v in t2p.items()}
+
+    return result
+
+
+def _train_reid_classifiers(
+    video_ids: set[str],
+) -> dict[str, Any]:
+    """Train per-video ReID classifiers from reference crops.
+
+    Returns video_id -> trained PlayerReIDClassifier (or missing if no crops).
+    """
+    from rallycut.evaluation.tracking.db import get_video_path
+
+    classifiers: dict[str, Any] = {}
+
+    for vid in video_ids:
+        # Check for reference crops
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT player_id, frame_ms, bbox_x, bbox_y, bbox_w, bbox_h
+                       FROM player_reference_crops
+                       WHERE video_id = %s
+                       ORDER BY player_id, created_at""",
+                    [vid],
+                )
+                crop_rows = cur.fetchall()
+
+        if not crop_rows:
+            continue
+
+        video_path = get_video_path(vid)
+        if video_path is None:
+            continue
+
+        from rallycut.tracking.reid_embeddings import (
+            PlayerReIDClassifier,
+            extract_crops_from_video,
+        )
+
+        crop_infos = [
+            {
+                "player_id": r[0], "frame_ms": r[1],
+                "bbox_x": r[2], "bbox_y": r[3],
+                "bbox_w": r[4], "bbox_h": r[5],
+            }
+            for r in crop_rows
+        ]
+
+        try:
+            crops_by_player = extract_crops_from_video(video_path, crop_infos)
+            if len(crops_by_player) < 2:
+                continue
+
+            classifier = PlayerReIDClassifier()
+            stats = classifier.train(crops_by_player)
+            n_crops = sum(len(c) for c in crops_by_player.values())
+            console.print(
+                f"  ReID [{vid[:8]}]: {n_crops} crops → "
+                f"{len(crops_by_player)} players, acc={stats['train_acc']:.0%}"
+            )
+            classifiers[vid] = classifier
+        except Exception:
+            console.print(f"  [dim]ReID [{vid[:8]}]: training failed, skipping[/dim]")
+
+    return classifiers
+
+
+def _compute_reid_predictions_for_rally(
+    classifier: Any,
+    video_id: str,
+    rally_start_ms: int,
+    rally_fps: float,
+    contacts: list,
+    positions_json: list[dict],
+    track_to_player: dict[int, int],
+) -> dict[int, dict[str, Any]]:
+    """Compute ReID predictions for contacts in a rally.
+
+    Returns {contact_frame: {"best_tid": int, "margin": float}}.
+    """
+    import cv2
+    import numpy as np
+
+    from rallycut.evaluation.tracking.db import get_video_path
+
+    video_path = get_video_path(video_id)
+    if video_path is None:
+        return {}
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return {}
+
+    pos_by_frame_track: dict[tuple[int, int], dict] = {}
+    for pp in positions_json:
+        pos_by_frame_track[(pp["frameNumber"], pp["trackId"])] = pp
+
+    rally_start_frame = int(rally_start_ms / 1000.0 * rally_fps)
+    predictions: dict[int, dict[str, Any]] = {}
+
+    try:
+        for contact in contacts:
+            if not contact.player_candidates or len(contact.player_candidates) < 2:
+                continue
+
+            candidate_info: list[tuple[int, int, np.ndarray]] = []
+
+            for cand_tid, _dist in contact.player_candidates:
+                cand_pid = track_to_player.get(cand_tid, -1)
+                if cand_pid < 0:
+                    continue
+
+                best_pos = None
+                for delta in range(6):
+                    for fn in [contact.frame + delta, contact.frame - delta]:
+                        if fn < 0:
+                            continue
+                        pos = pos_by_frame_track.get((fn, cand_tid))
+                        if pos is not None:
+                            best_pos = pos
+                            break
+                    if best_pos is not None:
+                        break
+
+                if best_pos is None:
+                    continue
+
+                abs_fn = rally_start_frame + best_pos["frameNumber"]
+                cap.set(cv2.CAP_PROP_POS_FRAMES, abs_fn)
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    continue
+
+                h, w = frame.shape[:2]
+                bx = best_pos["x"]
+                by = best_pos["y"]
+                bw = best_pos["width"]
+                bh = best_pos["height"]
+                x1 = max(0, int((bx - bw / 2) * w))
+                y1 = max(0, int((by - bh / 2) * h))
+                x2 = min(w, int((bx + bw / 2) * w))
+                y2 = min(h, int((by + bh / 2) * h))
+
+                if x2 <= x1 or y2 <= y1:
+                    continue
+
+                crop = frame[y1:y2, x1:x2]
+                if crop.size == 0 or crop.shape[0] < 16 or crop.shape[1] < 8:
+                    continue
+
+                candidate_info.append((cand_tid, cand_pid, crop))
+
+            if len(candidate_info) < 2:
+                continue
+
+            crops = [c[2] for c in candidate_info]
+            probs_list = classifier.predict(crops)
+
+            best_tid = -1
+            best_prob = -1.0
+            second_prob = -1.0
+
+            for idx, (cand_tid, cand_pid, _crop) in enumerate(candidate_info):
+                prob = probs_list[idx].get(cand_pid, 0.0)
+                if prob > best_prob:
+                    second_prob = best_prob
+                    best_prob = prob
+                    best_tid = cand_tid
+                elif prob > second_prob:
+                    second_prob = prob
+
+            margin = best_prob - second_prob if second_prob >= 0 else 0.0
+            predictions[contact.frame] = {
+                "best_tid": best_tid,
+                "margin": margin,
+            }
+    finally:
+        cap.release()
+
+    return predictions
+
+
 @dataclass
 class MatchResult:
     """Result of matching GT to predicted contacts."""
@@ -188,6 +411,7 @@ class MatchResult:
     pred_action: str | None  # None if unmatched
     player_correct: bool = False
     player_evaluable: bool = True  # False if GT track_id doesn't exist in tracking
+    court_side_correct: bool | None = None  # None if not evaluable
 
 
 def match_contacts(
@@ -195,6 +419,7 @@ def match_contacts(
     pred_actions: list[dict],
     tolerance: int = 3,
     available_track_ids: set[int] | None = None,
+    team_assignments: dict[int, int] | None = None,
 ) -> tuple[list[MatchResult], list[dict]]:
     """Match GT labels to predicted actions using frame tolerance.
 
@@ -205,6 +430,8 @@ def match_contacts(
         available_track_ids: Track IDs present in current tracking data.
             When provided, marks matches as player_evaluable=False if the GT
             track_id doesn't exist in the current tracking data.
+        team_assignments: Optional track_id -> team (0=near, 1=far) for
+            court_side accuracy evaluation.
 
     Returns:
         Tuple of (matched GT results, unmatched predictions).
@@ -215,6 +442,8 @@ def match_contacts(
     # Sort GT and predictions by frame
     gt_sorted = sorted(gt_labels, key=lambda gt: gt.frame)
     pred_sorted = sorted(pred_actions, key=lambda a: a.get("frame", 0))
+
+    team_to_side = {0: "near", 1: "far"}
 
     for gt in gt_sorted:
         best_idx: int | None = None
@@ -236,6 +465,16 @@ def match_contacts(
         if best_idx is not None:
             used_preds.add(best_idx)
             pred = pred_sorted[best_idx]
+
+            # Court-side accuracy: check if predicted court_side matches
+            # expected side for the GT player's team
+            cs_correct: bool | None = None
+            if team_assignments and gt.player_track_id >= 0:
+                gt_team = team_assignments.get(gt.player_track_id)
+                pred_cs = pred.get("courtSide")
+                if gt_team is not None and pred_cs in ("near", "far"):
+                    cs_correct = pred_cs == team_to_side[gt_team]
+
             results.append(MatchResult(
                 gt_frame=gt.frame,
                 gt_action=gt.action,
@@ -243,6 +482,7 @@ def match_contacts(
                 pred_action=pred.get("action"),
                 player_correct=(gt.player_track_id == pred.get("playerTrackId", -1)),
                 player_evaluable=evaluable,
+                court_side_correct=cs_correct,
             ))
         else:
             results.append(MatchResult(
@@ -317,6 +557,12 @@ def compute_metrics(
             "f1": c_f1,
         }
 
+    # Court-side accuracy (where evaluable)
+    cs_evaluable = [m for m in matched if m.court_side_correct is not None]
+    cs_correct = sum(1 for m in cs_evaluable if m.court_side_correct)
+    cs_total = len(cs_evaluable)
+    cs_accuracy = cs_correct / max(1, cs_total)
+
     return {
         "total_gt": total_gt,
         "total_pred": tp + fp,
@@ -332,6 +578,9 @@ def compute_metrics(
         "player_evaluable_total": evaluable_total,
         "player_evaluable_correct": evaluable_correct,
         "player_evaluable_skipped": evaluable_skipped,
+        "court_side_accuracy": cs_accuracy,
+        "court_side_total": cs_total,
+        "court_side_correct": cs_correct,
         "per_class": per_class,
     }
 
@@ -485,6 +734,7 @@ def main() -> None:
     parser.add_argument("--no-classifier", action="store_true", help="Disable auto-loading of trained contact classifier (force hand-tuned gates)")
     parser.add_argument("--no-action-classifier", action="store_true", help="Disable learned action type classifier (force rule-based state machine)")
     parser.add_argument("--sweep-thresholds", action="store_true", help="Sweep classifier thresholds [0.25-0.55] and report P/R/F1 tradeoff")
+    parser.add_argument("--reid", action="store_true", help="Enable ReID re-attribution (Pass 3) using per-video reference crops")
     args = parser.parse_args()
 
     # Build ContactDetectionConfig from overrides
@@ -537,9 +787,24 @@ def main() -> None:
     match_teams_by_rally = _load_match_team_assignments(video_ids, min_confidence=0.70)
     n_with_match = sum(1 for r in rallies if r.rally_id in match_teams_by_rally)
 
+    # Load ReID classifiers if requested
+    reid_classifiers: dict[str, Any] = {}
+    track_to_player_maps: dict[str, dict[int, int]] = {}
+    if args.reid:
+        console.print("[bold]Training ReID classifiers from reference crops...[/bold]")
+        reid_classifiers = _train_reid_classifiers(video_ids)
+        if reid_classifiers:
+            track_to_player_maps = _load_track_to_player_maps(video_ids)
+        console.print(
+            f"  ReID classifiers: {len(reid_classifiers)}/{len(video_ids)} videos\n"
+        )
+
     console.print(f"\n[bold]Evaluating {len(rallies)} rallies with action ground truth[/bold]")
     console.print(f"  Court calibration: {n_calibrated}/{len(video_ids)} videos")
-    console.print(f"  Match teams (conf>=0.70): {n_with_match}/{len(rallies)} rallies\n")
+    console.print(f"  Match teams (conf>=0.70): {n_with_match}/{len(rallies)} rallies")
+    if args.reid:
+        console.print(f"  ReID classifiers: {len(reid_classifiers)}/{len(video_ids)} videos")
+    console.print()
 
     all_matches: list[MatchResult] = []
     all_unmatched: list[dict] = []
@@ -612,10 +877,23 @@ def main() -> None:
             )
 
             match_teams = match_teams_by_rally.get(rally.rally_id)
+
+            # Build ReID predictions if classifier available for this video
+            reid_preds: dict[int, dict[str, Any]] | None = None
+            reid_cls = reid_classifiers.get(rally.video_id)
+            if reid_cls is not None and rally.positions_json:
+                t2p = track_to_player_maps.get(rally.rally_id, {})
+                if t2p:
+                    reid_preds = _compute_reid_predictions_for_rally(
+                        reid_cls, rally.video_id, rally.start_ms, rally.fps,
+                        contacts.contacts, rally.positions_json, t2p,
+                    )
+
             rally_actions = classify_rally_actions(
                 contacts, rally.rally_id,
                 use_classifier=not args.no_action_classifier,
                 match_team_assignments=match_teams,
+                reid_predictions=reid_preds,
             )
             pred_actions = [a.to_dict() for a in rally_actions.actions]
         elif rally.actions_json:
@@ -643,11 +921,13 @@ def main() -> None:
         if rally.positions_json:
             avail_tids = {pp["trackId"] for pp in rally.positions_json}
 
+        match_teams_for_cs = match_teams_by_rally.get(rally.rally_id)
         matches, unmatched = match_contacts(
             rally.gt_labels,
             real_pred_actions,
             tolerance=tolerance_frames,
             available_track_ids=avail_tids,
+            team_assignments=match_teams_for_cs,
         )
 
         metrics = compute_metrics(matches, unmatched)
@@ -705,6 +985,13 @@ def main() -> None:
             console.print(
                 f"  Player Attr (eval): {ev_acc:.1%} "
                 f"({ev_cor}/{ev_tot}, {skipped} skipped — stale GT track IDs)"
+            )
+        cs_tot = agg_metrics['court_side_total']
+        if cs_tot > 0:
+            cs_acc = agg_metrics['court_side_accuracy']
+            cs_cor = agg_metrics['court_side_correct']
+            console.print(
+                f"  Court-Side Accuracy: {cs_acc:.1%} ({cs_cor}/{cs_tot})"
             )
 
         # Serve presence: does a serve action exist (real or synthetic)?

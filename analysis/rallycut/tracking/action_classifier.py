@@ -1230,6 +1230,30 @@ _HIGH_CONFIDENCE_GATE = 0.6
 _MEDIUM_CONFIDENCE_GATE = 0.5
 
 
+def assign_court_side_from_teams(
+    actions: list[ClassifiedAction],
+    team_assignments: dict[int, int],
+) -> None:
+    """Assign court_side directly from team membership (mutates in place).
+
+    For each action with player_track_id in team_assignments:
+    team 0 → "near", team 1 → "far".
+    """
+    n_assigned = 0
+    for action in actions:
+        if action.player_track_id < 0:
+            continue
+        team = team_assignments.get(action.player_track_id)
+        if team is None:
+            continue
+        action.court_side = "near" if team == 0 else "far"
+        n_assigned += 1
+    if n_assigned > 0:
+        logger.info(
+            "Team-based court_side: assigned %d/%d actions", n_assigned, len(actions),
+        )
+
+
 def propagate_court_side(actions: list[ClassifiedAction]) -> list[ClassifiedAction]:
     """Propagate court_side using volleyball transition rules.
 
@@ -1391,6 +1415,56 @@ def _reattribute_reid(
     return actions
 
 
+def _compute_expected_teams(
+    actions: list[ClassifiedAction],
+    team_assignments: dict[int, int],
+) -> list[int | None]:
+    """Derive expected team for each action from serve identity + action sequence.
+
+    Uses volleyball rules: serve/attack cross the net (next contact on
+    opposite team), receive/set/dig stay on same team. Block does not
+    cross (defender reacts on same side). The server's team (from
+    match-level team_assignments) seeds the chain.
+
+    Synthetic serves (inserted by repair_action_sequence) reset the chain
+    to serve_team — this is correct for rally-start synthetics but may
+    drift if repair injects mid-rally synthetics after misclassification.
+
+    Returns list parallel to actions: expected team (0 or 1) per action,
+    or None if not determinable (no serve found or unknown action type).
+    """
+    expected: list[int | None] = [None] * len(actions)
+
+    # Find serve and its team
+    serve_team: int | None = None
+    for a in actions:
+        if a.action_type == ActionType.SERVE and a.player_track_id >= 0:
+            serve_team = team_assignments.get(a.player_track_id)
+            break
+
+    if serve_team is None:
+        return expected
+
+    current_team = serve_team
+    for i, action in enumerate(actions):
+        if action.action_type == ActionType.UNKNOWN:
+            continue
+        if action.is_synthetic:
+            # Synthetic serves are inferred — trust the team chain
+            if action.action_type == ActionType.SERVE:
+                expected[i] = serve_team
+                current_team = serve_team
+            continue
+
+        expected[i] = current_team
+
+        # After net-crossing actions, flip to opposite team
+        if action.action_type in _NET_CROSSING_ACTIONS:
+            current_team = 1 - current_team
+
+    return expected
+
+
 def reattribute_players(
     actions: list[ClassifiedAction],
     contacts: list[Contact],
@@ -1405,9 +1479,10 @@ def reattribute_players(
     1. Server exclusion (no team data needed): ensures RECEIVE actions are
        not attributed to the server. Catches cases missed by the inline
        check (e.g. receives created by repair_action_sequence).
-    2. Team-based re-attribution (requires team data): for actions where
-       the assigned player is on the wrong team for the court side,
-       re-assigns to a correct-team candidate within distance cap.
+    2. Team-based re-attribution (requires team data): derives expected
+       team from server identity + action sequence (volleyball rules),
+       then swaps players on the wrong team to best candidate on the
+       correct team within distance cap.
     3. ReID re-attribution (requires reid_predictions): for each contact,
        if the fine-tuned classifier is confident that a different candidate
        is the correct player, re-attribute.
@@ -1438,18 +1513,31 @@ def reattribute_players(
             return _reattribute_reid(actions, contact_by_frame, reid_predictions, reid_min_margin)
         return actions
 
+    # Derive expected team per action from serve identity + action sequence.
+    # This breaks the circular dependency: instead of deriving expected_team
+    # from court_side (which depends on the player being evaluated), we use
+    # the server's known team + volleyball transition rules.
+    expected_teams = _compute_expected_teams(actions, team_assignments)
+
+    # Fallback when serve chain unavailable: map court_side to team
     side_to_team = {"near": 0, "far": 1}
+
     n_reattributed = 0
 
-    for action in actions:
-        if action.court_side not in ("near", "far"):
-            continue
+    for i, action in enumerate(actions):
         if action.confidence < 0.6:
             continue
         if action.player_track_id < 0:
             continue
 
-        expected_team = side_to_team[action.court_side]
+        expected_team = expected_teams[i]
+        if expected_team is None:
+            # Fallback to court_side when serve-seeded chain unavailable
+            if action.court_side in ("near", "far"):
+                expected_team = side_to_team[action.court_side]
+            else:
+                continue
+
         current_team = team_assignments.get(action.player_track_id)
 
         # Only re-attribute if current player is on the WRONG team
@@ -1480,10 +1568,9 @@ def reattribute_players(
         if best_tid >= 0:
             logger.debug(
                 "Re-attribute frame %d: track %d (team %d, dist %.3f) → "
-                "track %d (team %d, dist %.3f) for %s side",
+                "track %d (dist %.3f) expected team %d",
                 action.frame, action.player_track_id, current_team,
-                current_dist, best_tid, expected_team, best_dist,
-                action.court_side,
+                current_dist, best_tid, best_dist, expected_team,
             )
             action.player_track_id = best_tid
             n_reattributed += 1
@@ -1768,12 +1855,24 @@ def classify_rally_actions(
     use_classifier: bool = True,
     team_assignments: dict[int, int] | None = None,
     match_team_assignments: dict[int, int] | None = None,
+    reid_predictions: dict[int, dict[str, Any]] | None = None,
 ) -> RallyActions:
     """Convenience function to classify actions in a rally.
 
     When use_classifier=True and a trained action type model exists on disk,
     uses the learned classifier for dig/set/attack classification. Otherwise
     falls back to the rule-based state machine.
+
+    Pipeline:
+    1. classify_rally() — initial action types + serve detection
+    2. propagate_court_side() — infer court_side from action-type transitions
+    3. repair_action_sequence() — fix illegal patterns using court_side
+    4. viterbi_decode_actions() — sequence-level smoothing
+    5. validate_action_sequence() — log constraint violations
+    6. assign_court_side_from_teams() — overwrite court_side from match teams
+       (more accurate than propagation for output + downstream consumers)
+    7. reattribute_players() — server exclusion + server-seeded team chain
+       for player re-attribution
 
     Args:
         contact_sequence: Contacts detected by ContactDetector.
@@ -1783,9 +1882,12 @@ def classify_rally_actions(
         team_assignments: Optional mapping of track_id → team (0=near/A, 1=far/B).
             Used for team labeling and action classification.
         match_team_assignments: Optional high-confidence match-level team mapping
-            (track_id → team). Used ONLY for post-classification player
-            re-attribution — not for court_side or action classification.
+            (track_id → team). Used for post-classification player
+            re-attribution and court_side labeling.
             Should only be provided when assignment confidence >= 0.70.
+        reid_predictions: Optional ReID predictions per contact frame
+            ({frame: {"best_tid": int, "margin": float}}). Enables Pass 3
+            in reattribute_players(). Off by default — currently net negative.
 
     Returns:
         RallyActions with all classified actions.
@@ -1806,7 +1908,12 @@ def classify_rally_actions(
         team_assignments=team_assignments,
         classifier=learned,
     )
+
+    # Propagation infers court_side from action-type transitions (serve/attack
+    # cross net, receive/set/dig stay same side). This drives repair_action_sequence
+    # which fixes illegal patterns.
     result.actions = propagate_court_side(result.actions)
+
     result.actions = repair_action_sequence(
         result.actions,
         net_y=contact_sequence.net_y,
@@ -1815,7 +1922,16 @@ def classify_rally_actions(
     )
     result.actions = viterbi_decode_actions(result.actions)
     result.actions = validate_action_sequence(result.actions, rally_id)
+
+    # Overwrite court_side from team membership (73% accurate vs 61%
+    # from propagation). This improves court_side labels for output but
+    # doesn't affect reattribution — Pass 2 uses server-seeded expected
+    # teams from _compute_expected_teams() instead of court_side.
+    if match_team_assignments:
+        assign_court_side_from_teams(result.actions, match_team_assignments)
+
     result.actions = reattribute_players(
         result.actions, contact_sequence.contacts, reattrib_teams,
+        reid_predictions=reid_predictions,
     )
     return result

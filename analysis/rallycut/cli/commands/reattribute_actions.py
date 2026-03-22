@@ -288,6 +288,11 @@ def reattribute_actions_cmd(
         "--quiet", "-q",
         help="Suppress progress output",
     ),
+    reid: bool = typer.Option(
+        False,
+        "--reid",
+        help="Enable ReID re-attribution (Pass 3) using reference crops",
+    ),
 ) -> None:
     """Re-attribute player actions using match-level team assignments.
 
@@ -300,7 +305,11 @@ def reattribute_actions_cmd(
         rallycut reattribute-actions abc123 --dry-run
     """
     from rallycut.evaluation.tracking.db import get_connection, get_video_path
-    from rallycut.tracking.action_classifier import _team_label, reattribute_players
+    from rallycut.tracking.action_classifier import (
+        _team_label,
+        assign_court_side_from_teams,
+        reattribute_players,
+    )
 
     # Load match analysis
     with get_connection() as conn:
@@ -341,8 +350,9 @@ def reattribute_actions_cmd(
             f"(conf >= {min_confidence:.2f})"
         )
 
-    # Train ReID classifier if reference crops are available
-    reid_classifier = _train_reid_classifier(video_id, quiet)
+    # Train ReID classifier only if explicitly requested (off by default —
+    # ReID Pass 3 is currently net negative on player attribution accuracy).
+    reid_classifier = _train_reid_classifier(video_id, quiet) if reid else None
 
     # Load contacts + actions for all rallies with match teams
     rally_ids = list(all_teams.keys())
@@ -411,8 +421,13 @@ def reattribute_actions_cmd(
                     start_ms=start_ms_val or 0, video_fps=video_fps,  # type: ignore[arg-type]
                 )
 
-        # Re-attribute players if high-confidence and contacts have candidates
+        # Overwrite court_side from team assignments (stored actions have
+        # propagation-based court_side which is less accurate).
         reattrib_ta = reattrib_teams.get(rally_id)
+        if reattrib_ta and actions:
+            assign_court_side_from_teams(actions, reattrib_ta)
+
+        # Re-attribute players if high-confidence and contacts have candidates
         has_candidates = contacts and any(c.player_candidates for c in contacts)
         n_changed = 0
         if reattrib_ta and has_candidates and actions:
