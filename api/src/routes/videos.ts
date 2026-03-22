@@ -17,7 +17,7 @@ function getAllowedOrigin(req: Request): string {
   }
   return env.CORS_ORIGIN;
 }
-import { getObject, generateDownloadUrl } from "../lib/s3.js";
+import { getObject, generateDownloadUrl, uploadPlayerCrop, deleteObject } from "../lib/s3.js";
 import { requireUser } from "../middleware/resolveUser.js";
 import { validateRequest } from "../middleware/validateRequest.js";
 import { paginationSchema, uuidSchema } from "../schemas/common.js";
@@ -47,6 +47,8 @@ import { queueVideoProcessing } from "../services/processingService.js";
 import { trackAllRallies, getBatchTrackingStatus } from "../services/batchTrackingService.js";
 import { getMatchAnalysis, getMatchStats, runMatchAnalysis, type ProgressCallback } from "../services/matchAnalysisService.js";
 import { assessVideoQuality, getAnalysisPipelineStatus, savePlayerMatchingGt, getPlayerMatchingGt } from "../services/qualityService.js";
+
+const MAX_REFERENCE_CROPS_PER_PLAYER = 6;
 
 // Calibration corners can be outside 0-1 if dragged outside video bounds
 const calibrationCornerSchema = z.object({
@@ -556,6 +558,161 @@ router.delete(
           courtCalibrationSource: null,
         },
       });
+
+      return res.json({ success: true });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+// ============================================================================
+// Player Reference Crops Endpoints
+// ============================================================================
+
+/**
+ * GET /v1/videos/:id/player-reference-crops
+ * List all reference crops for a video (with presigned download URLs)
+ */
+router.get(
+  "/v1/videos/:id/player-reference-crops",
+  requireUser,
+  validateRequest({ params: z.object({ id: uuidSchema }) }),
+  async (req, res, next) => {
+    try {
+      const video = await prisma.video.findFirst({
+        where: { id: req.params.id, userId: req.userId!, deletedAt: null },
+      });
+
+      if (!video) {
+        return res.status(404).json({ error: "Video not found" });
+      }
+
+      const crops = await prisma.playerReferenceCrop.findMany({
+        where: { videoId: req.params.id },
+        orderBy: [{ playerId: "asc" }, { createdAt: "asc" }],
+      });
+
+      const cropsWithUrls = await Promise.all(
+        crops.map(async (crop) => ({
+          id: crop.id,
+          playerId: crop.playerId,
+          frameMs: crop.frameMs,
+          bbox: { x: crop.bboxX, y: crop.bboxY, w: crop.bboxW, h: crop.bboxH },
+          downloadUrl: await generateDownloadUrl(crop.s3Key),
+          createdAt: crop.createdAt,
+        }))
+      );
+
+      return res.json({ crops: cropsWithUrls });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+/**
+ * POST /v1/videos/:id/player-reference-crops
+ * Upload a player reference crop (base64 JPEG in body)
+ */
+router.post(
+  "/v1/videos/:id/player-reference-crops",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: z.object({
+      playerId: z.number().int().min(1).max(4),
+      frameMs: z.number().int().nonnegative(),
+      bbox: z.object({
+        x: z.number(),
+        y: z.number(),
+        w: z.number(),
+        h: z.number(),
+      }),
+      imageData: z.string().max(200000), // base64 JPEG, ~150KB max
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const video = await prisma.video.findFirst({
+        where: { id: req.params.id, userId: req.userId!, deletedAt: null },
+      });
+
+      if (!video) {
+        return res.status(404).json({ error: "Video not found" });
+      }
+
+      // Decode base64 and upload to S3
+      const imageBuffer = Buffer.from(req.body.imageData, "base64");
+      if (imageBuffer.length < 100) {
+        return res.status(400).json({ error: "Image data too small" });
+      }
+      const cropId = crypto.randomUUID();
+      const s3Key = `player-crops/${req.params.id}/${req.body.playerId}/${cropId}.jpg`;
+
+      // Enforce max crops per player atomically
+      const crop = await prisma.$transaction(async (tx) => {
+        const existingCount = await tx.playerReferenceCrop.count({
+          where: { videoId: req.params.id, playerId: req.body.playerId },
+        });
+        if (existingCount >= MAX_REFERENCE_CROPS_PER_PLAYER) {
+          throw new Error(`Player ${req.body.playerId} already has ${existingCount} reference crops (max ${MAX_REFERENCE_CROPS_PER_PLAYER})`);
+        }
+        await uploadPlayerCrop(s3Key, imageBuffer);
+        return tx.playerReferenceCrop.create({
+          data: {
+            videoId: req.params.id,
+            playerId: req.body.playerId,
+            s3Key,
+            frameMs: req.body.frameMs,
+            bboxX: req.body.bbox.x,
+            bboxY: req.body.bbox.y,
+            bboxW: req.body.bbox.w,
+            bboxH: req.body.bbox.h,
+          },
+        });
+      });
+
+      const downloadUrl = await generateDownloadUrl(s3Key);
+
+      return res.status(201).json({
+        id: crop.id,
+        playerId: crop.playerId,
+        frameMs: crop.frameMs,
+        bbox: { x: crop.bboxX, y: crop.bboxY, w: crop.bboxW, h: crop.bboxH },
+        downloadUrl,
+        createdAt: crop.createdAt,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+/**
+ * DELETE /v1/videos/:id/player-reference-crops/:cropId
+ * Delete a player reference crop
+ */
+router.delete(
+  "/v1/videos/:id/player-reference-crops/:cropId",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema, cropId: uuidSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      const crop = await prisma.playerReferenceCrop.findFirst({
+        where: { id: req.params.cropId, videoId: req.params.id },
+        include: { video: { select: { userId: true } } },
+      });
+
+      if (!crop || crop.video.userId !== req.userId) {
+        return res.status(404).json({ error: "Crop not found" });
+      }
+
+      // Delete DB first (recoverable), then S3 (best-effort cleanup)
+      await prisma.playerReferenceCrop.delete({ where: { id: crop.id } });
+      await deleteObject(crop.s3Key).catch(() => {});
 
       return res.json({ success: true });
     } catch (error) {

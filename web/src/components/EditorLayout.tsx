@@ -26,6 +26,7 @@ import { PlayerTrackingToolbar } from './PlayerTrackingToolbar';
 import { VideoInsightsBanner } from './VideoInsightsBanner';
 import { MatchStatsPanel } from './MatchStatsPanel';
 import { PlayerMatchingDialog } from './PlayerMatchingDialog';
+import { PlayerReferenceCropDialog } from './PlayerReferenceCropDialog';
 import { useEditorStore } from '@/stores/editorStore';
 import { useAnalysisStore } from '@/stores/analysisStore';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
@@ -76,6 +77,7 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
   const [showNamePromptModal, setShowNamePromptModal] = useState(false);
   const [pendingCreateHighlight, setPendingCreateHighlight] = useState(false);
   const [playerMatchingVideoId, setPlayerMatchingVideoId] = useState<string | null>(null);
+  const [referenceCropVideoId, setReferenceCropVideoId] = useState<string | null>(null);
 
   // Analysis pipeline state
   const analysisPipeline = useAnalysisStore((s) =>
@@ -452,7 +454,10 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
             <OriginalQualityBanner currentMatch={currentMatch} />
             <VideoInsightsBanner currentMatch={currentMatch} />
             {/* Player tracking toolbar */}
-            <PlayerTrackingToolbar onOpenPlayerMatching={currentMatch?.id ? () => setPlayerMatchingVideoId(currentMatch.id) : undefined} />
+            <PlayerTrackingToolbar
+              onOpenPlayerMatching={currentMatch?.id ? () => setPlayerMatchingVideoId(currentMatch.id) : undefined}
+              onOpenReferenceCrops={currentMatch?.id ? () => setReferenceCropVideoId(currentMatch.id) : undefined}
+            />
             <Box sx={{ flex: 1, minHeight: 0 }}>
               <VideoPlayer />
             </Box>
@@ -510,6 +515,15 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
           open={true}
           videoId={playerMatchingVideoId}
           onClose={() => setPlayerMatchingVideoId(null)}
+        />
+      )}
+
+      {/* Player Reference Crop Dialog */}
+      {referenceCropVideoId && (
+        <PlayerReferenceCropDialog
+          open={true}
+          videoId={referenceCropVideoId}
+          onClose={() => setReferenceCropVideoId(null)}
         />
       )}
       </Box>

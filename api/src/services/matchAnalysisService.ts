@@ -18,6 +18,7 @@ import { fileURLToPath } from 'url';
 import { env } from '../config/env.js';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
+import { getObject } from '../lib/s3.js';
 import { ForbiddenError, NotFoundError } from '../middleware/errorHandler.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -148,10 +149,54 @@ export async function runMatchAnalysis(
 
   await fs.mkdir(TEMP_DIR, { recursive: true });
   const outputPath = path.join(TEMP_DIR, `match_${videoId}.json`);
+  let cropsDir: string | undefined;
 
   try {
+    // Download reference crops (if any) for the CLI
+    let referenceCropsJsonPath: string | undefined;
+    const referenceCrops = await prisma.playerReferenceCrop.findMany({
+      where: { videoId },
+      orderBy: [{ playerId: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    if (referenceCrops.length > 0) {
+      cropsDir = path.join(TEMP_DIR, `crops_${videoId}`);
+      await fs.mkdir(cropsDir, { recursive: true });
+
+      const downloadResults = await Promise.all(
+        referenceCrops.map(async (crop) => {
+          try {
+            const obj = await getObject(crop.s3Key);
+            const chunks: Buffer[] = [];
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            for await (const chunk of obj.Body as any) {
+              chunks.push(Buffer.from(chunk));
+            }
+            const cropPath = path.join(cropsDir!, `${crop.id}.jpg`);
+            await fs.writeFile(cropPath, Buffer.concat(chunks));
+            return {
+              playerId: crop.playerId,
+              cropPath,
+              frameMs: crop.frameMs,
+              bbox: { x: crop.bboxX, y: crop.bboxY, w: crop.bboxW, h: crop.bboxH },
+            };
+          } catch (dlError) {
+            console.error(`[MATCH_ANALYSIS] Failed to download crop ${crop.id}:`, dlError);
+            return null;
+          }
+        })
+      );
+
+      const manifest = downloadResults.filter((r): r is NonNullable<typeof r> => r !== null);
+      if (manifest.length > 0) {
+        referenceCropsJsonPath = path.join(cropsDir, 'manifest.json');
+        await fs.writeFile(referenceCropsJsonPath, JSON.stringify(manifest));
+        console.log(`[MATCH_ANALYSIS] Using ${manifest.length} reference crops for matching`);
+      }
+    }
+
     report('Matching players across rallies...', 2, 6);
-    const result = await runMatchPlayersCli(videoId, outputPath);
+    const result = await runMatchPlayersCli(videoId, outputPath, referenceCropsJsonPath);
 
     // Persist to database
     await prisma.video.update({
@@ -204,6 +249,9 @@ export async function runMatchAnalysis(
     return null;
   } finally {
     await fs.unlink(outputPath).catch(() => {});
+    if (cropsDir) {
+      await fs.rm(cropsDir, { recursive: true, force: true }).catch(() => {});
+    }
   }
 }
 
@@ -325,8 +373,8 @@ async function repairIdentities(videoId: string): Promise<void> {
     // 5-minute timeout
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
-      settle(() => reject(new Error(`${logPrefix} timed out after 5 minutes`)));
-    }, 5 * 60 * 1000);
+      settle(() => reject(new Error(`${logPrefix} timed out after 15 minutes`)));
+    }, 15 * 60 * 1000);
 
     let stderr = '';
     child.stdout?.on('data', (data: Buffer) => {
@@ -382,8 +430,8 @@ async function remapTrackIds(videoId: string): Promise<void> {
     // 5-minute timeout
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
-      settle(() => reject(new Error(`${logPrefix} timed out after 5 minutes`)));
-    }, 5 * 60 * 1000);
+      settle(() => reject(new Error(`${logPrefix} timed out after 15 minutes`)));
+    }, 15 * 60 * 1000);
 
     let stderr = '';
     child.stdout?.on('data', (data: Buffer) => {
@@ -439,8 +487,8 @@ async function reattributeActions(videoId: string): Promise<void> {
     // 5-minute timeout
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
-      settle(() => reject(new Error(`${logPrefix} timed out after 5 minutes`)));
-    }, 5 * 60 * 1000);
+      settle(() => reject(new Error(`${logPrefix} timed out after 15 minutes`)));
+    }, 15 * 60 * 1000);
 
     let stderr = '';
     child.stdout?.on('data', (data: Buffer) => {
@@ -498,12 +546,13 @@ async function computeAndSaveMatchStats(videoId: string): Promise<void> {
 async function runMatchPlayersCli(
   videoId: string,
   outputPath: string,
+  referenceCropsJsonPath?: string,
 ): Promise<MatchAnalysisResult> {
-  return runCli<MatchAnalysisResult>(
-    ['match-players', videoId, '--output', outputPath, '--quiet'],
-    outputPath,
-    'MATCH_ANALYSIS',
-  );
+  const args = ['match-players', videoId, '--output', outputPath, '--quiet'];
+  if (referenceCropsJsonPath) {
+    args.push('--reference-crops-json', referenceCropsJsonPath);
+  }
+  return runCli<MatchAnalysisResult>(args, outputPath, 'MATCH_ANALYSIS');
 }
 
 /**
@@ -552,8 +601,8 @@ function runCli<T>(
     // 5-minute timeout
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
-      settle(() => reject(new Error(`${logPrefix} timed out after 5 minutes`)));
-    }, 5 * 60 * 1000);
+      settle(() => reject(new Error(`${logPrefix} timed out after 15 minutes`)));
+    }, 15 * 60 * 1000);
 
     let stdout = '';
     let stderr = '';

@@ -329,6 +329,7 @@ class MatchPlayerTracker:
         self,
         calibrator: CourtCalibrator | None = None,
         collect_diagnostics: bool = False,
+        reference_profiles: dict[int, PlayerAppearanceProfile] | None = None,
     ):
         """
         Initialize match tracker.
@@ -337,10 +338,17 @@ class MatchPlayerTracker:
             calibrator: Optional court calibrator for baseline detection.
             collect_diagnostics: If True, collect per-rally cost matrices
                 and assignment margins for diagnostic analysis.
+            reference_profiles: Optional user-provided frozen profiles (player_id -> profile).
+                When provided, profiles are never updated — they anchor all assignments.
         """
         self.calibrator = calibrator
         self.state = MatchPlayerState()
         self.state.initialize_players()
+        self.frozen_player_ids: set[int] = set()
+        if reference_profiles:
+            for pid, profile in reference_profiles.items():
+                self.state.players[pid] = profile
+                self.frozen_player_ids.add(pid)
         self.rally_count = 0
         self.collect_diagnostics = collect_diagnostics
         self.diagnostics: list[RallyAssignmentDiagnostics] = []
@@ -423,18 +431,19 @@ class MatchPlayerTracker:
         # Side switch detection runs in Pass 2 (combinatorial search)
         side_switch_detected = False
 
-        if self.rally_count <= 1:
+        if self.rally_count <= 1 and not self.frozen_player_ids:
             track_to_player = self._initialize_first_rally(
                 top_tracks, track_avg_y, track_court_sides
             )
         else:
             track_to_player = self._assign_tracks_to_players_global(
                 top_tracks, track_stats, track_court_sides,
+                use_side_penalty=not self.frozen_player_ids,
                 early_positions=early_positions,
             )
 
         # Step 5: Within-team refinement
-        if self.rally_count > 1:
+        if self.rally_count > 1 or self.frozen_player_ids:
             track_to_player = self._refine_within_team(
                 track_to_player, player_positions, track_court_sides
             )
@@ -446,6 +455,7 @@ class MatchPlayerTracker:
         confidence = self._compute_assignment_confidence(track_stats, track_to_player)
 
         # Step 7: Update player profiles (gated on confidence)
+        # Skip frozen (user-provided) profiles, update the rest normally.
         if self.rally_count <= 1:
             self._update_profiles(track_stats, track_to_player)
         elif confidence >= MIN_PROFILE_UPDATE_CONFIDENCE:
@@ -887,6 +897,9 @@ class MatchPlayerTracker:
             if track_id not in track_stats:
                 continue
             if player_id not in self.state.players:
+                continue
+            # Skip frozen profiles (user-provided reference crops)
+            if player_id in self.frozen_player_ids:
                 continue
 
             stats = track_stats[track_id]
@@ -1330,6 +1343,7 @@ class MatchPlayerTracker:
                 data.top_tracks,
                 data.track_stats,
                 data.track_court_sides,
+                use_side_penalty=not self.frozen_player_ids,
             )
 
             self.state.current_side_assignment = saved_side
@@ -1700,6 +1714,7 @@ def match_players_across_rallies(
     rallies: list[RallyTrackData],
     num_samples: int = 12,
     collect_diagnostics: bool = False,
+    reference_profiles: dict[int, PlayerAppearanceProfile] | None = None,
 ) -> MatchPlayersResult:
     """
     Match players across all rallies in a video for consistent IDs.
@@ -1713,11 +1728,21 @@ def match_players_across_rallies(
         num_samples: Frames to sample per track for appearance.
         collect_diagnostics: If True, collect per-rally cost matrices
             and assignment margins for diagnostic analysis.
+        reference_profiles: Optional user-provided frozen profiles (player_id -> profile).
+            When provided, profiles are never updated — they anchor all assignments.
 
     Returns:
         MatchPlayersResult with track→player mappings and accumulated profiles.
     """
-    tracker = MatchPlayerTracker(collect_diagnostics=collect_diagnostics)
+    if reference_profiles:
+        logger.info(
+            f"Using reference profiles for players: "
+            f"{sorted(reference_profiles.keys())}"
+        )
+    tracker = MatchPlayerTracker(
+        collect_diagnostics=collect_diagnostics,
+        reference_profiles=reference_profiles,
+    )
     results: list[RallyTrackingResult] = []
 
     for rally in rallies:

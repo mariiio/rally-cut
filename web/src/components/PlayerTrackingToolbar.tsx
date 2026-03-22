@@ -40,9 +40,10 @@ function formatPhase(phase: string): string {
 
 interface PlayerTrackingToolbarProps {
   onOpenPlayerMatching?: () => void;
+  onOpenReferenceCrops?: () => void;
 }
 
-export function PlayerTrackingToolbar({ onOpenPlayerMatching }: PlayerTrackingToolbarProps = {}) {
+export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCrops }: PlayerTrackingToolbarProps = {}) {
   const [labelStudioLoading, setLabelStudioLoading] = useState(false);
   const [hasGroundTruth, setHasGroundTruth] = useState(false);
   const [labelStudioTaskId, setLabelStudioTaskId] = useState<number | null>(null);
@@ -406,6 +407,18 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching }: PlayerTrackingTo
                       ? 'Re-track Rally'
                       : 'Track Rally'}
               </Button>
+            )}
+
+            {onOpenReferenceCrops && (
+              <Tooltip title="Select player reference crops for attribution">
+                <IconButton
+                  size="small"
+                  onClick={onOpenReferenceCrops}
+                  color="default"
+                >
+                  <PersonSearchIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
             )}
 
             {onOpenPlayerMatching && (

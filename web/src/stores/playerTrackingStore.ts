@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { trackPlayers, getPlayerTrack, swapPlayerTracks, saveCourtCalibration, deleteCourtCalibration, getActionGroundTruth, saveActionGroundTruth as apiSaveActionGroundTruth, trackAllRallies as apiTrackAllRallies, getBatchTrackingStatus as apiGetBatchTrackingStatus, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData, type ActionGroundTruthLabel, type QualityReport, type BatchTrackingStatus } from '@/services/api';
+import { trackPlayers, getPlayerTrack, swapPlayerTracks, saveCourtCalibration, deleteCourtCalibration, getActionGroundTruth, saveActionGroundTruth as apiSaveActionGroundTruth, trackAllRallies as apiTrackAllRallies, getBatchTrackingStatus as apiGetBatchTrackingStatus, getPlayerReferenceCrops, uploadPlayerReferenceCrop, deletePlayerReferenceCrop, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData, type ActionGroundTruthLabel, type QualityReport, type BatchTrackingStatus, type PlayerReferenceCrop } from '@/services/api';
 
 // Types for player tracking data (store format)
 export interface PlayerPosition {
@@ -84,6 +84,10 @@ interface PlayerTrackingState {
   actionGtDirty: Record<string, boolean>; // keyed by rallyId
   actionGtSaving: Record<string, boolean>; // keyed by rallyId
 
+  // Reference crops state
+  referenceCrops: PlayerReferenceCrop[];
+  referenceCropsLoading: boolean;
+
   // Actions
   togglePlayerOverlay: () => void;
   toggleBallOverlay: () => void;
@@ -104,6 +108,11 @@ interface PlayerTrackingState {
   trackAllRalliesForVideo: (videoId: string) => Promise<void>;
   pollBatchTrackingStatus: (videoId: string, fallbackFps?: number) => void;
   stopPollingBatchTracking: (videoId: string) => void;
+
+  // Reference crop actions
+  loadReferenceCrops: (videoId: string) => Promise<void>;
+  addReferenceCrop: (videoId: string, playerId: number, frameMs: number, bbox: { x: number; y: number; w: number; h: number }, imageData: string) => Promise<PlayerReferenceCrop>;
+  removeReferenceCrop: (videoId: string, cropId: string) => Promise<void>;
 
   // Action labeling actions
   setIsLabelingActions: (value: boolean) => void;
@@ -219,6 +228,8 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
       actionGroundTruth: {},
       actionGtDirty: {},
       actionGtSaving: {},
+      referenceCrops: [],
+      referenceCropsLoading: false,
 
       togglePlayerOverlay: () => {
         set((state) => ({ showPlayerOverlay: !state.showPlayerOverlay }));
@@ -574,6 +585,32 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
           set((s) => ({ actionGtSaving: { ...s.actionGtSaving, [rallyId]: false } }));
           throw error;
         }
+      },
+
+      loadReferenceCrops: async (videoId: string) => {
+        set({ referenceCropsLoading: true });
+        try {
+          const crops = await getPlayerReferenceCrops(videoId);
+          set({ referenceCrops: crops, referenceCropsLoading: false });
+        } catch (error) {
+          console.error('[PlayerTrackingStore] Failed to load reference crops:', error);
+          set({ referenceCropsLoading: false });
+        }
+      },
+
+      addReferenceCrop: async (videoId, playerId, frameMs, bbox, imageData) => {
+        const crop = await uploadPlayerReferenceCrop(videoId, { playerId, frameMs, bbox, imageData });
+        set((state) => ({
+          referenceCrops: [...state.referenceCrops, crop],
+        }));
+        return crop;
+      },
+
+      removeReferenceCrop: async (videoId, cropId) => {
+        await deletePlayerReferenceCrop(videoId, cropId);
+        set((state) => ({
+          referenceCrops: state.referenceCrops.filter((c) => c.id !== cropId),
+        }));
       },
     }),
     {

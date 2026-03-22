@@ -125,22 +125,26 @@ export async function uploadProcessedVideo(
 }
 
 /**
- * Upload a poster image to S3.
+ * Upload a JPEG image to S3 with long-term caching.
+ * Used for poster thumbnails and player reference crops.
  */
-export async function uploadPoster(key: string, data: Buffer): Promise<void> {
-  const upload = new Upload({
-    client: s3Client,
-    params: {
-      Bucket: env.S3_BUCKET_NAME,
-      Key: key,
-      Body: data,
-      ContentType: "image/jpeg",
-      CacheControl: "public, max-age=31536000", // 1 year
-    },
+export async function uploadImage(key: string, data: Buffer): Promise<void> {
+  const command = new PutObjectCommand({
+    Bucket: env.S3_BUCKET_NAME,
+    Key: key,
+    Body: data,
+    ContentType: "image/jpeg",
+    CacheControl: "public, max-age=31536000", // 1 year
   });
 
-  await upload.done();
+  await s3Client.send(command);
 }
+
+/** @deprecated Use uploadImage instead */
+export const uploadPoster = uploadImage;
+
+/** @deprecated Use uploadImage instead */
+export const uploadPlayerCrop = uploadImage;
 
 // ============================================================================
 // Multipart Upload (for large files)

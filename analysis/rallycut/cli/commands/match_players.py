@@ -49,6 +49,11 @@ def match_players(
         "--quiet", "-q",
         help="Suppress progress output",
     ),
+    reference_crops_json: Path | None = typer.Option(
+        None,
+        "--reference-crops-json",
+        help="JSON file with user-selected reference crops [{playerId, cropPath}, ...]",
+    ),
 ) -> None:
     """Match players across rallies for consistent player IDs (1-4).
 
@@ -90,7 +95,8 @@ def match_players(
             if row and row[0]:
                 old_match_analysis = cast(dict[str, Any], row[0])
 
-    # Reverse remapped positions so matching always sees original tracker IDs
+    # Reverse remapped positions so matching always sees original tracker IDs.
+    # Persist the reversal to DB so remap-track-ids starts from original IDs.
     if old_match_analysis:
         old_entries_by_id: dict[str, dict[str, Any]] = {}
         for entry in old_match_analysis.get("rallies", []):
@@ -98,7 +104,7 @@ def match_players(
             if rid:
                 old_entries_by_id[rid] = entry
 
-        reversed_count = 0
+        reversed_ids: set[str] = set()
         for rally in rallies:
             old_entry = old_entries_by_id.get(rally.rally_id)
             if not old_entry:
@@ -109,16 +115,38 @@ def match_players(
             if not applied_raw:
                 continue
             applied = {int(k): int(v) for k, v in applied_raw.items()}
-            # Build position dicts for _should_reverse check
             pos_dicts = [{"trackId": p.track_id} for p in rally.positions]
             if _should_reverse(pos_dicts, applied):
                 inverse = _invert_mapping(applied)
                 _reverse_rally_positions(rally, inverse)
-                reversed_count += 1
+                reversed_ids.add(rally.rally_id)
 
-        if reversed_count > 0 and not quiet:
+        # Persist reversed positions to DB so remap-track-ids sees original IDs.
+        # All updates are committed atomically.
+        if reversed_ids:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    for rally in rallies:
+                        if rally.rally_id not in reversed_ids:
+                            continue
+                        pos_data = [
+                            {"trackId": p.track_id, "frameNumber": p.frame_number,
+                             "x": p.x, "y": p.y, "width": p.width, "height": p.height,
+                             "confidence": p.confidence}
+                            for p in rally.positions
+                        ]
+                        cur.execute(
+                            "UPDATE player_tracks SET positions_json = %s, "
+                            "primary_track_ids = %s WHERE rally_id = %s",
+                            [json.dumps(pos_data),
+                             json.dumps([int(t) for t in rally.primary_track_ids]),
+                             rally.rally_id],
+                        )
+                conn.commit()
+
+        if reversed_ids and not quiet:
             console.print(
-                f"  Reversed previous remap on {reversed_count} rallies"
+                f"  Reversed previous remap on {len(reversed_ids)} rallies"
             )
 
     # Resolve video path
@@ -131,11 +159,72 @@ def match_players(
         console.print(f"  Video: {video_path.name}")
         console.print()
 
+    # Load reference crop profiles if provided
+    reference_profiles = None
+    if reference_crops_json is not None:
+        import cv2
+        import numpy as np
+
+        from rallycut.tracking.player_features import (
+            build_profiles_from_crops,
+            extract_appearance_features,
+        )
+
+        with open(reference_crops_json) as f:
+            crop_entries = json.load(f)
+
+        # Extract features from the original video at the stored bbox coordinates.
+        # This produces features directly comparable to extract_rally_appearances(),
+        # unlike using the small JPEG thumbnails which include padding/background.
+        cap = cv2.VideoCapture(str(video_path))
+        fw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        fh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        crops_by_player: dict[int, list[Any]] = {}
+        for entry in crop_entries:
+            pid = entry["playerId"]
+            bbox = entry.get("bbox")
+            frame_ms = entry.get("frameMs")
+
+            if bbox and frame_ms is not None and fw > 0:
+                # Seek video and extract features at full resolution
+                cap.set(cv2.CAP_PROP_POS_MSEC, frame_ms)
+                ret, frame = cap.read()
+                if ret and frame is not None:
+                    frame_arr: Any = np.asarray(frame)
+                    features = extract_appearance_features(
+                        frame=frame_arr,
+                        track_id=0,
+                        frame_number=0,
+                        bbox=(bbox["x"], bbox["y"], bbox["w"], bbox["h"]),
+                        frame_width=fw,
+                        frame_height=fh,
+                    )
+                    crops_by_player.setdefault(pid, []).append(features)
+                    continue
+
+            # Fallback: read the JPEG crop file
+            crop_path = entry.get("cropPath", "")
+            img = cv2.imread(crop_path) if crop_path else None
+            if img is not None:
+                crops_by_player.setdefault(pid, []).append(img)
+            else:
+                console.print(f"[yellow]Warning:[/yellow] Could not extract crop for P{pid}")
+
+        cap.release()
+        reference_profiles = build_profiles_from_crops(crops_by_player)
+        if not quiet:
+            for pid in sorted(reference_profiles):
+                n = len(crops_by_player.get(pid, []))
+                console.print(f"  Reference profile P{pid}: {n} crop(s)")
+            console.print()
+
     # Run matching
     match_result: MatchPlayersResult = match_players_across_rallies(
         video_path=video_path,
         rallies=rallies,
         num_samples=num_samples,
+        reference_profiles=reference_profiles,
     )
     results = match_result.rally_results
 
@@ -190,23 +279,16 @@ def match_players(
         if profile.rally_count > 0
     }
 
-    # Build per-rally entries, carrying forward remap state from old analysis
-    old_remap_state: dict[str, dict[str, Any]] = {}
-    if old_match_analysis:
-        for entry in old_match_analysis.get("rallies", []):
-            rid = entry.get("rallyId") or entry.get("rally_id", "")
-            afm = entry.get("appliedFullMapping")
-            if rid and afm:
-                old_remap_state[rid] = {
-                    "appliedFullMapping": afm,
-                    "remapApplied": entry.get("remapApplied", False),
-                }
-
+    # Build per-rally entries. Don't carry forward old remap state —
+    # match-players already reversed any previous remap, so positions
+    # are back to original tracker IDs. remap-track-ids will apply fresh.
     rally_entries = []
     for rally, result in zip(rallies, results):
         rally_entry: dict[str, Any] = {
             "rallyId": rally.rally_id,
             "rallyIndex": result.rally_index,
+            "startMs": rally.start_ms,
+            "endMs": rally.end_ms,
             "trackToPlayer": {
                 str(k): v for k, v in result.track_to_player.items()
             },
@@ -214,11 +296,6 @@ def match_players(
             "sideSwitchDetected": result.side_switch_detected,
             "serverPlayerId": result.server_player_id,
         }
-        # Carry forward remap state so remap-track-ids can reverse
-        old_state = old_remap_state.get(rally.rally_id)
-        if old_state:
-            rally_entry["appliedFullMapping"] = old_state["appliedFullMapping"]
-            rally_entry["remapApplied"] = old_state["remapApplied"]
         rally_entries.append(rally_entry)
 
     # Build result JSON (same format used by batch_match_players and API)

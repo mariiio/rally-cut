@@ -1990,6 +1990,80 @@ export async function swapPlayerTracks(
 }
 
 // ============================================================================
+// Player Reference Crops
+// ============================================================================
+
+export interface PlayerReferenceCrop {
+  id: string;
+  playerId: number;
+  frameMs: number;
+  bbox: { x: number; y: number; w: number; h: number };
+  downloadUrl: string;
+  createdAt: string;
+}
+
+/**
+ * Get all reference crops for a video.
+ */
+export async function getPlayerReferenceCrops(videoId: string): Promise<PlayerReferenceCrop[]> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/player-reference-crops`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get reference crops: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.crops;
+}
+
+/**
+ * Upload a player reference crop.
+ */
+export async function uploadPlayerReferenceCrop(
+  videoId: string,
+  data: {
+    playerId: number;
+    frameMs: number;
+    bbox: { x: number; y: number; w: number; h: number };
+    imageData: string; // base64 JPEG
+  },
+): Promise<PlayerReferenceCrop> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/player-reference-crops`, {
+    method: 'POST',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to upload reference crop: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Delete a player reference crop.
+ */
+export async function deletePlayerReferenceCrop(videoId: string, cropId: string): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/v1/videos/${videoId}/player-reference-crops/${cropId}`,
+    {
+      method: 'DELETE',
+      headers: getHeaders(),
+    },
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to delete reference crop: ${response.status}`);
+  }
+}
+
+// ============================================================================
 // Label Studio Integration (Ground Truth Labeling)
 // ============================================================================
 

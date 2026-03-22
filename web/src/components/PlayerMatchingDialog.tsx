@@ -216,30 +216,34 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
         const trackIds = new Set(positions.map((p) => p.trackId));
         const rallyAssignment = currentAssignments[entry.rallyId] ?? {};
 
-        // Build effective mapping: match analysis is authoritative, but for
-        // primary tracks not in the assignment (stale IDs), assign to free slots
+        // Use primaryTrackIds to identify the 4 active players. These are
+        // always reliable regardless of whether remap-track-ids has run.
+        // The player ID assignment comes from match analysis or free-slot fallback.
         const usedPids = new Set<number>();
         const effectiveMapping: Record<number, number> = {};
+        const primarySet = new Set(primaryTrackIds ?? []);
+
+        // First pass: use match analysis mapping for primary tracks
         for (const [tidStr, pid] of Object.entries(rallyAssignment)) {
           const tid = Number(tidStr);
-          if (trackIds.has(tid)) {
+          if (primarySet.has(tid) && trackIds.has(tid) && !usedPids.has(pid)) {
             effectiveMapping[tid] = pid;
             usedPids.add(pid);
           }
         }
-        if (primaryTrackIds) {
-          for (const tid of primaryTrackIds) {
-            if (trackIds.has(tid) && !effectiveMapping[tid]) {
-              for (let p = 1; p <= 4; p++) {
-                if (!usedPids.has(p)) { effectiveMapping[tid] = p; usedPids.add(p); break; }
-              }
+        // Second pass: assign remaining primary tracks to free player slots
+        for (const tid of primarySet) {
+          if (trackIds.has(tid) && !effectiveMapping[tid]) {
+            for (let p = 1; p <= 4; p++) {
+              if (!usedPids.has(p)) { effectiveMapping[tid] = p; usedPids.add(p); break; }
             }
           }
         }
 
-        for (const trackId of trackIds) {
+        for (const trackId of primarySet) {
+          if (!trackIds.has(trackId)) continue;
           const pid = effectiveMapping[trackId];
-          if (!pid) continue; // Not an assigned track
+          if (!pid) continue;
 
           // Pick the frame where this player's bbox is largest (most visible).
           // For near-side players this is similar to midpoint; for far-side

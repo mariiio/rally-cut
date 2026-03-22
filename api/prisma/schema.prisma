@@ -237,6 +237,7 @@ model Video {
   sessionVideos         SessionVideo[]
   cameraSettings        VideoCameraSettings[]
   shares                VideoShare[]
+  referenceCrops        PlayerReferenceCrop[]
   user                  User?                 @relation(fields: [userId], references: [id])
 
   @@index([userId])
@@ -606,6 +607,24 @@ enum BatchTrackingStatus {
   PROCESSING
   COMPLETED
   FAILED
+}
+
+model PlayerReferenceCrop {
+  id        String   @id @default(uuid())
+  videoId   String   @map("video_id")
+  playerId  Int      @map("player_id")
+  s3Key     String   @map("s3_key")
+  frameMs   Int      @map("frame_ms")
+  bboxX     Float    @map("bbox_x")
+  bboxY     Float    @map("bbox_y")
+  bboxW     Float    @map("bbox_w")
+  bboxH     Float    @map("bbox_h")
+  createdAt DateTime @default(now()) @map("created_at")
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId])
+  @@index([videoId, playerId])
+  @@map("player_reference_crops")
 }
 
 enum FeedbackType {

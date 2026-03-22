@@ -52,6 +52,11 @@ PROFILE_EMA_ALPHA: float = 0.10
 CLOTHING_SKIN_LOWER = np.array([5, 40, 70], dtype=np.uint8)
 CLOTHING_SKIN_UPPER = np.array([20, 170, 230], dtype=np.uint8)
 
+# Rally count used for user-provided reference profiles. High value makes
+# the EMA weight ≈ 0, effectively freezing the profile so rally data
+# never overwrites the user's explicit labels.
+FROZEN_PROFILE_RALLY_COUNT = 100
+
 
 @dataclass
 class PlayerAppearanceFeatures:
@@ -77,6 +82,10 @@ class PlayerAppearanceFeatures:
 
     # Dominant clothing color (median HSV of masked lower-body pixels)
     dominant_color_hsv: tuple[float, float, float] | None = None
+
+    # Head/hair HS histogram (top 15% of bbox) — most discriminative for
+    # beach volleyball where players are shirtless with similar skin/shorts.
+    head_hist: np.ndarray | None = None
 
 
 @dataclass
@@ -104,6 +113,10 @@ class PlayerAppearanceProfile:
     # Dominant clothing color (median HSV)
     avg_dominant_color_hsv: tuple[float, float, float] | None = None
     dominant_color_count: int = 0
+
+    # Head/hair HS histogram
+    avg_head_hist: np.ndarray | None = None
+    head_hist_count: int = 0
 
     # Team assignment (0=near court, 1=far court)
     team: int = 0
@@ -268,6 +281,18 @@ class PlayerAppearanceProfile:
                 self.avg_dominant_color_hsv = (h_new, s_new, v_new)
             self.dominant_color_count += 1
 
+        # Update head/hair histogram
+        if features.head_hist is not None:
+            if self.avg_head_hist is None:
+                self.avg_head_hist = features.head_hist.copy()
+            else:
+                weight = self._ema_weight(self.head_hist_count)
+                self.avg_head_hist = (
+                    self.avg_head_hist * (1 - weight)
+                    + features.head_hist * weight
+                )
+            self.head_hist_count += 1
+
 
 @dataclass
 class TrackAppearanceStats:
@@ -283,6 +308,7 @@ class TrackAppearanceStats:
     avg_upper_v_hist: np.ndarray | None = None
     avg_lower_v_hist: np.ndarray | None = None
     avg_dominant_color_hsv: tuple[float, float, float] | None = None
+    avg_head_hist: np.ndarray | None = None
 
     def compute_averages(self) -> None:
         """Compute average features from all samples."""
@@ -350,6 +376,14 @@ class TrackAppearanceStats:
                 float(np.mean(s_vals)),
                 float(np.mean(v_vals)),
             )
+
+        # Head/hair histogram average
+        head_hists = [
+            f.head_hist for f in self.features
+            if f.head_hist is not None
+        ]
+        if head_hists:
+            self.avg_head_hist = np.mean(head_hists, axis=0).astype(np.float32)
 
 
 def _circular_mean(a: float, b: float, weight_b: float) -> float:
@@ -475,6 +509,12 @@ def extract_appearance_features(
 
     # Dominant clothing color: median HSV of masked lower-body pixels
     features.dominant_color_hsv = _extract_dominant_color(lower_hsv_roi, lower_mask)
+
+    # Head/hair histogram (top 15% of bbox)
+    head_height = int(bbox_h_px * 0.15)
+    if head_height >= 5:
+        head_hsv = hsv[:head_height, :]
+        features.head_hist = _extract_hs_histogram(head_hsv)
 
     return features
 
@@ -671,6 +711,7 @@ _WEIGHT_UPPER_HIST = 0.15
 _WEIGHT_UPPER_V_HIST = 0.10
 _WEIGHT_SKIN = 0.10
 _WEIGHT_DOMINANT_COLOR = 0.15
+_WEIGHT_HEAD_HIST = 0.25
 
 
 def compute_appearance_similarity(
@@ -743,6 +784,11 @@ def compute_appearance_similarity(
         )
         scores.append((_WEIGHT_DOMINANT_COLOR, dc_score))
 
+    # Head/hair histogram similarity
+    head_sim = _histogram_similarity(profile.avg_head_hist, features.avg_head_hist)
+    if head_sim is not None:
+        scores.append((_WEIGHT_HEAD_HIST, head_sim))
+
     if not scores:
         return 1.0  # No features → max cost (unknown)
 
@@ -802,6 +848,10 @@ def compute_track_similarity(
         )
         scores.append((_WEIGHT_DOMINANT_COLOR, dc_score))
 
+    head_sim = _histogram_similarity(stats_a.avg_head_hist, stats_b.avg_head_hist)
+    if head_sim is not None:
+        scores.append((_WEIGHT_HEAD_HIST, head_sim))
+
     if not scores:
         return 1.0
 
@@ -838,3 +888,104 @@ def _hsv_similarity(hsv1: tuple[float, float, float], hsv2: tuple[float, float, 
 
     # Weighted combination (hue is most important for color matching)
     return 0.5 * h_sim + 0.25 * s_sim + 0.25 * v_sim
+
+
+def extract_features_from_crop_image(
+    crop_bgr: NDArray[np.uint8],
+) -> PlayerAppearanceFeatures:
+    """Extract appearance features from a pre-cropped player image.
+
+    Delegates to ``extract_appearance_features`` with a bbox covering the
+    entire crop so the same region proportions are applied.
+    """
+    if crop_bgr.size == 0 or crop_bgr.shape[0] < 10:
+        return PlayerAppearanceFeatures(track_id=0, frame_number=0)
+
+    h, w = crop_bgr.shape[:2]
+    return extract_appearance_features(
+        frame=crop_bgr,
+        track_id=0,
+        frame_number=0,
+        bbox=(0.5, 0.5, 1.0, 1.0),  # full image
+        frame_width=w,
+        frame_height=h,
+    )
+
+
+def build_profiles_from_crops(
+    crops_by_player: dict[int, list[NDArray[np.uint8] | PlayerAppearanceFeatures]],
+) -> dict[int, PlayerAppearanceProfile]:
+    """Build frozen appearance profiles from user-selected reference crops.
+
+    Each player's crops are averaged into a single profile. The profile's
+    rally_count is set high so EMA updates have near-zero effect, making
+    the profile effectively immutable.
+
+    Args:
+        crops_by_player: Mapping of player_id (1-4) to list of BGR crop images
+            or pre-extracted PlayerAppearanceFeatures.
+
+    Returns:
+        Mapping of player_id to PlayerAppearanceProfile.
+    """
+    profiles: dict[int, PlayerAppearanceProfile] = {}
+
+    for player_id, items in crops_by_player.items():
+        if not items:
+            continue
+
+        # Accept either pre-extracted features or BGR images
+        all_features: list[PlayerAppearanceFeatures] = []
+        for item in items:
+            if isinstance(item, PlayerAppearanceFeatures):
+                all_features.append(item)
+            else:
+                all_features.append(extract_features_from_crop_image(item))
+
+        # Build TrackAppearanceStats to compute averages
+        stats = TrackAppearanceStats(track_id=0, features=all_features)
+        stats.compute_averages()
+
+        # Create profile seeded from averaged features
+        profile = PlayerAppearanceProfile(
+            player_id=player_id,
+            team=0,  # Team determined by matching, not by player ID
+            rally_count=FROZEN_PROFILE_RALLY_COUNT,
+        )
+
+        # Copy averaged features into profile
+        if stats.avg_skin_tone_hsv is not None:
+            profile.avg_skin_tone_hsv = stats.avg_skin_tone_hsv
+            profile.skin_sample_count = len(all_features)
+
+        if stats.avg_upper_hist is not None:
+            profile.avg_upper_hist = stats.avg_upper_hist
+            profile.upper_hist_count = len(all_features)
+
+        if stats.avg_lower_hist is not None:
+            profile.avg_lower_hist = stats.avg_lower_hist
+            profile.lower_hist_count = len(all_features)
+
+        if stats.avg_upper_v_hist is not None:
+            profile.avg_upper_v_hist = stats.avg_upper_v_hist
+            profile.upper_v_hist_count = len(all_features)
+
+        if stats.avg_lower_v_hist is not None:
+            profile.avg_lower_v_hist = stats.avg_lower_v_hist
+            profile.lower_v_hist_count = len(all_features)
+
+        if stats.avg_dominant_color_hsv is not None:
+            profile.avg_dominant_color_hsv = stats.avg_dominant_color_hsv
+            profile.dominant_color_count = len(all_features)
+
+        if stats.avg_head_hist is not None:
+            profile.avg_head_hist = stats.avg_head_hist
+            profile.head_hist_count = len(all_features)
+
+        profiles[player_id] = profile
+        logger.info(
+            f"Built reference profile for player {player_id} from "
+            f"{len(items)} crop(s)"
+        )
+
+    return profiles
