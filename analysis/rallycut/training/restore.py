@@ -32,6 +32,7 @@ class RestoreResult:
     rallies_inserted: int = 0
     tracking_gt_restored: int = 0
     action_gt_restored: int = 0
+    player_matching_gt_restored: int = 0
     session_created: str = ""
     errors: list[str] = field(default_factory=list)
 
@@ -318,6 +319,11 @@ def restore_dataset_to_db(
             if action_gt_path.exists():
                 _restore_action_gt(conn, action_gt_path, result)
 
+            # Restore player matching ground truth if available
+            pm_gt_path = dataset_dir / "player_matching_ground_truth.json"
+            if pm_gt_path.exists():
+                _restore_player_matching_gt(conn, pm_gt_path, result)
+
     finally:
         conn.close()
 
@@ -393,6 +399,17 @@ def _preview_restore(
         rprint(
             f"  Would restore: [green]{agt_stats.get('total_rallies_with_action_gt', 0)}[/green]"
             f" action GT annotations"
+        )
+
+    # Show player matching GT info if available
+    pm_gt_path = dataset_dir / "player_matching_ground_truth.json"
+    if pm_gt_path.exists():
+        with open(pm_gt_path) as f:
+            pm_gt = json.load(f)
+        pm_stats = pm_gt.get("stats", {})
+        rprint(
+            f"  Would restore: [green]{pm_stats.get('total_rallies', 0)}[/green]"
+            f" player matching GT across {pm_stats.get('total_videos', 0)} videos"
         )
 
 
@@ -537,6 +554,95 @@ def _restore_action_gt(
         restored += 1
 
     result.action_gt_restored = restored
+
+
+def _restore_player_matching_gt(
+    conn: psycopg.Connection[tuple[Any, ...]],
+    pm_gt_path: Path,
+    result: RestoreResult,
+) -> None:
+    """Restore player matching GT from player_matching_ground_truth.json.
+
+    Rebuilds the video-level player_matching_gt_json from per-rally entries
+    that are keyed by content_hash + timing (survives rally ID changes).
+    """
+    with open(pm_gt_path) as f:
+        pm_gt = json.load(f)
+
+    videos = pm_gt.get("videos", [])
+    if not videos:
+        return
+
+    restored = 0
+    for video_entry in videos:
+        content_hash = video_entry["video_content_hash"]
+        rally_entries = video_entry.get("rallies", [])
+        side_switch_timings = video_entry.get("side_switch_timings", [])
+
+        # Find the video
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM videos WHERE content_hash = %s AND deleted_at IS NULL",
+                (content_hash,),
+            )
+            video_row = cur.fetchone()
+
+        if video_row is None:
+            result.errors.append(
+                f"Player matching GT: no video for {content_hash[:8]}..."
+            )
+            continue
+
+        video_id = str(video_row[0])
+
+        # Load rally ordering for this video (for side switch index mapping)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, start_ms, end_ms FROM rallies WHERE video_id = %s "
+                "ORDER BY start_ms",
+                (video_id,),
+            )
+            rally_rows = cur.fetchall()
+
+        rally_by_timing: dict[tuple[int, int], str] = {}
+        rally_order: list[str] = []
+        for rid, start_ms, end_ms in rally_rows:
+            rally_by_timing[(start_ms, end_ms)] = str(rid)
+            rally_order.append(str(rid))
+
+        # Rebuild rallies dict with current rally IDs
+        gt_rallies: dict[str, Any] = {}
+        for entry in rally_entries:
+            key = (entry["rally_start_ms"], entry["rally_end_ms"])
+            rally_id = rally_by_timing.get(key)
+            if rally_id is None:
+                result.errors.append(
+                    f"Player matching GT: no rally for {content_hash[:8]}... "
+                    f"({key[0]}-{key[1]}ms)"
+                )
+                continue
+            gt_rallies[rally_id] = entry["track_to_player"]
+
+        # Rebuild side switch indices from timings
+        side_switches: list[int] = []
+        rally_id_to_index = {rid: i for i, rid in enumerate(rally_order)}
+        for timing in side_switch_timings:
+            key = (timing[0], timing[1])
+            rally_id = rally_by_timing.get(key)
+            if rally_id and rally_id in rally_id_to_index:
+                side_switches.append(rally_id_to_index[rally_id])
+
+        gt_data = {"rallies": gt_rallies, "sideSwitches": sorted(side_switches)}
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE videos SET player_matching_gt_json = %s::jsonb WHERE id = %s",
+                (json.dumps(gt_data), video_id),
+            )
+
+        restored += 1
+
+    result.player_matching_gt_restored = restored
 
 
 def _find_video_file(

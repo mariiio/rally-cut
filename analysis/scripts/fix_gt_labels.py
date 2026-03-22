@@ -187,15 +187,15 @@ def cmd_validate() -> None:
             )
             rows = cur.fetchall()
 
-    # Load position track IDs per rally for mismatch detection
-    rally_track_ids: dict[str, set[int]] = {}
-    with get_connection() as conn:
-        with conn.cursor() as cur:
+            # Load position track IDs per rally (only GT videos)
             cur.execute(
                 "SELECT r.id, pt.positions_json FROM rallies r "
                 "JOIN player_tracks pt ON pt.rally_id = r.id "
-                "WHERE pt.positions_json IS NOT NULL"
+                "JOIN videos v ON v.id = r.video_id "
+                "WHERE pt.positions_json IS NOT NULL "
+                "AND v.player_matching_gt_json IS NOT NULL"
             )
+            rally_track_ids: dict[str, set[int]] = {}
             for rid, pos_json in cur.fetchall():
                 tids: set[int] = set()
                 positions = cast(list[dict[str, Any]], pos_json or [])
@@ -283,7 +283,7 @@ def cmd_migrate_gt(dry_run: bool = False) -> None:
             new_mapping: dict[str, Any] = {}
             changed = False
             for tid_str, pid in mapping.items():
-                new_tid = afm.get(str(tid_str))
+                new_tid = afm.get(tid_str)
                 if new_tid is not None and str(new_tid) != str(tid_str):
                     new_mapping[str(new_tid)] = pid
                     changed = True

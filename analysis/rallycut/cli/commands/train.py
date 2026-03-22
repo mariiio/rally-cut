@@ -6,7 +6,7 @@ import json
 import random
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import cv2
 import numpy as np
@@ -1526,6 +1526,120 @@ def _export_tracking_ground_truth(
     }
 
 
+def _export_player_matching_gt(
+    video_content_hashes: set[str],
+) -> dict[str, Any] | None:
+    """Export player matching GT (cross-rally player identity labels) from DB.
+
+    player_matching_gt_json is stored at video level with rally IDs as keys.
+    We flatten to per-rally entries keyed by content_hash + timing so the
+    backup survives re-detection (new rally IDs).
+
+    Args:
+        video_content_hashes: Content hashes of videos in the dataset.
+
+    Returns:
+        Dict with videos and stats, or None.
+    """
+    from rallycut.evaluation.db import get_connection
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    v.content_hash,
+                    v.id as video_id,
+                    v.player_matching_gt_json
+                FROM videos v
+                WHERE v.player_matching_gt_json IS NOT NULL
+                  AND v.deleted_at IS NULL
+                ORDER BY v.content_hash
+                """
+            )
+            video_rows = cur.fetchall()
+
+            # Load rally timings for dataset videos only
+            cur.execute(
+                """
+                SELECT r.id, r.video_id, r.start_ms, r.end_ms
+                FROM rallies r
+                JOIN videos v ON v.id = r.video_id
+                WHERE v.deleted_at IS NULL
+                  AND v.content_hash = ANY(%s)
+                ORDER BY r.video_id, r.start_ms
+                """,
+                (list(video_content_hashes),),
+            )
+            rally_rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not video_rows:
+        return None
+
+    # Build rally ID → timing lookup
+    rally_timing: dict[str, tuple[int, int]] = {}
+    rally_order: dict[str, list[str]] = {}  # video_id → [rally_ids ordered by start_ms]
+    for rid, vid, start_ms, end_ms in rally_rows:
+        rally_timing[str(rid)] = (cast(int, start_ms), cast(int, end_ms))
+        rally_order.setdefault(str(vid), []).append(str(rid))
+
+    videos_exported: list[dict[str, Any]] = []
+
+    for row in video_rows:
+        content_hash = str(row[0])
+        video_id = str(row[1])
+        gt_json = row[2]
+
+        if content_hash not in video_content_hashes:
+            continue
+
+        gt_data = gt_json if isinstance(gt_json, dict) else json.loads(str(gt_json))
+        gt_rallies = gt_data.get("rallies", {})
+        side_switches = gt_data.get("sideSwitches", [])
+
+        # Convert rally ID keys to timing-based keys
+        rally_entries: list[dict[str, Any]] = []
+        for rally_id, mapping in gt_rallies.items():
+            timing = rally_timing.get(rally_id)
+            if timing is None:
+                continue
+            rally_entries.append({
+                "rally_start_ms": timing[0],
+                "rally_end_ms": timing[1],
+                "track_to_player": mapping,
+            })
+
+        # Convert side switch indices to timing-based
+        ordered_rids = rally_order.get(video_id, [])
+        side_switch_timings: list[list[int]] = []
+        for idx in side_switches:
+            if idx < len(ordered_rids):
+                timing = rally_timing.get(ordered_rids[idx])
+                if timing:
+                    side_switch_timings.append([timing[0], timing[1]])
+
+        videos_exported.append({
+            "video_content_hash": content_hash,
+            "rallies": rally_entries,
+            "side_switch_timings": side_switch_timings,
+        })
+
+    if not videos_exported:
+        return None
+
+    total_rallies = sum(len(v["rallies"]) for v in videos_exported)
+    return {
+        "videos": videos_exported,
+        "stats": {
+            "total_videos": len(videos_exported),
+            "total_rallies": total_rallies,
+        },
+    }
+
+
 def _export_action_ground_truth(
     video_content_hashes: set[str],
 ) -> dict[str, Any] | None:
@@ -1773,6 +1887,19 @@ def export_dataset(
         rprint(f"Created [cyan]{tracking_gt_path}[/cyan]")
         rprint(
             f"  Tracking GT: [green]{tgt_stats['total_rallies_with_tracking_gt']}[/green] rallies"
+        )
+
+    # Export player matching ground truth (cross-rally player identity labels)
+    player_matching_gt = _export_player_matching_gt(content_hashes)
+    if player_matching_gt:
+        pm_gt_path = dataset_dir / "player_matching_ground_truth.json"
+        with open(pm_gt_path, "w") as f:
+            json.dump(player_matching_gt, f, indent=2)
+        pm_stats = player_matching_gt["stats"]
+        rprint(f"Created [cyan]{pm_gt_path}[/cyan]")
+        rprint(
+            f"  Player matching GT: [green]{pm_stats['total_rallies']}[/green] rallies"
+            f" across {pm_stats['total_videos']} videos"
         )
 
     # Export action ground truth (serve/receive/set/attack/dig/block labels)

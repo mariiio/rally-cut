@@ -19,6 +19,8 @@ import CloseIcon from '@mui/icons-material/Close';
 import SaveIcon from '@mui/icons-material/Save';
 import DownloadIcon from '@mui/icons-material/Download';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import RemoveCircleOutlineIcon from '@mui/icons-material/RemoveCircleOutline';
+import UndoIcon from '@mui/icons-material/Undo';
 import {
   getMatchAnalysis,
   getPlayerMatchingGtApi,
@@ -79,13 +81,20 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
   const [normalizedRallies, setNormalizedRallies] = useState<RallyEntry[] | null>(null);
   const [assignments, setAssignments] = useState<Record<string, Record<string, number>>>({});
   const [crops, setCrops] = useState<Map<string, string>>(new Map());
-  const [selectedCell, setSelectedCell] = useState<CellId | null>(null);
+  const [selectedCell, setSelectedCellState] = useState<CellId | null>(null);
+  // Ref twin avoids stale closures in handleCellClick during async crop loading
+  const selectedCellRef = useRef<CellId | null>(null);
+  const setSelectedCell = useCallback((cell: CellId | null) => {
+    selectedCellRef.current = cell;
+    setSelectedCellState(cell);
+  }, []);
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [totalRallies, setTotalRallies] = useState(0);
   const [isDirty, setIsDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [sideSwitches, setSideSwitches] = useState<number[]>([]);
   const [untrackedCount, setUntrackedCount] = useState(0);
+  const [excludedRallies, setExcludedRallies] = useState<Set<string>>(new Set());
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const rallies = useEditorStore((state) => state.rallies);
@@ -129,11 +138,12 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
           }
         }
 
-        // Override with existing GT if available
+        // Override with existing GT if available — merge with match analysis
+        // so that incomplete GT (e.g., from migrate-gt) doesn't lose entries
         if (existingGt) {
           for (const [rid, mapping] of Object.entries(existingGt.rallies)) {
             if (initial[rid]) {
-              initial[rid] = { ...mapping };
+              initial[rid] = { ...initial[rid], ...mapping };
             }
           }
           setSideSwitches(existingGt.sideSwitches);
@@ -301,61 +311,55 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
     };
   }, [normalizedRallies, effectiveVideoUrl, open]);
 
-  // Handle cell click
   const handleCellClick = useCallback((rallyId: string, pid: number) => {
-    if (!selectedCell) {
-      // First click: select
+    const sel = selectedCellRef.current;
+
+    if (!sel || sel.rallyId !== rallyId) {
       setSelectedCell({ rallyId, pid });
       return;
     }
 
-    if (selectedCell.rallyId !== rallyId) {
-      // Different row: reselect
-      setSelectedCell({ rallyId, pid });
-      return;
-    }
-
-    if (selectedCell.pid === pid) {
-      // Same cell: deselect
+    if (sel.pid === pid) {
       setSelectedCell(null);
       return;
     }
 
     // Same row, different column: swap
-    const asgn = { ...assignments };
+    const currentAssignments = assignmentsRef.current;
+    const asgn = { ...currentAssignments };
     const rowAssignment = { ...asgn[rallyId] };
 
     // Find which track IDs are assigned to these player IDs
     let trackA: string | null = null;
     let trackB: string | null = null;
     for (const [tid, p] of Object.entries(rowAssignment)) {
-      if (p === selectedCell.pid) trackA = tid;
+      if (p === sel.pid) trackA = tid;
       if (p === pid) trackB = tid;
     }
 
     if (trackA !== null || trackB !== null) {
-      // Swap: both assigned, or move one to the other column
       if (trackA !== null) rowAssignment[trackA] = pid;
-      if (trackB !== null) rowAssignment[trackB] = selectedCell.pid;
+      if (trackB !== null) rowAssignment[trackB] = sel.pid;
       asgn[rallyId] = rowAssignment;
       assignmentsRef.current = asgn;
       setAssignments(asgn);
 
-      // Swap crops too
-      const newCrops = new Map(crops);
-      const keyA = cellKey(rallyId, selectedCell.pid);
-      const keyB = cellKey(rallyId, pid);
-      const cropA = newCrops.get(keyA);
-      const cropB = newCrops.get(keyB);
-      if (cropA) newCrops.set(keyB, cropA); else newCrops.delete(keyB);
-      if (cropB) newCrops.set(keyA, cropB); else newCrops.delete(keyA);
-      setCrops(newCrops);
+      setCrops((prev) => {
+        const newCrops = new Map(prev);
+        const keyA = cellKey(rallyId, sel.pid);
+        const keyB = cellKey(rallyId, pid);
+        const cropA = newCrops.get(keyA);
+        const cropB = newCrops.get(keyB);
+        if (cropA) newCrops.set(keyB, cropA); else newCrops.delete(keyB);
+        if (cropB) newCrops.set(keyA, cropB); else newCrops.delete(keyA);
+        return newCrops;
+      });
 
       setIsDirty(true);
     }
 
     setSelectedCell(null);
-  }, [selectedCell, assignments, crops]);
+  }, [setSelectedCell]);
 
   // Toggle side switch
   const handleToggleSideSwitch = useCallback((rallyIndex: number) => {
@@ -363,6 +367,20 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
       const next = prev.includes(rallyIndex)
         ? prev.filter((i) => i !== rallyIndex)
         : [...prev, rallyIndex].sort((a, b) => a - b);
+      setIsDirty(true);
+      return next;
+    });
+  }, []);
+
+  // Exclude/include rally from GT
+  const handleToggleExclude = useCallback((rallyId: string) => {
+    setExcludedRallies((prev) => {
+      const next = new Set(prev);
+      if (next.has(rallyId)) {
+        next.delete(rallyId);
+      } else {
+        next.add(rallyId);
+      }
       setIsDirty(true);
       return next;
     });
@@ -381,8 +399,13 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
   const handleSave = useCallback(async () => {
     setSaving(true);
     try {
+      // Filter out excluded rallies before saving
+      const filteredAssignments = { ...assignments };
+      for (const rid of excludedRallies) {
+        delete filteredAssignments[rid];
+      }
       await savePlayerMatchingGtApi(videoId, {
-        rallies: assignments,
+        rallies: filteredAssignments,
         sideSwitches,
       });
       setIsDirty(false);
@@ -391,7 +414,7 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
     } finally {
       setSaving(false);
     }
-  }, [videoId, assignments, sideSwitches]);
+  }, [videoId, assignments, sideSwitches, excludedRallies]);
 
   // Export JSON
   const handleExport = useCallback(() => {
@@ -503,6 +526,7 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
             });
           const isSideSwitch = sideSwitches.includes(entry.rallyIndex);
           const rowAssignment = assignments[entry.rallyId] || {};
+          const isExcluded = excludedRallies.has(entry.rallyId);
 
           return (
             <Box key={entry.rallyId}>
@@ -526,11 +550,12 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
                   mb: 0.5,
                   alignItems: 'center',
                   py: 0.5,
+                  opacity: isExcluded ? 0.3 : 1,
                   '&:hover': { bgcolor: 'rgba(255,255,255,0.03)' },
                 }}
               >
                 {/* Row label */}
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   <Tooltip title="Seek to rally">
                     <IconButton
                       size="small"
@@ -538,6 +563,15 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
                       sx={{ color: 'grey.500' }}
                     >
                       <PlayArrowIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title={isExcluded ? 'Include in GT' : 'Exclude from GT'}>
+                    <IconButton
+                      size="small"
+                      onClick={() => handleToggleExclude(entry.rallyId)}
+                      sx={{ color: isExcluded ? 'warning.main' : 'grey.700' }}
+                    >
+                      {isExcluded ? <UndoIcon fontSize="small" /> : <RemoveCircleOutlineIcon fontSize="small" />}
                     </IconButton>
                   </Tooltip>
                   <Box>
@@ -603,7 +637,8 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
                         <img
                           src={cropUrl}
                           alt={`R${rallyIndex + 1} P${pid}`}
-                          style={{ width: CROP_WIDTH, height: CROP_HEIGHT, objectFit: 'cover' }}
+                          draggable={false}
+                          style={{ width: CROP_WIDTH, height: CROP_HEIGHT, objectFit: 'cover', pointerEvents: 'none' }}
                         />
                       ) : isLoading ? (
                         <Skeleton
