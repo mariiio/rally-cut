@@ -1,12 +1,12 @@
-"""General volleyball ReID model — contrastive DINOv2 fine-tuning.
+"""General volleyball ReID model — OSNet-x1.0 with MSMT17 pretrained weights.
 
 Learns player-discriminative embeddings from GT-labeled training data across
 multiple videos. Unlike the per-video PlayerReIDClassifier (reid_embeddings.py),
 this model generalizes to unseen videos without requiring user reference crops.
 
 Architecture:
-    DINOv2 ViT-S/14 backbone (last 2 blocks unfrozen)
-    → projection head (384 → 128 → L2 normalize)
+    OSNet-x1.0 backbone (MSMT17 pretrained, 512-dim)
+    → projection head (512 → 128 → L2 normalize)
 
 Training:
     SupCon (Supervised Contrastive) loss on video-grouped batches.
@@ -17,6 +17,7 @@ Training:
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import cv2
@@ -29,9 +30,20 @@ from numpy.typing import NDArray
 logger = logging.getLogger(__name__)
 
 # Model constants
-EMBED_DIM = 384  # DINOv2 ViT-S/14 CLS token
+EMBED_DIM = 512  # OSNet-x1.0 feature dimension
 PROJ_DIM = 128  # Projection head output
 WEIGHTS_PATH = Path(__file__).parent.parent.parent / "weights" / "reid" / "general_reid.pt"
+
+# MSMT17 pretrained weights (auto-downloaded via gdown)
+_MSMT17_GDRIVE_ID = "1IosIFlLiulGIjwW3H8uMRmx3MzPwf86x"
+_MSMT17_NUM_CLASSES = 4101  # MSMT17 combineall identity count
+_MSMT17_CACHE_PATH = os.path.join(
+    os.path.expanduser("~"), ".cache", "torch", "checkpoints", "osnet_x1_0_msmt17.pth",
+)
+
+# OSNet input: 256×128 (standard ReID dimensions)
+_INPUT_HEIGHT = 256
+_INPUT_WIDTH = 128
 
 # Training defaults
 DEFAULT_BATCH_SIZE = 64
@@ -39,7 +51,6 @@ DEFAULT_EPOCHS = 30
 DEFAULT_LR_BACKBONE = 1e-5
 DEFAULT_LR_HEAD = 1e-3
 DEFAULT_TEMPERATURE = 0.07
-UNFREEZE_BLOCKS = 2  # Unfreeze last N ViT blocks
 
 
 def _default_device() -> str:
@@ -49,8 +60,80 @@ def _default_device() -> str:
     return "mps" if torch.backends.mps.is_available() else "cpu"
 
 
+class _OSNetFeatureExtractor(nn.Module):
+    """Wrapper that always returns 512-dim features, even in train mode.
+
+    OSNet's forward() returns classifier logits in train mode and features
+    in eval mode. This wrapper bypasses the classifier to always return
+    the 512-dim fc output, enabling gradient flow through the backbone
+    during contrastive training.
+    """
+
+    def __init__(self, osnet: nn.Module) -> None:
+        super().__init__()
+        self.osnet = osnet
+        self._feature_dim: int = getattr(osnet, "feature_dim", EMBED_DIM)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        featuremaps = getattr(self.osnet, "featuremaps")
+        global_avgpool = getattr(self.osnet, "global_avgpool")
+        fc = getattr(self.osnet, "fc", None)
+
+        x = featuremaps(x)
+        v: torch.Tensor = global_avgpool(x)
+        v = v.view(v.size(0), -1)
+        if fc is not None:
+            v = fc(v)
+        return v
+
+    @property
+    def feature_dim(self) -> int:
+        return self._feature_dim
+
+
+def _load_osnet_backbone(device: str) -> tuple[nn.Module, int]:
+    """Load OSNet-x1.0 with MSMT17 pretrained weights.
+
+    Downloads weights from Google Drive on first call (17 MB).
+
+    Returns:
+        (model, feature_dim) where model always outputs (B, 512) features.
+    """
+    import torchreid
+
+    # Download MSMT17 weights if not cached
+    if not os.path.exists(_MSMT17_CACHE_PATH):
+        import gdown
+
+        os.makedirs(os.path.dirname(_MSMT17_CACHE_PATH), exist_ok=True)
+        url = f"https://drive.google.com/uc?id={_MSMT17_GDRIVE_ID}"
+        logger.info("Downloading OSNet-x1.0 MSMT17 weights...")
+        gdown.download(url, _MSMT17_CACHE_PATH, quiet=True)
+
+    # Build model with matching num_classes for weight loading
+    osnet = torchreid.models.build_model(
+        name="osnet_x1_0",
+        num_classes=_MSMT17_NUM_CLASSES,
+        loss="softmax",
+        pretrained=False,
+    )
+
+    # Load MSMT17 pretrained weights
+    state = torch.load(_MSMT17_CACHE_PATH, map_location=device, weights_only=False)
+    osnet.load_state_dict(state)
+
+    # Wrap to always return 512-dim features (not classifier logits)
+    model = _OSNetFeatureExtractor(osnet).to(device)
+    feature_dim = model.feature_dim  # 512
+    logger.info(
+        "Loaded OSNet-x1.0 MSMT17 on %s (%d-dim, %.1fM params)",
+        device, feature_dim, sum(p.numel() for p in model.parameters()) / 1e6,
+    )
+    return model, feature_dim
+
+
 class ProjectionHead(nn.Module):
-    """MLP projection head: 384 → 384 → 128."""
+    """MLP projection head: 512 → 512 → 128."""
 
     def __init__(self, in_dim: int = EMBED_DIM, out_dim: int = PROJ_DIM) -> None:
         super().__init__()
@@ -65,7 +148,7 @@ class ProjectionHead(nn.Module):
 
 
 class GeneralReIDModel:
-    """Contrastive-trained DINOv2 model for volleyball player ReID.
+    """Contrastive-trained OSNet model for volleyball player ReID.
 
     Usage:
         # Training
@@ -92,13 +175,11 @@ class GeneralReIDModel:
             self._load(weights_path)
 
     def _ensure_backbone(self) -> None:
-        """Lazy-load DINOv2 backbone."""
+        """Lazy-load OSNet backbone with MSMT17 weights."""
         if self.backbone is not None:
             return
 
-        logger.info("Loading DINOv2 ViT-S/14 for general ReID on %s...", self.device)
-        self.backbone = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
-        self.backbone = self.backbone.to(self.device)
+        self.backbone, _feat_dim = _load_osnet_backbone(self.device)
 
         self._mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(self.device)
         self._std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(self.device)
@@ -107,7 +188,7 @@ class GeneralReIDModel:
             self.head = ProjectionHead().to(self.device)
 
     def _load(self, weights_path: Path) -> None:
-        """Load trained weights."""
+        """Load fine-tuned weights (backbone + projection head)."""
         self._ensure_backbone()
         assert self.backbone is not None
         assert self.head is not None
@@ -120,7 +201,7 @@ class GeneralReIDModel:
         logger.info("Loaded general ReID weights from %s", weights_path)
 
     def save(self, path: Path | None = None) -> None:
-        """Save trained weights."""
+        """Save fine-tuned weights."""
         assert self.backbone is not None
         assert self.head is not None
 
@@ -143,11 +224,11 @@ class GeneralReIDModel:
         """Extract (N, 128) L2-normalized embeddings from BGR crops.
 
         Args:
-            crops: List of BGR images (any size, resized to 224x224).
+            crops: List of BGR images (any size, resized to 256×128).
             batch_size: Batch size for inference.
 
         Returns:
-            (N, 128) float32 embeddings (L2-normalized).
+            (N, PROJ_DIM) float32 embeddings (L2-normalized).
         """
         if not crops:
             return np.empty((0, PROJ_DIM), dtype=np.float32)
@@ -168,7 +249,7 @@ class GeneralReIDModel:
             batch = []
             for crop in batch_crops:
                 img = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-                img = cv2.resize(img, (224, 224))
+                img = cv2.resize(img, (_INPUT_WIDTH, _INPUT_HEIGHT))
                 tensor = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
                 batch.append(tensor)
 
@@ -176,7 +257,7 @@ class GeneralReIDModel:
             batch_tensor = (batch_tensor - self._mean) / self._std
 
             with torch.inference_mode():
-                features = self.backbone(batch_tensor)  # (B, 384)
+                features = self.backbone(batch_tensor)  # (B, 512)
                 embeddings = self.head(features)  # (B, 128) L2-normalized
 
             all_embeddings.append(embeddings.cpu().numpy().astype(np.float32))
@@ -212,7 +293,7 @@ class GeneralReIDModel:
             dataset_dir: Directory with extracted training crops.
             epochs: Number of training epochs.
             batch_size: Batch size (will sample players_per_batch × crops_per_player).
-            lr_backbone: Learning rate for backbone (last UNFREEZE_BLOCKS).
+            lr_backbone: Learning rate for backbone unfrozen layers.
             lr_head: Learning rate for projection head.
             temperature: Temperature for SupCon loss.
             save_path: Where to save weights. Defaults to WEIGHTS_PATH.
@@ -239,8 +320,8 @@ class GeneralReIDModel:
             len(samples), n_identities,
         )
 
-        # Freeze backbone except last N blocks
-        self._set_backbone_freeze(unfreeze_blocks=UNFREEZE_BLOCKS)
+        # Freeze backbone except last conv stage
+        self._set_backbone_freeze()
 
         # Optimizer with different LRs
         backbone_params = [
@@ -273,7 +354,8 @@ class GeneralReIDModel:
         self.head.eval()
 
         # Save
-        self.save(save_path)
+        if save_path is not None:
+            self.save(save_path)
 
         return {
             "loss": best_loss,
@@ -369,7 +451,7 @@ class GeneralReIDModel:
                     img_u8 = np.asarray(img, dtype=np.uint8)
                     aug = _augment_crop(img_u8, rng)
                     aug = cv2.cvtColor(aug, cv2.COLOR_BGR2RGB)
-                    aug = cv2.resize(aug, (224, 224))
+                    aug = cv2.resize(aug, (_INPUT_WIDTH, _INPUT_HEIGHT))
                     tensor = torch.from_numpy(aug).permute(2, 0, 1).float() / 255.0
                     batch_crops.append(tensor)
                     batch_labels.append(label_idx)
@@ -407,39 +489,25 @@ class GeneralReIDModel:
 
         For each anchor, positive pairs are same-label samples.
         The loss encourages same-label samples to cluster.
-
-        Args:
-            embeddings: (N, D) L2-normalized embeddings.
-            labels: (N,) integer labels.
-            temperature: Scaling temperature.
-
-        Returns:
-            Scalar loss.
         """
         n = embeddings.size(0)
-        # Pairwise cosine similarity (embeddings are L2-normalized)
         sim = torch.mm(embeddings, embeddings.t()) / temperature
 
-        # Mask: same label = positive pair
-        label_eq = labels.unsqueeze(0) == labels.unsqueeze(1)  # (N, N)
-        # Remove self-pairs
+        label_eq = labels.unsqueeze(0) == labels.unsqueeze(1)
         self_mask = ~torch.eye(n, dtype=torch.bool, device=embeddings.device)
         pos_mask = label_eq & self_mask
 
-        # For numerical stability
+        # Numerical stability
         sim_max, _ = sim.max(dim=1, keepdim=True)
         sim = sim - sim_max.detach()
 
-        # Log-sum-exp over all non-self pairs (denominator)
         exp_sim = torch.exp(sim) * self_mask.float()
         log_sum_exp = torch.log(exp_sim.sum(dim=1, keepdim=True) + 1e-8)
 
-        # Average log-prob over positive pairs
         log_prob = sim - log_sum_exp
         pos_log_prob = (log_prob * pos_mask.float()).sum(dim=1)
         n_pos = pos_mask.float().sum(dim=1)
 
-        # Avoid division by zero for anchors with no positives
         valid = n_pos > 0
         if not valid.any():
             return torch.tensor(0.0, device=embeddings.device, requires_grad=True)
@@ -447,31 +515,25 @@ class GeneralReIDModel:
         loss = -(pos_log_prob[valid] / n_pos[valid]).mean()
         return loss
 
-    def _set_backbone_freeze(self, unfreeze_blocks: int = UNFREEZE_BLOCKS) -> None:
-        """Freeze all backbone parameters except the last N transformer blocks."""
+    def _set_backbone_freeze(self) -> None:
+        """Freeze backbone except the last conv stage (conv5) and fc layer."""
         assert self.backbone is not None
 
         # Freeze everything first
         for p in self.backbone.parameters():
             p.requires_grad_(False)
 
-        # Unfreeze last N blocks
-        blocks = getattr(self.backbone, "blocks", None)
-        if blocks is not None and len(blocks) > 0:
-            n_blocks = len(blocks)
-            for i in range(max(0, n_blocks - unfreeze_blocks), n_blocks):
-                for p in blocks[i].parameters():
-                    p.requires_grad_(True)
-
-        # Always unfreeze the final norm layer
-        norm = getattr(self.backbone, "norm", None)
-        if norm is not None:
-            for p in norm.parameters():
+        # _OSNetFeatureExtractor wraps osnet — access inner model's named params.
+        # OSNet structure: conv1, conv2, conv3, conv4, conv5, fc, classifier
+        # Unfreeze conv5 (last convolutional stage) and fc (feature layer)
+        for name, p in self.backbone.named_parameters():
+            # With wrapper: params are named "osnet.conv5.xxx", "osnet.fc.xxx"
+            if "conv5" in name or ".fc." in name or name.endswith(".fc"):
                 p.requires_grad_(True)
 
         n_trainable = sum(p.numel() for p in self.backbone.parameters() if p.requires_grad)
         n_total = sum(p.numel() for p in self.backbone.parameters())
         logger.info(
-            "Backbone: unfroze last %d blocks (%d/%d params trainable, %.1f%%)",
-            unfreeze_blocks, n_trainable, n_total, n_trainable / n_total * 100,
+            "Backbone: unfroze conv5+fc (%d/%d params trainable, %.1f%%)",
+            n_trainable, n_total, n_trainable / n_total * 100,
         )
