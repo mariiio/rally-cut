@@ -133,17 +133,18 @@ def _load_osnet_backbone(device: str) -> tuple[nn.Module, int]:
 
 
 class ProjectionHead(nn.Module):
-    """MLP projection head: 512 → 512 → 128."""
+    """MLP projection head: 512 → BN → ReLU → 128 → BN → L2 (SimCLR pattern)."""
 
     def __init__(self, in_dim: int = EMBED_DIM, out_dim: int = PROJ_DIM) -> None:
         super().__init__()
         self.fc1 = nn.Linear(in_dim, in_dim)
         self.bn1 = nn.BatchNorm1d(in_dim)
         self.fc2 = nn.Linear(in_dim, out_dim)
+        self.bn2 = nn.BatchNorm1d(out_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = functional.relu(self.bn1(self.fc1(x)))
-        x = self.fc2(x)
+        x = self.bn2(self.fc2(x))
         return functional.normalize(x, dim=1)
 
 

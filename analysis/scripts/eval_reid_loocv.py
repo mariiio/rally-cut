@@ -20,7 +20,6 @@ import json
 import logging
 import shutil
 import sys
-import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -208,6 +207,10 @@ def main() -> None:
     parser.add_argument("--video-id", type=str, default=None, help="Single fold only")
     parser.add_argument("--epochs", type=int, default=30, help="Training epochs per fold")
     parser.add_argument("--skip-extract", action="store_true", help="Skip crop extraction")
+    parser.add_argument(
+        "--blend-sweep", type=float, nargs="+", default=None,
+        help="Sweep REID_BLEND values (e.g. --blend-sweep 0.3 0.5 0.7)",
+    )
     args = parser.parse_args()
 
     from rallycut.evaluation.db import get_connection
@@ -237,17 +240,26 @@ def main() -> None:
     if not args.skip_extract:
         extract_all_crops([(str(vid), gt) for vid, gt in all_rows])
 
+    import rallycut.tracking.match_tracker as mt_module
+
+    blend_values = args.blend_sweep or [mt_module.REID_BLEND]
+
     logger.info("")
     logger.info("=" * 70)
     logger.info("LOO-CV: OSNet-x1.0 MSMT17 + SupCon (%d epochs)", args.epochs)
+    if len(blend_values) > 1:
+        logger.info("REID_BLEND sweep: %s", blend_values)
     logger.info("=" * 70)
     logger.info("Folds: %d", len(video_rows))
     logger.info("")
 
-    total_hsv_correct = 0
-    total_reid_correct = 0
-    total_assignments = 0
-    results_table: list[tuple[str, int, float, float, float]] = []
+    # Per-blend accumulators
+    totals: dict[float, dict[str, int]] = {
+        b: {"hsv": 0, "reid": 0, "n": 0} for b in blend_values
+    }
+    results_table: dict[float, list[tuple[str, int, float, float, float]]] = {
+        b: [] for b in blend_values
+    }
 
     for fold_idx, (video_id, gt_json) in enumerate(video_rows):
         gt_data = cast(dict[str, Any], gt_json)
@@ -263,59 +275,77 @@ def main() -> None:
             fold_idx + 1, len(video_rows), video_id[:8], n_gt,
         )
 
-        # HSV baseline
-        t0 = time.time()
+        # HSV baseline (only once per fold)
         pred_hsv = run_matching_hsv_only(video_id)
         _perm_h, c_hsv, t_hsv = find_best_permutation(gt_rallies, pred_hsv)
-        hsv_time = time.time() - t0
 
-        # Train model on other videos, run matching
-        t0 = time.time()
+        # Train model once per fold
         model = train_model_excluding(video_id[:12], epochs=args.epochs)
-        pred_reid = run_matching_with_model(video_id, model)
-        _perm_r, c_reid, t_reid = find_best_permutation(gt_rallies, pred_reid)
-        reid_time = time.time() - t0
 
-        acc_hsv = c_hsv / t_hsv * 100 if t_hsv > 0 else 0
-        acc_reid = c_reid / t_reid * 100 if t_reid > 0 else 0
-        delta = acc_reid - acc_hsv
+        # Sweep blend values using the same trained model
+        for blend_val in blend_values:
+            mt_module.REID_BLEND = blend_val
+            pred_reid = run_matching_with_model(video_id, model)
+            _perm_r, c_reid, t_reid = find_best_permutation(gt_rallies, pred_reid)
 
-        marker = "+" if delta > 0 else ("=" if delta == 0 else "")
+            acc_hsv = c_hsv / t_hsv * 100 if t_hsv > 0 else 0
+            acc_reid = c_reid / t_reid * 100 if t_reid > 0 else 0
+            delta = acc_reid - acc_hsv
+
+            totals[blend_val]["hsv"] += c_hsv
+            totals[blend_val]["reid"] += c_reid
+            totals[blend_val]["n"] += t_hsv
+            results_table[blend_val].append(
+                (video_id[:8], t_hsv, acc_hsv, acc_reid, delta),
+            )
+
+        # Log the default blend result
+        default_blend = blend_values[0]
+        acc_h = c_hsv / t_hsv * 100 if t_hsv > 0 else 0
+        fold_acc = results_table[default_blend][-1][3]
+        fold_delta = results_table[default_blend][-1][4]
+        marker = "+" if fold_delta > 0 else ("=" if fold_delta == 0 else "")
         logger.info(
-            "  HSV: %d/%d = %.1f%%  |  ReID: %d/%d = %.1f%%  [%s%.1fpp]  "
-            "(train %.0fs, match %.0fs)",
-            c_hsv, t_hsv, acc_hsv, c_reid, t_reid, acc_reid,
-            marker, delta, reid_time - hsv_time, hsv_time,
+            "  HSV: %.1f%%  |  ReID: %.1f%%  [%s%.1fpp]",
+            acc_h, fold_acc, marker, fold_delta,
         )
 
-        total_hsv_correct += c_hsv
-        total_reid_correct += c_reid
-        total_assignments += t_hsv
-        results_table.append((video_id[:8], t_hsv, acc_hsv, acc_reid, delta))
-
-        # Free GPU memory between folds
         del model
 
-    # Print summary table
-    logger.info("")
-    logger.info("=" * 70)
-    logger.info("%-10s %6s %8s %8s %8s", "Video", "N", "HSV", "ReID", "Delta")
-    logger.info("-" * 70)
+    # Restore default
+    mt_module.REID_BLEND = blend_values[0]
 
-    for vid, n, hsv, reid, delta in sorted(results_table, key=lambda r: -r[4]):
-        marker = "+" if delta > 0 else ""
-        logger.info("%-10s %6d %7.1f%% %7.1f%% %+7.1fpp", vid, n, hsv, reid, delta)
+    # Print summary for each blend value
+    for blend_val in blend_values:
+        t = totals[blend_val]
+        if t["n"] == 0:
+            continue
 
-    logger.info("-" * 70)
-    if total_assignments > 0:
-        agg_hsv = total_hsv_correct / total_assignments * 100
-        agg_reid = total_reid_correct / total_assignments * 100
+        logger.info("")
+        logger.info("=" * 70)
+        logger.info(
+            "REID_BLEND=%.2f  (%d epochs)",
+            blend_val, args.epochs,
+        )
+        logger.info("%-10s %6s %8s %8s %8s", "Video", "N", "HSV", "ReID", "Delta")
+        logger.info("-" * 70)
+
+        for vid, n, hsv, reid, delta in sorted(
+            results_table[blend_val], key=lambda r: -r[4],
+        ):
+            logger.info(
+                "%-10s %6d %7.1f%% %7.1f%% %+7.1fpp", vid, n, hsv, reid, delta,
+            )
+
+        logger.info("-" * 70)
+        agg_hsv = t["hsv"] / t["n"] * 100
+        agg_reid = t["reid"] / t["n"] * 100
         delta = agg_reid - agg_hsv
         logger.info(
             "%-10s %6d %7.1f%% %7.1f%% %+7.1fpp",
-            "AGGREGATE", total_assignments, agg_hsv, agg_reid, delta,
+            "AGGREGATE", t["n"], agg_hsv, agg_reid, delta,
         )
-    logger.info("=" * 70)
+        logger.info("=" * 70)
 
 
 if __name__ == "__main__":

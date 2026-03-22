@@ -40,6 +40,7 @@ from rallycut.tracking.player_features import (
     compute_appearance_similarity,
     compute_track_similarity,
     extract_appearance_features,
+    extract_bbox_crop,
 )
 
 if TYPE_CHECKING:
@@ -1804,15 +1805,11 @@ def extract_rally_appearances(
 
                 # Extract BGR crop for ReID
                 if extract_reid:
-                    bx, by, bw, bh = bbox
-                    x1 = max(0, int((bx - bw / 2) * frame_width))
-                    y1 = max(0, int((by - bh / 2) * frame_height))
-                    x2 = min(frame_width, int((bx + bw / 2) * frame_width))
-                    y2 = min(frame_height, int((by + bh / 2) * frame_height))
-                    if x2 > x1 and y2 > y1:
-                        crop = frame_arr[y1:y2, x1:x2]
-                        if crop.size > 0 and crop.shape[0] >= 16 and crop.shape[1] >= 8:
-                            reid_crops.setdefault(tid, []).append(crop)
+                    crop = extract_bbox_crop(
+                        frame_arr, bbox, frame_width, frame_height,
+                    )
+                    if crop is not None:
+                        reid_crops.setdefault(tid, []).append(crop)
     finally:
         cap.release()
 

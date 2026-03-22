@@ -57,6 +57,7 @@ def _load_db_reference_crops(
     from rallycut.tracking.player_features import (
         build_profiles_from_crops,
         extract_appearance_features,
+        extract_bbox_crop,
     )
 
     # Build HSV profiles from reference crops (existing appearance pipeline).
@@ -91,14 +92,9 @@ def _load_db_reference_crops(
                 features_by_player.setdefault(pid, []).append(features)
 
                 # Extract BGR crop for ReID embedding
-                x1 = max(0, int((bx - bw / 2) * fw))
-                y1 = max(0, int((by - bh / 2) * fh))
-                x2 = min(fw, int((bx + bw / 2) * fw))
-                y2 = min(fh, int((by + bh / 2) * fh))
-                if x2 > x1 and y2 > y1:
-                    crop = frame_arr[y1:y2, x1:x2]
-                    if crop.size > 0:
-                        bgr_crops_by_player.setdefault(pid, []).append(crop)
+                crop = extract_bbox_crop(frame_arr, (bx, by, bw, bh), fw, fh)
+                if crop is not None:
+                    bgr_crops_by_player.setdefault(pid, []).append(crop)
 
     cap.release()
 
@@ -302,6 +298,7 @@ def match_players(
         from rallycut.tracking.player_features import (
             build_profiles_from_crops,
             extract_appearance_features,
+            extract_bbox_crop,
         )
 
         with open(reference_crops_json) as f:
@@ -339,14 +336,11 @@ def match_players(
                     )
                     crops_by_player.setdefault(pid, []).append(features)
                     # Extract BGR crop for ReID
-                    x1 = max(0, int((bx - bw / 2) * fw))
-                    y1 = max(0, int((by - bh / 2) * fh))
-                    x2 = min(fw, int((bx + bw / 2) * fw))
-                    y2 = min(fh, int((by + bh / 2) * fh))
-                    if x2 > x1 and y2 > y1:
-                        crop = frame_arr[y1:y2, x1:x2]
-                        if crop.size > 0:
-                            bgr_crops_by_player_json.setdefault(pid, []).append(crop)
+                    crop = extract_bbox_crop(
+                        frame_arr, (bx, by, bw, bh), fw, fh,
+                    )
+                    if crop is not None:
+                        bgr_crops_by_player_json.setdefault(pid, []).append(crop)
                     continue
 
             # Fallback: read the JPEG crop file

@@ -950,6 +950,43 @@ def extract_features_from_crop_image(
     )
 
 
+def extract_bbox_crop(
+    frame: NDArray[np.uint8],
+    bbox: tuple[float, float, float, float],
+    frame_width: int,
+    frame_height: int,
+    min_height: int = 16,
+    min_width: int = 8,
+) -> NDArray[np.uint8] | None:
+    """Extract a BGR crop from a frame using normalized center-format bbox.
+
+    Args:
+        frame: BGR frame (H, W, 3).
+        bbox: (center_x, center_y, width, height) normalized 0-1.
+        frame_width: Frame width in pixels.
+        frame_height: Frame height in pixels.
+        min_height: Minimum crop height in pixels.
+        min_width: Minimum crop width in pixels.
+
+    Returns:
+        BGR crop or None if too small / invalid.
+    """
+    bx, by, bw, bh = bbox
+    x1 = max(0, int((bx - bw / 2) * frame_width))
+    y1 = max(0, int((by - bh / 2) * frame_height))
+    x2 = min(frame_width, int((bx + bw / 2) * frame_width))
+    y2 = min(frame_height, int((by + bh / 2) * frame_height))
+
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    crop = frame[y1:y2, x1:x2]
+    if crop.size == 0 or crop.shape[0] < min_height or crop.shape[1] < min_width:
+        return None
+
+    return np.asarray(crop, dtype=np.uint8)
+
+
 def build_profiles_from_crops(
     crops_by_player: dict[int, list[NDArray[np.uint8] | PlayerAppearanceFeatures]],
     reid_embeddings_by_player: dict[int, NDArray[np.floating]] | None = None,
