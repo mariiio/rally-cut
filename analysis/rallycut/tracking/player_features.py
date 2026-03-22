@@ -118,7 +118,9 @@ class PlayerAppearanceProfile:
     avg_head_hist: np.ndarray | None = None
     head_hist_count: int = 0
 
-    # DINOv2 ReID embedding (384-dim, L2-normalized)
+    # ReID embedding (L2-normalized). Dimension depends on source:
+    # 384-dim from DINOv2 backbone (per-video reference crops) or
+    # 128-dim from OSNet projection head (general model).
     reid_embedding: np.ndarray | None = None
     reid_embedding_count: int = 0
 

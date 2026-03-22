@@ -271,14 +271,27 @@ def _team_match_cost(
     """Best-matching cost between two sets of tracks."""
     if not tids_a or not tids_b:
         return 1.0
-    # Detect if any track has ReID embeddings for blending
-    def _has_emb(s: dict[int, TrackAppearanceStats], t: int) -> bool:
-        ts = s.get(t)
-        return ts is not None and ts.reid_embedding is not None
+    # Pass ReID blend weight through to track similarity. The margin gate
+    # is applied inside compute_track_similarity via the shape check — if
+    # embeddings are incompatible it falls back to HSV. For side-switch
+    # detection we use a conservative blend: only if BOTH tracks in a pair
+    # have embeddings (not just any).
+    def _both_have_emb(
+        sa: dict[int, TrackAppearanceStats], ta: int,
+        sb: dict[int, TrackAppearanceStats], tb: int,
+    ) -> bool:
+        tsa = sa.get(ta)
+        tsb = sb.get(tb)
+        return (
+            tsa is not None and tsa.reid_embedding is not None
+            and tsb is not None and tsb.reid_embedding is not None
+        )
 
+    # Only blend if at least one pair has both embeddings
     rb = REID_BLEND if any(
-        _has_emb(stats_a, t) or _has_emb(stats_b, t)
-        for t in (*tids_a, *tids_b)
+        _both_have_emb(stats_a, tids_a[i], stats_b, tids_b[j])
+        for i in range(min(2, len(tids_a)))
+        for j in range(min(2, len(tids_b)))
     ) else 0.0
     if len(tids_a) == 1 and len(tids_b) == 1:
         return compute_track_similarity(stats_a[tids_a[0]], stats_b[tids_b[0]], rb)
@@ -747,7 +760,13 @@ class MatchPlayerTracker:
                 if profile_emb is None:
                     continue
                 if profile_emb.shape != track_emb.shape:
-                    continue  # Dimension mismatch (384 vs 128) — skip
+                    # Log once per rally — profile is 384-dim (DINOv2 ref crops)
+                    # but track is 128-dim (general model) or vice versa
+                    logger.debug(
+                        "ReID dimension mismatch: profile %s vs track %s, skipping",
+                        profile_emb.shape, track_emb.shape,
+                    )
+                    continue
                 rc = 1.0 - float(np.dot(profile_emb, track_emb))
                 reid_costs_cache[(tid, pid)] = rc
                 costs_for_track.append(rc)

@@ -44,6 +44,8 @@ LABEL_SMOOTHING = 0.1  # Prevents overconfident predictions on few-shot data
 
 def _default_device() -> str:
     """Auto-detect best available torch device."""
+    if torch.cuda.is_available():
+        return "cuda"
     return "mps" if torch.backends.mps.is_available() else "cpu"
 
 
