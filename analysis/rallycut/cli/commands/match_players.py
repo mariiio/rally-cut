@@ -20,7 +20,7 @@ def _load_db_reference_crops(
     video_path: Path,
     quiet: bool,
 ) -> tuple[None, Any]:
-    """Load reference crops from DB and build frozen HSV profiles.
+    """Load reference crops from DB and build frozen HSV + ReID profiles.
 
     Returns:
         (None, reference_profiles). First element reserved for future use.
@@ -60,12 +60,13 @@ def _load_db_reference_crops(
     )
 
     # Build HSV profiles from reference crops (existing appearance pipeline).
-    # Extract features from video at stored coordinates for best quality.
+    # Also collect BGR crops for DINOv2 ReID embedding extraction.
     cap = cv2.VideoCapture(str(video_path))
     fw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     fh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     features_by_player: dict[int, list[Any]] = {}
+    bgr_crops_by_player: dict[int, list[Any]] = {}
     for info in sorted(crop_infos, key=lambda c: int(c["frame_ms"])):
         pid = int(info["player_id"])
         frame_ms = int(info["frame_ms"])
@@ -75,26 +76,67 @@ def _load_db_reference_crops(
             ret, frame = cap.read()
             if ret and frame is not None:
                 frame_arr: Any = np.asarray(frame)
+                bx = float(info["bbox_x"])
+                by = float(info["bbox_y"])
+                bw = float(info["bbox_w"])
+                bh = float(info["bbox_h"])
                 features = extract_appearance_features(
                     frame=frame_arr,
                     track_id=0,
                     frame_number=0,
-                    bbox=(
-                        float(info["bbox_x"]), float(info["bbox_y"]),
-                        float(info["bbox_w"]), float(info["bbox_h"]),
-                    ),
+                    bbox=(bx, by, bw, bh),
                     frame_width=fw,
                     frame_height=fh,
                 )
                 features_by_player.setdefault(pid, []).append(features)
 
+                # Extract BGR crop for ReID embedding
+                x1 = max(0, int((bx - bw / 2) * fw))
+                y1 = max(0, int((by - bh / 2) * fh))
+                x2 = min(fw, int((bx + bw / 2) * fw))
+                y2 = min(fh, int((by + bh / 2) * fh))
+                if x2 > x1 and y2 > y1:
+                    crop = frame_arr[y1:y2, x1:x2]
+                    if crop.size > 0:
+                        bgr_crops_by_player.setdefault(pid, []).append(crop)
+
     cap.release()
-    reference_profiles = build_profiles_from_crops(features_by_player)
+
+    # Extract DINOv2 embeddings from reference crops (per-player average).
+    # Falls back to HSV-only if DINOv2 fails (network, OOM, etc).
+    reid_embeddings_by_player: dict[int, Any] = {}
+    if bgr_crops_by_player:
+        try:
+            from rallycut.tracking.reid_embeddings import extract_backbone_features
+
+            for pid, crops in bgr_crops_by_player.items():
+                if not crops:
+                    continue
+                embeddings = extract_backbone_features(crops)  # (N, 384)
+                mean_emb = embeddings.mean(axis=0)
+                norm = np.linalg.norm(mean_emb)
+                if norm > 0:
+                    mean_emb /= norm
+                reid_embeddings_by_player[pid] = mean_emb
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "DINOv2 embedding extraction failed, falling back to HSV-only",
+                exc_info=True,
+            )
+            reid_embeddings_by_player = {}
+
+    reference_profiles = build_profiles_from_crops(
+        features_by_player,
+        reid_embeddings_by_player=reid_embeddings_by_player or None,
+    )
 
     if not quiet:
         for pid in sorted(reference_profiles):
             n = len(features_by_player.get(pid, []))
-            console.print(f"  Reference profile P{pid}: {n} crop(s)")
+            reid_str = " + ReID" if pid in reid_embeddings_by_player else ""
+            console.print(f"  Reference profile P{pid}: {n} crop(s){reid_str}")
         console.print()
 
     return None, reference_profiles
@@ -268,11 +310,13 @@ def match_players(
         # Extract features from the original video at the stored bbox coordinates.
         # This produces features directly comparable to extract_rally_appearances(),
         # unlike using the small JPEG thumbnails which include padding/background.
+        # Also collect BGR crops for DINOv2 ReID embedding extraction.
         cap = cv2.VideoCapture(str(video_path))
         fw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         fh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
         crops_by_player: dict[int, list[Any]] = {}
+        bgr_crops_by_player_json: dict[int, list[Any]] = {}
         for entry in crop_entries:
             pid = entry["playerId"]
             bbox = entry.get("bbox")
@@ -284,15 +328,25 @@ def match_players(
                 ret, frame = cap.read()
                 if ret and frame is not None:
                     frame_arr: Any = np.asarray(frame)
+                    bx, by, bw, bh = bbox["x"], bbox["y"], bbox["w"], bbox["h"]
                     features = extract_appearance_features(
                         frame=frame_arr,
                         track_id=0,
                         frame_number=0,
-                        bbox=(bbox["x"], bbox["y"], bbox["w"], bbox["h"]),
+                        bbox=(bx, by, bw, bh),
                         frame_width=fw,
                         frame_height=fh,
                     )
                     crops_by_player.setdefault(pid, []).append(features)
+                    # Extract BGR crop for ReID
+                    x1 = max(0, int((bx - bw / 2) * fw))
+                    y1 = max(0, int((by - bh / 2) * fh))
+                    x2 = min(fw, int((bx + bw / 2) * fw))
+                    y2 = min(fh, int((by + bh / 2) * fh))
+                    if x2 > x1 and y2 > y1:
+                        crop = frame_arr[y1:y2, x1:x2]
+                        if crop.size > 0:
+                            bgr_crops_by_player_json.setdefault(pid, []).append(crop)
                     continue
 
             # Fallback: read the JPEG crop file
@@ -300,16 +354,60 @@ def match_players(
             img = cv2.imread(crop_path) if crop_path else None
             if img is not None:
                 crops_by_player.setdefault(pid, []).append(img)
+                bgr_crops_by_player_json.setdefault(pid, []).append(img)
             else:
                 console.print(f"[yellow]Warning:[/yellow] Could not extract crop for P{pid}")
 
         cap.release()
-        reference_profiles = build_profiles_from_crops(crops_by_player)
+
+        # Extract DINOv2 embeddings from reference crops.
+        # Falls back to HSV-only if DINOv2 fails.
+        reid_emb_json: dict[int, Any] = {}
+        if bgr_crops_by_player_json:
+            try:
+                from rallycut.tracking.reid_embeddings import extract_backbone_features
+
+                for pid_j, crops_j in bgr_crops_by_player_json.items():
+                    if not crops_j:
+                        continue
+                    embeddings = extract_backbone_features(crops_j)
+                    mean_emb = embeddings.mean(axis=0)
+                    norm = np.linalg.norm(mean_emb)
+                    if norm > 0:
+                        mean_emb /= norm
+                    reid_emb_json[pid_j] = mean_emb
+            except Exception:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "DINOv2 embedding extraction failed, falling back to HSV-only",
+                    exc_info=True,
+                )
+                reid_emb_json = {}
+
+        reference_profiles = build_profiles_from_crops(
+            crops_by_player,
+            reid_embeddings_by_player=reid_emb_json or None,
+        )
         if not quiet:
             for pid in sorted(reference_profiles):
                 n = len(crops_by_player.get(pid, []))
-                console.print(f"  Reference profile P{pid}: {n} crop(s)")
+                reid_str = " + ReID" if pid in reid_emb_json else ""
+                console.print(f"  Reference profile P{pid}: {n} crop(s){reid_str}")
             console.print()
+
+    # Load general ReID model if no reference profiles (priority cascade)
+    general_reid_model = None
+    if reference_profiles is None:
+        from rallycut.tracking.reid_general import WEIGHTS_PATH as REID_WEIGHTS_PATH
+
+        if REID_WEIGHTS_PATH.exists():
+            from rallycut.tracking.reid_general import GeneralReIDModel
+
+            general_reid_model = GeneralReIDModel(weights_path=REID_WEIGHTS_PATH)
+            if not quiet:
+                console.print("  Using general ReID model")
+                console.print()
 
     # Run matching
     match_result: MatchPlayersResult = match_players_across_rallies(
@@ -317,6 +415,7 @@ def match_players(
         rallies=rallies,
         num_samples=num_samples,
         reference_profiles=reference_profiles,
+        reid_model=general_reid_model,
     )
     results = match_result.rally_results
 

@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from rallycut.court.calibration import CourtCalibrator
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.player_tracker import PlayerPosition
+    from rallycut.tracking.reid_general import GeneralReIDModel
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,18 @@ POSITION_WEIGHT = 0.30
 # profile updates are skipped to prevent error propagation (drift).
 # Tuned via grid search on 28 GT videos: 0.80 → 85.8% vs 0.55 → 84.4%.
 MIN_PROFILE_UPDATE_CONFIDENCE = 0.80
+
+# Weight for blending ReID cosine distance with HSV appearance cost.
+# When ReID embeddings are available on both profile and track:
+#   blended = reid_cost * REID_BLEND + hsv_cost * (1 - REID_BLEND)
+# When unavailable or below confidence gate, falls back to HSV-only.
+REID_BLEND = 0.50
+
+# Minimum margin (second_best - best ReID cost) to trust the ReID signal
+# for a given track. When the margin is small, all players look similar
+# to the track → ReID isn't discriminative → fall back to HSV only.
+# Protects against regressions from unrepresentative reference crops.
+REID_MIN_MARGIN = 0.08
 
 
 def build_match_team_assignments(
@@ -258,19 +271,28 @@ def _team_match_cost(
     """Best-matching cost between two sets of tracks."""
     if not tids_a or not tids_b:
         return 1.0
+    # Detect if any track has ReID embeddings for blending
+    def _has_emb(s: dict[int, TrackAppearanceStats], t: int) -> bool:
+        ts = s.get(t)
+        return ts is not None and ts.reid_embedding is not None
+
+    rb = REID_BLEND if any(
+        _has_emb(stats_a, t) or _has_emb(stats_b, t)
+        for t in (*tids_a, *tids_b)
+    ) else 0.0
     if len(tids_a) == 1 and len(tids_b) == 1:
-        return compute_track_similarity(stats_a[tids_a[0]], stats_b[tids_b[0]])
+        return compute_track_similarity(stats_a[tids_a[0]], stats_b[tids_b[0]], rb)
     if len(tids_a) >= 2 and len(tids_b) >= 2:
         cost_ab = (
-            compute_track_similarity(stats_a[tids_a[0]], stats_b[tids_b[0]])
-            + compute_track_similarity(stats_a[tids_a[1]], stats_b[tids_b[1]])
+            compute_track_similarity(stats_a[tids_a[0]], stats_b[tids_b[0]], rb)
+            + compute_track_similarity(stats_a[tids_a[1]], stats_b[tids_b[1]], rb)
         )
         cost_ba = (
-            compute_track_similarity(stats_a[tids_a[0]], stats_b[tids_b[1]])
-            + compute_track_similarity(stats_a[tids_a[1]], stats_b[tids_b[0]])
+            compute_track_similarity(stats_a[tids_a[0]], stats_b[tids_b[1]], rb)
+            + compute_track_similarity(stats_a[tids_a[1]], stats_b[tids_b[0]], rb)
         )
         return min(cost_ab, cost_ba) / 2.0
-    return compute_track_similarity(stats_a[tids_a[0]], stats_b[tids_b[0]])
+    return compute_track_similarity(stats_a[tids_a[0]], stats_b[tids_b[0]], rb)
 
 
 def _detect_serve_direction(
@@ -706,6 +728,36 @@ class MatchPlayerTracker:
             and use_side_penalty  # Only for final assignment, not side-switch detection
         )
 
+        # Pre-compute per-track ReID margins for confidence gating.
+        # Only blend ReID when the margin (2nd best - best cost) is large
+        # enough that the model is discriminating, not guessing.
+        reid_use_for_track: dict[int, bool] = {}
+        reid_costs_cache: dict[tuple[int, int], float] = {}
+        for i, tid in enumerate(track_ids):
+            if tid not in track_stats:
+                continue
+            track_emb = track_stats[tid].reid_embedding
+            if track_emb is None:
+                continue
+            costs_for_track: list[float] = []
+            for j, pid in enumerate(all_player_ids):
+                if pid not in self.state.players:
+                    continue
+                profile_emb = self.state.players[pid].reid_embedding
+                if profile_emb is None:
+                    continue
+                if profile_emb.shape != track_emb.shape:
+                    continue  # Dimension mismatch (384 vs 128) — skip
+                rc = 1.0 - float(np.dot(profile_emb, track_emb))
+                reid_costs_cache[(tid, pid)] = rc
+                costs_for_track.append(rc)
+            if len(costs_for_track) >= 2:
+                sorted_costs = sorted(costs_for_track)
+                margin = sorted_costs[1] - sorted_costs[0]
+                reid_use_for_track[tid] = margin >= REID_MIN_MARGIN
+            else:
+                reid_use_for_track[tid] = False
+
         # Build cost matrix: appearance + optional side penalty + position
         default_cost = 1.0 + (SIDE_PENALTY if use_side_penalty else 0.0)
         cost_matrix = np.full((size, size), default_cost)
@@ -713,12 +765,22 @@ class MatchPlayerTracker:
             if tid not in track_stats:
                 continue
             track_side = track_court_sides.get(tid)
+            use_reid = reid_use_for_track.get(tid, False)
             for j, pid in enumerate(all_player_ids):
                 if pid not in self.state.players:
                     continue
-                appearance_cost = compute_appearance_similarity(
+                hsv_cost = compute_appearance_similarity(
                     self.state.players[pid], track_stats[tid]
                 )
+
+                # Blend ReID only when margin gate passes for this track
+                if use_reid and (tid, pid) in reid_costs_cache:
+                    reid_cost = reid_costs_cache[(tid, pid)]
+                    appearance_cost = (
+                        reid_cost * REID_BLEND + hsv_cost * (1 - REID_BLEND)
+                    )
+                else:
+                    appearance_cost = hsv_cost
 
                 # Position continuity cost (normalized distance)
                 # Only apply within same team — position shouldn't pull
@@ -908,6 +970,22 @@ class MatchPlayerTracker:
             # Update profile with each feature sample
             for features in stats.features:
                 profile.update_from_features(features)
+
+            # Update ReID embedding (per-track average, not per-sample)
+            if stats.reid_embedding is not None:
+                if profile.reid_embedding is None:
+                    profile.reid_embedding = stats.reid_embedding.copy()
+                else:
+                    alpha = profile._ema_weight(profile.reid_embedding_count)
+                    profile.reid_embedding = (
+                        profile.reid_embedding * (1 - alpha)
+                        + stats.reid_embedding * alpha
+                    )
+                    # Re-normalize to unit sphere
+                    norm = np.linalg.norm(profile.reid_embedding)
+                    if norm > 0:
+                        profile.reid_embedding /= norm
+                profile.reid_embedding_count += 1
 
             profile.rally_count += 1
 
@@ -1438,15 +1516,21 @@ class MatchPlayerTracker:
                     stats_lo_b = self.stored_rally_data[ri_b].track_stats[t_lo_b]
                     stats_hi_b = self.stored_rally_data[ri_b].track_stats[t_hi_b]
 
+                    # Blend ReID when any track has embeddings
+                    _rb = REID_BLEND if (
+                        stats_lo_a.reid_embedding is not None
+                        or stats_lo_b.reid_embedding is not None
+                    ) else 0.0
+
                     # Cost of "same ordering" (lo↔lo, hi↔hi)
                     same_cost = (
-                        compute_track_similarity(stats_lo_a, stats_lo_b)
-                        + compute_track_similarity(stats_hi_a, stats_hi_b)
+                        compute_track_similarity(stats_lo_a, stats_lo_b, _rb)
+                        + compute_track_similarity(stats_hi_a, stats_hi_b, _rb)
                     )
                     # Cost of "swapped ordering" (lo↔hi, hi↔lo)
                     swap_cost = (
-                        compute_track_similarity(stats_lo_a, stats_hi_b)
-                        + compute_track_similarity(stats_hi_a, stats_lo_b)
+                        compute_track_similarity(stats_lo_a, stats_hi_b, _rb)
+                        + compute_track_similarity(stats_hi_a, stats_lo_b, _rb)
                     )
 
                     # Positive = same ordering preferred
@@ -1596,6 +1680,8 @@ def extract_rally_appearances(
     start_ms: int,
     end_ms: int,
     num_samples: int = 12,
+    extract_reid: bool = False,
+    reid_model: GeneralReIDModel | None = None,
 ) -> dict[int, TrackAppearanceStats]:
     """
     Extract appearance features from video frames for primary tracks.
@@ -1610,6 +1696,9 @@ def extract_rally_appearances(
         start_ms: Rally start time in milliseconds.
         end_ms: Rally end time in milliseconds.
         num_samples: Target number of frames to sample per track.
+        extract_reid: If True, also extract DINOv2 embeddings per track.
+        reid_model: Optional GeneralReIDModel for embedding extraction.
+            When provided, uses its projection head instead of raw backbone.
 
     Returns:
         Dict mapping track_id to TrackAppearanceStats with computed averages.
@@ -1674,6 +1763,9 @@ def extract_rally_appearances(
         for tid in track_positions
     }
 
+    # Collect BGR crops per track for ReID embedding extraction
+    reid_crops: dict[int, list[np.ndarray]] = {} if extract_reid else {}
+
     try:
         for fn in sorted_frames:
             abs_frame = start_frame + fn
@@ -1690,12 +1782,61 @@ def extract_rally_appearances(
                     frame_arr, tid, fn, bbox, frame_width, frame_height,
                 )
                 stats[tid].features.append(features)
+
+                # Extract BGR crop for ReID
+                if extract_reid:
+                    bx, by, bw, bh = bbox
+                    x1 = max(0, int((bx - bw / 2) * frame_width))
+                    y1 = max(0, int((by - bh / 2) * frame_height))
+                    x2 = min(frame_width, int((bx + bw / 2) * frame_width))
+                    y2 = min(frame_height, int((by + bh / 2) * frame_height))
+                    if x2 > x1 and y2 > y1:
+                        crop = frame_arr[y1:y2, x1:x2]
+                        if crop.size > 0 and crop.shape[0] >= 16 and crop.shape[1] >= 8:
+                            reid_crops.setdefault(tid, []).append(crop)
     finally:
         cap.release()
 
     # Compute averages
     for s in stats.values():
         s.compute_averages()
+
+    # Compute per-track ReID embeddings from collected crops.
+    # Wrapped in try-catch: DINOv2 failure falls back to HSV-only silently.
+    if extract_reid and reid_crops:
+        try:
+            if reid_model is not None:
+                # General model: use projection head embeddings
+                for tid, crops in reid_crops.items():
+                    if not crops or tid not in stats:
+                        continue
+                    embeddings = reid_model.extract_embeddings(crops)
+                    mean_emb = embeddings.mean(axis=0)
+                    norm = np.linalg.norm(mean_emb)
+                    if norm > 0:
+                        mean_emb /= norm
+                    stats[tid].reid_embedding = mean_emb
+            else:
+                # Per-video: raw DINOv2 backbone features (384-dim)
+                from rallycut.tracking.reid_embeddings import extract_backbone_features
+
+                for tid, crops in reid_crops.items():
+                    if not crops or tid not in stats:
+                        continue
+                    embeddings = extract_backbone_features(crops)
+                    mean_emb = embeddings.mean(axis=0)
+                    norm = np.linalg.norm(mean_emb)
+                    if norm > 0:
+                        mean_emb /= norm
+                    stats[tid].reid_embedding = mean_emb
+        except Exception:
+            logger.warning(
+                "ReID embedding extraction failed, falling back to HSV-only",
+                exc_info=True,
+            )
+            # Clear any partial embeddings
+            for s in stats.values():
+                s.reid_embedding = None
 
     return stats
 
@@ -1715,6 +1856,8 @@ def match_players_across_rallies(
     num_samples: int = 12,
     collect_diagnostics: bool = False,
     reference_profiles: dict[int, PlayerAppearanceProfile] | None = None,
+    extract_reid: bool = False,
+    reid_model: GeneralReIDModel | None = None,
 ) -> MatchPlayersResult:
     """
     Match players across all rallies in a video for consistent IDs.
@@ -1730,10 +1873,27 @@ def match_players_across_rallies(
             and assignment margins for diagnostic analysis.
         reference_profiles: Optional user-provided frozen profiles (player_id -> profile).
             When provided, profiles are never updated — they anchor all assignments.
+        extract_reid: If True, extract DINOv2 embeddings per track for ReID-based
+            cost blending in the Hungarian assignment. Auto-enabled when reference
+            profiles contain ReID embeddings or a general ReID model is provided.
+        reid_model: Optional GeneralReIDModel for embedding extraction.
+            When provided, uses its projection head. Falls back to raw backbone
+            when not provided but reference profiles have embeddings.
 
     Returns:
         MatchPlayersResult with track→player mappings and accumulated profiles.
     """
+    # Auto-enable ReID extraction when general model available
+    if not extract_reid and reid_model is not None:
+        extract_reid = True
+        logger.info("Auto-enabling ReID extraction (general model provided)")
+
+    # Auto-enable ReID extraction when reference profiles have embeddings
+    if not extract_reid and reference_profiles:
+        if any(p.reid_embedding is not None for p in reference_profiles.values()):
+            extract_reid = True
+            logger.info("Auto-enabling ReID extraction (reference profiles have embeddings)")
+
     if reference_profiles:
         logger.info(
             f"Using reference profiles for players: "
@@ -1754,6 +1914,8 @@ def match_players_across_rallies(
             start_ms=rally.start_ms,
             end_ms=rally.end_ms,
             num_samples=num_samples,
+            extract_reid=extract_reid,
+            reid_model=reid_model,
         )
 
         # Process rally

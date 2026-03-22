@@ -118,6 +118,10 @@ class PlayerAppearanceProfile:
     avg_head_hist: np.ndarray | None = None
     head_hist_count: int = 0
 
+    # DINOv2 ReID embedding (384-dim, L2-normalized)
+    reid_embedding: np.ndarray | None = None
+    reid_embedding_count: int = 0
+
     # Team assignment (0=near court, 1=far court)
     team: int = 0
 
@@ -136,6 +140,7 @@ class PlayerAppearanceProfile:
             "upper_v_hist_count": self.upper_v_hist_count,
             "lower_v_hist_count": self.lower_v_hist_count,
             "dominant_color_count": self.dominant_color_count,
+            "head_hist_count": self.head_hist_count,
         }
         if self.avg_skin_tone_hsv is not None:
             d["avg_skin_tone_hsv"] = list(self.avg_skin_tone_hsv)
@@ -149,6 +154,9 @@ class PlayerAppearanceProfile:
             d["avg_lower_v_hist"] = self.avg_lower_v_hist.flatten().tolist()
         if self.avg_dominant_color_hsv is not None:
             d["avg_dominant_color_hsv"] = list(self.avg_dominant_color_hsv)
+        if self.reid_embedding is not None:
+            d["reid_embedding"] = self.reid_embedding.flatten().tolist()
+            d["reid_embedding_count"] = self.reid_embedding_count
         return d
 
     @classmethod
@@ -164,6 +172,7 @@ class PlayerAppearanceProfile:
             upper_v_hist_count=d.get("upper_v_hist_count", 0),
             lower_v_hist_count=d.get("lower_v_hist_count", 0),
             dominant_color_count=d.get("dominant_color_count", 0),
+            head_hist_count=d.get("head_hist_count", 0),
         )
         if "avg_skin_tone_hsv" in d and d["avg_skin_tone_hsv"] is not None:
             hsv = d["avg_skin_tone_hsv"]
@@ -187,6 +196,11 @@ class PlayerAppearanceProfile:
         if "avg_dominant_color_hsv" in d and d["avg_dominant_color_hsv"] is not None:
             dc = d["avg_dominant_color_hsv"]
             profile.avg_dominant_color_hsv = (float(dc[0]), float(dc[1]), float(dc[2]))
+        if "reid_embedding" in d and d["reid_embedding"] is not None:
+            profile.reid_embedding = np.array(
+                d["reid_embedding"], dtype=np.float32,
+            )
+            profile.reid_embedding_count = d.get("reid_embedding_count", 1)
         return profile
 
     def _ema_weight(self, sample_count: int) -> float:
@@ -309,6 +323,9 @@ class TrackAppearanceStats:
     avg_lower_v_hist: np.ndarray | None = None
     avg_dominant_color_hsv: tuple[float, float, float] | None = None
     avg_head_hist: np.ndarray | None = None
+
+    # DINOv2 ReID embedding (384-dim, L2-normalized) — set externally
+    reid_embedding: np.ndarray | None = None
 
     def compute_averages(self) -> None:
         """Compute average features from all samples."""
@@ -802,11 +819,18 @@ def compute_appearance_similarity(
 def compute_track_similarity(
     stats_a: TrackAppearanceStats,
     stats_b: TrackAppearanceStats,
+    reid_blend: float = 0.0,
 ) -> float:
     """Compute similarity cost between two track appearance stats.
 
     Same cost formula as compute_appearance_similarity but works between
     two raw TrackAppearanceStats (no accumulated profile needed).
+
+    Args:
+        stats_a: First track's appearance stats.
+        stats_b: Second track's appearance stats.
+        reid_blend: When >0 and both tracks have ReID embeddings, blend
+            ReID cosine distance with HSV cost (0.0 = HSV-only).
 
     Returns:
         Cost (0-1, lower = more similar).
@@ -857,7 +881,19 @@ def compute_track_similarity(
 
     total_weight = sum(w for w, _ in scores)
     similarity = sum(w * s for w, s in scores) / total_weight
-    return 1.0 - similarity
+    hsv_cost = 1.0 - similarity
+
+    # Blend ReID cosine distance when both tracks have compatible embeddings
+    if (
+        reid_blend > 0
+        and stats_a.reid_embedding is not None
+        and stats_b.reid_embedding is not None
+        and stats_a.reid_embedding.shape == stats_b.reid_embedding.shape
+    ):
+        reid_cost = 1.0 - float(np.dot(stats_a.reid_embedding, stats_b.reid_embedding))
+        return reid_cost * reid_blend + hsv_cost * (1 - reid_blend)
+
+    return hsv_cost
 
 
 def _hsv_similarity(hsv1: tuple[float, float, float], hsv2: tuple[float, float, float]) -> float:
@@ -914,6 +950,7 @@ def extract_features_from_crop_image(
 
 def build_profiles_from_crops(
     crops_by_player: dict[int, list[NDArray[np.uint8] | PlayerAppearanceFeatures]],
+    reid_embeddings_by_player: dict[int, NDArray[np.floating]] | None = None,
 ) -> dict[int, PlayerAppearanceProfile]:
     """Build frozen appearance profiles from user-selected reference crops.
 
@@ -924,6 +961,8 @@ def build_profiles_from_crops(
     Args:
         crops_by_player: Mapping of player_id (1-4) to list of BGR crop images
             or pre-extracted PlayerAppearanceFeatures.
+        reid_embeddings_by_player: Optional mapping of player_id to L2-normalized
+            DINOv2 embedding (384-dim). Injected into frozen profiles.
 
     Returns:
         Mapping of player_id to PlayerAppearanceProfile.
@@ -981,6 +1020,13 @@ def build_profiles_from_crops(
         if stats.avg_head_hist is not None:
             profile.avg_head_hist = stats.avg_head_hist
             profile.head_hist_count = len(all_features)
+
+        # Inject DINOv2 ReID embedding if provided
+        if reid_embeddings_by_player and player_id in reid_embeddings_by_player:
+            profile.reid_embedding = np.asarray(
+                reid_embeddings_by_player[player_id], dtype=np.float32,
+            )
+            profile.reid_embedding_count = len(items)
 
         profiles[player_id] = profile
         logger.info(

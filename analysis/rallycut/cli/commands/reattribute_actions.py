@@ -136,21 +136,28 @@ def _train_reid_classifier(
         extract_crops_from_video,
     )
 
-    crops_by_player = extract_crops_from_video(video_path, crop_infos)
-    if len(crops_by_player) < 2:
-        return None
+    try:
+        crops_by_player = extract_crops_from_video(video_path, crop_infos)
+        if len(crops_by_player) < 2:
+            return None
 
-    classifier = PlayerReIDClassifier()
-    stats = classifier.train(crops_by_player)
+        classifier = PlayerReIDClassifier()
+        stats = classifier.train(crops_by_player)
 
-    if not quiet:
-        n_crops = sum(len(c) for c in crops_by_player.values())
-        console.print(
-            f"  ReID classifier: {n_crops} crops → "
-            f"{len(crops_by_player)} players, train_acc={stats['train_acc']:.0%}"
+        if not quiet:
+            n_crops = sum(len(c) for c in crops_by_player.values())
+            console.print(
+                f"  ReID classifier: {n_crops} crops → "
+                f"{len(crops_by_player)} players, train_acc={stats['train_acc']:.0%}"
+            )
+
+        return classifier
+    except Exception:
+        logger.warning(
+            "ReID classifier training failed, skipping ReID re-attribution",
+            exc_info=True,
         )
-
-    return classifier
+        return None
 
 
 def _compute_reid_predictions(
