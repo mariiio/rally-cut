@@ -211,6 +211,10 @@ def main() -> None:
         "--blend-sweep", type=float, nargs="+", default=None,
         help="Sweep REID_BLEND values (e.g. --blend-sweep 0.3 0.5 0.7)",
     )
+    parser.add_argument(
+        "--max-folds", type=int, default=None,
+        help="Limit to first N folds (quick directional signal)",
+    )
     args = parser.parse_args()
 
     from rallycut.evaluation.db import get_connection
@@ -231,6 +235,8 @@ def main() -> None:
         (str(vid), gt) for vid, gt in all_rows
         if args.video_id is None or str(vid).startswith(args.video_id)
     ]
+    if args.max_folds is not None:
+        video_rows = video_rows[:args.max_folds]
 
     if not video_rows:
         logger.error("No GT videos found")
