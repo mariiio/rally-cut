@@ -1002,6 +1002,7 @@ router.put(
     body: z.object({
       rallies: z.record(z.string(), z.record(z.string(), z.number())),
       sideSwitches: z.array(z.number()),
+      excludedRallies: z.array(z.string()).optional(),
     }),
   }),
   async (req, res, next) => {

@@ -351,7 +351,7 @@ export async function getAnalysisPipelineStatus(
 export async function savePlayerMatchingGt(
   videoId: string,
   userId: string,
-  gt: { rallies: Record<string, Record<string, number>>; sideSwitches: number[] },
+  gt: { rallies: Record<string, Record<string, number>>; sideSwitches: number[]; excludedRallies?: string[] },
 ) {
   const video = await prisma.video.findFirst({
     where: { id: videoId, userId, deletedAt: null },

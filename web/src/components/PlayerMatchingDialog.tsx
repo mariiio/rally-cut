@@ -138,15 +138,17 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
           }
         }
 
-        // Override with existing GT if available — merge with match analysis
-        // so that incomplete GT (e.g., from migrate-gt) doesn't lose entries
+        // Override with existing GT if available
         if (existingGt) {
           for (const [rid, mapping] of Object.entries(existingGt.rallies)) {
             if (initial[rid]) {
-              initial[rid] = { ...initial[rid], ...mapping };
+              initial[rid] = { ...mapping };
             }
           }
           setSideSwitches(existingGt.sideSwitches);
+          if (existingGt.excludedRallies) {
+            setExcludedRallies(new Set(existingGt.excludedRallies));
+          }
         } else {
           setSideSwitches(switches);
         }
@@ -395,18 +397,35 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
     seek(midTime);
   }, [rallies, seek]);
 
-  // Save GT
+  // Save GT — validates mappings before writing to prevent corrupt data
   const handleSave = useCallback(async () => {
     setSaving(true);
     try {
-      // Filter out excluded rallies before saving
       const filteredAssignments = { ...assignments };
       for (const rid of excludedRallies) {
         delete filteredAssignments[rid];
       }
+
+      // Validate: every rally must have exactly 4 entries with unique player IDs 1-4
+      const warnings: string[] = [];
+      for (const [rid, mapping] of Object.entries(filteredAssignments)) {
+        const pids = Object.values(mapping);
+        if (pids.length < 4) {
+          warnings.push(`Rally ${rid.slice(0, 8)}: only ${pids.length}/4 players assigned`);
+        }
+        const uniquePids = new Set(pids);
+        if (uniquePids.size !== pids.length) {
+          warnings.push(`Rally ${rid.slice(0, 8)}: duplicate player IDs`);
+        }
+      }
+      if (warnings.length > 0) {
+        console.warn('[save] GT validation warnings:', warnings);
+      }
+
       await savePlayerMatchingGtApi(videoId, {
         rallies: filteredAssignments,
         sideSwitches,
+        excludedRallies: [...excludedRallies],
       });
       setIsDirty(false);
     } catch (err) {

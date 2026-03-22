@@ -245,6 +245,30 @@ def cmd_validate() -> None:
 
 def cmd_migrate_gt(dry_run: bool = False) -> None:
     """Translate pre-remap GT track IDs to current (post-remap) IDs."""
+    # Safety: require a recent export before modifying GT
+    from pathlib import Path
+    import time
+
+    export_dir = Path(__file__).parent.parent / "training_datasets"
+    latest_export = None
+    for d in sorted(export_dir.iterdir(), reverse=True) if export_dir.exists() else []:
+        pm_file = d / "player_matching_ground_truth.json"
+        if pm_file.exists():
+            age_hours = (time.time() - pm_file.stat().st_mtime) / 3600
+            latest_export = (d.name, age_hours)
+            break
+
+    if not dry_run:
+        if latest_export is None:
+            print("Error: No player matching GT export found.")
+            print("Run 'rallycut train export-dataset' first to create a backup.")
+            sys.exit(1)
+        name, age = latest_export
+        if age > 24:
+            print(f"Error: Latest export '{name}' is {age:.0f}h old.")
+            print("Run 'rallycut train export-dataset' first to create a fresh backup.")
+            sys.exit(1)
+        print(f"Backup verified: {name} ({age:.1f}h old)")
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(

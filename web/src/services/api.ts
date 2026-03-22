@@ -2519,6 +2519,7 @@ export async function getAnalysisPipelineStatus(videoId: string): Promise<Pipeli
 export interface PlayerMatchingGt {
   rallies: Record<string, Record<string, number>>; // rallyId -> {trackId: playerId}
   sideSwitches: number[];
+  excludedRallies?: string[];
   savedAt?: string;
 }
 
@@ -2550,7 +2551,7 @@ export async function savePlayerMatchingGtApi(
   const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/player-matching-gt`, {
     method: 'PUT',
     headers: getHeaders('application/json'),
-    body: JSON.stringify({ rallies: gt.rallies, sideSwitches: gt.sideSwitches }),
+    body: JSON.stringify({ rallies: gt.rallies, sideSwitches: gt.sideSwitches, excludedRallies: gt.excludedRallies }),
   });
 
   if (!response.ok) {
