@@ -50,6 +50,9 @@ image = (
         "onnxruntime-gpu>=1.17.0",
         # AWS S3 access
         "boto3>=1.34.0",
+        # Player ReID (cross-rally matching)
+        "torchreid>=0.2.5",
+        "gdown>=5.2.0",
         # Web endpoint
         "fastapi",
     )
