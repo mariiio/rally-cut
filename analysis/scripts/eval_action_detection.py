@@ -735,6 +735,7 @@ def main() -> None:
     parser.add_argument("--no-action-classifier", action="store_true", help="Disable learned action type classifier (force rule-based state machine)")
     parser.add_argument("--sweep-thresholds", action="store_true", help="Sweep classifier thresholds [0.25-0.55] and report P/R/F1 tradeoff")
     parser.add_argument("--reid", action="store_true", help="Enable ReID re-attribution (Pass 3) using per-video reference crops")
+    parser.add_argument("--visual", action="store_true", help="Enable visual attribution using VideoMAE per-player action classifier")
     args = parser.parse_args()
 
     # Build ContactDetectionConfig from overrides
@@ -799,11 +800,21 @@ def main() -> None:
             f"  ReID classifiers: {len(reid_classifiers)}/{len(video_ids)} videos\n"
         )
 
+    # Load visual attribution classifier if requested
+    visual_classifier = None
+    if args.visual:
+        from rallycut.tracking.visual_attribution import load_visual_attribution_classifier
+        visual_classifier = load_visual_attribution_classifier()
+        if visual_classifier is None:
+            console.print("[yellow]Warning: No trained visual attribution model found.[/yellow]")
+
     console.print(f"\n[bold]Evaluating {len(rallies)} rallies with action ground truth[/bold]")
     console.print(f"  Court calibration: {n_calibrated}/{len(video_ids)} videos")
     console.print(f"  Match teams (conf>=0.70): {n_with_match}/{len(rallies)} rallies")
     if args.reid:
         console.print(f"  ReID classifiers: {len(reid_classifiers)}/{len(video_ids)} videos")
+    if visual_classifier is not None:
+        console.print("  Visual attribution classifier: loaded")
     console.print()
 
     all_matches: list[MatchResult] = []
@@ -826,6 +837,10 @@ def main() -> None:
     cumulative_tp = 0
     cumulative_fp = 0
     cumulative_fn = 0
+
+    # Video file handles for visual attribution (reuse across rallies from same video)
+    _video_caps: dict[str, Any] = {}  # video_id → cv2.VideoCapture
+    _video_dims: dict[str, tuple[int, int, float]] = {}  # video_id → (w, h, fps)
 
     for rally_idx, rally in enumerate(rallies):
         t_start = time.monotonic()
@@ -889,11 +904,43 @@ def main() -> None:
                         contacts.contacts, rally.positions_json, t2p,
                     )
 
+            # Prepare visual attribution context if classifier loaded
+            vis_cap = None
+            vis_positions = None
+            vis_start_frame = 0
+            vis_w = vis_h = 0
+            if visual_classifier is not None and rally.positions_json:
+                if rally.video_id not in _video_caps:
+                    from rallycut.evaluation.tracking.db import get_video_path
+                    vpath = get_video_path(rally.video_id)
+                    if vpath is not None:
+                        import cv2
+                        cap = cv2.VideoCapture(str(vpath))
+                        if cap.isOpened():
+                            _video_caps[rally.video_id] = cap
+                            _video_dims[rally.video_id] = (
+                                int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                                int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+                                cap.get(cv2.CAP_PROP_FPS) or 30.0,
+                            )
+                if rally.video_id in _video_caps:
+                    vis_cap = _video_caps[rally.video_id]
+                    w, h, fps = _video_dims[rally.video_id]
+                    vis_w, vis_h = w, h
+                    vis_positions = rally.positions_json
+                    vis_start_frame = int((rally.start_ms or 0) / 1000.0 * fps)
+
             rally_actions = classify_rally_actions(
                 contacts, rally.rally_id,
                 use_classifier=not args.no_action_classifier,
                 match_team_assignments=match_teams,
                 reid_predictions=reid_preds,
+                visual_classifier=visual_classifier if vis_cap else None,
+                visual_video_cap=vis_cap,
+                visual_positions_json=vis_positions,
+                visual_rally_start_frame=vis_start_frame,
+                visual_frame_w=vis_w,
+                visual_frame_h=vis_h,
             )
             pred_actions = [a.to_dict() for a in rally_actions.actions]
         elif rally.actions_json:
@@ -1077,6 +1124,10 @@ def main() -> None:
                 )
 
             console.print(attr_table)
+
+    # Clean up video file handles
+    for cap in _video_caps.values():
+        cap.release()
 
 
 if __name__ == "__main__":
