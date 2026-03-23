@@ -1228,6 +1228,7 @@ _SAME_SIDE_ACTIONS = {ActionType.RECEIVE, ActionType.SET, ActionType.DIG}
 
 _HIGH_CONFIDENCE_GATE = 0.6
 _MEDIUM_CONFIDENCE_GATE = 0.5
+_SIDE_TO_TEAM: dict[str, int] = {"near": 0, "far": 1}
 
 
 def assign_court_side_from_teams(
@@ -1520,8 +1521,6 @@ def reattribute_players(
     expected_teams = _compute_expected_teams(actions, team_assignments)
 
     # Fallback when serve chain unavailable: map court_side to team
-    side_to_team = {"near": 0, "far": 1}
-
     n_reattributed = 0
 
     for i, action in enumerate(actions):
@@ -1534,7 +1533,7 @@ def reattribute_players(
         if expected_team is None:
             # Fallback to court_side when serve-seeded chain unavailable
             if action.court_side in ("near", "far"):
-                expected_team = side_to_team[action.court_side]
+                expected_team = _SIDE_TO_TEAM[action.court_side]
             else:
                 continue
 
@@ -1582,6 +1581,112 @@ def reattribute_players(
     # Pass 3: ReID re-attribution (requires reid_predictions)
     if reid_predictions:
         _reattribute_reid(actions, contact_by_frame, reid_predictions, reid_min_margin)
+
+    return actions
+
+
+def correct_team_from_propagation(
+    actions: list[ClassifiedAction],
+    contacts: list[Contact],
+    propagated_sides: list[str],
+    team_assignments: dict[int, int],
+    pre_reattrib_tids: list[int],
+    max_distance_ratio: float = 1.5,
+) -> list[ClassifiedAction]:
+    """Post-hoc team correction using propagated court_side signal.
+
+    Targets actions where Pass 2 (reattribute_players) changed the player
+    AND the original player's team matched the propagated court_side. These
+    are cascade-error candidates: _compute_expected_teams() incorrectly
+    flipped the expected team, causing Pass 2 to swap a correct player to
+    the wrong team. Reverts to the original player.
+
+    Falls back to candidate search when original player also doesn't match.
+
+    Args:
+        actions: Actions after reattribute_players() has run.
+        contacts: Contact objects with player_candidates.
+        propagated_sides: Court side per action from propagate_court_side(),
+            captured before assign_court_side_from_teams() overwrites.
+        team_assignments: Match-level track_id -> team mapping.
+        pre_reattrib_tids: Player track IDs before reattribute_players(),
+            used to identify which actions Pass 2 changed.
+        max_distance_ratio: Candidate must be within this ratio of the
+            current player's distance (1.5 = up to 50% farther).
+    """
+    contact_by_frame: dict[int, Contact] = {c.frame: c for c in contacts}
+
+    n_corrected = 0
+
+    for i, action in enumerate(actions):
+        if action.player_track_id < 0:
+            continue
+        if i >= len(propagated_sides) or i >= len(pre_reattrib_tids):
+            continue
+
+        # Only target actions where Pass 2 changed the player
+        if pre_reattrib_tids[i] == action.player_track_id:
+            continue
+
+        prop_side = propagated_sides[i]
+        if prop_side not in ("near", "far"):
+            continue
+
+        expected_team = _SIDE_TO_TEAM[prop_side]
+        current_team = team_assignments.get(action.player_track_id)
+
+        if current_team is None or current_team == expected_team:
+            continue
+
+        # Pass 2 swapped to wrong team per propagation. Try reverting first.
+        orig_tid = pre_reattrib_tids[i]
+        orig_team = team_assignments.get(orig_tid)
+        if orig_tid >= 0 and orig_team == expected_team:
+            logger.debug(
+                "Post-hoc revert frame %d: track %d (team %d) → "
+                "track %d (team %d, original) from propagated side '%s'",
+                action.frame, action.player_track_id, current_team,
+                orig_tid, expected_team, prop_side,
+            )
+            action.player_track_id = orig_tid
+            n_corrected += 1
+            continue
+
+        # Original also wrong team — find best candidate on correct team
+        contact = contact_by_frame.get(action.frame)
+        if contact is None or not contact.player_candidates:
+            continue
+
+        current_dist = contact.player_distance
+        if not math.isfinite(current_dist) or current_dist <= 0.0:
+            continue
+
+        best_tid = -1
+        best_dist = float("inf")
+        for tid, dist in contact.player_candidates:
+            if tid == action.player_track_id:
+                continue
+            cand_team = team_assignments.get(tid)
+            if cand_team != expected_team:
+                continue
+            if dist <= max_distance_ratio * current_dist and dist < best_dist:
+                best_tid = tid
+                best_dist = dist
+
+        if best_tid >= 0:
+            logger.debug(
+                "Post-hoc team correction frame %d: track %d (team %d) → "
+                "track %d (team %d) from propagated side '%s'",
+                action.frame, action.player_track_id, current_team,
+                best_tid, expected_team, prop_side,
+            )
+            action.player_track_id = best_tid
+            n_corrected += 1
+
+    if n_corrected > 0:
+        logger.info(
+            "Post-hoc team correction: fixed %d/%d actions", n_corrected, len(actions),
+        )
 
     return actions
 
@@ -1937,6 +2042,10 @@ def classify_rally_actions(
     result.actions = viterbi_decode_actions(result.actions)
     result.actions = validate_action_sequence(result.actions, rally_id)
 
+    # Snapshot propagated court_side before team-based overwrite.
+    # Used by post-hoc team correction to bypass _compute_expected_teams() cascade.
+    propagated_sides = [a.court_side for a in result.actions]
+
     # Overwrite court_side from team membership (73% accurate vs 61%
     # from propagation). This improves court_side labels for output but
     # doesn't affect reattribution — Pass 2 uses server-seeded expected
@@ -1944,10 +2053,24 @@ def classify_rally_actions(
     if match_team_assignments:
         assign_court_side_from_teams(result.actions, match_team_assignments)
 
+    pre_reattrib_tids = [a.player_track_id for a in result.actions]
+
     result.actions = reattribute_players(
         result.actions, contact_sequence.contacts, reattrib_teams,
         reid_predictions=reid_predictions,
     )
+
+    # Post-hoc team correction: use propagated court_side (bidirectional,
+    # confidence-gated) to fix cascade errors from _compute_expected_teams().
+    # Only targets actions where Pass 2 changed the player.
+    if match_team_assignments:
+        result.actions = correct_team_from_propagation(
+            result.actions, contact_sequence.contacts,
+            propagated_sides, match_team_assignments,
+            pre_reattrib_tids=pre_reattrib_tids,
+        )
+        # Re-apply court_side from (now-corrected) player's team
+        assign_court_side_from_teams(result.actions, match_team_assignments)
 
     # Visual attribution pass (overrides proximity-based attribution)
     if (visual_classifier is not None and visual_video_cap is not None
