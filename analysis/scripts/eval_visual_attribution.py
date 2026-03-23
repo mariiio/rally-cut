@@ -405,8 +405,9 @@ def train_production_model(samples: list[ContactSample]) -> None:
     console.print(f"  Train accuracy: {acc:.1%}")
     console.print(f"  Samples: {len(y)} ({int(y.sum())} positive, {int((1 - y).sum())} negative)")
 
+    from rallycut.tracking.visual_attribution import DEFAULT_MODEL_PATH
     classifier.save()
-    console.print(f"  [green]Saved to {classifier.save.__defaults__}[/green]")  # type: ignore[union-attr]
+    console.print(f"  [green]Saved to {DEFAULT_MODEL_PATH}[/green]")
 
 
 def main() -> None:
