@@ -293,6 +293,11 @@ def reattribute_actions_cmd(
         "--reid",
         help="Enable ReID re-attribution (Pass 3) using reference crops",
     ),
+    visual: bool = typer.Option(
+        False,
+        "--visual",
+        help="Enable visual attribution using VideoMAE per-player action classifier",
+    ),
 ) -> None:
     """Re-attribute player actions using match-level team assignments.
 
@@ -354,6 +359,19 @@ def reattribute_actions_cmd(
     # ReID Pass 3 is currently net negative on player attribution accuracy).
     reid_classifier = _train_reid_classifier(video_id, quiet) if reid else None
 
+    # Load visual attribution classifier if requested
+    visual_classifier = None
+    if visual:
+        from rallycut.tracking.visual_attribution import load_visual_attribution_classifier
+        visual_classifier = load_visual_attribution_classifier()
+        if visual_classifier is None:
+            console.print(
+                "[yellow]Warning: No trained visual attribution model found "
+                "at weights/visual_attribution/. Skipping visual attribution.[/yellow]"
+            )
+        elif not quiet:
+            console.print("  Visual attribution classifier loaded")
+
     # Load contacts + actions for all rallies with match teams
     rally_ids = list(all_teams.keys())
     placeholders = ", ".join(["%s"] * len(rally_ids))
@@ -384,16 +402,20 @@ def reattribute_actions_cmd(
     total_actions = 0
     updated_tracks: list[tuple[int, str]] = []  # (pt_id, new_actions_json)
 
-    # Open video for ReID crop extraction (if classifier is available)
+    # Open video for ReID/visual crop extraction (if classifier is available)
     video_cap = None
     video_fps = 30.0
-    if reid_classifier is not None:
+    video_w = 0
+    video_h = 0
+    if reid_classifier is not None or visual_classifier is not None:
         video_path = get_video_path(video_id)
         if video_path is not None:
             import cv2
             video_cap = cv2.VideoCapture(str(video_path))
             if video_cap.isOpened():
                 video_fps = video_cap.get(cv2.CAP_PROP_FPS) or 30.0
+                video_w = int(video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                video_h = int(video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             else:
                 video_cap = None
 
@@ -436,6 +458,19 @@ def reattribute_actions_cmd(
                 actions, contacts, reattrib_ta,
                 reid_predictions=reid_predictions,
             )
+
+            # Visual attribution pass (overrides when confident)
+            if visual_classifier is not None and video_cap is not None and positions_json_val:
+                from rallycut.tracking.visual_attribution import visual_reattribute
+                start_ms_int = cast(int, start_ms_val) if start_ms_val else 0
+                rally_start_frame = int(start_ms_int / 1000.0 * video_fps)
+                visual_reattribute(
+                    actions, contacts,
+                    cast(list[dict[str, Any]], positions_json_val),
+                    video_cap, rally_start_frame, video_w, video_h,
+                    visual_classifier, team_assignments=reattrib_ta,
+                )
+
             n_changed = sum(
                 1 for orig, act in zip(original_track_ids, actions)
                 if orig != act.player_track_id

@@ -1856,6 +1856,12 @@ def classify_rally_actions(
     team_assignments: dict[int, int] | None = None,
     match_team_assignments: dict[int, int] | None = None,
     reid_predictions: dict[int, dict[str, Any]] | None = None,
+    visual_classifier: Any = None,
+    visual_video_cap: Any = None,
+    visual_positions_json: list[dict[str, Any]] | None = None,
+    visual_rally_start_frame: int = 0,
+    visual_frame_w: int = 0,
+    visual_frame_h: int = 0,
 ) -> RallyActions:
     """Convenience function to classify actions in a rally.
 
@@ -1888,6 +1894,14 @@ def classify_rally_actions(
         reid_predictions: Optional ReID predictions per contact frame
             ({frame: {"best_tid": int, "margin": float}}). Enables Pass 3
             in reattribute_players(). Off by default — currently net negative.
+        visual_classifier: Optional trained VisualAttributionClassifier.
+            When provided with video context, runs visual re-attribution
+            after proximity-based reattribution.
+        visual_video_cap: Open cv2.VideoCapture (required if visual_classifier).
+        visual_positions_json: Player positions for clip extraction.
+        visual_rally_start_frame: Absolute frame of rally start.
+        visual_frame_w: Video frame width in pixels.
+        visual_frame_h: Video frame height in pixels.
 
     Returns:
         RallyActions with all classified actions.
@@ -1934,4 +1948,16 @@ def classify_rally_actions(
         result.actions, contact_sequence.contacts, reattrib_teams,
         reid_predictions=reid_predictions,
     )
+
+    # Visual attribution pass (overrides proximity-based attribution)
+    if (visual_classifier is not None and visual_video_cap is not None
+            and visual_positions_json is not None):
+        from rallycut.tracking.visual_attribution import visual_reattribute
+        visual_reattribute(
+            result.actions, contact_sequence.contacts,
+            visual_positions_json, visual_video_cap,
+            visual_rally_start_frame, visual_frame_w, visual_frame_h,
+            visual_classifier, team_assignments=reattrib_teams,
+        )
+
     return result
