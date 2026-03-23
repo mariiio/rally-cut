@@ -95,6 +95,7 @@ These rules apply to ANY eval, training, tuning, or diagnostic run. The ML skill
 5. **Stop early**: If first few items show errors or unexpected results, STOP and investigate.
 6. **No long inline Python**: Write a script file instead.
 7. **Review before reporting**: Check for per-item regressions and anomalies, don't just relay the summary.
+8. **Never truncate output**: Do not pipe commands through `head`, `tail -N`, or similar filters. Let output stream fully so progress logs are visible. If output is too verbose, fix the script's logging instead.
 
 ## See Also
 
