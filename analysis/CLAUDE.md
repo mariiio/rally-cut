@@ -278,10 +278,16 @@ Uses YOLO for person detection with BoT-SORT for temporal tracking. BoT-SORT wit
 | yolo11m | 2.4 | 77.0% | 82.4% | 89.4% | Mid-recall regression, slow |
 | yolov8n@640 | 15.3 | 74.1% | 79.2% | 55.3% | Fastest, lowest accuracy |
 
-Default tracker is BoT-SORT (ReID enabled). ByteTrack available as `--tracker bytetrack` (legacy).
+**Tracker Options:**
+| Tracker | ReID | Description |
+|---------|------|-------------|
+| **botsort** (default) | YOLO backbone | Ultralytics built-in BoT-SORT. Fast, but ReID uses detection features (not person-ReID trained) |
+| **boxmot-botsort** | Fine-tuned OSNet | BoxMOT BoT-SORT with our SupCon-trained OSNet-x1.0 (128-dim). Reduces track fragmentation ~40%. Requires `weights/reid/general_reid.pt` |
+| bytetrack | None | Motion-only tracking (legacy) |
 
 ```bash
 uv run rallycut track-players video.mp4                          # Default (yolo11s + BoT-SORT)
+uv run rallycut track-players video.mp4 --tracker boxmot-botsort # BoxMOT + OSNet ReID
 uv run rallycut track-players video.mp4 --yolo-model yolov8n     # Faster, lower accuracy
 uv run rallycut track-players video.mp4 --calibration '[...]'    # Court calibration for ROI + teams
 ```

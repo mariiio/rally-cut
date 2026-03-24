@@ -529,6 +529,7 @@ BOTSORT_CONFIG = Path(__file__).parent / "botsort_volleyball.yaml"
 # Available trackers
 TRACKER_BYTETRACK = "bytetrack"
 TRACKER_BOTSORT = "botsort"
+TRACKER_BOXMOT_BOTSORT = "boxmot-botsort"  # BoxMOT BoT-SORT with custom OSNet ReID
 DEFAULT_TRACKER = TRACKER_BOTSORT  # BoT-SORT reduces ID switches by 64%
 
 # Preprocessing options
@@ -839,6 +840,7 @@ class PlayerTracker:
         reid_model: str | None = None,
         imgsz: int = DEFAULT_IMGSZ,
         court_roi: list[tuple[float, float]] | None = None,
+        reid_weights_path: Path | None = None,
     ):
         """
         Initialize player tracker.
@@ -854,6 +856,7 @@ class PlayerTracker:
             tracker: Tracking algorithm. Options:
                     - "bytetrack": ByteTrack (motion-based)
                     - "botsort": BoT-SORT (adds camera motion compensation, default)
+                    - "boxmot-botsort": BoxMOT BoT-SORT with custom OSNet ReID
             yolo_model: YOLO model size (default: yolo11s). Options:
                        yolov8n/s/m/l and yolo11n/s/m/l.
             with_reid: Enable BoT-SORT ReID for appearance-based re-identification.
@@ -875,6 +878,9 @@ class PlayerTracker:
                       background objects (wall drawings, spectators, etc.).
                       Use DEFAULT_COURT_ROI for a conservative rectangle.
                       None disables ROI masking.
+            reid_weights_path: Path to custom ReID weights for boxmot-botsort.
+                              If None and tracker is boxmot-botsort, uses the
+                              default GeneralReIDModel weights.
         """
         self.model_path = model_path
         self.confidence = confidence
@@ -887,8 +893,11 @@ class PlayerTracker:
         self.reid_model = reid_model
         self.imgsz = imgsz
         self.court_roi = court_roi
+        self.reid_weights_path = reid_weights_path
         self._model: Any = None
         self._custom_tracker_config: Path | None = None
+        self._boxmot_tracker: Any = None
+        self._reid_model: Any = None
 
     def _get_tracker_config(self) -> Path:
         """Get the tracker config file path based on selected tracker.
@@ -939,6 +948,177 @@ class PlayerTracker:
             return self._custom_tracker_config
 
         return base_config
+
+    def _init_boxmot_tracker(self) -> Any:
+        """Initialize BoxMOT BotSort tracker with custom ReID embeddings.
+
+        Creates a BotSort tracker configured with the same parameters as
+        botsort_volleyball.yaml but using externally-provided ReID embeddings
+        (via the embs parameter in update()) instead of BoxMOT's built-in ReID.
+
+        This allows using our fine-tuned OSNet-x1.0 model which produces
+        128-dim embeddings trained with SupCon loss on volleyball data,
+        rather than BoxMOT's generic ReID or ultralytics' YOLO backbone features.
+        """
+        from boxmot.trackers.botsort.basetrack import BaseTrack
+        from boxmot.trackers.botsort.botsort import BotSort
+
+        BaseTrack.clear_count()
+
+        appearance_thresh = self.appearance_thresh if self.appearance_thresh is not None else 0.30
+
+        import torch
+
+        # Create tracker with with_reid=False to skip loading BoxMOT's
+        # internal ReID model. We'll set with_reid=True after construction
+        # and pass embeddings via the embs parameter in update().
+        tracker = BotSort(
+            reid_weights=Path("unused"),  # Not loaded when with_reid=False
+            device=torch.device("cpu"),   # Not used for ReID
+            half=False,
+            track_high_thresh=0.25,
+            track_low_thresh=0.08,
+            new_track_thresh=0.35,
+            track_buffer=45,
+            match_thresh=0.90,
+            proximity_thresh=0.5,
+            appearance_thresh=appearance_thresh,
+            cmc_method="sof",  # Cheapest CMC; ~identity for fixed tripod (~2ms/frame)
+            frame_rate=30,
+            fuse_first_associate=False,
+            with_reid=False,  # Skip model loading
+            min_hits=1,  # Show tracks after 1 hit (same as ultralytics default)
+        )
+
+        # Enable appearance matching in update() without loading a model.
+        # Safety: BotSort.update() checks `self.with_reid and embs is None`
+        # before accessing self.model (botsort.py:124). Since we always pass
+        # embs, self.model is never touched. We MUST always pass embs when
+        # calling update() on this tracker.
+        tracker.with_reid = True
+
+        logger.info(
+            "BoxMOT BotSort initialized (appearance_thresh=%.2f, "
+            "track_buffer=45, match_thresh=0.90)",
+            appearance_thresh,
+        )
+        return tracker
+
+    def _load_reid_model(self) -> Any:
+        """Load the GeneralReIDModel for extracting ReID embeddings.
+
+        Returns the model ready for inference. Uses reid_weights_path if
+        provided, otherwise falls back to the default WEIGHTS_PATH.
+        """
+        from rallycut.tracking.reid_general import WEIGHTS_PATH, GeneralReIDModel
+
+        weights = self.reid_weights_path or WEIGHTS_PATH
+        if not weights.exists():
+            raise FileNotFoundError(
+                f"ReID weights not found at {weights}. "
+                "Train with: uv run python -m rallycut.tracking.reid_general"
+            )
+
+        t0 = time.monotonic()
+        model = GeneralReIDModel(weights_path=weights)
+        t_load = time.monotonic() - t0
+        print(f"Loaded OSNet ReID model ({t_load:.1f}s)", flush=True)
+        return model
+
+    def _extract_reid_embeddings(
+        self,
+        frame: np.ndarray,
+        dets: np.ndarray,
+    ) -> np.ndarray:
+        """Extract ReID embeddings for detected bounding boxes.
+
+        Args:
+            frame: BGR image (H, W, 3).
+            dets: Detection array (N, 6) with [x1, y1, x2, y2, conf, cls].
+
+        Returns:
+            (N, 128) L2-normalized embeddings from GeneralReIDModel.
+        """
+        if self._reid_model is None:
+            raise RuntimeError("ReID model not loaded — call _load_reid_model() first")
+
+        if len(dets) == 0:
+            return np.empty((0, 128), dtype=np.float32)
+
+        h, w = frame.shape[:2]
+        crops: list[np.ndarray] = []
+        for det in dets:
+            x1, y1, x2, y2 = det[:4].astype(int)
+            # Clamp to frame bounds
+            x1 = max(0, x1)
+            y1 = max(0, y1)
+            x2 = min(w, x2)
+            y2 = min(h, y2)
+            if x2 <= x1 or y2 <= y1:
+                # Degenerate box — use a tiny black crop
+                crops.append(np.zeros((10, 10, 3), dtype=np.uint8))
+                continue
+            crops.append(frame[y1:y2, x1:x2].copy())
+
+        embeddings: np.ndarray = self._reid_model.extract_embeddings(crops)
+        return embeddings
+
+    def _decode_boxmot_results(
+        self,
+        tracks: np.ndarray,
+        frame_number: int,
+        video_width: int,
+        video_height: int,
+    ) -> list[PlayerPosition]:
+        """Decode BoxMOT tracker output to PlayerPosition list.
+
+        Args:
+            tracks: BoxMOT output (M, 8) with
+                    [x1, y1, x2, y2, track_id, conf, cls, det_idx].
+            frame_number: Current frame index.
+            video_width: Video frame width.
+            video_height: Video frame height.
+
+        Returns:
+            List of PlayerPosition for this frame.
+        """
+        positions: list[PlayerPosition] = []
+
+        if tracks is None or len(tracks) == 0:
+            return positions
+
+        for row in tracks:
+            x1, y1, x2, y2 = row[0], row[1], row[2], row[3]
+            track_id, conf, cls = row[4], row[5], row[6]
+
+            if int(cls) != PERSON_CLASS_ID:
+                continue
+
+            cx = (x1 + x2) / 2 / video_width
+            cy = (y1 + y2) / 2 / video_height
+            w = (x2 - x1) / video_width
+            h = (y2 - y1) / video_height
+
+            positions.append(PlayerPosition(
+                frame_number=frame_number,
+                track_id=int(track_id),
+                x=float(cx),
+                y=float(cy),
+                width=float(w),
+                height=float(h),
+                confidence=float(conf),
+            ))
+
+        return positions
+
+    def _reset_boxmot_tracker(self) -> None:
+        """Reset BoxMOT tracker state between rallies.
+
+        Re-creates the tracker to ensure all state is clean — including
+        CMC (sparse optical flow) internal state which cannot be partially
+        reset. The ReID model is NOT reloaded (kept in self._reid_model).
+        """
+        self._boxmot_tracker = self._init_boxmot_tracker()
 
     def _get_model_filename(self) -> str:
         """Get the model filename for the selected YOLO model size."""
@@ -1202,19 +1382,33 @@ class PlayerTracker:
 
         # Load YOLO model
         model = self._load_model()
+        use_boxmot = self.tracker == TRACKER_BOXMOT_BOTSORT
 
-        # Reset tracker state from any previous track_video call.
-        # ultralytics caches trackers, feature hooks, and ReID state on the
-        # predictor when persist=True. When ReID is enabled (with_reid),
-        # the feature extraction hook state can't be cleanly reset without
-        # a full model reload. For non-ReID, just clearing trackers suffices.
-        if hasattr(model, "predictor") and model.predictor is not None:
-            if self.with_reid:
-                # Full reload needed for clean ReID hook state
-                self._model = None
-                model = self._load_model()
-            elif hasattr(model.predictor, "trackers"):
-                del model.predictor.trackers
+        if use_boxmot:
+            # BoxMOT path: initialize or reset BoxMOT tracker + load ReID model
+            if self._reid_model is None:
+                self._reid_model = self._load_reid_model()
+            if self._boxmot_tracker is None:
+                self._boxmot_tracker = self._init_boxmot_tracker()
+            else:
+                self._reset_boxmot_tracker()
+            # Clear ultralytics predictor state (no tracking, detection only)
+            if hasattr(model, "predictor") and model.predictor is not None:
+                if hasattr(model.predictor, "trackers"):
+                    del model.predictor.trackers
+        else:
+            # Reset tracker state from any previous track_video call.
+            # ultralytics caches trackers, feature hooks, and ReID state on the
+            # predictor when persist=True. When ReID is enabled (with_reid),
+            # the feature extraction hook state can't be cleanly reset without
+            # a full model reload. For non-ReID, just clearing trackers suffices.
+            if hasattr(model, "predictor") and model.predictor is not None:
+                if self.with_reid:
+                    # Full reload needed for clean ReID hook state
+                    self._model = None
+                    model = self._load_model()
+                elif hasattr(model.predictor, "trackers"):
+                    del model.predictor.trackers
 
         # Open video
         cap = cv2.VideoCapture(str(video_path))
@@ -1299,24 +1493,56 @@ class PlayerTracker:
                         processed_frame, self.court_roi
                     )
 
-                # Run YOLO with ByteTrack
-                # persist=True enables tracking across frames
+                # Run detection + tracking
                 try:
-                    results = model.track(
-                        frame_to_track,
-                        persist=True,
-                        tracker=str(self._get_tracker_config()),
-                        conf=self.confidence,
-                        iou=self.iou,
-                        imgsz=self.imgsz,
-                        classes=[PERSON_CLASS_ID],
-                        verbose=False,
-                    )
+                    if use_boxmot:
+                        # BoxMOT path: YOLO detect → extract ReID → BoxMOT track
+                        results = model.predict(
+                            frame_to_track,
+                            conf=self.confidence,
+                            iou=self.iou,
+                            imgsz=self.imgsz,
+                            classes=[PERSON_CLASS_ID],
+                            verbose=False,
+                        )
 
-                    # Decode results
-                    frame_positions = self._decode_results(
-                        results, frame_idx, video_width, video_height
-                    )
+                        # Convert YOLO detections to BoxMOT format (N, 6)
+                        dets_array = np.empty((0, 6), dtype=np.float32)
+                        if results and len(results) > 0 and results[0].boxes is not None:
+                            boxes = results[0].boxes
+                            if len(boxes.xyxy) > 0:
+                                xyxy = boxes.xyxy.cpu().numpy()
+                                conf = boxes.conf.cpu().numpy().reshape(-1, 1)
+                                cls = boxes.cls.cpu().numpy().reshape(-1, 1)
+                                dets_array = np.hstack([xyxy, conf, cls]).astype(np.float32)
+
+                        # Extract ReID embeddings from our fine-tuned OSNet
+                        embs = self._extract_reid_embeddings(frame_to_track, dets_array)
+
+                        # Update BoxMOT tracker
+                        tracks = self._boxmot_tracker.update(dets_array, frame_to_track, embs)
+
+                        # Decode BoxMOT output to PlayerPosition
+                        frame_positions = self._decode_boxmot_results(
+                            tracks, frame_idx, video_width, video_height
+                        )
+                    else:
+                        # Ultralytics path: YOLO detect + track in one call
+                        results = model.track(
+                            frame_to_track,
+                            persist=True,
+                            tracker=str(self._get_tracker_config()),
+                            conf=self.confidence,
+                            iou=self.iou,
+                            imgsz=self.imgsz,
+                            classes=[PERSON_CLASS_ID],
+                            verbose=False,
+                        )
+
+                        # Decode results
+                        frame_positions = self._decode_results(
+                            results, frame_idx, video_width, video_height
+                        )
 
                     # Sport-aware detection filters
                     if filter_enabled:
@@ -1750,7 +1976,9 @@ class PlayerTracker:
         finally:
             cap.release()
             # Reset tracker state for next video
-            if hasattr(model, "predictor") and model.predictor is not None:
+            if use_boxmot:
+                self._reset_boxmot_tracker()
+            elif hasattr(model, "predictor") and model.predictor is not None:
                 model.predictor.trackers = []
 
     def track_frames(
@@ -1773,7 +2001,16 @@ class PlayerTracker:
             List of PlayerPosition for each frame.
         """
         model = self._load_model()
+        use_boxmot = self.tracker == TRACKER_BOXMOT_BOTSORT
         frame_idx = 0
+
+        if use_boxmot:
+            if self._reid_model is None:
+                self._reid_model = self._load_reid_model()
+            if self._boxmot_tracker is None:
+                self._boxmot_tracker = self._init_boxmot_tracker()
+            else:
+                self._reset_boxmot_tracker()
 
         for frame in frames:
             try:
@@ -1789,22 +2026,44 @@ class PlayerTracker:
                         processed_frame, self.court_roi
                     )
 
-                # Run YOLO with ByteTrack
-                results = model.track(
-                    frame_to_track,
-                    persist=True,
-                    tracker=str(self._get_tracker_config()),
-                    conf=self.confidence,
-                    iou=self.iou,
-                    imgsz=self.imgsz,
-                    classes=[PERSON_CLASS_ID],
-                    verbose=False,
-                )
-
-                # Decode results
-                frame_positions = self._decode_results(
-                    results, frame_idx, video_width, video_height
-                )
+                if use_boxmot:
+                    # BoxMOT path: YOLO detect → extract ReID → BoxMOT track
+                    results = model.predict(
+                        frame_to_track,
+                        conf=self.confidence,
+                        iou=self.iou,
+                        imgsz=self.imgsz,
+                        classes=[PERSON_CLASS_ID],
+                        verbose=False,
+                    )
+                    dets_array = np.empty((0, 6), dtype=np.float32)
+                    if results and len(results) > 0 and results[0].boxes is not None:
+                        boxes = results[0].boxes
+                        if len(boxes.xyxy) > 0:
+                            xyxy = boxes.xyxy.cpu().numpy()
+                            conf = boxes.conf.cpu().numpy().reshape(-1, 1)
+                            cls = boxes.cls.cpu().numpy().reshape(-1, 1)
+                            dets_array = np.hstack([xyxy, conf, cls]).astype(np.float32)
+                    embs = self._extract_reid_embeddings(frame_to_track, dets_array)
+                    tracks = self._boxmot_tracker.update(dets_array, frame_to_track, embs)
+                    frame_positions = self._decode_boxmot_results(
+                        tracks, frame_idx, video_width, video_height
+                    )
+                else:
+                    # Ultralytics path: YOLO detect + track in one call
+                    results = model.track(
+                        frame_to_track,
+                        persist=True,
+                        tracker=str(self._get_tracker_config()),
+                        conf=self.confidence,
+                        iou=self.iou,
+                        imgsz=self.imgsz,
+                        classes=[PERSON_CLASS_ID],
+                        verbose=False,
+                    )
+                    frame_positions = self._decode_results(
+                        results, frame_idx, video_width, video_height
+                    )
 
                 # Sport-aware detection filters (only when ROI masking is active)
                 if self.court_roi is not None:
@@ -1818,5 +2077,7 @@ class PlayerTracker:
             frame_idx += 1
 
         # Reset tracker state
-        if hasattr(model, "predictor") and model.predictor is not None:
+        if use_boxmot:
+            self._reset_boxmot_tracker()
+        elif hasattr(model, "predictor") and model.predictor is not None:
             model.predictor.trackers = []

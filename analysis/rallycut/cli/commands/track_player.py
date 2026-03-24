@@ -28,6 +28,7 @@ from rallycut.tracking.player_tracker import (
     PREPROCESSING_CLAHE,
     PREPROCESSING_NONE,
     TRACKER_BOTSORT,
+    TRACKER_BOXMOT_BOTSORT,
     TRACKER_BYTETRACK,
     YOLO_MODELS,
     PlayerPosition,
@@ -347,7 +348,7 @@ def track_players(
     tracker: str = typer.Option(
         DEFAULT_TRACKER,
         "--tracker",
-        help=f"Tracking algorithm: {TRACKER_BOTSORT} (default, fewer ID switches), {TRACKER_BYTETRACK}",
+        help=f"Tracking algorithm: {TRACKER_BOTSORT} (default), {TRACKER_BOXMOT_BOTSORT} (custom OSNet ReID), {TRACKER_BYTETRACK}",
     ),
     # YOLO model selection
     yolo_model: str = typer.Option(
