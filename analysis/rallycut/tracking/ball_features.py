@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from rallycut.tracking.ball_tracker import BallPosition
+from rallycut.tracking.contact_detector import compute_direction_change
 
 if TYPE_CHECKING:
     from rallycut.court.calibration import CourtCalibrator
@@ -634,71 +635,6 @@ def _find_nearest_player(
     return best_track_id, best_distance
 
 
-def _compute_direction_change(
-    ball_positions: list[BallPosition],
-    frame: int,
-    check_frames: int = 5,
-) -> float:
-    """
-    Compute trajectory direction change at a given frame.
-
-    Args:
-        ball_positions: Ball positions (must be sorted by frame).
-        frame: Frame to compute direction change at.
-        check_frames: Frames before/after to compute direction.
-
-    Returns:
-        Direction change in degrees (0-180).
-    """
-    # Index positions by frame
-    by_frame = {bp.frame_number: bp for bp in ball_positions}
-
-    # Find positions before and after
-    before_frame = None
-    after_frame = None
-
-    for offset in range(1, check_frames + 1):
-        if before_frame is None and (frame - offset) in by_frame:
-            before_frame = frame - offset
-        if after_frame is None and (frame + offset) in by_frame:
-            after_frame = frame + offset
-
-        if before_frame is not None and after_frame is not None:
-            break
-
-    if before_frame is None or after_frame is None:
-        return 0.0
-
-    bp_before = by_frame[before_frame]
-    bp_at = by_frame.get(frame)
-    bp_after = by_frame[after_frame]
-
-    if bp_at is None:
-        # Use interpolated position
-        t = (frame - before_frame) / (after_frame - before_frame)
-        at_x = bp_before.x + t * (bp_after.x - bp_before.x)
-        at_y = bp_before.y + t * (bp_after.y - bp_before.y)
-    else:
-        at_x, at_y = bp_at.x, bp_at.y
-
-    # Compute direction vectors
-    vec_in = (at_x - bp_before.x, at_y - bp_before.y)
-    vec_out = (bp_after.x - at_x, bp_after.y - at_y)
-
-    # Normalize and compute angle
-    mag_in = (vec_in[0] ** 2 + vec_in[1] ** 2) ** 0.5
-    mag_out = (vec_out[0] ** 2 + vec_out[1] ** 2) ** 0.5
-
-    if mag_in < 1e-6 or mag_out < 1e-6:
-        return 0.0
-
-    dot = vec_in[0] * vec_out[0] + vec_in[1] * vec_out[1]
-    cos_angle = max(-1.0, min(1.0, dot / (mag_in * mag_out)))
-    angle_rad = np.arccos(cos_angle)
-
-    return float(np.degrees(angle_rad))
-
-
 def detect_ball_contacts(
     ball_positions: list[BallPosition],
     player_positions: list[PlayerPosition] | None,
@@ -727,9 +663,6 @@ def detect_ball_contacts(
 
     if not velocities:
         return []
-
-    # Sort ball positions for direction computation
-    sorted_balls = sorted(ball_positions, key=lambda bp: bp.frame_number)
 
     # Get sorted frames and smooth velocity
     frames = sorted(velocities.keys())
@@ -780,8 +713,8 @@ def detect_ball_contacts(
             player_dist = float("inf")
 
         # Compute direction change
-        direction_change = _compute_direction_change(
-            sorted_balls, frame, contact_cfg.direction_check_frames
+        direction_change = compute_direction_change(
+            ball_by_frame, frame, contact_cfg.direction_check_frames
         )
 
         # Validate contact

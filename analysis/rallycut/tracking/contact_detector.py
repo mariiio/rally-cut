@@ -56,9 +56,9 @@ def _get_default_classifier() -> ContactClassifier | None:
 class ContactDetectionConfig:
     """Configuration for trajectory-based contact detection."""
 
-    # Velocity peak detection
+    # Velocity peak detection (velocities are in normalized image-space units/frame)
     min_peak_velocity: float = 0.008  # Min velocity for a contact peak
-    min_peak_prominence: float = 0.003  # Min prominence above neighbors
+    min_peak_prominence: float = 0.003  # Min prominence relative to neighboring velocity values
     smoothing_window: int = 5  # Frames for velocity smoothing
     min_peak_distance_frames: int = 12  # Min frames between contacts (~0.4s @ 30fps)
 
@@ -75,8 +75,8 @@ class ContactDetectionConfig:
     enable_noise_filter: bool = True
     noise_spike_max_jump: float = 0.20  # Max distance to predecessor/successor
 
-    # Player proximity
-    player_contact_radius: float = 0.15  # Max distance (normalized) for attribution
+    # Player proximity (distances in fraction of frame width/height, image-space)
+    player_contact_radius: float = 0.15  # Max Euclidean distance for player attribution
     player_search_frames: int = 5  # Search ±N frames for nearest player (classifier feature)
     player_candidate_search_frames: int = 15  # Wider search for ranked candidates (~500ms)
 
@@ -109,7 +109,8 @@ class ContactDetectionConfig:
     # Player-proximity candidate refinement
     enable_proximity_candidates: bool = True
     proximity_search_window: int = 8  # Search ±N frames around each candidate
-    # Court position (baselines used by ball_features.py serve detection)
+    # Court position baselines (fixed defaults assuming net_y≈0.5).
+    # action_classifier.py computes dynamic baselines from actual net_y instead.
     baseline_y_near: float = 0.82  # Near baseline Y threshold
     baseline_y_far: float = 0.18  # Far baseline Y threshold
     serve_window_frames: int = 60  # Serve must occur in first N frames (~2s)
@@ -242,12 +243,18 @@ def _smooth_signal(values: list[float], window: int) -> list[float]:
     return smoothed
 
 
-def _compute_direction_change(
+def compute_direction_change(
     ball_by_frame: dict[int, BallPosition],
     frame: int,
     check_frames: int = 5,
 ) -> float:
-    """Compute trajectory direction change at a frame in degrees (0-180)."""
+    """Compute trajectory direction change at a frame in degrees (0-180).
+
+    Finds the nearest ball positions before and after the given frame
+    (within check_frames), computes incoming and outgoing direction
+    vectors, and returns the angle between them. Interpolates if no
+    exact position exists at the target frame.
+    """
     before_frame = None
     after_frame = None
 
@@ -479,7 +486,7 @@ def _find_inflection_candidates(
     # Compute angle at each confident frame
     frame_angles: list[tuple[int, float]] = []
     for frame in confident_frames:
-        angle = _compute_direction_change(ball_by_frame, frame, check_frames)
+        angle = compute_direction_change(ball_by_frame, frame, check_frames)
         if angle >= min_angle_deg:
             frame_angles.append((frame, angle))
 
@@ -1490,7 +1497,7 @@ def detect_contacts(
             continue
 
         # Compute direction change
-        direction_change = _compute_direction_change(
+        direction_change = compute_direction_change(
             ball_by_frame, frame, cfg.direction_check_frames
         )
 

@@ -12,7 +12,7 @@ from rallycut.tracking.contact_detector import (
     Contact,
     ContactDetectionConfig,
     ContactSequence,
-    _compute_direction_change,
+    compute_direction_change,
     _compute_velocities,
     _filter_noise_spikes,
     _find_inflection_candidates,
@@ -112,7 +112,7 @@ class TestComputeDirectionChange:
         ball_by_frame = {
             i: _bp(i, 0.1 + i * 0.02, 0.5) for i in range(10)
         }
-        angle = _compute_direction_change(ball_by_frame, 5, check_frames=3)
+        angle = compute_direction_change(ball_by_frame, 5, check_frames=3)
         assert angle < 5.0  # Nearly straight
 
     def test_90_degree_turn(self) -> None:
@@ -122,7 +122,7 @@ class TestComputeDirectionChange:
             5: _bp(5, 0.5, 0.5),  # Moving right
             10: _bp(10, 0.5, 0.3),  # Moving up (90 degree turn)
         }
-        angle = _compute_direction_change(ball_by_frame, 5, check_frames=6)
+        angle = compute_direction_change(ball_by_frame, 5, check_frames=6)
         assert 80.0 < angle < 100.0
 
     def test_reversal_180_degrees(self) -> None:
@@ -132,13 +132,13 @@ class TestComputeDirectionChange:
             5: _bp(5, 0.5, 0.5),  # Moving right
             10: _bp(10, 0.3, 0.5),  # Moving back left
         }
-        angle = _compute_direction_change(ball_by_frame, 5, check_frames=6)
+        angle = compute_direction_change(ball_by_frame, 5, check_frames=6)
         assert angle > 150.0
 
     def test_missing_neighbors(self) -> None:
         """Returns 0 when before/after positions are missing."""
         ball_by_frame = {5: _bp(5, 0.5, 0.5)}
-        angle = _compute_direction_change(ball_by_frame, 5, check_frames=3)
+        angle = compute_direction_change(ball_by_frame, 5, check_frames=3)
         assert angle == 0.0
 
 

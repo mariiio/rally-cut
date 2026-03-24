@@ -97,6 +97,9 @@ def build_match_team_assignments(
     Convention: player IDs 1-2 = team 0 (near), 3-4 = team 1 (far)
     at baseline. Each side switch flips the mapping.
 
+    Accepts both camelCase (from API JSON) and snake_case (from Python)
+    field names (e.g. sideSwitchDetected / side_switch_detected).
+
     Args:
         match_analysis: The match_analysis_json from the videos table.
         min_confidence: Skip rallies below this assignment confidence.

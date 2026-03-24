@@ -2060,14 +2060,19 @@ class PlayerFilter:
 
     def analyze_tracks(self, all_positions: list[PlayerPosition]) -> None:
         """
-        Analyze all positions to identify stable (primary) tracks.
+        Analyze all positions to identify the 4 active player tracks.
 
         Must be called before filter() for track stability to work.
         If not called, filter() falls back to size-based selection.
 
-        Also computes:
-        - Court position stats (if calibrator available)
-        - Court split using player positions (more reliable than ball trajectory)
+        Performs the following steps:
+        1. Compute ball proximity scores (if ball data available)
+        2. Compute per-track statistics (bbox size, coverage, movement)
+        3. Compute court position stats (if calibrator available)
+        4. Detect referee tracks (excluded from primary selection)
+        5. Identify primary tracks via hard/soft filters with safety net
+        6. Detect distractor tracks (non-players coexisting with primaries)
+        7. Recompute court split from player position density
 
         Args:
             all_positions: All player positions from all frames.

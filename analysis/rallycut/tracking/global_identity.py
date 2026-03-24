@@ -45,15 +45,16 @@ INTERACTION_MARGIN_FRAMES = 5  # ±frames around interaction boundary
 MIN_SEGMENT_FRAMES = 5  # Shorter than track filters (20/50) to capture fine-grained splits
 
 # Anchor selection
-MIN_ANCHOR_BHATTACHARYYA = 0.20  # Minimum distance between same-team anchors
+MIN_ANCHOR_BHATTACHARYYA = 0.20  # Minimum Bhattacharyya distance between same-team anchors
 
-# Cost function weights (must sum to 1.0)
-WEIGHT_APPEARANCE = 0.40
-WEIGHT_SPATIAL = 0.15
-WEIGHT_BBOX_SIZE = 0.10
-WEIGHT_MULTI_REGION = 0.15
-WEIGHT_COURT_SIDE = 0.20
-SPATIAL_NORMALIZER = 0.30  # Euclidean distance normalization
+# Cost function weights for segment-to-profile assignment (must sum to 1.0).
+# Tuned empirically on 16 GT rallies. IDsw 61→40 with these weights.
+WEIGHT_APPEARANCE = 0.40   # HSV histogram Bhattacharyya distance
+WEIGHT_SPATIAL = 0.15      # Euclidean distance (normalized court coordinates)
+WEIGHT_BBOX_SIZE = 0.10    # Relative bbox height difference
+WEIGHT_MULTI_REGION = 0.15 # Multi-region (shorts/jersey/full) descriptor distance
+WEIGHT_COURT_SIDE = 0.20   # 0 if same side as profile, 1 if opposite
+SPATIAL_NORMALIZER = 0.30  # Euclidean distance divisor (normalized image coords)
 
 # Assignment
 MAX_REASSIGNMENT_ROUNDS = 10
