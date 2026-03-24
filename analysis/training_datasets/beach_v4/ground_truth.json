@@ -43,7 +43,7 @@
       },
       {
         "start_ms": 70163,
-        "end_ms": 78148
+        "end_ms": 79148
       },
       {
         "start_ms": 88434,
@@ -208,6 +208,10 @@
         "end_ms": 55422
       },
       {
+        "start_ms": 64422,
+        "end_ms": 70922
+      },
+      {
         "start_ms": 83700,
         "end_ms": 95533
       },
@@ -272,6 +276,10 @@
         "end_ms": 34840
       },
       {
+        "start_ms": 59036,
+        "end_ms": 63536
+      },
+      {
         "start_ms": 75525,
         "end_ms": 80801
       },
@@ -300,8 +308,16 @@
         "end_ms": 249985
       },
       {
+        "start_ms": 264571,
+        "end_ms": 269092
+      },
+      {
         "start_ms": 301585,
         "end_ms": 311423
+      },
+      {
+        "start_ms": 328997,
+        "end_ms": 333506
       },
       {
         "start_ms": 347467,
@@ -398,6 +414,10 @@
         "end_ms": 137650
       },
       {
+        "start_ms": 151718,
+        "end_ms": 158791
+      },
+      {
         "start_ms": 172005,
         "end_ms": 180417
       },
@@ -492,6 +512,140 @@
     ]
   },
   {
+    "video_id": "2e984c43-cef6-4215-8d8e-50d892b510b9",
+    "filename": "titi.mp4",
+    "rallies": [
+      {
+        "start_ms": 11833,
+        "end_ms": 21500
+      },
+      {
+        "start_ms": 31933,
+        "end_ms": 44900
+      },
+      {
+        "start_ms": 65400,
+        "end_ms": 71400
+      },
+      {
+        "start_ms": 80234,
+        "end_ms": 89600
+      },
+      {
+        "start_ms": 100234,
+        "end_ms": 108501
+      },
+      {
+        "start_ms": 117434,
+        "end_ms": 126801
+      },
+      {
+        "start_ms": 135034,
+        "end_ms": 147601
+      },
+      {
+        "start_ms": 167035,
+        "end_ms": 186701
+      },
+      {
+        "start_ms": 216235,
+        "end_ms": 238802
+      },
+      {
+        "start_ms": 255435,
+        "end_ms": 270502
+      },
+      {
+        "start_ms": 285436,
+        "end_ms": 294703
+      },
+      {
+        "start_ms": 310236,
+        "end_ms": 323870
+      },
+      {
+        "start_ms": 342636,
+        "end_ms": 356503
+      },
+      {
+        "start_ms": 373837,
+        "end_ms": 384004
+      },
+      {
+        "start_ms": 411037,
+        "end_ms": 425304
+      },
+      {
+        "start_ms": 447837,
+        "end_ms": 461104
+      },
+      {
+        "start_ms": 471438,
+        "end_ms": 484705
+      },
+      {
+        "start_ms": 500238,
+        "end_ms": 511405
+      },
+      {
+        "start_ms": 523438,
+        "end_ms": 531705
+      },
+      {
+        "start_ms": 541038,
+        "end_ms": 550905
+      },
+      {
+        "start_ms": 567905,
+        "end_ms": 573905
+      },
+      {
+        "start_ms": 593439,
+        "end_ms": 606706
+      },
+      {
+        "start_ms": 628239,
+        "end_ms": 644406
+      },
+      {
+        "start_ms": 657040,
+        "end_ms": 666206
+      },
+      {
+        "start_ms": 681282,
+        "end_ms": 686282
+      },
+      {
+        "start_ms": 702240,
+        "end_ms": 717707
+      },
+      {
+        "start_ms": 731840,
+        "end_ms": 741174
+      },
+      {
+        "start_ms": 768641,
+        "end_ms": 777908
+      },
+      {
+        "start_ms": 801841,
+        "end_ms": 816508
+      },
+      {
+        "start_ms": 846242,
+        "end_ms": 869275
+      },
+      {
+        "start_ms": 887842,
+        "end_ms": 894175
+      },
+      {
+        "start_ms": 906242,
+        "end_ms": 922409
+      }
+    ]
+  },
+  {
     "video_id": "313c6c95-e586-4585-bfce-a2d293d96815",
     "filename": "meme.mp4",
     "rallies": [
@@ -578,6 +732,10 @@
         "end_ms": 26995
       },
       {
+        "start_ms": 41825,
+        "end_ms": 45825
+      },
+      {
         "start_ms": 55452,
         "end_ms": 60531
       },
@@ -612,6 +770,44 @@
       {
         "start_ms": 286449,
         "end_ms": 294215
+      }
+    ]
+  },
+  {
+    "video_id": "3ad271bd-b94d-4d63-86ec-4ecbe5dbfeac",
+    "filename": "gugu.mp4",
+    "rallies": [
+      {
+        "start_ms": 3073,
+        "end_ms": 12888
+      },
+      {
+        "start_ms": 29015,
+        "end_ms": 35993
+      },
+      {
+        "start_ms": 46850,
+        "end_ms": 66359
+      },
+      {
+        "start_ms": 83735,
+        "end_ms": 95361
+      },
+      {
+        "start_ms": 113325,
+        "end_ms": 119965
+      },
+      {
+        "start_ms": 131565,
+        "end_ms": 145717
+      },
+      {
+        "start_ms": 168450,
+        "end_ms": 179982
+      },
+      {
+        "start_ms": 196013,
+        "end_ms": 209586
       }
     ]
   },
@@ -674,12 +870,20 @@
         "end_ms": 148875
       },
       {
+        "start_ms": 173018,
+        "end_ms": 177271
+      },
+      {
         "start_ms": 196160,
         "end_ms": 204431
       },
       {
         "start_ms": 230281,
         "end_ms": 243881
+      },
+      {
+        "start_ms": 273616,
+        "end_ms": 278655
       },
       {
         "start_ms": 298876,
@@ -790,6 +994,132 @@
       {
         "start_ms": 202200,
         "end_ms": 217766
+      }
+    ]
+  },
+  {
+    "video_id": "635dcba2-2645-49d1-ac62-072f05c957d9",
+    "filename": "toto.mp4",
+    "rallies": [
+      {
+        "start_ms": 3844,
+        "end_ms": 26481
+      },
+      {
+        "start_ms": 35537,
+        "end_ms": 46540
+      },
+      {
+        "start_ms": 66427,
+        "end_ms": 76023
+      },
+      {
+        "start_ms": 93707,
+        "end_ms": 99059
+      },
+      {
+        "start_ms": 109059,
+        "end_ms": 115059
+      },
+      {
+        "start_ms": 137034,
+        "end_ms": 145327
+      },
+      {
+        "start_ms": 154284,
+        "end_ms": 163380
+      },
+      {
+        "start_ms": 194380,
+        "end_ms": 200380
+      },
+      {
+        "start_ms": 212053,
+        "end_ms": 221819
+      },
+      {
+        "start_ms": 237728,
+        "end_ms": 248929
+      },
+      {
+        "start_ms": 260595,
+        "end_ms": 270796
+      },
+      {
+        "start_ms": 297904,
+        "end_ms": 310473
+      },
+      {
+        "start_ms": 335614,
+        "end_ms": 347519
+      },
+      {
+        "start_ms": 356877,
+        "end_ms": 369682
+      },
+      {
+        "start_ms": 396191,
+        "end_ms": 415475
+      },
+      {
+        "start_ms": 432297,
+        "end_ms": 462853
+      },
+      {
+        "start_ms": 477228,
+        "end_ms": 484621
+      },
+      {
+        "start_ms": 504909,
+        "end_ms": 519990
+      },
+      {
+        "start_ms": 539811,
+        "end_ms": 547572
+      },
+      {
+        "start_ms": 561876,
+        "end_ms": 578391
+      },
+      {
+        "start_ms": 591563,
+        "end_ms": 600659
+      },
+      {
+        "start_ms": 615659,
+        "end_ms": 622159
+      },
+      {
+        "start_ms": 639704,
+        "end_ms": 665248
+      },
+      {
+        "start_ms": 704748,
+        "end_ms": 710248
+      },
+      {
+        "start_ms": 721142,
+        "end_ms": 731507
+      },
+      {
+        "start_ms": 742003,
+        "end_ms": 766211
+      },
+      {
+        "start_ms": 800975,
+        "end_ms": 811742
+      },
+      {
+        "start_ms": 821435,
+        "end_ms": 846341
+      },
+      {
+        "start_ms": 863558,
+        "end_ms": 877969
+      },
+      {
+        "start_ms": 888832,
+        "end_ms": 897928
       }
     ]
   },
@@ -954,6 +1284,96 @@
     ]
   },
   {
+    "video_id": "7d77980f-3006-40e0-adc0-db491a5bb659",
+    "filename": "tata.mp4",
+    "rallies": [
+      {
+        "start_ms": 0,
+        "end_ms": 30133
+      },
+      {
+        "start_ms": 62200,
+        "end_ms": 72733
+      },
+      {
+        "start_ms": 124200,
+        "end_ms": 142733
+      },
+      {
+        "start_ms": 174200,
+        "end_ms": 187733
+      },
+      {
+        "start_ms": 209400,
+        "end_ms": 223933
+      },
+      {
+        "start_ms": 244200,
+        "end_ms": 250033
+      },
+      {
+        "start_ms": 269400,
+        "end_ms": 287133
+      },
+      {
+        "start_ms": 304400,
+        "end_ms": 319333
+      },
+      {
+        "start_ms": 349400,
+        "end_ms": 362333
+      },
+      {
+        "start_ms": 383800,
+        "end_ms": 391633
+      },
+      {
+        "start_ms": 402200,
+        "end_ms": 413633
+      },
+      {
+        "start_ms": 430600,
+        "end_ms": 437733
+      },
+      {
+        "start_ms": 456200,
+        "end_ms": 471533
+      },
+      {
+        "start_ms": 516600,
+        "end_ms": 539633
+      },
+      {
+        "start_ms": 560200,
+        "end_ms": 579933
+      },
+      {
+        "start_ms": 591000,
+        "end_ms": 600433
+      },
+      {
+        "start_ms": 612933,
+        "end_ms": 618933
+      },
+      {
+        "start_ms": 635400,
+        "end_ms": 647133
+      },
+      {
+        "start_ms": 664600,
+        "end_ms": 684733
+      },
+      {
+        "start_ms": 699400,
+        "end_ms": 710833
+      },
+      {
+        "start_ms": 725800,
+        "end_ms": 734733
+      }
+    ]
+  },
+  {
     "video_id": "840e8b6b-8428-48d6-8af8-d239d7c64f5c",
     "filename": "match.mp4",
     "rallies": [
@@ -1004,6 +1424,96 @@
       {
         "start_ms": 285220,
         "end_ms": 301609
+      }
+    ]
+  },
+  {
+    "video_id": "84e66e74-8d4f-420a-ad01-0ada95153ad0",
+    "filename": "lala.mp4",
+    "rallies": [
+      {
+        "start_ms": 3865,
+        "end_ms": 19180
+      },
+      {
+        "start_ms": 28470,
+        "end_ms": 43382
+      },
+      {
+        "start_ms": 61949,
+        "end_ms": 77168
+      },
+      {
+        "start_ms": 90184,
+        "end_ms": 101369
+      },
+      {
+        "start_ms": 114386,
+        "end_ms": 128894
+      },
+      {
+        "start_ms": 146655,
+        "end_ms": 156936
+      },
+      {
+        "start_ms": 178117,
+        "end_ms": 186882
+      },
+      {
+        "start_ms": 203932,
+        "end_ms": 218537
+      },
+      {
+        "start_ms": 233781,
+        "end_ms": 268151
+      },
+      {
+        "start_ms": 308806,
+        "end_ms": 314037
+      },
+      {
+        "start_ms": 323731,
+        "end_ms": 339773
+      },
+      {
+        "start_ms": 358823,
+        "end_ms": 373831
+      },
+      {
+        "start_ms": 388672,
+        "end_ms": 404390
+      },
+      {
+        "start_ms": 415697,
+        "end_ms": 424462
+      },
+      {
+        "start_ms": 444739,
+        "end_ms": 460457
+      },
+      {
+        "start_ms": 481848,
+        "end_ms": 498777
+      },
+      {
+        "start_ms": 521746,
+        "end_ms": 551584
+      },
+      {
+        "start_ms": 565344,
+        "end_ms": 578949
+      },
+      {
+        "start_ms": 592773,
+        "end_ms": 600134
+      },
+      {
+        "start_ms": 615764,
+        "end_ms": 631483
+      },
+      {
+        "start_ms": 652067,
+        "end_ms": 668348
       }
     ]
   },
@@ -1062,8 +1572,8 @@
         "end_ms": 76393
       },
       {
-        "start_ms": 92700,
-        "end_ms": 99200
+        "start_ms": 92702,
+        "end_ms": 99202
       },
       {
         "start_ms": 117835,
@@ -1082,6 +1592,10 @@
       {
         "start_ms": 29769,
         "end_ms": 64982
+      },
+      {
+        "start_ms": 82392,
+        "end_ms": 90508
       },
       {
         "start_ms": 101822,
@@ -1154,6 +1668,10 @@
       {
         "start_ms": 64304,
         "end_ms": 71804
+      },
+      {
+        "start_ms": 83518,
+        "end_ms": 95566
       },
       {
         "start_ms": 110871,
@@ -1274,6 +1792,10 @@
         "end_ms": 122733
       },
       {
+        "start_ms": 137827,
+        "end_ms": 142827
+      },
+      {
         "start_ms": 155800,
         "end_ms": 167266
       }
@@ -1326,7 +1848,7 @@
         "end_ms": 87260
       },
       {
-        "start_ms": 120033,
+        "start_ms": 120533,
         "end_ms": 131986
       },
       {
@@ -1520,6 +2042,10 @@
         "end_ms": 59233
       },
       {
+        "start_ms": 70200,
+        "end_ms": 81233
+      },
+      {
         "start_ms": 90200,
         "end_ms": 103433
       },
@@ -1686,320 +2212,6 @@
     ]
   },
   {
-    "video_id": "edc81438-10bc-431d-ae88-5c609f3fae93",
-    "filename": "macho.mp4",
-    "rallies": [
-      {
-        "start_ms": 16116,
-        "end_ms": 24528
-      },
-      {
-        "start_ms": 35470,
-        "end_ms": 43247
-      },
-      {
-        "start_ms": 62028,
-        "end_ms": 69940
-      },
-      {
-        "start_ms": 106441,
-        "end_ms": 114217
-      },
-      {
-        "start_ms": 128294,
-        "end_ms": 139843
-      },
-      {
-        "start_ms": 155164,
-        "end_ms": 174917
-      }
-    ]
-  },
-  {
-    "video_id": "fb83f876-7288-44ce-b8e4-4151bc7da4df",
-    "filename": "gaga.mp4",
-    "rallies": [
-      {
-        "start_ms": 6389,
-        "end_ms": 40212
-      },
-      {
-        "start_ms": 49640,
-        "end_ms": 67814
-      },
-      {
-        "start_ms": 101315,
-        "end_ms": 113030
-      },
-      {
-        "start_ms": 123361,
-        "end_ms": 134187
-      },
-      {
-        "start_ms": 145454,
-        "end_ms": 159066
-      },
-      {
-        "start_ms": 170236,
-        "end_ms": 187368
-      }
-    ]
-  },
-  {
-    "video_id": "7d77980f-3006-40e0-adc0-db491a5bb659",
-    "filename": "tata.mp4",
-    "rallies": [
-      {
-        "start_ms": 0,
-        "end_ms": 30133
-      },
-      {
-        "start_ms": 62200,
-        "end_ms": 72733
-      },
-      {
-        "start_ms": 124200,
-        "end_ms": 142733
-      },
-      {
-        "start_ms": 174200,
-        "end_ms": 187733
-      },
-      {
-        "start_ms": 209400,
-        "end_ms": 223933
-      },
-      {
-        "start_ms": 269400,
-        "end_ms": 287133
-      },
-      {
-        "start_ms": 304400,
-        "end_ms": 319333
-      },
-      {
-        "start_ms": 349400,
-        "end_ms": 362333
-      },
-      {
-        "start_ms": 383800,
-        "end_ms": 391633
-      },
-      {
-        "start_ms": 402200,
-        "end_ms": 413633
-      },
-      {
-        "start_ms": 456200,
-        "end_ms": 471533
-      },
-      {
-        "start_ms": 516600,
-        "end_ms": 539633
-      },
-      {
-        "start_ms": 560200,
-        "end_ms": 579933
-      },
-      {
-        "start_ms": 591000,
-        "end_ms": 600433
-      },
-      {
-        "start_ms": 612933,
-        "end_ms": 618933
-      },
-      {
-        "start_ms": 635400,
-        "end_ms": 647133
-      },
-      {
-        "start_ms": 664600,
-        "end_ms": 684733
-      },
-      {
-        "start_ms": 699400,
-        "end_ms": 710833
-      },
-      {
-        "start_ms": 725800,
-        "end_ms": 734733
-      }
-    ]
-  },
-  {
-    "video_id": "2e984c43-cef6-4215-8d8e-50d892b510b9",
-    "filename": "titi.mp4",
-    "rallies": [
-      {
-        "start_ms": 11833,
-        "end_ms": 21500
-      },
-      {
-        "start_ms": 31933,
-        "end_ms": 44900
-      },
-      {
-        "start_ms": 65400,
-        "end_ms": 71400
-      },
-      {
-        "start_ms": 80234,
-        "end_ms": 89600
-      },
-      {
-        "start_ms": 100234,
-        "end_ms": 108501
-      },
-      {
-        "start_ms": 117434,
-        "end_ms": 126801
-      },
-      {
-        "start_ms": 135034,
-        "end_ms": 147601
-      },
-      {
-        "start_ms": 167035,
-        "end_ms": 186701
-      },
-      {
-        "start_ms": 216235,
-        "end_ms": 238802
-      },
-      {
-        "start_ms": 255435,
-        "end_ms": 270502
-      },
-      {
-        "start_ms": 285436,
-        "end_ms": 294703
-      },
-      {
-        "start_ms": 310236,
-        "end_ms": 323870
-      },
-      {
-        "start_ms": 342636,
-        "end_ms": 356503
-      },
-      {
-        "start_ms": 373837,
-        "end_ms": 384004
-      },
-      {
-        "start_ms": 411037,
-        "end_ms": 425304
-      },
-      {
-        "start_ms": 447837,
-        "end_ms": 461104
-      },
-      {
-        "start_ms": 471438,
-        "end_ms": 484705
-      },
-      {
-        "start_ms": 500238,
-        "end_ms": 511405
-      },
-      {
-        "start_ms": 523438,
-        "end_ms": 531705
-      },
-      {
-        "start_ms": 541038,
-        "end_ms": 550905
-      },
-      {
-        "start_ms": 567905,
-        "end_ms": 573905
-      },
-      {
-        "start_ms": 593439,
-        "end_ms": 606706
-      },
-      {
-        "start_ms": 628239,
-        "end_ms": 644406
-      },
-      {
-        "start_ms": 657040,
-        "end_ms": 666206
-      },
-      {
-        "start_ms": 681282,
-        "end_ms": 686282
-      },
-      {
-        "start_ms": 702240,
-        "end_ms": 717707
-      },
-      {
-        "start_ms": 731840,
-        "end_ms": 741174
-      },
-      {
-        "start_ms": 768641,
-        "end_ms": 777908
-      },
-      {
-        "start_ms": 801841,
-        "end_ms": 816508
-      },
-      {
-        "start_ms": 846242,
-        "end_ms": 869275
-      },
-      {
-        "start_ms": 887842,
-        "end_ms": 894175
-      },
-      {
-        "start_ms": 906242,
-        "end_ms": 922409
-      }
-    ]
-  },
-  {
-    "video_id": "3ad271bd-b94d-4d63-86ec-4ecbe5dbfeac",
-    "filename": "gugu.mp4",
-    "rallies": [
-      {
-        "start_ms": 3073,
-        "end_ms": 12888
-      },
-      {
-        "start_ms": 29015,
-        "end_ms": 35993
-      },
-      {
-        "start_ms": 46850,
-        "end_ms": 66359
-      },
-      {
-        "start_ms": 83735,
-        "end_ms": 95361
-      },
-      {
-        "start_ms": 113325,
-        "end_ms": 119965
-      },
-      {
-        "start_ms": 131565,
-        "end_ms": 145717
-      },
-      {
-        "start_ms": 168450,
-        "end_ms": 179982
-      },
-      {
-        "start_ms": 196013,
-        "end_ms": 209586
-      }
-    ]
-  },
-  {
     "video_id": "d5a6932f-e853-469b-ad9b-8c811a058526",
     "filename": "tete.mp4",
     "rallies": [
@@ -2090,134 +2302,8 @@
     ]
   },
   {
-    "video_id": "635dcba2-2645-49d1-ac62-072f05c957d9",
-    "filename": "toto.mp4",
-    "rallies": [
-      {
-        "start_ms": 3844,
-        "end_ms": 26481
-      },
-      {
-        "start_ms": 35537,
-        "end_ms": 46540
-      },
-      {
-        "start_ms": 66427,
-        "end_ms": 76023
-      },
-      {
-        "start_ms": 93707,
-        "end_ms": 99059
-      },
-      {
-        "start_ms": 109059,
-        "end_ms": 115059
-      },
-      {
-        "start_ms": 137034,
-        "end_ms": 145327
-      },
-      {
-        "start_ms": 154284,
-        "end_ms": 163380
-      },
-      {
-        "start_ms": 194380,
-        "end_ms": 200380
-      },
-      {
-        "start_ms": 212053,
-        "end_ms": 221819
-      },
-      {
-        "start_ms": 237728,
-        "end_ms": 248929
-      },
-      {
-        "start_ms": 260595,
-        "end_ms": 270796
-      },
-      {
-        "start_ms": 297904,
-        "end_ms": 310473
-      },
-      {
-        "start_ms": 335614,
-        "end_ms": 347519
-      },
-      {
-        "start_ms": 356877,
-        "end_ms": 369682
-      },
-      {
-        "start_ms": 396191,
-        "end_ms": 415475
-      },
-      {
-        "start_ms": 432297,
-        "end_ms": 462853
-      },
-      {
-        "start_ms": 477228,
-        "end_ms": 484621
-      },
-      {
-        "start_ms": 504909,
-        "end_ms": 519990
-      },
-      {
-        "start_ms": 539811,
-        "end_ms": 547572
-      },
-      {
-        "start_ms": 561876,
-        "end_ms": 578391
-      },
-      {
-        "start_ms": 591563,
-        "end_ms": 600659
-      },
-      {
-        "start_ms": 615659,
-        "end_ms": 622159
-      },
-      {
-        "start_ms": 639704,
-        "end_ms": 665248
-      },
-      {
-        "start_ms": 704748,
-        "end_ms": 710248
-      },
-      {
-        "start_ms": 721142,
-        "end_ms": 731507
-      },
-      {
-        "start_ms": 742003,
-        "end_ms": 766211
-      },
-      {
-        "start_ms": 800975,
-        "end_ms": 811742
-      },
-      {
-        "start_ms": 821435,
-        "end_ms": 846341
-      },
-      {
-        "start_ms": 863558,
-        "end_ms": 877969
-      },
-      {
-        "start_ms": 888832,
-        "end_ms": 897928
-      }
-    ]
-  },
-  {
     "video_id": "dd042609-e22e-4f60-83ed-038897c88c32",
-    "filename": "tutu.mp4",
+    "filename": "tete.mp4",
     "rallies": [
       {
         "start_ms": 7860,
@@ -2334,6 +2420,70 @@
       {
         "start_ms": 800206,
         "end_ms": 810815
+      }
+    ]
+  },
+  {
+    "video_id": "edc81438-10bc-431d-ae88-5c609f3fae93",
+    "filename": "macho.mp4",
+    "rallies": [
+      {
+        "start_ms": 16116,
+        "end_ms": 24528
+      },
+      {
+        "start_ms": 35470,
+        "end_ms": 43247
+      },
+      {
+        "start_ms": 62028,
+        "end_ms": 69940
+      },
+      {
+        "start_ms": 84018,
+        "end_ms": 88092
+      },
+      {
+        "start_ms": 106441,
+        "end_ms": 114217
+      },
+      {
+        "start_ms": 128294,
+        "end_ms": 139843
+      },
+      {
+        "start_ms": 155164,
+        "end_ms": 174917
+      }
+    ]
+  },
+  {
+    "video_id": "fb83f876-7288-44ce-b8e4-4151bc7da4df",
+    "filename": "gaga.mp4",
+    "rallies": [
+      {
+        "start_ms": 6389,
+        "end_ms": 40212
+      },
+      {
+        "start_ms": 49640,
+        "end_ms": 67814
+      },
+      {
+        "start_ms": 101315,
+        "end_ms": 113030
+      },
+      {
+        "start_ms": 123361,
+        "end_ms": 134187
+      },
+      {
+        "start_ms": 145454,
+        "end_ms": 159066
+      },
+      {
+        "start_ms": 170236,
+        "end_ms": 187368
       }
     ]
   },
@@ -2456,96 +2606,6 @@
       {
         "start_ms": 938600,
         "end_ms": 949633
-      }
-    ]
-  },
-  {
-    "video_id": "84e66e74-8d4f-420a-ad01-0ada95153ad0",
-    "filename": "lala.mp4",
-    "rallies": [
-      {
-        "start_ms": 3865,
-        "end_ms": 19180
-      },
-      {
-        "start_ms": 28470,
-        "end_ms": 43382
-      },
-      {
-        "start_ms": 61949,
-        "end_ms": 77168
-      },
-      {
-        "start_ms": 90184,
-        "end_ms": 101369
-      },
-      {
-        "start_ms": 114386,
-        "end_ms": 128894
-      },
-      {
-        "start_ms": 146655,
-        "end_ms": 156936
-      },
-      {
-        "start_ms": 178117,
-        "end_ms": 186882
-      },
-      {
-        "start_ms": 203932,
-        "end_ms": 218537
-      },
-      {
-        "start_ms": 233781,
-        "end_ms": 268151
-      },
-      {
-        "start_ms": 308806,
-        "end_ms": 314037
-      },
-      {
-        "start_ms": 323731,
-        "end_ms": 339773
-      },
-      {
-        "start_ms": 358823,
-        "end_ms": 373831
-      },
-      {
-        "start_ms": 388672,
-        "end_ms": 404390
-      },
-      {
-        "start_ms": 415697,
-        "end_ms": 424462
-      },
-      {
-        "start_ms": 444739,
-        "end_ms": 460457
-      },
-      {
-        "start_ms": 481848,
-        "end_ms": 498777
-      },
-      {
-        "start_ms": 521747,
-        "end_ms": 551584
-      },
-      {
-        "start_ms": 565344,
-        "end_ms": 578949
-      },
-      {
-        "start_ms": 592773,
-        "end_ms": 600134
-      },
-      {
-        "start_ms": 615764,
-        "end_ms": 631483
-      },
-      {
-        "start_ms": 652067,
-        "end_ms": 668348
       }
     ]
   }

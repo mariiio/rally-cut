@@ -2,6 +2,10 @@
 
 Volleyball video analysis platform. Monorepo with ML pipeline, web editor, and REST API.
 
+## Documentation Lookup
+
+Always use Context7 when needing library/API documentation, code generation, setup or configuration steps without the user having to explicitly ask.
+
 ## Projects
 
 | Directory | Purpose | Stack |

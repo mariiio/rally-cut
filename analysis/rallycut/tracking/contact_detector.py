@@ -109,7 +109,6 @@ class ContactDetectionConfig:
     # Player-proximity candidate refinement
     enable_proximity_candidates: bool = True
     proximity_search_window: int = 8  # Search ±N frames around each candidate
-
     # Court position (baselines used by ball_features.py serve detection)
     baseline_y_near: float = 0.82  # Near baseline Y threshold
     baseline_y_far: float = 0.18  # Far baseline Y threshold
@@ -308,7 +307,7 @@ def _find_nearest_player(
         player_center_y is the bbox center Y (for court side determination).
     """
     best_track_id = -1
-    best_distance = float("inf")
+    best_dist = float("inf")
     best_player_y = 0.5
 
     for p in player_positions:
@@ -321,12 +320,12 @@ def _find_nearest_player(
 
         dist = math.sqrt((ball_x - player_x) ** 2 + (ball_y - player_y) ** 2)
 
-        if dist < best_distance:
-            best_distance = dist
+        if dist < best_dist:
+            best_dist = dist
             best_track_id = p.track_id
             best_player_y = p.y  # bbox center Y for court side
 
-    return best_track_id, best_distance, best_player_y
+    return best_track_id, best_dist, best_player_y
 
 
 def _depth_scale_at_y(
@@ -1464,6 +1463,7 @@ def detect_contacts(
     # Build velocity lookup for any frame
     velocity_lookup = dict(zip(frames, smoothed))
 
+    net_zone = 0.08  # ±8% of screen around net
     contacts: list[Contact] = []
     prev_candidate_frame = 0  # Track ALL candidates, not just accepted ones
 
@@ -1495,7 +1495,7 @@ def detect_contacts(
         )
 
         # Find nearest player (narrow window — matches classifier training semantics)
-        # MUST use image-space distance to preserve classifier feature distribution
+        # MUST use image-space distance to preserve classifier feature distribution.
         if player_positions:
             track_id, player_dist, _player_y = _find_nearest_player(
                 frame, ball.x, ball.y, player_positions,
@@ -1527,7 +1527,6 @@ def detect_contacts(
         )
 
         # Check if at net
-        net_zone = 0.08  # ±8% of screen around net
         is_at_net = abs(ball.y - estimated_net_y) < net_zone
 
         has_player = player_dist <= cfg.player_contact_radius

@@ -120,6 +120,17 @@ def train_model(
             "Upload with: rallycut train wasb-modal --upload"
         )
 
+    # Extract images tar if present (faster upload: 1 tar vs 200K+ small files)
+    images_tar = data_path / "images.tar"
+    images_dir = data_path / "images"
+    if images_tar.exists() and not images_dir.exists():
+        import tarfile
+
+        print(f"Extracting {images_tar} → {data_path}/ ...")
+        with tarfile.open(images_tar, "r:") as tar:
+            tar.extractall(data_path)
+        print(f"  Extracted images to {images_dir}")
+
     # Discover available rallies (must have both CSV and images)
     csv_files = sorted(data_path.glob("*.csv"))
     rally_ids: list[str] = []

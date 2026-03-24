@@ -674,16 +674,18 @@ def _run_threshold_sweep(
                     for pp in rally.positions_json
                 ]
 
+            match_teams = match_teams_by_rally.get(rally.rally_id)
+
             contacts = detect_contacts(
                 ball_positions=ball_positions,
                 player_positions=player_positions,
                 net_y=rally.court_split_y,
                 frame_count=rally.frame_count or None,
                 classifier=classifier,
+                team_assignments=match_teams,
                 court_calibrator=calibrators.get(rally.video_id),
             )
 
-            match_teams = match_teams_by_rally.get(rally.rally_id)
             rally_actions = classify_rally_actions(
                 contacts, rally.rally_id,
                 match_team_assignments=match_teams,
@@ -880,6 +882,8 @@ def main() -> None:
                     for pp in rally.positions_json
                 ]
 
+            match_teams = match_teams_by_rally.get(rally.rally_id)
+
             contacts = detect_contacts(
                 ball_positions=ball_positions,
                 player_positions=player_positions,
@@ -888,10 +892,9 @@ def main() -> None:
                 frame_count=rally.frame_count or None,
                 classifier=contact_classifier,
                 use_classifier=not args.no_classifier,
+                team_assignments=match_teams,
                 court_calibrator=calibrators.get(rally.video_id),
             )
-
-            match_teams = match_teams_by_rally.get(rally.rally_id)
 
             # Build ReID predictions if classifier available for this video
             reid_preds: dict[int, dict[str, Any]] | None = None

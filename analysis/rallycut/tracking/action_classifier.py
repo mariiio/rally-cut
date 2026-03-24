@@ -2057,6 +2057,7 @@ def classify_rally_actions(
 
     result.actions = reattribute_players(
         result.actions, contact_sequence.contacts, reattrib_teams,
+        max_distance_ratio=1.5,
         reid_predictions=reid_predictions,
     )
 
