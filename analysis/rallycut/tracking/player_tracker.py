@@ -537,6 +537,21 @@ PREPROCESSING_NONE = "none"
 PREPROCESSING_CLAHE = "clahe"  # Contrast Limited Adaptive Histogram Equalization
 
 
+class _IdentityCMC:
+    """No-op camera motion compensation for fixed tripod cameras.
+
+    BoxMOT's BotSort requires a CMC object but doesn't support "none".
+    This returns an identity affine matrix (no warp), avoiding the small
+    estimation errors that SOF/ECC introduce on static cameras which
+    perturb Kalman predictions and cause track fragmentation.
+    """
+
+    def apply(
+        self, img: np.ndarray, dets: np.ndarray | None = None,
+    ) -> np.ndarray:
+        return np.eye(2, 3, dtype=np.float32)
+
+
 def apply_clahe_preprocessing(frame: np.ndarray) -> np.ndarray:
     """Apply CLAHE preprocessing to improve detection on sand backgrounds.
 
@@ -983,7 +998,7 @@ class PlayerTracker:
             match_thresh=0.90,
             proximity_thresh=0.5,
             appearance_thresh=appearance_thresh,
-            cmc_method="sof",  # Cheapest CMC; ~identity for fixed tripod (~2ms/frame)
+            cmc_method="sof",  # Overridden with _IdentityCMC below
             frame_rate=30,
             fuse_first_associate=False,
             with_reid=False,  # Skip model loading
@@ -996,6 +1011,13 @@ class PlayerTracker:
         # embs, self.model is never touched. We MUST always pass embs when
         # calling update() on this tracker.
         tracker.with_reid = True
+
+        # Disable camera motion compensation for fixed tripod cameras.
+        # BoxMOT doesn't support cmc_method="none", so we replace the CMC
+        # with a no-op that returns identity. SOF (sparse optical flow) on a
+        # static camera introduces small affine estimation errors that perturb
+        # Kalman predictions and cause severe track fragmentation.
+        tracker.cmc = _IdentityCMC()
 
         logger.info(
             "BoxMOT BotSort initialized (appearance_thresh=%.2f, "
