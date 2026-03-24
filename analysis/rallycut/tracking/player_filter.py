@@ -667,6 +667,28 @@ def classify_teams(
 
     near_count = sum(1 for t in team_assignments.values() if t == 0)
     far_count = sum(1 for t in team_assignments.values() if t == 1)
+
+    # Fallback: if all players ended up on the same team (court_split_y
+    # is too extreme, e.g. above/below all players), split by median Y
+    # index.  This guarantees a valid 2-team split.
+    if len(team_assignments) >= 4 and (near_count == 0 or far_count == 0):
+        sorted_tids = sorted(
+            team_assignments.keys(),
+            key=lambda t: np.median([p.y for p in track_positions[t][:window_frames]]),
+        )
+        mid = len(sorted_tids) // 2
+        for t in sorted_tids[:mid]:
+            team_assignments[t] = 1  # far (lower Y)
+        for t in sorted_tids[mid:]:
+            team_assignments[t] = 0  # near (higher Y)
+        near_count = len(sorted_tids) - mid
+        far_count = mid
+        logger.info(
+            "All tracks on one side with split_y=%.3f, "
+            "using median-index fallback: near=%d, far=%d",
+            court_split_y, near_count, far_count,
+        )
+
     logger.debug(
         f"Team classification (split_y={court_split_y:.3f}): "
         f"near={near_count}, far={far_count}"

@@ -1829,6 +1829,17 @@ class PlayerTracker:
                         positions, split_y,
                         precomputed_assignments=precomputed_teams,
                     )
+                elif precomputed_teams and len(set(precomputed_teams.values())) >= 2:
+                    # Bbox-size ranking produced a valid 2-team split even
+                    # though the Y-based split_y is unreliable.  Use the
+                    # size-based assignments directly (they don't depend
+                    # on split_y).
+                    team_assignments = dict(precomputed_teams)
+                    logger.info(
+                        "Using bbox-size team assignments despite low "
+                        "split confidence (%d tracks)",
+                        len(team_assignments),
+                    )
 
                 # Step 4c: Global identity optimization
                 # Splits tracks at interaction boundaries and reassigns
