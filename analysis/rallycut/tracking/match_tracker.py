@@ -56,6 +56,11 @@ logger = logging.getLogger(__name__)
 # Appearance costs range 0.0-1.0, so 0.15 is meaningful but not dominant.
 SIDE_PENALTY = 0.15
 
+# Hard side penalty when court calibration provides authoritative side labels.
+# Effectively prevents cross-side assignment — players physically cannot be on
+# the wrong side of the net.
+SIDE_PENALTY_CALIBRATED = 1.0
+
 # Position continuity weight in the cost matrix. When last positions are known,
 # the distance between early-rally track position and previous rally's late position
 # is blended into the cost. This is critical for within-team discrimination where
@@ -261,6 +266,8 @@ class StoredRallyData:
     # Rally timing (for inter-rally gap calculation in switch detection)
     start_ms: int = 0
     end_ms: int = 0
+    # Whether side classification used court calibration (authoritative)
+    sides_from_calibration: bool = False
 
 
 def _team_match_cost(
@@ -389,6 +396,7 @@ class MatchPlayerTracker:
         self.collect_diagnostics = collect_diagnostics
         self.diagnostics: list[RallyAssignmentDiagnostics] = []
         self.stored_rally_data: list[StoredRallyData] = []
+        self._sides_from_calibration = False
 
     def process_rally(
         self,
@@ -524,6 +532,7 @@ class MatchPlayerTracker:
             serve_direction=serve_dir,
             start_ms=start_ms,
             end_ms=end_ms,
+            sides_from_calibration=self._sides_from_calibration,
         ))
 
         return RallyTrackingResult(
@@ -543,8 +552,9 @@ class MatchPlayerTracker:
     ) -> tuple[dict[int, float], dict[int, int]]:
         """Classify tracks into near/far court with soft labels.
 
-        Priority: team_assignments (from tracking pipeline's bbox-size
-        clustering) > court_split_y > median Y split.
+        Priority: court calibration (homography) > team_assignments
+        (from tracking pipeline's bbox-size clustering) > court_split_y
+        > median Y split.
 
         Args:
             track_stats: Appearance stats per track.
@@ -573,6 +583,57 @@ class MatchPlayerTracker:
             track_avg_y[track_id] = float(np.mean(y_vals))
 
         track_court_sides: dict[int, int] = {}
+        self._sides_from_calibration = False
+
+        # Priority 0: Court calibration — project foot positions through
+        # homography to get court_y in meters.  Net is at 8.0 m.
+        # This is authoritative when available.
+        if self.calibrator is not None and self.calibrator.is_calibrated:
+            track_court_y: dict[int, list[float]] = {}
+            for p in player_positions:
+                if p.track_id < 0 or p.track_id not in track_avg_y:
+                    continue
+                foot_x = p.x
+                # p.y is bbox center; + height/2 = bottom edge (feet)
+                foot_y = p.y + p.height * 0.5
+                try:
+                    _, cy = self.calibrator.image_to_court(
+                        (foot_x, foot_y), 1, 1
+                    )
+                    if p.track_id not in track_court_y:
+                        track_court_y[p.track_id] = []
+                    track_court_y[p.track_id].append(cy)
+                except Exception:
+                    pass
+
+            if track_court_y:
+                classified = 0
+                for tid in track_avg_y:
+                    if tid in track_court_y and track_court_y[tid]:
+                        med_cy = float(np.median(track_court_y[tid]))
+                        # Net at 8.0 m: near side < 8.0, far side > 8.0
+                        track_court_sides[tid] = 0 if med_cy < 8.0 else 1
+                        classified += 1
+
+                if classified >= len(track_avg_y) * 0.75:
+                    # Fill unclassified tracks using image-space Y position:
+                    # higher Y = near court (closer to camera)
+                    sorted_unclassified = sorted(
+                        (tid for tid in track_avg_y if tid not in track_court_sides),
+                        key=lambda t: track_avg_y[t],
+                    )
+                    mid = len(sorted_unclassified) // 2
+                    for idx, tid in enumerate(sorted_unclassified):
+                        track_court_sides[tid] = 1 if idx < mid else 0
+                    self._sides_from_calibration = True
+                    logger.info(
+                        "Court calibration classified %d/%d tracks",
+                        classified,
+                        len(track_avg_y),
+                    )
+                    return track_avg_y, track_court_sides
+                # Not enough tracks classified — fall through
+                track_court_sides.clear()
 
         # Priority 1: Use pre-computed team_assignments if they cover most tracks
         if team_assignments:
@@ -779,7 +840,11 @@ class MatchPlayerTracker:
                 reid_use_for_track[tid] = False
 
         # Build cost matrix: appearance + optional side penalty + position
-        default_cost = 1.0 + (SIDE_PENALTY if use_side_penalty else 0.0)
+        active_side_penalty = (
+            SIDE_PENALTY_CALIBRATED if self._sides_from_calibration
+            else SIDE_PENALTY
+        )
+        default_cost = 1.0 + (active_side_penalty if use_side_penalty else 0.0)
         cost_matrix = np.full((size, size), default_cost)
         for i, tid in enumerate(track_ids):
             if tid not in track_stats:
@@ -822,7 +887,7 @@ class MatchPlayerTracker:
 
                 # Side penalty (player_side already computed above)
                 if use_side_penalty:
-                    side_pen = SIDE_PENALTY if track_side != player_side else 0.0
+                    side_pen = active_side_penalty if track_side != player_side else 0.0
                 else:
                     side_pen = 0.0
 
@@ -1430,10 +1495,11 @@ class MatchPlayerTracker:
         for i, (data, initial) in enumerate(
             zip(self.stored_rally_data, initial_results)
         ):
-            # Restore the player→side mapping from Pass 1 so side penalties
-            # are correct for pre-switch rallies.
+            # Restore the player→side mapping and calibration flag from Pass 1
+            # so side penalties are correct for pre-switch rallies.
             saved_side = self.state.current_side_assignment
             self.state.current_side_assignment = data.player_side_assignment
+            self._sides_from_calibration = data.sides_from_calibration
 
             # No position continuity in Pass 2 — rebuilding the position
             # chain from scratch can propagate errors.
@@ -1874,6 +1940,7 @@ def match_players_across_rallies(
     reference_profiles: dict[int, PlayerAppearanceProfile] | None = None,
     extract_reid: bool = False,
     reid_model: GeneralReIDModel | None = None,
+    calibrator: CourtCalibrator | None = None,
 ) -> MatchPlayersResult:
     """
     Match players across all rallies in a video for consistent IDs.
@@ -1895,6 +1962,10 @@ def match_players_across_rallies(
         reid_model: Optional GeneralReIDModel for embedding extraction.
             When provided, uses its projection head. Falls back to raw backbone
             when not provided but reference profiles have embeddings.
+        calibrator: Optional court calibrator for authoritative near/far side
+            classification. When provided, track foot positions are projected
+            through the homography to determine court side (net at 8.0m),
+            and a hard penalty (SIDE_PENALTY_CALIBRATED) is applied.
 
     Returns:
         MatchPlayersResult with track→player mappings and accumulated profiles.
@@ -1916,6 +1987,7 @@ def match_players_across_rallies(
             f"{sorted(reference_profiles.keys())}"
         )
     tracker = MatchPlayerTracker(
+        calibrator=calibrator,
         collect_diagnostics=collect_diagnostics,
         reference_profiles=reference_profiles,
     )

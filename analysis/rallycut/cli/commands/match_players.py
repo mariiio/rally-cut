@@ -189,6 +189,7 @@ def match_players(
         rallycut match-players abc123 -o result.json
     """
     from rallycut.cli.commands.remap_track_ids import _invert_mapping, _should_reverse
+    from rallycut.court.calibration import CourtCalibrator
     from rallycut.evaluation.db import get_connection
     from rallycut.evaluation.tracking.db import get_video_path, load_rallies_for_video
     from rallycut.tracking.match_tracker import MatchPlayersResult, match_players_across_rallies
@@ -278,8 +279,25 @@ def match_players(
         console.print("[red]Error:[/red] Could not resolve video file.")
         raise typer.Exit(1)
 
+    # Load court calibration for authoritative near/far side classification.
+    # Requires 4 court corners to compute a valid homography.
+    court_calibrator: CourtCalibrator | None = None
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT court_calibration_json FROM videos WHERE id = %s",
+                [video_id],
+            )
+            cal_row = cur.fetchone()
+    if cal_row and cal_row[0] and isinstance(cal_row[0], list) and len(cal_row[0]) == 4:
+        court_calibrator = CourtCalibrator()
+        court_calibrator.calibrate([(c["x"], c["y"]) for c in cal_row[0]])
+        if not court_calibrator.is_calibrated:
+            court_calibrator = None
+
     if not quiet:
-        console.print(f"  Video: {video_path.name}")
+        cal_str = " (court calibration)" if court_calibrator else ""
+        console.print(f"  Video: {video_path.name}{cal_str}")
         console.print()
 
     # Load reference crop profiles: from JSON file, or from DB
@@ -410,6 +428,7 @@ def match_players(
         num_samples=num_samples,
         reference_profiles=reference_profiles,
         reid_model=general_reid_model,
+        calibrator=court_calibrator,
     )
     results = match_result.rally_results
 
