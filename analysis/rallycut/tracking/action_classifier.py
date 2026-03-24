@@ -1482,8 +1482,10 @@ def reattribute_players(
        check (e.g. receives created by repair_action_sequence).
     2. Team-based re-attribution (requires team data): derives expected
        team from server identity + action sequence (volleyball rules),
-       then swaps players on the wrong team to best candidate on the
-       correct team within distance cap.
+       then swaps players on the wrong team — or unmapped non-player
+       tracks (spectator/ref IDs) — to best candidate on the correct
+       team within distance cap. For unmapped tracks, falls back to the
+       nearest mapped candidate on any team.
     3. ReID re-attribution (requires reid_predictions): for each contact,
        if the fine-tuned classifier is confident that a different candidate
        is the correct player, re-attribute.
@@ -1539,9 +1541,14 @@ def reattribute_players(
 
         current_team = team_assignments.get(action.player_track_id)
 
-        # Only re-attribute if current player is on the WRONG team
-        if current_team is None or current_team == expected_team:
+        # Skip if current player is already on the correct team
+        if current_team is not None and current_team == expected_team:
             continue
+
+        # current_team is None → unmapped track (spectator/ref shifted to 101+)
+        # current_team != expected_team → wrong team
+        # In both cases, find the best candidate on the expected team.
+        is_unmapped = current_team is None
 
         contact = contact_by_frame.get(action.frame)
         if contact is None or not contact.player_candidates:
@@ -1549,9 +1556,17 @@ def reattribute_players(
 
         current_dist = contact.player_distance
         if not math.isfinite(current_dist):
-            continue
+            # Unmapped tracks may lack a meaningful distance — use inf so any
+            # mapped candidate wins.
+            if is_unmapped:
+                current_dist = float("inf")
+            else:
+                continue
 
-        # Find best candidate on the correct team within distance cap
+        # Find best candidate on the correct team within distance cap.
+        # For unmapped tracks, skip the distance ratio cap — any mapped
+        # player on the expected team is better than a non-player track.
+        dist_cap = float("inf") if is_unmapped else max_distance_ratio * current_dist
         best_tid = -1
         best_dist = float("inf")
         for tid, dist in contact.player_candidates:
@@ -1560,16 +1575,30 @@ def reattribute_players(
             cand_team = team_assignments.get(tid)
             if cand_team != expected_team:
                 continue
-            if dist <= max_distance_ratio * current_dist and dist < best_dist:
+            if dist <= dist_cap and dist < best_dist:
                 best_tid = tid
                 best_dist = dist
 
+        # For unmapped tracks: if no candidate on expected team, fall back
+        # to the nearest mapped (primary) candidate on any team.  Any real
+        # player is better than a spectator/ref track.
+        if best_tid < 0 and is_unmapped:
+            for tid, dist in contact.player_candidates:
+                if tid == action.player_track_id:
+                    continue
+                if team_assignments.get(tid) is None:
+                    continue  # also unmapped
+                if dist < best_dist:
+                    best_tid = tid
+                    best_dist = dist
+
         if best_tid >= 0:
             logger.debug(
-                "Re-attribute frame %d: track %d (team %d, dist %.3f) → "
-                "track %d (dist %.3f) expected team %d",
+                "Re-attribute frame %d: track %d (team %s, dist %.3f) → "
+                "track %d (dist %.3f) expected team %d%s",
                 action.frame, action.player_track_id, current_team,
                 current_dist, best_tid, best_dist, expected_team,
+                " (was unmapped)" if is_unmapped else "",
             )
             action.player_track_id = best_tid
             n_reattributed += 1

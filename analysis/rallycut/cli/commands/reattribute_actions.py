@@ -454,8 +454,34 @@ def reattribute_actions_cmd(
         if reattrib_ta and actions:
             assign_court_side_from_teams(actions, reattrib_ta)
 
-        # Re-attribute players if high-confidence and contacts have candidates
+        # Fix unmapped tracks (spectator/ref IDs like 101+) even on
+        # low-confidence rallies — any primary player is better than a
+        # non-player track, regardless of team assignment quality.
         has_candidates = contacts and any(c.player_candidates for c in contacts)
+        if has_candidates and actions and not reattrib_ta:
+            contact_by_frame = {c.frame: c for c in contacts}
+            for action in actions:
+                if team_assignments.get(action.player_track_id) is not None:
+                    continue  # already mapped to a primary track
+                if action.player_track_id < 0:
+                    continue
+                contact = contact_by_frame.get(action.frame)
+                if contact is None or not contact.player_candidates:
+                    continue
+                best_tid = -1
+                best_dist = float("inf")
+                for tid, dist in contact.player_candidates:
+                    if tid == action.player_track_id:
+                        continue
+                    if team_assignments.get(tid) is None:
+                        continue  # also unmapped
+                    if dist < best_dist:
+                        best_tid = tid
+                        best_dist = dist
+                if best_tid >= 0:
+                    action.player_track_id = best_tid
+
+        # Re-attribute players if high-confidence and contacts have candidates
         n_changed = 0
         if reattrib_ta and has_candidates and actions:
             original_track_ids = [a.player_track_id for a in actions]
