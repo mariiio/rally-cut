@@ -93,6 +93,64 @@ def _serialize_actions(
     return result
 
 
+def _attribute_synthetic_serves(
+    actions: list[ClassifiedAction],
+    positions_json: list[dict[str, Any]] | Any,
+    team_assignments: dict[int, int],
+) -> None:
+    """Attribute synthetic serves (playerTrackId=-1) to nearest server.
+
+    Synthetic serves are injected by the action classifier when no contact
+    matches the serve.  They carry court_side but no player.  This pass
+    finds the nearest primary-track player on the serving side at (or near)
+    the serve frame.
+    """
+    from rallycut.tracking.action_classifier import ActionType
+
+    # Build per-frame position index for primary tracks only
+    pos_by_frame: dict[int, list[tuple[int, float, float]]] = {}
+    for p in positions_json:
+        tid = p.get("trackId")
+        if tid is None or team_assignments.get(tid) is None:
+            continue  # skip unmapped tracks
+        fn = p.get("frameNumber", -1)
+        pos_by_frame.setdefault(fn, []).append((tid, p.get("x", 0.5), p.get("y", 0.5)))
+
+    # team 0 = near (high Y), team 1 = far (low Y)
+    serve_team = {"near": 0, "far": 1}
+
+    for action in actions:
+        if not action.is_synthetic:
+            continue
+        if action.action_type != ActionType.SERVE:
+            continue
+        if action.player_track_id >= 0:
+            continue  # already attributed
+
+        expected_team = serve_team.get(action.court_side)
+        if expected_team is None:
+            continue
+
+        # Search serve frame ± 5 frames for player positions
+        best_tid = -1
+        best_dist = float("inf")
+        for delta in range(6):
+            for fn in [action.frame + delta, action.frame - delta]:
+                for tid, px, py in pos_by_frame.get(fn, []):
+                    if team_assignments.get(tid) != expected_team:
+                        continue
+                    # Distance from serve baseline (Y-axis is most relevant)
+                    dist = abs(py - action.ball_y) + abs(px - action.ball_x) * 0.3
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_tid = tid
+            if best_tid >= 0:
+                break  # found at this delta, no need to search further
+
+        if best_tid >= 0:
+            action.player_track_id = best_tid
+
+
 def _train_reid_classifier(
     video_id: str,
     quiet: bool = False,
@@ -514,6 +572,11 @@ def reattribute_actions_cmd(
                 1 for orig, act in zip(original_track_ids, actions)
                 if orig != act.player_track_id
             )
+
+        # Attribute synthetic serves (P-1) using position data.
+        # Find the nearest primary player on the serving court side.
+        if positions_json_val and team_assignments:
+            _attribute_synthetic_serves(actions, positions_json_val, team_assignments)
 
         total_actions += len(actions)
         total_reattributed += n_changed
