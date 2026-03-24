@@ -530,7 +530,7 @@ BOTSORT_CONFIG = Path(__file__).parent / "botsort_volleyball.yaml"
 TRACKER_BYTETRACK = "bytetrack"
 TRACKER_BOTSORT = "botsort"
 TRACKER_BOXMOT_BOTSORT = "boxmot-botsort"  # BoxMOT BoT-SORT with custom OSNet ReID
-DEFAULT_TRACKER = TRACKER_BOTSORT  # BoT-SORT reduces ID switches by 64%
+DEFAULT_TRACKER = TRACKER_BOXMOT_BOTSORT  # BoxMOT + OSNet ReID: +2.8pp F1, -59% FP vs ultralytics
 
 # Preprocessing options
 PREPROCESSING_NONE = "none"
