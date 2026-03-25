@@ -51,8 +51,9 @@ def repair_identities_cmd(
     from rallycut.evaluation.db import get_connection
     from rallycut.evaluation.tracking.db import get_video_path
     from rallycut.tracking.identity_repair import (
+        RallyRepairInput,
         apply_repairs,
-        repair_rally_identities,
+        repair_all_rallies,
     )
     from rallycut.tracking.player_features import PlayerAppearanceProfile
     from rallycut.tracking.player_tracker import PlayerPosition
@@ -131,8 +132,12 @@ def repair_identities_cmd(
             r[3],
         )
 
-    total_repairs = 0
-    updates: list[tuple[str, str]] = []  # (pt_id, new_positions_json)
+    # Build batch inputs
+    repair_inputs: list[RallyRepairInput] = []
+    # Map rally_id → pt_id for DB updates
+    rally_pt_ids: dict[str, str] = {}
+    # Map rally_id → positions list (mutable, for apply_repairs)
+    rally_positions: dict[str, list[PlayerPosition]] = {}
 
     for rally_entry in rally_entries:
         rid = rally_entry.get("rallyId") or rally_entry.get("rally_id", "")
@@ -144,14 +149,10 @@ def repair_identities_cmd(
         ttp = rally_entry.get("trackToPlayer") or rally_entry.get(
             "track_to_player", {}
         )
-        if not ttp:
+        if not ttp or not pos_json:
             continue
         ttp = {int(k): int(v) for k, v in ttp.items()}
 
-        if not pos_json:
-            continue
-
-        # Convert positions
         positions = [
             PlayerPosition(
                 frame_number=p["frameNumber"],
@@ -165,16 +166,22 @@ def repair_identities_cmd(
             for p in cast(list[dict[str, Any]], pos_json)
         ]
 
-        # Run repair
-        repair_result = repair_rally_identities(
-            positions=positions,
-            track_to_player=ttp,
-            player_profiles=profiles,
-            video_path=video_path,
-            start_ms=start_ms,
-            rally_id=rid,
-        )
+        repair_inputs.append(RallyRepairInput(
+            rally_id=rid, start_ms=start_ms,
+            positions=positions, track_to_player=ttp,
+        ))
+        rally_pt_ids[rid] = pt_id
+        rally_positions[rid] = positions
 
+    # Run batch repair (single sequential video pass)
+    repair_results = repair_all_rallies(video_path, repair_inputs, profiles)
+
+    # Process results
+    total_repairs = 0
+    updates: list[tuple[str, str]] = []  # (pt_id, new_positions_json)
+
+    for repair_result in repair_results:
+        rid = repair_result.rally_id
         if repair_result.skipped:
             if not quiet:
                 console.print(
@@ -183,12 +190,12 @@ def repair_identities_cmd(
             continue
 
         if repair_result.num_repairs > 0:
+            positions = rally_positions[rid]
             n_modified = apply_repairs(positions, repair_result.decisions)
             total_repairs += repair_result.num_repairs
 
-            # Serialize back
             new_pos_json = json.dumps([p.to_dict() for p in positions])
-            updates.append((pt_id, new_pos_json))
+            updates.append((rally_pt_ids[rid], new_pos_json))
 
             if not quiet:
                 accepted = [d for d in repair_result.decisions if d.accepted]
