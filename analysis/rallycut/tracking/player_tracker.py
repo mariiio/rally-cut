@@ -1717,11 +1717,16 @@ class PlayerTracker:
                     total_frames=frames_to_process,
                 )
 
-                # Step 0: Spatial consistency — split tracks at large jumps
+                # Step 0: Spatial consistency — split tracks at instantaneous
+                # jumps only. Drift detection is deferred to step 4e (after
+                # identity optimization) so the identity modules can work
+                # with full continuous tracks.
                 positions, consistency_result = enforce_spatial_consistency(
                     positions,
                     color_store=color_store,
                     appearance_store=appearance_store,
+                    video_fps=fps,
+                    drift_detection=False,
                 )
                 num_jump_splits = consistency_result.jump_splits
 
@@ -1935,6 +1940,30 @@ class PlayerTracker:
                             upstream_split_y=split_y,
                             upstream_teams=team_assignments,
                         )
+                    )
+
+            # Step 4e: Post-identity spatial consistency.
+            # Runs both jump detection and drift detection. Drift is
+            # deferred to here (not step 0) so identity modules work with
+            # full continuous tracks. Jump splits catch residual Kalman
+            # artifacts from identity remapping. Drift splits catch smooth
+            # ID swaps that no identity module resolved.
+            if filter_enabled:
+                positions, final_consistency = enforce_spatial_consistency(
+                    positions,
+                    color_store=color_store,
+                    appearance_store=appearance_store,
+                    video_fps=fps,
+                )
+                final_total = (
+                    final_consistency.jump_splits + final_consistency.drift_splits
+                )
+                if final_total > 0:
+                    num_jump_splits += final_total
+                    logger.info(
+                        f"Post-identity spatial consistency: "
+                        f"{final_consistency.jump_splits} jump(s), "
+                        f"{final_consistency.drift_splits} drift(s)"
                     )
 
             # Step 5: Interpolate detection gaps for primary tracks
