@@ -505,6 +505,25 @@ def _infer_serve_side(
     return None
 
 
+def _is_opposite_team(
+    contact_track_id: int,
+    serve_track_id: int,
+    team_assignments: dict[int, int] | None,
+) -> bool | None:
+    """Check if a contact is on the opposite team from the server.
+
+    Returns True (opposite team), False (same team), or None (unknown).
+    Only uses team_assignments (high-confidence). Court_side is too
+    unreliable (can be wrong when ball crosses net) to gate receive.
+    """
+    if team_assignments:
+        serve_team = team_assignments.get(serve_track_id)
+        contact_team = team_assignments.get(contact_track_id)
+        if serve_team is not None and contact_team is not None:
+            return serve_team != contact_team
+    return None
+
+
 def _make_synthetic_serve(
     serve_side: str,
     first_contact_frame: int,
@@ -857,11 +876,16 @@ class ActionClassifier:
                     action_type = ActionType.UNKNOWN
                     confidence = self.config.low_confidence
 
-            elif not receive_detected and serve_side is not None:
-                # First non-block contact after serve is always the receive.
-                # No court_side guard needed: if a rare FP contact between
-                # serve and real receive gets this label, Rule 4 (duplicate
-                # receives → set) in repair_action_sequence handles it.
+            elif (
+                not receive_detected
+                and serve_side is not None
+                and _is_opposite_team(
+                    contact.player_track_id, serve_track_id,
+                    match_team_assignments,
+                ) is not False
+            ):
+                # First contact by the OPPOSITE team after serve is the receive.
+                # Same-team contacts skip this rule → learned classifier handles them.
                 action_type = ActionType.RECEIVE
                 confidence = self.config.high_confidence
                 receive_detected = True
