@@ -13,9 +13,10 @@ import { fileURLToPath } from 'url';
 
 import { env } from '../config/env.js';
 import { generateDownloadUrl } from '../lib/s3.js';
-import { Prisma } from '@prisma/client';
+import { Prisma, PlayerTrack } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errorHandler.js';
+import { remapSingleRally } from './matchAnalysisService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -134,6 +135,29 @@ export interface GetPlayerTrackResult {
   actions?: ActionsData;
   qualityReport?: QualityReport;
   error?: string;
+}
+
+/**
+ * Convert a Prisma PlayerTrack record to the API response shape.
+ */
+function playerTrackToResult(track: PlayerTrack, extra?: { processingTimeMs?: number }): TrackPlayersResult {
+  return {
+    status: 'completed',
+    frameCount: track.frameCount ?? undefined,
+    fps: track.fps ?? undefined,
+    detectionRate: track.detectionRate ?? undefined,
+    avgConfidence: track.avgConfidence ?? undefined,
+    avgPlayerCount: track.avgPlayerCount ?? undefined,
+    uniqueTrackCount: track.uniqueTrackCount ?? undefined,
+    processingTimeMs: extra?.processingTimeMs,
+    courtSplitY: track.courtSplitY ?? undefined,
+    primaryTrackIds: (track.primaryTrackIds as number[] | null) ?? undefined,
+    positions: (track.positionsJson as PlayerPosition[] | null) ?? undefined,
+    ballPositions: (track.ballPositionsJson as BallPosition[] | null) ?? undefined,
+    contacts: (track.contactsJson as ContactsData | null) ?? undefined,
+    actions: (track.actionsJson as ActionsData | null) ?? undefined,
+    qualityReport: (track.qualityReportJson as QualityReport | null) ?? undefined,
+  };
 }
 
 /**
@@ -815,23 +839,7 @@ export async function getPlayerTrack(
     return { status: 'not_found' };
   }
 
-  const track = rally.playerTrack;
-  return {
-    status: 'completed',
-    frameCount: track.frameCount ?? undefined,
-    fps: track.fps ?? undefined,
-    detectionRate: track.detectionRate ?? undefined,
-    avgConfidence: track.avgConfidence ?? undefined,
-    avgPlayerCount: track.avgPlayerCount ?? undefined,
-    uniqueTrackCount: track.uniqueTrackCount ?? undefined,
-    courtSplitY: track.courtSplitY ?? undefined,
-    primaryTrackIds: (track.primaryTrackIds as number[] | null) ?? undefined,
-    positions: (track.positionsJson as PlayerPosition[] | null) ?? undefined,
-    ballPositions: (track.ballPositionsJson as BallPosition[] | null) ?? undefined,
-    contacts: (track.contactsJson as ContactsData | null) ?? undefined,
-    actions: (track.actionsJson as ActionsData | null) ?? undefined,
-    qualityReport: (track.qualityReportJson as QualityReport | null) ?? undefined,
-  };
+  return playerTrackToResult(rally.playerTrack);
 }
 
 /**
@@ -1056,6 +1064,20 @@ export async function trackPlayersForRally(
 
     // Save to database and update video characteristics
     await saveTrackingResult(rallyId, rally.video.id, trackerResult, processingTimeMs);
+
+    // Remap track IDs to global player IDs if match analysis exists.
+    // This ensures the re-tracked rally gets consistent IDs (1-4) matching the rest.
+    const didRemap = await remapSingleRally(rally.video.id, rallyId);
+
+    // If remapped, re-read from DB to return the updated data
+    if (didRemap) {
+      const updated = await prisma.playerTrack.findUnique({
+        where: { rallyId },
+      });
+      if (updated && updated.status === 'COMPLETED') {
+        return playerTrackToResult(updated, { processingTimeMs });
+      }
+    }
 
     return {
       status: 'completed',

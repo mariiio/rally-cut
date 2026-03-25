@@ -462,6 +462,196 @@ async function remapTrackIds(videoId: string): Promise<void> {
 }
 
 /**
+ * Remap track IDs for a single rally after re-tracking.
+ *
+ * Looks up the rally's trackToPlayer mapping from matchAnalysisJson and
+ * applies it to positions, contacts, actions, and primaryTrackIds in the DB.
+ * Skips if no match analysis exists (first-time tracking before batch analysis).
+ *
+ * Repair-identities is not re-run — it already ran during the full match analysis
+ * and the re-tracked rally has fresh detections that don't need appearance repair.
+ *
+ * Returns true if remapping was applied, false if skipped.
+ */
+export async function remapSingleRally(videoId: string, rallyId: string): Promise<boolean> {
+  const video = await prisma.video.findUnique({
+    where: { id: videoId },
+    select: { matchAnalysisJson: true },
+  });
+
+  if (!video?.matchAnalysisJson) {
+    return false;
+  }
+
+  // Find the rally's track→player mapping
+  const matchAnalysis = video.matchAnalysisJson as Record<string, unknown>;
+  const rallies = (matchAnalysis.rallies ?? []) as Array<Record<string, unknown>>;
+  const rallyEntry = rallies.find(
+    (r) => (r.rallyId ?? r.rally_id) === rallyId,
+  );
+
+  if (!rallyEntry) {
+    console.log(`[REMAP_SINGLE] Rally ${rallyId} not found in match analysis, skipping`);
+    return false;
+  }
+
+  const rawTrackToPlayer = (rallyEntry.trackToPlayer ?? rallyEntry.track_to_player ?? {}) as Record<string, number>;
+  const trackToPlayer = new Map<number, number>();
+  for (const [k, v] of Object.entries(rawTrackToPlayer)) {
+    trackToPlayer.set(Number(k), v);
+  }
+
+  if (trackToPlayer.size === 0) {
+    return false;
+  }
+
+  // Load the player track
+  const playerTrack = await prisma.playerTrack.findUnique({
+    where: { rallyId },
+  });
+  if (!playerTrack || playerTrack.status !== 'COMPLETED') {
+    return false;
+  }
+
+  // Collect all track IDs present in positions
+  const positions = (playerTrack.positionsJson ?? []) as Array<Record<string, unknown>>;
+  const allTrackIds = new Set<number>();
+  for (const p of positions) {
+    const tid = p.trackId as number | undefined;
+    if (tid != null) allTrackIds.add(tid);
+  }
+  const primaryIds = (playerTrack.primaryTrackIds ?? []) as number[];
+  for (const pid of primaryIds) allTrackIds.add(pid);
+
+  // Build collision-safe full mapping (mapped → player IDs, unmapped → 101+ if collision)
+  const usedIds = new Set(trackToPlayer.values());
+  const mapping = new Map<number, number>();
+  for (const [tid, pid] of trackToPlayer) {
+    mapping.set(tid, pid);
+  }
+  let nextShifted = 101;
+  for (const tid of [...allTrackIds].sort((a, b) => a - b)) {
+    if (mapping.has(tid)) continue;
+    if (usedIds.has(tid)) {
+      while (allTrackIds.has(nextShifted) || usedIds.has(nextShifted)) nextShifted++;
+      mapping.set(tid, nextShifted++);
+    } else {
+      mapping.set(tid, tid);
+    }
+  }
+
+  // Check if mapping is all identity (nothing to remap)
+  let hasChanges = false;
+  for (const [k, v] of mapping) {
+    if (k !== v) { hasChanges = true; break; }
+  }
+  if (!hasChanges) {
+    console.log(`[REMAP_SINGLE] Rally ${rallyId.slice(0, 8)}: already using player IDs`);
+    return false;
+  }
+
+  // Apply mapping to positions
+  let remapCount = 0;
+  for (const p of positions) {
+    const oldId = p.trackId as number | undefined;
+    if (oldId != null && mapping.has(oldId) && mapping.get(oldId) !== oldId) {
+      p.trackId = mapping.get(oldId);
+      remapCount++;
+    }
+  }
+
+  // Apply mapping to contacts
+  const contactsData = (playerTrack.contactsJson ?? {}) as Record<string, unknown>;
+  const contacts = (contactsData.contacts ?? []) as Array<Record<string, unknown>>;
+  for (const c of contacts) {
+    const oldId = c.playerTrackId as number | undefined;
+    if (oldId != null && mapping.has(oldId) && mapping.get(oldId) !== oldId) {
+      c.playerTrackId = mapping.get(oldId);
+      remapCount++;
+    }
+    const candidates = (c.playerCandidates ?? []) as Array<unknown[]>;
+    for (const cand of candidates) {
+      if (Array.isArray(cand) && cand.length >= 1) {
+        const candId = cand[0] as number;
+        if (mapping.has(candId)) cand[0] = mapping.get(candId);
+      }
+    }
+  }
+
+  // Apply mapping to actions
+  const actionsData = (playerTrack.actionsJson ?? {}) as Record<string, unknown>;
+  const actions = (actionsData.actions ?? []) as Array<Record<string, unknown>>;
+  for (const a of actions) {
+    const oldId = a.playerTrackId as number | undefined;
+    if (oldId != null && mapping.has(oldId) && mapping.get(oldId) !== oldId) {
+      a.playerTrackId = mapping.get(oldId);
+      remapCount++;
+    }
+  }
+  // Remap teamAssignments keys
+  const oldTa = actionsData.teamAssignments as Record<string, string> | undefined;
+  if (oldTa) {
+    const newTa: Record<string, string> = {};
+    for (const [tidStr, team] of Object.entries(oldTa)) {
+      const tid = Number(tidStr);
+      const newTid = mapping.get(tid) ?? tid;
+      newTa[String(newTid)] = team;
+    }
+    actionsData.teamAssignments = newTa;
+  }
+
+  // Remap primaryTrackIds
+  const newPrimaryIds = primaryIds.map((tid) => mapping.get(tid) ?? tid);
+
+  // Remap action ground truth if present
+  const actionGt = (playerTrack.actionGroundTruthJson ?? null) as Array<Record<string, unknown>> | null;
+  if (actionGt) {
+    for (const label of actionGt) {
+      const oldTid = label.playerTrackId as number | undefined;
+      if (oldTid != null && mapping.has(oldTid) && mapping.get(oldTid) !== oldTid) {
+        label.playerTrackId = mapping.get(oldTid);
+      }
+    }
+  }
+
+  // Update DB
+  await prisma.playerTrack.update({
+    where: { rallyId },
+    data: {
+      positionsJson: positions as unknown as Prisma.InputJsonValue,
+      contactsJson: contactsData as unknown as Prisma.InputJsonValue,
+      actionsJson: actionsData as unknown as Prisma.InputJsonValue,
+      primaryTrackIds: newPrimaryIds as unknown as Prisma.InputJsonValue,
+      ...(actionGt ? { actionGroundTruthJson: actionGt as unknown as Prisma.InputJsonValue } : {}),
+    },
+  });
+
+  // Update matchAnalysisJson with appliedFullMapping + remapApplied
+  const mappingObj: Record<string, number> = {};
+  for (const [k, v] of mapping) mappingObj[String(k)] = v;
+  rallyEntry.appliedFullMapping = mappingObj;
+  rallyEntry.remapApplied = true;
+  // Set trackToPlayer to identity (downstream consumers expect post-remap identity)
+  const identityTtp: Record<string, number> = {};
+  for (const v of trackToPlayer.values()) identityTtp[String(v)] = v;
+  rallyEntry.trackToPlayer = identityTtp;
+  if (rallyEntry.track_to_player != null) rallyEntry.track_to_player = identityTtp;
+
+  await prisma.video.update({
+    where: { id: videoId },
+    data: { matchAnalysisJson: matchAnalysis as unknown as Prisma.InputJsonValue },
+  });
+
+  const mappingStr = [...trackToPlayer.entries()]
+    .filter(([k, v]) => k !== v)
+    .map(([k, v]) => `T${k}→P${v}`)
+    .join(', ');
+  console.log(`[REMAP_SINGLE] Rally ${rallyId.slice(0, 8)}: ${remapCount} remapped (${mappingStr})`);
+
+  return true;
+}
+
+/**
  * Re-attribute player actions using match-level team assignments.
  * Updates actions_json in player_tracks where the team signal improves attribution.
  */
