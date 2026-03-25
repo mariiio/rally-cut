@@ -116,9 +116,19 @@ def _bhattacharyya_distance(hist1: np.ndarray, hist2: np.ndarray) -> float:
 def _tracks_overlap_temporally(
     frames_a: set[int],
     frames_b: set[int],
+    max_allowed_overlap: int = 0,
 ) -> bool:
-    """Check if two tracks have any frames in common."""
-    return bool(frames_a & frames_b)
+    """Check if two tracks have more than max_allowed_overlap frames in common.
+
+    Args:
+        frames_a: Frame numbers for track A.
+        frames_b: Frame numbers for track B.
+        max_allowed_overlap: Number of overlapping frames to tolerate.
+            0 = strict (any overlap blocks merge).
+            >0 = allow brief handoff overlaps (e.g., Kalman ghost + new detection).
+    """
+    overlap = frames_a & frames_b
+    return len(overlap) > max_allowed_overlap
 
 
 def link_tracklets_by_appearance(
@@ -130,6 +140,7 @@ def link_tracklets_by_appearance(
     target_track_count: int | None = 4,
     team_assignments: dict[int, int] | None = None,
     appearance_store: AppearanceDescriptorStore | None = None,
+    max_overlap_frames: int = 15,
 ) -> tuple[list[PlayerPosition], int]:
     """Link fragmented tracklets using appearance similarity.
 
@@ -149,6 +160,10 @@ def link_tracklets_by_appearance(
         team_assignments: Optional team classification (track_id -> team).
             Blocks cross-team merges (a player's fragment should only
             reconnect with tracks from the same team).
+        max_overlap_frames: Maximum frames of temporal overlap to allow
+            between tracklets being merged. During net crossings, BoT-SORT
+            may briefly have both a dying Kalman prediction and a new
+            detection active. Default 15 (~0.5s at 30fps).
 
     Returns:
         Tuple of (modified positions, number of merges performed).
@@ -205,8 +220,11 @@ def link_tracklets_by_appearance(
                     dist_matrix[j, i] = 1.0
                     continue
 
-            # Temporal overlap check: can never merge overlapping tracks
-            if _tracks_overlap_temporally(tracks[tid_i]["frames"], tracks[tid_j]["frames"]):
+            # Temporal overlap check: block merges with large overlap
+            if _tracks_overlap_temporally(
+                tracks[tid_i]["frames"], tracks[tid_j]["frames"],
+                max_allowed_overlap=max_overlap_frames,
+            ):
                 dist_matrix[i, j] = 1.0
                 dist_matrix[j, i] = 1.0
                 continue
@@ -297,8 +315,11 @@ def link_tracklets_by_appearance(
             canonical, merged = canon_i, canon_j
             keep_idx, remove_idx = best_i, best_j
 
-        # Verify no temporal overlap after resolving canonical IDs
-        if _tracks_overlap_temporally(tracks[canonical]["frames"], tracks[merged]["frames"]):
+        # Verify no large temporal overlap after resolving canonical IDs
+        if _tracks_overlap_temporally(
+            tracks[canonical]["frames"], tracks[merged]["frames"],
+            max_allowed_overlap=max_overlap_frames,
+        ):
             dist_matrix[best_i, best_j] = 1.0
             dist_matrix[best_j, best_i] = 1.0
             continue
@@ -334,7 +355,10 @@ def link_tracklets_by_appearance(
             canon_k = id_mapping.get(tid_k, tid_k)
 
             # Recheck temporal overlap
-            if _tracks_overlap_temporally(tracks[canonical]["frames"], tracks[canon_k]["frames"]):
+            if _tracks_overlap_temporally(
+                tracks[canonical]["frames"], tracks[canon_k]["frames"],
+                max_allowed_overlap=max_overlap_frames,
+            ):
                 dist_matrix[keep_idx, k] = 1.0
                 dist_matrix[k, keep_idx] = 1.0
             elif avg_hists.get(canonical) is not None and avg_hists.get(canon_k) is not None:
@@ -371,6 +395,33 @@ def link_tracklets_by_appearance(
         if canonical != p.track_id:
             p.track_id = canonical
             remapped += 1
+
+    # Resolve any overlapping frames created by merging tracks with
+    # brief temporal overlap. Keep the higher-confidence detection per
+    # frame, drop others by setting track_id = -1.
+    frame_best: dict[tuple[int, int], tuple[int, float]] = {}  # (track_id, frame) -> (idx, conf)
+    for i, p in enumerate(positions):
+        if p.track_id < 0:
+            continue
+        key = (p.track_id, p.frame_number)
+        if key not in frame_best or p.confidence > frame_best[key][1]:
+            frame_best[key] = (i, p.confidence)
+
+    # Mark duplicates
+    n_dup_dropped = 0
+    for i, p in enumerate(positions):
+        if p.track_id < 0:
+            continue
+        key = (p.track_id, p.frame_number)
+        if frame_best.get(key, (i, 0))[0] != i:
+            positions[i].track_id = -1
+            n_dup_dropped += 1
+
+    if n_dup_dropped > 0:
+        logger.info(
+            f"Tracklet linking: dropped {n_dup_dropped} duplicate detections "
+            f"from overlap resolution"
+        )
 
     # Apply remapping to color_store and appearance_store
     color_store.remap_ids(resolved_mapping)
