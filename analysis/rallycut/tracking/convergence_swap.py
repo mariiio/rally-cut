@@ -54,6 +54,11 @@ WEIGHT_SIZE = 0.30
 WEIGHT_APPEARANCE = 0.35
 MIN_SWAP_SCORE = 0.35  # Minimum combined score to apply swap
 
+# Gap convergence detection: overlapping detection gaps between cross-team tracks
+# indicate a net interaction that happened while players were undetected.
+MIN_GAP_FRAMES = 15  # Minimum gap length to consider (short flickers are not interactions)
+GAP_OVERLAP_MARGIN = 10  # Gaps within this many frames of each other count as overlapping
+
 
 @dataclass
 class _TrackWindow:
@@ -296,6 +301,110 @@ def _score_appearance_swap(
     return 0.0
 
 
+def _find_detection_gaps(
+    positions: list[PlayerPosition],
+    track_id: int,
+    min_gap_frames: int = MIN_GAP_FRAMES,
+) -> list[tuple[int, int]]:
+    """Find detection gaps for a track.
+
+    Returns list of (gap_start_frame, gap_end_frame) where the track
+    has no detections. Only gaps >= min_gap_frames are returned.
+    """
+    frames = sorted(
+        p.frame_number for p in positions if p.track_id == track_id
+    )
+    if len(frames) < 2:
+        return []
+
+    gaps: list[tuple[int, int]] = []
+    for i in range(1, len(frames)):
+        gap_len = frames[i] - frames[i - 1] - 1
+        if gap_len >= min_gap_frames:
+            gaps.append((frames[i - 1] + 1, frames[i] - 1))
+    return gaps
+
+
+def _detect_gap_convergences(
+    positions: list[PlayerPosition],
+    primary_track_ids: list[int],
+    teams: dict[int, int],
+    min_gap_frames: int = MIN_GAP_FRAMES,
+    overlap_margin: int = GAP_OVERLAP_MARGIN,
+) -> list[ConvergencePeriod]:
+    """Detect "gap convergences" — overlapping detection gaps between cross-team tracks.
+
+    When two cross-team players interact at the net and both lose detection,
+    the interaction isn't visible as a normal convergence (both absent).
+    This function finds these phantom interactions by checking for
+    temporally overlapping gaps between cross-team primary tracks.
+
+    Args:
+        positions: Player positions.
+        primary_track_ids: Primary player track IDs.
+        teams: Team assignments (track_id -> 0=near, 1=far).
+        min_gap_frames: Minimum gap length to consider.
+        overlap_margin: Gaps within this many frames count as overlapping.
+
+    Returns:
+        List of synthetic ConvergencePeriod objects for gap-based interactions.
+    """
+    # Find gaps per primary track
+    track_gaps: dict[int, list[tuple[int, int]]] = {}
+    for tid in primary_track_ids:
+        gaps = _find_detection_gaps(positions, tid, min_gap_frames)
+        if gaps:
+            track_gaps[tid] = gaps
+
+    if len(track_gaps) < 2:
+        return []
+
+    # Check all cross-team pairs for overlapping gaps
+    gap_convergences: list[ConvergencePeriod] = []
+    checked: set[tuple[int, int]] = set()
+
+    for tid_a, gaps_a in track_gaps.items():
+        team_a = teams.get(tid_a)
+        if team_a is None:
+            continue
+        for tid_b, gaps_b in track_gaps.items():
+            if tid_b <= tid_a:
+                continue
+            pair = (tid_a, tid_b)
+            if pair in checked:
+                continue
+            checked.add(pair)
+
+            team_b = teams.get(tid_b)
+            if team_b is None or team_b == team_a:
+                continue  # Same team — skip
+
+            # Check for overlapping gaps
+            for ga_start, ga_end in gaps_a:
+                for gb_start, gb_end in gaps_b:
+                    # Gaps overlap if they're within margin of each other
+                    overlap_start = max(ga_start, gb_start)
+                    overlap_end = min(ga_end, gb_end)
+
+                    if overlap_end - overlap_start >= -overlap_margin:
+                        # Create synthetic convergence spanning the union
+                        conv_start = min(ga_start, gb_start)
+                        conv_end = max(ga_end, gb_end)
+                        gap_convergences.append(ConvergencePeriod(
+                            track_a=tid_a,
+                            track_b=tid_b,
+                            start_frame=conv_start,
+                            end_frame=conv_end,
+                        ))
+                        logger.debug(
+                            f"Gap convergence: T{tid_a}[{ga_start}-{ga_end}] "
+                            f"x T{tid_b}[{gb_start}-{gb_end}] "
+                            f"→ frames {conv_start}-{conv_end}"
+                        )
+
+    return gap_convergences
+
+
 def detect_convergence_swaps(
     positions: list[PlayerPosition],
     primary_track_ids: list[int],
@@ -354,13 +463,20 @@ def detect_convergence_swaps(
         if team_a is not None and team_b is not None and team_a != team_b:
             cross_team_convergences.append(conv)
 
-    if not cross_team_convergences:
+    # Also detect gap convergences: overlapping detection gaps between
+    # cross-team tracks indicate a net interaction during the gap.
+    gap_convergences = _detect_gap_convergences(
+        positions, primary_track_ids, teams,
+    )
+    all_convergences = cross_team_convergences + gap_convergences
+
+    if not all_convergences:
         return positions, 0
 
-    # Score each convergence event
+    # Score each convergence event (both visible and gap-based)
     candidates: list[_SwapCandidate] = []
 
-    for conv in cross_team_convergences:
+    for conv in all_convergences:
         swap_frame = conv.end_frame + 1
         after_start = conv.end_frame + 1 + SEPARATION_GAP
 
