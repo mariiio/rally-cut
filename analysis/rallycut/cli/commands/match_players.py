@@ -177,6 +177,15 @@ def match_players(
         "--reference-crops-json",
         help="JSON file with user-selected reference crops [{playerId, cropPath}, ...]",
     ),
+    use_existing_profiles: bool = typer.Option(
+        False,
+        "--use-existing-profiles",
+        help=(
+            "Use existing player profiles from DB as frozen anchors instead of "
+            "rebuilding. For single-rally retrack: classifies new tracks against "
+            "established profiles from previous full match-players run."
+        ),
+    ),
 ) -> None:
     """Match players across rallies for consistent player IDs (1-4).
 
@@ -420,6 +429,46 @@ def match_players(
             if not quiet:
                 console.print("  Using general ReID model")
                 console.print()
+
+    # Load existing profiles as frozen anchors for single-rally retrack.
+    # Uses established profiles from previous full match-players run instead
+    # of rebuilding from scratch — prevents ambiguous first-rally assignments
+    # that can cause player teleports.
+    if use_existing_profiles and reference_profiles is None:
+        from rallycut.tracking.player_features import PlayerAppearanceProfile
+
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT match_analysis_json FROM videos WHERE id = %s",
+                    [video_id],
+                )
+                row = cur.fetchone()
+
+        if row and row[0] and isinstance(row[0], dict):
+            stored_profiles = row[0].get("playerProfiles", {})
+            if stored_profiles:
+                reference_profiles = {}
+                for pid_str, profile_data in stored_profiles.items():
+                    try:
+                        profile = PlayerAppearanceProfile.from_dict(profile_data)
+                        reference_profiles[int(pid_str)] = profile
+                    except (KeyError, ValueError) as e:
+                        console.print(
+                            f"[yellow]Warning: Failed to load profile "
+                            f"for player {pid_str}: {e}[/yellow]"
+                        )
+
+                if reference_profiles and not quiet:
+                    console.print(
+                        f"  Using existing profiles as anchors: "
+                        f"players {sorted(reference_profiles.keys())}"
+                    )
+            elif not quiet:
+                console.print(
+                    "  [yellow]No existing profiles found — "
+                    "falling back to full rebuild[/yellow]"
+                )
 
     # Run matching
     match_result: MatchPlayersResult = match_players_across_rallies(

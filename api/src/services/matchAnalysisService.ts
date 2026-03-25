@@ -535,9 +535,11 @@ export async function remapSingleRally(videoId: string, rallyId: string): Promis
       }
     }
 
-    // Run match-players CLI — it writes camelCase result directly to DB
-    // (the --output file uses snake_case, so we read from DB instead)
-    await runMatchPlayersCli(videoId, outputPath, referenceCropsJsonPath);
+    // Run match-players with existing profiles as frozen anchors.
+    // This classifies the re-tracked rally against established player profiles
+    // instead of rebuilding from scratch — prevents ambiguous assignments
+    // that cause player teleports on single-rally retrack.
+    await runMatchPlayersCli(videoId, outputPath, referenceCropsJsonPath, true);
 
     // Read the fresh match analysis from DB (camelCase, written by CLI)
     const updatedVideo = await prisma.video.findUnique({
@@ -822,10 +824,14 @@ async function runMatchPlayersCli(
   videoId: string,
   outputPath: string,
   referenceCropsJsonPath?: string,
+  useExistingProfiles?: boolean,
 ): Promise<MatchAnalysisResult> {
   const args = ['match-players', videoId, '--output', outputPath, '--quiet'];
   if (referenceCropsJsonPath) {
     args.push('--reference-crops-json', referenceCropsJsonPath);
+  }
+  if (useExistingProfiles) {
+    args.push('--use-existing-profiles');
   }
   return runCli<MatchAnalysisResult>(args, outputPath, 'MATCH_ANALYSIS');
 }
