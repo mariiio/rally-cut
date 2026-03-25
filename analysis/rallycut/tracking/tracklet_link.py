@@ -12,7 +12,7 @@ merges fragments using position proximity, but fails when:
 This module adds appearance-based matching:
 1. Compute average color histogram per track from ColorHistogramStore
 2. Build pairwise Bhattacharyya distance matrix between all tracks
-3. Greedily merge closest pairs (temporal non-overlap + spatial constraints)
+3. Greedily merge closest pairs (spatial + temporal + overlap constraints)
 4. Stop when distance exceeds threshold
 
 For beach volleyball (4 players), this is dramatically simpler than
@@ -37,101 +37,13 @@ logger = logging.getLogger(__name__)
 
 # Linking parameters
 DEFAULT_MERGE_DISTANCE_THRESHOLD = 0.45  # Max Bhattacharyya distance to merge
-DEFAULT_MAX_SPATIAL_DISPLACEMENT = 0.25  # Max normalized position jump — matches enforce_spatial_consistency
+DEFAULT_MAX_SPATIAL_DISPLACEMENT = 0.25  # Max normalized endpoint displacement
 DEFAULT_MIN_TRACK_FRAMES = 5  # Minimum frames in a track to participate in linking
-# Velocity gate: reject merges where the junction between fragments creates
-# displacement exceeding this threshold within the window. Prevents merging
-# same-appearance fragments from different players at different court positions.
-DEFAULT_MAX_MERGE_VELOCITY = 0.20  # Max displacement across junction
-DEFAULT_MERGE_VELOCITY_WINDOW = 10  # Frames around junction to check
 
-
-def _would_create_velocity_anomaly(
-    positions: list[PlayerPosition],
-    tid_a: int,
-    tid_b: int,
-    max_displacement: float = DEFAULT_MAX_MERGE_VELOCITY,
-    window: int = DEFAULT_MERGE_VELOCITY_WINDOW,
-) -> bool:
-    """Check if merging two tracks would create impossible velocity at the junction.
-
-    Examines positions from both tracks near the temporal boundary where
-    they meet. If any pair of positions within `window` frames has
-    displacement exceeding `max_displacement`, the merge is rejected.
-
-    This catches merges of same-appearance fragments from different
-    players — they look similar (low Bhattacharyya distance) but are
-    at different court positions, so merging creates a teleport.
-
-    Args:
-        positions: All positions (with original track IDs).
-        tid_a: First track ID.
-        tid_b: Second track ID.
-        max_displacement: Maximum allowed displacement in the window.
-        window: Number of frames around the junction to check.
-
-    Returns:
-        True if the merge would create a velocity anomaly.
-    """
-    # Get positions for each track sorted by frame
-    pos_a = sorted(
-        [p for p in positions if p.track_id == tid_a],
-        key=lambda p: p.frame_number,
-    )
-    pos_b = sorted(
-        [p for p in positions if p.track_id == tid_b],
-        key=lambda p: p.frame_number,
-    )
-
-    if not pos_a or not pos_b:
-        return False
-
-    # Determine temporal order: which track ends first?
-    if pos_a[-1].frame_number <= pos_b[0].frame_number:
-        earlier, later = pos_a, pos_b
-    elif pos_b[-1].frame_number <= pos_a[0].frame_number:
-        earlier, later = pos_b, pos_a
-    else:
-        # Overlapping — check positions near the overlap boundary
-        overlap_start = max(pos_a[0].frame_number, pos_b[0].frame_number)
-        tail = [p for p in pos_a if abs(p.frame_number - overlap_start) <= window]
-        head = [p for p in pos_b if abs(p.frame_number - overlap_start) <= window]
-        for pa in tail:
-            for pb in head:
-                frame_gap = abs(pb.frame_number - pa.frame_number)
-                if frame_gap > window or frame_gap == 0:
-                    continue
-                dx = pb.x - pa.x
-                dy = pb.y - pa.y
-                if (dx * dx + dy * dy) ** 0.5 > max_displacement:
-                    return True
-        return False
-
-    # Check endpoint displacement regardless of gap size.
-    # Two fragments of the same player can't be >max_displacement apart
-    # at their nearest temporal boundary.
-    end_pos = earlier[-1]
-    start_pos = later[0]
-    dx = start_pos.x - end_pos.x
-    dy = start_pos.y - end_pos.y
-    endpoint_dist = (dx * dx + dy * dy) ** 0.5
-    if endpoint_dist > max_displacement:
-        return True
-
-    # Also check sliding window near the junction for short-gap merges
-    tail = [p for p in earlier if p.frame_number >= earlier[-1].frame_number - window]
-    head = [p for p in later if p.frame_number <= later[0].frame_number + window]
-    for pa in tail:
-        for pb in head:
-            frame_gap = abs(pb.frame_number - pa.frame_number)
-            if frame_gap > window or frame_gap == 0:
-                continue
-            dx = pb.x - pa.x
-            dy = pb.y - pa.y
-            if (dx * dx + dy * dy) ** 0.5 > max_displacement:
-                return True
-
-    return False
+# Overlap position gate: when two tracks coexist for a few frames (e.g.,
+# dying Kalman ghost + new detection), they must be at nearly the same
+# position to be the same player. A person can't be in two places at once.
+OVERLAP_MAX_POSITION_DISTANCE = 0.08  # Max avg distance during overlap frames
 
 
 def _compute_track_summary(
@@ -206,22 +118,81 @@ def _bhattacharyya_distance(hist1: np.ndarray, hist2: np.ndarray) -> float:
     return float(cv2.compareHist(hist1, hist2, cv2.HISTCMP_BHATTACHARYYA))
 
 
-def _tracks_overlap_temporally(
+def _compute_overlap_position_distance(
+    positions: list[PlayerPosition],
+    tid_a: int,
+    tid_b: int,
     frames_a: set[int],
     frames_b: set[int],
-    max_allowed_overlap: int = 0,
-) -> bool:
-    """Check if two tracks have more than max_allowed_overlap frames in common.
+    id_mapping: dict[int, int] | None = None,
+) -> tuple[int, float]:
+    """Compute temporal overlap and average position distance during overlap.
+
+    A person cannot be in two places at once. If two tracks coexist and
+    are far apart, they are different players regardless of appearance.
 
     Args:
-        frames_a: Frame numbers for track A.
-        frames_b: Frame numbers for track B.
-        max_allowed_overlap: Number of overlapping frames to tolerate.
-            0 = strict (any overlap blocks merge).
-            >0 = allow brief handoff overlaps (e.g., Kalman ghost + new detection).
+        positions: All positions (track_ids may not yet be remapped).
+        tid_a: First track ID (canonical, may have absorbed fragments).
+        tid_b: Second track ID (canonical, may have absorbed fragments).
+        frames_a: Frame set for track A (includes absorbed fragments).
+        frames_b: Frame set for track B (includes absorbed fragments).
+        id_mapping: Current merge mapping (merged_id -> canonical_id).
+            Used to find positions whose track_id hasn't been remapped
+            yet but logically belongs to tid_a or tid_b.
+
+    Returns:
+        (overlap_count, avg_distance): Number of overlapping frames and
+        average position distance during those frames. Returns (0, 0.0)
+        if no overlap.
     """
-    overlap = frames_a & frames_b
-    return len(overlap) > max_allowed_overlap
+    overlap_frames = frames_a & frames_b
+    if not overlap_frames:
+        return 0, 0.0
+
+    # Build set of track IDs that resolve to each canonical ID.
+    # After merging T15→T20, positions still have track_id=15 but
+    # frames_a (for canonical=20) includes T15's frames. We need to
+    # match positions by their resolved canonical ID, not their raw ID.
+    ids_a = {tid_a}
+    ids_b = {tid_b}
+    if id_mapping:
+        for raw_id, canon_id in id_mapping.items():
+            # Resolve transitively
+            resolved = canon_id
+            visited: set[int] = set()
+            while resolved in id_mapping and resolved not in visited:
+                visited.add(resolved)
+                resolved = id_mapping[resolved]
+            if resolved == tid_a:
+                ids_a.add(raw_id)
+            elif resolved == tid_b:
+                ids_b.add(raw_id)
+
+    # Build frame -> position lookup for both tracks
+    pos_a: dict[int, tuple[float, float]] = {}
+    pos_b: dict[int, tuple[float, float]] = {}
+    for p in positions:
+        if p.frame_number not in overlap_frames:
+            continue
+        if p.track_id in ids_a:
+            pos_a[p.frame_number] = (p.x, p.y)
+        elif p.track_id in ids_b:
+            pos_b[p.frame_number] = (p.x, p.y)
+
+    # Compute distance for frames where both have positions
+    common_frames = set(pos_a.keys()) & set(pos_b.keys())
+    if not common_frames:
+        return len(overlap_frames), 0.0
+
+    total_dist = 0.0
+    for f in common_frames:
+        dx = pos_a[f][0] - pos_b[f][0]
+        dy = pos_a[f][1] - pos_b[f][1]
+        total_dist += (dx * dx + dy * dy) ** 0.5
+
+    avg_dist = total_dist / len(common_frames)
+    return len(overlap_frames), avg_dist
 
 
 def link_tracklets_by_appearance(
@@ -233,12 +204,18 @@ def link_tracklets_by_appearance(
     target_track_count: int | None = 4,
     team_assignments: dict[int, int] | None = None,
     appearance_store: AppearanceDescriptorStore | None = None,
-    max_overlap_frames: int = 15,
 ) -> tuple[list[PlayerPosition], int]:
     """Link fragmented tracklets using appearance similarity.
 
     Uses color histogram Bhattacharyya distance to find tracklet pairs
     that likely belong to the same player, then merges them.
+
+    Merge gates (all must pass):
+    1. Cross-team block: fragments must be same team (if teams known).
+    2. Overlap position gate: if tracks coexist, they must be at the
+       same position (a person can't be in two places at once).
+    3. Spatial displacement: endpoint distance must be within threshold.
+    4. Appearance distance: histogram distance below merge threshold.
 
     Args:
         positions: Player positions with track IDs (modified in place).
@@ -253,10 +230,6 @@ def link_tracklets_by_appearance(
         team_assignments: Optional team classification (track_id -> team).
             Blocks cross-team merges (a player's fragment should only
             reconnect with tracks from the same team).
-        max_overlap_frames: Maximum frames of temporal overlap to allow
-            between tracklets being merged. During net crossings, BoT-SORT
-            may briefly have both a dying Kalman prediction and a new
-            detection active. Default 15 (~0.5s at 30fps).
 
     Returns:
         Tuple of (modified positions, number of merges performed).
@@ -313,17 +286,24 @@ def link_tracklets_by_appearance(
                     dist_matrix[j, i] = 1.0
                     continue
 
-            # Temporal overlap check: block merges with large overlap
-            if _tracks_overlap_temporally(
+            # Overlap position gate: if tracks coexist, check positions.
+            # A person can't be in two places — if they're far apart
+            # during overlapping frames, they're different players.
+            overlap_count, overlap_dist = _compute_overlap_position_distance(
+                positions, tid_i, tid_j,
                 tracks[tid_i]["frames"], tracks[tid_j]["frames"],
-                max_allowed_overlap=max_overlap_frames,
-            ):
+            )
+            if overlap_count > 0 and overlap_dist > OVERLAP_MAX_POSITION_DISTANCE:
+                logger.debug(
+                    f"Tracklet link: blocked {tid_i}+{tid_j}: "
+                    f"overlap={overlap_count}f, dist={overlap_dist:.3f} "
+                    f"(>{OVERLAP_MAX_POSITION_DISTANCE})"
+                )
                 dist_matrix[i, j] = 1.0
                 dist_matrix[j, i] = 1.0
                 continue
 
             # Spatial displacement check between fragment endpoints
-            # Determine temporal order
             if tracks[tid_i]["last_frame"] < tracks[tid_j]["first_frame"]:
                 end_pos = tracks[tid_i]["last_pos"]
                 start_pos = tracks[tid_j]["first_pos"]
@@ -331,7 +311,8 @@ def link_tracklets_by_appearance(
                 end_pos = tracks[tid_j]["last_pos"]
                 start_pos = tracks[tid_i]["first_pos"]
             else:
-                # Interleaved but non-overlapping (rare): skip spatial check
+                # Overlapping: use endpoints (overlap position gate above
+                # already validated they're close enough)
                 end_pos = tracks[tid_i]["last_pos"]
                 start_pos = tracks[tid_j]["first_pos"]
 
@@ -408,20 +389,19 @@ def link_tracklets_by_appearance(
             canonical, merged = canon_i, canon_j
             keep_idx, remove_idx = best_i, best_j
 
-        # Verify no large temporal overlap after resolving canonical IDs
-        if _tracks_overlap_temporally(
+        # Re-check overlap position gate after transitive merges.
+        # Prior merges may have absorbed fragments that now overlap
+        # with the merge candidate at a different position.
+        overlap_count, overlap_dist = _compute_overlap_position_distance(
+            positions, canonical, merged,
             tracks[canonical]["frames"], tracks[merged]["frames"],
-            max_allowed_overlap=max_overlap_frames,
-        ):
-            dist_matrix[best_i, best_j] = 1.0
-            dist_matrix[best_j, best_i] = 1.0
-            continue
-
-        # Verify merge doesn't create impossible velocity at the junction
-        if _would_create_velocity_anomaly(positions, canonical, merged):
+            id_mapping=id_mapping,
+        )
+        if overlap_count > 0 and overlap_dist > OVERLAP_MAX_POSITION_DISTANCE:
             logger.debug(
                 f"Tracklet link: blocked merge {merged} -> {canonical} "
-                f"(velocity anomaly at junction)"
+                f"(post-transitive overlap={overlap_count}f, "
+                f"dist={overlap_dist:.3f})"
             )
             dist_matrix[best_i, best_j] = 1.0
             dist_matrix[best_j, best_i] = 1.0
@@ -439,7 +419,6 @@ def link_tracklets_by_appearance(
         )
 
         # Update average histogram for canonical track
-        # (count was already updated above; recover pre-merge canonical count)
         hist_c = avg_hists.get(canonical)
         hist_m = avg_hists.get(merged)
         if hist_c is not None and hist_m is not None:
@@ -458,11 +437,13 @@ def link_tracklets_by_appearance(
             tid_k = hist_ids[k]
             canon_k = id_mapping.get(tid_k, tid_k)
 
-            # Recheck temporal overlap
-            if _tracks_overlap_temporally(
+            # Recheck overlap position gate with updated canonical track
+            ov_count, ov_dist = _compute_overlap_position_distance(
+                positions, canonical, canon_k,
                 tracks[canonical]["frames"], tracks[canon_k]["frames"],
-                max_allowed_overlap=max_overlap_frames,
-            ):
+                id_mapping=id_mapping,
+            )
+            if ov_count > 0 and ov_dist > OVERLAP_MAX_POSITION_DISTANCE:
                 dist_matrix[keep_idx, k] = 1.0
                 dist_matrix[k, keep_idx] = 1.0
             elif avg_hists.get(canonical) is not None and avg_hists.get(canon_k) is not None:
@@ -489,9 +470,6 @@ def link_tracklets_by_appearance(
             tid = id_mapping[tid]
         return tid
 
-    # Build resolved mapping for all merged IDs
-    resolved_mapping = {tid: resolve(tid) for tid in id_mapping}
-
     # Apply remapping to positions
     remapped = 0
     for p in positions:
@@ -500,10 +478,9 @@ def link_tracklets_by_appearance(
             p.track_id = canonical
             remapped += 1
 
-    # Resolve any overlapping frames created by merging tracks with
-    # brief temporal overlap. Keep the higher-confidence detection per
-    # frame, drop others by setting track_id = -1.
-    frame_best: dict[tuple[int, int], tuple[int, float]] = {}  # (track_id, frame) -> (idx, conf)
+    # Resolve any duplicate detections created by merging overlapping
+    # tracks. Keep the higher-confidence detection per (track, frame).
+    frame_best: dict[tuple[int, int], tuple[int, float]] = {}
     for i, p in enumerate(positions):
         if p.track_id < 0:
             continue
@@ -511,7 +488,6 @@ def link_tracklets_by_appearance(
         if key not in frame_best or p.confidence > frame_best[key][1]:
             frame_best[key] = (i, p.confidence)
 
-    # Mark duplicates
     n_dup_dropped = 0
     for i, p in enumerate(positions):
         if p.track_id < 0:
@@ -528,6 +504,7 @@ def link_tracklets_by_appearance(
         )
 
     # Apply remapping to color_store and appearance_store
+    resolved_mapping = {tid: resolve(tid) for tid in id_mapping}
     color_store.remap_ids(resolved_mapping)
     if appearance_store is not None:
         appearance_store.remap_ids(resolved_mapping)
