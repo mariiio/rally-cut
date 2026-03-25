@@ -231,17 +231,27 @@ def optimize_global_identity(
         result.skip_reason = "reverted: would reduce track count"
         return positions, result
 
-    # Validate no temporal overlaps within a canonical track
+    # Resolve small temporal overlaps within same-team tracks.
+    # After merging fragments, two tracks may coexist for a few frames
+    # during the handoff (e.g., Kalman-predicted ghost + new detection).
+    # Keep the higher-confidence detection per frame instead of reverting.
+    # Large overlaps (>30 frames) indicate a bad merge — revert entirely.
     if total_remapped > 0:
-        valid = _validate_no_temporal_overlaps(positions, team_assignments)
-        if not valid:
+        n_resolved, bad_merge = _resolve_temporal_overlaps(
+            positions, team_assignments, max_overlap_frames=30,
+        )
+        if bad_merge:
             logger.warning(
-                "Global identity created temporal overlaps — reverting"
+                "Global identity created large temporal overlaps — reverting"
             )
             for p, orig_tid in zip(positions, input_tids):
                 p.track_id = orig_tid
-            result.skip_reason = "reverted: temporal overlaps"
+            result.skip_reason = "reverted: large temporal overlaps"
             return positions, result
+        if n_resolved > 0:
+            logger.info(
+                f"Global identity resolved {n_resolved} temporal overlap(s)"
+            )
 
     result.num_remapped = total_remapped
     if total_remapped > 0:
@@ -318,6 +328,84 @@ def _validate_no_temporal_overlaps(
                     )
                     return False
     return True
+
+
+def _resolve_temporal_overlaps(
+    positions: list[PlayerPosition],
+    team_assignments: dict[int, int],
+    max_overlap_frames: int = 30,
+) -> tuple[int, bool]:
+    """Resolve temporal overlaps between same-team tracks after merging.
+
+    When global identity merges track fragments, two tracks may coexist
+    for a few frames during the handoff (e.g., old Kalman-predicted ghost
+    overlapping with the new detection). Instead of reverting the entire
+    merge, keep the higher-confidence detection per overlapping frame and
+    drop the other by setting track_id = -1.
+
+    Large overlaps (> max_overlap_frames) indicate a bad merge — two
+    distinct players were incorrectly assigned the same canonical ID.
+    In that case, signal the caller to revert.
+
+    Args:
+        positions: Tracking positions (modified in place for small overlaps).
+        team_assignments: Track ID to team mapping.
+        max_overlap_frames: Maximum overlap to resolve. Larger overlaps
+            are treated as bad merges.
+
+    Returns:
+        (n_resolved, bad_merge): Number of small overlaps resolved, and
+        whether a large overlap (bad merge) was found.
+    """
+    # Build per-team, per-frame positions index
+    team_track_frame_idx: dict[int, dict[int, dict[int, list[int]]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(list))
+    )
+    for i, p in enumerate(positions):
+        if p.track_id < 0:
+            continue
+        team = team_assignments.get(p.track_id)
+        if team is not None:
+            team_track_frame_idx[team][p.track_id][p.frame_number].append(i)
+
+    n_resolved = 0
+    for team_id, track_data in team_track_frame_idx.items():
+        tids = list(track_data.keys())
+        for a in range(len(tids)):
+            for b in range(a + 1, len(tids)):
+                tid_a, tid_b = tids[a], tids[b]
+                frames_a = set(track_data[tid_a].keys())
+                frames_b = set(track_data[tid_b].keys())
+                overlap = frames_a & frames_b
+                if not overlap:
+                    continue
+
+                if len(overlap) > max_overlap_frames:
+                    logger.warning(
+                        f"Bad merge: team {team_id}, tracks {tid_a} and "
+                        f"{tid_b} overlap {len(overlap)} frames "
+                        f"(> {max_overlap_frames} threshold)"
+                    )
+                    return n_resolved, True
+
+                # Small overlap: keep higher confidence per frame
+                for frame in overlap:
+                    idxs_a = track_data[tid_a][frame]
+                    idxs_b = track_data[tid_b][frame]
+                    best_conf_a = max(positions[i].confidence for i in idxs_a)
+                    best_conf_b = max(positions[i].confidence for i in idxs_b)
+
+                    drop_idxs = idxs_b if best_conf_a >= best_conf_b else idxs_a
+                    for i in drop_idxs:
+                        positions[i].track_id = -1
+
+                logger.info(
+                    f"Resolved overlap: team {team_id}, tracks {tid_a} and "
+                    f"{tid_b}, {len(overlap)} frames (kept higher confidence)"
+                )
+                n_resolved += 1
+
+    return n_resolved, False
 
 
 def _extract_segments(
