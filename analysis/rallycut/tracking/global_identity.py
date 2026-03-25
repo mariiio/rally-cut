@@ -290,46 +290,6 @@ def _detect_cross_team_interactions(
     return cross_team
 
 
-def _validate_no_temporal_overlaps(
-    positions: list[PlayerPosition],
-    team_assignments: dict[int, int],
-) -> bool:
-    """Validate that no two tracks on the same team have temporal overlap.
-
-    This is a safety check after global identity optimization. The per-team
-    assignment with conflict resolution should prevent overlaps, but this
-    catches bugs in the assignment logic.
-
-    Returns:
-        True if valid (no overlaps), False if overlaps detected.
-    """
-    # Build per-team frame sets for each track
-    team_track_frames: dict[int, dict[int, set[int]]] = defaultdict(
-        lambda: defaultdict(set)
-    )
-    for p in positions:
-        if p.track_id < 0:
-            continue
-        team = team_assignments.get(p.track_id)
-        if team is not None:
-            team_track_frames[team][p.track_id].add(p.frame_number)
-
-    # Check same-team tracks for frame overlap
-    for team_id, track_frames in team_track_frames.items():
-        tids = list(track_frames.keys())
-        for i in range(len(tids)):
-            for j in range(i + 1, len(tids)):
-                overlap = track_frames[tids[i]] & track_frames[tids[j]]
-                if overlap:
-                    logger.warning(
-                        f"Temporal overlap: team {team_id}, tracks "
-                        f"{tids[i]} and {tids[j]} share "
-                        f"{len(overlap)} frames"
-                    )
-                    return False
-    return True
-
-
 def _resolve_temporal_overlaps(
     positions: list[PlayerPosition],
     team_assignments: dict[int, int],
