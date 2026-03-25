@@ -37,8 +37,101 @@ logger = logging.getLogger(__name__)
 
 # Linking parameters
 DEFAULT_MERGE_DISTANCE_THRESHOLD = 0.45  # Max Bhattacharyya distance to merge
-DEFAULT_MAX_SPATIAL_DISPLACEMENT = 0.30  # Max normalized position jump between fragments
+DEFAULT_MAX_SPATIAL_DISPLACEMENT = 0.25  # Max normalized position jump — matches enforce_spatial_consistency
 DEFAULT_MIN_TRACK_FRAMES = 5  # Minimum frames in a track to participate in linking
+# Velocity gate: reject merges where the junction between fragments creates
+# displacement exceeding this threshold within the window. Prevents merging
+# same-appearance fragments from different players at different court positions.
+DEFAULT_MAX_MERGE_VELOCITY = 0.20  # Max displacement across junction
+DEFAULT_MERGE_VELOCITY_WINDOW = 10  # Frames around junction to check
+
+
+def _would_create_velocity_anomaly(
+    positions: list[PlayerPosition],
+    tid_a: int,
+    tid_b: int,
+    max_displacement: float = DEFAULT_MAX_MERGE_VELOCITY,
+    window: int = DEFAULT_MERGE_VELOCITY_WINDOW,
+) -> bool:
+    """Check if merging two tracks would create impossible velocity at the junction.
+
+    Examines positions from both tracks near the temporal boundary where
+    they meet. If any pair of positions within `window` frames has
+    displacement exceeding `max_displacement`, the merge is rejected.
+
+    This catches merges of same-appearance fragments from different
+    players — they look similar (low Bhattacharyya distance) but are
+    at different court positions, so merging creates a teleport.
+
+    Args:
+        positions: All positions (with original track IDs).
+        tid_a: First track ID.
+        tid_b: Second track ID.
+        max_displacement: Maximum allowed displacement in the window.
+        window: Number of frames around the junction to check.
+
+    Returns:
+        True if the merge would create a velocity anomaly.
+    """
+    # Get positions for each track sorted by frame
+    pos_a = sorted(
+        [p for p in positions if p.track_id == tid_a],
+        key=lambda p: p.frame_number,
+    )
+    pos_b = sorted(
+        [p for p in positions if p.track_id == tid_b],
+        key=lambda p: p.frame_number,
+    )
+
+    if not pos_a or not pos_b:
+        return False
+
+    # Determine temporal order: which track ends first?
+    if pos_a[-1].frame_number <= pos_b[0].frame_number:
+        earlier, later = pos_a, pos_b
+    elif pos_b[-1].frame_number <= pos_a[0].frame_number:
+        earlier, later = pos_b, pos_a
+    else:
+        # Overlapping — check positions near the overlap boundary
+        overlap_start = max(pos_a[0].frame_number, pos_b[0].frame_number)
+        tail = [p for p in pos_a if abs(p.frame_number - overlap_start) <= window]
+        head = [p for p in pos_b if abs(p.frame_number - overlap_start) <= window]
+        for pa in tail:
+            for pb in head:
+                frame_gap = abs(pb.frame_number - pa.frame_number)
+                if frame_gap > window or frame_gap == 0:
+                    continue
+                dx = pb.x - pa.x
+                dy = pb.y - pa.y
+                if (dx * dx + dy * dy) ** 0.5 > max_displacement:
+                    return True
+        return False
+
+    # Check endpoint displacement regardless of gap size.
+    # Two fragments of the same player can't be >max_displacement apart
+    # at their nearest temporal boundary.
+    end_pos = earlier[-1]
+    start_pos = later[0]
+    dx = start_pos.x - end_pos.x
+    dy = start_pos.y - end_pos.y
+    endpoint_dist = (dx * dx + dy * dy) ** 0.5
+    if endpoint_dist > max_displacement:
+        return True
+
+    # Also check sliding window near the junction for short-gap merges
+    tail = [p for p in earlier if p.frame_number >= earlier[-1].frame_number - window]
+    head = [p for p in later if p.frame_number <= later[0].frame_number + window]
+    for pa in tail:
+        for pb in head:
+            frame_gap = abs(pb.frame_number - pa.frame_number)
+            if frame_gap > window or frame_gap == 0:
+                continue
+            dx = pb.x - pa.x
+            dy = pb.y - pa.y
+            if (dx * dx + dy * dy) ** 0.5 > max_displacement:
+                return True
+
+    return False
 
 
 def _compute_track_summary(
@@ -320,6 +413,16 @@ def link_tracklets_by_appearance(
             tracks[canonical]["frames"], tracks[merged]["frames"],
             max_allowed_overlap=max_overlap_frames,
         ):
+            dist_matrix[best_i, best_j] = 1.0
+            dist_matrix[best_j, best_i] = 1.0
+            continue
+
+        # Verify merge doesn't create impossible velocity at the junction
+        if _would_create_velocity_anomaly(positions, canonical, merged):
+            logger.debug(
+                f"Tracklet link: blocked merge {merged} -> {canonical} "
+                f"(velocity anomaly at junction)"
+            )
             dist_matrix[best_i, best_j] = 1.0
             dist_matrix[best_j, best_i] = 1.0
             continue
