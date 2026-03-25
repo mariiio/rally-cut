@@ -38,7 +38,6 @@ from rallycut.tracking.contact_classifier import ContactClassifier, load_contact
 from rallycut.tracking.contact_detector import (
     _CONFIDENCE_THRESHOLD,
     ContactDetectionConfig,
-    _compute_direction_change,
     _compute_velocities,
     _filter_noise_spikes,
     _find_deceleration_candidates,
@@ -49,6 +48,7 @@ from rallycut.tracking.contact_detector import (
     _find_velocity_reversal_candidates,
     _merge_candidates,
     _smooth_signal,
+    compute_direction_change,
     detect_contacts,
     estimate_net_position,
 )
@@ -476,7 +476,7 @@ def diagnose_rally_fns(
 
         direction_change = 0.0
         if has_ball_nearby:
-            direction_change = _compute_direction_change(ball_by_frame, frame, check_frames=8)
+            direction_change = compute_direction_change(ball_by_frame, frame, check_frames=8)
 
         # Player distance
         player_distance = float("inf")

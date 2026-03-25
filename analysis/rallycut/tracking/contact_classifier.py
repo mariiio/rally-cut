@@ -111,7 +111,7 @@ class ContactClassifier:
     3-tier validation gates in detect_contacts().
     """
 
-    def __init__(self, model: Any = None, threshold: float = 0.35):
+    def __init__(self, model: Any = None, threshold: float = 0.40):
         self.model = model
         self.threshold = threshold
         self._feature_names = CandidateFeatures.feature_names()
@@ -297,7 +297,7 @@ class ContactClassifier:
 
         classifier = cls(
             model=data["model"],
-            threshold=data.get("threshold", 0.35),
+            threshold=data.get("threshold", 0.40),
         )
         classifier._feature_names = data.get(
             "feature_names", CandidateFeatures.feature_names()

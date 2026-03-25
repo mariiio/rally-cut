@@ -1753,12 +1753,9 @@ class PlayerTracker:
                         link_tracklets_by_appearance,
                     )
 
-                    # Scale frame-count params for FPS (defaults tuned at 30fps)
-                    fps_ratio = fps / 30.0
                     positions, num_appearance_links = link_tracklets_by_appearance(
                         positions, color_store,
                         appearance_store=appearance_store,
-                        max_overlap_frames=int(round(15 * fps_ratio)),
                     )
 
                 # Step 1: Stabilize track IDs before filtering

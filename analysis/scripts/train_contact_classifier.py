@@ -29,7 +29,6 @@ from rallycut.tracking.contact_detector import (
     ContactDetectionConfig,
     _check_net_crossing,
     _compute_acceleration,
-    _compute_direction_change,
     _compute_trajectory_curvature,
     _compute_velocities,
     _compute_velocity_ratio,
@@ -44,6 +43,7 @@ from rallycut.tracking.contact_detector import (
     _find_velocity_reversal_candidates,
     _merge_candidates,
     _smooth_signal,
+    compute_direction_change,
     estimate_net_position,
 )
 from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
@@ -244,7 +244,7 @@ def extract_candidate_features(
             continue
 
         # Direction change
-        direction_change = _compute_direction_change(
+        direction_change = compute_direction_change(
             ball_by_frame, frame, cfg.direction_check_frames
         )
 
