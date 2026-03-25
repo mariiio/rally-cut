@@ -168,11 +168,15 @@ def _count_contacts_on_side(
     index: int,
     ball_positions: list[BallPosition] | None,
     net_y: float,
+    team_assignments: dict[int, int] | None = None,
 ) -> int:
     """Count consecutive same-side contacts ending at index.
 
     Scans backward from contacts[index], counting contacts on the same
-    side. Resets when ball crosses net between consecutive contacts.
+    side. Resets when possession changes. Detection priority:
+    1. Team membership (when both contacts have known teams)
+    2. Ball crossing net (high precision, ~6% recall)
+    3. Court side comparison (fallback)
     Capped at 3 (beach volleyball max).
     """
     if index == 0:
@@ -185,7 +189,18 @@ def _count_contacts_on_side(
 
     for j in range(index - 1, -1, -1):
         prev = contacts[j]
-        # Check for net crossing between contacts
+        # Priority 1: team membership (most reliable when available)
+        if team_assignments:
+            cur_team = team_assignments.get(current.player_track_id)
+            prev_team = team_assignments.get(prev.player_track_id)
+            if cur_team is not None and prev_team is not None:
+                if cur_team != prev_team:
+                    break
+                # Same team — skip net-crossing/court_side checks
+                count += 1
+                current = prev
+                continue
+        # Priority 2: net crossing between contacts
         if ball_positions:
             crossed = _ball_crossed_net(
                 ball_positions, prev.frame, current.frame, net_y,
@@ -207,6 +222,7 @@ def extract_action_features(
     ball_positions: list[BallPosition] | None,
     net_y: float,
     rally_start_frame: int = 0,
+    team_assignments: dict[int, int] | None = None,
 ) -> ActionFeatures:
     """Compute features for a single contact for action classification.
 
@@ -230,7 +246,9 @@ def extract_action_features(
     _, pre_dy = _compute_displacement(ball_by_frame, contact.frame, 10, "backward")
 
     # Contact count on current side
-    side_count = _count_contacts_on_side(all_contacts, index, ball_positions, net_y)
+    side_count = _count_contacts_on_side(
+        all_contacts, index, ball_positions, net_y, team_assignments,
+    )
 
     # Inter-contact features
     if index > 0:

@@ -581,6 +581,7 @@ class ActionClassifier:
         rally_id: str = "",
         team_assignments: dict[int, int] | None = None,
         classifier: ActionTypeClassifier | None = None,
+        match_team_assignments: dict[int, int] | None = None,
     ) -> RallyActions:
         """Classify all contacts in a rally into action types.
 
@@ -593,6 +594,8 @@ class ActionClassifier:
             rally_id: Optional rally identifier.
             team_assignments: Optional mapping of track_id → team (0=near/A, 1=far/B).
             classifier: Optional trained action type classifier for dig/set/attack.
+            match_team_assignments: Optional high-confidence match-level team mapping
+                (track_id → team). Used for team-aware touch counting.
 
         Returns:
             RallyActions with classified actions.
@@ -650,6 +653,7 @@ class ActionClassifier:
                     ball_positions=ball_positions,
                     net_y=contact_sequence.net_y,
                     rally_start_frame=start_frame,
+                    team_assignments=match_team_assignments,
                 )
                 pred_action, _conf = classifier.predict([feat])[0]
                 if pred_action == "serve":
@@ -707,30 +711,37 @@ class ActionClassifier:
                 last_action_type = ActionType.UNKNOWN
                 continue
 
-            # Handle possession changes.
-            # _ball_crossed_net detects ball Y crossing net_y (high precision
-            # but only 6% recall — the ball arcs OVER the net in image coords).
-            # When it confirms a crossing (True), trust it. Otherwise, fall
-            # back to court_side comparison — don't let an unreliable False
-            # override court_side, which would drag the touch counter error
-            # forward through subsequent contacts.
-            crossed_net: bool | None = None
-            if ball_positions and i > 0 and current_side is not None:
-                crossed_net = _ball_crossed_net(
-                    ball_positions,
-                    from_frame=contacts[i - 1].frame,
-                    to_frame=contact.frame,
-                    net_y=contact_sequence.net_y,
+            # Handle possession changes.  Detection priority:
+            # 1. Team membership from match_team_assignments (most reliable)
+            # 2. _ball_crossed_net (high precision, ~6% recall)
+            # 3. court_side comparison (fallback)
+            team_resolved = False
+            if match_team_assignments and i > 0:
+                cur_team = match_team_assignments.get(contact.player_track_id)
+                prev_team = match_team_assignments.get(
+                    contacts[i - 1].player_track_id,
                 )
-            if crossed_net is True:
-                current_side = contact.court_side
-                contact_count_on_side = 0
-            elif contact.court_side != current_side:
-                # Court side changed — trust it. _ball_crossed_net False is
-                # unreliable (misses 90% of real crossings due to camera
-                # perspective), so we don't let it override court_side.
-                current_side = contact.court_side
-                contact_count_on_side = 0
+                if cur_team is not None and prev_team is not None:
+                    team_resolved = True
+                    if cur_team != prev_team:
+                        current_side = contact.court_side
+                        contact_count_on_side = 0
+
+            if not team_resolved:
+                crossed_net: bool | None = None
+                if ball_positions and i > 0 and current_side is not None:
+                    crossed_net = _ball_crossed_net(
+                        ball_positions,
+                        from_frame=contacts[i - 1].frame,
+                        to_frame=contact.frame,
+                        net_y=contact_sequence.net_y,
+                    )
+                if crossed_net is True:
+                    current_side = contact.court_side
+                    contact_count_on_side = 0
+                elif contact.court_side != current_side:
+                    current_side = contact.court_side
+                    contact_count_on_side = 0
 
             contact_count_on_side += 1
 
@@ -784,6 +795,7 @@ class ActionClassifier:
                             ball_positions=ball_positions,
                             net_y=contact_sequence.net_y,
                             rally_start_frame=start_frame,
+                            team_assignments=match_team_assignments,
                         )
                         pred_action, pred_conf = classifier.predict([feat])[0]
                         if pred_action == "serve":
@@ -877,6 +889,7 @@ class ActionClassifier:
                     ball_positions=ball_positions,
                     net_y=contact_sequence.net_y,
                     rally_start_frame=start_frame,
+                    team_assignments=match_team_assignments,
                 )
                 pred_action, pred_conf = classifier.predict([feat])[0]
                 try:
@@ -2127,6 +2140,7 @@ def classify_rally_actions(
 
     Pipeline:
     1. classify_rally() — initial action types + serve detection
+       (uses match_team_assignments for team-aware touch counting when available)
     2. propagate_court_side() — infer court_side from action-type transitions
     3. repair_action_sequence() — fix illegal patterns using court_side
     4. viterbi_decode_actions() — sequence-level smoothing
@@ -2177,6 +2191,7 @@ def classify_rally_actions(
         contact_sequence, rally_id,
         team_assignments=team_assignments,
         classifier=learned,
+        match_team_assignments=match_team_assignments,
     )
 
     # Propagation infers court_side from action-type transitions (serve/attack
