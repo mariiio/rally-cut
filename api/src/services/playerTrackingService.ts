@@ -1067,7 +1067,13 @@ export async function trackPlayersForRally(
 
     // Remap track IDs to global player IDs if match analysis exists.
     // This ensures the re-tracked rally gets consistent IDs (1-4) matching the rest.
-    const didRemap = await remapSingleRally(rally.video.id, rallyId);
+    // Best-effort: don't fail the whole tracking result if remap fails.
+    let didRemap = false;
+    try {
+      didRemap = await remapSingleRally(rally.video.id, rallyId);
+    } catch (remapError) {
+      console.error(`[PLAYER_TRACK] Post-track remap failed (non-fatal):`, remapError);
+    }
 
     // If remapped, re-read from DB to return the updated data
     if (didRemap) {

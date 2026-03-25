@@ -535,18 +535,26 @@ export async function remapSingleRally(videoId: string, rallyId: string): Promis
       }
     }
 
-    const matchResult = await runMatchPlayersCli(videoId, outputPath, referenceCropsJsonPath);
+    // Run match-players CLI — it writes camelCase result directly to DB
+    // (the --output file uses snake_case, so we read from DB instead)
+    await runMatchPlayersCli(videoId, outputPath, referenceCropsJsonPath);
 
-    // Persist fresh match analysis
-    await prisma.video.update({
+    // Read the fresh match analysis from DB (camelCase, written by CLI)
+    const updatedVideo = await prisma.video.findUnique({
       where: { id: videoId },
-      data: { matchAnalysisJson: matchResult as unknown as Prisma.InputJsonValue },
+      select: { matchAnalysisJson: true },
     });
+    const matchResult = updatedVideo?.matchAnalysisJson as unknown as MatchAnalysisResult | null;
+    if (!matchResult?.rallies) {
+      console.log(`[REMAP_SINGLE] No match analysis in DB after match-players, skipping remap`);
+      return false;
+    }
 
     // Find the rally's mapping from the fresh result
     const rallyEntry = matchResult.rallies.find((r) => r.rallyId === rallyId);
     if (!rallyEntry) {
-      console.log(`[REMAP_SINGLE] Rally ${rallyId} not in match result, skipping remap`);
+      const matchRallyIds = matchResult.rallies.map((r) => r.rallyId);
+      console.log(`[REMAP_SINGLE] Rally ${rallyId} not in match result (${matchResult.numRallies} rallies: ${matchRallyIds.join(', ')}), skipping remap`);
       return false;
     }
 
