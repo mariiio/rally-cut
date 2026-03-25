@@ -13,6 +13,7 @@ from rallycut.tracking.action_classifier import (
     _ball_crossed_net,
     _ball_moving_toward_net,
     _ball_starts_on_contact_side,
+    _find_server_by_position,
     _infer_serve_side,
     _is_ball_on_serve_side,
     _make_synthetic_serve,
@@ -25,6 +26,7 @@ from rallycut.tracking.action_classifier import (
 )
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.contact_detector import Contact, ContactSequence
+from rallycut.tracking.player_tracker import PlayerPosition
 
 
 def _contact(
@@ -1014,10 +1016,6 @@ class TestPass2BaselineTrajectoryGate:
             _bp(11, 0.86), _bp(12, 0.87), _bp(13, 0.88),
             _bp(14, 0.89), _bp(15, 0.90), _bp(16, 0.91),
         ]
-        seq = ContactSequence(
-            contacts=contacts, net_y=0.5, rally_start_frame=0,
-            ball_positions=ball_positions,
-        )
         classifier = ActionClassifier()
         serve_idx, serve_pass = classifier._find_serve_index(
             contacts, 0, 0.5, ball_positions=ball_positions,
@@ -1036,10 +1034,6 @@ class TestPass2BaselineTrajectoryGate:
             _bp(11, 0.83), _bp(12, 0.80), _bp(13, 0.76),
             _bp(14, 0.72), _bp(15, 0.68), _bp(16, 0.64),
         ]
-        seq = ContactSequence(
-            contacts=contacts, net_y=0.5, rally_start_frame=0,
-            ball_positions=ball_positions,
-        )
         classifier = ActionClassifier()
         serve_idx, serve_pass = classifier._find_serve_index(
             contacts, 0, 0.5, ball_positions=ball_positions,
@@ -1730,3 +1724,150 @@ class TestValidateActionSequence:
         ]
         result = validate_action_sequence(actions, "test")
         assert len(result) == 2  # Still returned unchanged
+
+
+def _player_pos(
+    frame: int, track_id: int, y: float, x: float = 0.5,
+    width: float = 0.05, height: float = 0.15,
+) -> PlayerPosition:
+    """Helper to create a PlayerPosition."""
+    return PlayerPosition(
+        frame_number=frame, track_id=track_id,
+        x=x, y=y, width=width, height=height, confidence=0.9,
+    )
+
+
+class TestFindServerByPosition:
+    """Tests for position-based server detection."""
+
+    def test_both_sides_ambiguous_no_detection(self) -> None:
+        """When teammates on each side are equally far from net, no detection."""
+        # Near: both at similar distance from net. Far: both at similar distance.
+        positions = []
+        for f in range(45):
+            positions.append(_player_pos(f, 1, y=0.60))  # near, foot=0.675
+            positions.append(_player_pos(f, 2, y=0.62))  # near, foot=0.695
+            positions.append(_player_pos(f, 3, y=0.38))  # far, foot=0.455
+            positions.append(_player_pos(f, 4, y=0.36))  # far, foot=0.435
+        tid, side, conf = _find_server_by_position(positions, 0, 0.5)
+        assert tid == -1  # Separation < 0.04 on both sides
+
+    def test_server_at_near_baseline(self) -> None:
+        """Player right at the near baseline is detected."""
+        positions = []
+        for f in range(45):
+            positions.append(_player_pos(f, 1, y=0.60))  # near, foot=0.675
+            positions.append(_player_pos(f, 2, y=0.80))  # near, foot=0.875 (far from net)
+            positions.append(_player_pos(f, 3, y=0.35))  # far, foot=0.425
+            positions.append(_player_pos(f, 4, y=0.40))  # far, foot=0.475
+        tid, side, conf = _find_server_by_position(positions, 0, 0.5)
+        # Near side: track 2 dist=0.375, track 1 dist=0.175, sep=0.20
+        assert tid == 2
+        assert side == "near"
+        assert conf > 0.0
+
+    def test_server_at_far_baseline(self) -> None:
+        """Player right at the far baseline is detected."""
+        positions = []
+        for f in range(45):
+            positions.append(_player_pos(f, 1, y=0.60))  # near, foot=0.675
+            positions.append(_player_pos(f, 2, y=0.62))  # near, foot=0.695
+            positions.append(_player_pos(f, 3, y=0.38))  # far, foot=0.455
+            positions.append(_player_pos(f, 4, y=0.15))  # far, foot=0.225 (far from net)
+        tid, side, conf = _find_server_by_position(positions, 0, 0.5)
+        # Far side: track 4 dist=0.275, track 3 dist=0.045, sep=0.23
+        assert tid == 4
+        assert side == "far"
+
+    def test_all_players_midcourt_no_detection(self) -> None:
+        """When all players are mid-court with similar distances, no detection."""
+        positions = []
+        for f in range(45):
+            positions.append(_player_pos(f, 1, y=0.53))  # near, foot=0.605
+            positions.append(_player_pos(f, 2, y=0.55))  # near, foot=0.625
+            positions.append(_player_pos(f, 3, y=0.45))  # far, foot=0.525
+            positions.append(_player_pos(f, 4, y=0.43))  # far, foot=0.505
+        tid, side, conf = _find_server_by_position(positions, 0, 0.5)
+        assert tid == -1
+
+    def test_two_players_near_same_baseline_no_detection(self) -> None:
+        """When teammates on both sides have small separation, no detection."""
+        positions = []
+        for f in range(45):
+            # Near: both similarly far from net
+            positions.append(_player_pos(f, 1, y=0.62))  # foot=0.695
+            positions.append(_player_pos(f, 2, y=0.64))  # foot=0.715, sep=0.02
+            # Far: both similarly far from net
+            positions.append(_player_pos(f, 3, y=0.36))  # foot=0.435
+            positions.append(_player_pos(f, 4, y=0.34))  # foot=0.415, sep=0.02
+        tid, side, conf = _find_server_by_position(positions, 0, 0.5)
+        assert tid == -1  # Separation < 0.04 on both sides
+
+    def test_no_positions_returns_nothing(self) -> None:
+        """Empty player positions returns no server."""
+        tid, side, conf = _find_server_by_position([], 0, 0.5)
+        assert tid == -1
+
+    def test_window_filters_late_frames(self) -> None:
+        """Only positions within the window are considered."""
+        positions = []
+        # First 45 frames: both on near side, similar distance from net
+        for f in range(45):
+            positions.append(_player_pos(f, 1, y=0.53))  # foot=0.605
+            positions.append(_player_pos(f, 2, y=0.55))  # foot=0.625
+        # Frame 50+: track 1 moves far from net (outside default 45-frame window)
+        for f in range(50, 70):
+            positions.append(_player_pos(f, 1, y=0.80))
+            positions.append(_player_pos(f, 2, y=0.55))
+        tid, side, conf = _find_server_by_position(positions, 0, 0.5)
+        assert tid == -1  # Should not detect late positions
+
+
+class TestPositionBasedServePass:
+    """Integration tests for Pass 0 in _find_serve_index."""
+
+    def test_serve_found_by_track_id(self) -> None:
+        """Pass 0 finds serve contact matching server's track_id."""
+        positions = []
+        for f in range(45):
+            positions.append(_player_pos(f, 1, y=0.80))  # server (far from net)
+            positions.append(_player_pos(f, 2, y=0.55))
+            positions.append(_player_pos(f, 3, y=0.30))
+            positions.append(_player_pos(f, 4, y=0.40))
+
+        contacts = [
+            _contact(10, ball_y=0.80, player_track_id=1, court_side="near"),
+            _contact(40, ball_y=0.50, player_track_id=2, court_side="near"),
+        ]
+        # Server is track 1 (detected from positions)
+        classifier = ActionClassifier()
+        idx, pass_num = classifier._find_serve_index(
+            contacts, 0, 0.5, server_pos_tid=1,
+        )
+        assert idx == 0
+        assert pass_num == 0
+
+    def test_no_matching_track_falls_through(self) -> None:
+        """Pass 0 falls through when no contact has the server's track_id."""
+        contacts = [
+            _contact(10, ball_y=0.75, player_track_id=2, court_side="near"),
+            _contact(40, ball_y=0.40, player_track_id=3, court_side="far"),
+        ]
+        classifier = ActionClassifier()
+        # Server is track 1 but no contact has that track_id
+        idx, pass_num = classifier._find_serve_index(
+            contacts, 0, 0.5, server_pos_tid=1,
+        )
+        assert pass_num != 0
+
+    def test_falls_through_without_server(self) -> None:
+        """Without server_pos_tid, Pass 0 is skipped."""
+        contacts = [
+            _contact(10, ball_y=0.85, velocity=0.03, court_side="near"),
+        ]
+        classifier = ActionClassifier()
+        idx, pass_num = classifier._find_serve_index(
+            contacts, 0, 0.5,
+        )
+        # Should use Pass 2 (baseline position)
+        assert pass_num != 0

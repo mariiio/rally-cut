@@ -23,7 +23,8 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass, field
+from collections import defaultdict
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -32,6 +33,7 @@ from rallycut.tracking.contact_detector import Contact, ContactSequence
 if TYPE_CHECKING:
     from rallycut.tracking.action_type_classifier import ActionTypeClassifier
     from rallycut.tracking.ball_tracker import BallPosition
+    from rallycut.tracking.player_tracker import PlayerPosition
 
 logger = logging.getLogger(__name__)
 
@@ -321,6 +323,84 @@ def _serve_baselines(net_y: float) -> tuple[float, float]:
     return net_y + (1.0 - net_y) * 0.64, net_y * 0.36
 
 
+def _find_server_by_position(
+    player_positions: list[PlayerPosition],
+    start_frame: int,
+    net_y: float,
+    window_frames: int = 45,
+    separation_min: float = 0.04,
+) -> tuple[int, str, float]:
+    """Identify the server from player positions at rally start.
+
+    In beach volleyball (2v2), the server is the only player standing near a
+    baseline at rally start.  All others are mid-court or at the net.
+
+    Strategy: split players into near-side (foot_y > net_y) and far-side
+    (foot_y < net_y).  On each side, the player furthest from the net is the
+    server candidate.  The candidate must be separated from their same-side
+    teammate by *separation_min*.  The side with the larger separation wins.
+
+    Returns:
+        (server_track_id, court_side, confidence).
+        (-1, "", 0.0) when no server can be identified.
+    """
+    end_frame = start_frame + window_frames
+
+    # Gather foot-Y per track (foot ≈ bottom of bbox = y + height/2)
+    track_foot_ys: dict[int, list[float]] = defaultdict(list)
+    for p in player_positions:
+        if start_frame <= p.frame_number < end_frame:
+            track_foot_ys[p.track_id].append(p.y + p.height / 2.0)
+
+    if not track_foot_ys:
+        return -1, "", 0.0
+
+    # Mean foot-Y per track
+    track_means: dict[int, float] = {
+        tid: sum(ys) / len(ys) for tid, ys in track_foot_ys.items()
+    }
+
+    # Split into near (foot_y > net_y) and far (foot_y <= net_y) sides.
+    # Distance from net = how far toward the baseline the player is.
+    near_tracks: list[tuple[int, float]] = []  # (tid, dist_from_net)
+    far_tracks: list[tuple[int, float]] = []
+    for tid, foot_y in track_means.items():
+        if foot_y > net_y:
+            near_tracks.append((tid, foot_y - net_y))
+        else:
+            far_tracks.append((tid, net_y - foot_y))
+
+    # On each side, find the server candidate (furthest from net) and the
+    # separation from their teammate.
+    candidates: list[tuple[int, str, float, float]] = []  # tid, side, sep, dist
+    for side, tracks in [("near", near_tracks), ("far", far_tracks)]:
+        if not tracks:
+            continue
+        tracks.sort(key=lambda t: t[1], reverse=True)
+        best_tid, best_dist = tracks[0]
+        if len(tracks) >= 2:
+            teammate_dist = tracks[1][1]
+            sep = best_dist - teammate_dist
+        else:
+            sep = best_dist  # Only player on this side
+        candidates.append((best_tid, side, sep, best_dist))
+
+    if not candidates:
+        return -1, "", 0.0
+
+    # Pick the side with the largest separation
+    candidates.sort(key=lambda t: t[2], reverse=True)
+    best_tid, best_side, best_sep, best_dist = candidates[0]
+
+    if best_sep < separation_min:
+        return -1, "", 0.0
+
+    # Confidence: based on separation from teammate
+    confidence = min(1.0, best_sep / 0.10)
+
+    return best_tid, best_side, confidence
+
+
 def _is_ball_on_serve_side(
     ball_y: float,
     court_side: str,
@@ -539,11 +619,22 @@ class ActionClassifier:
 
         ball_positions = contact_sequence.ball_positions or None
 
+        # Position-based server detection: identify who the server is from
+        # player positions at rally start (before ball tracking kicks in).
+        server_pos_tid = -1
+        server_pos_side = ""
+        if contact_sequence.player_positions:
+            server_pos_tid, server_pos_side, _pos_conf = _find_server_by_position(
+                contact_sequence.player_positions, start_frame,
+                contact_sequence.net_y,
+            )
+
         # Determine which contact is the serve (may be outside window if
         # ball tracking starts late — common with detector warmup).
         serve_index, serve_pass = self._find_serve_index(
             contacts, start_frame, contact_sequence.net_y,
             ball_positions=ball_positions,
+            server_pos_tid=server_pos_tid,
         )
 
         # Classifier-assisted serve detection: when heuristic falls through to
@@ -722,19 +813,28 @@ class ActionClassifier:
                     else:
                         # Phantom serve: real serve was missed, this is the
                         # receive. Infer serve came from the opposite side.
-                        serve_side = _infer_serve_side(
-                            contact, ball_positions,
-                            contact_sequence.net_y,
-                        ) or (
-                            "far" if contact.court_side == "near"
-                            else "near"
-                        )
+                        # Position-based server_side is most reliable when
+                        # available; fall back to trajectory / court_side.
+                        if server_pos_side:
+                            serve_side = server_pos_side
+                        else:
+                            serve_side = _infer_serve_side(
+                                contact, ball_positions,
+                                contact_sequence.net_y,
+                            ) or (
+                                "far" if contact.court_side == "near"
+                                else "near"
+                            )
                         # Prepend synthetic serve action
-                        actions.append(_make_synthetic_serve(
+                        synth = _make_synthetic_serve(
                             serve_side, contact.frame,
                             contact_sequence.net_y,
                             rally_start_frame=start_frame,
-                        ))
+                        )
+                        # Attach server track_id from position detection
+                        if server_pos_tid >= 0:
+                            synth = replace(synth, player_track_id=server_pos_tid)
+                        actions.append(synth)
                         action_type = ActionType.RECEIVE
                         confidence = self.config.medium_confidence
                         serve_detected = True
@@ -861,23 +961,45 @@ class ActionClassifier:
         start_frame: int,
         net_y: float = 0.5,
         ball_positions: list[BallPosition] | None = None,
+        server_pos_tid: int = -1,
     ) -> tuple[int, int]:
         """Find which contact is the serve.
 
-        Uses three passes with decreasing strictness:
+        Uses four passes with decreasing strictness:
+        0. Position-based: matches a pre-computed server track_id (from
+           ``_find_server_by_position``) to a contact in the serve window.
         1. Arc-based: first contact in window whose subsequent trajectory crosses
            the net (distinctive serve arc pattern).
         2. Position/velocity: baseline position or high velocity (original heuristic).
         3. Fallback: first contact is the serve.
 
+        Args:
+            server_pos_tid: Server track_id from position-based detection.
+                -1 when no server was identified from positions.
+
         Returns:
             Tuple of (index into contacts list, pass number that found it).
-            Pass number: 1=arc, 2=position/velocity, 3=fallback, 0=not found.
+            Pass number: 0=position, 1=arc, 2=position/velocity, 3=fallback.
             Index is -1 if no serve found.
         """
         window = self.config.serve_window_frames
 
         baseline_near, baseline_far = _serve_baselines(net_y)
+
+        # Pass 0: Position-based — match pre-computed server track_id to a
+        # contact. Only matches by track_id (not court_side) to avoid FP
+        # where the first detected contact is actually the receive.
+        if server_pos_tid >= 0 and contacts:
+            for i, c in enumerate(contacts):
+                if (c.frame - start_frame) >= window:
+                    break
+                if c.player_track_id == server_pos_tid:
+                    logger.debug(
+                        "Serve detected via player position at frame %d "
+                        "(track %d)",
+                        c.frame, server_pos_tid,
+                    )
+                    return i, 0
 
         # Pass 1: Arc-based serve detection — check only the first 2 contacts
         # (serve is always at the start of the rally). A serve initiates a

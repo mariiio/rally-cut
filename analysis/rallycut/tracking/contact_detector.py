@@ -170,6 +170,8 @@ class ContactSequence:
     net_y: float = 0.50  # Estimated net Y position
     rally_start_frame: int = 0
     ball_positions: list[BallPosition] = field(default_factory=list)
+    player_positions: list[PlayerPosition] = field(default_factory=list)
+
     @property
     def num_contacts(self) -> int:
         return len(self.contacts)
@@ -1675,4 +1677,5 @@ def detect_contacts(
         net_y=estimated_net_y,
         rally_start_frame=first_frame,
         ball_positions=confident_positions,
+        player_positions=player_positions or [],
     )
