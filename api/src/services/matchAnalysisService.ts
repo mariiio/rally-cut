@@ -462,12 +462,13 @@ async function remapTrackIds(videoId: string): Promise<void> {
 }
 
 /**
- * Remap track IDs for a single rally after re-tracking.
+ * Re-match and remap track IDs for a single rally after re-tracking.
  *
- * Looks up the rally's trackToPlayer mapping from matchAnalysisJson and
- * applies it to positions, contacts, actions, and primaryTrackIds in the DB.
- * Skips if no match analysis exists (first-time tracking before batch analysis).
+ * Runs match-players (video-wide, fast) to produce a fresh trackToPlayer mapping
+ * for the re-tracked rally's new raw track IDs, then remaps just this rally's
+ * positions, contacts, actions, and primaryTrackIds.
  *
+ * Skips if no match analysis exists yet (first-time tracking before batch analysis).
  * Repair-identities is not re-run — it already ran during the full match analysis
  * and the re-tracked rally has fresh detections that don't need appearance repair.
  *
@@ -483,27 +484,101 @@ export async function remapSingleRally(videoId: string, rallyId: string): Promis
     return false;
   }
 
-  // Find the rally's track→player mapping
-  const matchAnalysis = video.matchAnalysisJson as Record<string, unknown>;
-  const rallies = (matchAnalysis.rallies ?? []) as Array<Record<string, unknown>>;
-  const rallyEntry = rallies.find(
-    (r) => (r.rallyId ?? r.rally_id) === rallyId,
-  );
+  // Re-run match-players to get fresh mapping for the re-tracked rally's new raw track IDs.
+  // This is video-wide but fast (DB reads + appearance comparison, no GPU).
+  console.log(`[REMAP_SINGLE] Re-running match-players for video ${videoId}`);
+  await fs.mkdir(TEMP_DIR, { recursive: true });
+  const outputPath = path.join(TEMP_DIR, `rematch_${videoId}.json`);
+  let cropsDir: string | undefined;
 
-  if (!rallyEntry) {
-    console.log(`[REMAP_SINGLE] Rally ${rallyId} not found in match analysis, skipping`);
-    return false;
-  }
+  try {
+    // Download reference crops if any exist
+    const referenceCrops = await prisma.playerReferenceCrop.findMany({
+      where: { videoId },
+      orderBy: [{ playerId: 'asc' }, { createdAt: 'asc' }],
+    });
 
-  const rawTrackToPlayer = (rallyEntry.trackToPlayer ?? rallyEntry.track_to_player ?? {}) as Record<string, number>;
-  const trackToPlayer = new Map<number, number>();
-  for (const [k, v] of Object.entries(rawTrackToPlayer)) {
-    trackToPlayer.set(Number(k), v);
-  }
+    let referenceCropsJsonPath: string | undefined;
+    if (referenceCrops.length > 0) {
+      cropsDir = path.join(TEMP_DIR, `crops_${videoId}`);
+      await fs.mkdir(cropsDir, { recursive: true });
 
-  if (trackToPlayer.size === 0) {
-    return false;
+      const downloadResults = await Promise.all(
+        referenceCrops.map(async (crop) => {
+          try {
+            const obj = await getObject(crop.s3Key);
+            const chunks: Buffer[] = [];
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            for await (const chunk of obj.Body as any) {
+              chunks.push(Buffer.from(chunk));
+            }
+            const cropPath = path.join(cropsDir!, `${crop.id}.jpg`);
+            await fs.writeFile(cropPath, Buffer.concat(chunks));
+            return {
+              playerId: crop.playerId,
+              imagePath: cropPath,
+              frameMs: crop.frameMs,
+              bbox: { x: crop.bboxX, y: crop.bboxY, w: crop.bboxW, h: crop.bboxH },
+            };
+          } catch (dlError) {
+            console.error(`[REMAP_SINGLE] Failed to download crop ${crop.id}:`, dlError);
+            return null;
+          }
+        }),
+      );
+
+      const manifest = downloadResults.filter((r): r is NonNullable<typeof r> => r !== null);
+      if (manifest.length > 0) {
+        referenceCropsJsonPath = path.join(cropsDir, 'manifest.json');
+        await fs.writeFile(referenceCropsJsonPath, JSON.stringify(manifest));
+        console.log(`[REMAP_SINGLE] Using ${manifest.length} reference crops for matching`);
+      }
+    }
+
+    const matchResult = await runMatchPlayersCli(videoId, outputPath, referenceCropsJsonPath);
+
+    // Persist fresh match analysis
+    await prisma.video.update({
+      where: { id: videoId },
+      data: { matchAnalysisJson: matchResult as unknown as Prisma.InputJsonValue },
+    });
+
+    // Find the rally's mapping from the fresh result
+    const rallyEntry = matchResult.rallies.find((r) => r.rallyId === rallyId);
+    if (!rallyEntry) {
+      console.log(`[REMAP_SINGLE] Rally ${rallyId} not in match result, skipping remap`);
+      return false;
+    }
+
+    const rawTrackToPlayer = rallyEntry.trackToPlayer;
+    const trackToPlayer = new Map<number, number>();
+    for (const [k, v] of Object.entries(rawTrackToPlayer)) {
+      trackToPlayer.set(Number(k), v);
+    }
+
+    if (trackToPlayer.size === 0) {
+      return false;
+    }
+
+    // Now remap just this rally (inline, no CLI)
+    return await applyRemapToRally(videoId, rallyId, trackToPlayer, matchResult);
+  } finally {
+    await fs.unlink(outputPath).catch(() => {});
+    if (cropsDir) {
+      await fs.rm(cropsDir, { recursive: true, force: true }).catch(() => {});
+    }
   }
+}
+
+/**
+ * Apply a trackToPlayer mapping to a single rally's DB data.
+ */
+async function applyRemapToRally(
+  videoId: string,
+  rallyId: string,
+  trackToPlayer: Map<number, number>,
+  matchResult: MatchAnalysisResult,
+): Promise<boolean> {
 
   // Load the player track
   const playerTrack = await prisma.playerTrack.findUnique({
@@ -626,21 +701,23 @@ export async function remapSingleRally(videoId: string, rallyId: string): Promis
     },
   });
 
-  // Update matchAnalysisJson with appliedFullMapping + remapApplied
-  const mappingObj: Record<string, number> = {};
-  for (const [k, v] of mapping) mappingObj[String(k)] = v;
-  rallyEntry.appliedFullMapping = mappingObj;
-  rallyEntry.remapApplied = true;
-  // Set trackToPlayer to identity (downstream consumers expect post-remap identity)
-  const identityTtp: Record<string, number> = {};
-  for (const v of trackToPlayer.values()) identityTtp[String(v)] = v;
-  rallyEntry.trackToPlayer = identityTtp;
-  if (rallyEntry.track_to_player != null) rallyEntry.track_to_player = identityTtp;
+  // Update matchAnalysisJson: store appliedFullMapping + set trackToPlayer to identity
+  const rallyEntry = matchResult.rallies.find((r) => r.rallyId === rallyId);
+  if (rallyEntry) {
+    const mappingObj: Record<string, number> = {};
+    for (const [k, v] of mapping) mappingObj[String(k)] = v;
+    (rallyEntry as Record<string, unknown>).appliedFullMapping = mappingObj;
+    (rallyEntry as Record<string, unknown>).remapApplied = true;
+    // Set trackToPlayer to identity (downstream consumers expect post-remap identity)
+    const identityTtp: Record<string, number> = {};
+    for (const v of trackToPlayer.values()) identityTtp[String(v)] = v;
+    rallyEntry.trackToPlayer = identityTtp;
 
-  await prisma.video.update({
-    where: { id: videoId },
-    data: { matchAnalysisJson: matchAnalysis as unknown as Prisma.InputJsonValue },
-  });
+    await prisma.video.update({
+      where: { id: videoId },
+      data: { matchAnalysisJson: matchResult as unknown as Prisma.InputJsonValue },
+    });
+  }
 
   const mappingStr = [...trackToPlayer.entries()]
     .filter(([k, v]) => k !== v)
