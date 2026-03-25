@@ -395,7 +395,7 @@ def track_players(
 ) -> None:
     """Track player positions in a beach volleyball video.
 
-    Uses YOLOv8 for detection with BoT-SORT for temporal tracking.
+    Uses YOLO for detection with BoxMOT BoT-SORT + OSNet ReID for tracking.
     Outputs player coordinates with track IDs and confidence scores.
 
     By default, filters to court players only using:

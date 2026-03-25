@@ -1044,6 +1044,7 @@ class PlayerTracker:
         t0 = time.monotonic()
         model = GeneralReIDModel(weights_path=weights)
         t_load = time.monotonic() - t0
+        # print() not logger: must be visible through Node.js subprocess pipe
         print(f"Loaded OSNet ReID model ({t_load:.1f}s)", flush=True)
         return model
 
@@ -1136,9 +1137,10 @@ class PlayerTracker:
     def _reset_boxmot_tracker(self) -> None:
         """Reset BoxMOT tracker state between rallies.
 
-        Re-creates the tracker to ensure all state is clean — including
-        CMC (sparse optical flow) internal state which cannot be partially
-        reset. The ReID model is NOT reloaded (kept in self._reid_model).
+        Re-creates the tracker to ensure all state is clean — Kalman
+        filter predictions, track histories, BaseTrack ID counter, and
+        association state. The ReID model is NOT reloaded (kept in
+        self._reid_model).
         """
         self._boxmot_tracker = self._init_boxmot_tracker()
 

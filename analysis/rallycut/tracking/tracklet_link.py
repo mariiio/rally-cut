@@ -439,6 +439,7 @@ def link_tracklets_by_appearance(
         )
 
         # Update average histogram for canonical track
+        # (count was already updated above; recover pre-merge canonical count)
         hist_c = avg_hists.get(canonical)
         hist_m = avg_hists.get(merged)
         if hist_c is not None and hist_m is not None:
