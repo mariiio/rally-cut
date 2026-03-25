@@ -11,6 +11,7 @@ Filters out spectators, referees, and other non-playing persons using:
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -191,6 +192,27 @@ class PlayerFilterConfig:
     max_interpolation_gap: int = 30  # Max gap in frames to interpolate (~1s at 30fps)
     interpolated_confidence: float = 0.5  # Confidence assigned to interpolated positions
 
+    def scaled_for_fps(self, fps: float) -> PlayerFilterConfig:
+        """Return a copy with frame-count thresholds scaled for the video FPS.
+
+        All frame-count parameters are tuned for 30fps. At 60fps the same
+        real-world durations correspond to 2x more frames. This method
+        scales those parameters so behaviour is consistent across frame
+        rates.
+
+        Non-frame-count settings (distances, weights, ratios) are unchanged.
+        """
+        if fps <= 0 or abs(fps - 30.0) < 1.0:
+            return self  # No scaling needed
+
+        ratio = fps / 30.0
+        return dataclasses.replace(
+            self,
+            max_gap_frames=int(round(self.max_gap_frames * ratio)),
+            max_interpolation_gap=int(round(self.max_interpolation_gap * ratio)),
+            stationary_bg_min_detections=int(round(self.stationary_bg_min_detections * ratio)),
+        )
+
 
 @dataclass
 class CourtFilterConfig:
@@ -358,6 +380,24 @@ def compute_court_position_stats(
     return stats
 
 
+def _zone_min_bbox_area(y: float, config_min: float) -> float:
+    """Compute zone-dependent minimum bbox area.
+
+    Far-court players (low Y) appear smaller due to perspective.
+    Uses the same linear ramp as ``_filter_detections`` in
+    ``player_tracker.py`` so that detections accepted pre-tracking
+    are not discarded post-tracking.
+
+    For far-court positions where the zone-dependent threshold is below
+    ``config_min``, the zone value is used (relaxation). For near-court
+    positions the zone threshold equals or exceeds ``config_min``, so
+    ``config_min`` applies (no tightening beyond config).
+    """
+    zone_min = 0.0005 + 0.0025 * y
+    # Relax for far-court only; never go above config_min
+    return min(zone_min, config_min)
+
+
 def filter_by_bbox_size(
     players: list[PlayerPosition],
     config: PlayerFilterConfig,
@@ -365,8 +405,9 @@ def filter_by_bbox_size(
     """
     Filter players by bounding box size.
 
-    Court players are closer to the camera, so they have larger bounding boxes.
-    Spectators in background have smaller boxes.
+    Uses zone-dependent minimum area: far-court players (low Y) have a
+    lower threshold matching the pre-tracking filter in ``_filter_detections``.
+    Near-court players still use ``config.min_bbox_area``.
 
     Args:
         players: List of player detections.
@@ -378,7 +419,8 @@ def filter_by_bbox_size(
     filtered = []
     for p in players:
         bbox_area = p.width * p.height
-        if bbox_area >= config.min_bbox_area and p.height >= config.min_bbox_height:
+        min_area = _zone_min_bbox_area(p.y, config.min_bbox_area)
+        if bbox_area >= min_area and p.height >= config.min_bbox_height:
             filtered.append(p)
 
     if len(filtered) < len(players):
@@ -1626,14 +1668,25 @@ def identify_primary_tracks(
             )
             selected.append((tid, stab))
 
-    # Score by player behavior (ball proximity, movement, presence) for ranking
+    # Score by player behavior (ball proximity, movement, presence, coverage)
+    # for ranking when >max_players candidates pass the stability threshold.
+    # Coverage = temporal span / total frames. Prevents short-lived tracks
+    # (e.g., a near-court player detected for only the first third of a rally)
+    # from beating long-lived tracks that cover the full rally.
     def _player_behavior_score(tid: int) -> float:
         s = track_stats[tid]
         spread_normalized = min(s.position_spread / 0.05, 1.0)
+        temporal_coverage = min(
+            (s.last_frame - s.first_frame) / s.total_frames
+            if s.total_frames > 0
+            else 0.0,
+            1.0,
+        )
         return (
-            0.5 * s.ball_proximity_score
-            + 0.3 * spread_normalized
+            0.4 * s.ball_proximity_score
+            + 0.2 * spread_normalized
             + 0.2 * s.presence_rate
+            + 0.2 * temporal_coverage
         )
 
     # Apply max_players limit if we have too many
@@ -1651,9 +1704,15 @@ def identify_primary_tracks(
         for tid, score in scored:
             s = track_stats[tid]
             status = "KEPT" if tid in kept_ids else "EXCLUDED"
+            coverage = (
+                (s.last_frame - s.first_frame) / s.total_frames
+                if s.total_frames > 0
+                else 0.0
+            )
             logger.info(
                 f"  Track {tid}: score={score:.3f} (ball={s.ball_proximity_score:.2f}, "
-                f"spread={s.position_spread:.4f}, presence={s.presence_rate:.2f}) [{status}]"
+                f"spread={s.position_spread:.4f}, presence={s.presence_rate:.2f}, "
+                f"coverage={coverage:.2f}) [{status}]"
             )
         selected = [(tid, stab) for tid, stab in selected if tid in kept_ids]
 
@@ -2485,7 +2544,7 @@ def recover_missing_players(
             continue
         if stats.presence_rate < cfg.min_presence_rate:
             continue
-        if stats.avg_bbox_area < cfg.min_bbox_area:
+        if stats.avg_bbox_area < _zone_min_bbox_area(stats.avg_y, cfg.min_bbox_area):
             continue
 
         # Check spatial distinctness: must not overlap with existing primaries
@@ -2515,10 +2574,17 @@ def recover_missing_players(
 
         # Score: same behavior score used by identify_primary_tracks
         spread_normalized = min(stats.position_spread / 0.05, 1.0)
+        temporal_coverage = min(
+            (stats.last_frame - stats.first_frame) / stats.total_frames
+            if stats.total_frames > 0
+            else 0.0,
+            1.0,
+        )
         score = (
-            0.5 * stats.ball_proximity_score
-            + 0.3 * spread_normalized
+            0.4 * stats.ball_proximity_score
+            + 0.2 * spread_normalized
             + 0.2 * stats.presence_rate
+            + 0.2 * temporal_coverage
         )
         candidates.append((tid, score))
 

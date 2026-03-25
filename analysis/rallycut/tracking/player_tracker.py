@@ -964,7 +964,7 @@ class PlayerTracker:
 
         return base_config
 
-    def _init_boxmot_tracker(self) -> Any:
+    def _init_boxmot_tracker(self, video_fps: float = 30.0) -> Any:
         """Initialize BoxMOT BotSort tracker with custom ReID embeddings.
 
         Creates a BotSort tracker configured with the same parameters as
@@ -974,6 +974,12 @@ class PlayerTracker:
         This allows using our fine-tuned OSNet-x1.0 model which produces
         128-dim embeddings trained with SupCon loss on volleyball data,
         rather than BoxMOT's generic ReID or ultralytics' YOLO backbone features.
+
+        Args:
+            video_fps: Video frame rate. BoT-SORT uses this to scale
+                track_buffer into real time (buffer_size = fps/30 * track_buffer).
+                Passing the actual FPS ensures consistent ~1.5s track retention
+                regardless of whether the video is 30fps or 60fps.
         """
         from boxmot.trackers.botsort.basetrack import BaseTrack
         from boxmot.trackers.botsort.botsort import BotSort
@@ -983,6 +989,9 @@ class PlayerTracker:
         appearance_thresh = self.appearance_thresh if self.appearance_thresh is not None else 0.30
 
         import torch
+
+        # Round FPS to nearest int for BoT-SORT (expects int frame_rate)
+        frame_rate = max(int(round(video_fps)), 1)
 
         # Create tracker with with_reid=False to skip loading BoxMOT's
         # internal ReID model. We'll set with_reid=True after construction
@@ -999,7 +1008,7 @@ class PlayerTracker:
             proximity_thresh=0.5,
             appearance_thresh=appearance_thresh,
             cmc_method="sof",  # Overridden with _IdentityCMC below
-            frame_rate=30,
+            frame_rate=frame_rate,
             fuse_first_associate=False,
             with_reid=False,  # Skip model loading
             min_hits=1,  # Show tracks after 1 hit (same as ultralytics default)
@@ -1019,10 +1028,14 @@ class PlayerTracker:
         # Kalman predictions and cause severe track fragmentation.
         tracker.cmc = _IdentityCMC()
 
+        # BoT-SORT computes: buffer_size = int(frame_rate/30 * track_buffer)
+        # At 30fps: buffer_size=45 (1.5s). At 60fps: buffer_size=90 (1.5s).
         logger.info(
             "BoxMOT BotSort initialized (appearance_thresh=%.2f, "
-            "track_buffer=45, match_thresh=0.90)",
+            "track_buffer=45, frame_rate=%d, buffer_size=%d, match_thresh=0.90)",
             appearance_thresh,
+            frame_rate,
+            tracker.buffer_size,
         )
         return tracker
 
@@ -1044,7 +1057,6 @@ class PlayerTracker:
         t0 = time.monotonic()
         model = GeneralReIDModel(weights_path=weights)
         t_load = time.monotonic() - t0
-        # print() not logger: must be visible through Node.js subprocess pipe
         print(f"Loaded OSNet ReID model ({t_load:.1f}s)", flush=True)
         return model
 
@@ -1134,15 +1146,14 @@ class PlayerTracker:
 
         return positions
 
-    def _reset_boxmot_tracker(self) -> None:
+    def _reset_boxmot_tracker(self, video_fps: float = 30.0) -> None:
         """Reset BoxMOT tracker state between rallies.
 
-        Re-creates the tracker to ensure all state is clean — Kalman
-        filter predictions, track histories, BaseTrack ID counter, and
-        association state. The ReID model is NOT reloaded (kept in
-        self._reid_model).
+        Re-creates the tracker to ensure all state is clean — including
+        CMC (sparse optical flow) internal state which cannot be partially
+        reset. The ReID model is NOT reloaded (kept in self._reid_model).
         """
-        self._boxmot_tracker = self._init_boxmot_tracker()
+        self._boxmot_tracker = self._init_boxmot_tracker(video_fps)
 
     def _get_model_filename(self) -> str:
         """Get the model filename for the selected YOLO model size."""
@@ -1409,13 +1420,12 @@ class PlayerTracker:
         use_boxmot = self.tracker == TRACKER_BOXMOT_BOTSORT
 
         if use_boxmot:
-            # BoxMOT path: initialize or reset BoxMOT tracker + load ReID model
+            # BoxMOT path: load ReID model (FPS-independent).
+            # Tracker creation is deferred until after video FPS is known,
+            # so BoT-SORT's Kalman filter and track buffer are correctly
+            # scaled for the video's actual frame rate.
             if self._reid_model is None:
                 self._reid_model = self._load_reid_model()
-            if self._boxmot_tracker is None:
-                self._boxmot_tracker = self._init_boxmot_tracker()
-            else:
-                self._reset_boxmot_tracker()
             # Clear ultralytics predictor state (no tracking, detection only)
             if hasattr(model, "predictor") and model.predictor is not None:
                 if hasattr(model.predictor, "trackers"):
@@ -1445,6 +1455,18 @@ class PlayerTracker:
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+            # Initialize/reset BoxMOT tracker now that FPS is known.
+            # BoT-SORT scales track_buffer by fps/30 internally, so passing
+            # the actual FPS ensures consistent ~1.5s track retention.
+            if use_boxmot:
+                self._boxmot_tracker = self._init_boxmot_tracker(fps)
+
+            # Scale frame-count thresholds for videos that aren't 30fps.
+            # All defaults are tuned for 30fps; at 60fps the same real-world
+            # durations need 2x more frames.
+            if filter_config is not None:
+                filter_config = filter_config.scaled_for_fps(fps)
 
             # Calculate frame range
             start_frame = 0
@@ -1731,9 +1753,12 @@ class PlayerTracker:
                         link_tracklets_by_appearance,
                     )
 
+                    # Scale frame-count params for FPS (defaults tuned at 30fps)
+                    fps_ratio = fps / 30.0
                     positions, num_appearance_links = link_tracklets_by_appearance(
                         positions, color_store,
                         appearance_store=appearance_store,
+                        max_overlap_frames=int(round(15 * fps_ratio)),
                     )
 
                 # Step 1: Stabilize track IDs before filtering
@@ -2042,10 +2067,7 @@ class PlayerTracker:
         if use_boxmot:
             if self._reid_model is None:
                 self._reid_model = self._load_reid_model()
-            if self._boxmot_tracker is None:
-                self._boxmot_tracker = self._init_boxmot_tracker()
-            else:
-                self._reset_boxmot_tracker()
+            self._boxmot_tracker = self._init_boxmot_tracker(video_fps)
 
         for frame in frames:
             try:
