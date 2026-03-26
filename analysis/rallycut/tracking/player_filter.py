@@ -1399,7 +1399,8 @@ def stabilize_track_ids(
                         total_dist += (dx * dx + dy * dy) ** 0.5
                         count += 1
 
-                    # Block if no common frames or positions are far apart
+                    # Block if no common frames or positions are far apart.
+                    # Threshold matches OVERLAP_MAX_POSITION_DISTANCE in tracklet_link.
                     max_overlap_dist = 0.08
                     if count == 0 or (total_dist / count) > max_overlap_dist:
                         logger.debug(

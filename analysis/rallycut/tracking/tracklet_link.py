@@ -617,14 +617,16 @@ def relink_spatial_splits(
 ) -> tuple[list[PlayerPosition], int]:
     """Reconnect fragments that are trivially the same player by position.
 
-    After color splitting (Step 0b), a single track may be split into two
-    fragments at a point where the color histogram changed (e.g., lighting
-    shift, player rotation). When the gap is tiny (≤5 frames) and the
-    endpoint distance is negligible (≤0.05), spatial continuity alone
-    proves they're the same player — no appearance matching needed.
+    Color splitting (Step 0b) and drift detection (Step 4e) can split a
+    continuous track into fragments at nearly the same position. When the
+    gap is tiny (≤5 frames) and endpoint distance is negligible (≤0.05),
+    spatial continuity alone proves they're the same player — no appearance
+    matching needed.
 
-    This runs BEFORE appearance-based linking to prevent greedy appearance
-    merges from stealing these obvious spatial matches.
+    Called at two pipeline points:
+    - After color splitting (Step 0b2): prevents greedy appearance merges
+      from stealing obvious spatial matches.
+    - After drift detection (Step 4f): reconnects fast-movement drift splits.
 
     Args:
         positions: Player positions (modified in place).
