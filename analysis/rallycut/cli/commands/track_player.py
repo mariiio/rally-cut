@@ -292,15 +292,19 @@ def extract_segment(
 
 @handle_errors
 def track_players(
-    video: Path = typer.Argument(
-        ...,
-        exists=True,
-        help="Input video file to track player positions",
+    video: Path | None = typer.Argument(
+        None,
+        help="Input video file to track player positions (or use --rally-id)",
     ),
     output: Path = typer.Option(
         None,
         "--output", "-o",
         help="Output JSON file for player positions (default: video_player_track.json)",
+    ),
+    rally_id: str | None = typer.Option(
+        None,
+        "--rally-id",
+        help="Rally ID from database. Downloads the exact video from S3/MinIO and uses rally start/end times.",
     ),
     start_ms: int | None = typer.Option(
         None,
@@ -425,6 +429,10 @@ def track_players(
 ) -> None:
     """Track player positions in a beach volleyball video.
 
+    Accepts either a local video file or --rally-id to download the exact video
+    from S3/MinIO and use rally start/end times from the database. Using --rally-id
+    ensures byte-identical input to the app's tracking pipeline.
+
     Uses YOLO for detection with BoxMOT BoT-SORT + OSNet ReID for tracking.
     Outputs player coordinates with track IDs and confidence scores.
 
@@ -441,9 +449,47 @@ def track_players(
 
     Example:
         rallycut track-players game.mp4 -o rally_players.json
+        rallycut track-players --rally-id abc123  # Track using app's exact video
         rallycut track-players game.mp4 --no-filter  # Include all persons
         rallycut track-players game.mp4 --debug-video out.mp4  # Visualize tracking
     """
+    # Resolve video source: either local file or rally ID from database
+    if rally_id is not None and video is not None:
+        console.print("[red]Error: Provide either VIDEO or --rally-id, not both[/red]")
+        raise typer.Exit(1)
+
+    if rally_id is not None:
+        from rallycut.evaluation.tracking.db import get_rally_info
+        from rallycut.evaluation.video_resolver import VideoResolver
+
+        rally_info = get_rally_info(rally_id)
+        if rally_info is None:
+            console.print(f"[red]Error: Rally {rally_id} not found in database[/red]")
+            raise typer.Exit(1)
+
+        # Download the exact video the app uses from S3/MinIO
+        resolver = VideoResolver()
+        if not quiet:
+            console.print(f"[dim]Resolving video for rally {rally_id}...[/dim]")
+        video = resolver.resolve(rally_info.s3_key, rally_info.content_hash)
+        start_ms = rally_info.start_ms
+        end_ms = rally_info.end_ms
+
+        # Use calibration from DB if not provided via CLI
+        if calibration is None and rally_info.calibration_json is not None:
+            import json as _json
+            calibration = _json.dumps(rally_info.calibration_json)
+
+        if not quiet:
+            console.print(
+                f"[dim]Video: {video.name} (cached from S3)[/dim]\n"
+                f"[dim]Rally: {rally_info.start_ms}ms - {rally_info.end_ms}ms[/dim]"
+            )
+
+    if video is None:
+        console.print("[red]Error: Provide either VIDEO or --rally-id[/red]")
+        raise typer.Exit(1)
+
     validate_video_file(video)
 
     # When --start/--end are provided, extract a segment first and track that.

@@ -354,6 +354,66 @@ def get_video_path(video_id: str) -> Path | None:
                 return None
 
 
+@dataclass
+class RallyVideoInfo:
+    """Rally metadata with video S3 info for downloading the exact source."""
+
+    rally_id: str
+    video_id: str
+    start_ms: int
+    end_ms: int
+    s3_key: str
+    content_hash: str
+    video_fps: float | None = None
+    calibration_json: list[dict[str, float]] | None = None
+
+
+def get_rally_info(rally_id: str) -> RallyVideoInfo | None:
+    """Get rally metadata and video S3 info for downloading.
+
+    Args:
+        rally_id: The rally ID from the database.
+
+    Returns:
+        RallyVideoInfo with rally times and video S3 key, or None if not found.
+    """
+    query = """
+        SELECT r.id, r.video_id, r.start_ms, r.end_ms,
+               v.s3_key, v.content_hash, v.fps,
+               v.court_calibration_json
+        FROM rallies r
+        JOIN videos v ON v.id = r.video_id
+        WHERE r.id = %s
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, [rally_id])
+            row = cur.fetchone()
+
+            if row is None:
+                logger.warning(f"Rally {rally_id} not found in database")
+                return None
+
+            (rally_id_val, video_id, start_ms, end_ms,
+             s3_key, content_hash, fps, cal_json) = row
+
+            if not s3_key or not content_hash:
+                logger.warning(f"Video for rally {rally_id} missing s3_key or content_hash")
+                return None
+
+            return RallyVideoInfo(
+                rally_id=cast(str, rally_id_val),
+                video_id=cast(str, video_id),
+                start_ms=cast(int, start_ms),
+                end_ms=cast(int, end_ms),
+                s3_key=cast(str, s3_key),
+                content_hash=cast(str, content_hash),
+                video_fps=cast(float | None, fps),
+                calibration_json=cal_json,  # type: ignore[arg-type]
+            )
+
+
 def load_rallies_for_video(video_id: str) -> list[RallyTrackData]:
     """Load all tracked rallies for a video from the database.
 
