@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -178,8 +181,6 @@ def create_debug_video(
     ball_positions: list[BallPosition] | None,
     split_y: float | None,
     primary_tracks: set[int],
-    start_ms: int | None = None,
-    end_ms: int | None = None,
     stride: int = 1,
     progress_callback: Callable[[float], None] | None = None,
     court_roi: list[tuple[float, float]] | None = None,
@@ -187,14 +188,12 @@ def create_debug_video(
     """Create debug video with two-team overlay.
 
     Args:
-        video_path: Input video path.
+        video_path: Input video path (full file or pre-extracted segment).
         output_path: Output video path.
         tracking_result: Player tracking results.
         ball_positions: Ball positions for trajectory.
         split_y: Y-coordinate for court split (horizontal line).
         primary_tracks: Primary track IDs.
-        start_ms: Start time in ms.
-        end_ms: End time in ms.
         stride: Frame stride used during tracking.
         progress_callback: Progress callback function.
         court_roi: Optional court ROI polygon for visualization.
@@ -213,27 +212,22 @@ def create_debug_video(
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    # Calculate frame range
-    start_frame = int(start_ms / 1000 * fps) if start_ms else 0
-    end_frame = int(end_ms / 1000 * fps) if end_ms else total_frames
-
     # Setup video writer
     fourcc = cv2.VideoWriter.fourcc(*"mp4v")
     out = cv2.VideoWriter(str(output_path), fourcc, fps / stride, (width, height))
 
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-    frame_idx = start_frame
+    frame_idx = 0
     frames_written = 0
-    total_to_write = (end_frame - start_frame + stride - 1) // stride
+    total_to_write = (total_frames + stride - 1) // stride
 
     try:
-        while frame_idx < end_frame:
+        while frame_idx < total_frames:
             ret, frame = cap.read()
             if not ret:
                 break
 
             # Only process strided frames
-            if (frame_idx - start_frame) % stride == 0:
+            if frame_idx % stride == 0:
                 players = positions_by_frame.get(frame_idx, [])
                 overlay_frame = render_debug_overlay(
                     frame,
@@ -258,6 +252,42 @@ def create_debug_video(
     finally:
         cap.release()
         out.release()
+
+
+def extract_segment(
+    video: Path,
+    start_ms: int | None,
+    end_ms: int | None,
+) -> Path:
+    """Extract video segment with FFmpeg, matching the app's approach.
+
+    Uses the same flags as playerTrackingService.ts:extractVideoSegmentFromLocal
+    to ensure identical BoT-SORT behavior between app and CLI.
+
+    Returns path to the extracted segment in a temp directory.
+    Caller is responsible for cleaning up the temp directory.
+    """
+    start_seconds = (start_ms or 0) / 1000
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="rallycut_segment_"))
+    segment_path = tmp_dir / f"{video.stem}_segment.mp4"
+
+    args = ["ffmpeg"]
+    if start_ms is not None:
+        args.extend(["-ss", str(start_seconds)])
+    args.extend(["-i", str(video)])
+    if end_ms is not None:
+        duration_seconds = (end_ms - (start_ms or 0)) / 1000
+        args.extend(["-t", str(duration_seconds)])
+    args.extend([
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
+        "-an",
+        "-y",
+        str(segment_path),
+    ])
+
+    subprocess.run(args, capture_output=True, check=True)
+    return segment_path
 
 
 @handle_errors
@@ -416,6 +446,80 @@ def track_players(
     """
     validate_video_file(video)
 
+    # When --start/--end are provided, extract a segment first and track that.
+    # This matches the app's approach (playerTrackingService.ts) which extracts
+    # rally segments with FFmpeg before tracking, producing frame-accurate cuts
+    # with clean frame numbering from 0 and no keyframe seeking issues.
+    segment_tmp_dir: Path | None = None
+    original_video = video
+    if start_ms is not None or end_ms is not None:
+        if not quiet:
+            time_range = f"{start_ms or 0}ms - {end_ms or 'end'}ms"
+            console.print(f"[dim]Extracting segment ({time_range}) with FFmpeg...[/dim]")
+        segment_path = extract_segment(video, start_ms, end_ms)
+        segment_tmp_dir = segment_path.parent
+        video = segment_path
+        # Clear start/end — the segment already covers just the rally
+        start_ms = None
+        end_ms = None
+        if not quiet:
+            console.print(f"[dim]Segment extracted: {segment_path.name}[/dim]")
+
+    try:
+        _run_tracking(
+            video=video,
+            original_video=original_video,
+            output=output,
+            confidence=confidence,
+            stride=stride,
+            filter_court=filter_court,
+            debug_video=debug_video,
+            calibration=calibration,
+            quiet=quiet,
+            ball_model=ball_model,
+            min_bbox_area=min_bbox_area,
+            min_bbox_height=min_bbox_height,
+            min_position_spread=min_position_spread,
+            min_presence_rate=min_presence_rate,
+            preprocessing=preprocessing,
+            tracker=tracker,
+            yolo_model=yolo_model,
+            imgsz=imgsz,
+            reid_model=reid_model,
+            court_roi_str=court_roi_str,
+            actions=actions,
+        )
+    finally:
+        if segment_tmp_dir is not None:
+            shutil.rmtree(segment_tmp_dir, ignore_errors=True)
+
+
+def _run_tracking(
+    *,
+    video: Path,
+    original_video: Path,
+    output: Path | None,
+    confidence: float,
+    stride: int,
+    filter_court: bool,
+    debug_video: Path | None,
+    calibration: str | None,
+    quiet: bool,
+    ball_model: str,
+    min_bbox_area: float | None,
+    min_bbox_height: float | None,
+    min_position_spread: float | None,
+    min_presence_rate: float | None,
+    preprocessing: str,
+    tracker: str,
+    yolo_model: str,
+    imgsz: int,
+    reid_model: str | None,
+    court_roi_str: str | None,
+    actions: bool,
+) -> None:
+    """Core tracking implementation, separated for segment extraction cleanup."""
+
     # Parse calibration if provided
     calibrator = None
     if calibration:
@@ -464,15 +568,12 @@ def track_players(
             except (json_mod.JSONDecodeError, KeyError, TypeError) as e:
                 console.print(f"[yellow]Warning: Invalid court ROI JSON: {e}[/yellow]")
 
-    # Default output path
+    # Default output path (use original video name, not temp segment)
     if output is None:
-        output = video.with_name(f"{video.stem}_player_track.json")
+        output = original_video.with_name(f"{original_video.stem}_player_track.json")
 
     if not quiet:
-        console.print(f"[bold]Player Tracking:[/bold] {video.name}")
-        if start_ms is not None or end_ms is not None:
-            time_range = f"{start_ms or 0}ms - {end_ms or 'end'}ms"
-            console.print(f"[dim]Time range: {time_range}[/dim]")
+        console.print(f"[bold]Player Tracking:[/bold] {original_video.name}")
         if stride > 1:
             console.print(f"[dim]Stride: {stride} (processing every {stride}th frame)[/dim]")
         if filter_court:
@@ -544,11 +645,7 @@ def track_players(
 
         ball_tracker = create_ball_tracker(model=ball_model)
         if quiet:
-            ball_result = ball_tracker.track_video(
-                video,
-                start_ms=start_ms,
-                end_ms=end_ms,
-            )
+            ball_result = ball_tracker.track_video(video)
         else:
             with Progress(
                 SpinnerColumn(),
@@ -564,8 +661,6 @@ def track_players(
 
                 ball_result = ball_tracker.track_video(
                     video,
-                    start_ms=start_ms,
-                    end_ms=end_ms,
                     progress_callback=update_ball_progress,
                 )
 
@@ -691,8 +786,6 @@ def track_players(
     if quiet:
         result = player_tracker.track_video(
             video,
-            start_ms=start_ms,
-            end_ms=end_ms,
             stride=stride,
             ball_positions=ball_positions,
             filter_enabled=filter_court,
@@ -715,8 +808,6 @@ def track_players(
 
             result = player_tracker.track_video(
                 video,
-                start_ms=start_ms,
-                end_ms=end_ms,
                 stride=stride,
                 progress_callback=update_progress,
                 ball_positions=ball_positions,
@@ -842,9 +933,7 @@ def track_players(
                 ball_positions,
                 split_y,
                 primary_tracks,
-                start_ms,
-                end_ms,
-                stride,
+                stride=stride,
                 court_roi=court_roi,
             )
         else:
@@ -867,10 +956,8 @@ def track_players(
                     ball_positions,
                     split_y,
                     primary_tracks,
-                    start_ms,
-                    end_ms,
-                    stride,
-                    update_video_progress,
+                    stride=stride,
+                    progress_callback=update_video_progress,
                     court_roi=court_roi,
                 )
 
