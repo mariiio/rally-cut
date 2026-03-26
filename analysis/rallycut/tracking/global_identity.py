@@ -231,6 +231,32 @@ def optimize_global_identity(
         result.skip_reason = "reverted: would reduce track count"
         return positions, result
 
+    # Coverage guard: revert if any track lost >50% of its frames.
+    # The optimizer can swap identities between similar-looking players
+    # without reducing the track count — this catches that pattern.
+    input_frame_counts: dict[int, int] = {}
+    for tid in input_tids:
+        input_frame_counts[tid] = input_frame_counts.get(tid, 0) + 1
+
+    output_frame_counts: dict[int, int] = {}
+    for p in positions:
+        if p.track_id >= 0:
+            output_frame_counts[p.track_id] = output_frame_counts.get(p.track_id, 0) + 1
+
+    for tid in input_unique:
+        input_n = input_frame_counts.get(tid, 0)
+        output_n = output_frame_counts.get(tid, 0)
+        if input_n > 0 and output_n < input_n * 0.5:
+            logger.warning(
+                f"Global identity: track {tid} lost "
+                f"{input_n - output_n}/{input_n} frames "
+                f"({100 * output_n / input_n:.0f}% remaining) — reverting"
+            )
+            for p, orig_tid in zip(positions, input_tids):
+                p.track_id = orig_tid
+            result.skip_reason = f"reverted: track {tid} lost >50% coverage"
+            return positions, result
+
     # Resolve small temporal overlaps within same-team tracks.
     # After merging fragments, two tracks may coexist for a few frames
     # during the handoff (e.g., Kalman-predicted ghost + new detection).
