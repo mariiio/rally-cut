@@ -49,6 +49,29 @@ DEFAULT_MAX_TEMPORAL_GAP = 90  # Max frame gap between fragments for appearance-
 # position to be the same player. A person can't be in two places at once.
 OVERLAP_MAX_POSITION_DISTANCE = 0.08  # Max avg distance during overlap frames
 
+# Spatial-temporal blending: weight for spatial-temporal component in merge scoring.
+# When same-team players have near-identical appearance, spatial proximity breaks ties.
+SPATIAL_BLEND_WEIGHT = 0.35  # 65% appearance + 35% spatial-temporal
+
+
+def _compute_blended_distance(
+    appearance_dist: float,
+    spatial_dist: float,
+    temporal_gap: int,
+    max_spatial: float = DEFAULT_MAX_SPATIAL_DISPLACEMENT,
+    max_gap: int = DEFAULT_MAX_TEMPORAL_GAP,
+) -> float:
+    """Blend appearance and spatial-temporal distances for merge ranking.
+
+    Normalizes spatial distance and temporal gap to [0, 1], combines them
+    equally, then blends with appearance distance. This ensures spatially
+    closer fragments are preferred when appearance is ambiguous.
+    """
+    normalized_spatial = min(spatial_dist / max_spatial, 1.0) if max_spatial > 0 else 0.0
+    normalized_gap = min(temporal_gap / max_gap, 1.0) if max_gap > 0 else 0.0
+    spatial_temporal = 0.5 * normalized_spatial + 0.5 * normalized_gap
+    return (1 - SPATIAL_BLEND_WEIGHT) * appearance_dist + SPATIAL_BLEND_WEIGHT * spatial_temporal
+
 
 def _compute_track_summary(
     positions: list[PlayerPosition],
@@ -218,8 +241,12 @@ def link_tracklets_by_appearance(
     1. Cross-team block: fragments must be same team (if teams known).
     2. Overlap position gate: if tracks coexist, they must be at the
        same position (a person can't be in two places at once).
-    3. Spatial displacement: endpoint distance must be within threshold.
-    4. Appearance distance: histogram distance below merge threshold.
+    3. Temporal gap: fragments must be within MAX_TEMPORAL_GAP frames.
+    4. Spatial displacement: endpoint distance must be within threshold.
+
+    Ranking uses a blended distance (appearance + spatial-temporal proximity)
+    so that spatially closer fragments are preferred when appearance is
+    ambiguous between same-team players.
 
     Args:
         positions: Player positions with track IDs (modified in place).
@@ -363,8 +390,11 @@ def link_tracklets_by_appearance(
                     # Blend: 40% shorts-only, 60% multi-region
                     dist = 0.4 * dist + 0.6 * multi_dist
 
-            dist_matrix[i, j] = dist
-            dist_matrix[j, i] = dist
+            blended = _compute_blended_distance(
+                dist, spatial_dist, temporal_gap, max_spatial_displacement,
+            )
+            dist_matrix[i, j] = blended
+            dist_matrix[j, i] = blended
 
     # Greedy hierarchical merging
     id_mapping: dict[int, int] = {}  # merged_id -> canonical_id
@@ -430,6 +460,13 @@ def link_tracklets_by_appearance(
         id_mapping[merged] = canonical
         tracks[canonical]["frames"] |= tracks[merged]["frames"]
         tracks[canonical]["count"] += tracks[merged]["count"]
+
+        # Update endpoint positions before frame range (needs original bounds)
+        if tracks[merged]["first_frame"] < tracks[canonical]["first_frame"]:
+            tracks[canonical]["first_pos"] = tracks[merged]["first_pos"]
+        if tracks[merged]["last_frame"] > tracks[canonical]["last_frame"]:
+            tracks[canonical]["last_pos"] = tracks[merged]["last_pos"]
+
         tracks[canonical]["first_frame"] = min(
             tracks[canonical]["first_frame"], tracks[merged]["first_frame"]
         )
@@ -466,7 +503,31 @@ def link_tracklets_by_appearance(
                 dist_matrix[keep_idx, k] = 1.0
                 dist_matrix[k, keep_idx] = 1.0
             elif avg_hists.get(canonical) is not None and avg_hists.get(canon_k) is not None:
-                new_dist = _bhattacharyya_distance(avg_hists[canonical], avg_hists[canon_k])
+                new_appearance = _bhattacharyya_distance(
+                    avg_hists[canonical], avg_hists[canon_k]
+                )
+
+                # Compute spatial-temporal for blended distance
+                if tracks[canonical]["last_frame"] < tracks[canon_k]["first_frame"]:
+                    ep = tracks[canonical]["last_pos"]
+                    sp = tracks[canon_k]["first_pos"]
+                    gap = tracks[canon_k]["first_frame"] - tracks[canonical]["last_frame"]
+                elif tracks[canon_k]["last_frame"] < tracks[canonical]["first_frame"]:
+                    ep = tracks[canon_k]["last_pos"]
+                    sp = tracks[canonical]["first_pos"]
+                    gap = tracks[canonical]["first_frame"] - tracks[canon_k]["last_frame"]
+                else:
+                    ep = tracks[canonical]["last_pos"]
+                    sp = tracks[canon_k]["first_pos"]
+                    gap = 0
+
+                dx = ep[0] - sp[0]
+                dy = ep[1] - sp[1]
+                sp_dist = (dx * dx + dy * dy) ** 0.5
+
+                new_dist = _compute_blended_distance(
+                    new_appearance, sp_dist, gap, max_spatial_displacement,
+                )
                 dist_matrix[keep_idx, k] = new_dist
                 dist_matrix[k, keep_idx] = new_dist
 
@@ -475,7 +536,7 @@ def link_tracklets_by_appearance(
 
         logger.debug(
             f"Tracklet link: merged track {merged} -> {canonical} "
-            f"(bhatt={min_dist:.3f}, tracks remaining={current_track_count})"
+            f"(dist={min_dist:.3f}, tracks remaining={current_track_count})"
         )
 
     if num_merges == 0:
