@@ -39,6 +39,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_MERGE_DISTANCE_THRESHOLD = 0.45  # Max Bhattacharyya distance to merge
 DEFAULT_MAX_SPATIAL_DISPLACEMENT = 0.25  # Max normalized endpoint displacement
 DEFAULT_MIN_TRACK_FRAMES = 5  # Minimum frames in a track to participate in linking
+DEFAULT_MAX_TEMPORAL_GAP = 90  # Max frame gap between fragments for appearance-based merge
+# Beyond this gap, appearance matching is unreliable (player may have moved,
+# lighting changed, or a different same-team player is at the endpoint).
+# Matches stabilize_track_ids.max_gap_frames for consistency.
 
 # Overlap position gate: when two tracks coexist for a few frames (e.g.,
 # dying Kalman ghost + new detection), they must be at nearly the same
@@ -299,6 +303,21 @@ def link_tracklets_by_appearance(
                     f"overlap={overlap_count}f, dist={overlap_dist:.3f} "
                     f"(>{OVERLAP_MAX_POSITION_DISTANCE})"
                 )
+                dist_matrix[i, j] = 1.0
+                dist_matrix[j, i] = 1.0
+                continue
+
+            # Temporal gap check: don't merge fragments separated by large
+            # gaps. Over long gaps, appearance matching is unreliable —
+            # same-team players with similar appearance can be confused.
+            if tracks[tid_i]["last_frame"] < tracks[tid_j]["first_frame"]:
+                temporal_gap = tracks[tid_j]["first_frame"] - tracks[tid_i]["last_frame"]
+            elif tracks[tid_j]["last_frame"] < tracks[tid_i]["first_frame"]:
+                temporal_gap = tracks[tid_i]["first_frame"] - tracks[tid_j]["last_frame"]
+            else:
+                temporal_gap = 0  # Overlapping
+
+            if temporal_gap > DEFAULT_MAX_TEMPORAL_GAP:
                 dist_matrix[i, j] = 1.0
                 dist_matrix[j, i] = 1.0
                 continue
