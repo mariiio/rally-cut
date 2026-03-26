@@ -40,7 +40,8 @@ class TrackingQualityReport:
     avg_track_lifespan_frames: float = 0.0
 
     # Repair metrics
-    id_switch_count: int = 0  # From enforce_spatial_consistency
+    id_switch_count: int = 0  # From enforce_spatial_consistency (jump splits)
+    gap_collision_count: int = 0  # From enforce_spatial_consistency (gap collisions)
     color_split_count: int = 0  # From split_tracks_by_color
     height_swap_count: int = 0  # From fix_height_swaps
     appearance_link_count: int = 0  # From link_tracklets_by_appearance
@@ -84,6 +85,7 @@ class TrackingQualityReport:
             "trackDestructionRate": self.track_destruction_rate,
             "avgTrackLifespanFrames": self.avg_track_lifespan_frames,
             "idSwitchCount": self.id_switch_count,
+            "gapCollisionCount": self.gap_collision_count,
             "colorSplitCount": self.color_split_count,
             "heightSwapCount": self.height_swap_count,
             "appearanceLinkCount": self.appearance_link_count,
@@ -113,6 +115,7 @@ def compute_quality_report(
     ball_detection_rate: float = 0.0,
     ball_positions_xy: list[tuple[float, float]] | None = None,
     id_switch_count: int = 0,
+    gap_collision_count: int = 0,
     color_split_count: int = 0,
     height_swap_count: int = 0,
     appearance_link_count: int = 0,
@@ -158,6 +161,7 @@ def compute_quality_report(
     report.ball_detection_rate = ball_detection_rate
     report.primary_track_count = len(primary_track_ids)
     report.id_switch_count = id_switch_count
+    report.gap_collision_count = gap_collision_count
     report.color_split_count = color_split_count
     report.height_swap_count = height_swap_count
     report.appearance_link_count = appearance_link_count
@@ -218,7 +222,7 @@ def compute_quality_report(
                 report.track_destruction_rate = destroyed / duration_sec
 
     # Compute sub-scores
-    total_switches = id_switch_count + color_split_count
+    total_switches = id_switch_count + gap_collision_count + color_split_count
 
     # Detection score (0.30): primary tracks per frame vs expected
     detection_score = 0.0

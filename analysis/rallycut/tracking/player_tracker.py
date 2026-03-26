@@ -1686,6 +1686,7 @@ class PlayerTracker:
 
             # Apply court player filtering if enabled (per-frame with track stability)
             num_jump_splits = 0
+            num_gap_splits = 0
             num_height_swaps = 0
             num_color_splits = 0
             num_appearance_links = 0
@@ -1718,9 +1719,9 @@ class PlayerTracker:
                 )
 
                 # Step 0: Spatial consistency — split tracks at instantaneous
-                # jumps only. Drift detection is deferred to step 4e (after
-                # identity optimization) so the identity modules can work
-                # with full continuous tracks.
+                # jumps only. Drift and gap collision detection are deferred
+                # to step 4e (after identity optimization) so the identity
+                # modules can work with full continuous tracks.
                 positions, consistency_result = enforce_spatial_consistency(
                     positions,
                     color_store=color_store,
@@ -1943,27 +1944,35 @@ class PlayerTracker:
                     )
 
             # Step 4e: Post-identity spatial consistency.
-            # Runs both jump detection and drift detection. Drift is
-            # deferred to here (not step 0) so identity modules work with
-            # full continuous tracks. Jump splits catch residual Kalman
-            # artifacts from identity remapping. Drift splits catch smooth
-            # ID swaps that no identity module resolved.
+            # Runs jump detection, drift detection, and gap collision
+            # detection. All deferred to here (not step 0) so identity
+            # modules work with full continuous tracks first.
+            # Gap collision: after identity merges/splits may create gaps,
+            # check if any gap reappearance collides with another track.
             if filter_enabled:
                 positions, final_consistency = enforce_spatial_consistency(
                     positions,
                     color_store=color_store,
                     appearance_store=appearance_store,
                     video_fps=fps,
+                    gap_collision_detection=True,
                 )
                 final_total = (
-                    final_consistency.jump_splits + final_consistency.drift_splits
+                    final_consistency.jump_splits
+                    + final_consistency.drift_splits
+                    + final_consistency.gap_collisions
                 )
                 if final_total > 0:
-                    num_jump_splits += final_total
+                    num_jump_splits += (
+                        final_consistency.jump_splits
+                        + final_consistency.drift_splits
+                    )
+                    num_gap_splits += final_consistency.gap_collisions
                     logger.info(
                         f"Post-identity spatial consistency: "
                         f"{final_consistency.jump_splits} jump(s), "
-                        f"{final_consistency.drift_splits} drift(s)"
+                        f"{final_consistency.drift_splits} drift(s), "
+                        f"{final_consistency.gap_collisions} gap collision(s)"
                     )
 
             # Step 5: Interpolate detection gaps for primary tracks
@@ -2004,6 +2013,7 @@ class PlayerTracker:
                     ball_detection_rate=ball_det_rate,
                     ball_positions_xy=ball_xy,
                     id_switch_count=num_jump_splits,
+                    gap_collision_count=num_gap_splits,
                     color_split_count=num_color_splits,
                     height_swap_count=num_height_swaps,
                     appearance_link_count=num_appearance_links,
