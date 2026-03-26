@@ -1750,14 +1750,25 @@ class PlayerTracker:
                         positions, color_store
                     )
 
+                    # Step 0b2: Spatial re-link — reconnect color-split
+                    # fragments that are trivially the same player (tiny gap,
+                    # near-identical position). Runs before appearance-based
+                    # linking to prevent greedy merges from stealing these
+                    # obvious spatial matches.
+                    from rallycut.tracking.tracklet_link import (
+                        link_tracklets_by_appearance,
+                        relink_spatial_splits,
+                    )
+
+                    positions, num_spatial_relinks = relink_spatial_splits(
+                        positions, color_store,
+                        appearance_store=appearance_store,
+                    )
+
                     # Step 0c: Appearance-based tracklet linking (GTA-Link inspired)
                     # Reconnects fragments using color histogram similarity.
                     # Runs unconstrained (no team_assignments yet) -- team
                     # classification happens once on clean post-filter data.
-                    from rallycut.tracking.tracklet_link import (
-                        link_tracklets_by_appearance,
-                    )
-
                     positions, num_appearance_links = link_tracklets_by_appearance(
                         positions, color_store,
                         appearance_store=appearance_store,
@@ -1964,6 +1975,22 @@ class PlayerTracker:
                         f"Post-identity spatial consistency: "
                         f"{final_consistency.jump_splits} jump(s), "
                         f"{final_consistency.drift_splits} drift(s)"
+                    )
+
+            # Step 4f: Spatial re-link after drift detection.
+            # Drift detection (4e) can split a fast-moving player's track
+            # into two fragments at nearly the same position. Re-link them
+            # if the gap is tiny and endpoints are near-identical.
+            if filter_enabled and color_store is not None:
+                from rallycut.tracking.tracklet_link import relink_spatial_splits
+
+                positions, num_post_relinks = relink_spatial_splits(
+                    positions, color_store,
+                    appearance_store=appearance_store,
+                )
+                if num_post_relinks > 0:
+                    logger.info(
+                        f"Post-drift spatial re-link: {num_post_relinks} re-link(s)"
                     )
 
             # Step 5: Interpolate detection gaps for primary tracks

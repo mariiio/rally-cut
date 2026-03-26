@@ -596,3 +596,153 @@ def link_tracklets_by_appearance(
     )
 
     return positions, num_merges
+
+
+# --- Spatial re-link: reconnect fragments that are trivially the same player ---
+
+# Maximum gap (frames) for spatial-only re-linking. Fragments separated by
+# more than this require appearance confirmation.
+SPATIAL_RELINK_MAX_GAP = 5
+# Maximum endpoint distance for spatial-only re-linking. At this distance
+# the player hasn't moved — it's the same person, no appearance needed.
+SPATIAL_RELINK_MAX_DISTANCE = 0.05
+
+
+def relink_spatial_splits(
+    positions: list[PlayerPosition],
+    color_store: ColorHistogramStore,
+    appearance_store: AppearanceDescriptorStore | None = None,
+    max_gap: int = SPATIAL_RELINK_MAX_GAP,
+    max_distance: float = SPATIAL_RELINK_MAX_DISTANCE,
+) -> tuple[list[PlayerPosition], int]:
+    """Reconnect fragments that are trivially the same player by position.
+
+    After color splitting (Step 0b), a single track may be split into two
+    fragments at a point where the color histogram changed (e.g., lighting
+    shift, player rotation). When the gap is tiny (≤5 frames) and the
+    endpoint distance is negligible (≤0.05), spatial continuity alone
+    proves they're the same player — no appearance matching needed.
+
+    This runs BEFORE appearance-based linking to prevent greedy appearance
+    merges from stealing these obvious spatial matches.
+
+    Args:
+        positions: Player positions (modified in place).
+        color_store: Updated with remap after merges.
+        appearance_store: Updated with remap after merges (optional).
+        max_gap: Maximum frame gap for spatial re-linking.
+        max_distance: Maximum endpoint distance (normalized).
+
+    Returns:
+        Tuple of (modified positions, number of re-links performed).
+    """
+    if not positions:
+        return positions, 0
+
+    tracks = _compute_track_summary(positions)
+    if len(tracks) <= 1:
+        return positions, 0
+
+    logger.info(
+        f"Spatial re-link: scanning {len(tracks)} tracks "
+        f"(max_gap={max_gap}, max_dist={max_distance})"
+    )
+
+    # Build sorted list of (track_id, first_frame, last_frame, first_pos, last_pos)
+    track_list = sorted(tracks.items(), key=lambda x: x[1]["first_frame"])
+
+    id_mapping: dict[int, int] = {}
+    # Track canonical frame ranges to prevent overlap merges
+    canonical_ranges: dict[int, tuple[int, int]] = {}
+
+    for idx, (tid, info) in enumerate(track_list):
+        if tid in id_mapping:
+            continue
+
+        # Look for the next fragment that starts shortly after this one ends
+        for jdx in range(idx + 1, len(track_list)):
+            next_tid, next_info = track_list[jdx]
+            if next_tid in id_mapping:
+                continue
+
+            # Resolve canonical for current track
+            canon = tid
+            while canon in id_mapping:
+                canon = id_mapping[canon]
+
+            gap = next_info["first_frame"] - tracks[canon]["last_frame"]
+            if gap < 0:
+                continue  # Overlapping — skip
+            if gap > max_gap:
+                break  # Sorted by start frame — no more candidates
+
+            # Endpoint distance
+            end_pos = tracks[canon]["last_pos"]
+            start_pos = next_info["first_pos"]
+            dx = end_pos[0] - start_pos[0]
+            dy = end_pos[1] - start_pos[1]
+            dist = (dx * dx + dy * dy) ** 0.5
+
+            if dist > max_distance:
+                continue
+
+            # Check canonical range doesn't overlap with next track
+            if canon in canonical_ranges:
+                c_first, c_last = canonical_ranges[canon]
+                if next_info["first_frame"] <= c_last:
+                    continue
+
+            # Merge: map next_tid -> canonical
+            id_mapping[next_tid] = canon
+
+            # Update canonical's track info
+            tracks[canon]["frames"] |= next_info["frames"]
+            tracks[canon]["count"] += next_info["count"]
+            if next_info["last_frame"] > tracks[canon]["last_frame"]:
+                tracks[canon]["last_pos"] = next_info["last_pos"]
+            tracks[canon]["last_frame"] = max(
+                tracks[canon]["last_frame"], next_info["last_frame"]
+            )
+
+            # Update canonical range
+            canonical_ranges[canon] = (
+                tracks[canon]["first_frame"],
+                tracks[canon]["last_frame"],
+            )
+
+            logger.debug(
+                f"Spatial re-link: {next_tid} -> {canon} "
+                f"(gap={gap}f, dist={dist:.4f})"
+            )
+
+    if not id_mapping:
+        return positions, 0
+
+    # Resolve transitive chains
+    def resolve(tid: int) -> int:
+        visited: set[int] = set()
+        while tid in id_mapping and tid not in visited:
+            visited.add(tid)
+            tid = id_mapping[tid]
+        return tid
+
+    # Apply remapping
+    remapped = 0
+    for p in positions:
+        canonical = resolve(p.track_id)
+        if canonical != p.track_id:
+            p.track_id = canonical
+            remapped += 1
+
+    resolved_mapping = {tid: resolve(tid) for tid in id_mapping}
+    color_store.remap_ids(resolved_mapping)
+    if appearance_store is not None:
+        appearance_store.remap_ids(resolved_mapping)
+
+    num_relinks = len(id_mapping)
+    logger.info(
+        f"Spatial re-link: {num_relinks} re-links, "
+        f"remapped {remapped} positions"
+    )
+
+    return positions, num_relinks
