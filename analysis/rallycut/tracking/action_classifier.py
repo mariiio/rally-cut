@@ -1597,9 +1597,10 @@ def reattribute_players(
         if current_team is not None and current_team == expected_team:
             continue
 
-        # current_team is None → unmapped track (spectator/ref shifted to 101+)
+        # current_team is None → unmapped track (may be spectator/ref OR a
+        #   real player without a cross-rally team assignment)
         # current_team != expected_team → wrong team
-        # In both cases, find the best candidate on the expected team.
+        # In both cases, try to find a better candidate on the expected team.
         is_unmapped = current_team is None
 
         contact = contact_by_frame.get(action.frame)
@@ -1608,17 +1609,23 @@ def reattribute_players(
 
         current_dist = contact.player_distance
         if not math.isfinite(current_dist):
-            # Unmapped tracks may lack a meaningful distance — use inf so any
-            # mapped candidate wins.
             if is_unmapped:
+                # Unmapped tracks with no distance info — allow any mapped
+                # candidate to win, but only via the expected-team search
+                # below (not the any-team fallback).
                 current_dist = float("inf")
             else:
                 continue
 
         # Find best candidate on the correct team within distance cap.
-        # For unmapped tracks, skip the distance ratio cap — any mapped
-        # player on the expected team is better than a non-player track.
-        dist_cap = float("inf") if is_unmapped else max_distance_ratio * current_dist
+        # Unmapped tracks with a finite distance were found near the ball
+        # and are likely real players without a cross-rally team assignment,
+        # not spectators — apply the same distance cap as mapped tracks.
+        # Only use infinite cap when the unmapped track has no distance info.
+        if is_unmapped and not math.isfinite(current_dist):
+            dist_cap = float("inf")
+        else:
+            dist_cap = max_distance_ratio * current_dist
         best_tid = -1
         best_dist = float("inf")
         for tid, dist in contact.player_candidates:
@@ -1631,10 +1638,11 @@ def reattribute_players(
                 best_tid = tid
                 best_dist = dist
 
-        # For unmapped tracks: if no candidate on expected team, fall back
-        # to the nearest mapped (primary) candidate on any team.  Any real
-        # player is better than a spectator/ref track.
-        if best_tid < 0 and is_unmapped:
+        # For unmapped tracks with no distance info: fall back to the
+        # nearest mapped candidate on any team.  Only when we have no
+        # proximity signal at all (inf distance) — when the unmapped track
+        # had a finite distance it was likely a real player, not a spectator.
+        if best_tid < 0 and is_unmapped and not math.isfinite(contact.player_distance):
             for tid, dist in contact.player_candidates:
                 if tid == action.player_track_id:
                     continue
