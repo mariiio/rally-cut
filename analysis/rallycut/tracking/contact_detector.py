@@ -1744,7 +1744,9 @@ def detect_contacts(
             and player_positions
             and len(candidates) >= 2
         ):
-            # Compute contact sequence context
+            # Compute contact sequence context. Note: contact_index counts only
+            # validated contacts here, while training uses all stored contacts.
+            # The tree model is robust to this small divergence.
             ta_contact_index = len(contacts)
             ta_side_count = 1
             for prev_c in reversed(contacts):

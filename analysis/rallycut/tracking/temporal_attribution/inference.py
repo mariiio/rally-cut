@@ -34,8 +34,10 @@ class TemporalAttributionInference:
         """
         x = features.reshape(1, -1)
         probs = self.model.predict_proba(x)[0]
-        slot_idx = int(probs.argmax())
-        confidence = float(probs[slot_idx])
+        # Map probability index back to actual class label (slot 0-3).
+        # classes_ may not be [0,1,2,3] if a slot was absent from training data.
+        slot_idx = int(self.model.classes_[probs.argmax()])
+        confidence = float(probs.max())
 
         track_id = (
             canonical_track_ids[slot_idx]

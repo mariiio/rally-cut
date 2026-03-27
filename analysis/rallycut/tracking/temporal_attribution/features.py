@@ -329,7 +329,7 @@ def _ball_dir_change_at(
     ball_xy: list[tuple[float, float] | None],
     idx: int,
 ) -> float:
-    """Compute ball direction change (1 - cos_angle) at window index."""
+    """Incoming trajectory curvature (1 - cos_angle) using frames idx-2..idx."""
     if idx < 2 or idx >= len(ball_xy):
         return 0.0
     p0, p1, p2 = ball_xy[idx - 2], ball_xy[idx - 1], ball_xy[idx]
