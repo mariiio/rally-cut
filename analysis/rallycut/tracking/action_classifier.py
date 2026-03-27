@@ -1585,11 +1585,10 @@ def reattribute_players(
 
         expected_team = expected_teams[i]
         if expected_team is None:
-            # Fallback to court_side when serve-seeded chain unavailable
-            if action.court_side in ("near", "far"):
-                expected_team = _SIDE_TO_TEAM[action.court_side]
-            else:
-                continue
+            # No serve-seeded chain available. The court_side fallback is
+            # circular (court_side depends on the player being evaluated)
+            # and empirically 0% accurate. Skip reattribution entirely.
+            continue
 
         current_team = team_assignments.get(action.player_track_id)
 
@@ -1605,6 +1604,17 @@ def reattribute_players(
 
         contact = contact_by_frame.get(action.frame)
         if contact is None or not contact.player_candidates:
+            continue
+
+        # Guard: don't override the nearest candidate. Proximity is hard
+        # physical evidence; the expected_team chain drifts when contacts
+        # are missed or action types are wrong. Only override non-nearest
+        # attributions (unmapped tracks or clear team mismatches).
+        if (
+            not is_unmapped
+            and contact.player_candidates
+            and contact.player_candidates[0][0] == action.player_track_id
+        ):
             continue
 
         current_dist = contact.player_distance
