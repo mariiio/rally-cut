@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import math
+import statistics
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -204,12 +205,13 @@ def _ball_crossed_net(
     net_y: float,
     min_frames_per_side: int = 2,
 ) -> bool | None:
-    """Check if ball Y crossed net_y between two frames.
+    """Check if ball crossed net between two contacts using endpoint displacement.
 
-    Detects any transient crossing: if the ball starts on one side and
-    at any point spends ≥min_frames_per_side consecutive frames on the
-    other side, a crossing occurred. This handles cases where the ball
-    crosses the net and immediately bounces back (e.g., attack → dig).
+    Compares ball Y near the start (post-contact-A) and end (pre-contact-B) of
+    the inter-contact window.  The ball arcs above the net ~96% of the time, so
+    checking whether Y physically crosses net_y in intermediate frames fails.
+    Endpoint displacement detects that the ball departed from one side and
+    arrived on the other.
 
     Args:
         ball_positions: Sorted list of confident ball positions.
@@ -226,39 +228,32 @@ def _ball_crossed_net(
         bp for bp in ball_positions
         if from_frame < bp.frame_number < to_frame
     ]
-    if len(positions_in_range) < min_frames_per_side * 2:
+    min_required = min_frames_per_side * 2
+    if len(positions_in_range) < min_required:
         return None
 
-    # Determine starting side from first min_frames consecutive frames
-    start_near = 0
-    start_far = 0
-    for bp in positions_in_range:
-        if bp.y >= net_y:
-            if start_far == 0:
-                start_near += 1
-            else:
-                break
-        else:
-            if start_near == 0:
-                start_far += 1
-            else:
-                break
+    # Median Y near the start and end of the window
+    n = min_frames_per_side
+    start_median_y = statistics.median(
+        bp.y for bp in positions_in_range[:n]
+    )
+    end_median_y = statistics.median(
+        bp.y for bp in positions_in_range[-n:]
+    )
 
-    if start_near < min_frames_per_side and start_far < min_frames_per_side:
-        return None  # Can't determine starting side (noisy data)
+    # Dead-zone guard: both medians very close to net → ambiguous (e.g. block
+    # vs attack at the net). Return None so the caller falls through to
+    # court_side which uses team/calibration signals.
+    dead_zone = 0.03
+    if (abs(start_median_y - net_y) < dead_zone
+            and abs(end_median_y - net_y) < dead_zone):
+        return None
 
-    starting_is_near = start_near >= min_frames_per_side
+    start_is_near = start_median_y >= net_y
+    end_is_near = end_median_y >= net_y
 
-    # Scan for any contiguous block on the opposite side
-    consecutive_opposite = 0
-    for bp in positions_in_range:
-        is_near = bp.y >= net_y
-        if is_near != starting_is_near:
-            consecutive_opposite += 1
-            if consecutive_opposite >= min_frames_per_side:
-                return True
-        else:
-            consecutive_opposite = 0
+    if start_is_near != end_is_near:
+        return True
 
     return False
 
@@ -713,7 +708,7 @@ class ActionClassifier:
 
             # Handle possession changes.  Detection priority:
             # 1. Team membership from match_team_assignments (most reliable)
-            # 2. _ball_crossed_net (high precision, ~6% recall)
+            # 2. _ball_crossed_net (endpoint displacement)
             # 3. court_side comparison (fallback)
             team_resolved = False
             if match_team_assignments and i > 0:

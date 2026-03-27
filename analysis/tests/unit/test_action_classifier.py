@@ -24,6 +24,7 @@ from rallycut.tracking.action_classifier import (
     validate_action_sequence,
     viterbi_decode_actions,
 )
+from rallycut.tracking.action_type_classifier import _count_contacts_on_side
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.contact_detector import Contact, ContactSequence
 from rallycut.tracking.player_tracker import PlayerPosition
@@ -97,6 +98,61 @@ class TestBallCrossedNet:
             _bp(13, 0.55), _bp(14, 0.6),   # Back to near
         ]
         assert not _ball_crossed_net(positions, from_frame=9, to_frame=15, net_y=0.5)
+
+    def test_arc_over_net_near_to_far(self) -> None:
+        """Ball arcs above net (low Y at apex) but starts near, ends far."""
+        positions = [
+            _bp(10, 0.65), _bp(12, 0.55),   # Start: near side
+            _bp(14, 0.30), _bp(16, 0.20),   # Arc above net
+            _bp(18, 0.25), _bp(20, 0.35),   # End: far side
+        ]
+        assert _ball_crossed_net(positions, from_frame=9, to_frame=21, net_y=0.5) is True
+
+    def test_arc_over_net_far_to_near(self) -> None:
+        """Ball arcs above net from far side to near side."""
+        positions = [
+            _bp(10, 0.35), _bp(12, 0.40),   # Start: far side
+            _bp(14, 0.25), _bp(16, 0.20),   # Arc above net
+            _bp(18, 0.55), _bp(20, 0.65),   # End: near side
+        ]
+        assert _ball_crossed_net(positions, from_frame=9, to_frame=21, net_y=0.5) is True
+
+    def test_both_contacts_near_net_returns_none(self) -> None:
+        """When start and end are both within dead zone of net, return None."""
+        positions = [
+            _bp(10, 0.51), _bp(11, 0.52),   # Just barely near side
+            _bp(12, 0.48), _bp(13, 0.47),   # Just barely far side
+        ]
+        assert _ball_crossed_net(positions, from_frame=9, to_frame=14, net_y=0.5) is None
+
+
+class TestCountContactsOnSide:
+    """Tests for _count_contacts_on_side fallthrough to court_side."""
+
+    def test_court_side_fallback_with_ball_positions(self) -> None:
+        """Court side resets count even when ball_positions exist but show no crossing."""
+        contacts = [
+            _contact(frame=30, ball_y=0.3, court_side="far"),
+            _contact(frame=55, ball_y=0.65, court_side="near"),
+        ]
+        # Ball positions all on far side — _ball_crossed_net returns False
+        ball_positions = [
+            _bp(35, 0.32), _bp(40, 0.30), _bp(45, 0.28), _bp(50, 0.26),
+        ]
+        count = _count_contacts_on_side(contacts, 1, ball_positions, net_y=0.5)
+        assert count == 1  # Reset due to court_side change
+
+    def test_same_side_continues_count(self) -> None:
+        """Same court_side and no crossing increments count."""
+        contacts = [
+            _contact(frame=30, ball_y=0.3, court_side="far"),
+            _contact(frame=45, ball_y=0.25, court_side="far"),
+        ]
+        ball_positions = [
+            _bp(33, 0.28), _bp(35, 0.26), _bp(37, 0.27), _bp(40, 0.25),
+        ]
+        count = _count_contacts_on_side(contacts, 1, ball_positions, net_y=0.5)
+        assert count == 2
 
 
 class TestServeDetection:

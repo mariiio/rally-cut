@@ -175,7 +175,7 @@ def _count_contacts_on_side(
     Scans backward from contacts[index], counting contacts on the same
     side. Resets when possession changes. Detection priority:
     1. Team membership (when both contacts have known teams)
-    2. Ball crossing net (high precision, ~6% recall)
+    2. Ball crossing net (endpoint displacement)
     3. Court side comparison (fallback)
     Capped at 3 (beach volleyball max).
     """
@@ -201,13 +201,16 @@ def _count_contacts_on_side(
                 current = prev
                 continue
         # Priority 2: net crossing between contacts
+        crossed: bool | None = None
         if ball_positions:
             crossed = _ball_crossed_net(
                 ball_positions, prev.frame, current.frame, net_y,
             )
-            if crossed is True:
-                break
-        elif prev.court_side != current.court_side:
+        if crossed is True:
+            break
+        # Priority 3: court side comparison (fallback when trajectory
+        # is absent or ambiguous)
+        if prev.court_side != current.court_side:
             break
         count += 1
         current = prev
