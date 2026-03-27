@@ -173,16 +173,19 @@ class PlayerFilterConfig:
 
     # Stationary background track pre-filter
     # Removes tracks from raw positions that are clearly fixed objects (signs, equipment,
-    # distant spectators). These have near-zero position variance AND high presence.
+    # distant spectators, bags on the floor). These have near-zero position variance.
     # Key insight: real background objects have spread < 0.008 (truly zero motion),
     # while real players even in ready position have spread > 0.012 (body sway, reactions).
     # Threshold 0.010 sits in the gap. yolo11s produces tighter bboxes than yolov8n,
     # so players have lower spread than before — threshold must be conservative.
+    # No presence requirement: an object that doesn't move across 50+ detections is
+    # inanimate regardless of how intermittently YOLO detects it. A safety net
+    # (see remove_stationary_background_tracks) prevents removal when < max_players
+    # tracks would survive.
     # Runs before split/merge/link to prevent background tracks from interfering.
     enable_stationary_background_filter: bool = True
     stationary_bg_max_spread: float = 0.010  # Max position_spread (geometric mean of x/y std)
     stationary_bg_min_detections: int = 50  # Minimum detections to be considered
-    stationary_bg_min_presence: float = 0.80  # Must be present in 80%+ of frames (background = always there)
 
     # Gap interpolation for primary tracks
     # Fills short detection gaps with linearly interpolated positions.
@@ -1160,10 +1163,11 @@ def remove_stationary_background_tracks(
 ) -> tuple[list[PlayerPosition], set[int]]:
     """Remove tracks that are clearly stationary background objects.
 
-    Background objects (signs, equipment, distant spectators at fixed positions)
-    have very low position variance despite being consistently detected. Real
-    players always move more than the threshold even when standing still due to
-    body sway, game reactions, and court movement.
+    Background objects (signs, equipment, distant spectators, bags on the floor)
+    have very low position variance. Real players always move more than the
+    threshold even when standing still due to body sway, game reactions, and
+    court movement. An object that doesn't move across 50+ detections is
+    inanimate regardless of how intermittently YOLO detects it.
 
     Runs before split/merge/link to prevent background tracks from interfering
     with post-processing (tracklet linking, court identity, etc.).
@@ -1198,10 +1202,6 @@ def remove_stationary_background_tracks(
         if n < config.stationary_bg_min_detections:
             continue
 
-        presence = n / total_frames
-        if presence < config.stationary_bg_min_presence:
-            continue
-
         # Compute position spread
         xs = np.array([p.x for p in track_positions])
         ys = np.array([p.y for p in track_positions])
@@ -1211,6 +1211,7 @@ def remove_stationary_background_tracks(
 
         if spread < config.stationary_bg_max_spread:
             removed_ids.add(track_id)
+            presence = n / total_frames
             logger.info(
                 f"Stationary background filter: removing track {track_id} "
                 f"({n} det, presence={presence:.0%}, spread={spread:.4f}, "
