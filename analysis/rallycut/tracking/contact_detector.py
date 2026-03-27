@@ -131,6 +131,8 @@ class Contact:
     player_distance: float = float("inf")  # Distance to nearest player
     player_candidates: list[tuple[int, float]] = field(default_factory=list)
     # Ranked (track_id, distance) pairs, sorted by distance. First = nearest.
+    candidate_bbox_motion: dict[int, tuple[float, float]] = field(default_factory=dict)
+    # {track_id: (max_d_y, max_d_height)} — peak frame-to-frame bbox deltas in ±5 frames.
 
     # Court context
     court_side: str = "unknown"  # "near", "far", or "unknown"
@@ -159,6 +161,10 @@ class Contact:
                 [tid, d if math.isfinite(d) else None]
                 for tid, d in self.player_candidates
             ],
+            "candidateBboxMotion": {
+                str(tid): [dy, dh]
+                for tid, (dy, dh) in self.candidate_bbox_motion.items()
+            } if self.candidate_bbox_motion else None,
         }
 
 
@@ -421,6 +427,50 @@ def _find_nearest_players(
         (tid, img_dist, center_y)
         for tid, (_rank_dist, img_dist, center_y) in ranked[:max_candidates]
     ]
+
+
+def _compute_candidate_bbox_motion(
+    player_positions: list[PlayerPosition],
+    contact_frame: int,
+    candidate_track_ids: list[int],
+    window: int = 5,
+) -> dict[int, tuple[float, float]]:
+    """Compute peak frame-to-frame bbox motion for each candidate track.
+
+    For each candidate, collects positions in ±window frames and computes the
+    maximum absolute frame-to-frame change in Y (vertical shift from jumps)
+    and height (elongation from arm swings / crouching).
+
+    Returns:
+        {track_id: (max_delta_y, max_delta_height)}.
+        Tracks with < 2 observations in the window are omitted.
+    """
+    candidate_set = set(candidate_track_ids)
+    # Collect per-track positions in the window, keyed by frame
+    track_frames: dict[int, dict[int, PlayerPosition]] = {}
+    for p in player_positions:
+        if p.track_id not in candidate_set:
+            continue
+        if abs(p.frame_number - contact_frame) > window:
+            continue
+        track_frames.setdefault(p.track_id, {})[p.frame_number] = p
+
+    result: dict[int, tuple[float, float]] = {}
+    for tid in candidate_track_ids:
+        frames = track_frames.get(tid)
+        if not frames or len(frames) < 2:
+            continue
+        sorted_pos = [frames[f] for f in sorted(frames)]
+        max_dy = max(
+            abs(sorted_pos[i + 1].y - sorted_pos[i].y)
+            for i in range(len(sorted_pos) - 1)
+        )
+        max_dh = max(
+            abs(sorted_pos[i + 1].height - sorted_pos[i].height)
+            for i in range(len(sorted_pos) - 1)
+        )
+        result[tid] = (max_dy, max_dh)
+    return result
 
 
 def _filter_noise_spikes(
@@ -1518,12 +1568,18 @@ def detect_contacts(
         # Perspective compression makes far-court players appear closer than they
         # are; depth scaling corrects this (median 3.9x far-to-near ratio).
         candidates: list[tuple[int, float, float]] = []
+        bbox_motion: dict[int, tuple[float, float]] = {}
         if player_positions:
             candidates = _find_nearest_players(
                 frame, ball.x, ball.y, player_positions,
                 search_frames=cfg.player_candidate_search_frames,
                 court_calibrator=court_calibrator,
             )
+            if candidates:
+                bbox_motion = _compute_candidate_bbox_motion(
+                    player_positions, frame,
+                    [tid for tid, _, _ in candidates],
+                )
 
         # Velocity floor: skip very low velocity candidates (tracking noise)
         if velocity < cfg.min_candidate_velocity:
@@ -1642,6 +1698,7 @@ def detect_contacts(
             player_track_id=track_id,
             player_distance=player_dist,
             player_candidates=[(tid, d) for tid, d, _y in candidates],
+            candidate_bbox_motion=bbox_motion,
             court_side=court_side,
             is_at_net=is_at_net,
             is_validated=is_validated,
