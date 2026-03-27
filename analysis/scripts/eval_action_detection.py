@@ -499,6 +499,68 @@ def match_contacts(
     return results, unmatched
 
 
+def _match_synthetic_serves(
+    matches: list[MatchResult],
+    synth_serves: list[dict],
+    gt_labels: list[GtLabel],
+    synth_tolerance: int,
+    available_track_ids: set[int] | None = None,
+    team_assignments: dict[int, int] | None = None,
+) -> None:
+    """Match synthetic serves against unmatched GT serves (in-place).
+
+    Pass 2 of the two-pass matching strategy. Real predictions are matched
+    first (Pass 1); this function fills remaining GT serve slots with
+    synthetic serves using a wider tolerance (~1s) to account for frame
+    estimation uncertainty.
+
+    Each synthetic serve can match at most one GT serve. GT contacts that
+    already have a real prediction match are not affected.
+    """
+    team_to_side = {0: "near", 1: "far"}
+    used_synth_indices: set[int] = set()
+
+    for m_idx, m in enumerate(matches):
+        if m.pred_frame is not None or m.gt_action != "serve":
+            continue
+        for s_idx, synth in enumerate(synth_serves):
+            if s_idx in used_synth_indices:
+                continue
+            s_frame = synth.get("frame", 0)
+            if abs(m.gt_frame - s_frame) > synth_tolerance:
+                continue
+
+            # Find GT label for player attribution evaluation
+            gt_tid = -1
+            for gt in gt_labels:
+                if gt.frame == m.gt_frame:
+                    gt_tid = gt.player_track_id
+                    break
+
+            evaluable = True
+            if available_track_ids is not None and gt_tid >= 0:
+                evaluable = gt_tid in available_track_ids
+
+            cs_correct: bool | None = None
+            if team_assignments and gt_tid >= 0:
+                gt_team = team_assignments.get(gt_tid)
+                pred_cs = synth.get("courtSide")
+                if gt_team is not None and pred_cs in ("near", "far"):
+                    cs_correct = pred_cs == team_to_side[gt_team]
+
+            matches[m_idx] = MatchResult(
+                gt_frame=m.gt_frame,
+                gt_action=m.gt_action,
+                pred_frame=s_frame,
+                pred_action=synth.get("action"),
+                player_correct=(gt_tid == synth.get("playerTrackId", -1)),
+                player_evaluable=evaluable,
+                court_side_correct=cs_correct,
+            )
+            used_synth_indices.add(s_idx)
+            break
+
+
 def compute_metrics(
     matches: list[MatchResult],
     unmatched_preds: list[dict],
@@ -703,6 +765,18 @@ def _run_threshold_sweep(
                 tolerance=tolerance_frames,
                 available_track_ids=avail_tids,
             )
+
+            # Pass 2: synthetic serves → unmatched GT serves
+            sweep_synth = [
+                a for a in pred_actions
+                if a.get("isSynthetic") and a.get("action") == "serve"
+            ]
+            if sweep_synth:
+                synth_tol = max(tolerance_frames, round(rally.fps * 1.0))
+                _match_synthetic_serves(
+                    matches, sweep_synth, rally.gt_labels,
+                    synth_tol, avail_tids,
+                )
             all_matches_sweep.extend(matches)
             all_unmatched_sweep.extend(unmatched)
 
@@ -951,9 +1025,11 @@ def main() -> None:
             pred_actions = rally.actions_json.get("actions", [])
 
         # Separate synthetic vs real predictions for metrics.
-        # Synthetic serves are game-state inferences with no real detection
-        # frame, so they should not participate in contact-level F1.
         real_pred_actions = [a for a in pred_actions if not a.get("isSynthetic")]
+        synth_serves = [
+            a for a in pred_actions
+            if a.get("isSynthetic") and a.get("action") == "serve"
+        ]
         # Includes synthetic serves — presence metric counts game-state inference
         has_pred_serve = any(a.get("action") == "serve" for a in pred_actions)
         has_gt_serve = any(gt.action == "serve" for gt in rally.gt_labels)
@@ -972,6 +1048,8 @@ def main() -> None:
             avail_tids = {pp["trackId"] for pp in rally.positions_json}
 
         match_teams_for_cs = match_teams_by_rally.get(rally.rally_id)
+
+        # Pass 1: match real predictions (original behavior)
         matches, unmatched = match_contacts(
             rally.gt_labels,
             real_pred_actions,
@@ -979,6 +1057,17 @@ def main() -> None:
             available_track_ids=avail_tids,
             team_assignments=match_teams_for_cs,
         )
+
+        # Pass 2: match synthetic serves against unmatched GT serves.
+        # Uses wider tolerance (~1s) since synthetic serve frame is
+        # estimated from ball detection onset, not actual contact.
+        # Only matches GT serves that real predictions couldn't reach.
+        if synth_serves:
+            synth_tolerance = max(tolerance_frames, round(rally.fps * 1.0))
+            _match_synthetic_serves(
+                matches, synth_serves, rally.gt_labels,
+                synth_tolerance, avail_tids, match_teams_for_cs,
+            )
 
         metrics = compute_metrics(matches, unmatched)
 

@@ -12,6 +12,7 @@ from rallycut.tracking.action_classifier import (
     RallyActions,
     _ball_moving_toward_net,
     _ball_starts_on_contact_side,
+    _compute_expected_teams,
     _find_server_by_position,
     _infer_serve_side,
     _is_ball_on_serve_side,
@@ -1926,3 +1927,99 @@ class TestPositionBasedServePass:
         )
         # Should use Pass 2 (baseline position)
         assert pass_num != 0
+
+
+class TestSyntheticServeAttribution:
+    """Tests for synthetic serve server_track_id and team chain."""
+
+    def test_synthetic_serve_with_server_track_id(self) -> None:
+        """Synthetic serve carries server_track_id and higher confidence."""
+        serve = _make_synthetic_serve("near", 50, 0.5, server_track_id=5)
+        assert serve.player_track_id == 5
+        assert serve.confidence == 0.55
+        assert serve.is_synthetic is True
+
+    def test_synthetic_serve_without_server_track_id(self) -> None:
+        """Default synthetic serve has player_track_id=-1 and low confidence."""
+        serve = _make_synthetic_serve("near", 50, 0.5)
+        assert serve.player_track_id == -1
+        assert serve.confidence == 0.4
+        assert serve.is_synthetic is True
+
+    def test_synthetic_serve_to_dict_with_attribution(self) -> None:
+        """Synthetic serve with real player_track_id serializes correctly."""
+        serve = _make_synthetic_serve("near", 30, 0.5, server_track_id=3)
+        d = serve.to_dict()
+        assert d["isSynthetic"] is True
+        assert d["playerTrackId"] == 3
+        assert d["confidence"] == 0.55
+
+    def test_repair_rule0_carries_server_track_id(self) -> None:
+        """Rule 0 synthetic serve inherits server_track_id."""
+        # Serve on "near" but ball_y suggests it's on far side (wrong side)
+        actions = [
+            ClassifiedAction(
+                ActionType.SERVE, 10, 0.5, 0.2, 0.03, 5, "near", 0.8,
+            ),
+            ClassifiedAction(
+                ActionType.RECEIVE, 25, 0.5, 0.7, 0.02, 3, "far", 0.7,
+            ),
+        ]
+        repaired = repair_action_sequence(
+            actions, net_y=0.5, server_track_id=5,
+        )
+        # Rule 0 should prepend synthetic serve on "far" side
+        assert repaired[0].is_synthetic is True
+        assert repaired[0].action_type == ActionType.SERVE
+        assert repaired[0].player_track_id == 5
+        assert repaired[0].court_side == "far"
+        # Original serve reclassified as receive
+        assert repaired[1].action_type == ActionType.RECEIVE
+        assert repaired[1].is_synthetic is False
+
+    def test_repair_rule0_without_server_track_id(self) -> None:
+        """Rule 0 synthetic serve defaults to player_track_id=-1."""
+        actions = [
+            ClassifiedAction(
+                ActionType.SERVE, 10, 0.5, 0.2, 0.03, 5, "near", 0.8,
+            ),
+            ClassifiedAction(
+                ActionType.RECEIVE, 25, 0.5, 0.7, 0.02, 3, "far", 0.7,
+            ),
+        ]
+        # No server_track_id → default -1
+        repaired = repair_action_sequence(actions, net_y=0.5)
+        assert repaired[0].is_synthetic is True
+        assert repaired[0].player_track_id == -1
+        assert repaired[0].confidence == 0.4
+
+    def test_compute_expected_teams_with_synthetic_serve(self) -> None:
+        """Team chain flips correctly after synthetic serve."""
+        actions = [
+            _make_synthetic_serve("near", 0, 0.5, server_track_id=1),
+            ClassifiedAction(
+                ActionType.RECEIVE, 20, 0.5, 0.7, 0.02, 2, "far", 0.7,
+            ),
+            ClassifiedAction(
+                ActionType.SET, 30, 0.5, 0.7, 0.01, 3, "far", 0.7,
+            ),
+            ClassifiedAction(
+                ActionType.ATTACK, 40, 0.5, 0.3, 0.03, 3, "far", 0.8,
+            ),
+            ClassifiedAction(
+                ActionType.DIG, 55, 0.5, 0.7, 0.02, 1, "near", 0.7,
+            ),
+        ]
+        # Team 0 = near (server's team), team 1 = far (receiver's team)
+        teams = {1: 0, 2: 1, 3: 1}
+        expected = _compute_expected_teams(actions, teams)
+        # Serve is team 0 (server's team)
+        assert expected[0] == 0
+        # After serve crosses net → receive on team 1
+        assert expected[1] == 1
+        # Set stays on team 1
+        assert expected[2] == 1
+        # Attack is on team 1 (before flip)
+        assert expected[3] == 1
+        # After attack crosses net → dig on team 0
+        assert expected[4] == 0

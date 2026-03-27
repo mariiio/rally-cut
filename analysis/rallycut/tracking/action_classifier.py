@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import defaultdict
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -481,6 +481,7 @@ def _make_synthetic_serve(
     first_contact_frame: int,
     net_y: float,
     rally_start_frame: int | None = None,
+    server_track_id: int = -1,
 ) -> ClassifiedAction:
     """Create a synthetic serve action for a missed serve.
 
@@ -488,12 +489,20 @@ def _make_synthetic_serve(
     reasonably close to the first detected contact, otherwise ~1s
     (30 frames) before the first contact.
 
+    When server_track_id is provided (from position-based server
+    detection), the synthetic serve becomes an attributed contact
+    that anchors the action chain — enabling team-seeded
+    reattribution and correct downstream action classification.
+
     Args:
         serve_side: Court side of the serve ("near" or "far").
         first_contact_frame: Frame of the first detected contact.
         net_y: Net Y position.
         rally_start_frame: Frame when the rally segment starts (from
             detection). Used for more accurate serve placement.
+        server_track_id: Track ID of the server from position
+            detection. -1 if server could not be identified (e.g.
+            off-screen near-side serve).
 
     Returns:
         A synthetic ClassifiedAction for the serve.
@@ -511,15 +520,19 @@ def _make_synthetic_serve(
     else:
         serve_frame = max(0, first_contact_frame - 30)
 
+    # Higher confidence when we have a real server identity from
+    # position detection (game-structure inference + attribution).
+    confidence = 0.55 if server_track_id >= 0 else 0.4
+
     return ClassifiedAction(
         action_type=ActionType.SERVE,
         frame=serve_frame,
         ball_x=0.5,
         ball_y=baseline_near if serve_side == "near" else baseline_far,
         velocity=0.0,
-        player_track_id=-1,
+        player_track_id=server_track_id,
         court_side=serve_side,
-        confidence=0.4,
+        confidence=confidence,
         is_synthetic=True,
     )
 
@@ -859,10 +872,8 @@ class ActionClassifier:
                             serve_side, contact.frame,
                             contact_sequence.net_y,
                             rally_start_frame=start_frame,
+                            server_track_id=server_pos_tid,
                         )
-                        # Attach server track_id from position detection
-                        if server_pos_tid >= 0:
-                            synth = replace(synth, player_track_id=server_pos_tid)
                         actions.append(synth)
                         action_type = ActionType.RECEIVE
                         confidence = self.config.medium_confidence
@@ -1127,6 +1138,7 @@ def repair_action_sequence(
     net_y: float = 0.5,
     ball_positions: list[BallPosition] | None = None,
     rally_start_frame: int | None = None,
+    server_track_id: int = -1,
 ) -> list[ClassifiedAction]:
     """Repair volleyball-illegal action sequences.
 
@@ -1160,6 +1172,7 @@ def repair_action_sequence(
         net_y: Net Y position.
         ball_positions: Ball positions for one-sided trajectory checks.
         rally_start_frame: Rally start frame for synthetic serve placement.
+        server_track_id: Server track ID for synthetic serve attribution.
 
     Returns:
         Repaired list of ClassifiedAction (possibly longer if synthetic
@@ -1216,6 +1229,7 @@ def repair_action_sequence(
                 synthetic = _make_synthetic_serve(
                     opposite, serve.frame, net_y,
                     rally_start_frame=rally_start_frame,
+                    server_track_id=server_track_id,
                 )
                 repaired[serve_idx] = _reclassify(serve, ActionType.RECEIVE)
                 repaired.insert(serve_idx, synthetic)
@@ -1583,9 +1597,8 @@ def _compute_expected_teams(
     cross (defender reacts on same side). The server's team (from
     match-level team_assignments) seeds the chain.
 
-    Synthetic serves (inserted by repair_action_sequence) reset the chain
-    to serve_team — this is correct for rally-start synthetics but may
-    drift if repair injects mid-rally synthetics after misclassification.
+    Synthetic serves (inserted by repair_action_sequence) set expected to
+    serve_team and flip current_team to receiving team (serve crosses net).
 
     Returns list parallel to actions: expected team (0 or 1) per action,
     or None if not determinable (no serve found or unknown action type).
@@ -1607,10 +1620,11 @@ def _compute_expected_teams(
         if action.action_type == ActionType.UNKNOWN:
             continue
         if action.is_synthetic:
-            # Synthetic serves are inferred — trust the team chain
+            # Synthetic serves are inferred — trust the team chain.
+            # Serve crosses the net, so flip to receiving team.
             if action.action_type == ActionType.SERVE:
                 expected[i] = serve_team
-                current_team = serve_team
+                current_team = 1 - serve_team
             continue
 
         expected[i] = current_team
@@ -2238,11 +2252,24 @@ def classify_rally_actions(
     # which fixes illegal patterns.
     result.actions = propagate_court_side(result.actions)
 
+    # Extract server track_id for repair_action_sequence Rule 0.
+    # Only trust the ID from synthetic serves (phantom path uses
+    # position-based detection — known correct). Real serves that
+    # Rule 0 reclassifies may have the receiver's track_id (nearest
+    # player at the misclassified contact), not the actual server.
+    serve_tid = -1
+    for a in result.actions:
+        if a.action_type == ActionType.SERVE:
+            if a.is_synthetic:
+                serve_tid = a.player_track_id
+            break
+
     result.actions = repair_action_sequence(
         result.actions,
         net_y=contact_sequence.net_y,
         ball_positions=contact_sequence.ball_positions,
         rally_start_frame=contact_sequence.rally_start_frame,
+        server_track_id=serve_tid,
     )
     result.actions = viterbi_decode_actions(result.actions)
     result.actions = validate_action_sequence(result.actions, rally_id)
