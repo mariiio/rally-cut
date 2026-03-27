@@ -130,6 +130,7 @@ def extract_features_for_rally(
             ball_positions=contact_seq.ball_positions or None,
             net_y=contact_seq.net_y,
             rally_start_frame=contact_seq.rally_start_frame,
+            player_positions=player_positions or None,
         )
 
         features_list.append(feat.to_array())

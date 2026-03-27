@@ -21,9 +21,12 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from rallycut.tracking.contact_detector import ball_crossed_net
+
 if TYPE_CHECKING:
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.contact_detector import Contact
+    from rallycut.tracking.player_tracker import PlayerPosition
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +64,11 @@ class ActionFeatures:
     max_d_y: float  # Peak frame-to-frame Y shift (jumps/dives)
     max_d_height: float  # Peak frame-to-frame height change (arm swings/crouching)
 
+    # Net-crossing and player context (v2 features)
+    post_contact_crosses_net: float  # 1.0=crosses, 0.0=same side, 0.5=unknown
+    player_y_relative_net: float  # Player bbox center Y minus net_y
+    post_contact_speed: float  # Mean ball speed over 5 frames post-contact
+
     def to_array(self) -> np.ndarray:
         """Convert to numpy feature array for classifier input."""
         player_dist = self.player_distance if math.isfinite(self.player_distance) else 1.0
@@ -82,6 +90,9 @@ class ActionFeatures:
             self.distance_from_last_contact,
             self.max_d_y,
             self.max_d_height,
+            self.post_contact_crosses_net,
+            self.player_y_relative_net,
+            self.post_contact_speed,
         ], dtype=np.float64)
 
     @staticmethod
@@ -104,6 +115,9 @@ class ActionFeatures:
             "distance_from_last_contact",
             "max_d_y",
             "max_d_height",
+            "post_contact_crosses_net",
+            "player_y_relative_net",
+            "post_contact_speed",
         ]
 
 
@@ -190,8 +204,6 @@ def _count_contacts_on_side(
     if index == 0:
         return 1
 
-    from rallycut.tracking.contact_detector import ball_crossed_net
-
     current = contacts[index]
     count = 1
 
@@ -226,6 +238,32 @@ def _count_contacts_on_side(
     return min(count, 3)
 
 
+def _get_player_y_relative_net(
+    player_positions: list[PlayerPosition] | None,
+    track_id: int,
+    frame: int,
+    net_y: float,
+    max_gap: int = 5,
+) -> float:
+    """Get player's Y position relative to net at a given frame.
+
+    Returns 0.0 if no matching position is found within *max_gap* frames.
+    """
+    if not player_positions:
+        return 0.0
+    best_pp = None
+    best_gap = max_gap + 1
+    for pp in player_positions:
+        if pp.track_id == track_id:
+            gap = abs(pp.frame_number - frame)
+            if gap < best_gap:
+                best_gap = gap
+                best_pp = pp
+    if best_pp is None:
+        return 0.0
+    return (best_pp.y + best_pp.height / 2) - net_y
+
+
 def extract_action_features(
     contact: Contact,
     index: int,
@@ -234,6 +272,7 @@ def extract_action_features(
     net_y: float,
     rally_start_frame: int = 0,
     team_assignments: dict[int, int] | None = None,
+    player_positions: list[PlayerPosition] | None = None,
 ) -> ActionFeatures:
     """Compute features for a single contact for action classification.
 
@@ -244,6 +283,8 @@ def extract_action_features(
         ball_positions: Ball positions for trajectory features.
         net_y: Estimated net Y position.
         rally_start_frame: First frame of the rally.
+        team_assignments: Track ID → team index mapping.
+        player_positions: Player positions for player-Y feature.
 
     Returns:
         ActionFeatures for this contact.
@@ -278,6 +319,38 @@ def extract_action_features(
         frames_since_last = 0
         dist_from_last = 0.0
 
+    # --- v2 features ---
+
+    # Post-contact net crossing (attack vs set discriminator)
+    crosses_net = 0.5  # unknown
+    if ball_positions:
+        crossed = ball_crossed_net(
+            ball_positions, contact.frame, contact.frame + 15, net_y,
+        )
+        if crossed is True:
+            crosses_net = 1.0
+        elif crossed is False:
+            crosses_net = 0.0
+
+    # Player Y relative to net (attacks happen closer to net)
+    player_y_rel = _get_player_y_relative_net(
+        player_positions, contact.player_track_id, contact.frame, net_y,
+    )
+
+    # Post-contact ball speed (attacks are faster than sets)
+    post_speed = 0.0
+    if ball_by_frame:
+        speeds: list[float] = []
+        for f in range(contact.frame + 1, contact.frame + 6):
+            bp_cur = ball_by_frame.get(f)
+            bp_prev = ball_by_frame.get(f - 1)
+            if bp_cur is not None and bp_prev is not None:
+                dx = bp_cur.x - bp_prev.x
+                dy = bp_cur.y - bp_prev.y
+                speeds.append(math.sqrt(dx * dx + dy * dy))
+        if speeds:
+            post_speed = sum(speeds) / len(speeds)
+
     return ActionFeatures(
         velocity=contact.velocity,
         direction_change_deg=contact.direction_change_deg,
@@ -296,10 +369,16 @@ def extract_action_features(
         distance_from_last_contact=dist_from_last,
         max_d_y=max_d_y,
         max_d_height=max_d_height,
+        post_contact_crosses_net=crosses_net,
+        player_y_relative_net=player_y_rel,
+        post_contact_speed=post_speed,
     )
 
 
 ACTION_CLASSES = ["serve", "receive", "set", "attack", "dig"]
+
+# Bump when feature vector changes (forces retrain of stale pickles).
+FEATURE_VERSION = 2
 
 
 class ActionTypeClassifier:
@@ -481,6 +560,7 @@ class ActionTypeClassifier:
             "model": self.model,
             "feature_names": self._feature_names,
             "action_classes": ACTION_CLASSES,
+            "feature_version": FEATURE_VERSION,
         }
         with open(path, "wb") as f:
             pickle.dump(data, f)
@@ -494,6 +574,15 @@ class ActionTypeClassifier:
 
         with open(path, "rb") as f:
             data = pickle.load(f)  # noqa: S301
+
+        stored_version = data.get("feature_version", 1)
+        if stored_version != FEATURE_VERSION:
+            logger.warning(
+                "Action classifier feature version mismatch: model has v%d, "
+                "code expects v%d. Please retrain.",
+                stored_version, FEATURE_VERSION,
+            )
+            return cls()  # Untrained — forces fallback
 
         classifier = cls(model=data["model"])
         classifier._feature_names = data.get(

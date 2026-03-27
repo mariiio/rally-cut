@@ -639,6 +639,7 @@ class ActionClassifier:
                     net_y=contact_sequence.net_y,
                     rally_start_frame=start_frame,
                     team_assignments=match_team_assignments,
+                    player_positions=contact_sequence.player_positions or None,
                 )
                 pred_action, _conf = classifier.predict([feat])[0]
                 if pred_action == "serve":
@@ -763,6 +764,16 @@ class ActionClassifier:
                         and server_pos_tid >= 0
                         and pos_conf >= 0.7
                     )
+                    # Also require the server to have a contact in the
+                    # serve window — if not, the "serve" is likely a
+                    # phantom (the real server wasn't detected).
+                    if suppress_phantom:
+                        suppress_phantom = any(
+                            c.player_track_id == server_pos_tid
+                            for c in contacts[:min(3, len(contacts))]
+                            if (c.frame - start_frame)
+                            < self.config.serve_window_frames
+                        )
                     if suppress_phantom:
                         logger.debug(
                             "One-sided ball trajectory + server "
@@ -775,11 +786,23 @@ class ActionClassifier:
                             ball_positions, contact.frame,
                             contact.ball_y, contact_sequence.net_y,
                         )
-                        # Only trigger phantom on confirmed False.
-                        # None (insufficient data) → keep as serve
-                        # (conservative).
                         if toward_net is False:
                             is_phantom = True
+                        elif (
+                            toward_net is None
+                            and classifier is not None
+                            and classifier.is_trained
+                        ):
+                            # Insufficient trajectory data for Pass 3
+                            # fallback — treat as phantom. The classifier
+                            # override below rescues true serves.
+                            is_phantom = True
+                            logger.debug(
+                                "Insufficient trajectory data for Pass 3 "
+                                "serve at frame %d — treating as phantom "
+                                "(pending classifier check)",
+                                contact.frame,
+                            )
 
                     # Court-side check for Pass 3 fallback: if ball is
                     # clearly on the wrong side of the net for a serve
@@ -798,10 +821,10 @@ class ActionClassifier:
                         if on_serve_side is False:
                             is_phantom = True
 
-                    # Classifier override: if the learned classifier says
-                    # "serve", trust it over trajectory-based phantom detection.
+                    # Classifier arbitration for Pass 3 serves: both
+                    # rescue (phantom → real) and reject (real → phantom).
                     if (
-                        is_phantom
+                        serve_pass == 3
                         and classifier is not None
                         and classifier.is_trained
                     ):
@@ -811,14 +834,28 @@ class ActionClassifier:
                             net_y=contact_sequence.net_y,
                             rally_start_frame=start_frame,
                             team_assignments=match_team_assignments,
+                            player_positions=contact_sequence.player_positions or None,
                         )
                         pred_action, pred_conf = classifier.predict([feat])[0]
-                        if pred_action == "serve":
+                        if is_phantom and pred_action == "serve":
+                            # Rescue: classifier says serve, override phantom
                             is_phantom = False
                             logger.debug(
                                 "Classifier overrides phantom serve at "
                                 "frame %d (conf=%.2f)",
                                 contact.frame, pred_conf,
+                            )
+                        elif (
+                            not is_phantom
+                            and pred_action != "serve"
+                            and pred_conf > 0.7
+                        ):
+                            # Reject: classifier confidently says non-serve
+                            is_phantom = True
+                            logger.debug(
+                                "Classifier rejects Pass 3 serve at "
+                                "frame %d (pred=%s, conf=%.2f)",
+                                contact.frame, pred_action, pred_conf,
                             )
 
                     if not is_phantom:
@@ -918,6 +955,7 @@ class ActionClassifier:
                     net_y=contact_sequence.net_y,
                     rally_start_frame=start_frame,
                     team_assignments=match_team_assignments,
+                    player_positions=contact_sequence.player_positions or None,
                 )
                 pred_action, pred_conf = classifier.predict([feat])[0]
                 try:
@@ -1212,10 +1250,14 @@ def repair_action_sequence(
             # uses the trajectory signal alone since it catches
             # additional serves that passed through Pass 0-2 or
             # classifier-assisted Pass 4 without phantom checks.
+            # Stricter than classify_rally (min_per_side=3) — Rule 0 is a
+            # last-resort correction, so require stronger one-sided evidence
+            # before skipping it.
             skip_rule0 = (
                 ball_positions is not None
                 and _is_ball_one_sided(
                     ball_positions, serve.frame, net_y,
+                    min_per_side=5,
                 )
             )
             if skip_rule0:
