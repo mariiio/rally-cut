@@ -1140,6 +1140,7 @@ def repair_action_sequence(
     Repairs applied (in order):
     0. (serve fix) Non-synthetic serve with ball on wrong court side →
        reclassify as receive and prepend a synthetic serve.
+       Skipped when ball trajectory is one-sided (WASB missed serve).
     3. (pre-pass) Duplicate serves → extras become dig.
     4. (pre-pass) Duplicate receives → extras become set.
     1. (main pass) Consecutive receives/digs on same side → second becomes set.
@@ -1157,7 +1158,7 @@ def repair_action_sequence(
     Args:
         actions: Classified actions from classify_rally.
         net_y: Net Y position.
-        ball_positions: Ball positions (unused currently, reserved for future).
+        ball_positions: Ball positions for one-sided trajectory checks.
         rally_start_frame: Rally start frame for synthetic serve placement.
 
     Returns:
@@ -1193,10 +1194,11 @@ def repair_action_sequence(
         if on_serve_side is False:
             # Skip Rule 0 when ball trajectory is one-sided — ball_y
             # is unreliable (WASB missed the serve trajectory).
-            # The confidence gate is applied upstream in classify_rally
-            # (suppress_phantom requires pos_conf >= 0.7); Rule 0 only
-            # checks the trajectory signal since it runs post-hoc on an
-            # already-classified serve.
+            # Phantom suppression in classify_rally handles the
+            # tighter gate (one-sided + server conf >= 0.7); Rule 0
+            # uses the trajectory signal alone since it catches
+            # additional serves that passed through Pass 0-2 or
+            # classifier-assisted Pass 4 without phantom checks.
             skip_rule0 = (
                 ball_positions is not None
                 and _is_ball_one_sided(
