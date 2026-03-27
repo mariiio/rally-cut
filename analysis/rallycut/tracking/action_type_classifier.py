@@ -57,6 +57,10 @@ class ActionFeatures:
     frames_since_last_contact: int
     distance_from_last_contact: float
 
+    # Bbox motion of attributed player (peak changes in ±5 frames)
+    max_d_y: float  # Peak frame-to-frame Y shift (jumps/dives)
+    max_d_height: float  # Peak frame-to-frame height change (arm swings/crouching)
+
     def to_array(self) -> np.ndarray:
         """Convert to numpy feature array for classifier input."""
         player_dist = self.player_distance if math.isfinite(self.player_distance) else 1.0
@@ -76,6 +80,8 @@ class ActionFeatures:
             self.pre_contact_dy,
             float(self.frames_since_last_contact),
             self.distance_from_last_contact,
+            self.max_d_y,
+            self.max_d_height,
         ], dtype=np.float64)
 
     @staticmethod
@@ -96,6 +102,8 @@ class ActionFeatures:
             "pre_contact_dy",
             "frames_since_last_contact",
             "distance_from_last_contact",
+            "max_d_y",
+            "max_d_height",
         ]
 
 
@@ -253,6 +261,11 @@ def extract_action_features(
         all_contacts, index, ball_positions, net_y, team_assignments,
     )
 
+    # Bbox motion of attributed player
+    bbox_motion = contact.candidate_bbox_motion.get(contact.player_track_id)
+    max_d_y = bbox_motion[0] if bbox_motion else 0.0
+    max_d_height = bbox_motion[1] if bbox_motion else 0.0
+
     # Inter-contact features
     if index > 0:
         prev = all_contacts[index - 1]
@@ -281,6 +294,8 @@ def extract_action_features(
         pre_contact_dy=pre_dy,
         frames_since_last_contact=frames_since_last,
         distance_from_last_contact=dist_from_last,
+        max_d_y=max_d_y,
+        max_d_height=max_d_height,
     )
 
 
