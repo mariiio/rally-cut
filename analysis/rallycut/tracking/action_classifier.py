@@ -403,6 +403,43 @@ def _ball_starts_on_contact_side(
     return None
 
 
+def _is_ball_one_sided(
+    ball_positions: list[BallPosition],
+    up_to_frame: int,
+    net_y: float,
+    min_per_side: int = 3,
+) -> bool:
+    """Check if ball positions up to a frame are on one side of the net.
+
+    When WASB misses the fast-moving serve ball, all detections start only
+    after the ball crosses the net.  Every pre-contact position is on the
+    receiver's side, making trajectory-based serve/receive discrimination
+    unreliable.
+
+    Args:
+        ball_positions: Sorted list of ball positions (by frame_number).
+        up_to_frame: Only consider positions at or before this frame.
+        net_y: Net Y position.
+        min_per_side: Minimum positions required on each side to consider
+            the trajectory two-sided (default 3).
+
+    Returns:
+        True when fewer than *min_per_side* positions exist on either
+        side (includes zero positions on both sides — no trajectory data).
+        False when both sides have >= min_per_side positions.
+    """
+    n_far = 0
+    n_near = 0
+    for bp in ball_positions:
+        if bp.frame_number > up_to_frame:
+            break  # ball_positions sorted by frame_number
+        if bp.y < net_y:
+            n_far += 1
+        else:
+            n_near += 1
+    return n_far < min_per_side or n_near < min_per_side
+
+
 def _infer_serve_side(
     first_contact: Contact,
     ball_positions: list[BallPosition] | None = None,
@@ -560,8 +597,9 @@ class ActionClassifier:
         # player positions at rally start (before ball tracking kicks in).
         server_pos_tid = -1
         server_pos_side = ""
+        pos_conf = 0.0
         if contact_sequence.player_positions:
-            server_pos_tid, server_pos_side, _pos_conf = _find_server_by_position(
+            server_pos_tid, server_pos_side, pos_conf = _find_server_by_position(
                 contact_sequence.player_positions, start_frame,
                 contact_sequence.net_y,
             )
@@ -603,6 +641,7 @@ class ActionClassifier:
             action_type = ActionType.UNKNOWN
             confidence = self.config.low_confidence
             player_tid = contact.player_track_id
+            action_court_side = contact.court_side
 
             # Check for block (must be at net, immediately after opponent's attack)
             if (
@@ -696,20 +735,49 @@ class ActionClassifier:
                     # is actually the receive. Pass 1/2 serves are more reliable
                     # (arc crossing or baseline/velocity) so skip the check.
                     is_phantom = False
-                    if serve_pass == 3 and ball_positions:
+                    # When all pre-contact ball positions are on one side
+                    # of the net AND server position is confidently known,
+                    # WASB missed the serve trajectory (fast ball near the
+                    # server). Trajectory-based phantom checks are
+                    # unreliable — skip them and trust server position.
+                    suppress_phantom = (
+                        serve_pass == 3
+                        and ball_positions is not None
+                        and _is_ball_one_sided(
+                            ball_positions, contact.frame,
+                            contact_sequence.net_y,
+                        )
+                        and server_pos_tid >= 0
+                        and pos_conf >= 0.7
+                    )
+                    if suppress_phantom:
+                        logger.debug(
+                            "One-sided ball trajectory + server "
+                            "position (tid=%d, conf=%.2f) — "
+                            "suppressing phantom check at frame %d",
+                            server_pos_tid, pos_conf, contact.frame,
+                        )
+                    elif serve_pass == 3 and ball_positions:
                         toward_net = _ball_moving_toward_net(
                             ball_positions, contact.frame,
                             contact.ball_y, contact_sequence.net_y,
                         )
                         # Only trigger phantom on confirmed False.
-                        # None (insufficient data) → keep as serve (conservative).
+                        # None (insufficient data) → keep as serve
+                        # (conservative).
                         if toward_net is False:
                             is_phantom = True
 
-                    # Court-side check for Pass 3 fallback: if ball is clearly
-                    # on the wrong side of the net for a serve from this court
-                    # side, it's likely a receive, not a serve.
-                    if not is_phantom and serve_pass == 3:
+                    # Court-side check for Pass 3 fallback: if ball is
+                    # clearly on the wrong side of the net for a serve
+                    # from this court side, it's likely a receive.
+                    # Skipped when suppress_phantom — ball position data
+                    # is unreliable (all on one side of net).
+                    if (
+                        not is_phantom
+                        and serve_pass == 3
+                        and not suppress_phantom
+                    ):
                         on_serve_side = _is_ball_on_serve_side(
                             contact.ball_y, contact.court_side,
                             contact_sequence.net_y,
@@ -752,9 +820,24 @@ class ActionClassifier:
                             else self.config.medium_confidence
                         )
                         serve_detected = True
-                        serve_side = contact.court_side
-                        serve_track_id = contact.player_track_id
-                        current_side = contact.court_side
+                        if suppress_phantom:
+                            # suppress_phantom is True only when all
+                            # phantom checks were skipped, so
+                            # is_phantom is always False here.
+                            # Ball tracking missed the serve trajectory.
+                            # Override court_side and attribution with
+                            # server position (ball-derived values are
+                            # unreliable — ball was only visible after
+                            # crossing the net).
+                            serve_side = server_pos_side
+                            current_side = server_pos_side
+                            action_court_side = server_pos_side
+                            serve_track_id = server_pos_tid
+                            player_tid = server_pos_tid
+                        else:
+                            serve_side = contact.court_side
+                            current_side = contact.court_side
+                            serve_track_id = contact.player_track_id
                         contact_count_on_side = 1
                     else:
                         # Phantom serve: real serve was missed, this is the
@@ -855,7 +938,7 @@ class ActionClassifier:
                 ball_y=contact.ball_y,
                 velocity=contact.velocity,
                 player_track_id=player_tid,
-                court_side=contact.court_side,
+                court_side=action_court_side,
                 confidence=confidence,
             ))
             last_action_type = action_type
@@ -1108,19 +1191,38 @@ def repair_action_sequence(
             serve.ball_y, serve.court_side, net_y,
         )
         if on_serve_side is False:
-            opposite = "far" if serve.court_side == "near" else "near"
-            synthetic = _make_synthetic_serve(
-                opposite, serve.frame, net_y,
-                rally_start_frame=rally_start_frame,
+            # Skip Rule 0 when ball trajectory is one-sided — ball_y
+            # is unreliable (WASB missed the serve trajectory).
+            # The confidence gate is applied upstream in classify_rally
+            # (suppress_phantom requires pos_conf >= 0.7); Rule 0 only
+            # checks the trajectory signal since it runs post-hoc on an
+            # already-classified serve.
+            skip_rule0 = (
+                ball_positions is not None
+                and _is_ball_one_sided(
+                    ball_positions, serve.frame, net_y,
+                )
             )
-            repaired[serve_idx] = _reclassify(serve, ActionType.RECEIVE)
-            repaired.insert(serve_idx, synthetic)
-            logger.debug(
-                "Repair rule 0: serve at f%d on wrong court side "
-                "(%s, ball_y=%.2f, net_y=%.2f) → reclassified as receive, "
-                "synthetic serve prepended",
-                serve.frame, serve.court_side, serve.ball_y, net_y,
-            )
+            if skip_rule0:
+                logger.debug(
+                    "Rule 0 skipped: one-sided ball trajectory "
+                    "at serve frame %d",
+                    serve.frame,
+                )
+            else:
+                opposite = "far" if serve.court_side == "near" else "near"
+                synthetic = _make_synthetic_serve(
+                    opposite, serve.frame, net_y,
+                    rally_start_frame=rally_start_frame,
+                )
+                repaired[serve_idx] = _reclassify(serve, ActionType.RECEIVE)
+                repaired.insert(serve_idx, synthetic)
+                logger.debug(
+                    "Repair rule 0: serve at f%d on wrong court side "
+                    "(%s, ball_y=%.2f, net_y=%.2f) → reclassified as "
+                    "receive, synthetic serve prepended",
+                    serve.frame, serve.court_side, serve.ball_y, net_y,
+                )
 
     # Re-find serve_idx after possible insertion
     serve_idx = None
