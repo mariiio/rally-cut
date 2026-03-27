@@ -56,7 +56,7 @@ def _get_temporal_attributor() -> TemporalAttributionInference | None:
             Path(__file__).parent.parent.parent
             / "weights"
             / "temporal_attribution"
-            / "best_temporal_attribution.pt"
+            / "best_temporal_attribution.joblib"
         )
         if model_path.exists():
             _temporal_attributor_cache["default"] = TemporalAttributionInference(
@@ -1378,7 +1378,7 @@ def detect_contacts(
     from scipy.signal import find_peaks
 
     from rallycut.tracking.temporal_attribution.features import (
-        extract_attribution_window,
+        extract_attribution_features,
     )
 
     cfg = config or ContactDetectionConfig()
@@ -1737,22 +1737,34 @@ def detect_contacts(
             if margin < 0.05 and alt_tid != track_id:
                 track_id = alt_tid
 
-        # Temporal attribution: override track_id using trajectory convergence
-        # model when available. Only applied when ≥2 candidates exist.
+        # Temporal attribution: override track_id using trajectory-based model.
+        # Only applied when ≥2 candidates exist.
         if (
             temporal_attributor is not None
             and player_positions
             and len(candidates) >= 2
         ):
-            window_result = extract_attribution_window(
+            # Compute contact sequence context
+            ta_contact_index = len(contacts)
+            ta_side_count = 1
+            for prev_c in reversed(contacts):
+                if prev_c.court_side == court_side:
+                    ta_side_count += 1
+                else:
+                    break
+            ta_side_count = min(ta_side_count, 3)
+
+            feat_result = extract_attribution_features(
                 contact_frame=frame,
                 ball_positions=ball_positions,
                 player_positions=player_positions,
+                contact_index=ta_contact_index,
+                side_count=ta_side_count,
             )
-            if window_result is not None:
-                window, canonical_tids = window_result
+            if feat_result is not None:
+                feats, canonical_tids = feat_result
                 pred_tid, pred_conf = temporal_attributor.predict(
-                    window, canonical_tids
+                    feats, canonical_tids
                 )
                 if (
                     pred_conf >= cfg.temporal_attribution_min_confidence

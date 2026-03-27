@@ -1,13 +1,14 @@
 """Train temporal contact attribution model.
 
-Loads GT contacts from the database, extracts trajectory windows,
-runs leave-one-video-out CV, and trains a final model on all data.
+Loads GT contacts from the database, extracts trajectory features,
+runs leave-one-video-out CV with gradient-boosted trees, and trains
+a final model on all data.
 
 Usage:
     cd analysis
     uv run python scripts/train_temporal_attribution.py
-    uv run python scripts/train_temporal_attribution.py --epochs 150
-    uv run python scripts/train_temporal_attribution.py --skip-cv  # Skip LOO-CV, train only
+    uv run python scripts/train_temporal_attribution.py --skip-cv
+    uv run python scripts/train_temporal_attribution.py --use-predicted  # train on predicted contacts
 """
 
 from __future__ import annotations
@@ -23,14 +24,15 @@ from rich.table import Table
 from rallycut.evaluation.db import get_connection
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.player_tracker import PlayerPosition
-from rallycut.tracking.temporal_attribution.features import extract_attribution_window
-from rallycut.tracking.temporal_attribution.model import TemporalAttributionConfig
+from rallycut.tracking.temporal_attribution.features import (
+    extract_attribution_features,
+)
 from rallycut.tracking.temporal_attribution.training import TrainingConfig, train_model
 
 console = Console()
 
 WEIGHTS_DIR = Path(__file__).parent.parent / "weights" / "temporal_attribution"
-CHECKPOINT_PATH = WEIGHTS_DIR / "best_temporal_attribution.pt"
+CHECKPOINT_PATH = WEIGHTS_DIR / "best_temporal_attribution.joblib"
 
 
 def load_rallies_with_action_gt(
@@ -52,7 +54,8 @@ def load_rallies_with_action_gt(
             r.video_id,
             pt.action_ground_truth_json,
             pt.ball_positions_json,
-            pt.positions_json
+            pt.positions_json,
+            pt.contacts_json
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
         WHERE {where_sql}
@@ -72,6 +75,7 @@ def load_rallies_with_action_gt(
                     action_gt_json,
                     ball_positions_json,
                     positions_json,
+                    contacts_json,
                 ) = row
 
                 results.append({
@@ -80,6 +84,7 @@ def load_rallies_with_action_gt(
                     "action_gt_json": action_gt_json or [],
                     "ball_positions_json": ball_positions_json or [],
                     "positions_json": positions_json or [],
+                    "contacts_json": contacts_json,
                 })
 
     return results
@@ -114,22 +119,69 @@ def parse_player_positions(raw: list[dict]) -> list[PlayerPosition]:
     ]
 
 
+def _compute_contact_context(
+    contacts_json: dict | None,
+    gt_frame: int,
+    tolerance: int = 5,
+) -> tuple[int, int]:
+    """Compute contact_index and side_count from stored contacts.
+
+    Matches the GT frame to the nearest stored contact to get sequence context.
+    Returns (contact_index, side_count) or (0, 1) as default.
+    """
+    if not contacts_json:
+        return 0, 1
+
+    contacts = contacts_json.get("contacts", [])
+    if not contacts:
+        return 0, 1
+
+    # Find nearest stored contact
+    best_idx = 0
+    best_dist = abs(gt_frame - contacts[0].get("frame", 0))
+    for i, c in enumerate(contacts[1:], 1):
+        dist = abs(gt_frame - c.get("frame", 0))
+        if dist < best_dist:
+            best_dist = dist
+            best_idx = i
+
+    if best_dist > tolerance:
+        return 0, 1
+
+    # Count contacts on same court side up to this point
+    contact_index = best_idx
+    court_side = contacts[best_idx].get("courtSide", "unknown")
+    side_count = 1
+    for i in range(best_idx - 1, -1, -1):
+        if contacts[i].get("courtSide") == court_side:
+            side_count += 1
+        else:
+            break
+
+    return contact_index, min(side_count, 3)
+
+
 def extract_training_data(
     rallies: list[dict],
+    use_predicted: bool = False,
 ) -> tuple[list[np.ndarray], list[int], list[str]]:
-    """Extract trajectory windows and labels from GT contacts.
+    """Extract features and labels from GT contacts.
+
+    Args:
+        rallies: Loaded rally data from DB.
+        use_predicted: If True, use predicted contact frames (from contacts_json)
+            matched to GT labels. Matches inference distribution better.
 
     Returns:
-        (windows, labels, video_ids) — parallel lists.
-        windows[i] is (21, 14), labels[i] is 0-3 (canonical slot of GT player).
+        (features_list, labels, video_ids) — parallel lists.
     """
-    windows: list[np.ndarray] = []
+    features_list: list[np.ndarray] = []
     labels: list[int] = []
     video_ids: list[str] = []
 
-    skipped_no_ball = 0
     skipped_no_player = 0
-    skipped_gt_not_in_slots = 0
+    skipped_sparse = 0
+    skipped_not_in_slots = 0
 
     for ri, rally in enumerate(rallies):
         ball_positions = parse_ball_positions(rally["ball_positions_json"])
@@ -139,6 +191,23 @@ def extract_training_data(
             continue
 
         gt_labels = rally["action_gt_json"]
+
+        # If using predicted contacts, build frame mapping
+        pred_frame_map: dict[int, tuple[int, int]] = {}
+        if use_predicted and rally["contacts_json"]:
+            contacts = rally["contacts_json"].get("contacts", [])
+            for ci, c in enumerate(contacts):
+                cf = c.get("frame", -1)
+                cs = c.get("courtSide", "unknown")
+                # Count side contacts
+                sc = 1
+                for j in range(ci - 1, -1, -1):
+                    if contacts[j].get("courtSide") == cs:
+                        sc += 1
+                    else:
+                        break
+                pred_frame_map[cf] = (ci, min(sc, 3))
+
         for gt in gt_labels:
             gt_frame = gt["frame"]
             gt_track_id = gt.get("playerTrackId", -1)
@@ -147,64 +216,79 @@ def extract_training_data(
                 skipped_no_player += 1
                 continue
 
-            result = extract_attribution_window(
-                contact_frame=gt_frame,
+            # Determine contact frame and context
+            if use_predicted and pred_frame_map:
+                # Find nearest predicted contact to GT frame
+                best_pf = min(pred_frame_map.keys(), key=lambda f: abs(f - gt_frame))
+                if abs(best_pf - gt_frame) <= 5:
+                    contact_frame = best_pf
+                    contact_index, side_count = pred_frame_map[best_pf]
+                else:
+                    contact_frame = gt_frame
+                    contact_index, side_count = _compute_contact_context(
+                        rally["contacts_json"], gt_frame
+                    )
+            else:
+                contact_frame = gt_frame
+                contact_index, side_count = _compute_contact_context(
+                    rally["contacts_json"], gt_frame
+                )
+
+            result = extract_attribution_features(
+                contact_frame=contact_frame,
                 ball_positions=ball_positions,
                 player_positions=player_positions,
+                contact_index=contact_index,
+                side_count=side_count,
             )
 
             if result is None:
-                skipped_no_ball += 1
+                skipped_sparse += 1
                 continue
 
-            window, canonical_tids = result
+            feats, canonical_tids = result
 
-            # Find which slot the GT player occupies
             if gt_track_id in canonical_tids:
                 slot_label = canonical_tids.index(gt_track_id)
             else:
-                skipped_gt_not_in_slots += 1
+                skipped_not_in_slots += 1
                 continue
 
-            windows.append(window)
+            features_list.append(feats)
             labels.append(slot_label)
             video_ids.append(rally["video_id"])
 
         if (ri + 1) % 20 == 0 or ri == len(rallies) - 1:
             console.print(
-                f"  [{ri + 1}/{len(rallies)}] {len(windows)} windows extracted"
+                f"  [{ri + 1}/{len(rallies)}] {len(features_list)} samples extracted"
             )
 
     console.print("\nExtraction summary:")
-    console.print(f"  Total windows: {len(windows)}")
+    console.print(f"  Total samples: {len(features_list)}")
     console.print(f"  Skipped (no GT player): {skipped_no_player}")
-    console.print(f"  Skipped (sparse ball): {skipped_no_ball}")
-    console.print(f"  Skipped (GT not in 4 nearest): {skipped_gt_not_in_slots}")
+    console.print(f"  Skipped (sparse ball): {skipped_sparse}")
+    console.print(f"  Skipped (GT not in 4 nearest): {skipped_not_in_slots}")
 
-    # Label distribution
     if labels:
         dist = np.bincount(labels, minlength=4)
         console.print(f"  Slot distribution: {dict(enumerate(dist.tolist()))}")
         baseline = dist[0] / len(labels)
         console.print(f"  Baseline (always slot 0): {baseline:.1%}")
 
-    return windows, labels, video_ids
+    return features_list, labels, video_ids
 
 
 def run_loocv(
-    windows: list[np.ndarray],
+    features_list: list[np.ndarray],
     labels: list[int],
     video_ids: list[str],
     config: TrainingConfig,
 ) -> float:
-    """Run leave-one-video-out cross-validation.
-
-    Returns aggregate accuracy across all folds.
-    """
+    """Run leave-one-video-out cross-validation."""
     unique_videos = sorted(set(video_ids))
     console.print(f"\nLeave-one-video-out CV: {len(unique_videos)} folds")
 
-    all_windows = np.array(windows)
+    all_features = np.array(features_list)
     all_labels = np.array(labels)
     video_arr = np.array(video_ids)
 
@@ -216,18 +300,18 @@ def run_loocv(
         val_mask = video_arr == held_out_video
         train_mask = ~val_mask
 
-        train_w = all_windows[train_mask]
+        train_f = all_features[train_mask]
         train_l = all_labels[train_mask]
-        val_w = all_windows[val_mask]
+        val_f = all_features[val_mask]
         val_l = all_labels[val_mask]
 
         if len(val_l) == 0 or len(train_l) == 0:
             continue
 
         result = train_model(
-            train_windows=train_w,
+            train_features=train_f,
             train_labels=train_l,
-            val_windows=val_w,
+            val_features=val_f,
             val_labels=val_l,
             config=config,
         )
@@ -247,7 +331,7 @@ def run_loocv(
             f"  [{fold_idx + 1}/{len(unique_videos)}] "
             f"{held_out_video[:8]}: "
             f"{n_correct}/{len(val_l)} = {result.best_val_accuracy:.1%} "
-            f"(train={len(train_l)}, epoch={result.best_epoch})"
+            f"(train={len(train_l)})"
         )
 
     # Summary table
@@ -262,32 +346,34 @@ def run_loocv(
         table.add_row(vid, str(n), str(correct), f"{acc:.1%}", style=style)
 
     agg_acc = total_correct / max(1, total_count)
-    table.add_row("TOTAL", str(total_count), str(total_correct), f"{agg_acc:.1%}", style="bold")
+    table.add_row(
+        "TOTAL", str(total_count), str(total_correct), f"{agg_acc:.1%}",
+        style="bold",
+    )
     console.print(table)
 
     return agg_acc
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train temporal contact attribution model")
-    parser.add_argument("--epochs", type=int, default=100, help="Training epochs")
-    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
-    parser.add_argument("--hidden-dim", type=int, default=32, help="Hidden dimension")
-    parser.add_argument("--dropout", type=float, default=0.2, help="Dropout rate")
-    parser.add_argument("--patience", type=int, default=20, help="Early stopping patience")
+    parser = argparse.ArgumentParser(
+        description="Train temporal contact attribution model"
+    )
+    parser.add_argument("--max-iter", type=int, default=200, help="Max boosting iterations")
+    parser.add_argument("--max-depth", type=int, default=4, help="Max tree depth")
+    parser.add_argument("--lr", type=float, default=0.1, help="Learning rate")
     parser.add_argument("--skip-cv", action="store_true", help="Skip LOO-CV, train only")
+    parser.add_argument(
+        "--use-predicted", action="store_true",
+        help="Train on predicted contact frames (matches inference distribution)",
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     args = parser.parse_args()
 
-    model_config = TemporalAttributionConfig(
-        hidden_dim=args.hidden_dim,
-        dropout=args.dropout,
-    )
     train_config = TrainingConfig(
-        model_config=model_config,
+        max_iter=args.max_iter,
+        max_depth=args.max_depth,
         learning_rate=args.lr,
-        epochs=args.epochs,
-        patience=args.patience,
         seed=args.seed,
     )
 
@@ -297,37 +383,37 @@ def main() -> None:
     console.print(f"Loaded {len(rallies)} rallies")
 
     # --- Extract training data ---
-    console.print("\n[bold]Extracting trajectory windows...[/bold]")
-    windows, labels, video_ids = extract_training_data(rallies)
+    console.print("\n[bold]Extracting features...[/bold]")
+    features_list, labels, video_ids = extract_training_data(
+        rallies, use_predicted=args.use_predicted
+    )
 
-    if len(windows) < 10:
+    if len(features_list) < 10:
         console.print("[red]Too few training samples. Exiting.[/red]")
         sys.exit(1)
 
     # --- LOO-CV ---
     if not args.skip_cv:
-        loocv_acc = run_loocv(windows, labels, video_ids, train_config)
+        loocv_acc = run_loocv(features_list, labels, video_ids, train_config)
         console.print(f"\n[bold]LOO-CV accuracy: {loocv_acc:.1%}[/bold]")
-    else:
-        console.print("\n[dim]Skipping LOO-CV[/dim]")
 
     # --- Train final model on all data ---
     console.print("\n[bold]Training final model on all data...[/bold]")
-    all_windows = np.array(windows)
+    all_features = np.array(features_list)
     all_labels = np.array(labels)
 
-    # Use 90/10 split for early stopping
+    # Use 90/10 split for validation reporting
     np.random.seed(args.seed)
-    n = len(all_windows)
+    n = len(all_features)
     indices = np.random.permutation(n)
     split = int(0.9 * n)
     train_idx = indices[:split]
     val_idx = indices[split:]
 
     result = train_model(
-        train_windows=all_windows[train_idx],
+        train_features=all_features[train_idx],
         train_labels=all_labels[train_idx],
-        val_windows=all_windows[val_idx],
+        val_features=all_features[val_idx],
         val_labels=all_labels[val_idx],
         config=train_config,
         output_path=CHECKPOINT_PATH,
@@ -335,9 +421,21 @@ def main() -> None:
 
     console.print(
         f"\nFinal model: val_acc={result.best_val_accuracy:.1%}, "
-        f"epoch={result.best_epoch}, "
         f"train={result.num_train}, val={result.num_val}"
     )
+
+    # Feature importance
+    if result.feature_importances:
+        sorted_imp = sorted(
+            result.feature_importances.items(), key=lambda kv: kv[1], reverse=True
+        )
+        table = Table(title="Top 15 Feature Importances")
+        table.add_column("Feature", style="cyan")
+        table.add_column("Importance", justify="right")
+        for name, imp in sorted_imp[:15]:
+            table.add_row(name, f"{imp:.4f}")
+        console.print(table)
+
     console.print(f"Saved to: {CHECKPOINT_PATH}")
 
 
