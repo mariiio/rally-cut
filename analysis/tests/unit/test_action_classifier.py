@@ -10,7 +10,6 @@ from rallycut.tracking.action_classifier import (
     ActionType,
     ClassifiedAction,
     RallyActions,
-    _ball_crossed_net,
     _ball_moving_toward_net,
     _ball_starts_on_contact_side,
     _find_server_by_position,
@@ -26,7 +25,7 @@ from rallycut.tracking.action_classifier import (
 )
 from rallycut.tracking.action_type_classifier import _count_contacts_on_side
 from rallycut.tracking.ball_tracker import BallPosition
-from rallycut.tracking.contact_detector import Contact, ContactSequence
+from rallycut.tracking.contact_detector import Contact, ContactSequence, ball_crossed_net
 from rallycut.tracking.player_tracker import PlayerPosition
 
 
@@ -67,7 +66,7 @@ class TestBallCrossedNet:
             _bp(10, 0.7), _bp(11, 0.65), _bp(12, 0.6),  # Near side
             _bp(13, 0.45), _bp(14, 0.4), _bp(15, 0.35),  # Far side
         ]
-        assert _ball_crossed_net(positions, from_frame=9, to_frame=16, net_y=0.5)
+        assert ball_crossed_net(positions, from_frame=9, to_frame=16, net_y=0.5)
 
     def test_clear_crossing_far_to_near(self) -> None:
         """Ball crossing from far (low Y) to near (high Y) is detected."""
@@ -75,7 +74,7 @@ class TestBallCrossedNet:
             _bp(10, 0.3), _bp(11, 0.35), _bp(12, 0.4),   # Far side
             _bp(13, 0.55), _bp(14, 0.6), _bp(15, 0.65),   # Near side
         ]
-        assert _ball_crossed_net(positions, from_frame=9, to_frame=16, net_y=0.5)
+        assert ball_crossed_net(positions, from_frame=9, to_frame=16, net_y=0.5)
 
     def test_no_crossing_same_side(self) -> None:
         """Ball staying on one side is not a crossing."""
@@ -83,12 +82,12 @@ class TestBallCrossedNet:
             _bp(10, 0.7), _bp(11, 0.72), _bp(12, 0.68),
             _bp(13, 0.71), _bp(14, 0.69),
         ]
-        assert not _ball_crossed_net(positions, from_frame=9, to_frame=15, net_y=0.5)
+        assert not ball_crossed_net(positions, from_frame=9, to_frame=15, net_y=0.5)
 
     def test_too_few_positions(self) -> None:
         """Returns None (insufficient data) with too few positions between contacts."""
         positions = [_bp(10, 0.7), _bp(11, 0.3)]
-        assert _ball_crossed_net(positions, from_frame=9, to_frame=12, net_y=0.5) is None
+        assert ball_crossed_net(positions, from_frame=9, to_frame=12, net_y=0.5) is None
 
     def test_noisy_single_frame_not_crossing(self) -> None:
         """Single-frame noise crossing net is not enough (needs min_frames_per_side)."""
@@ -97,7 +96,7 @@ class TestBallCrossedNet:
             _bp(12, 0.45),                  # Single far frame
             _bp(13, 0.55), _bp(14, 0.6),   # Back to near
         ]
-        assert not _ball_crossed_net(positions, from_frame=9, to_frame=15, net_y=0.5)
+        assert not ball_crossed_net(positions, from_frame=9, to_frame=15, net_y=0.5)
 
     def test_arc_over_net_near_to_far(self) -> None:
         """Ball arcs above net (low Y at apex) but starts near, ends far."""
@@ -106,7 +105,7 @@ class TestBallCrossedNet:
             _bp(14, 0.30), _bp(16, 0.20),   # Arc above net
             _bp(18, 0.25), _bp(20, 0.35),   # End: far side
         ]
-        assert _ball_crossed_net(positions, from_frame=9, to_frame=21, net_y=0.5) is True
+        assert ball_crossed_net(positions, from_frame=9, to_frame=21, net_y=0.5) is True
 
     def test_arc_over_net_far_to_near(self) -> None:
         """Ball arcs above net from far side to near side."""
@@ -115,7 +114,7 @@ class TestBallCrossedNet:
             _bp(14, 0.25), _bp(16, 0.20),   # Arc above net
             _bp(18, 0.55), _bp(20, 0.65),   # End: near side
         ]
-        assert _ball_crossed_net(positions, from_frame=9, to_frame=21, net_y=0.5) is True
+        assert ball_crossed_net(positions, from_frame=9, to_frame=21, net_y=0.5) is True
 
     def test_both_contacts_near_net_returns_none(self) -> None:
         """When start and end are both within dead zone of net, return None."""
@@ -123,7 +122,7 @@ class TestBallCrossedNet:
             _bp(10, 0.51), _bp(11, 0.52),   # Just barely near side
             _bp(12, 0.48), _bp(13, 0.47),   # Just barely far side
         ]
-        assert _ball_crossed_net(positions, from_frame=9, to_frame=14, net_y=0.5) is None
+        assert ball_crossed_net(positions, from_frame=9, to_frame=14, net_y=0.5) is None
 
 
 class TestCountContactsOnSide:
@@ -135,7 +134,7 @@ class TestCountContactsOnSide:
             _contact(frame=30, ball_y=0.3, court_side="far"),
             _contact(frame=55, ball_y=0.65, court_side="near"),
         ]
-        # Ball positions all on far side — _ball_crossed_net returns False
+        # Ball positions all on far side — ball_crossed_net returns False
         ball_positions = [
             _bp(35, 0.32), _bp(40, 0.30), _bp(45, 0.28), _bp(50, 0.26),
         ]
@@ -647,7 +646,7 @@ class TestTrajectoryPossession:
             _contact(frame=60, ball_y=0.35, court_side="far"),   # After reset
         ]
         # Ball stays on far side between contacts 45-60 (no crossing detected
-        # by _ball_crossed_net, but court_side changed — trust court_side)
+        # by ball_crossed_net, but court_side changed — trust court_side)
         ball_positions = [
             _bp(46, 0.28), _bp(47, 0.30), _bp(48, 0.33),
             _bp(49, 0.36), _bp(50, 0.38), _bp(51, 0.40),
@@ -679,7 +678,7 @@ class TestTrajectoryPossession:
             # 5th contact, court_side changes — safety valve should trigger
             _contact(frame=75, ball_y=0.7, court_side="near"),
         ]
-        # Ball stays on far side (no crossing detected by _ball_crossed_net)
+        # Ball stays on far side (no crossing detected by ball_crossed_net)
         ball_positions = [
             _bp(31, 0.32), _bp(32, 0.30), _bp(33, 0.28),
             _bp(41, 0.27), _bp(42, 0.30), _bp(43, 0.33),
@@ -996,7 +995,7 @@ class TestSyntheticServe:
         assert serve.frame == 20  # 50 - 30
 
     def test_phantom_serve_injects_synthetic_learned_path(self) -> None:
-        """classify_rally_learned also injects synthetic serve on phantom."""
+        """classify_rally with classifier also injects synthetic serve on phantom."""
         contacts = [
             _contact(frame=10, ball_y=0.4, velocity=0.010, court_side="far"),
             _contact(frame=40, ball_y=0.35, court_side="far"),
@@ -1017,7 +1016,7 @@ class TestSyntheticServe:
         mock_clf.predict.return_value = [("set", 0.8)]
 
         classifier = ActionClassifier()
-        result = classifier.classify_rally_learned(seq, mock_clf, rally_id="test")
+        result = classifier.classify_rally(seq, rally_id="test", classifier=mock_clf)
 
         # Synthetic serve prepended, first contact → receive
         assert result.actions[0].action_type == ActionType.SERVE

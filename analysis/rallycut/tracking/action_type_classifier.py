@@ -190,7 +190,7 @@ def _count_contacts_on_side(
     if index == 0:
         return 1
 
-    from rallycut.tracking.action_classifier import _ball_crossed_net
+    from rallycut.tracking.contact_detector import ball_crossed_net
 
     current = contacts[index]
     count = 1
@@ -211,7 +211,7 @@ def _count_contacts_on_side(
         # Priority 2: net crossing between contacts
         crossed: bool | None = None
         if ball_positions:
-            crossed = _ball_crossed_net(
+            crossed = ball_crossed_net(
                 ball_positions, prev.frame, current.frame, net_y,
             )
         if crossed is True:

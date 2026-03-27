@@ -23,13 +23,12 @@ from __future__ import annotations
 
 import logging
 import math
-import statistics
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from rallycut.tracking.contact_detector import Contact, ContactSequence
+from rallycut.tracking.contact_detector import Contact, ContactSequence, ball_crossed_net
 
 if TYPE_CHECKING:
     from rallycut.tracking.action_type_classifier import ActionTypeClassifier
@@ -196,66 +195,6 @@ class ActionClassifierConfig:
     high_confidence: float = 0.9  # Confidence when rules match perfectly
     medium_confidence: float = 0.7  # Confidence with some ambiguity
     low_confidence: float = 0.5  # Confidence when classification is uncertain
-
-
-def _ball_crossed_net(
-    ball_positions: list[BallPosition],
-    from_frame: int,
-    to_frame: int,
-    net_y: float,
-    min_frames_per_side: int = 2,
-) -> bool | None:
-    """Check if ball crossed net between two contacts using endpoint displacement.
-
-    Compares ball Y near the start (post-contact-A) and end (pre-contact-B) of
-    the inter-contact window.  The ball arcs above the net ~96% of the time, so
-    checking whether Y physically crosses net_y in intermediate frames fails.
-    Endpoint displacement detects that the ball departed from one side and
-    arrived on the other.
-
-    Args:
-        ball_positions: Sorted list of confident ball positions.
-        from_frame: Start of frame range (exclusive).
-        to_frame: End of frame range (exclusive).
-        net_y: Net Y position.
-        min_frames_per_side: Min frames on each side to confirm crossing.
-
-    Returns:
-        True if ball crossed net, False if confirmed no crossing,
-        None if insufficient data to determine.
-    """
-    positions_in_range = [
-        bp for bp in ball_positions
-        if from_frame < bp.frame_number < to_frame
-    ]
-    min_required = min_frames_per_side * 2
-    if len(positions_in_range) < min_required:
-        return None
-
-    # Median Y near the start and end of the window
-    n = min_frames_per_side
-    start_median_y = statistics.median(
-        bp.y for bp in positions_in_range[:n]
-    )
-    end_median_y = statistics.median(
-        bp.y for bp in positions_in_range[-n:]
-    )
-
-    # Dead-zone guard: both medians very close to net → ambiguous (e.g. block
-    # vs attack at the net). Return None so the caller falls through to
-    # court_side which uses team/calibration signals.
-    dead_zone = 0.03
-    if (abs(start_median_y - net_y) < dead_zone
-            and abs(end_median_y - net_y) < dead_zone):
-        return None
-
-    start_is_near = start_median_y >= net_y
-    end_is_near = end_median_y >= net_y
-
-    if start_is_near != end_is_near:
-        return True
-
-    return False
 
 
 def _ball_moving_toward_net(
@@ -708,7 +647,7 @@ class ActionClassifier:
 
             # Handle possession changes.  Detection priority:
             # 1. Team membership from match_team_assignments (most reliable)
-            # 2. _ball_crossed_net (endpoint displacement)
+            # 2. ball_crossed_net (endpoint displacement)
             # 3. court_side comparison (fallback)
             team_resolved = False
             if match_team_assignments and i > 0:
@@ -725,7 +664,7 @@ class ActionClassifier:
             if not team_resolved:
                 crossed_net: bool | None = None
                 if ball_positions and i > 0 and current_side is not None:
-                    crossed_net = _ball_crossed_net(
+                    crossed_net = ball_crossed_net(
                         ball_positions,
                         from_frame=contacts[i - 1].frame,
                         to_frame=contact.frame,
@@ -945,23 +884,6 @@ class ActionClassifier:
 
         return result
 
-    def classify_rally_learned(
-        self,
-        contact_sequence: ContactSequence,
-        classifier: ActionTypeClassifier,
-        rally_id: str = "",
-        team_assignments: dict[int, int] | None = None,
-    ) -> RallyActions:
-        """Classify contacts using the learned action type classifier.
-
-        Delegates to classify_rally with classifier parameter.
-        Kept for backward compatibility with tests and scripts.
-        """
-        return self.classify_rally(
-            contact_sequence, rally_id,
-            team_assignments=team_assignments,
-            classifier=classifier,
-        )
 
     def _find_serve_index(
         self,
@@ -1024,7 +946,7 @@ class ActionClassifier:
                     contacts[i + 1].frame if i + 1 < len(contacts)
                     else c.frame + window
                 )
-                if _ball_crossed_net(ball_positions, c.frame, next_frame, net_y) is True:
+                if ball_crossed_net(ball_positions, c.frame, next_frame, net_y) is True:
                     # Validate crossing direction: after a serve, the ball
                     # should start on the server's court side. If the ball
                     # immediately ends up on the opposite side, this contact
@@ -1150,7 +1072,7 @@ def repair_action_sequence(
     Only repairs non-block/non-unknown actions.
 
     Args:
-        actions: Classified actions from classify_rally or classify_rally_learned.
+        actions: Classified actions from classify_rally.
         net_y: Net Y position.
         ball_positions: Ball positions (unused currently, reserved for future).
         rally_start_frame: Rally start frame for synthetic serve placement.

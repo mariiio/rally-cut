@@ -23,11 +23,8 @@ from rich.console import Console
 sys.path.insert(0, "scripts")
 from eval_action_detection import load_rallies_with_action_gt, match_contacts
 
-from rallycut.tracking.action_classifier import (
-    _ball_crossed_net,
-    classify_rally_actions,
-)
-from rallycut.tracking.contact_detector import detect_contacts
+from rallycut.tracking.action_classifier import classify_rally_actions
+from rallycut.tracking.contact_detector import ball_crossed_net, detect_contacts
 
 console = Console()
 
@@ -89,7 +86,7 @@ def trace_classification(rally) -> list[dict]:
     for i, (contact, action) in enumerate(zip(contact_list, result.actions)):
         crossed_net = None
         if bp_list and i > 0:
-            crossed_net = _ball_crossed_net(
+            crossed_net = ball_crossed_net(
                 bp_list,
                 from_frame=contact_list[i - 1].frame,
                 to_frame=contact.frame,

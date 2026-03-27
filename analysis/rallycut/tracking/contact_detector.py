@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import math
+import statistics
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
@@ -1002,6 +1003,66 @@ def _compute_trajectory_curvature(
     return twice_area / denom
 
 
+def ball_crossed_net(
+    ball_positions: list[BallPosition],
+    from_frame: int,
+    to_frame: int,
+    net_y: float,
+    min_frames_per_side: int = 2,
+) -> bool | None:
+    """Check if ball crossed net between two contacts using endpoint displacement.
+
+    Compares ball Y near the start (post-contact-A) and end (pre-contact-B) of
+    the inter-contact window.  The ball arcs above the net ~96% of the time, so
+    checking whether Y physically crosses net_y in intermediate frames fails.
+    Endpoint displacement detects that the ball departed from one side and
+    arrived on the other.
+
+    Args:
+        ball_positions: Sorted list of confident ball positions.
+        from_frame: Start of frame range (exclusive).
+        to_frame: End of frame range (exclusive).
+        net_y: Net Y position.
+        min_frames_per_side: Min frames on each side to confirm crossing.
+
+    Returns:
+        True if ball crossed net, False if confirmed no crossing,
+        None if insufficient data to determine.
+    """
+    positions_in_range = [
+        bp for bp in ball_positions
+        if from_frame < bp.frame_number < to_frame
+    ]
+    min_required = min_frames_per_side * 2
+    if len(positions_in_range) < min_required:
+        return None
+
+    # Median Y near the start and end of the window
+    n = min_frames_per_side
+    start_median_y = statistics.median(
+        bp.y for bp in positions_in_range[:n]
+    )
+    end_median_y = statistics.median(
+        bp.y for bp in positions_in_range[-n:]
+    )
+
+    # Dead-zone guard: both medians very close to net → ambiguous (e.g. block
+    # vs attack at the net). Return None so the caller falls through to
+    # court_side which uses team/calibration signals.
+    dead_zone = 0.03
+    if (abs(start_median_y - net_y) < dead_zone
+            and abs(end_median_y - net_y) < dead_zone):
+        return None
+
+    start_is_near = start_median_y >= net_y
+    end_is_near = end_median_y >= net_y
+
+    if start_is_near != end_is_near:
+        return True
+
+    return False
+
+
 def _check_net_crossing(
     ball_by_frame: dict[int, BallPosition],
     frame: int,
@@ -1736,6 +1797,7 @@ def detect_contacts(
             margin = d2 - d1
             if margin < 0.05 and alt_tid != track_id:
                 track_id = alt_tid
+                player_dist = d2
 
         # Temporal attribution: override track_id using trajectory-based model.
         # Only applied when ≥2 candidates exist.
@@ -1773,6 +1835,11 @@ def detect_contacts(
                     and pred_tid >= 0
                 ):
                     track_id = pred_tid
+                    # Update distance to reflect the chosen player
+                    for cand_tid, cand_dist, _ in candidates:
+                        if cand_tid == pred_tid:
+                            player_dist = cand_dist
+                            break
 
         contacts.append(Contact(
             frame=frame,
