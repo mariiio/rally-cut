@@ -22,6 +22,9 @@ if TYPE_CHECKING:
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.contact_classifier import ContactClassifier
     from rallycut.tracking.player_tracker import PlayerPosition
+    from rallycut.tracking.temporal_attribution.inference import (
+        TemporalAttributionInference,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +35,38 @@ _CONFIDENCE_THRESHOLD = 0.3
 # Valid range for court_split_y / net_y.  Values outside this range indicate
 # extreme camera angles where bbox-clustering estimation breaks down.
 _VALID_NET_Y_RANGE = (0.30, 0.70)
+
+# Cached temporal attributor (loaded once from disk on first use)
+_temporal_attributor_cache: dict[str, TemporalAttributionInference | None] = {}
+
+
+def _get_temporal_attributor() -> TemporalAttributionInference | None:
+    """Load and cache the temporal attribution model from disk.
+
+    Returns None if no trained model exists at the default path.
+    """
+    if "default" not in _temporal_attributor_cache:
+        from pathlib import Path
+
+        from rallycut.tracking.temporal_attribution.inference import (
+            TemporalAttributionInference,
+        )
+
+        model_path = (
+            Path(__file__).parent.parent.parent
+            / "weights"
+            / "temporal_attribution"
+            / "best_temporal_attribution.pt"
+        )
+        if model_path.exists():
+            _temporal_attributor_cache["default"] = TemporalAttributionInference(
+                model_path
+            )
+            logger.info("Auto-loaded temporal attribution model from default path")
+        else:
+            _temporal_attributor_cache["default"] = None
+    return _temporal_attributor_cache["default"]
+
 
 # Cached default classifier (loaded once from disk on first use)
 _default_classifier_cache: dict[str, ContactClassifier | None] = {}
@@ -114,6 +149,10 @@ class ContactDetectionConfig:
     baseline_y_near: float = 0.82  # Near baseline Y threshold
     baseline_y_far: float = 0.18  # Far baseline Y threshold
     serve_window_frames: int = 60  # Serve must occur in first N frames (~2s)
+
+    # Temporal attribution: use trajectory-based model to override proximity attribution
+    use_temporal_attribution: bool = True
+    temporal_attribution_min_confidence: float = 0.6  # Min softmax confidence to accept
 
 
 @dataclass
@@ -1338,7 +1377,16 @@ def detect_contacts(
         classifier = _get_default_classifier()
     from scipy.signal import find_peaks
 
+    from rallycut.tracking.temporal_attribution.features import (
+        extract_attribution_window,
+    )
+
     cfg = config or ContactDetectionConfig()
+
+    # Auto-load temporal attribution model if enabled
+    temporal_attributor = (
+        _get_temporal_attributor() if cfg.use_temporal_attribution else None
+    )
 
     if not ball_positions:
         return ContactSequence()
@@ -1688,6 +1736,29 @@ def detect_contacts(
             margin = d2 - d1
             if margin < 0.05 and alt_tid != track_id:
                 track_id = alt_tid
+
+        # Temporal attribution: override track_id using trajectory convergence
+        # model when available. Only applied when ≥2 candidates exist.
+        if (
+            temporal_attributor is not None
+            and player_positions
+            and len(candidates) >= 2
+        ):
+            window_result = extract_attribution_window(
+                contact_frame=frame,
+                ball_positions=ball_positions,
+                player_positions=player_positions,
+            )
+            if window_result is not None:
+                window, canonical_tids = window_result
+                pred_tid, pred_conf = temporal_attributor.predict(
+                    window, canonical_tids
+                )
+                if (
+                    pred_conf >= cfg.temporal_attribution_min_confidence
+                    and pred_tid >= 0
+                ):
+                    track_id = pred_tid
 
         contacts.append(Contact(
             frame=frame,
