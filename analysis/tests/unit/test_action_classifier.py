@@ -664,9 +664,9 @@ class TestTrajectoryPossession:
         assert result.actions[1].action_type == ActionType.RECEIVE
         assert result.actions[2].action_type == ActionType.SET
         # Court side changed to "near" → counter reset → 1st touch = dig
-        # (repair_action_sequence may adjust consecutive digs to dig→set)
         assert result.actions[3].action_type == ActionType.DIG
-        assert result.actions[4].action_type == ActionType.SET
+        # Back to "far" → counter reset → 1st touch = dig
+        assert result.actions[4].action_type == ActionType.DIG
 
     def test_safety_valve_at_4_contacts(self) -> None:
         """After 4 contacts on same side with trajectory, force possession change."""
@@ -693,9 +693,9 @@ class TestTrajectoryPossession:
         result = classify_rally_actions(seq, use_classifier=False)
 
         # Safety valve triggers at 4th far contact (index 4 → DIG),
-        # so the next near contact (index 5) is the 2nd touch → SET
+        # next near contact (index 5) is 1st touch on near side → DIG
         assert result.actions[4].action_type == ActionType.DIG
-        assert result.actions[5].action_type == ActionType.SET
+        assert result.actions[5].action_type == ActionType.DIG
 
     def test_no_trajectory_falls_back_to_court_side(self) -> None:
         """Without ball_positions, court_side comparison still works for possession."""

@@ -371,7 +371,6 @@ def reattribute_actions_cmd(
     from rallycut.tracking.action_classifier import (
         _team_label,
         assign_court_side_from_teams,
-        correct_team_from_propagation,
         reattribute_players,
     )
 
@@ -502,10 +501,6 @@ def reattribute_actions_cmd(
                     start_ms=start_ms_val or 0, video_fps=video_fps,  # type: ignore[arg-type]
                 )
 
-        # Snapshot propagated court_side before team-based overwrite.
-        # Stored actions have propagation-based court_side from initial tracking.
-        propagated_sides = [a.court_side for a in actions]
-
         # Overwrite court_side from team assignments (stored actions have
         # propagation-based court_side which is less accurate).
         reattrib_ta = reattrib_teams.get(rally_id)
@@ -546,13 +541,6 @@ def reattribute_actions_cmd(
             reattribute_players(
                 actions, contacts, reattrib_ta,
                 reid_predictions=reid_predictions,
-            )
-
-            # Post-hoc team correction using propagated court_side
-            # Only targets actions where Pass 2 changed the player
-            actions = correct_team_from_propagation(
-                actions, contacts, propagated_sides, reattrib_ta,
-                pre_reattrib_tids=original_track_ids,
             )
             assign_court_side_from_teams(actions, reattrib_ta)
 

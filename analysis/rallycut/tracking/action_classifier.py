@@ -2236,13 +2236,10 @@ def classify_rally_actions(
     Pipeline:
     1. classify_rally() — initial action types + serve detection
        (uses match_team_assignments for team-aware touch counting when available)
-    2. propagate_court_side() — infer court_side from action-type transitions
-    3. repair_action_sequence() — fix illegal patterns using court_side
-    4. viterbi_decode_actions() — sequence-level smoothing
-    5. validate_action_sequence() — log constraint violations
-    6. assign_court_side_from_teams() — overwrite court_side from match teams
-       (more accurate than propagation for output + downstream consumers)
-    7. reattribute_players() — server exclusion + server-seeded team chain
+    2. viterbi_decode_actions() — sequence-level smoothing
+    3. validate_action_sequence() — log constraint violations
+    4. assign_court_side_from_teams() — overwrite court_side from match teams
+    5. reattribute_players() — server exclusion + server-seeded team chain
        for player re-attribution
 
     Args:
@@ -2289,63 +2286,17 @@ def classify_rally_actions(
         match_team_assignments=match_team_assignments,
     )
 
-    # Propagation infers court_side from action-type transitions (serve/attack
-    # cross net, receive/set/dig stay same side). This drives repair_action_sequence
-    # which fixes illegal patterns.
-    result.actions = propagate_court_side(result.actions)
-
-    # Extract server track_id for repair_action_sequence Rule 0.
-    # Only trust the ID from synthetic serves (phantom path uses
-    # position-based detection — known correct). Real serves that
-    # Rule 0 reclassifies may have the receiver's track_id (nearest
-    # player at the misclassified contact), not the actual server.
-    serve_tid = -1
-    for a in result.actions:
-        if a.action_type == ActionType.SERVE:
-            if a.is_synthetic:
-                serve_tid = a.player_track_id
-            break
-
-    result.actions = repair_action_sequence(
-        result.actions,
-        net_y=contact_sequence.net_y,
-        ball_positions=contact_sequence.ball_positions,
-        rally_start_frame=contact_sequence.rally_start_frame,
-        server_track_id=serve_tid,
-    )
     result.actions = viterbi_decode_actions(result.actions)
     result.actions = validate_action_sequence(result.actions, rally_id)
 
-    # Snapshot propagated court_side before team-based overwrite.
-    # Used by post-hoc team correction to bypass _compute_expected_teams() cascade.
-    propagated_sides = [a.court_side for a in result.actions]
-
-    # Overwrite court_side from team membership (73% accurate vs 61%
-    # from propagation). This improves court_side labels for output but
-    # doesn't affect reattribution — Pass 2 uses server-seeded expected
-    # teams from _compute_expected_teams() instead of court_side.
     if match_team_assignments:
         assign_court_side_from_teams(result.actions, match_team_assignments)
-
-    pre_reattrib_tids = [a.player_track_id for a in result.actions]
 
     result.actions = reattribute_players(
         result.actions, contact_sequence.contacts, reattrib_teams,
         max_distance_ratio=1.5,
         reid_predictions=reid_predictions,
     )
-
-    # Post-hoc team correction: use propagated court_side (bidirectional,
-    # confidence-gated) to fix cascade errors from _compute_expected_teams().
-    # Only targets actions where Pass 2 changed the player.
-    if match_team_assignments:
-        result.actions = correct_team_from_propagation(
-            result.actions, contact_sequence.contacts,
-            propagated_sides, match_team_assignments,
-            pre_reattrib_tids=pre_reattrib_tids,
-        )
-        # Re-apply court_side from (now-corrected) player's team
-        assign_court_side_from_teams(result.actions, match_team_assignments)
 
     # Visual attribution pass (overrides proximity-based attribution)
     if (visual_classifier is not None and visual_video_cap is not None
