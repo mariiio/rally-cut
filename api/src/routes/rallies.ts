@@ -10,7 +10,7 @@ import {
   listRallies,
   updateRally,
 } from "../services/rallyService.js";
-import { trackPlayersForRally, getPlayerTrack, swapPlayerTracks, getActionGroundTruth, saveActionGroundTruth } from "../services/playerTrackingService.js";
+import { trackPlayersForRally, getPlayerTrack, swapPlayerTracks, promoteRawTrack, getActionGroundTruth, saveActionGroundTruth } from "../services/playerTrackingService.js";
 import {
   exportToLabelStudio,
   importFromLabelStudio,
@@ -145,6 +145,33 @@ router.post(
         req.userId!,
         req.body.trackA,
         req.body.trackB,
+        req.body.fromFrame,
+      );
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.post(
+  "/v1/rallies/:id/player-track/promote",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: z.object({
+      demoteTrackId: z.number().int(),
+      promoteTrackId: z.number().int(),
+      fromFrame: z.number().int().min(0),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const result = await promoteRawTrack(
+        req.params.id,
+        req.userId!,
+        req.body.demoteTrackId,
+        req.body.promoteTrackId,
         req.body.fromFrame,
       );
       res.json(result);

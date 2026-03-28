@@ -111,6 +111,8 @@ export interface TrackPlayersResult {
   primaryTrackIds?: number[];
   // Positions included for immediate display
   positions?: PlayerPosition[];
+  // Raw (non-primary) positions for overlay & promote-to-primary
+  rawPositions?: PlayerPosition[];
   // Ball positions for trajectory overlay
   ballPositions?: BallPosition[];
   // Contact detection and action classification
@@ -130,6 +132,7 @@ export interface GetPlayerTrackResult {
   courtSplitY?: number;
   primaryTrackIds?: number[];
   positions?: PlayerPosition[];
+  rawPositions?: PlayerPosition[];
   ballPositions?: BallPosition[];
   contacts?: ContactsData;
   actions?: ActionsData;
@@ -141,6 +144,13 @@ export interface GetPlayerTrackResult {
  * Convert a Prisma PlayerTrack record to the API response shape.
  */
 function playerTrackToResult(track: PlayerTrack, extra?: { processingTimeMs?: number }): TrackPlayersResult {
+  // Filter raw positions to only non-primary tracks
+  const rawAll = track.rawPositionsJson as PlayerPosition[] | null;
+  const primarySet = new Set((track.primaryTrackIds as number[] | null) ?? []);
+  const rawNonPrimary = rawAll && primarySet.size > 0
+    ? rawAll.filter(p => !primarySet.has(p.trackId))
+    : undefined;
+
   return {
     status: 'completed',
     frameCount: track.frameCount ?? undefined,
@@ -153,6 +163,7 @@ function playerTrackToResult(track: PlayerTrack, extra?: { processingTimeMs?: nu
     courtSplitY: track.courtSplitY ?? undefined,
     primaryTrackIds: (track.primaryTrackIds as number[] | null) ?? undefined,
     positions: (track.positionsJson as PlayerPosition[] | null) ?? undefined,
+    rawPositions: rawNonPrimary && rawNonPrimary.length > 0 ? rawNonPrimary : undefined,
     ballPositions: (track.ballPositionsJson as BallPosition[] | null) ?? undefined,
     contacts: (track.contactsJson as ContactsData | null) ?? undefined,
     actions: (track.actionsJson as ActionsData | null) ?? undefined,
@@ -736,6 +747,7 @@ export async function trackRallyFromLocalVideo(
 
     console.log(`[BATCH_TRACK] Rally ${rallyId} completed in ${processingTimeMs}ms`);
 
+    const batchPrimarySet = new Set(trackerResult.primaryTrackIds ?? []);
     return {
       status: 'completed',
       frameCount: trackerResult.frameCount,
@@ -748,6 +760,7 @@ export async function trackRallyFromLocalVideo(
       courtSplitY: trackerResult.courtSplitY,
       primaryTrackIds: trackerResult.primaryTrackIds,
       positions: trackerResult.positions,
+      rawPositions: trackerResult.rawPositions?.filter(p => !batchPrimarySet.has(p.trackId)),
       ballPositions: trackerResult.ballPositions,
       contacts: trackerResult.contacts,
       actions: trackerResult.actions,
@@ -903,6 +916,98 @@ export async function swapPlayerTracks(
   console.log(`[PLAYER_TRACK] Swapped tracks ${trackA} ↔ ${trackB} from frame ${fromFrame}: ${swappedCount} positions updated`);
 
   return { swappedCount };
+}
+
+/**
+ * Promote a raw (non-primary) track to primary, demoting an existing primary track.
+ * For frames >= fromFrame: removes the demoted track from positionsJson and adds
+ * the promoted track's positions from rawPositionsJson.
+ * Updates primaryTrackIds accordingly. rawPositionsJson is never modified.
+ */
+export async function promoteRawTrack(
+  rallyId: string,
+  userId: string,
+  demoteTrackId: number,
+  promoteTrackId: number,
+  fromFrame: number,
+): Promise<{ promotedCount: number; primaryTrackIds: number[] }> {
+  if (demoteTrackId === promoteTrackId) {
+    throw new ValidationError('demoteTrackId and promoteTrackId must be different');
+  }
+
+  const rally = await prisma.rally.findUnique({
+    where: { id: rallyId },
+    include: {
+      video: true,
+      playerTrack: true,
+    },
+  });
+
+  if (!rally) {
+    throw new NotFoundError('Rally', rallyId);
+  }
+
+  if (rally.video.userId !== userId) {
+    throw new ForbiddenError('You do not have permission to modify player tracking for this rally');
+  }
+
+  if (!rally.playerTrack || rally.playerTrack.status !== 'COMPLETED') {
+    throw new ValidationError('No completed player tracking data found for this rally');
+  }
+
+  const positions = rally.playerTrack.positionsJson as PlayerPosition[] | null;
+  const rawPositions = rally.playerTrack.rawPositionsJson as PlayerPosition[] | null;
+  const primaryTrackIds = (rally.playerTrack.primaryTrackIds as number[] | null) ?? [];
+
+  if (!positions || positions.length === 0) {
+    throw new ValidationError('No player positions found in tracking data');
+  }
+
+  if (!rawPositions || rawPositions.length === 0) {
+    throw new ValidationError('No raw positions available for this rally');
+  }
+
+  if (!primaryTrackIds.includes(demoteTrackId)) {
+    throw new ValidationError(`Track ${demoteTrackId} is not a primary track`);
+  }
+
+  if (primaryTrackIds.includes(promoteTrackId)) {
+    throw new ValidationError(`Track ${promoteTrackId} is already a primary track`);
+  }
+
+  const rawPromoted = rawPositions.filter(p => p.trackId === promoteTrackId);
+  if (rawPromoted.length === 0) {
+    throw new ValidationError(`Track ${promoteTrackId} not found in raw positions`);
+  }
+
+  // Remove demoted track positions from fromFrame onward
+  const updatedPositions = positions.filter(
+    p => !(p.trackId === demoteTrackId && p.frameNumber >= fromFrame)
+  );
+
+  // Add promoted track positions from fromFrame onward
+  const promotedPositions = rawPromoted.filter(p => p.frameNumber >= fromFrame);
+  updatedPositions.push(...promotedPositions);
+
+  // Keep positions sorted by frame for consistent downstream consumption
+  updatedPositions.sort((a, b) => a.frameNumber - b.frameNumber);
+
+  // Update primaryTrackIds: replace demoted with promoted
+  const updatedPrimaryTrackIds = primaryTrackIds.map(
+    id => id === demoteTrackId ? promoteTrackId : id
+  );
+
+  await prisma.playerTrack.update({
+    where: { rallyId },
+    data: {
+      positionsJson: updatedPositions as unknown as object[],
+      primaryTrackIds: updatedPrimaryTrackIds,
+    },
+  });
+
+  console.log(`[PLAYER_TRACK] Promoted raw track ${promoteTrackId} replacing primary ${demoteTrackId} from frame ${fromFrame}: ${promotedPositions.length} positions added`);
+
+  return { promotedCount: promotedPositions.length, primaryTrackIds: updatedPrimaryTrackIds };
 }
 
 // Action ground truth label format
@@ -1085,6 +1190,7 @@ export async function trackPlayersForRally(
       }
     }
 
+    const primarySet = new Set(trackerResult.primaryTrackIds ?? []);
     return {
       status: 'completed',
       frameCount: trackerResult.frameCount,
@@ -1097,6 +1203,7 @@ export async function trackPlayersForRally(
       courtSplitY: trackerResult.courtSplitY,
       primaryTrackIds: trackerResult.primaryTrackIds,
       positions: trackerResult.positions,
+      rawPositions: trackerResult.rawPositions?.filter(p => !primarySet.has(p.trackId)),
       ballPositions: trackerResult.ballPositions,
       contacts: trackerResult.contacts,
       actions: trackerResult.actions,

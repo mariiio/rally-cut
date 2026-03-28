@@ -32,8 +32,20 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
-// Maximum tracks we'll render
-const MAX_TRACKS = 8;
+// Muted but distinct colors for raw (non-primary) tracks
+const RAW_TRACK_COLORS = [
+  '#CE93D8', // Light purple
+  '#F48FB1', // Light pink
+  '#80CBC4', // Light teal
+  '#FFCC80', // Light orange
+  '#A5D6A7', // Light green
+  '#90CAF9', // Light blue
+  '#EF9A9A', // Light red
+  '#B0BEC5', // Blue-gray
+];
+
+// Maximum tracks we'll render (primary + raw)
+const MAX_TRACKS = 16;
 
 export function PlayerOverlay({
   rallyId,
@@ -49,7 +61,7 @@ export function PlayerOverlay({
   const dimensionsRef = useRef({ width: 0, height: 0, offsetX: 0, offsetY: 0 });
 
   // Get track data from store
-  const { playerTracks, showPlayerOverlay, selectedTrackId } = usePlayerTrackingStore();
+  const { playerTracks, showPlayerOverlay, showRawTracks, selectedTrackId } = usePlayerTrackingStore();
   const track = playerTracks[rallyId];
   const fps = track?.tracksJson?.fps ?? propFps;
 
@@ -66,6 +78,32 @@ export function PlayerOverlay({
     }
     return positions;
   }, [track]);
+
+  // Build raw track positions (non-primary tracks)
+  const rawTrackPositions = useMemo(() => {
+    if (!showRawTracks || !track?.tracksJson?.rawTracks) {
+      return new Map<number, PlayerPosition[]>();
+    }
+
+    const positions = new Map<number, PlayerPosition[]>();
+    for (const rawTrack of track.tracksJson.rawTracks) {
+      const sortedPositions = [...rawTrack.positions].sort((a, b) => a.frame - b.frame);
+      positions.set(rawTrack.trackId, sortedPositions);
+    }
+    return positions;
+  }, [track, showRawTracks]);
+
+  // Set of raw track IDs for distinguishing in render loop
+  const rawTrackIds = useMemo(() => new Set(rawTrackPositions.keys()), [rawTrackPositions]);
+
+  // Combined map for render loop (primary + raw)
+  const allTrackPositions = useMemo(() => {
+    const combined = new Map(trackPositions);
+    for (const [id, positions] of rawTrackPositions) {
+      combined.set(id, positions);
+    }
+    return combined;
+  }, [trackPositions, rawTrackPositions]);
 
   // Get interpolated position for a track at a given frame
   const getInterpolatedPosition = useCallback((positions: PlayerPosition[], currentFrame: number) => {
@@ -140,7 +178,7 @@ export function PlayerOverlay({
     const overlay = overlayRef.current;
     if (!overlay) return;
 
-    const currentTrackIds = new Set(trackPositions.keys());
+    const currentTrackIds = new Set(allTrackPositions.keys());
     const existingElements = trackElementsRef.current;
 
     // Remove elements for tracks that no longer exist
@@ -156,33 +194,63 @@ export function PlayerOverlay({
     for (const trackId of currentTrackIds) {
       if (trackIndex >= MAX_TRACKS) break;
 
+      const isRaw = rawTrackIds.has(trackId);
       const team = teamAssignments?.[String(trackId)];
-      const color = team ? (TEAM_COLORS[team] ?? TRACK_COLORS[(trackId - 1) % TRACK_COLORS.length]) : TRACK_COLORS[(trackId - 1) % TRACK_COLORS.length];
-      const playerNum = labelingPlayerNumbers?.get(trackId);
-      const labelText = playerNum != null
-        ? String(playerNum)
-        : team ? `Track ${trackId} (${team})` : `Track ${trackId}`;
+      const color = isRaw
+        ? RAW_TRACK_COLORS[trackId % RAW_TRACK_COLORS.length]
+        : team ? (TEAM_COLORS[team] ?? TRACK_COLORS[(trackId - 1) % TRACK_COLORS.length]) : TRACK_COLORS[(trackId - 1) % TRACK_COLORS.length];
+      const playerNum = !isRaw ? labelingPlayerNumbers?.get(trackId) : undefined;
+      const labelText = isRaw
+        ? `Raw #${trackId}`
+        : playerNum != null
+          ? String(playerNum)
+          : team ? `Track ${trackId} (${team})` : `Track ${trackId}`;
 
       if (!existingElements.has(trackId)) {
         const trackEl = document.createElement('div');
-        trackEl.className = 'player-track';
+        trackEl.className = isRaw ? 'player-track raw-track' : 'player-track';
         trackEl.dataset.trackId = String(trackId);
-        trackEl.style.cssText = `
-          position: absolute;
-          left: 0;
-          top: 0;
-          border: 2px solid ${color};
-          border-radius: 4px;
-          pointer-events: none;
-          will-change: transform, width, height;
-          display: none;
-        `;
+        trackEl.style.cssText = isRaw
+          ? `
+            position: absolute;
+            left: 0;
+            top: 0;
+            border: 2px dashed ${color};
+            border-radius: 4px;
+            pointer-events: none;
+            will-change: transform, width, height;
+            display: none;
+            opacity: 0.65;
+          `
+          : `
+            position: absolute;
+            left: 0;
+            top: 0;
+            border: 2px solid ${color};
+            border-radius: 4px;
+            pointer-events: none;
+            will-change: transform, width, height;
+            display: none;
+          `;
 
         // Track label
         const label = document.createElement('div');
         label.className = 'track-label';
         label.textContent = labelText;
-        if (playerNum != null) {
+        if (isRaw) {
+          label.style.cssText = `
+            position: absolute;
+            bottom: -20px;
+            left: 0;
+            background-color: rgba(0,0,0,0.7);
+            color: ${color};
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+            white-space: nowrap;
+          `;
+        } else if (playerNum != null) {
           label.style.cssText = `
             position: absolute;
             top: -30px;
@@ -216,22 +284,24 @@ export function PlayerOverlay({
         }
         trackEl.appendChild(label);
 
-        // Court position label
-        const courtLabel = document.createElement('div');
-        courtLabel.className = 'court-label';
-        courtLabel.style.cssText = `
-          position: absolute;
-          bottom: -18px;
-          left: 0;
-          background-color: rgba(0,0,0,0.7);
-          color: white;
-          padding: 1px 4px;
-          border-radius: 2px;
-          font-size: 9px;
-          font-family: monospace;
-          display: none;
-        `;
-        trackEl.appendChild(courtLabel);
+        // Court position label (primary tracks only)
+        if (!isRaw) {
+          const courtLabel = document.createElement('div');
+          courtLabel.className = 'court-label';
+          courtLabel.style.cssText = `
+            position: absolute;
+            bottom: -18px;
+            left: 0;
+            background-color: rgba(0,0,0,0.7);
+            color: white;
+            padding: 1px 4px;
+            border-radius: 2px;
+            font-size: 9px;
+            font-family: monospace;
+            display: none;
+          `;
+          trackEl.appendChild(courtLabel);
+        }
 
         overlay.appendChild(trackEl);
         existingElements.set(trackId, trackEl);
@@ -239,10 +309,25 @@ export function PlayerOverlay({
         // Update existing element colors/label when teamAssignments or labeling mode change
         const trackEl = existingElements.get(trackId)!;
         trackEl.style.borderColor = color;
+        trackEl.style.borderStyle = isRaw ? 'dashed' : 'solid';
+        trackEl.style.opacity = isRaw ? '0.65' : '1';
         const label = trackEl.querySelector('.track-label') as HTMLDivElement;
         if (label) {
           label.textContent = labelText;
-          if (playerNum != null) {
+          if (isRaw) {
+            label.style.cssText = `
+              position: absolute;
+              bottom: -20px;
+              left: 0;
+              background-color: rgba(0,0,0,0.7);
+              color: ${color};
+              padding: 1px 5px;
+              border-radius: 3px;
+              font-size: 10px;
+              font-weight: 600;
+              white-space: nowrap;
+            `;
+          } else if (playerNum != null) {
             label.style.cssText = `
               position: absolute;
               top: -30px;
@@ -278,7 +363,7 @@ export function PlayerOverlay({
       }
       trackIndex++;
     }
-  }, [trackPositions, teamAssignments, labelingPlayerNumbers]);
+  }, [allTrackPositions, rawTrackIds, teamAssignments, labelingPlayerNumbers]);
 
   // Update dimensions on resize
   useEffect(() => {
@@ -343,7 +428,7 @@ export function PlayerOverlay({
 
       const currentFrame = (videoTime - rallyStartTime) * fps;
 
-      for (const [trackId, positions] of trackPositions) {
+      for (const [trackId, positions] of allTrackPositions) {
         const element = trackElementsRef.current.get(trackId);
         if (!element) continue;
 
@@ -365,19 +450,22 @@ export function PlayerOverlay({
         element.style.height = `${boxHeight}px`;
 
         // Update selection styling (read color from element to avoid recomputing per-frame)
+        const isRaw = rawTrackIds.has(trackId);
         const isSelected = selectedTrackId === trackId;
         element.style.boxShadow = isSelected
           ? `0 0 0 2px white, 0 0 10px ${element.style.borderColor}`
-          : '0 2px 4px rgba(0,0,0,0.3)';
+          : isRaw ? 'none' : '0 2px 4px rgba(0,0,0,0.3)';
 
-        // Update court label
-        const courtLabel = element.querySelector('.court-label') as HTMLDivElement;
-        if (courtLabel) {
-          if (pos.courtX !== undefined && pos.courtY !== undefined) {
-            courtLabel.style.display = 'block';
-            courtLabel.textContent = `${pos.courtX.toFixed(1)}m, ${pos.courtY.toFixed(1)}m`;
-          } else {
-            courtLabel.style.display = 'none';
+        // Update court label (primary tracks only)
+        if (!isRaw) {
+          const courtLabel = element.querySelector('.court-label') as HTMLDivElement;
+          if (courtLabel) {
+            if (pos.courtX !== undefined && pos.courtY !== undefined) {
+              courtLabel.style.display = 'block';
+              courtLabel.textContent = `${pos.courtX.toFixed(1)}m, ${pos.courtY.toFixed(1)}m`;
+            } else {
+              courtLabel.style.display = 'none';
+            }
           }
         }
       }
@@ -395,7 +483,7 @@ export function PlayerOverlay({
     return () => {
       video.cancelVideoFrameCallback(rvfcId);
     };
-  }, [videoRef, rallyStartTime, fps, trackPositions, showPlayerOverlay, selectedTrackId, getInterpolatedPosition]);
+  }, [videoRef, rallyStartTime, fps, allTrackPositions, rawTrackIds, showPlayerOverlay, selectedTrackId, getInterpolatedPosition]);
 
   if (!track?.tracksJson) {
     return null;

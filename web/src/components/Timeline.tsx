@@ -449,6 +449,20 @@ export function Timeline() {
           }
           break;
 
+        case 'Comma':
+          // Step back one frame
+          e.preventDefault();
+          seek(Math.max(0, currentTime - 1 / fps));
+          autoPausedAtEndRef.current = null;
+          break;
+
+        case 'Period':
+          // Step forward one frame
+          e.preventDefault();
+          seek(Math.min(duration, currentTime + 1 / fps));
+          autoPausedAtEndRef.current = null;
+          break;
+
         case 'Delete':
         case 'Backspace':
           // Priority 1: Delete keyframe in camera edit mode (single press)
@@ -562,7 +576,7 @@ export function Timeline() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, play, pause, seek, currentTime, duration, selectedRallyId, deleteConfirmId, removeRally, selectRally, isInsideSelectedRally, getSelectedRally, goToPrevRally, goToNextRally, adjustRallyStart, adjustRallyEnd, videoMetadata, rallies, createRallyAtTime, handleToggleHighlight, isLocked, isInCameraEditMode, selectedKeyframeId, removeKeyframe, selectKeyframe, isRecordingRally, startRallyRecording, stopRallyRecording, cancelRallyRecording, cyclePlaybackRate, toggleFullscreen, handleZoomIn, handleZoomOut, handleZoomReset]);
+  }, [isPlaying, play, pause, seek, currentTime, duration, fps, selectedRallyId, deleteConfirmId, removeRally, selectRally, isInsideSelectedRally, getSelectedRally, goToPrevRally, goToNextRally, adjustRallyStart, adjustRallyEnd, videoMetadata, rallies, createRallyAtTime, handleToggleHighlight, isLocked, isInCameraEditMode, selectedKeyframeId, removeKeyframe, selectKeyframe, isRecordingRally, startRallyRecording, stopRallyRecording, cancelRallyRecording, cyclePlaybackRate, toggleFullscreen, handleZoomIn, handleZoomOut, handleZoomReset]);
 
   // Jump to previous/next rally
   const jumpToPrevRally = useCallback(() => {

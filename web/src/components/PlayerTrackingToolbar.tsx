@@ -16,6 +16,7 @@ import LabelIcon from '@mui/icons-material/Label';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import PeopleIcon from '@mui/icons-material/People';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
+import LayersIcon from '@mui/icons-material/Layers';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
@@ -55,6 +56,10 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
   const [swapTrackB, setSwapTrackB] = useState<number | ''>('');
   const [swapFromCurrent, setSwapFromCurrent] = useState(true);
   const [isSwapping, setIsSwapping] = useState(false);
+  const [swapMode, setSwapMode] = useState<'swap' | 'promote'>('swap');
+  const [demoteTrackId, setDemoteTrackId] = useState<number | ''>('');
+  const [promoteTrackId, setPromoteTrackId] = useState<number | ''>('');
+
   const [toolsMenuAnchor, setToolsMenuAnchor] = useState<null | HTMLElement>(null);
 
   const activeMatchId = useEditorStore((state) => state.activeMatchId);
@@ -77,7 +82,10 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
     toggleBallOverlay,
     showCourtDebugOverlay,
     toggleCourtDebugOverlay,
+    showRawTracks,
+    toggleRawTracks,
     swapTracks,
+    promoteTracks,
     isLabelingActions,
     setIsLabelingActions,
     actionGroundTruth,
@@ -195,6 +203,23 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
     return bestFrame;
   }, [gtLabels, currentTime, selectedRally, trackData]);
 
+  // Compute frame ranges for raw tracks (for display hints in dropdown)
+  const rawTrackFrameRanges = useMemo(() => {
+    if (!trackData?.rawTracks) return new Map<number, { first: number; last: number; count: number }>();
+    const ranges = new Map<number, { first: number; last: number; count: number }>();
+    for (const rt of trackData.rawTracks) {
+      if (rt.positions.length > 0) {
+        const sorted = [...rt.positions].sort((a, b) => a.frame - b.frame);
+        ranges.set(rt.trackId, {
+          first: sorted[0].frame,
+          last: sorted[sorted.length - 1].frame,
+          count: sorted.length,
+        });
+      }
+    }
+    return ranges;
+  }, [trackData?.rawTracks]);
+
   // Don't show if no video loaded
   if (!activeMatchId) {
     return null;
@@ -294,16 +319,23 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
 
   // Available track IDs for swap dialog
   const availableTrackIds = trackData?.tracks?.map(t => t.trackId) ?? [];
+  const availableRawTrackIds = trackData?.rawTracks?.map(t => t.trackId) ?? [];
+  const hasRawTracks = availableRawTrackIds.length > 0;
 
   const handleOpenSwapDialog = () => {
     setSwapTrackA('');
     setSwapTrackB('');
+    setDemoteTrackId('');
+    setPromoteTrackId('');
     setSwapFromCurrent(true);
+    setSwapMode('swap');
     setShowSwapDialog(true);
   };
 
   const handleSwapSubmit = async () => {
-    if (!backendRallyId || swapTrackA === '' || swapTrackB === '' || swapTrackA === swapTrackB) return;
+    if (!backendRallyId) return;
+    if (swapMode === 'promote' && (demoteTrackId === '' || promoteTrackId === '')) return;
+    if (swapMode === 'swap' && (swapTrackA === '' || swapTrackB === '' || swapTrackA === swapTrackB)) return;
 
     const rallyStart = selectedRally?.start_time ?? 0;
     const fromFrame = swapFromCurrent
@@ -312,16 +344,19 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
 
     setIsSwapping(true);
     try {
-      await swapTracks(backendRallyId, swapTrackA, swapTrackB, fromFrame, fps);
+      if (swapMode === 'promote') {
+        await promoteTracks(backendRallyId, demoteTrackId as number, promoteTrackId as number, fromFrame, fps);
+      } else {
+        await swapTracks(backendRallyId, swapTrackA as number, swapTrackB as number, fromFrame, fps);
+      }
       setShowSwapDialog(false);
     } catch (error) {
-      console.error('Failed to swap tracks:', error);
-      alert(error instanceof Error ? error.message : 'Failed to swap tracks');
+      console.error('Failed to swap/promote tracks:', error);
+      alert(error instanceof Error ? error.message : 'Failed to swap/promote tracks');
     } finally {
       setIsSwapping(false);
     }
   };
-
 
   const hasBallPositions = !!trackData?.ballPositions?.length;
 
@@ -449,6 +484,22 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
                 <PersonSearchIcon sx={{ fontSize: 16 }} />
                 Players
               </ToggleButton>
+              {hasRawTracks && showPlayerOverlay && (
+                <Tooltip title="Show all detected tracks (including non-primary)">
+                  <ToggleButton
+                    value="raw"
+                    selected={showRawTracks}
+                    onClick={toggleRawTracks}
+                    sx={{
+                      px: 0.75, textTransform: 'none', fontSize: '0.7rem', gap: 0.5,
+                      '&.Mui-selected': { color: '#B39DDB', bgcolor: 'rgba(179,157,219,0.12)' },
+                    }}
+                  >
+                    <LayersIcon sx={{ fontSize: 16 }} />
+                    All
+                  </ToggleButton>
+                </Tooltip>
+              )}
               {hasBallPositions && (
                 <ToggleButton
                   value="ball"
@@ -752,39 +803,101 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
       <Dialog open={showSwapDialog} onClose={() => !isSwapping && setShowSwapDialog(false)}>
         <DialogTitle>Swap Player Tracks</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" sx={{ mb: 2 }}>
-            Swap track IDs between two players to fix ID switches.
-          </Typography>
-          <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
-            <FormControl fullWidth size="small">
-              <InputLabel>Track A</InputLabel>
-              <Select
-                value={swapTrackA}
-                label="Track A"
-                onChange={(e) => setSwapTrackA(e.target.value as number)}
-              >
-                {availableTrackIds.map((id) => (
-                  <MenuItem key={id} value={id} disabled={id === swapTrackB}>
-                    Player #{id}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <FormControl fullWidth size="small">
-              <InputLabel>Track B</InputLabel>
-              <Select
-                value={swapTrackB}
-                label="Track B"
-                onChange={(e) => setSwapTrackB(e.target.value as number)}
-              >
-                {availableTrackIds.map((id) => (
-                  <MenuItem key={id} value={id} disabled={id === swapTrackA}>
-                    Player #{id}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          </Box>
+          {hasRawTracks && (
+            <ToggleButtonGroup
+              value={swapMode}
+              exclusive
+              onChange={(_, v) => v && setSwapMode(v)}
+              size="small"
+              sx={{ mb: 2 }}
+            >
+              <ToggleButton value="swap" sx={{ textTransform: 'none', fontSize: '0.75rem' }}>
+                Swap Primary
+              </ToggleButton>
+              <ToggleButton value="promote" sx={{ textTransform: 'none', fontSize: '0.75rem' }}>
+                Replace with Raw
+              </ToggleButton>
+            </ToggleButtonGroup>
+          )}
+
+          {swapMode === 'swap' ? (
+            <>
+              <Typography variant="body2" sx={{ mb: 2 }}>
+                Swap track IDs between two players to fix ID switches.
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Track A</InputLabel>
+                  <Select
+                    value={swapTrackA}
+                    label="Track A"
+                    onChange={(e) => setSwapTrackA(e.target.value as number)}
+                  >
+                    {availableTrackIds.map((id) => (
+                      <MenuItem key={id} value={id} disabled={id === swapTrackB}>
+                        Player #{id}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Track B</InputLabel>
+                  <Select
+                    value={swapTrackB}
+                    label="Track B"
+                    onChange={(e) => setSwapTrackB(e.target.value as number)}
+                  >
+                    {availableTrackIds.map((id) => (
+                      <MenuItem key={id} value={id} disabled={id === swapTrackA}>
+                        Player #{id}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Box>
+            </>
+          ) : (
+            <>
+              <Typography variant="body2" sx={{ mb: 2 }}>
+                Replace a primary track with a raw (non-primary) track.
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Primary to replace</InputLabel>
+                  <Select
+                    value={demoteTrackId}
+                    label="Primary to replace"
+                    onChange={(e) => setDemoteTrackId(e.target.value as number)}
+                  >
+                    {availableTrackIds.map((id) => (
+                      <MenuItem key={id} value={id}>
+                        Player #{id}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Raw track to promote</InputLabel>
+                  <Select
+                    value={promoteTrackId}
+                    label="Raw track to promote"
+                    onChange={(e) => setPromoteTrackId(e.target.value as number)}
+                  >
+                    {availableRawTrackIds.map((id) => {
+                      const range = rawTrackFrameRanges.get(id);
+                      const hint = range ? ` (frames ${range.first}-${range.last})` : '';
+                      return (
+                        <MenuItem key={id} value={id}>
+                          Raw #{id}{hint}
+                        </MenuItem>
+                      );
+                    })}
+                  </Select>
+                </FormControl>
+              </Box>
+            </>
+          )}
+
           <FormControlLabel
             control={
               <Checkbox
@@ -796,7 +909,7 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
           />
           {!swapFromCurrent && (
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 4 }}>
-              Swaps for entire rally
+              {swapMode === 'swap' ? 'Swaps for entire rally' : 'Replaces for entire rally'}
             </Typography>
           )}
         </DialogContent>
@@ -805,10 +918,14 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
           <Button
             onClick={handleSwapSubmit}
             variant="contained"
-            disabled={swapTrackA === '' || swapTrackB === '' || swapTrackA === swapTrackB || isSwapping}
+            disabled={
+              isSwapping || (swapMode === 'swap'
+                ? (swapTrackA === '' || swapTrackB === '' || swapTrackA === swapTrackB)
+                : (demoteTrackId === '' || promoteTrackId === ''))
+            }
             startIcon={isSwapping ? <CircularProgress size={16} /> : undefined}
           >
-            {isSwapping ? 'Swapping...' : 'Swap'}
+            {isSwapping ? (swapMode === 'swap' ? 'Swapping...' : 'Promoting...') : (swapMode === 'swap' ? 'Swap' : 'Replace')}
           </Button>
         </DialogActions>
       </Dialog>

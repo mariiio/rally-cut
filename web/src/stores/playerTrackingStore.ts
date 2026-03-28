@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { trackPlayers, getPlayerTrack, swapPlayerTracks, saveCourtCalibration, deleteCourtCalibration, getActionGroundTruth, saveActionGroundTruth as apiSaveActionGroundTruth, trackAllRallies as apiTrackAllRallies, getBatchTrackingStatus as apiGetBatchTrackingStatus, getPlayerReferenceCrops, uploadPlayerReferenceCrop, deletePlayerReferenceCrop, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData, type ActionGroundTruthLabel, type QualityReport, type BatchTrackingStatus, type PlayerReferenceCrop } from '@/services/api';
+import { trackPlayers, getPlayerTrack, swapPlayerTracks, promoteRawTrack, saveCourtCalibration, deleteCourtCalibration, getActionGroundTruth, saveActionGroundTruth as apiSaveActionGroundTruth, trackAllRallies as apiTrackAllRallies, getBatchTrackingStatus as apiGetBatchTrackingStatus, getPlayerReferenceCrops, uploadPlayerReferenceCrop, deletePlayerReferenceCrop, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData, type ActionGroundTruthLabel, type QualityReport, type BatchTrackingStatus, type PlayerReferenceCrop } from '@/services/api';
 
 // Types for player tracking data (store format)
 export interface PlayerPosition {
@@ -23,6 +23,8 @@ export interface TracksJson {
   fps: number;
   frameCount: number;
   tracks: PlayerTrackData[];
+  // Raw (non-primary) tracks for overlay & promote-to-primary
+  rawTracks?: PlayerTrackData[];
   // Ball positions for trajectory overlay
   ballPositions?: BallPosition[];
   // Contact detection and action classification
@@ -66,6 +68,7 @@ interface PlayerTrackingState {
   showPlayerOverlay: boolean;
   showBallOverlay: boolean;
   showCourtDebugOverlay: boolean;
+  showRawTracks: boolean;
 
   // Selected track for highlighting
   selectedTrackId: number | null;
@@ -92,6 +95,7 @@ interface PlayerTrackingState {
   togglePlayerOverlay: () => void;
   toggleBallOverlay: () => void;
   toggleCourtDebugOverlay: () => void;
+  toggleRawTracks: () => void;
   setSelectedTrack: (trackId: number | null) => void;
   setIsCalibrating: (value: boolean) => void;
   saveCalibration: (videoId: string, corners: Corner[]) => void;
@@ -103,6 +107,7 @@ interface PlayerTrackingState {
   trackPlayersForRally: (rallyId: string, videoId: string, fallbackFps?: number) => Promise<void>;
   loadPlayerTrack: (rallyId: string, fallbackFps?: number, forceRefresh?: boolean) => Promise<boolean>;
   swapTracks: (rallyId: string, trackA: number, trackB: number, fromFrame: number, fallbackFps?: number) => Promise<void>;
+  promoteTracks: (rallyId: string, demoteTrackId: number, promoteTrackId: number, fromFrame: number, fallbackFps?: number) => Promise<void>;
 
   // Batch tracking actions
   trackAllRalliesForVideo: (videoId: string) => Promise<void>;
@@ -189,6 +194,9 @@ function apiResponseToPlayerTrack(
   // Use fps from response (actual tracked video fps), fallback to parameter
   const fps = response.fps ?? fallbackFps;
 
+  // Convert raw (non-primary) positions to tracks format
+  const rawTracks = response.rawPositions ? positionsToTracks(response.rawPositions) : undefined;
+
   return {
     id: `track-${rallyId}`,
     rallyId,
@@ -197,6 +205,7 @@ function apiResponseToPlayerTrack(
       fps,
       frameCount: response.frameCount || 0,
       tracks,
+      rawTracks: rawTracks && rawTracks.length > 0 ? rawTracks : undefined,
       ballPositions: response.ballPositions,
       contacts: response.contacts,
       actions: response.actions,
@@ -219,6 +228,7 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
       showPlayerOverlay: false,
       showBallOverlay: false,
       showCourtDebugOverlay: false,
+      showRawTracks: false,
       selectedTrackId: null,
       isCalibrating: false,
       calibrations: {},
@@ -241,6 +251,10 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
 
       toggleCourtDebugOverlay: () => {
         set((state) => ({ showCourtDebugOverlay: !state.showCourtDebugOverlay }));
+      },
+
+      toggleRawTracks: () => {
+        set((state) => ({ showRawTracks: !state.showRawTracks }));
       },
 
       setSelectedTrack: (trackId: number | null) => {
@@ -408,6 +422,17 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
           await get().loadPlayerTrack(rallyId, fallbackFps, true);
         } catch (error) {
           console.error('[PlayerTrackingStore] Failed to swap tracks:', error);
+          throw error;
+        }
+      },
+
+      promoteTracks: async (rallyId: string, demoteTrackId: number, promoteTrackId: number, fromFrame: number, fallbackFps: number = 30) => {
+        try {
+          await promoteRawTrack(rallyId, demoteTrackId, promoteTrackId, fromFrame);
+          // Re-fetch from server to refresh both primary and raw tracks
+          await get().loadPlayerTrack(rallyId, fallbackFps, true);
+        } catch (error) {
+          console.error('[PlayerTrackingStore] Failed to promote raw track:', error);
           throw error;
         }
       },
@@ -616,8 +641,9 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
     {
       name: 'player-tracking-storage',
       partialize: (state) => ({
-        // Only persist calibrations, not transient tracking data
+        // Only persist calibrations and overlay preferences, not transient tracking data
         calibrations: state.calibrations,
+        showRawTracks: state.showRawTracks,
       }),
     }
   )

@@ -1889,6 +1889,8 @@ export interface TrackPlayersResponse {
   primaryTrackIds?: number[];
   // Positions included for immediate display
   positions?: PlayerPosition[];
+  // Raw (non-primary) positions for overlay & promote-to-primary
+  rawPositions?: PlayerPosition[];
   // Ball positions for trajectory overlay
   ballPositions?: BallPosition[];
   // Contact detection and action classification
@@ -1908,6 +1910,7 @@ export interface GetPlayerTrackResponse {
   courtSplitY?: number;
   primaryTrackIds?: number[];
   positions?: PlayerPosition[];
+  rawPositions?: PlayerPosition[];
   ballPositions?: BallPosition[];
   contacts?: ContactsData;
   actions?: ActionsData;
@@ -1984,6 +1987,29 @@ export async function swapPlayerTracks(
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
     throw new Error(error.error?.message || `Failed to swap player tracks: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Promote a raw (non-primary) track to primary, replacing an existing primary track.
+ */
+export async function promoteRawTrack(
+  rallyId: string,
+  demoteTrackId: number,
+  promoteTrackId: number,
+  fromFrame: number,
+): Promise<{ promotedCount: number; primaryTrackIds: number[] }> {
+  const response = await fetch(`${API_BASE_URL}/v1/rallies/${rallyId}/player-track/promote`, {
+    method: 'POST',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify({ demoteTrackId, promoteTrackId, fromFrame }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to promote raw track: ${response.status}`);
   }
 
   return response.json();
