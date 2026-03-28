@@ -975,39 +975,42 @@ export async function promoteRawTrack(
     throw new ValidationError(`Track ${promoteTrackId} is already a primary track`);
   }
 
-  const rawPromoted = rawPositions.filter(p => p.trackId === promoteTrackId);
-  if (rawPromoted.length === 0) {
+  const rawPromotedAll = rawPositions.filter(p => p.trackId === promoteTrackId);
+  if (rawPromotedAll.length === 0) {
     throw new ValidationError(`Track ${promoteTrackId} not found in raw positions`);
   }
 
-  // Remove demoted track positions from fromFrame onward
+  // From fromFrame onward: replace the demoted track's positions with the
+  // promoted raw track's positions, re-labeled to keep the demoted track's ID.
+  // This preserves the player slot (same color/number) while swapping the
+  // underlying detection source. primaryTrackIds stays unchanged since we
+  // keep the same track ID in positionsJson.
+
+  // 1. Remove demoted track's positions from fromFrame onward
   const updatedPositions = positions.filter(
     p => !(p.trackId === demoteTrackId && p.frameNumber >= fromFrame)
   );
 
-  // Add promoted track positions from fromFrame onward
-  const promotedPositions = rawPromoted.filter(p => p.frameNumber >= fromFrame);
+  // 2. Add promoted raw positions, re-labeled with the demoted track's ID
+  const promotedPositions = rawPromotedAll
+    .filter(p => p.frameNumber >= fromFrame)
+    .map(p => ({ ...p, trackId: demoteTrackId }));
   updatedPositions.push(...promotedPositions);
 
   // Keep positions sorted by frame for consistent downstream consumption
   updatedPositions.sort((a, b) => a.frameNumber - b.frameNumber);
 
-  // Update primaryTrackIds: replace demoted with promoted
-  const updatedPrimaryTrackIds = primaryTrackIds.map(
-    id => id === demoteTrackId ? promoteTrackId : id
-  );
-
+  // primaryTrackIds stays the same — we kept the demoted track's ID
   await prisma.playerTrack.update({
     where: { rallyId },
     data: {
       positionsJson: updatedPositions as unknown as object[],
-      primaryTrackIds: updatedPrimaryTrackIds,
     },
   });
 
-  console.log(`[PLAYER_TRACK] Promoted raw track ${promoteTrackId} replacing primary ${demoteTrackId} from frame ${fromFrame}: ${promotedPositions.length} positions added`);
+  console.log(`[PLAYER_TRACK] Promoted raw track ${promoteTrackId} → primary slot ${demoteTrackId} from frame ${fromFrame}: ${promotedPositions.length} positions replaced`);
 
-  return { promotedCount: promotedPositions.length, primaryTrackIds: updatedPrimaryTrackIds };
+  return { promotedCount: promotedPositions.length, primaryTrackIds };
 }
 
 // Action ground truth label format
