@@ -75,6 +75,21 @@ def evaluate_tracking(
         "--output", "-o",
         help="Output metrics to JSON file",
     ),
+    retrack: bool = typer.Option(
+        False,
+        "--retrack",
+        help="Re-run tracking pipeline instead of using DB predictions",
+    ),
+    cached: bool = typer.Option(
+        False,
+        "--cached",
+        help="Cache/reuse raw BoT-SORT detections (requires --retrack)",
+    ),
+    clear_retrack_cache: bool = typer.Option(
+        False,
+        "--clear-retrack-cache",
+        help="Clear retrack cache before running",
+    ),
 ) -> None:
     """Evaluate player and ball tracking predictions against ground truth.
 
@@ -97,11 +112,14 @@ def evaluate_tracking(
         # Ball tracking evaluation only
         rallycut evaluate-tracking --all --ball-only
 
+        # Re-run tracking pipeline (fresh YOLO + post-processing)
+        rallycut evaluate-tracking --all --retrack
+
+        # Re-run with cached raw detections (fast post-processing only)
+        rallycut evaluate-tracking --all --retrack --cached
+
         # Show per-player breakdown
         rallycut evaluate-tracking --rally-id abc123 --per-player
-
-        # Show detailed error analysis
-        rallycut evaluate-tracking --rally-id abc123 --analyze-errors
 
         # Export to JSON
         rallycut evaluate-tracking --rally-id abc123 -o metrics.json
@@ -111,6 +129,26 @@ def evaluate_tracking(
     """
     # If a subcommand was invoked, don't run the default
     if ctx.invoked_subcommand is not None:
+        return
+
+    # Validate --cached requires --retrack
+    if cached and not retrack:
+        console.print("[red]Error:[/red] --cached requires --retrack")
+        raise typer.Exit(1)
+
+    # Retrack path: re-run the tracking pipeline instead of using DB predictions
+    if retrack:
+        _run_retrack_evaluation(
+            rally_id=rally_id,
+            video_id=video_id,
+            all_rallies=all_rallies,
+            cached=cached,
+            clear_retrack_cache=clear_retrack_cache,
+            iou_threshold=iou_threshold,
+            per_player=per_player,
+            analyze_errors=analyze_errors,
+            output=output,
+        )
         return
 
     from rallycut.evaluation.tracking.ball_metrics import (
@@ -158,10 +196,10 @@ def evaluate_tracking(
         ball_results = []
         for rally in rallies:
             # Prefer cached raw positions + current filter over stale DB positions
-            cached = raw_cache.get(rally.rally_id)
-            if cached is not None:
+            ball_cached = raw_cache.get(rally.rally_id)
+            if ball_cached is not None:
                 predictions = apply_ball_filter_config(
-                    cached.raw_ball_positions, BallFilterConfig()
+                    ball_cached.raw_ball_positions, BallFilterConfig()
                 )
             elif rally.predictions is not None and rally.predictions.ball_positions:
                 predictions = rally.predictions.ball_positions
@@ -388,6 +426,394 @@ def evaluate_tracking(
                 },
             }
 
+        with open(output, "w") as f:
+            json.dump(output_data, f, indent=2)
+        console.print(f"\n[green]Metrics saved to {output}[/green]")
+
+
+def _compute_tracker_config_hash() -> str:
+    """Compute a hash of the detection-phase config for cache invalidation.
+
+    Captures everything that affects YOLO+BoT-SORT output (Phase 1).
+    Post-processing config is deliberately excluded — that's what we iterate on.
+    """
+    import hashlib
+
+    from rallycut.tracking.player_tracker import (
+        DEFAULT_CONFIDENCE,
+        DEFAULT_COURT_ROI,
+        DEFAULT_IMGSZ,
+        DEFAULT_IOU,
+        DEFAULT_TRACKER,
+        MODEL_NAME,
+    )
+
+    config_parts = [
+        f"model={MODEL_NAME}",
+        f"conf={DEFAULT_CONFIDENCE}",
+        f"iou={DEFAULT_IOU}",
+        f"imgsz={DEFAULT_IMGSZ}",
+        f"tracker={DEFAULT_TRACKER}",
+        f"roi={DEFAULT_COURT_ROI}",
+    ]
+    config_str = "|".join(config_parts)
+    return hashlib.sha256(config_str.encode()).hexdigest()[:16]
+
+
+def _run_retrack_evaluation(
+    *,
+    rally_id: str | None,
+    video_id: str | None,
+    all_rallies: bool,
+    cached: bool,
+    clear_retrack_cache: bool,
+    iou_threshold: float,
+    per_player: bool,
+    analyze_errors: bool,
+    output: Path | None,
+) -> None:
+    """Re-run tracking pipeline on GT rallies and evaluate.
+
+    This is the implementation behind --retrack and --retrack --cached.
+    """
+    import time as time_mod
+
+    from rallycut.evaluation.tracking.db import get_video_path, load_labeled_rallies
+    from rallycut.evaluation.tracking.metrics import aggregate_results, evaluate_rally
+    from rallycut.evaluation.tracking.retrack_cache import (
+        CachedRetrackData,
+        RetrackCache,
+    )
+    from rallycut.evaluation.tracking.retrack_results import (
+        RetrackRunResult,
+        format_delta,
+        format_delta_int,
+        load_last_run,
+        save_run,
+    )
+    from rallycut.tracking.player_filter import PlayerFilterConfig
+    from rallycut.tracking.player_tracker import (
+        DEFAULT_TRACKER,
+        PlayerTracker,
+        PlayerTrackingResult,
+    )
+
+    # Validate input
+    if not rally_id and not video_id and not all_rallies:
+        console.print("[red]Error:[/red] Specify --rally-id, --video-id, or --all")
+        raise typer.Exit(1)
+
+    # Setup cache
+    retrack_cache: RetrackCache | None = None
+    config_hash = _compute_tracker_config_hash()
+    if cached:
+        retrack_cache = RetrackCache()
+        if clear_retrack_cache:
+            count = retrack_cache.clear()
+            console.print(f"[yellow]Cleared {count} retrack cache entries[/yellow]")
+
+    # Load rallies from database (for GT + video_id + timing)
+    console.print("[bold]Loading labeled rallies from database...[/bold]")
+    rallies = load_labeled_rallies(
+        video_id=video_id,
+        rally_id=rally_id,
+    )
+
+    if not rallies:
+        console.print("[yellow]No rallies with ground truth found[/yellow]")
+        raise typer.Exit(1)
+
+    console.print(f"  Found {len(rallies)} rally(s) with ground truth")
+
+    # Group rallies by video (download each video once)
+    rallies_by_video: dict[str, list] = {}
+    for rally in rallies:
+        vid = rally.video_id
+        if vid not in rallies_by_video:
+            rallies_by_video[vid] = []
+        rallies_by_video[vid].append(rally)
+
+    console.print(
+        f"  {len(rallies_by_video)} video(s), "
+        f"{'cached' if cached else 'full retrack'} mode\n"
+    )
+
+    # Load previous run for delta comparison
+    previous_run = load_last_run()
+
+    results = []
+    current_run: dict[str, RetrackRunResult] = {}
+    filter_config = PlayerFilterConfig()
+    total_rallies = len(rallies)
+    rally_idx = 0
+    total_start = time_mod.time()
+
+    for video_id_key, video_rallies in rallies_by_video.items():
+        # Check cache hits for this video's rallies
+        cache_hits = 0
+        if retrack_cache is not None:
+            cache_hits = sum(
+                1 for r in video_rallies
+                if retrack_cache.has(r.rally_id, config_hash)
+            )
+
+        # Only download video if we have cache misses
+        video_path = None
+        need_video = cache_hits < len(video_rallies)
+        if need_video:
+            video_path = get_video_path(video_id_key)
+            if not video_path or not video_path.exists():
+                console.print(
+                    f"[yellow]Could not download video {video_id_key[:8]}... "
+                    f"({len(video_rallies)} rallies skipped)[/yellow]"
+                )
+                rally_idx += len(video_rallies)
+                continue
+
+        # Create fresh tracker per video
+        tracker: PlayerTracker | None = None
+        if need_video:
+            tracker = PlayerTracker(tracker=DEFAULT_TRACKER)
+
+        for rally in video_rallies:
+            rally_idx += 1
+            rally_start = time_mod.time()
+            rally_label = f"[{rally_idx}/{total_rallies}] {rally.rally_id[:8]}..."
+
+            # Get ball positions from DB for filtering
+            ball_positions = None
+            if rally.predictions is not None:
+                ball_positions = rally.predictions.ball_positions or None
+
+            # Get court calibration if available
+            court_calibrator = None
+            cal_json = rally.court_calibration_json
+            if cal_json and isinstance(cal_json, list) and len(cal_json) == 4:
+                try:
+                    from rallycut.court.calibration import CourtCalibrator
+
+                    court_calibrator = CourtCalibrator()
+                    court_calibrator.calibrate(
+                        [(c["x"], c["y"]) for c in cal_json]
+                    )
+                    if not court_calibrator.is_calibrated:
+                        court_calibrator = None
+                except Exception:
+                    court_calibrator = None
+
+            tracking_result: PlayerTrackingResult | None = None
+
+            # Try cache first
+            if retrack_cache is not None:
+                cache_entry = retrack_cache.get(rally.rally_id, config_hash)
+                if cache_entry is not None:
+                    cached_data, color_store, appearance_store = cache_entry
+                    tracking_result = PlayerTracker.apply_post_processing(
+                        positions=cached_data.positions,
+                        raw_positions=list(cached_data.positions),
+                        color_store=color_store,
+                        appearance_store=appearance_store,
+                        ball_positions=ball_positions,
+                        video_fps=cached_data.video_fps,
+                        video_width=cached_data.video_width,
+                        video_height=cached_data.video_height,
+                        frame_count=cached_data.frame_count,
+                        start_frame=0,  # Cache stores rally-relative frames
+                        filter_enabled=True,
+                        filter_config=filter_config.scaled_for_fps(
+                            cached_data.video_fps
+                        ),
+                        court_calibrator=court_calibrator,
+                    )
+                    elapsed = time_mod.time() - rally_start
+                    console.print(
+                        f"  {rally_label} [green]cached[/green] "
+                        f"({elapsed:.1f}s)"
+                    )
+
+            # Cache miss or no cache: run full tracking
+            if tracking_result is None:
+                if tracker is None or video_path is None:
+                    console.print(
+                        f"  {rally_label} [yellow]skipped (no video)[/yellow]"
+                    )
+                    continue
+
+                console.print(f"  {rally_label} tracking...", end="")
+
+                if retrack_cache is not None:
+                    # Run tracking and capture raw data for caching
+                    result_tuple = tracker.track_video(
+                        video_path,
+                        start_ms=rally.start_ms,
+                        end_ms=rally.end_ms,
+                        filter_enabled=True,
+                        filter_config=filter_config,
+                        ball_positions=ball_positions,
+                        court_calibrator=court_calibrator,
+                        return_raw=True,
+                    )
+                    tracking_result, raw_data = result_tuple
+
+                    # Cache the raw data
+                    cache_data = CachedRetrackData(
+                        rally_id=rally.rally_id,
+                        video_id=rally.video_id,
+                        config_hash=config_hash,
+                        positions=raw_data.positions,
+                        ball_positions=ball_positions or [],
+                        video_fps=tracking_result.video_fps,
+                        video_width=tracking_result.video_width,
+                        video_height=tracking_result.video_height,
+                        frame_count=tracking_result.frame_count,
+                    )
+                    retrack_cache.put(
+                        cache_data,
+                        raw_data.color_store,
+                        raw_data.appearance_store,
+                    )
+                else:
+                    # Run tracking without caching
+                    tracking_result = tracker.track_video(
+                        video_path,
+                        start_ms=rally.start_ms,
+                        end_ms=rally.end_ms,
+                        filter_enabled=True,
+                        filter_config=filter_config,
+                        ball_positions=ball_positions,
+                        court_calibrator=court_calibrator,
+                    )
+
+                elapsed = time_mod.time() - rally_start
+                console.print(f" done ({elapsed:.1f}s)")
+
+            # Evaluate against GT
+            if tracking_result is None:
+                continue
+            eval_result = evaluate_rally(
+                rally_id=rally.rally_id,
+                ground_truth=rally.ground_truth,
+                predictions=tracking_result,
+                iou_threshold=iou_threshold,
+                video_width=rally.video_width,
+                video_height=rally.video_height,
+            )
+            results.append(eval_result)
+
+            # Store for delta comparison
+            current_run[rally.rally_id] = RetrackRunResult(
+                rally_id=rally.rally_id,
+                hota=eval_result.hota_metrics.hota if eval_result.hota_metrics else None,
+                f1=eval_result.aggregate.f1,
+                id_switches=eval_result.aggregate.num_id_switches,
+                identity_accuracy=(
+                    eval_result.identity_metrics.identity_accuracy
+                    if eval_result.identity_metrics
+                    else None
+                ),
+            )
+
+    total_elapsed = time_mod.time() - total_start
+
+    if not results:
+        console.print("[red]No rallies were successfully tracked[/red]")
+        raise typer.Exit(1)
+
+    # Display results table with deltas
+    console.print(
+        f"\n[bold]Retrack Evaluation - {len(results)} Rallies "
+        f"({total_elapsed:.0f}s total)[/bold]"
+    )
+    console.print("=" * 70)
+
+    rally_table = Table(show_header=True, header_style="bold")
+    rally_table.add_column("Rally")
+    rally_table.add_column("HOTA", justify="right")
+    rally_table.add_column("F1", justify="right")
+    rally_table.add_column("IDsw", justify="right")
+    rally_table.add_column("Real", justify="right")
+    rally_table.add_column("ID Acc", justify="right")
+    rally_table.add_column("MT", justify="right")
+    if previous_run:
+        rally_table.add_column("ΔHOTA", justify="right")
+        rally_table.add_column("ΔF1", justify="right")
+        rally_table.add_column("ΔIDsw", justify="right")
+
+    for result in results:
+        hota_str = "-"
+        if result.hota_metrics:
+            hota_str = f"{result.hota_metrics.hota:.1%}"
+
+        mt_str = "-"
+        if result.track_quality:
+            mt_str = f"{result.track_quality.mostly_tracked}/{result.track_quality.gt_track_count}"
+
+        real_str = "-"
+        id_acc_str = "-"
+        if result.identity_metrics:
+            real_str = str(result.identity_metrics.num_switches)
+            id_acc_str = f"{result.identity_metrics.identity_accuracy:.1%}"
+
+        row = [
+            result.rally_id[:8] + "...",
+            hota_str,
+            f"{result.aggregate.f1:.1%}",
+            str(result.aggregate.num_id_switches),
+            real_str,
+            id_acc_str,
+            mt_str,
+        ]
+
+        if previous_run:
+            prev = previous_run.get(result.rally_id)
+            if prev:
+                row.append(
+                    format_delta(
+                        result.hota_metrics.hota if result.hota_metrics else 0,
+                        prev.hota,
+                    )
+                )
+                row.append(format_delta(result.aggregate.f1, prev.f1))
+                row.append(
+                    format_delta_int(result.aggregate.num_id_switches, prev.id_switches)
+                )
+            else:
+                row.extend(["", "", ""])
+
+        rally_table.add_row(*row)
+
+    console.print(rally_table)
+
+    # Aggregate metrics
+    console.print("\n[bold]Aggregate Metrics[/bold]")
+    combined = aggregate_results(results)
+    _display_aggregate_metrics(combined)
+    _display_aggregate_extended_metrics(results)
+
+    # Save current run for next delta comparison
+    save_run(current_run)
+
+    # Show cache stats
+    if retrack_cache is not None:
+        stats = retrack_cache.stats()
+        console.print(
+            f"\n[dim]Cache: {stats['count']} rallies, "
+            f"{stats['total_size_mb']:.1f} MB in {stats['cache_dir']}[/dim]"
+        )
+
+    # Save to file if requested
+    if output:
+        combined = aggregate_results(results)
+        output_data = {
+            "rallies": [r.to_dict() for r in results],
+            "aggregate": {
+                "mota": combined.mota,
+                "precision": combined.precision,
+                "recall": combined.recall,
+                "f1": combined.f1,
+                "idSwitches": combined.num_id_switches,
+            },
+        }
         with open(output, "w") as f:
             json.dump(output_data, f, indent=2)
         console.print(f"\n[green]Metrics saved to {output}[/green]")

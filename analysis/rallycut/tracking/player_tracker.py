@@ -16,7 +16,7 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import cv2
 import numpy as np
@@ -834,6 +834,19 @@ class PlayerTrackingResult:
         }
 
 
+@dataclass
+class TrackingRawData:
+    """Raw BoT-SORT output before post-processing, for caching.
+
+    Contains everything needed to replay the full post-processing pipeline
+    (Steps 0–5) without re-running YOLO+BoT-SORT detection.
+    """
+
+    positions: list[PlayerPosition]
+    color_store: ColorHistogramStore | None = None
+    appearance_store: AppearanceDescriptorStore | None = None
+
+
 class PlayerTracker:
     """
     Player tracker using YOLO + BoT-SORT.
@@ -1376,6 +1389,490 @@ class PlayerTracker:
 
         return filtered
 
+    @staticmethod
+    def apply_post_processing(
+        positions: list[PlayerPosition],
+        raw_positions: list[PlayerPosition],
+        color_store: ColorHistogramStore | None,
+        appearance_store: AppearanceDescriptorStore | None,
+        ball_positions: list[BallPosition] | None,
+        video_fps: float,
+        video_width: int,
+        video_height: int,
+        frame_count: int,
+        start_frame: int = 0,
+        filter_enabled: bool = True,
+        filter_config: PlayerFilterConfig | None = None,
+        court_calibrator: CourtCalibrator | None = None,
+        court_detection_insights: CourtDetectionInsights | None = None,
+        skip_global_identity: bool = False,
+        processing_time_ms: float = 0.0,
+    ) -> PlayerTrackingResult:
+        """Apply full post-processing pipeline to raw BoT-SORT output.
+
+        This runs Steps 0–6 of the player tracking pipeline: spatial
+        consistency, color repair, tracklet linking, filtering, team
+        classification, global identity, drift detection, interpolation,
+        and quality reporting.
+
+        Can be called either from track_video() (after YOLO loop) or
+        from a cache-replay path that loads raw data from disk.
+
+        Args:
+            positions: Raw BoT-SORT detections (deep-copied internally).
+            raw_positions: Copy of raw positions for recovery in Step 2b.
+                Mutated during frame normalization when start_frame > 0.
+                Caller must pass a disposable copy.
+            color_store: Per-frame color histograms (deep-copied internally).
+            appearance_store: Per-frame appearance descriptors (deep-copied internally).
+            ball_positions: Ball tracking data for court filtering.
+            video_fps: Video frame rate.
+            video_width: Frame width in pixels.
+            video_height: Frame height in pixels.
+            frame_count: Total frames in the rally segment.
+            start_frame: Absolute frame offset for normalization (0 if already
+                rally-relative).
+            filter_enabled: Whether to run post-processing filters.
+            filter_config: Configuration for player filtering.
+            court_calibrator: Court calibration for ROI and team classification.
+            court_detection_insights: Court detection metadata for quality report.
+            skip_global_identity: Skip the global identity optimization step.
+            processing_time_ms: Elapsed time from the YOLO phase (for result metadata).
+
+        Returns:
+            PlayerTrackingResult with filtered and post-processed positions.
+        """
+        import copy
+
+        # Deep-copy mutable inputs so callers (especially cache replay)
+        # can reuse their originals.
+        positions = [
+            PlayerPosition(
+                frame_number=p.frame_number,
+                track_id=p.track_id,
+                x=p.x,
+                y=p.y,
+                width=p.width,
+                height=p.height,
+                confidence=p.confidence,
+            )
+            for p in positions
+        ]
+        if color_store is not None:
+            color_store = copy.deepcopy(color_store)
+        if appearance_store is not None:
+            appearance_store = copy.deepcopy(appearance_store)
+
+        court_split_y: float | None = None
+        primary_track_ids: list[int] = []
+        filter_method: str | None = None
+
+        num_jump_splits = 0
+        num_height_swaps = 0
+        num_color_splits = 0
+        num_appearance_links = 0
+        team_assignments: dict[int, int] = {}
+
+        # Quality report accumulators (set inside filter_enabled block)
+        _removed_bg_count = 0
+        _num_global_segments = 0
+        _num_global_remapped = 0
+        _num_convergence_swaps = 0
+        _team_skipped = False
+        _split_confidence: str | None = None
+
+        if filter_enabled:
+            from rallycut.tracking.player_filter import (
+                PlayerFilter,
+                PlayerFilterConfig,
+                classify_teams,
+                compute_court_split,
+                remove_stationary_background_tracks,
+                stabilize_track_ids,
+            )
+            from rallycut.tracking.spatial_consistency import (
+                enforce_spatial_consistency,
+            )
+
+            config = filter_config or PlayerFilterConfig()
+
+            # Pre-step: Remove stationary background tracks
+            positions, _removed_bg_tracks = remove_stationary_background_tracks(
+                positions, config,
+                total_frames=frame_count,
+            )
+            _removed_bg_count = len(_removed_bg_tracks)
+
+            # Step 0: Spatial consistency — jump detection only
+            positions, consistency_result = enforce_spatial_consistency(
+                positions,
+                color_store=color_store,
+                appearance_store=appearance_store,
+                video_fps=video_fps,
+                drift_detection=False,
+            )
+            num_jump_splits = consistency_result.jump_splits
+
+            # Step 0a: Height-based swap correction
+            from rallycut.tracking.height_consistency import fix_height_swaps
+
+            positions, height_swap_result = fix_height_swaps(
+                positions,
+                color_store=color_store,
+                appearance_store=appearance_store,
+            )
+            num_height_swaps = height_swap_result.swaps
+
+            # Step 0b: Color-based track splitting
+            if color_store is not None and color_store.has_data():
+                from rallycut.tracking.color_repair import (
+                    split_tracks_by_color,
+                )
+
+                positions, num_color_splits = split_tracks_by_color(
+                    positions, color_store
+                )
+
+                # Step 0b2: Spatial re-link
+                from rallycut.tracking.tracklet_link import (
+                    link_tracklets_by_appearance,
+                    relink_spatial_splits,
+                )
+
+                positions, num_spatial_relinks = relink_spatial_splits(
+                    positions, color_store,
+                    appearance_store=appearance_store,
+                )
+
+                # Step 0c: Appearance-based tracklet linking
+                positions, num_appearance_links = link_tracklets_by_appearance(
+                    positions, color_store,
+                    appearance_store=appearance_store,
+                )
+
+            # Step 1: Stabilize track IDs
+            positions, id_mapping = stabilize_track_ids(
+                positions, config,
+            )
+            if id_mapping:
+                if color_store is not None:
+                    color_store.remap_ids(id_mapping)
+                if appearance_store is not None:
+                    appearance_store.remap_ids(id_mapping)
+
+            player_filter = PlayerFilter(
+                ball_positions=ball_positions,
+                total_frames=frame_count,
+                config=config,
+                court_calibrator=court_calibrator,
+            )
+
+            # Step 2: Analyze all positions to identify stable tracks
+            player_filter.analyze_tracks(positions)
+
+            court_split_y = player_filter.court_split_y
+            primary_track_ids = sorted(player_filter.primary_tracks)
+
+            # Step 2b: Recover missing players from raw positions
+            num_recovered = 0
+            if len(primary_track_ids) < config.max_players and raw_positions:
+                from rallycut.tracking.player_filter import recover_missing_players
+
+                positions, recovered_primary_set, num_recovered = (
+                    recover_missing_players(
+                        pipeline_positions=positions,
+                        raw_positions=raw_positions,
+                        primary_track_ids=player_filter.primary_tracks,
+                        total_frames=frame_count,
+                        ball_positions=ball_positions,
+                        config=config,
+                    )
+                )
+                if num_recovered > 0:
+                    player_filter.primary_tracks = recovered_primary_set
+                    primary_track_ids = sorted(recovered_primary_set)
+                    logger.info(
+                        f"Recovered {num_recovered} players from raw: "
+                        f"primary tracks now {primary_track_ids}"
+                    )
+
+            # Step 3: Group positions by frame
+            frames: dict[int, list[PlayerPosition]] = {}
+            for p in positions:
+                if p.frame_number not in frames:
+                    frames[p.frame_number] = []
+                frames[p.frame_number].append(p)
+
+            # Step 4: Filter each frame
+            original_count = len(positions)
+            filtered_positions: list[PlayerPosition] = []
+            for frame_num in sorted(frames.keys()):
+                frame_players = frames[frame_num]
+                filtered_frame = player_filter.filter(frame_players)
+                filtered_positions.extend(filtered_frame)
+
+            positions = filtered_positions
+            filter_method = player_filter.filter_method
+            logger.info(
+                f"Filtered {original_count} -> {len(positions)} detections "
+                f"using {filter_method}"
+            )
+
+            # Step 4b: Team classification
+            split_result = compute_court_split(
+                ball_positions or [], config,
+                player_positions=positions,
+                court_calibrator=court_calibrator,
+            )
+            split_y = split_result[0] if split_result else None
+            _split_confidence = split_result[1] if split_result else None
+            precomputed_teams = split_result[2] if split_result else None
+            _team_skipped = _split_confidence != "high"
+
+            if split_y is not None and _split_confidence == "high":
+                team_assignments = classify_teams(
+                    positions, split_y,
+                    precomputed_assignments=precomputed_teams,
+                )
+            elif precomputed_teams and len(set(precomputed_teams.values())) >= 2:
+                team_assignments = dict(precomputed_teams)
+                logger.info(
+                    "Using bbox-size team assignments despite low "
+                    "split confidence (%d tracks)",
+                    len(team_assignments),
+                )
+
+            # Step 4c: Global identity optimization
+            if (
+                not skip_global_identity
+                and color_store is not None
+                and color_store.has_data()
+                and team_assignments
+            ):
+                from rallycut.tracking.global_identity import (
+                    optimize_global_identity,
+                )
+
+                pre_global = {
+                    (p.frame_number, id(p)): p.track_id
+                    for p in positions
+                }
+
+                positions, global_result = optimize_global_identity(
+                    positions,
+                    team_assignments,
+                    color_store,
+                    court_split_y=split_y,
+                    appearance_store=appearance_store,
+                )
+                _num_global_segments = global_result.num_segments
+                _num_global_remapped = global_result.num_remapped
+
+                if global_result.num_remapped > 0:
+                    remap_keys: dict[tuple[int, int], int] = {}
+                    for p in positions:
+                        key = (p.frame_number, id(p))
+                        old_tid = pre_global.get(key)
+                        if old_tid is not None and old_tid != p.track_id:
+                            remap_keys[(old_tid, p.frame_number)] = p.track_id
+                    if remap_keys:
+                        if color_store is not None:
+                            color_store.remap_per_frame(remap_keys)
+                        if appearance_store is not None:
+                            appearance_store.remap_per_frame(remap_keys)
+                if not global_result.skipped:
+                    logger.info(
+                        f"Global identity: {global_result.num_segments} "
+                        f"segments, {global_result.num_remapped} remapped, "
+                        f"{global_result.num_interactions} interactions"
+                    )
+                else:
+                    logger.debug(
+                        f"Global identity skipped: "
+                        f"{global_result.skip_reason}"
+                    )
+
+            # Step 4d: Convergence-anchored swap detection
+            if len(primary_track_ids) >= 4:
+                from rallycut.tracking.convergence_swap import (
+                    detect_convergence_swaps,
+                )
+
+                positions, _num_convergence_swaps = (
+                    detect_convergence_swaps(
+                        positions,
+                        primary_track_ids,
+                        color_store=color_store,
+                        upstream_split_y=split_y,
+                        upstream_teams=team_assignments,
+                    )
+                )
+
+        # Step 4e: Post-identity spatial consistency
+        if filter_enabled:
+            from rallycut.tracking.spatial_consistency import (
+                enforce_spatial_consistency,
+            )
+
+            positions, final_consistency = enforce_spatial_consistency(
+                positions,
+                color_store=color_store,
+                appearance_store=appearance_store,
+                video_fps=video_fps,
+            )
+            final_total = (
+                final_consistency.jump_splits + final_consistency.drift_splits
+            )
+            if final_total > 0:
+                num_jump_splits += final_total
+                logger.info(
+                    f"Post-identity spatial consistency: "
+                    f"{final_consistency.jump_splits} jump(s), "
+                    f"{final_consistency.drift_splits} drift(s)"
+                )
+
+                for old_id, new_id, *_ in (
+                    final_consistency.drift_details
+                    + final_consistency.jump_details
+                ):
+                    if old_id in primary_track_ids:
+                        primary_track_ids.append(new_id)
+                        logger.info(
+                            f"Propagated primary status: "
+                            f"track {old_id} -> {new_id}"
+                        )
+
+        # Step 4f: Spatial re-link after drift detection
+        if filter_enabled and color_store is not None:
+            from rallycut.tracking.tracklet_link import relink_spatial_splits
+
+            positions, num_post_relinks = relink_spatial_splits(
+                positions, color_store,
+                appearance_store=appearance_store,
+            )
+            if num_post_relinks > 0:
+                logger.info(
+                    f"Post-drift spatial re-link: {num_post_relinks} re-link(s)"
+                )
+
+        # Step 5: Interpolate detection gaps
+        num_interpolated = 0
+        if filter_enabled and primary_track_ids:
+            from rallycut.tracking.player_filter import interpolate_player_gaps
+
+            positions, num_interpolated = interpolate_player_gaps(
+                positions,
+                primary_track_ids,
+                config=filter_config,
+            )
+
+        # Step 6: Compute quality report
+        quality_report = None
+        if filter_enabled:
+            from rallycut.tracking.quality_report import compute_quality_report
+
+            ball_det_rate = 0.0
+            ball_xy: list[tuple[float, float]] | None = None
+            if ball_positions:
+                confident_balls = [
+                    bp for bp in ball_positions
+                    if bp.confidence >= 0.3
+                    and not (bp.x == 0.0 and bp.y == 0.0)
+                ]
+                ball_det_rate = min(
+                    len(confident_balls) / max(frame_count, 1), 1.0
+                )
+                ball_xy = [(bp.x, bp.y) for bp in confident_balls]
+
+            quality_report = compute_quality_report(
+                positions=positions,
+                raw_positions=raw_positions,
+                frame_count=frame_count,
+                video_fps=video_fps,
+                primary_track_ids=primary_track_ids,
+                ball_detection_rate=ball_det_rate,
+                ball_positions_xy=ball_xy,
+                id_switch_count=num_jump_splits,
+                color_split_count=num_color_splits,
+                height_swap_count=num_height_swaps,
+                appearance_link_count=num_appearance_links,
+                has_court_calibration=court_calibrator is not None,
+                court_detection_insights=court_detection_insights,
+                stationary_bg_removed_count=_removed_bg_count,
+                global_identity_segments=_num_global_segments,
+                global_identity_remapped=_num_global_remapped,
+                convergence_swaps_fixed=_num_convergence_swaps,
+                team_classification_skipped=_team_skipped,
+                interpolated_position_count=num_interpolated,
+            )
+
+        # Normalize frame numbers to rally-relative (0-based)
+        if start_frame > 0:
+            for p in positions:
+                p.frame_number -= start_frame
+            if raw_positions:
+                for p in raw_positions:
+                    p.frame_number -= start_frame
+            if ball_positions:
+                for bp in ball_positions:
+                    bp.frame_number -= start_frame
+            if color_store is not None and color_store.has_data():
+                color_store.shift_frames(-start_frame)
+            if appearance_store is not None and appearance_store.has_data():
+                appearance_store.shift_frames(-start_frame)
+
+        return PlayerTrackingResult(
+            positions=positions,
+            frame_count=frame_count,
+            video_fps=video_fps,
+            video_width=video_width,
+            video_height=video_height,
+            processing_time_ms=processing_time_ms,
+            model_version=MODEL_NAME,
+            court_split_y=court_split_y,
+            primary_track_ids=primary_track_ids,
+            filter_method=filter_method,
+            raw_positions=raw_positions,
+            quality_report=quality_report,
+            team_assignments=team_assignments,
+            color_store=color_store,
+            appearance_store=appearance_store,
+        )
+
+    @overload
+    def track_video(
+        self,
+        video_path: Path | str,
+        start_ms: int | None = ...,
+        end_ms: int | None = ...,
+        stride: int = ...,
+        progress_callback: Callable[[float], None] | None = ...,
+        ball_positions: list[BallPosition] | None = ...,
+        filter_enabled: bool = ...,
+        filter_config: PlayerFilterConfig | None = ...,
+        court_calibrator: CourtCalibrator | None = ...,
+        court_detection_insights: CourtDetectionInsights | None = ...,
+        skip_global_identity: bool = ...,
+        return_raw: Literal[False] = ...,
+    ) -> PlayerTrackingResult: ...
+
+    @overload
+    def track_video(
+        self,
+        video_path: Path | str,
+        start_ms: int | None = ...,
+        end_ms: int | None = ...,
+        stride: int = ...,
+        progress_callback: Callable[[float], None] | None = ...,
+        ball_positions: list[BallPosition] | None = ...,
+        filter_enabled: bool = ...,
+        filter_config: PlayerFilterConfig | None = ...,
+        court_calibrator: CourtCalibrator | None = ...,
+        court_detection_insights: CourtDetectionInsights | None = ...,
+        skip_global_identity: bool = ...,
+        return_raw: Literal[True] = ...,
+    ) -> tuple[PlayerTrackingResult, TrackingRawData]: ...
+
     def track_video(
         self,
         video_path: Path | str,
@@ -1389,7 +1886,8 @@ class PlayerTracker:
         court_calibrator: CourtCalibrator | None = None,
         court_detection_insights: CourtDetectionInsights | None = None,
         skip_global_identity: bool = False,
-    ) -> PlayerTrackingResult:
+        return_raw: bool = False,
+    ) -> PlayerTrackingResult | tuple[PlayerTrackingResult, TrackingRawData]:
         """
         Track players in a video segment.
 
@@ -1405,9 +1903,12 @@ class PlayerTracker:
             court_calibrator: Optional calibrated court calibrator. Used for
                             court-space team classification and post-processing
                             court presence scoring.
+            return_raw: If True, also return raw BoT-SORT data before
+                post-processing (for caching).
 
         Returns:
-            PlayerTrackingResult with all detected positions.
+            PlayerTrackingResult with all detected positions. If return_raw
+            is True, returns (PlayerTrackingResult, TrackingRawData).
         """
         start_time = time.time()
         video_path = Path(video_path)
@@ -1665,11 +2166,6 @@ class PlayerTracker:
             if progress_callback:
                 progress_callback(1.0)
 
-            # Court split Y for debug overlay (horizontal line)
-            court_split_y: float | None = None
-            primary_track_ids: list[int] = []
-            filter_method: str | None = None
-
             # Save raw positions before filtering (for parameter tuning)
             raw_positions = [
                 PlayerPosition(
@@ -1684,380 +2180,36 @@ class PlayerTracker:
                 for p in positions
             ]
 
-            # Apply court player filtering if enabled (per-frame with track stability)
-            num_jump_splits = 0
-            num_height_swaps = 0
-            num_color_splits = 0
-            num_appearance_links = 0
+            # Capture raw data for caching if requested.
+            # Frame numbers are normalized to rally-relative (0-based) so
+            # the cache can replay without knowing the absolute offset.
+            raw_data: TrackingRawData | None = None
+            if return_raw:
+                import copy
 
-            # Team classification (populated during filtering)
-            team_assignments: dict[int, int] = {}
-
-            if filter_enabled:
-                from rallycut.tracking.player_filter import (
-                    PlayerFilter,
-                    PlayerFilterConfig,
-                    classify_teams,
-                    compute_court_split,
-                    remove_stationary_background_tracks,
-                    stabilize_track_ids,
-                )
-                from rallycut.tracking.spatial_consistency import (
-                    enforce_spatial_consistency,
-                )
-
-                # Get config (or create default)
-                config = filter_config or PlayerFilterConfig()
-
-                # Pre-step: Remove stationary background tracks before any
-                # post-processing to prevent them from interfering with
-                # tracklet linking, court identity, etc.
-                positions, removed_bg_tracks = remove_stationary_background_tracks(
-                    positions, config,
-                    total_frames=frames_to_process,
-                )
-
-                # Step 0: Spatial consistency — split tracks at instantaneous
-                # jumps only. Drift detection is deferred to step 4e (after
-                # identity optimization) so the identity modules can work
-                # with full continuous tracks.
-                positions, consistency_result = enforce_spatial_consistency(
-                    positions,
-                    color_store=color_store,
-                    appearance_store=appearance_store,
-                    video_fps=fps,
-                    drift_detection=False,
-                )
-                num_jump_splits = consistency_result.jump_splits
-
-                # Step 0a: Height-based swap correction
-                from rallycut.tracking.height_consistency import fix_height_swaps
-
-                positions, height_swap_result = fix_height_swaps(
-                    positions,
-                    color_store=color_store,
-                    appearance_store=appearance_store,
-                )
-                num_height_swaps = height_swap_result.swaps
-
-                # Step 0b: Color-based track splitting
-                if color_store is not None and color_store.has_data():
-                    from rallycut.tracking.color_repair import (
-                        split_tracks_by_color,
+                raw_positions_for_cache = [
+                    PlayerPosition(
+                        frame_number=p.frame_number - start_frame,
+                        track_id=p.track_id,
+                        x=p.x,
+                        y=p.y,
+                        width=p.width,
+                        height=p.height,
+                        confidence=p.confidence,
                     )
-
-                    positions, num_color_splits = split_tracks_by_color(
-                        positions, color_store
-                    )
-
-                    # Step 0b2: Spatial re-link — reconnect color-split
-                    # fragments that are trivially the same player (tiny gap,
-                    # near-identical position). Runs before appearance-based
-                    # linking to prevent greedy merges from stealing these
-                    # obvious spatial matches.
-                    from rallycut.tracking.tracklet_link import (
-                        link_tracklets_by_appearance,
-                        relink_spatial_splits,
-                    )
-
-                    positions, num_spatial_relinks = relink_spatial_splits(
-                        positions, color_store,
-                        appearance_store=appearance_store,
-                    )
-
-                    # Step 0c: Appearance-based tracklet linking (GTA-Link inspired)
-                    # Reconnects fragments using color histogram similarity.
-                    # Runs unconstrained (no team_assignments yet) -- team
-                    # classification happens once on clean post-filter data.
-                    positions, num_appearance_links = link_tracklets_by_appearance(
-                        positions, color_store,
-                        appearance_store=appearance_store,
-                    )
-
-                # Step 1: Stabilize track IDs before filtering
-                # This merges tracks that represent the same player
-                positions, id_mapping = stabilize_track_ids(
-                    positions, config,
-                )
-                if id_mapping:
-                    if color_store is not None:
-                        color_store.remap_ids(id_mapping)
-                    if appearance_store is not None:
-                        appearance_store.remap_ids(id_mapping)
-
-                num_global_segments = 0
-                num_global_remapped = 0
-                num_convergence_swaps = 0
-
-                player_filter = PlayerFilter(
-                    ball_positions=ball_positions,
-                    total_frames=frames_to_process,
-                    config=config,
-                    court_calibrator=court_calibrator,
-                )
-
-                # Step 2: Analyze all positions to identify stable tracks
-                # This must be done before per-frame filtering
-                player_filter.analyze_tracks(positions)
-
-                # Capture court split Y for debug overlay
-                court_split_y = player_filter.court_split_y
-                primary_track_ids = sorted(player_filter.primary_tracks)
-
-                # Step 2b: Recover players lost during intermediate pipeline steps
-                # If <max_players primary tracks found but raw detections show
-                # more concurrent people, a valid player was lost during
-                # track splitting/merging. Recover from raw positions.
-                num_recovered = 0
-                if len(primary_track_ids) < config.max_players and raw_positions:
-                    from rallycut.tracking.player_filter import recover_missing_players
-
-                    positions, recovered_primary_set, num_recovered = (
-                        recover_missing_players(
-                            pipeline_positions=positions,
-                            raw_positions=raw_positions,
-                            primary_track_ids=player_filter.primary_tracks,
-                            total_frames=total_frames_in_range,
-                            ball_positions=ball_positions,
-                            config=config,
-                        )
-                    )
-                    if num_recovered > 0:
-                        player_filter.primary_tracks = recovered_primary_set
-                        primary_track_ids = sorted(recovered_primary_set)
-                        logger.info(
-                            f"Recovered {num_recovered} players from raw: "
-                            f"primary tracks now {primary_track_ids}"
-                        )
-
-                # Step 3: Group positions by frame
-                frames: dict[int, list[PlayerPosition]] = {}
-                for p in positions:
-                    if p.frame_number not in frames:
-                        frames[p.frame_number] = []
-                    frames[p.frame_number].append(p)
-
-                # Step 4: Filter each frame separately (uses track stability)
-                original_count = len(positions)
-                filtered_positions: list[PlayerPosition] = []
-                for frame_num in sorted(frames.keys()):
-                    frame_players = frames[frame_num]
-                    filtered_frame = player_filter.filter(frame_players)
-                    filtered_positions.extend(filtered_frame)
-
-                positions = filtered_positions
-                filter_method = player_filter.filter_method
-                logger.info(
-                    f"Filtered {original_count} -> {len(positions)} detections "
-                    f"using {filter_method}"
-                )
-
-                # Step 4b: Single team classification on clean filtered data
-                # All team-dependent operations (global identity, court
-                # identity) run after this single classify_teams call.
-                split_result = compute_court_split(
-                    ball_positions or [], config,
-                    player_positions=positions,
-                    court_calibrator=court_calibrator,
-                )
-                split_y = split_result[0] if split_result else None
-                split_confidence = split_result[1] if split_result else None
-                precomputed_teams = split_result[2] if split_result else None
-
-                if split_y is not None and split_confidence == "high":
-                    team_assignments = classify_teams(
-                        positions, split_y,
-                        precomputed_assignments=precomputed_teams,
-                    )
-                elif precomputed_teams and len(set(precomputed_teams.values())) >= 2:
-                    # Bbox-size ranking produced a valid 2-team split even
-                    # though the Y-based split_y is unreliable.  Use the
-                    # size-based assignments directly (they don't depend
-                    # on split_y).
-                    team_assignments = dict(precomputed_teams)
-                    logger.info(
-                        "Using bbox-size team assignments despite low "
-                        "split confidence (%d tracks)",
-                        len(team_assignments),
-                    )
-
-                # Step 4c: Global identity optimization
-                # Splits tracks at interaction boundaries and reassigns
-                # segments to canonical players via greedy cost minimization
-                if (
-                    not skip_global_identity
-                    and color_store is not None
-                    and color_store.has_data()
-                    and team_assignments
-                ):
-                    from rallycut.tracking.global_identity import (
-                        optimize_global_identity,
-                    )
-
-                    # Snapshot track IDs to sync color_store after
-                    pre_global = {
-                        (p.frame_number, id(p)): p.track_id
-                        for p in positions
-                    }
-
-                    positions, global_result = optimize_global_identity(
-                        positions,
-                        team_assignments,
-                        color_store,
-                        court_split_y=split_y,
-                        appearance_store=appearance_store,
-                    )
-                    num_global_segments = global_result.num_segments
-                    num_global_remapped = global_result.num_remapped
-
-                    # Sync color_store and appearance_store with any ID changes
-                    if global_result.num_remapped > 0:
-                        remap_keys: dict[tuple[int, int], int] = {}
-                        for p in positions:
-                            key = (p.frame_number, id(p))
-                            old_tid = pre_global.get(key)
-                            if old_tid is not None and old_tid != p.track_id:
-                                remap_keys[(old_tid, p.frame_number)] = p.track_id
-                        if remap_keys:
-                            if color_store is not None:
-                                color_store.remap_per_frame(remap_keys)
-                            if appearance_store is not None:
-                                appearance_store.remap_per_frame(remap_keys)
-                    if not global_result.skipped:
-                        logger.info(
-                            f"Global identity: {global_result.num_segments} "
-                            f"segments, {global_result.num_remapped} remapped, "
-                            f"{global_result.num_interactions} interactions"
-                        )
-                    else:
-                        logger.debug(
-                            f"Global identity skipped: "
-                            f"{global_result.skip_reason}"
-                        )
-
-                # Step 4d: Convergence-anchored swap detection
-                # Checks each net interaction for cross-team ID swaps
-                # using court-side, bbox size, and appearance signals.
-                if len(primary_track_ids) >= 4:
-                    from rallycut.tracking.convergence_swap import (
-                        detect_convergence_swaps,
-                    )
-
-                    positions, num_convergence_swaps = (
-                        detect_convergence_swaps(
-                            positions,
-                            primary_track_ids,
-                            color_store=color_store,
-                            upstream_split_y=split_y,
-                            upstream_teams=team_assignments,
-                        )
-                    )
-
-            # Step 4e: Post-identity spatial consistency.
-            # Runs both jump detection and drift detection. Drift is
-            # deferred to here (not step 0) so identity modules work with
-            # full continuous tracks. Jump splits catch residual Kalman
-            # artifacts from identity remapping. Drift splits catch smooth
-            # ID swaps that no identity module resolved.
-            if filter_enabled:
-                positions, final_consistency = enforce_spatial_consistency(
-                    positions,
-                    color_store=color_store,
-                    appearance_store=appearance_store,
-                    video_fps=fps,
-                )
-                final_total = (
-                    final_consistency.jump_splits + final_consistency.drift_splits
-                )
-                if final_total > 0:
-                    num_jump_splits += final_total
-                    logger.info(
-                        f"Post-identity spatial consistency: "
-                        f"{final_consistency.jump_splits} jump(s), "
-                        f"{final_consistency.drift_splits} drift(s)"
-                    )
-
-                    # Propagate primary status to split fragments.
-                    # When a primary track is split, both the original
-                    # prefix and the new suffix must remain primary —
-                    # otherwise the suffix is filtered out, causing
-                    # catastrophic trackability loss.
-                    for old_id, new_id, *_ in (
-                        final_consistency.drift_details
-                        + final_consistency.jump_details
-                    ):
-                        if old_id in primary_track_ids:
-                            primary_track_ids.append(new_id)
-                            logger.info(
-                                f"Propagated primary status: "
-                                f"track {old_id} -> {new_id}"
-                            )
-
-            # Step 4f: Spatial re-link after drift detection.
-            # Drift detection (4e) can split a fast-moving player's track
-            # into two fragments at nearly the same position. Re-link them
-            # if the gap is tiny and endpoints are near-identical.
-            if filter_enabled and color_store is not None:
-                from rallycut.tracking.tracklet_link import relink_spatial_splits
-
-                positions, num_post_relinks = relink_spatial_splits(
-                    positions, color_store,
-                    appearance_store=appearance_store,
-                )
-                if num_post_relinks > 0:
-                    logger.info(
-                        f"Post-drift spatial re-link: {num_post_relinks} re-link(s)"
-                    )
-
-            # Step 5: Interpolate detection gaps for primary tracks
-            num_interpolated = 0
-            if filter_enabled and primary_track_ids:
-                from rallycut.tracking.player_filter import interpolate_player_gaps
-
-                positions, num_interpolated = interpolate_player_gaps(
-                    positions,
-                    primary_track_ids,
-                    config=filter_config,
-                )
-
-            # Step 6: Compute quality report
-            quality_report = None
-            if filter_enabled:
-                from rallycut.tracking.quality_report import compute_quality_report
-
-                ball_det_rate = 0.0
-                ball_xy: list[tuple[float, float]] | None = None
-                if ball_positions:
-                    confident_balls = [
-                        bp for bp in ball_positions
-                        if bp.confidence >= 0.3
-                        and not (bp.x == 0.0 and bp.y == 0.0)
-                    ]
-                    ball_det_rate = min(
-                        len(confident_balls) / max(total_frames_in_range, 1), 1.0
-                    )
-                    ball_xy = [(bp.x, bp.y) for bp in confident_balls]
-
-                quality_report = compute_quality_report(
-                    positions=positions,
-                    raw_positions=raw_positions,
-                    frame_count=total_frames_in_range,
-                    video_fps=fps,
-                    primary_track_ids=primary_track_ids,
-                    ball_detection_rate=ball_det_rate,
-                    ball_positions_xy=ball_xy,
-                    id_switch_count=num_jump_splits,
-                    color_split_count=num_color_splits,
-                    height_swap_count=num_height_swaps,
-                    appearance_link_count=num_appearance_links,
-                    has_court_calibration=court_calibrator is not None,
-                    court_detection_insights=court_detection_insights,
-                    stationary_bg_removed_count=len(removed_bg_tracks),
-                    global_identity_segments=num_global_segments,
-                    global_identity_remapped=num_global_remapped,
-                    convergence_swaps_fixed=num_convergence_swaps,
-                    team_classification_skipped=split_confidence != "high",
-                    interpolated_position_count=num_interpolated,
+                    for p in raw_positions
+                ]
+                raw_color = copy.deepcopy(color_store)
+                raw_appearance = copy.deepcopy(appearance_store)
+                if start_frame > 0:
+                    if raw_color is not None and raw_color.has_data():
+                        raw_color.shift_frames(-start_frame)
+                    if raw_appearance is not None and raw_appearance.has_data():
+                        raw_appearance.shift_frames(-start_frame)
+                raw_data = TrackingRawData(
+                    positions=raw_positions_for_cache,
+                    color_store=raw_color,
+                    appearance_store=raw_appearance,
                 )
 
             processing_time_ms = (time.time() - start_time) * 1000
@@ -2067,40 +2219,29 @@ class PlayerTracker:
                 f"{processing_time_ms/1000:.1f}s ({effective_fps:.1f} FPS)"
             )
 
-            # Normalize frame numbers to rally-relative (0-based).
-            # When tracking a segment of the full video (start_ms provided),
-            # frame_idx is absolute. Frontend and match_tracker expect 0-based.
-            if start_frame > 0:
-                for p in positions:
-                    p.frame_number -= start_frame
-                if raw_positions:
-                    for p in raw_positions:
-                        p.frame_number -= start_frame
-                if ball_positions:
-                    for bp in ball_positions:
-                        bp.frame_number -= start_frame
-                if color_store is not None and color_store.has_data():
-                    color_store.shift_frames(-start_frame)
-                if appearance_store is not None and appearance_store.has_data():
-                    appearance_store.shift_frames(-start_frame)
-
-            return PlayerTrackingResult(
+            # Delegate to apply_post_processing for Steps 0-6
+            result = PlayerTracker.apply_post_processing(
                 positions=positions,
-                frame_count=total_frames_in_range,  # Total frames in video range (for time mapping)
+                raw_positions=raw_positions,
+                color_store=color_store,
+                appearance_store=appearance_store,
+                ball_positions=ball_positions,
                 video_fps=fps,
                 video_width=video_width,
                 video_height=video_height,
+                frame_count=total_frames_in_range,
+                start_frame=start_frame,
+                filter_enabled=filter_enabled,
+                filter_config=filter_config,
+                court_calibrator=court_calibrator,
+                court_detection_insights=court_detection_insights,
+                skip_global_identity=skip_global_identity,
                 processing_time_ms=processing_time_ms,
-                model_version=MODEL_NAME,
-                court_split_y=court_split_y,
-                primary_track_ids=primary_track_ids,
-                filter_method=filter_method,
-                raw_positions=raw_positions,
-                quality_report=quality_report,
-                team_assignments=team_assignments,
-                color_store=color_store,
-                appearance_store=appearance_store,
             )
+
+            if return_raw and raw_data is not None:
+                return result, raw_data
+            return result
 
         finally:
             cap.release()

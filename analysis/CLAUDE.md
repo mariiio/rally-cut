@@ -324,6 +324,8 @@ uv run rallycut compare-tracking tracking.json ground_truth.json
 # Evaluate from database (after ground truth is synced)
 uv run rallycut evaluate-tracking --all              # All labeled rallies (player metrics)
 uv run rallycut evaluate-tracking --all --ball-only  # Ball tracking metrics only
+uv run rallycut evaluate-tracking --all --retrack    # Re-run tracking pipeline (~2 min/rally)
+uv run rallycut evaluate-tracking --all --retrack --cached  # Cache raw detections, replay post-processing only (~5s/rally)
 uv run rallycut evaluate-tracking -r <rally-id>      # Specific rally
 
 # Grid search for filter parameters (use --help for grid options)
