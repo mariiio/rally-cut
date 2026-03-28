@@ -26,7 +26,7 @@ DEFAULT_JUMP_MAX_FRAME_GAP = 3
 
 # Drift detection defaults (mode 2: sliding window)
 DEFAULT_DRIFT_WINDOW_SECONDS = 0.5  # Time-based window
-DEFAULT_DRIFT_MAX_DISPLACEMENT = 0.15  # Max displacement over window
+DEFAULT_DRIFT_MAX_DISPLACEMENT = 0.20  # Max displacement over window
 DEFAULT_DRIFT_MIN_WINDOW_FRAMES = 6  # Don't check windows shorter than this
 
 

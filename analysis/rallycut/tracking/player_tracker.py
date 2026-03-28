@@ -1977,6 +1977,22 @@ class PlayerTracker:
                         f"{final_consistency.drift_splits} drift(s)"
                     )
 
+                    # Propagate primary status to split fragments.
+                    # When a primary track is split, both the original
+                    # prefix and the new suffix must remain primary —
+                    # otherwise the suffix is filtered out, causing
+                    # catastrophic trackability loss.
+                    for old_id, new_id, *_ in (
+                        final_consistency.drift_details
+                        + final_consistency.jump_details
+                    ):
+                        if old_id in primary_track_ids:
+                            primary_track_ids.append(new_id)
+                            logger.info(
+                                f"Propagated primary status: "
+                                f"track {old_id} -> {new_id}"
+                            )
+
             # Step 4f: Spatial re-link after drift detection.
             # Drift detection (4e) can split a fast-moving player's track
             # into two fragments at nearly the same position. Re-link them

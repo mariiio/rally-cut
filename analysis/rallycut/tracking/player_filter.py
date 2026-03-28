@@ -1299,18 +1299,6 @@ def stabilize_track_ids(
     if not track_info:
         return positions, {}
 
-    # Build position lookup for overlap position checks.
-    # During BoT-SORT handoffs, a dying track and new detection overlap for
-    # a few frames at the same position. We need to allow these merges while
-    # blocking merges where overlapping tracks are far apart (different players).
-    pos_lookup: dict[tuple[int, int], tuple[float, float]] = {}
-    for p in positions:
-        if p.track_id >= 0:
-            pos_lookup[(p.track_id, p.frame_number)] = (p.x, p.y)
-
-    # Track which original track IDs are absorbed into each canonical
-    canonical_members: dict[int, set[int]] = {}  # canonical_id -> {track_ids}
-
     # Find tracks to merge: new tracks that start after an old track ends nearby
     id_mapping: dict[int, int] = {}  # new_id -> canonical_id
 
@@ -1373,47 +1361,12 @@ def stabilize_track_ids(
                 canon_first, canon_last = canonical_frame_ranges[canonical_id]
                 # New track overlaps with canonical's effective range
                 if new_first_frame <= canon_last and new_last_frame >= canon_first:
-                    # During BoT-SORT handoffs, a dying track and new detection
-                    # coexist for a few frames at the same position. Allow the
-                    # merge if overlap positions are close (same player).
-                    overlap_start = max(new_first_frame, canon_first)
-                    overlap_end = min(new_last_frame, canon_last)
-
-                    # Find positions during overlap for canonical's members
-                    members = canonical_members.get(canonical_id, {canonical_id})
-                    total_dist = 0.0
-                    count = 0
-                    for f in range(overlap_start, overlap_end + 1):
-                        new_pos = pos_lookup.get((new_id, f))
-                        if new_pos is None:
-                            continue
-                        # Find canonical's position from any absorbed track
-                        canon_pos = None
-                        for member_tid in members:
-                            canon_pos = pos_lookup.get((member_tid, f))
-                            if canon_pos is not None:
-                                break
-                        if canon_pos is None:
-                            continue
-                        dx = new_pos[0] - canon_pos[0]
-                        dy = new_pos[1] - canon_pos[1]
-                        total_dist += (dx * dx + dy * dy) ** 0.5
-                        count += 1
-
-                    # Block if no common frames or positions are far apart.
-                    # Threshold matches OVERLAP_MAX_POSITION_DISTANCE in tracklet_link.
-                    max_overlap_dist = 0.08
-                    if count == 0 or (total_dist / count) > max_overlap_dist:
-                        logger.debug(
-                            f"Skipping merge {new_id} -> {canonical_id}: "
-                            f"would overlap (new: {new_first_frame}-{new_last_frame}"
-                            f", canonical: {canon_first}-{canon_last}"
-                            f", avg_dist={total_dist / count:.3f})"
-                            if count > 0 else
-                            f"Skipping merge {new_id} -> {canonical_id}: "
-                            f"would overlap, no common positions"
-                        )
-                        continue
+                    logger.debug(
+                        f"Skipping merge {new_id} -> {canonical_id}: "
+                        f"would overlap (new: {new_first_frame}-{new_last_frame}, "
+                        f"canonical: {canon_first}-{canon_last})"
+                    )
+                    continue
 
             # Check position distance (use squared distance to avoid sqrt)
             dx = new_first_pos[0] - old_last_pos[0]
@@ -1434,10 +1387,6 @@ def stabilize_track_ids(
 
         if best_match is not None and best_match != new_id:
             id_mapping[new_id] = best_match
-            # Track absorbed members for overlap position checks
-            if best_match not in canonical_members:
-                canonical_members[best_match] = {best_match}
-            canonical_members[best_match].add(new_id)
             # Update canonical's effective frame range to include merged track
             if best_match in canonical_frame_ranges:
                 canon_first, canon_last = canonical_frame_ranges[best_match]
