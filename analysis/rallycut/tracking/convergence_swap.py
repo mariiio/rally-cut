@@ -78,7 +78,7 @@ class _SwapCandidate:
     track_b: int
     convergence: ConvergencePeriod
     swap_frame: int
-    court_side_score: float
+    team_score: float
     size_score: float
     appearance_score: float
     total_score: float
@@ -237,7 +237,7 @@ def _score_team_consistency(
     # Use whichever signal (Y or height) has better separation.
     def _team_dist(window: _TrackWindow, profile: _TeamProfile) -> float:
         y_d = abs(window.median_y - profile.median_y)
-        h_d = abs(window.mean_bbox_area ** 0.5 - profile.median_height)
+        h_d = abs(math.sqrt(window.mean_bbox_area) - profile.median_height)
         # Weight by separation quality
         if y_sep > h_sep:
             return y_d / max(y_sep, 0.01)
@@ -592,7 +592,7 @@ def detect_convergence_swaps(
                 track_b=conv.track_b,
                 convergence=conv,
                 swap_frame=swap_frame,
-                court_side_score=team_score,
+                team_score=team_score,
                 size_score=size_score,
                 appearance_score=appearance_score,
                 total_score=total,
@@ -639,7 +639,7 @@ def detect_convergence_swaps(
             logger.info(
                 f"Convergence swap: fixed T{cand.track_a}<->T{cand.track_b} "
                 f"at frame {cand.swap_frame} ({swapped} positions, "
-                f"score={cand.total_score:.2f}: court={cand.court_side_score:.2f} "
+                f"score={cand.total_score:.2f}: court={cand.team_score:.2f} "
                 f"size={cand.size_score:.2f} appearance={cand.appearance_score:.2f})"
             )
 

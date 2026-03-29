@@ -1714,7 +1714,10 @@ def identify_primary_tracks(
     if len(selected) > config.max_players:
         scored = [(tid, _player_behavior_score(tid)) for tid, _ in selected]
 
-        # Build per-track frame sets for coverage computation
+        # Build per-track frame spans for coverage computation.
+        # Uses contiguous range (first_frame..last_frame) as approximation —
+        # actual detections may be sparse, but primary candidates pass the
+        # presence threshold so the gap is small.
         track_frames: dict[int, set[int]] = {}
         for tid, _ in scored:
             s = track_stats[tid]
@@ -1749,11 +1752,10 @@ def identify_primary_tracks(
         for tid, score in scored:
             s = track_stats[tid]
             status = "KEPT" if tid in kept_ids else "EXCLUDED"
-            marginal = len(track_frames[tid] - (covered_frames - track_frames[tid]))
             logger.info(
                 f"  Track {tid}: score={score:.3f} (ball={s.ball_proximity_score:.2f}, "
-                f"spread={s.position_spread:.4f}, presence={s.presence_rate:.2f}, "
-                f"marginal_frames={marginal}) [{status}]"
+                f"spread={s.position_spread:.4f}, presence={s.presence_rate:.2f}) "
+                f"[{status}]"
             )
         selected = [(tid, stab) for tid, stab in selected if tid in kept_ids]
 
