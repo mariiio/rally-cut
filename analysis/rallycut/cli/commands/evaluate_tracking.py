@@ -1367,8 +1367,12 @@ def _display_aggregate_extended_metrics(results: list) -> None:
         total_frames = sum(r.identity_metrics.num_total_frames for r in id_results)
         accuracy = 1.0 - (total_err / total_frames) if total_frames > 0 else 1.0
 
+        total_ambiguous = sum(
+            r.identity_metrics.num_ambiguous_switches for r in id_results
+        )
         console.print("\n[bold]Aggregate Identity[/bold]")
-        console.print(f"  Real Identity Switches: {total_switches}")
+        ambig_str = f" (+{total_ambiguous} ambiguous)" if total_ambiguous else ""
+        console.print(f"  Real Identity Switches: {total_switches}{ambig_str}")
         console.print(f"  Identity Accuracy: {accuracy:.1%} ({total_err} error frames / {total_frames})")
 
 

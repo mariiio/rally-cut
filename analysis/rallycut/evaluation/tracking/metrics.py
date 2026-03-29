@@ -232,14 +232,16 @@ class PositionMetrics:
 
 @dataclass
 class IdentityMetrics:
-    """Real identity switch metrics, immune to Hungarian matching noise.
+    """Real identity switch metrics, immune to matching noise.
 
     Builds temporal segments of consistent pred→GT assignment in non-overlap
     frames. A "real identity switch" is when a pred track's GT assignment
-    changes between two stable segments (≥5 frames each).
+    changes between two stable segments (≥5 frames each) AND the two GT
+    players are not spatially close (convergence ambiguity).
     """
 
     num_switches: int = 0  # Real identity switches (pred track follows different person)
+    num_ambiguous_switches: int = 0  # Switches at convergence points (not counted as errors)
     num_error_frames: int = 0  # Frames after a switch where pred follows wrong person
     num_total_frames: int = 0  # Total matched frames (all, including overlap)
     identity_accuracy: float = 1.0  # 1 - error_frames / total_frames
@@ -552,6 +554,7 @@ def evaluate_rally(
     identity_metrics = compute_identity_metrics(
         pred_by_frame,
         matches_by_frame,
+        gt_by_frame=gt_by_frame,
     )
 
     return TrackingEvaluationResult(
@@ -773,6 +776,7 @@ _MIN_SEGMENT_FRAMES = 5
 def compute_identity_metrics(
     pred_by_frame: dict[int, list[tuple[int, float, float, float, float]]],
     matches_by_frame: dict[int, list[tuple[int, int]]],
+    gt_by_frame: dict[int, list[tuple[int, float, float, float, float]]] | None = None,
 ) -> IdentityMetrics:
     """Compute real identity switches using temporal segment analysis.
 
@@ -780,7 +784,13 @@ def compute_identity_metrics(
     non-overlap frames. A real identity switch is when the GT assignment changes
     between two stable segments (both >= MIN_SEGMENT_FRAMES).
 
-    This is immune to Hungarian matching noise during bbox overlap.
+    Convergence-aware: switches where the two GT players are spatially close
+    at the switch point are classified as ambiguous (not counted as real
+    switches). Two teammates at the same position can't be reliably
+    distinguished, so the evaluation shouldn't penalize either assignment.
+
+    This is immune to both Hungarian matching noise during bbox overlap
+    and convergence ambiguity where players share the same position.
     """
     all_frames = sorted(matches_by_frame.keys())
     if not all_frames:
@@ -811,12 +821,22 @@ def compute_identity_metrics(
 
         frame_info.append((frame, p2g, is_overlap))
 
+    # Build GT position index for convergence checking
+    gt_positions: dict[int, dict[int, tuple[float, float]]] = {}  # gt_id -> frame -> (x,y)
+    if gt_by_frame is not None:
+        for frame, boxes in gt_by_frame.items():
+            for gt_id, x, y, _w, _h in boxes:
+                if gt_id not in gt_positions:
+                    gt_positions[gt_id] = {}
+                gt_positions[gt_id][frame] = (x, y)
+
     # Collect all pred IDs
     pred_ids: set[int] = set()
     for _, p2g, _ in frame_info:
         pred_ids.update(p2g.keys())
 
     total_switches = 0
+    total_ambiguous = 0
     total_error_frames = 0
 
     for pred_id in pred_ids:
@@ -850,10 +870,22 @@ def compute_identity_metrics(
         if len(real_segs) <= 1:
             continue
 
-        # Count switches
+        # Count switches (convergence-aware)
         first_gt = real_segs[0][0]
         for i in range(1, len(real_segs)):
             if real_segs[i][0] != real_segs[i - 1][0]:
+                # Check if this is a convergence ambiguity: are the two GT
+                # players spatially close at the switch frame?
+                gt_old = real_segs[i - 1][0]
+                gt_new = real_segs[i][0]
+                switch_frame = real_segs[i][2]
+
+                if _is_convergence_ambiguity(
+                    gt_old, gt_new, switch_frame, gt_positions,
+                ):
+                    total_ambiguous += 1
+                    continue
+
                 total_switches += 1
                 total_error_frames += sum(
                     s[1] for s in real_segs[i:] if s[0] != first_gt
@@ -864,10 +896,47 @@ def compute_identity_metrics(
 
     return IdentityMetrics(
         num_switches=total_switches,
+        num_ambiguous_switches=total_ambiguous,
         num_error_frames=total_error_frames,
         num_total_frames=total_matched,
         identity_accuracy=accuracy,
     )
+
+
+# Maximum centroid distance between two GT players for a switch to be
+# considered ambiguous (convergence). At this distance, both matching
+# assignments are equally valid and the switch is measurement noise.
+_CONVERGENCE_DISTANCE = 0.05
+
+
+def _is_convergence_ambiguity(
+    gt_old: int,
+    gt_new: int,
+    switch_frame: int,
+    gt_positions: dict[int, dict[int, tuple[float, float]]],
+    window: int = 5,
+) -> bool:
+    """Check if a GT assignment switch is at a convergence point.
+
+    Returns True if the two GT players are spatially close around the
+    switch frame, meaning either assignment is equally valid.
+    """
+    if not gt_positions:
+        return False
+
+    pos_old = gt_positions.get(gt_old, {})
+    pos_new = gt_positions.get(gt_new, {})
+
+    # Check frames around the switch point
+    for f in range(switch_frame - window, switch_frame + window + 1):
+        if f in pos_old and f in pos_new:
+            dx = pos_old[f][0] - pos_new[f][0]
+            dy = pos_old[f][1] - pos_new[f][1]
+            dist = (dx * dx + dy * dy) ** 0.5
+            if dist < _CONVERGENCE_DISTANCE:
+                return True
+
+    return False
 
 
 def aggregate_results(results: list[TrackingEvaluationResult]) -> MOTMetrics:
