@@ -11,8 +11,9 @@ S3 key structure:
       datasets/{name}/
         manifest.json
         ground_truth.json
-        tracking_ground_truth.json  (optional)
-        action_ground_truth.json    (optional)
+        tracking_ground_truth.json           (optional)
+        action_ground_truth.json             (optional)
+        player_matching_ground_truth.json    (optional)
       videos/
         {content_hash}.mp4
       weights/
@@ -248,6 +249,11 @@ class DatasetBackup:
         action_gt_path = dataset_dir / "action_ground_truth.json"
         if action_gt_path.exists():
             metadata_files.append((action_gt_path, "action_ground_truth.json"))
+        player_matching_gt_path = dataset_dir / "player_matching_ground_truth.json"
+        if player_matching_gt_path.exists():
+            metadata_files.append(
+                (player_matching_gt_path, "player_matching_ground_truth.json")
+            )
 
         for path, filename in metadata_files:
             self.s3.upload_file(
@@ -369,6 +375,17 @@ class DatasetBackup:
                 self.bucket,
                 self._dataset_key(name, "action_ground_truth.json"),
                 str(action_gt_path),
+            )
+        except ClientError:
+            pass  # Not present in older datasets
+
+        # Download player matching ground truth (optional)
+        try:
+            player_matching_gt_path = dataset_dir / "player_matching_ground_truth.json"
+            self.s3.download_file(
+                self.bucket,
+                self._dataset_key(name, "player_matching_ground_truth.json"),
+                str(player_matching_gt_path),
             )
         except ClientError:
             pass  # Not present in older datasets
