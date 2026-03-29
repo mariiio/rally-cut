@@ -174,18 +174,18 @@ class PlayerFilterConfig:
     # Stationary background track pre-filter
     # Removes tracks from raw positions that are clearly fixed objects (signs, equipment,
     # distant spectators, bags on the floor). These have near-zero position variance.
-    # Key insight: real background objects have spread < 0.008 (truly zero motion),
-    # while real players even in ready position have spread > 0.012 (body sway, reactions).
-    # Threshold 0.010 sits in the gap. yolo11s produces tighter bboxes than yolov8n,
-    # so players have lower spread than before — threshold must be conservative.
-    # No presence requirement: an object that doesn't move across 50+ detections is
-    # inanimate regardless of how intermittently YOLO detects it. A safety net
-    # (see remove_stationary_background_tracks) prevents removal when < max_players
-    # tracks would survive.
+    # Two-tier threshold: small objects use max_spread (0.010). Person-sized objects
+    # (bbox height >= min_person_height) use a stricter person_spread (0.003), because
+    # far-court players standing still between touches have spread 0.003–0.010 from
+    # body sway/reactions, while truly static person-sized objects (signs with people
+    # printed on them, seated spectators) have spread < 0.003.
+    # A safety net prevents removal when < max_players tracks would survive.
     # Runs before split/merge/link to prevent background tracks from interfering.
     enable_stationary_background_filter: bool = True
-    stationary_bg_max_spread: float = 0.010  # Max position_spread (geometric mean of x/y std)
+    stationary_bg_max_spread: float = 0.010  # Max spread for small objects
     stationary_bg_min_detections: int = 50  # Minimum detections to be considered
+    stationary_bg_min_person_height: float = 0.10  # Min bbox height to be person-sized
+    stationary_bg_person_spread: float = 0.003  # Stricter spread threshold for person-sized tracks
 
     # Gap interpolation for primary tracks
     # Fills short detection gaps with linearly interpolated positions.
@@ -1197,15 +1197,6 @@ def remove_stationary_background_tracks(
 
     removed_ids: set[int] = set()
 
-    # Two-tier spread threshold:
-    # - Small objects (height < 0.10): use standard threshold (0.010)
-    # - Person-sized objects (height >= 0.10): use stricter threshold (0.003)
-    #   Far-court players can have low spread (standing still between
-    #   touches) but always move *slightly* (body sway, reactions).
-    #   Truly static objects (signs, seated spectators) have spread < 0.003.
-    min_person_height = 0.10
-    person_strict_spread = 0.003
-
     for track_id, track_positions in tracks.items():
         n = len(track_positions)
         if n < config.stationary_bg_min_detections:
@@ -1222,11 +1213,15 @@ def remove_stationary_background_tracks(
             avg_height = float(np.mean([p.height for p in track_positions]))
 
             # Person-sized tracks get a stricter (lower) spread threshold.
-            if avg_height >= min_person_height and spread >= person_strict_spread:
+            # Far-court players can have low spread (standing still between
+            # touches) but always move *slightly* (body sway, reactions).
+            # Truly static objects (signs, seated spectators) have < 0.003.
+            if (avg_height >= config.stationary_bg_min_person_height
+                    and spread >= config.stationary_bg_person_spread):
                 logger.info(
                     f"Stationary background filter: sparing track {track_id} "
                     f"(spread={spread:.4f}, avg_height={avg_height:.3f} "
-                    f">= {min_person_height} — likely a player)"
+                    f">= {config.stationary_bg_min_person_height} — likely a player)"
                 )
                 continue
 

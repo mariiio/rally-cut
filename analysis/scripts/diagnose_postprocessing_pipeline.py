@@ -294,8 +294,6 @@ STAGE_NAMES = [
     "team_classify",
     "global_identity",
     "convergence_swap",
-    "post_spatial",
-    "post_relink",
     "interpolate",
 ]
 
@@ -514,29 +512,7 @@ def replay_pipeline_stages(rd: RallyData) -> list[StageResult]:
         )
     snapshot("convergence_swap")
 
-    # Stage 12: post-identity spatial consistency
-    positions, final_consistency = enforce_spatial_consistency(
-        positions, color_store=color_store,
-        appearance_store=appearance_store,
-        video_fps=rd.video_fps,
-    )
-    # Propagate primary status for split tracks
-    for old_id, new_id, *_ in (
-        final_consistency.drift_details + final_consistency.jump_details
-    ):
-        if old_id in primary_track_ids:
-            primary_track_ids.append(new_id)
-    snapshot("post_spatial")
-
-    # Stage 13: post relink
-    if color_store is not None:
-        from rallycut.tracking.tracklet_link import relink_spatial_splits
-        positions, _ = relink_spatial_splits(
-            positions, color_store, appearance_store=appearance_store,
-        )
-    snapshot("post_relink")
-
-    # Stage 14: interpolate
+    # Stage 12: interpolate
     if primary_track_ids:
         positions, _ = interpolate_player_gaps(
             positions, primary_track_ids, config=config,
