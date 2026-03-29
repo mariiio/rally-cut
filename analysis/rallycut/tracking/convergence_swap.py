@@ -172,44 +172,99 @@ def _get_track_window(
     )
 
 
-def _score_court_side_flip(
-    a_before: _TrackWindow,
+@dataclass
+class _TeamProfile:
+    """Full-rally summary of a team's spatial properties."""
+
+    median_y: float
+    median_height: float
+
+
+def _build_team_profiles(
+    positions: list[PlayerPosition],
+    teams: dict[int, int],
+) -> dict[int, _TeamProfile]:
+    """Build per-team spatial profiles from full-rally positions."""
+    team_ys: dict[int, list[float]] = defaultdict(list)
+    team_hs: dict[int, list[float]] = defaultdict(list)
+    for p in positions:
+        t = teams.get(p.track_id)
+        if t is not None:
+            team_ys[t].append(p.y)
+            team_hs[t].append(p.height)
+
+    profiles: dict[int, _TeamProfile] = {}
+    for team_id in team_ys:
+        profiles[team_id] = _TeamProfile(
+            median_y=float(np.median(team_ys[team_id])),
+            median_height=float(np.median(team_hs[team_id])),
+        )
+    return profiles
+
+
+def _score_team_consistency(
     a_after: _TrackWindow,
-    b_before: _TrackWindow,
     b_after: _TrackWindow,
-    split_y: float,
+    team_a: int,
+    team_b: int,
+    team_profiles: dict[int, _TeamProfile],
 ) -> float:
-    """Score court-side evidence for a swap.
+    """Score team-consistency evidence for a swap.
 
-    Returns 0-1. High score = both tracks flipped sides at convergence.
+    After a convergence, checks if each track's post-convergence properties
+    (Y position and bbox height) are more consistent with its OWN team's
+    profile or the OTHER team's profile. Uses the same signals that team
+    classification used — so it works regardless of camera angle.
+
+    Returns 0-1. High score = tracks are on each other's team side.
     """
-    def _side(y: float) -> int | None:
-        if abs(y - split_y) < COURT_SIDE_MARGIN:
-            return None
-        return 0 if y > split_y else 1  # 0=near, 1=far
-
-    a_side_before = _side(a_before.median_y)
-    a_side_after = _side(a_after.median_y)
-    b_side_before = _side(b_before.median_y)
-    b_side_after = _side(b_after.median_y)
-
-    # Both tracks must have classifiable sides
-    if None in (a_side_before, a_side_after, b_side_before, b_side_after):
+    if team_a not in team_profiles or team_b not in team_profiles:
+        return 0.0
+    if team_a == team_b:
         return 0.0
 
-    # Both flipped: strong evidence
-    a_flipped = a_side_before != a_side_after
-    b_flipped = b_side_before != b_side_after
-    if a_flipped and b_flipped:
-        # Extra: did they flip to each other's original side?
-        if a_side_after == b_side_before and b_side_after == a_side_before:
-            return 1.0
-        return 0.7
+    prof_a = team_profiles[team_a]
+    prof_b = team_profiles[team_b]
 
-    # Only one flipped: moderate evidence
-    if a_flipped or b_flipped:
-        return 0.4
+    # How far apart are the team profiles? If teams aren't separated,
+    # this signal is uninformative.
+    y_sep = abs(prof_a.median_y - prof_b.median_y)
+    h_sep = abs(prof_a.median_height - prof_b.median_height)
+    if y_sep < 0.02 and h_sep < 0.02:
+        return 0.0
 
+    # For each track, compute distance to own team vs other team.
+    # Use whichever signal (Y or height) has better separation.
+    def _team_dist(window: _TrackWindow, profile: _TeamProfile) -> float:
+        y_d = abs(window.median_y - profile.median_y)
+        h_d = abs(window.mean_bbox_area ** 0.5 - profile.median_height)
+        # Weight by separation quality
+        if y_sep > h_sep:
+            return y_d / max(y_sep, 0.01)
+        return h_d / max(h_sep, 0.01)
+
+    # Track A: distance to own team vs other team
+    a_own = _team_dist(a_after, prof_a)
+    a_other = _team_dist(a_after, prof_b)
+
+    # Track B: distance to own team vs other team
+    b_own = _team_dist(b_after, prof_b)
+    b_other = _team_dist(b_after, prof_a)
+
+    # Both tracks closer to the OTHER team's profile → swap evidence
+    a_on_wrong_side = a_own > a_other
+    b_on_wrong_side = b_own > b_other
+
+    if a_on_wrong_side and b_on_wrong_side:
+        # Both tracks are closer to the other team → strong swap evidence.
+        # Score by how decisive the mismatch is.
+        a_margin = (a_own - a_other) / max(a_own + a_other, 0.01)
+        b_margin = (b_own - b_other) / max(b_own + b_other, 0.01)
+        return min(1.0, (a_margin + b_margin) / 2 + 0.3)
+
+    # Only one track on wrong side → not enough evidence.
+    # At a net interaction, one player naturally approaches the other
+    # team's side. Require BOTH to show inconsistency.
     return 0.0
 
 
@@ -473,6 +528,9 @@ def detect_convergence_swaps(
     if not all_convergences:
         return positions, 0
 
+    # Build per-team profiles from full rally for team-consistency scoring
+    team_profiles = _build_team_profiles(positions, teams)
+
     # Score each convergence event (both visible and gap-based)
     candidates: list[_SwapCandidate] = []
 
@@ -509,8 +567,10 @@ def detect_convergence_swaps(
         assert b_before is not None and b_after is not None
 
         # Score each signal
-        court_score = _score_court_side_flip(
-            a_before, a_after, b_before, b_after, split_y,
+        team_a = teams.get(conv.track_a, -1)
+        team_b = teams.get(conv.track_b, -1)
+        team_score = _score_team_consistency(
+            a_after, b_after, team_a, team_b, team_profiles,
         )
         size_score = _score_size_swap(
             a_before, a_after, b_before, b_after,
@@ -521,7 +581,7 @@ def detect_convergence_swaps(
 
         # Weighted combination
         total = (
-            WEIGHT_COURT_SIDE * court_score
+            WEIGHT_COURT_SIDE * team_score
             + WEIGHT_SIZE * size_score
             + WEIGHT_APPEARANCE * appearance_score
         )
@@ -532,7 +592,7 @@ def detect_convergence_swaps(
                 track_b=conv.track_b,
                 convergence=conv,
                 swap_frame=swap_frame,
-                court_side_score=court_score,
+                court_side_score=team_score,
                 size_score=size_score,
                 appearance_score=appearance_score,
                 total_score=total,
@@ -541,7 +601,7 @@ def detect_convergence_swaps(
         logger.debug(
             f"Convergence swap: T{conv.track_a}<->T{conv.track_b} "
             f"frames {conv.start_frame}-{conv.end_frame}: "
-            f"court={court_score:.2f} size={size_score:.2f} "
+            f"team={team_score:.2f} size={size_score:.2f} "
             f"appearance={appearance_score:.2f} total={total:.2f}"
             f"{' -> SWAP' if total >= MIN_SWAP_SCORE else ''}"
         )
