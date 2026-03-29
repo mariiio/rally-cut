@@ -1708,52 +1708,10 @@ class PlayerTracker:
                     )
                 )
 
-        # Step 4e: Post-identity spatial consistency
-        if filter_enabled:
-            from rallycut.tracking.spatial_consistency import (
-                enforce_spatial_consistency,
-            )
-
-            positions, final_consistency = enforce_spatial_consistency(
-                positions,
-                color_store=color_store,
-                appearance_store=appearance_store,
-                video_fps=video_fps,
-            )
-            final_total = (
-                final_consistency.jump_splits + final_consistency.drift_splits
-            )
-            if final_total > 0:
-                num_jump_splits += final_total
-                logger.info(
-                    f"Post-identity spatial consistency: "
-                    f"{final_consistency.jump_splits} jump(s), "
-                    f"{final_consistency.drift_splits} drift(s)"
-                )
-
-                for old_id, new_id, *_ in (
-                    final_consistency.drift_details
-                    + final_consistency.jump_details
-                ):
-                    if old_id in primary_track_ids:
-                        primary_track_ids.append(new_id)
-                        logger.info(
-                            f"Propagated primary status: "
-                            f"track {old_id} -> {new_id}"
-                        )
-
-        # Step 4f: Spatial re-link after drift detection
-        if filter_enabled and color_store is not None:
-            from rallycut.tracking.tracklet_link import relink_spatial_splits
-
-            positions, num_post_relinks = relink_spatial_splits(
-                positions, color_store,
-                appearance_store=appearance_store,
-            )
-            if num_post_relinks > 0:
-                logger.info(
-                    f"Post-drift spatial re-link: {num_post_relinks} re-link(s)"
-                )
+        # Step 4e/4f removed: post-identity spatial consistency (drift
+        # detection) was net-negative — it fragmented correct tracks and
+        # post_relink couldn't always recover.  See diagnose_postprocessing
+        # _pipeline.py analysis (2026-03-29).
 
         # Step 5: Interpolate detection gaps
         num_interpolated = 0

@@ -1197,6 +1197,15 @@ def remove_stationary_background_tracks(
 
     removed_ids: set[int] = set()
 
+    # Two-tier spread threshold:
+    # - Small objects (height < 0.10): use standard threshold (0.010)
+    # - Person-sized objects (height >= 0.10): use stricter threshold (0.003)
+    #   Far-court players can have low spread (standing still between
+    #   touches) but always move *slightly* (body sway, reactions).
+    #   Truly static objects (signs, seated spectators) have spread < 0.003.
+    min_person_height = 0.10
+    person_strict_spread = 0.003
+
     for track_id, track_positions in tracks.items():
         n = len(track_positions)
         if n < config.stationary_bg_min_detections:
@@ -1210,11 +1219,23 @@ def remove_stationary_background_tracks(
         spread = _position_spread(x_std, y_std)
 
         if spread < config.stationary_bg_max_spread:
+            avg_height = float(np.mean([p.height for p in track_positions]))
+
+            # Person-sized tracks get a stricter (lower) spread threshold.
+            if avg_height >= min_person_height and spread >= person_strict_spread:
+                logger.info(
+                    f"Stationary background filter: sparing track {track_id} "
+                    f"(spread={spread:.4f}, avg_height={avg_height:.3f} "
+                    f">= {min_person_height} — likely a player)"
+                )
+                continue
+
             removed_ids.add(track_id)
             presence = n / total_frames
             logger.info(
                 f"Stationary background filter: removing track {track_id} "
                 f"({n} det, presence={presence:.0%}, spread={spread:.4f}, "
+                f"avg_height={avg_height:.3f}, "
                 f"pos=({float(np.mean(xs)):.3f}, {float(np.mean(ys)):.3f}))"
             )
 
