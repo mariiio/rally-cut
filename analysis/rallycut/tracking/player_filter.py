@@ -1706,30 +1706,54 @@ def identify_primary_tracks(
             + 0.2 * temporal_coverage
         )
 
-    # Apply max_players limit if we have too many
+    # Apply max_players limit if we have too many.
+    # Use greedy set-cover: start with the highest-scoring track, then
+    # iteratively pick the track that adds the most *new* frame coverage.
+    # This ensures complementary tracks (covering different time periods)
+    # are preferred over redundant high-scorers covering the same frames.
     if len(selected) > config.max_players:
         scored = [(tid, _player_behavior_score(tid)) for tid, _ in selected]
-        scored.sort(key=lambda x: x[1], reverse=True)
 
-        kept_ids = {tid for tid, _ in scored[:config.max_players]}
-        excluded_ids = {tid for tid, _ in scored[config.max_players:]}
+        # Build per-track frame sets for coverage computation
+        track_frames: dict[int, set[int]] = {}
+        for tid, _ in scored:
+            s = track_stats[tid]
+            track_frames[tid] = set(range(s.first_frame, s.last_frame + 1))
+
+        # Greedy set-cover selection
+        remaining = dict(scored)
+        chosen: list[tuple[int, float]] = []
+        covered_frames: set[int] = set()
+
+        for _ in range(config.max_players):
+            if not remaining:
+                break
+            # Pick track maximizing marginal coverage, break ties by score
+            best_tid = max(
+                remaining,
+                key=lambda tid: (
+                    len(track_frames[tid] - covered_frames),
+                    remaining[tid],
+                ),
+            )
+            chosen.append((best_tid, remaining.pop(best_tid)))
+            covered_frames |= track_frames[best_tid]
+
+        kept_ids = {tid for tid, _ in chosen}
+        excluded_ids = {tid for tid, _ in scored if tid not in kept_ids}
 
         logger.info(
             f"Limiting primary tracks: {len(selected)} candidates -> {config.max_players} "
-            f"(excluded tracks {sorted(excluded_ids)} with lower player scores)"
+            f"(excluded tracks {sorted(excluded_ids)} via coverage-aware selection)"
         )
         for tid, score in scored:
             s = track_stats[tid]
             status = "KEPT" if tid in kept_ids else "EXCLUDED"
-            coverage = (
-                (s.last_frame - s.first_frame) / s.total_frames
-                if s.total_frames > 0
-                else 0.0
-            )
+            marginal = len(track_frames[tid] - (covered_frames - track_frames[tid]))
             logger.info(
                 f"  Track {tid}: score={score:.3f} (ball={s.ball_proximity_score:.2f}, "
                 f"spread={s.position_spread:.4f}, presence={s.presence_rate:.2f}, "
-                f"coverage={coverage:.2f}) [{status}]"
+                f"marginal_frames={marginal}) [{status}]"
             )
         selected = [(tid, stab) for tid, stab in selected if tid in kept_ids]
 
