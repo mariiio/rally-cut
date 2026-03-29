@@ -52,7 +52,7 @@ SIZE_CHANGE_THRESHOLD = 0.15  # Min relative bbox area change to count as signal
 WEIGHT_COURT_SIDE = 0.35
 WEIGHT_SIZE = 0.30
 WEIGHT_APPEARANCE = 0.35
-MIN_SWAP_SCORE = 0.35  # Minimum combined score to apply swap
+MIN_SWAP_SCORE = 0.45  # Minimum combined score to apply swap
 
 # Gap convergence detection: overlapping detection gaps between cross-team tracks
 # indicate a net interaction that happened while players were undetected.
