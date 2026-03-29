@@ -31,6 +31,9 @@ from rich.table import Table
 
 from rallycut.court.calibration import CourtCalibrator
 from rallycut.evaluation.db import get_connection
+from rallycut.evaluation.sanity_checks import SanityViolation
+from rallycut.evaluation.sanity_checks import check_all as check_sanity
+from rallycut.evaluation.split import add_split_argument, apply_split
 from rallycut.evaluation.tracking.db import load_court_calibration
 from rallycut.tracking.action_classifier import classify_rally_actions
 from rallycut.tracking.contact_detector import ContactDetectionConfig, detect_contacts
@@ -812,6 +815,9 @@ def main() -> None:
     parser.add_argument("--sweep-thresholds", action="store_true", help="Sweep classifier thresholds [0.25-0.55] and report P/R/F1 tradeoff")
     parser.add_argument("--reid", action="store_true", help="Enable ReID re-attribution (Pass 3) using per-video reference crops")
     parser.add_argument("--visual", action="store_true", help="Enable visual attribution using VideoMAE per-player action classifier")
+    parser.add_argument("--exclude-videos", type=str, help="Comma-separated video ID prefixes to exclude (held-out test set)")
+    parser.add_argument("--only-videos", type=str, help="Comma-separated video ID prefixes to include (held-out test set eval)")
+    add_split_argument(parser)
     args = parser.parse_args()
 
     # Build ContactDetectionConfig from overrides
@@ -836,6 +842,21 @@ def main() -> None:
         console.print(f"[bold]Using trained classifier: {args.classifier}[/bold]")
 
     rallies = load_rallies_with_action_gt(rally_id=args.rally)
+
+    # Apply hash-based train/held-out split
+    rallies = apply_split(rallies, args)
+
+    # Filter by video ID prefixes (held-out test set support)
+    if args.exclude_videos:
+        prefixes = [p.strip() for p in args.exclude_videos.split(",")]
+        before = len(rallies)
+        rallies = [r for r in rallies if not any(r.video_id.startswith(p) for p in prefixes)]
+        console.print(f"  Excluded {before - len(rallies)} rallies from {len(prefixes)} video(s)")
+    if args.only_videos:
+        prefixes = [p.strip() for p in args.only_videos.split(",")]
+        before = len(rallies)
+        rallies = [r for r in rallies if any(r.video_id.startswith(p) for p in prefixes)]
+        console.print(f"  Filtered to {len(rallies)} rallies from {len(prefixes)} video(s) (was {before})")
 
     if not rallies:
         console.print("[red]No rallies found with action ground truth labels.[/red]")
@@ -897,6 +918,9 @@ def main() -> None:
     all_unmatched: list[dict] = []
     total_gt_serves = 0
     serves_present = 0
+
+    # Sanity violation tracking
+    all_violations: list[SanityViolation] = []
 
     # Per-rally results table
     rally_table = Table(title="Per-Rally Contact Detection")
@@ -1069,6 +1093,15 @@ def main() -> None:
                 synth_tolerance, avail_tids, match_teams_for_cs,
             )
 
+        # Sanity checks on predicted action sequence
+        pred_action_names = [a.get("action", "") for a in pred_actions]
+        pred_frames = [a.get("frame", 0) for a in pred_actions]
+        rally_violations = check_sanity(
+            pred_action_names, pred_frames,
+            rally_id=rally.rally_id, fps=rally.fps,
+        )
+        all_violations.extend(rally_violations)
+
         metrics = compute_metrics(matches, unmatched)
 
         rally_table.add_row(
@@ -1216,6 +1249,22 @@ def main() -> None:
                 )
 
             console.print(attr_table)
+
+    # Sanity violation summary
+    if all_violations:
+        time_gaps = [v for v in all_violations if v.violation_type == "time_gap"]
+        illegal_seq = [v for v in all_violations if v.violation_type == "same_action_repeat"]
+        console.print("\n[bold]Sanity Violations[/bold]")
+        console.print(f"  Time gaps (>3s):      {len(time_gaps)}")
+        console.print(f"  Illegal sequences:    {len(illegal_seq)}")
+        console.print(f"  Total violations:     {len(all_violations)}")
+        rallies_with_violations = len({v.rally_id for v in all_violations})
+        console.print(f"  Rallies with issues:  {rallies_with_violations}/{len(rallies)}")
+        if len(all_violations) <= 20:
+            for v in all_violations:
+                console.print(f"    [{v.rally_id[:8]}] {v.violation_type}: {v.description}")
+    else:
+        console.print("\n[bold]Sanity Violations: 0[/bold] (all sequences clean)")
 
     # Clean up video file handles
     for cap in _video_caps.values():

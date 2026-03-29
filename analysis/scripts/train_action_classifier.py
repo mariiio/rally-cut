@@ -21,6 +21,7 @@ import numpy as np
 from rich.console import Console
 from rich.table import Table
 
+from rallycut.evaluation.split import add_split_argument, apply_split
 from rallycut.tracking.action_type_classifier import (
     ActionTypeClassifier,
     extract_action_features,
@@ -153,9 +154,21 @@ def main() -> None:
         default=5,
         help="Frame tolerance for GT matching",
     )
+    parser.add_argument(
+        "--exclude-videos",
+        type=str,
+        help="Comma-separated video ID prefixes to exclude from training (held-out test set)",
+    )
+    add_split_argument(parser)
     args = parser.parse_args()
 
     rallies = load_rallies_with_action_gt()
+    rallies = apply_split(rallies, args)
+    if args.exclude_videos:
+        prefixes = [p.strip() for p in args.exclude_videos.split(",")]
+        before = len(rallies)
+        rallies = [r for r in rallies if not any(r.video_id.startswith(p) for p in prefixes)]
+        console.print(f"  Excluded {before - len(rallies)} rallies from {len(prefixes)} video(s)")
     if not rallies:
         console.print("[red]No rallies with action GT found.[/red]")
         return

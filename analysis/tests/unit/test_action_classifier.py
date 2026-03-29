@@ -663,9 +663,11 @@ class TestTrajectoryPossession:
         assert result.actions[0].action_type == ActionType.SERVE
         assert result.actions[1].action_type == ActionType.RECEIVE
         assert result.actions[2].action_type == ActionType.SET
-        # Court side changed to "near" → counter reset → 1st touch = dig
-        assert result.actions[3].action_type == ActionType.DIG
-        # Back to "far" → counter reset → 1st touch = dig
+        # Court side changed to "near" → counter reset → 1st touch;
+        # Viterbi favours SET→ATTACK (0.90) over SET→DIG (0.05) so both
+        # contacts get relabeled to the most likely post-set action.
+        assert result.actions[3].action_type == ActionType.ATTACK
+        # Back to "far" → counter reset → Viterbi prefers ATTACK→DIG
         assert result.actions[4].action_type == ActionType.DIG
 
     def test_safety_valve_at_4_contacts(self) -> None:
@@ -693,9 +695,10 @@ class TestTrajectoryPossession:
         result = classify_rally_actions(seq, use_classifier=False)
 
         # Safety valve triggers at 4th far contact (index 4 → DIG),
-        # next near contact (index 5) is 1st touch on near side → DIG
+        # next near contact (index 5): rule-based assigns DIG (1st on side),
+        # but Viterbi corrects to SET (DIG→SET is 0.65, DIG→DIG only 0.10).
         assert result.actions[4].action_type == ActionType.DIG
-        assert result.actions[5].action_type == ActionType.DIG
+        assert result.actions[5].action_type == ActionType.SET
 
     def test_no_trajectory_falls_back_to_court_side(self) -> None:
         """Without ball_positions, court_side comparison still works for possession."""
@@ -1694,8 +1697,8 @@ class TestViterbiDecoding:
         assert result[2].action_type == ActionType.SET
         assert result[3].action_type == ActionType.ATTACK
 
-    def test_high_confidence_not_relabeled(self) -> None:
-        """High-confidence actions should not be relabeled even if sequence suggests otherwise."""
+    def test_high_confidence_not_relabeled_with_cap(self) -> None:
+        """With an explicit confidence cap, high-confidence actions are preserved."""
         actions = [
             self._ca(ActionType.SERVE, 10, "near", 0.9),
             self._ca(ActionType.RECEIVE, 30, "far", 0.9),
@@ -1704,9 +1707,22 @@ class TestViterbiDecoding:
             self._ca(ActionType.ATTACK, 40, "far", 0.8),
             self._ca(ActionType.ATTACK, 50, "far", 0.8),
         ]
-        result = viterbi_decode_actions(actions)
+        result = viterbi_decode_actions(actions, confidence_cap=0.65)
         # Both attacks should stay — confidence 0.8 > 0.65 cap
         assert result[2].action_type == ActionType.ATTACK
+        assert result[3].action_type == ActionType.ATTACK
+
+    def test_default_cap_allows_relabeling(self) -> None:
+        """Default confidence_cap=1.0 allows Viterbi to relabel any contact."""
+        actions = [
+            self._ca(ActionType.SERVE, 10, "near", 0.9),
+            self._ca(ActionType.RECEIVE, 30, "far", 0.9),
+            self._ca(ActionType.ATTACK, 40, "far", 0.8),
+            self._ca(ActionType.ATTACK, 50, "far", 0.8),
+        ]
+        result = viterbi_decode_actions(actions)
+        # Viterbi prefers RECEIVE→SET→ATTACK over RECEIVE→ATTACK→ATTACK
+        assert result[2].action_type == ActionType.SET
         assert result[3].action_type == ActionType.ATTACK
 
     def test_preserves_serve_receive(self) -> None:

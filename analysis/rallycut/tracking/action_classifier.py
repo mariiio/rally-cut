@@ -2061,13 +2061,16 @@ _VITERBI_RELABEL_TYPES = {ActionType.DIG, ActionType.SET, ActionType.ATTACK}
 # Candidate labels for Viterbi decoding at each position
 _VITERBI_CANDIDATES = [ActionType.DIG, ActionType.SET, ActionType.ATTACK]
 
-# Only relabel actions below this confidence — high-confidence GBM
-# predictions are usually correct, Viterbi helps ambiguous cases.
-_VITERBI_RELABEL_CONFIDENCE_CAP = 0.65
+# Default confidence cap for Viterbi re-labeling.  Set to 1.0 to always
+# apply Viterbi (no gating); the legacy value 0.65 only relabels
+# low-confidence predictions.
+_VITERBI_RELABEL_CONFIDENCE_CAP_DEFAULT = 1.0
 
 
 def viterbi_decode_actions(
     actions: list[ClassifiedAction],
+    *,
+    confidence_cap: float = _VITERBI_RELABEL_CONFIDENCE_CAP_DEFAULT,
 ) -> list[ClassifiedAction]:
     """Apply Viterbi decoding to enforce sequence constraints.
 
@@ -2196,7 +2199,7 @@ def viterbi_decode_actions(
     result = list(actions)
     for t, idx in enumerate(relabel_indices):
         if decoded[t] != result[idx].action_type:
-            if result[idx].confidence > _VITERBI_RELABEL_CONFIDENCE_CAP:
+            if result[idx].confidence > confidence_cap:
                 continue  # Trust high-confidence predictions
             logger.debug(
                 "Viterbi: frame %d %s → %s (conf=%.2f)",

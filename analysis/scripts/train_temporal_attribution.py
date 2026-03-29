@@ -22,6 +22,7 @@ from rich.console import Console
 from rich.table import Table
 
 from rallycut.evaluation.db import get_connection
+from rallycut.evaluation.split import add_split_argument, apply_split
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.player_tracker import PlayerPosition
 from rallycut.tracking.temporal_attribution.features import (
@@ -368,6 +369,12 @@ def main() -> None:
         help="Train on predicted contact frames (matches inference distribution)",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument(
+        "--exclude-videos",
+        type=str,
+        help="Comma-separated video ID prefixes to exclude from training (held-out test set)",
+    )
+    add_split_argument(parser)
     args = parser.parse_args()
 
     train_config = TrainingConfig(
@@ -380,6 +387,12 @@ def main() -> None:
     # --- Load data ---
     console.print("[bold]Loading rallies with action GT...[/bold]")
     rallies = load_rallies_with_action_gt()
+    rallies = apply_split(rallies, args)
+    if args.exclude_videos:
+        prefixes = [p.strip() for p in args.exclude_videos.split(",")]
+        before = len(rallies)
+        rallies = [r for r in rallies if not any(r["video_id"].startswith(p) for p in prefixes)]
+        console.print(f"  Excluded {before - len(rallies)} rallies from {len(prefixes)} video(s)")
     console.print(f"Loaded {len(rallies)} rallies")
 
     # --- Extract training data ---
