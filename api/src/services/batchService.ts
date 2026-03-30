@@ -1,6 +1,8 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { NotFoundError, ValidationError } from "../middleware/errorHandler.js";
 import type { BatchOperation, BatchResponse } from "../schemas/batch.js";
+import { reindexTrackingData } from "./playerTrackingService.js";
 
 export async function processBatch(
   sessionId: string,
@@ -85,10 +87,26 @@ export async function processBatch(
           if (rally === null) {
             throw new ValidationError(`Rally ${op.id} not found in session`);
           }
+          const boundaryChanged =
+            (op.data.startMs !== undefined && op.data.startMs !== rally.startMs) ||
+            (op.data.endMs !== undefined && op.data.endMs !== rally.endMs);
           await tx.rally.update({
             where: { id: op.id },
             data: op.data,
           });
+          if (boundaryChanged) {
+            const reindexed = await reindexTrackingData(
+              tx, op.id,
+              rally.startMs, rally.endMs,
+              op.data.startMs ?? rally.startMs, op.data.endMs ?? rally.endMs,
+            );
+            if (reindexed) {
+              await tx.video.update({
+                where: { id: rally.videoId },
+                data: { matchAnalysisJson: Prisma.DbNull, matchStatsJson: Prisma.DbNull },
+              });
+            }
+          }
         } else if (op.entity === "highlight") {
           const highlight = await tx.highlight.findFirst({
             where: { id: op.id, sessionId },

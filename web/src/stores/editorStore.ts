@@ -1162,10 +1162,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     const fps = state.videoMetadata?.fps ?? 30;
 
+    const rally = state.rallies.find((r) => r.id === id);
+    const boundaryChanged = rally && ('start_time' in updates || 'end_time' in updates);
+
     set({
-      rallies: state.rallies.map((rally) => {
-        if (rally.id !== id) return rally;
-        const updated = { ...rally, ...updates };
+      rallies: state.rallies.map((r) => {
+        if (r.id !== id) return r;
+        const updated = { ...r, ...updates };
         // Recalculate derived fields if times changed
         if ('start_time' in updates || 'end_time' in updates) {
           return recalculateRally(updated, fps);
@@ -1174,6 +1177,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }),
       hasUnsavedChanges: true,
     });
+
+    // Reindex cached tracking data when boundaries change — shift frame numbers
+    // so overlays stay aligned immediately. Backend reindexes on sync.
+    if (boundaryChanged && rally._backendId) {
+      const newStartTime = updates.start_time ?? rally.start_time;
+      const newEndTime = updates.end_time ?? rally.end_time;
+      usePlayerTrackingStore.getState().reindexTrack(
+        rally._backendId, rally.start_time, newStartTime, newEndTime,
+      );
+    }
 
     // Mark dirty for backend sync
     syncService.markDirty();

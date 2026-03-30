@@ -1,6 +1,8 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { ForbiddenError, NotFoundError } from "../middleware/errorHandler.js";
 import type { SyncStateInput } from "../schemas/sync.js";
+import { reindexTrackingData } from "./playerTrackingService.js";
 import { canAccessSession } from "./shareService.js";
 import { getUserTier, getTierLimits } from "./tierService.js";
 
@@ -99,6 +101,8 @@ export async function syncState(
         allExistingCameraEdits.map((ce) => [ce.rallyId, ce])
       );
 
+      const reindexedVideoIds = new Set<string>();
+
       for (const [videoId, rallies] of Object.entries(input.ralliesPerVideo)) {
         if (!videoIds.has(videoId)) {
           continue; // Skip unknown videos
@@ -126,6 +130,10 @@ export async function syncState(
               existing.order !== order;
 
             if (hasChanges) {
+              const boundaryChanged =
+                existing.startMs !== rally.startMs ||
+                existing.endMs !== rally.endMs;
+
               await tx.rally.update({
                 where: { id: rally.id },
                 data: {
@@ -134,6 +142,18 @@ export async function syncState(
                   order,
                 },
               });
+
+              // Reindex tracking data if rally boundaries shifted
+              if (boundaryChanged) {
+                const reindexed = await reindexTrackingData(
+                  tx, rally.id,
+                  existing.startMs, existing.endMs,
+                  rally.startMs, rally.endMs,
+                );
+                if (reindexed) {
+                  reindexedVideoIds.add(videoId);
+                }
+              }
             }
             rallyId = rally.id;
             seenIds.add(rally.id);
@@ -242,6 +262,17 @@ export async function syncState(
             where: { id: { in: toDelete } },
           });
         }
+      }
+
+      // Clear match analysis for videos where tracking was reindexed
+      if (reindexedVideoIds.size > 0) {
+        await tx.video.updateMany({
+          where: { id: { in: [...reindexedVideoIds] } },
+          data: {
+            matchAnalysisJson: Prisma.DbNull,
+            matchStatsJson: Prisma.DbNull,
+          },
+        });
       }
 
       // Sync global camera settings for each video (per-user: each user has their own settings)

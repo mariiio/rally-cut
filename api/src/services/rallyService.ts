@@ -1,6 +1,8 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { ForbiddenError, NotFoundError } from "../middleware/errorHandler.js";
 import type { CreateRallyInput, UpdateRallyInput } from "../schemas/rally.js";
+import { reindexTrackingData } from "./playerTrackingService.js";
 import { canAccessVideoRallies } from "./shareService.js";
 
 export async function listRallies(videoId: string, userId: string) {
@@ -49,7 +51,7 @@ export async function createRally(videoId: string, userId: string, data: CreateR
 export async function updateRally(id: string, userId: string, data: UpdateRallyInput) {
   const rally = await prisma.rally.findUnique({
     where: { id },
-    select: { videoId: true },
+    select: { videoId: true, startMs: true, endMs: true },
   });
 
   if (rally === null) {
@@ -60,6 +62,28 @@ export async function updateRally(id: string, userId: string, data: UpdateRallyI
   const hasAccess = await canAccessVideoRallies(rally.videoId, userId, true);
   if (!hasAccess) {
     throw new ForbiddenError("You do not have permission to update this rally");
+  }
+
+  const boundaryChanged =
+    (data.startMs !== undefined && data.startMs !== rally.startMs) ||
+    (data.endMs !== undefined && data.endMs !== rally.endMs);
+
+  if (boundaryChanged) {
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.rally.update({ where: { id }, data });
+      const reindexed = await reindexTrackingData(
+        tx, id,
+        rally.startMs, rally.endMs,
+        data.startMs ?? rally.startMs, data.endMs ?? rally.endMs,
+      );
+      if (reindexed) {
+        await tx.video.update({
+          where: { id: rally.videoId },
+          data: { matchAnalysisJson: Prisma.DbNull, matchStatsJson: Prisma.DbNull },
+        });
+      }
+      return updated;
+    });
   }
 
   return prisma.rally.update({

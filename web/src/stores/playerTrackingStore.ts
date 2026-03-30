@@ -106,6 +106,7 @@ interface PlayerTrackingState {
   hydrateFromAutoSave: (videoId: string, corners: Corner[]) => void;
   trackPlayersForRally: (rallyId: string, videoId: string, fallbackFps?: number) => Promise<void>;
   loadPlayerTrack: (rallyId: string, fallbackFps?: number, forceRefresh?: boolean) => Promise<boolean>;
+  reindexTrack: (rallyId: string, oldStartTime: number, newStartTime: number, newEndTime: number) => void;
   swapTracks: (rallyId: string, trackA: number, trackB: number, fromFrame: number, fallbackFps?: number) => Promise<void>;
   promoteTracks: (rallyId: string, demoteTrackId: number, promoteTrackId: number, fromFrame: number, fallbackFps?: number) => Promise<void>;
 
@@ -360,9 +361,13 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
           const response = await getPlayerTrack(rallyId);
 
           if (response.status === 'not_found') {
-            set((state) => ({
-              isLoadingTrack: { ...state.isLoadingTrack, [rallyId]: false },
-            }));
+            set((state) => {
+              const { [rallyId]: _, ...restTracks } = state.playerTracks;
+              return {
+                playerTracks: restTracks,
+                isLoadingTrack: { ...state.isLoadingTrack, [rallyId]: false },
+              };
+            });
             return false;
           }
 
@@ -381,6 +386,83 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
           }));
           return false;
         }
+      },
+
+      // Shift frame numbers in cached tracking data so overlays stay aligned
+      // when rally boundaries change. Times are in seconds (matching Rally.start_time).
+      reindexTrack: (rallyId: string, oldStartTime: number, newStartTime: number, newEndTime: number) => {
+        const track = get().playerTracks[rallyId];
+        if (!track?.tracksJson) return;
+
+        const { tracksJson } = track;
+        const fps = tracksJson.fps || 30;
+        const deltaFrames = Math.round((newStartTime - oldStartTime) * fps);
+        const newFrameCount = Math.round((newEndTime - newStartTime) * fps);
+
+        if (deltaFrames === 0 && newFrameCount === tracksJson.frameCount) return;
+
+        const shiftPlayerPositions = (positions: PlayerPosition[]) =>
+          positions
+            .map((p) => ({ ...p, frame: p.frame - deltaFrames }))
+            .filter((p) => p.frame >= 0 && p.frame < newFrameCount);
+
+        const reindexedTracks = tracksJson.tracks.map((t) => ({
+          ...t,
+          positions: shiftPlayerPositions(t.positions),
+        }));
+
+        const reindexedRawTracks = tracksJson.rawTracks?.map((t) => ({
+          ...t,
+          positions: shiftPlayerPositions(t.positions),
+        }));
+
+        const reindexedBallPositions = tracksJson.ballPositions
+          ?.map((p) => ({ ...p, frameNumber: p.frameNumber - deltaFrames }))
+          .filter((p) => p.frameNumber >= 0 && p.frameNumber < newFrameCount);
+
+        let reindexedContacts = tracksJson.contacts;
+        if (reindexedContacts) {
+          const shiftedContacts = reindexedContacts.contacts
+            .map((c) => ({ ...c, frame: c.frame - deltaFrames }))
+            .filter((c) => c.frame >= 0 && c.frame < newFrameCount);
+          reindexedContacts = {
+            ...reindexedContacts,
+            rallyStartFrame: reindexedContacts.rallyStartFrame - deltaFrames,
+            numContacts: shiftedContacts.length,
+            contacts: shiftedContacts,
+          };
+        }
+
+        let reindexedActions = tracksJson.actions;
+        if (reindexedActions) {
+          const shiftedActions = reindexedActions.actions
+            .map((a) => ({ ...a, frame: a.frame - deltaFrames }))
+            .filter((a) => a.frame >= 0 && a.frame < newFrameCount);
+          reindexedActions = {
+            ...reindexedActions,
+            numContacts: shiftedActions.length,
+            actionSequence: shiftedActions.map((a) => a.action),
+            actions: shiftedActions,
+          };
+        }
+
+        set((state) => ({
+          playerTracks: {
+            ...state.playerTracks,
+            [rallyId]: {
+              ...track,
+              tracksJson: {
+                ...tracksJson,
+                frameCount: newFrameCount,
+                tracks: reindexedTracks,
+                rawTracks: reindexedRawTracks,
+                ballPositions: reindexedBallPositions,
+                contacts: reindexedContacts,
+                actions: reindexedActions,
+              },
+            },
+          },
+        }));
       },
 
       trackPlayersForRally: async (rallyId: string, videoId: string, fallbackFps: number = 30) => {

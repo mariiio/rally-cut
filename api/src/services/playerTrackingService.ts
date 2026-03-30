@@ -18,6 +18,8 @@ import { prisma } from '../lib/prisma.js';
 import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errorHandler.js';
 import { remapSingleRally } from './matchAnalysisService.js';
 
+type PrismaTransaction = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -1242,4 +1244,117 @@ export async function trackPlayersForRally(
       // Ignore cleanup errors
     }
   }
+}
+
+/**
+ * Reindex tracking data when rally boundaries change.
+ *
+ * Frame numbers in tracking data are 0-indexed relative to the extracted video
+ * segment. When startMs/endMs change, we shift all frame numbers so they still
+ * correspond to the same absolute video moments, and clip any that fall outside
+ * the new range.
+ *
+ * Returns true if tracking data was modified (caller should clear match analysis).
+ */
+export async function reindexTrackingData(
+  tx: PrismaTransaction,
+  rallyId: string,
+  oldStartMs: number,
+  oldEndMs: number,
+  newStartMs: number,
+  newEndMs: number,
+): Promise<boolean> {
+  const track = await tx.playerTrack.findUnique({
+    where: { rallyId },
+    select: {
+      id: true,
+      status: true,
+      fps: true,
+      positionsJson: true,
+      rawPositionsJson: true,
+      ballPositionsJson: true,
+      contactsJson: true,
+      actionsJson: true,
+      frameCount: true,
+    },
+  });
+
+  if (!track || track.status !== 'COMPLETED') {
+    return false;
+  }
+
+  const fps = track.fps ?? 30;
+  if (!track.fps) {
+    console.warn(`[PLAYER_TRACK] rally ${rallyId}: fps is null, using 30fps fallback for reindex`);
+  }
+  const deltaFrames = Math.round((newStartMs - oldStartMs) / 1000 * fps);
+  const newFrameCount = Math.round((newEndMs - newStartMs) / 1000 * fps);
+
+  // Nothing to do if boundaries didn't actually shift
+  if (deltaFrames === 0 && track.frameCount != null && newFrameCount === track.frameCount) {
+    return false;
+  }
+
+  // Helper: shift and clip an array of objects with a frameNumber field
+  function shiftPositions<T extends { frameNumber: number }>(positions: T[] | null): T[] {
+    if (!positions) return [];
+    return positions
+      .map((p) => ({ ...p, frameNumber: p.frameNumber - deltaFrames }))
+      .filter((p) => p.frameNumber >= 0 && p.frameNumber < newFrameCount);
+  }
+
+  // Helper: shift and clip an array of objects with a frame field
+  function shiftFrameField<T extends { frame: number }>(items: T[]): T[] {
+    return items
+      .map((item) => ({ ...item, frame: item.frame - deltaFrames }))
+      .filter((item) => item.frame >= 0 && item.frame < newFrameCount);
+  }
+
+  const positions = shiftPositions(track.positionsJson as PlayerPosition[] | null);
+  const rawPositions = shiftPositions(track.rawPositionsJson as PlayerPosition[] | null);
+  const ballPositions = shiftPositions(track.ballPositionsJson as BallPosition[] | null);
+
+  // Contacts: shift frame on each contact + update rallyStartFrame
+  let contactsData = track.contactsJson as ContactsData | null;
+  if (contactsData?.contacts) {
+    const shiftedContacts = shiftFrameField(contactsData.contacts);
+    contactsData = {
+      ...contactsData,
+      rallyStartFrame: contactsData.rallyStartFrame - deltaFrames,
+      numContacts: shiftedContacts.length,
+      contacts: shiftedContacts,
+    };
+  }
+
+  // Actions: shift frame on each action
+  let actionsData = track.actionsJson as ActionsData | null;
+  if (actionsData?.actions) {
+    const shiftedActions = shiftFrameField(actionsData.actions);
+    actionsData = {
+      ...actionsData,
+      numContacts: shiftedActions.length,
+      actionSequence: shiftedActions.map((a) => a.action),
+      actions: shiftedActions,
+    };
+  }
+
+  await tx.playerTrack.update({
+    where: { id: track.id },
+    data: {
+      frameCount: newFrameCount,
+      positionsJson: positions as unknown as Prisma.JsonArray,
+      rawPositionsJson: rawPositions as unknown as Prisma.JsonArray,
+      ballPositionsJson: ballPositions as unknown as Prisma.JsonArray,
+      contactsJson: contactsData ? (contactsData as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
+      actionsJson: actionsData ? (actionsData as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
+    },
+  });
+
+  console.log(
+    `[PLAYER_TRACK] Reindexed rally ${rallyId}: deltaFrames=${deltaFrames}, ` +
+    `newFrameCount=${newFrameCount}, positions=${positions.length}, ` +
+    `ball=${ballPositions.length}, contacts=${contactsData?.numContacts ?? 0}`
+  );
+
+  return true;
 }
