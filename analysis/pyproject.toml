@@ -61,9 +61,13 @@ dependencies = [
     "pytorch-crf>=0.7.2",
     # Player tracking (YOLOv8 + ByteTrack)
     "ultralytics>=8.2.0",
-    "lap>=0.5.12",  # Required by ByteTrack for tracking
+    "lap>=0.5.12", # Required by ByteTrack for tracking
     # Player ReID (cross-rally matching)
     "torchreid>=0.2.5",
+    "boxmot>=16.0.11",
+    "tensorboard>=2.20.0",
+    # Action spotting (E2E-Spot)
+    "timm>=1.0.0",
 ]
 
 [project.optional-dependencies]

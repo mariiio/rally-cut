@@ -54,5 +54,11 @@ weights/
 # Vendor repos (cloned for training)
 vendor/
 
+# E2E-Spot experiment data (large, regeneratable)
+data/spotting_frames/
+data/spotting_frames.tar
+data/spotting_metadata.json
+data/external/
+
 # Cache
 .cache/
