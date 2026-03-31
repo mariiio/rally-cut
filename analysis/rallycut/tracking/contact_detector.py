@@ -151,6 +151,16 @@ class ContactDetectionConfig:
     baseline_y_far: float = 0.18  # Far baseline Y threshold
     serve_window_frames: int = 60  # Serve must occur in first N frames (~2s)
 
+    # Player-motion candidate generation: detect contacts from player body motion
+    # (arm swings, jumps) even when ball trajectory is flat (blocks, soft touches).
+    # Disabled by default: adds 265 candidates but only 9 TPs (3.4% hit rate),
+    # hurting classifier LOO CV. The bbox motion features on existing candidates
+    # capture the same signal more effectively.
+    enable_player_motion_candidates: bool = False
+    player_motion_min_d_y: float = 0.015  # Min peak Y shift to qualify as contact motion
+    player_motion_min_d_height: float = 0.015  # Min peak height change to qualify
+    player_motion_max_ball_distance: float = 0.20  # Max ball-player distance for motion candidate
+
     # Temporal attribution: use trajectory-based model to override proximity attribution
     use_temporal_attribution: bool = True
     temporal_attribution_min_confidence: float = 0.6  # Min softmax confidence to accept
@@ -511,6 +521,94 @@ def _compute_candidate_bbox_motion(
         )
         result[tid] = (max_dy, max_dh)
     return result
+
+
+def _find_player_motion_candidates(
+    player_positions: list[PlayerPosition],
+    ball_by_frame: dict[int, BallPosition],
+    existing_candidates: list[int],
+    min_distance_frames: int = 12,
+    motion_window: int = 5,
+    min_d_y: float = 0.015,
+    min_d_height: float = 0.015,
+    max_ball_distance: float = 0.20,
+) -> list[int]:
+    """Generate contact candidates from player body motion near the ball.
+
+    Detects frames where a player shows significant motion (jump, arm swing)
+    AND is close to the ball, even when ball trajectory doesn't change.
+    Addresses blocks and soft touches where existing generators fail.
+
+    Returns:
+        List of candidate frames not already covered by existing candidates.
+    """
+    if not player_positions or not ball_by_frame:
+        return []
+
+    existing_set = set(existing_candidates)
+    ball_frames = sorted(ball_by_frame.keys())
+    if not ball_frames:
+        return []
+
+    # Group player positions by frame and by track_id for efficient lookup
+    players_by_frame: dict[int, list[PlayerPosition]] = {}
+    players_by_track: dict[int, list[PlayerPosition]] = {}
+    for p in player_positions:
+        players_by_frame.setdefault(p.frame_number, []).append(p)
+        players_by_track.setdefault(p.track_id, []).append(p)
+
+    # Sort per-track positions by frame for windowed lookups
+    for positions in players_by_track.values():
+        positions.sort(key=lambda p: p.frame_number)
+
+    # Pre-sort existing candidates for efficient proximity check
+    sorted_existing = sorted(existing_set)
+
+    candidates: list[int] = []
+
+    # Scan ball frames for player motion peaks near the ball
+    for bf in ball_frames:
+        # Skip if near an existing candidate (binary search on sorted list)
+        if any(abs(bf - ec) < min_distance_frames for ec in sorted_existing):
+            continue
+
+        ball = ball_by_frame[bf]
+
+        # Check each player visible at this frame
+        players_at_frame = players_by_frame.get(bf, [])
+        for player in players_at_frame:
+            # Player must be close to ball (upper-body center)
+            player_x = player.x
+            player_y = player.y - player.height * 0.25
+            dist = math.sqrt((ball.x - player_x) ** 2 + (ball.y - player_y) ** 2)
+            if dist > max_ball_distance:
+                continue
+
+            # Compute peak motion for this player in ±window (O(1) lookup via pre-grouped dict)
+            positions_in_window: list[PlayerPosition] = [
+                p for p in players_by_track.get(player.track_id, [])
+                if abs(p.frame_number - bf) <= motion_window
+            ]
+
+            if len(positions_in_window) < 2:
+                continue
+
+            positions_in_window.sort(key=lambda p: p.frame_number)
+            max_dy = max(
+                abs(positions_in_window[i + 1].y - positions_in_window[i].y)
+                for i in range(len(positions_in_window) - 1)
+            )
+            max_dh = max(
+                abs(positions_in_window[i + 1].height - positions_in_window[i].height)
+                for i in range(len(positions_in_window) - 1)
+            )
+
+            if max_dy >= min_d_y or max_dh >= min_d_height:
+                candidates.append(bf)
+                existing_set.add(bf)
+                break  # One player qualifying is enough for this frame
+
+    return candidates
 
 
 def _filter_noise_spikes(
@@ -1572,6 +1670,23 @@ def detect_contacts(
         with_parabolic, net_crossing_frames, cfg.min_peak_distance_frames
     )
 
+    # Step 5f: Player-motion candidates — detect contacts from player body motion
+    # near the ball, even when ball trajectory doesn't change (blocks, soft touches)
+    n_player_motion = 0
+    if cfg.enable_player_motion_candidates and player_positions:
+        player_motion_frames = _find_player_motion_candidates(
+            player_positions, ball_by_frame, candidate_frames,
+            min_distance_frames=cfg.min_peak_distance_frames,
+            min_d_y=cfg.player_motion_min_d_y,
+            min_d_height=cfg.player_motion_min_d_height,
+            max_ball_distance=cfg.player_motion_max_ball_distance,
+        )
+        if player_motion_frames:
+            n_player_motion = len(player_motion_frames)
+            candidate_frames = _merge_candidates(
+                candidate_frames, player_motion_frames, cfg.min_peak_distance_frames
+            )
+
     if not candidate_frames:
         return ContactSequence(net_y=estimated_net_y)
 
@@ -1742,6 +1857,12 @@ def detect_contacts(
             # Consecutive ball detections around candidate frame
             consec = _count_consecutive_detections(ball_by_frame, frame)
 
+            # Aggregate bbox motion features from candidate players
+            best_d_y = max((dy for dy, _ in bbox_motion.values()), default=0.0)
+            best_d_h = max((dh for _, dh in bbox_motion.values()), default=0.0)
+            nearest_d_y = bbox_motion.get(track_id, (0.0, 0.0))[0] if track_id >= 0 else 0.0
+            nearest_d_h = bbox_motion.get(track_id, (0.0, 0.0))[1] if track_id >= 0 else 0.0
+
             features = CandidateFeatures(
                 frame=frame,
                 velocity=velocity,
@@ -1752,6 +1873,10 @@ def detect_contacts(
                 velocity_y=vel_y,
                 velocity_ratio=vel_ratio,
                 player_distance=player_dist,
+                best_player_max_d_y=best_d_y,
+                best_player_max_d_height=best_d_h,
+                nearest_player_max_d_y=nearest_d_y,
+                nearest_player_max_d_height=nearest_d_h,
                 ball_x=ball.x,
                 ball_y=ball.y,
                 ball_y_relative_net=ball.y - estimated_net_y,
@@ -1870,6 +1995,7 @@ def detect_contacts(
         f"{len(parabolic_frames)} parabolic + "
         f"{len(net_crossing_frames)} net-cross + "
         f"{n_post_serve} post-serve + "
+        f"{n_player_motion} player-motion + "
         f"{n_proximity} proximity → "
         f"{len(candidate_frames)} candidates"
         f"{f', {pre_dedup - len(contacts)} deduped' if pre_dedup > len(contacts) else ''}"

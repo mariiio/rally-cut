@@ -839,8 +839,8 @@ class TestCandidateFeatures:
             frames_since_last=15,
         )
         arr = f.to_array()
-        assert arr.shape == (16,)
-        assert len(CandidateFeatures.feature_names()) == 16
+        assert arr.shape == (20,)
+        assert len(CandidateFeatures.feature_names()) == 20
 
     def test_infinite_player_distance_handled(self) -> None:
         """Infinite player distance maps to 1.0."""
@@ -874,7 +874,7 @@ class TestCandidateFeatures:
             frames_since_last=0,
         )
         arr = f.to_array()
-        assert arr[11] == 1.0  # is_net_crossing
+        assert arr[15] == 1.0  # is_net_crossing
 
 
 class TestContactClassifier:

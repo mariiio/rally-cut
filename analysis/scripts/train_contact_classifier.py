@@ -29,6 +29,7 @@ from rallycut.tracking.contact_detector import (
     ContactDetectionConfig,
     _check_net_crossing,
     _compute_acceleration,
+    _compute_candidate_bbox_motion,
     _compute_trajectory_curvature,
     _compute_velocities,
     _compute_velocity_ratio,
@@ -37,8 +38,10 @@ from rallycut.tracking.contact_detector import (
     _find_deceleration_candidates,
     _find_inflection_candidates,
     _find_nearest_player,
+    _find_nearest_players,
     _find_net_crossing_candidates,
     _find_parabolic_breakpoints,
+    _find_player_motion_candidates,
     _find_proximity_frame,
     _find_velocity_reversal_candidates,
     _merge_candidates,
@@ -204,6 +207,20 @@ def extract_candidate_features(
             for pp in rally.positions_json
         ]
 
+    # Player-motion candidates (must match detect_contacts logic)
+    if player_positions and cfg.enable_player_motion_candidates:
+        player_motion_frames = _find_player_motion_candidates(
+            player_positions, ball_by_frame, candidate_frames,
+            min_distance_frames=cfg.min_peak_distance_frames,
+            min_d_y=cfg.player_motion_min_d_y,
+            min_d_height=cfg.player_motion_min_d_height,
+            max_ball_distance=cfg.player_motion_max_ball_distance,
+        )
+        if player_motion_frames:
+            candidate_frames = _merge_candidates(
+                candidate_frames, player_motion_frames, cfg.min_peak_distance_frames
+            )
+
     # Generate player-proximity candidates (must match detect_contacts logic)
     if player_positions and cfg.enable_proximity_candidates:
         candidate_set = set(candidate_frames)
@@ -249,13 +266,30 @@ def extract_candidate_features(
         )
 
         # Player
+        bbox_motion: dict[int, tuple[float, float]] = {}
         if player_positions:
             track_id, player_dist, _ = _find_nearest_player(
                 frame, ball.x, ball.y, player_positions,
                 search_frames=cfg.player_search_frames,
             )
+            candidates_ranked = _find_nearest_players(
+                frame, ball.x, ball.y, player_positions,
+                search_frames=cfg.player_candidate_search_frames,
+            )
+            if candidates_ranked:
+                bbox_motion = _compute_candidate_bbox_motion(
+                    player_positions, frame,
+                    [tid for tid, _, _ in candidates_ranked],
+                )
         else:
+            track_id = -1
             player_dist = float("inf")
+
+        # Aggregate bbox motion features
+        best_d_y = max((dy for dy, _ in bbox_motion.values()), default=0.0)
+        best_d_h = max((dh for _, dh in bbox_motion.values()), default=0.0)
+        nearest_d_y = bbox_motion.get(track_id, (0.0, 0.0))[0] if track_id >= 0 else 0.0
+        nearest_d_h = bbox_motion.get(track_id, (0.0, 0.0))[1] if track_id >= 0 else 0.0
 
         arc_residual = residual_by_frame.get(frame, 0.0)
 
@@ -295,6 +329,10 @@ def extract_candidate_features(
             velocity_y=vel_y,
             velocity_ratio=vel_ratio,
             player_distance=player_dist,
+            best_player_max_d_y=best_d_y,
+            best_player_max_d_height=best_d_h,
+            nearest_player_max_d_y=nearest_d_y,
+            nearest_player_max_d_height=nearest_d_h,
             ball_x=ball.x,
             ball_y=ball.y,
             ball_y_relative_net=ball.y - estimated_net_y,
@@ -422,13 +460,46 @@ def main() -> None:
     console.print(f"  Recall: {train_metrics['train_recall']:.1%}")
     console.print(f"  TP: {train_metrics['train_tp']}, FP: {train_metrics['train_fp']}, FN: {train_metrics['train_fn']}")
 
-    # LOO CV
-    loo_metrics = classifier.loo_cv(x_mat, y, rally_ids, positive_weight=args.positive_weight)
-    console.print(f"\n[bold]Leave-One-Rally-Out CV ({loo_metrics['n_rallies']} folds):[/bold]")
-    console.print(f"  F1: {loo_metrics['loo_f1']:.1%}")
-    console.print(f"  Precision: {loo_metrics['loo_precision']:.1%}")
-    console.print(f"  Recall: {loo_metrics['loo_recall']:.1%}")
-    console.print(f"  TP: {loo_metrics['loo_tp']}, FP: {loo_metrics['loo_fp']}, FN: {loo_metrics['loo_fn']}")
+    # LOO CV — compute probabilities once, then sweep thresholds on cached probas
+    from sklearn.ensemble import GradientBoostingClassifier as _Gbc
+
+    unique_rallies = np.unique(rally_ids)
+    loo_probas = np.zeros(len(y))
+
+    console.print(f"\n[bold]LOO CV: training {len(unique_rallies)} folds...[/bold]")
+    for i, rally in enumerate(unique_rallies):
+        test_mask = rally_ids == rally
+        train_mask = ~test_mask
+
+        if np.sum(train_mask) < 10 or np.sum(y[train_mask]) < 3:
+            loo_probas[test_mask] = 0.5
+            continue
+
+        model = _Gbc(
+            n_estimators=200, max_depth=4, learning_rate=0.05,
+            min_samples_leaf=5, subsample=0.8, random_state=42,
+        )
+        train_weights = np.where(y[train_mask] == 1, args.positive_weight, 1.0)
+        model.fit(x_mat[train_mask], y[train_mask], sample_weight=train_weights)
+        loo_probas[test_mask] = model.predict_proba(x_mat[test_mask])[:, 1]
+
+        if (i + 1) % 50 == 0:
+            console.print(f"  [{i + 1}/{len(unique_rallies)}] folds complete")
+
+    # Report LOO CV at requested threshold
+    loo_preds = (loo_probas >= args.threshold).astype(int)
+    tp = int(np.sum((loo_preds == 1) & (y == 1)))
+    fp = int(np.sum((loo_preds == 1) & (y == 0)))
+    fn = int(np.sum((loo_preds == 0) & (y == 1)))
+    prec = tp / max(1, tp + fp)
+    rec = tp / max(1, tp + fn)
+    f1 = 2 * prec * rec / max(1e-9, prec + rec)
+
+    console.print(f"\n[bold]Leave-One-Rally-Out CV ({len(unique_rallies)} folds):[/bold]")
+    console.print(f"  F1: {f1:.1%}")
+    console.print(f"  Precision: {prec:.1%}")
+    console.print(f"  Recall: {rec:.1%}")
+    console.print(f"  TP: {tp}, FP: {fp}, FN: {fn}")
 
     # Feature importance
     importance = classifier.feature_importance()
@@ -442,8 +513,8 @@ def main() -> None:
 
         console.print(imp_table)
 
-    # Threshold sweep
-    console.print("\n[bold]Threshold sweep (LOO CV):[/bold]")
+    # Threshold sweep on cached LOO probabilities (instant — no retraining)
+    console.print("\n[bold]Threshold sweep (LOO CV, cached probas):[/bold]")
     sweep_table = Table()
     sweep_table.add_column("Threshold", justify="right")
     sweep_table.add_column("F1", justify="right")
@@ -454,17 +525,21 @@ def main() -> None:
     best_threshold = args.threshold
 
     for t in [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50]:
-        sweep_clf = ContactClassifier(threshold=t)
-        sweep_metrics = sweep_clf.loo_cv(x_mat, y, rally_ids, positive_weight=args.positive_weight)
-        f1 = sweep_metrics["loo_f1"]
+        preds_t = (loo_probas >= t).astype(int)
+        tp_t = int(np.sum((preds_t == 1) & (y == 1)))
+        fp_t = int(np.sum((preds_t == 1) & (y == 0)))
+        fn_t = int(np.sum((preds_t == 0) & (y == 1)))
+        prec_t = tp_t / max(1, tp_t + fp_t)
+        rec_t = tp_t / max(1, tp_t + fn_t)
+        f1_t = 2 * prec_t * rec_t / max(1e-9, prec_t + rec_t)
         sweep_table.add_row(
             f"{t:.2f}",
-            f"{f1:.1%}",
-            f"{sweep_metrics['loo_precision']:.1%}",
-            f"{sweep_metrics['loo_recall']:.1%}",
+            f"{f1_t:.1%}",
+            f"{prec_t:.1%}",
+            f"{rec_t:.1%}",
         )
-        if f1 > best_f1:
-            best_f1 = f1
+        if f1_t > best_f1:
+            best_f1 = f1_t
             best_threshold = t
 
     console.print(sweep_table)

@@ -7,10 +7,11 @@ Individual trajectory features (velocity, direction change, player distance)
 overlap between TP and FP in marginal distributions, but a learned model can
 exploit correlations between features to separate them.
 
-Features per candidate (16 total):
+Features per candidate (20 total):
 - Ball velocity magnitude, direction change angle, vertical velocity, speed ratio
 - Arc fit residual, acceleration, trajectory curvature
 - Player distance to nearest player
+- Player bbox motion: best/nearest player max delta-Y and delta-height (4 features)
 - Ball (x, y) position, ball Y relative to net, net crossing flag
 - Time since last candidate (frames), frames since rally start
 - Ball detection density, consecutive detections
@@ -54,6 +55,11 @@ class CandidateFeatures:
     is_net_crossing: bool  # Ball crosses net_y within ±5 frames
     # Temporal features
     frames_since_last: int  # Frames since previous candidate (0 if first)
+    # Player bbox motion (peak frame-to-frame deltas in ±5 frames around candidate)
+    best_player_max_d_y: float = 0.0  # Max d_y across all nearby players
+    best_player_max_d_height: float = 0.0  # Max d_height across all nearby players
+    nearest_player_max_d_y: float = 0.0  # d_y of nearest player
+    nearest_player_max_d_height: float = 0.0  # d_height of nearest player
     # Detection quality
     ball_detection_density: float = 1.0  # fraction of frames with ball in ±10 window
     consecutive_detections: int = 0  # consecutive ball detections around candidate
@@ -71,6 +77,10 @@ class CandidateFeatures:
             self.velocity_y,
             self.velocity_ratio,
             player_dist,
+            self.best_player_max_d_y,
+            self.best_player_max_d_height,
+            self.nearest_player_max_d_y,
+            self.nearest_player_max_d_height,
             self.ball_x,
             self.ball_y,
             self.ball_y_relative_net,
@@ -92,6 +102,10 @@ class CandidateFeatures:
             "velocity_y",
             "velocity_ratio",
             "player_distance",
+            "best_player_max_d_y",
+            "best_player_max_d_height",
+            "nearest_player_max_d_y",
+            "nearest_player_max_d_height",
             "ball_x",
             "ball_y",
             "ball_y_relative_net",
