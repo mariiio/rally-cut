@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import copy
 from collections import defaultdict
 
 import numpy as np
@@ -25,6 +26,7 @@ from rallycut.evaluation.split import add_split_argument, apply_split
 from rallycut.tracking.action_type_classifier import (
     ActionTypeClassifier,
     extract_action_features,
+    set_prev_action_context,
 )
 from rallycut.tracking.ball_tracker import BallPosition as BallPos
 from rallycut.tracking.contact_detector import (
@@ -111,16 +113,29 @@ def extract_features_for_rally(
     labels: list[str] = []
     rally_ids: list[str] = []
 
+    # Build ordered list of matched GT for prev-action context
+    matched_gt: list[tuple[str, int, str]] = []  # (gt_action, pred_frame, court_side)
     for m in matches:
         if m.pred_frame is None:
-            continue  # Unmatched GT (missed contact)
-        if m.gt_action == "block":
-            continue  # Skip block (too few samples, stays rule-based)
-        if m.gt_action not in ("serve", "receive", "set", "attack", "dig"):
+            continue
+        if m.gt_action not in ("serve", "receive", "set", "attack", "dig", "block"):
+            continue
+        ci = frame_to_idx.get(m.pred_frame)
+        cs = contact_seq.contacts[ci].court_side if ci is not None else ""
+        matched_gt.append((m.gt_action, m.pred_frame, cs))
+
+    prev_action_str = "unknown"
+    prev_court_side = ""
+    for gt_action, pred_frame, court_side in matched_gt:
+        if gt_action == "block":
+            prev_action_str = gt_action
+            prev_court_side = court_side
             continue
 
-        contact_idx = frame_to_idx.get(m.pred_frame)
+        contact_idx = frame_to_idx.get(pred_frame)
         if contact_idx is None:
+            prev_action_str = gt_action
+            prev_court_side = court_side
             continue
 
         contact = contact_seq.contacts[contact_idx]
@@ -134,9 +149,23 @@ def extract_features_for_rally(
             player_positions=player_positions or None,
         )
 
+        # Sample 1: no prev-action context (simulates first pass)
         features_list.append(feat.to_array())
-        labels.append(m.gt_action)
+        labels.append(gt_action)
         rally_ids.append(rally.rally_id)
+
+        # Sample 2: with GT prev-action context (simulates second pass)
+        feat2 = copy.copy(feat)
+        same_side: bool | None = None
+        if prev_court_side and court_side in ("near", "far"):
+            same_side = prev_court_side == court_side
+        set_prev_action_context(feat2, prev_action_str, 0.7, same_side)
+        features_list.append(feat2.to_array())
+        labels.append(gt_action)
+        rally_ids.append(rally.rally_id)
+
+        prev_action_str = gt_action
+        prev_court_side = court_side
 
     return features_list, labels, rally_ids
 
@@ -234,6 +263,10 @@ def main() -> None:
     for cls, info in sorted(train_metrics["per_class"].items()):
         console.print(f"  {cls}: {info['accuracy']:.1%} ({info['count']} samples)")
 
+    # Save model (before LOO-CV which can be slow)
+    classifier.save(args.output)
+    console.print(f"\n[green]Saved action type classifier to {args.output}[/green]")
+
     # LOO CV
     loo_metrics = classifier.loo_cv(x_mat, y, rally_ids)
     console.print(
@@ -299,10 +332,6 @@ def main() -> None:
             imp_table.add_row(name, f"{imp:.3f}")
 
         console.print(imp_table)
-
-    # Save model
-    classifier.save(args.output)
-    console.print(f"\n[green]Saved action type classifier to {args.output}[/green]")
 
 
 if __name__ == "__main__":

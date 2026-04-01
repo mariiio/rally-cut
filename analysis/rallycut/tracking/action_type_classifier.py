@@ -69,6 +69,12 @@ class ActionFeatures:
     player_y_relative_net: float  # Player bbox center Y minus net_y
     post_contact_speed: float  # Mean ball speed over 5 frames post-contact
 
+    # Previous-action context (v3 features, two-pass classification)
+    # Set by second pass; defaults = no context (first pass / unknown)
+    prev_action_encoded: float = -1.0  # serve=0,..,dig=4, -1=unknown
+    prev_action_confidence: float = 0.0
+    prev_same_side: float = 0.5  # 1.0=same, 0.0=different, 0.5=unknown
+
     def to_array(self) -> np.ndarray:
         """Convert to numpy feature array for classifier input."""
         player_dist = self.player_distance if math.isfinite(self.player_distance) else 1.0
@@ -93,6 +99,9 @@ class ActionFeatures:
             self.post_contact_crosses_net,
             self.player_y_relative_net,
             self.post_contact_speed,
+            self.prev_action_encoded,
+            self.prev_action_confidence,
+            self.prev_same_side,
         ], dtype=np.float64)
 
     @staticmethod
@@ -118,6 +127,9 @@ class ActionFeatures:
             "post_contact_crosses_net",
             "player_y_relative_net",
             "post_contact_speed",
+            "prev_action_encoded",
+            "prev_action_confidence",
+            "prev_same_side",
         ]
 
 
@@ -377,8 +389,36 @@ def extract_action_features(
 
 ACTION_CLASSES = ["serve", "receive", "set", "attack", "dig"]
 
+# Encoding for prev_action_encoded feature
+_ACTION_ENCODING: dict[str, float] = {
+    "serve": 0.0,
+    "receive": 1.0,
+    "set": 2.0,
+    "attack": 3.0,
+    "dig": 4.0,
+    "block": 5.0,
+}
+
+
+def set_prev_action_context(
+    features: ActionFeatures,
+    prev_action: str,
+    prev_confidence: float,
+    same_side: bool | None,
+) -> None:
+    """Set previous-action context on a feature vector (mutates in place)."""
+    features.prev_action_encoded = _ACTION_ENCODING.get(prev_action, -1.0)
+    features.prev_action_confidence = prev_confidence
+    if same_side is True:
+        features.prev_same_side = 1.0
+    elif same_side is False:
+        features.prev_same_side = 0.0
+    else:
+        features.prev_same_side = 0.5
+
+
 # Bump when feature vector changes (forces retrain of stale pickles).
-FEATURE_VERSION = 2
+FEATURE_VERSION = 3
 
 
 class ActionTypeClassifier:

@@ -26,7 +26,7 @@ import math
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, overload
 
 from rallycut.tracking.contact_detector import Contact, ContactSequence, ball_crossed_net
 
@@ -970,7 +970,18 @@ class ActionClassifier:
                     action_type = ActionType.DIG
                     confidence = self.config.medium_confidence
                 elif contact_count_on_side == 2:
-                    action_type = ActionType.SET
+                    # 2nd touch is usually a set, but allow attack when
+                    # ball crosses net (pipe attack / overpass hit).
+                    crosses = None
+                    if ball_positions:
+                        crosses = ball_crossed_net(
+                            ball_positions, contact.frame,
+                            contact.frame + 15, contact_sequence.net_y,
+                        )
+                    if crosses is True:
+                        action_type = ActionType.ATTACK
+                    else:
+                        action_type = ActionType.SET
                     confidence = self.config.high_confidence
                 elif contact_count_on_side >= 3:
                     action_type = ActionType.ATTACK
@@ -992,6 +1003,81 @@ class ActionClassifier:
             ))
             last_action_type = action_type
 
+        # --- Second pass: re-predict dig/set/attack with prev-action context ---
+        _relabel_types = {ActionType.DIG, ActionType.SET, ActionType.ATTACK}
+        if classifier is not None and classifier.is_trained:
+            from rallycut.tracking.action_type_classifier import set_prev_action_context
+
+            # Build contact index lookup: action index → contact index
+            action_to_contact: dict[int, int] = {}
+            ci = 0
+            for ai, action in enumerate(actions):
+                if action.is_synthetic:
+                    continue
+                if ci < len(contacts) and contacts[ci].frame == action.frame:
+                    action_to_contact[ai] = ci
+                    ci += 1
+
+            n_relabeled = 0
+            for ai, action in enumerate(actions):
+                if action.action_type not in _relabel_types:
+                    continue
+                ci_idx = action_to_contact.get(ai)
+                if ci_idx is None:
+                    continue
+
+                # Find previous non-unknown/non-block action for context
+                prev_action_str = "unknown"
+                prev_conf = 0.0
+                prev_side: str | None = None
+                for j in range(ai - 1, -1, -1):
+                    prev_a = actions[j]
+                    if prev_a.action_type not in (ActionType.UNKNOWN, ActionType.BLOCK):
+                        prev_action_str = prev_a.action_type.value
+                        prev_conf = prev_a.confidence
+                        prev_side = prev_a.court_side
+                        break
+
+                same_side: bool | None = None
+                if prev_side and action.court_side in ("near", "far"):
+                    same_side = prev_side == action.court_side
+
+                feat = extract_action_features(
+                    contact=contacts[ci_idx], index=ci_idx,
+                    all_contacts=contacts,
+                    ball_positions=ball_positions,
+                    net_y=contact_sequence.net_y,
+                    rally_start_frame=start_frame,
+                    team_assignments=match_team_assignments,
+                    player_positions=contact_sequence.player_positions or None,
+                )
+                set_prev_action_context(feat, prev_action_str, prev_conf, same_side)
+
+                pred_action, pred_conf = classifier.predict([feat])[0]
+                try:
+                    new_type = ActionType(pred_action)
+                except ValueError:
+                    continue
+
+                if new_type != action.action_type:
+                    actions[ai] = ClassifiedAction(
+                        action_type=new_type,
+                        frame=action.frame,
+                        ball_x=action.ball_x,
+                        ball_y=action.ball_y,
+                        velocity=action.velocity,
+                        player_track_id=action.player_track_id,
+                        court_side=action.court_side,
+                        confidence=pred_conf,
+                    )
+                    n_relabeled += 1
+
+            if n_relabeled > 0:
+                logger.debug(
+                    "Second pass: re-labeled %d/%d actions with prev-action context",
+                    n_relabeled, len(actions),
+                )
+
         # Stamp team labels on all actions
         if team_assignments:
             for action in actions:
@@ -1008,7 +1094,7 @@ class ActionClassifier:
 
         if actions:
             seq = [a.action_type.value for a in actions]
-            mode = "learned" if classifier is not None else "rule-based"
+            mode = "learned-2pass" if classifier is not None else "rule-based"
             logger.info(
                 f"Rally {rally_id}: classified {len(actions)} actions "
                 f"({mode}): {seq}"
@@ -1150,6 +1236,10 @@ class ActionClassifier:
 # Heavily broken sequences get worse with cascading local fixes.
 _MAX_SEQUENCE_REPAIRS = 3
 
+# Rules disabled by default (ablation showed they hurt accuracy).
+# Rule 2: recv/dig→attack → set (-2.6pp action accuracy)
+_RULES_DISABLED_BY_DEFAULT: set[int] = {2}
+
 
 def _reclassify(action: ClassifiedAction, new_type: ActionType) -> ClassifiedAction:
     """Create a copy of *action* with a different action_type.
@@ -1171,13 +1261,36 @@ def _reclassify(action: ClassifiedAction, new_type: ActionType) -> ClassifiedAct
     )
 
 
+@overload
+def repair_action_sequence(
+    actions: list[ClassifiedAction],
+    net_y: float = ...,
+    ball_positions: list[BallPosition] | None = ...,
+    rally_start_frame: int | None = ...,
+    server_track_id: int = ...,
+    disabled_rules: None = ...,
+) -> list[ClassifiedAction]: ...
+
+
+@overload
+def repair_action_sequence(
+    actions: list[ClassifiedAction],
+    net_y: float = ...,
+    ball_positions: list[BallPosition] | None = ...,
+    rally_start_frame: int | None = ...,
+    server_track_id: int = ...,
+    disabled_rules: set[int] = ...,
+) -> tuple[list[ClassifiedAction], dict[int, int]]: ...
+
+
 def repair_action_sequence(
     actions: list[ClassifiedAction],
     net_y: float = 0.5,
     ball_positions: list[BallPosition] | None = None,
     rally_start_frame: int | None = None,
     server_track_id: int = -1,
-) -> list[ClassifiedAction]:
+    disabled_rules: set[int] | None = None,
+) -> list[ClassifiedAction] | tuple[list[ClassifiedAction], dict[int, int]]:
     """Repair volleyball-illegal action sequences.
 
     Missed contacts cause cascade failures in the state machine: missing one
@@ -1211,12 +1324,22 @@ def repair_action_sequence(
         ball_positions: Ball positions for one-sided trajectory checks.
         rally_start_frame: Rally start frame for synthetic serve placement.
         server_track_id: Server track ID for synthetic serve attribution.
+        disabled_rules: Set of rule numbers (0-6) to skip. None = all enabled.
+            When provided, the return type changes to include trigger counts.
 
     Returns:
-        Repaired list of ClassifiedAction (possibly longer if synthetic
-        serve inserted).
+        When disabled_rules is None: repaired list of ClassifiedAction.
+        When disabled_rules is provided: tuple of (repaired actions,
+        dict mapping rule number → trigger count).
     """
+    _track_triggers = disabled_rules is not None
+    _disabled = (disabled_rules if disabled_rules is not None
+                 else _RULES_DISABLED_BY_DEFAULT)
+    _triggers: dict[int, int] = {r: 0 for r in range(7)}
+
     if len(actions) < 2:
+        if _track_triggers:
+            return actions, _triggers
         return actions
 
     # Work on a mutable copy
@@ -1231,6 +1354,8 @@ def repair_action_sequence(
             break
 
     if serve_idx is None:
+        if _track_triggers:
+            return repaired, _triggers
         return repaired  # Can't repair without a serve anchor
 
     # ------------------------------------------------------------------
@@ -1243,16 +1368,6 @@ def repair_action_sequence(
             serve.ball_y, serve.court_side, net_y,
         )
         if on_serve_side is False:
-            # Skip Rule 0 when ball trajectory is one-sided — ball_y
-            # is unreliable (WASB missed the serve trajectory).
-            # Phantom suppression in classify_rally handles the
-            # tighter gate (one-sided + server conf >= 0.7); Rule 0
-            # uses the trajectory signal alone since it catches
-            # additional serves that passed through Pass 0-2 or
-            # classifier-assisted Pass 4 without phantom checks.
-            # Stricter than classify_rally (min_per_side=3) — Rule 0 is a
-            # last-resort correction, so require stronger one-sided evidence
-            # before skipping it.
             skip_rule0 = (
                 ball_positions is not None
                 and _is_ball_one_sided(
@@ -1266,7 +1381,8 @@ def repair_action_sequence(
                     "at serve frame %d",
                     serve.frame,
                 )
-            else:
+            elif 0 not in _disabled:
+                _triggers[0] += 1
                 opposite = "far" if serve.court_side == "near" else "near"
                 synthetic = _make_synthetic_serve(
                     opposite, serve.frame, net_y,
@@ -1289,26 +1405,31 @@ def repair_action_sequence(
             serve_idx = i
             break
     if serve_idx is None:
+        if _track_triggers:
+            return repaired, _triggers
         return repaired
 
     # ------------------------------------------------------------------
-    # Rule 3 (pre-pass): Duplicate non-synthetic serves → extras become dig.
+    # Rule 3 (pre-pass): Duplicate non-synthetic serves → extras become receive.
+    # The second detected "serve" is almost certainly the serve return.
     # Only non-synthetic serves count; the first real serve is the anchor.
     # ------------------------------------------------------------------
     first_real_serve_found = False
-    for i, a in enumerate(repaired):
-        if a.action_type == ActionType.SERVE and not a.is_synthetic:
-            if not first_real_serve_found:
-                first_real_serve_found = True
-            else:
-                if repair_count >= _MAX_SEQUENCE_REPAIRS:
-                    break
-                repaired[i] = _reclassify(a, ActionType.DIG)
-                repair_count += 1
-                logger.debug(
-                    "Repair rule 3: duplicate serve at f%d → dig",
-                    a.frame,
-                )
+    if 3 not in _disabled:
+        for i, a in enumerate(repaired):
+            if a.action_type == ActionType.SERVE and not a.is_synthetic:
+                if not first_real_serve_found:
+                    first_real_serve_found = True
+                else:
+                    if repair_count >= _MAX_SEQUENCE_REPAIRS:
+                        break
+                    _triggers[3] += 1
+                    repaired[i] = _reclassify(a, ActionType.RECEIVE)
+                    repair_count += 1
+                    logger.debug(
+                        "Repair rule 3: duplicate serve at f%d → receive",
+                        a.frame,
+                    )
 
     # ------------------------------------------------------------------
     # Rule 4 (pre-pass): Duplicate receives → extras become set.
@@ -1316,19 +1437,21 @@ def repair_action_sequence(
     # to distinguish same-side (set) from cross-side (dig).
     # ------------------------------------------------------------------
     first_receive_found = False
-    for i, a in enumerate(repaired):
-        if a.action_type == ActionType.RECEIVE:
-            if not first_receive_found:
-                first_receive_found = True
-            else:
-                if repair_count >= _MAX_SEQUENCE_REPAIRS:
-                    break
-                repaired[i] = _reclassify(a, ActionType.SET)
-                repair_count += 1
-                logger.debug(
-                    "Repair rule 4: duplicate receive at f%d → set",
-                    a.frame,
-                )
+    if 4 not in _disabled:
+        for i, a in enumerate(repaired):
+            if a.action_type == ActionType.RECEIVE:
+                if not first_receive_found:
+                    first_receive_found = True
+                else:
+                    if repair_count >= _MAX_SEQUENCE_REPAIRS:
+                        break
+                    _triggers[4] += 1
+                    repaired[i] = _reclassify(a, ActionType.SET)
+                    repair_count += 1
+                    logger.debug(
+                        "Repair rule 4: duplicate receive at f%d → set",
+                        a.frame,
+                    )
 
     # ------------------------------------------------------------------
     # Main pass: Rules 1, 2, 5, 6
@@ -1358,6 +1481,12 @@ def repair_action_sequence(
 
         prev = repaired[prev_idx]
 
+        # Time-gap guard: if >90 frames (3s at 30fps) between contacts,
+        # a contact was likely missed and same-side assumptions break down.
+        if a.frame - prev.frame > 90:
+            i += 1
+            continue
+
         same_side = (
             prev.court_side == a.court_side
             and a.court_side in ("near", "far")
@@ -1368,7 +1497,9 @@ def repair_action_sequence(
             same_side
             and prev.action_type in (ActionType.RECEIVE, ActionType.DIG)
             and a.action_type == prev.action_type
+            and 1 not in _disabled
         ):
+            _triggers[1] += 1
             repaired[i] = _reclassify(a, ActionType.SET)
             repair_count += 1
             logger.debug(
@@ -1379,11 +1510,14 @@ def repair_action_sequence(
 
         # Rule 2: receive/dig directly followed by attack on same side
         # with no set → reclassify the attack as set (if there's another
-        # action after)
+        # action after).
+        # DISABLED BY DEFAULT: dig→attack is legal in beach volleyball
+        # (pipe attacks, overpass hits). Ablation showed -2.6pp action acc.
         elif (
             same_side
             and prev.action_type in (ActionType.RECEIVE, ActionType.DIG)
             and a.action_type == ActionType.ATTACK
+            and 2 not in _disabled
         ):
             next_idx: int | None = None
             for k in range(i + 1, len(repaired)):
@@ -1393,6 +1527,7 @@ def repair_action_sequence(
                     next_idx = k
                     break
             if next_idx is not None:
+                _triggers[2] += 1
                 repaired[i] = _reclassify(a, ActionType.SET)
                 repair_count += 1
                 logger.debug(
@@ -1407,7 +1542,9 @@ def repair_action_sequence(
             same_side
             and prev.action_type == ActionType.SET
             and a.action_type == ActionType.SET
+            and 5 not in _disabled
         ):
+            _triggers[5] += 1
             repaired[i] = _reclassify(a, ActionType.ATTACK)
             repair_count += 1
             logger.debug(
@@ -1420,7 +1557,9 @@ def repair_action_sequence(
             same_side
             and prev.action_type == ActionType.ATTACK
             and a.action_type == ActionType.ATTACK
+            and 6 not in _disabled
         ):
+            _triggers[6] += 1
             repaired[prev_idx] = _reclassify(prev, ActionType.SET)
             repair_count += 1
             logger.debug(
@@ -1430,6 +1569,8 @@ def repair_action_sequence(
 
         i += 1
 
+    if _track_triggers:
+        return repaired, _triggers
     return repaired
 
 
@@ -2019,8 +2160,10 @@ def validate_action_sequence(
 # --- Viterbi sequence decoding ---
 
 # Transition matrix for beach volleyball action sequences.
-# Encodes which (prev_action, next_action) pairs are legal and their
-# relative probabilities. Transitions not listed have probability 0.
+# Hand-tuned probabilities — learned transitions from GT data were tested
+# (scripts/learn_viterbi_params.py) but performed -0.1pp worse due to
+# overfitting to training distribution. Hand-tuned values provide better
+# regularization for the Viterbi decoder.
 _VITERBI_TRANSITIONS: dict[tuple[ActionType, ActionType], float] = {
     # After serve: receive or block on opposite side
     (ActionType.SERVE, ActionType.RECEIVE): 0.85,
@@ -2239,10 +2382,11 @@ def classify_rally_actions(
     Pipeline:
     1. classify_rally() — initial action types + serve detection
        (uses match_team_assignments for team-aware touch counting when available)
-    2. viterbi_decode_actions() — sequence-level smoothing
-    3. validate_action_sequence() — log constraint violations
-    4. assign_court_side_from_teams() — overwrite court_side from match teams
-    5. reattribute_players() — server exclusion + server-seeded team chain
+    2. repair_action_sequence(Rule 1 only) — fix consecutive recv/dig → set
+    3. viterbi_decode_actions() — sequence-level smoothing
+    4. validate_action_sequence() — log constraint violations
+    5. assign_court_side_from_teams() — overwrite court_side from match teams
+    6. reattribute_players() — server exclusion + server-seeded team chain
        for player re-attribution
 
     Args:
@@ -2287,6 +2431,16 @@ def classify_rally_actions(
         team_assignments=team_assignments,
         classifier=learned,
         match_team_assignments=match_team_assignments,
+    )
+
+    # Repair with only Rule 1 (consecutive recv/dig → set, +0.8pp LOO-CV).
+    # All other rules hurt accuracy — see scripts/ablate_repair_rules.py.
+    result.actions, _ = repair_action_sequence(
+        result.actions,
+        net_y=contact_sequence.net_y,
+        ball_positions=contact_sequence.ball_positions,
+        rally_start_frame=contact_sequence.rally_start_frame,
+        disabled_rules={0, 2, 3, 4, 5, 6},
     )
 
     result.actions = viterbi_decode_actions(result.actions)

@@ -1344,8 +1344,8 @@ def _ca(
 class TestRepairDuplicateServe:
     """Tests for repair rule 3: duplicate serves."""
 
-    def test_two_real_serves_second_becomes_dig(self) -> None:
-        """Second non-synthetic serve → dig."""
+    def test_two_real_serves_second_becomes_receive(self) -> None:
+        """Second non-synthetic serve → receive (then Rule 4 → set)."""
         actions = [
             _ca(ActionType.SERVE, 10, "near"),
             _ca(ActionType.RECEIVE, 30, "far"),
@@ -1354,7 +1354,8 @@ class TestRepairDuplicateServe:
         repaired = repair_action_sequence(actions, net_y=0.5)
 
         assert repaired[0].action_type == ActionType.SERVE
-        assert repaired[2].action_type == ActionType.DIG
+        # Rule 3 changes to receive, then Rule 4 changes duplicate receive to set
+        assert repaired[2].action_type == ActionType.SET
         assert repaired[2].confidence <= 0.6
 
     def test_synthetic_serve_not_touched(self) -> None:
@@ -1373,18 +1374,19 @@ class TestRepairDuplicateServe:
         assert repaired[1].is_synthetic is False
 
     def test_three_serves_all_extras_repaired(self) -> None:
-        """Three duplicate serves → all extras become dig."""
+        """Three duplicate serves → extras become receive (Rule 3),
+        then duplicate receives → set (Rule 4)."""
         actions = [
             _ca(ActionType.SERVE, 10, "near"),
-            _ca(ActionType.SERVE, 30, "far"),   # dup 1
-            _ca(ActionType.SERVE, 50, "near"),  # dup 2
+            _ca(ActionType.SERVE, 30, "far"),   # dup → receive (Rule 3)
+            _ca(ActionType.SERVE, 50, "near"),  # dup → receive (Rule 3) → set (Rule 4)
             _ca(ActionType.DIG, 90, "far"),
         ]
         repaired = repair_action_sequence(actions, net_y=0.5)
 
-        assert repaired[0].action_type == ActionType.SERVE  # original
-        assert repaired[1].action_type == ActionType.DIG    # repaired
-        assert repaired[2].action_type == ActionType.DIG    # repaired
+        assert repaired[0].action_type == ActionType.SERVE    # original
+        assert repaired[1].action_type == ActionType.RECEIVE  # Rule 3
+        assert repaired[2].action_type == ActionType.SET      # Rule 3 + Rule 4
 
 
 class TestRepairDuplicateReceive:
@@ -1483,24 +1485,31 @@ class TestCircuitBreaker:
     """Tests for the circuit breaker: max 3 repairs per rally."""
 
     def test_breaker_with_mixed_violations(self) -> None:
-        """Mix of violations — only first 3 repaired, rest untouched."""
+        """Mix of violations — only first 3 repaired, rest untouched.
+
+        Rule 3 changes duplicate serve → receive (R=1).
+        Rule 4 changes duplicate receives → set (R=2, R=3 → breaker).
+        Main pass rules don't fire (breaker already at 3).
+        """
         actions = [
             _ca(ActionType.SERVE, 10, "near"),
-            _ca(ActionType.SERVE, 20, "near"),   # dup serve → dig (R=1)
+            _ca(ActionType.SERVE, 20, "near"),   # dup serve → receive (R=1)
             _ca(ActionType.RECEIVE, 30, "far"),
             _ca(ActionType.RECEIVE, 50, "far"),  # dup receive → set (R=2)
             _ca(ActionType.SET, 70, "far"),
-            _ca(ActionType.SET, 90, "far"),       # set→set → attack (R=3)
-            _ca(ActionType.SET, 110, "far"),      # would be rule 5 but breaker
+            _ca(ActionType.SET, 90, "far"),       # would be rule 5 but breaker
+            _ca(ActionType.SET, 110, "far"),      # untouched
         ]
         repaired = repair_action_sequence(actions, net_y=0.5)
 
-        assert repaired[1].action_type == ActionType.DIG     # rule 3 (R=1)
-        assert repaired[3].action_type == ActionType.SET      # rule 4 (R=2)
-        assert repaired[4].action_type == ActionType.ATTACK   # rule 5 (R=3)
+        assert repaired[1].action_type == ActionType.RECEIVE  # rule 3 (R=1)
+        # receive@20 (from rule 3) is first receive, receive@30 is dup → set (R=2)
+        assert repaired[2].action_type == ActionType.SET       # rule 4 (R=2)
+        assert repaired[3].action_type == ActionType.SET       # rule 4 (R=3, breaker)
         # Breaker hit — remaining violations untouched
-        assert repaired[5].action_type == ActionType.SET      # untouched
-        assert repaired[6].action_type == ActionType.SET      # untouched
+        assert repaired[4].action_type == ActionType.SET       # untouched
+        assert repaired[5].action_type == ActionType.SET       # untouched
+        assert repaired[6].action_type == ActionType.SET       # untouched
 
     def test_no_repairs_on_clean_sequence(self) -> None:
         """Clean sequence → 0 repairs, all actions unchanged."""
