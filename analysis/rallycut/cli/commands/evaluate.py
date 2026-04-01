@@ -265,7 +265,7 @@ def _apply_temporal_maxer(
     temporal_maxer_model_path: Path | None = None,
     video_id: str | None = None,
 ) -> list | None:
-    """Apply TemporalMaxer TAS model to cached features.
+    """Apply TemporalMaxer / MS-TCN++ TAS model to cached features.
 
     Args:
         content_hash: Video content hash to look up cached features.
@@ -278,11 +278,11 @@ def _apply_temporal_maxer(
         List of TimeSegment objects, or None if features/model not found.
     """
     import numpy as np
+    import torch
 
     from rallycut.core.config import get_config
     from rallycut.core.models import GameState, TimeSegment
     from rallycut.temporal.features import FeatureCache
-    from rallycut.temporal.temporal_maxer.inference import TemporalMaxerInference
 
     config = get_config()
 
@@ -305,8 +305,17 @@ def _apply_temporal_maxer(
 
     features, metadata = cached_data
 
-    # Fuse ball features if model expects them (773-dim = 768 VideoMAE + 5 ball)
-    inference = TemporalMaxerInference(model_path, device="cpu")
+    # Dispatch to correct inference class based on checkpoint head_type
+    ckpt = torch.load(model_path, map_location="cpu", weights_only=True)
+    head_type = ckpt.get("head_type", "temporalmaxer")
+    if head_type == "mstcn":
+        from rallycut.temporal.ms_tcn.inference import MSTCNInference
+
+        inference: TemporalMaxerInference = MSTCNInference(model_path, device="cpu")
+    else:
+        from rallycut.temporal.temporal_maxer.inference import TemporalMaxerInference
+
+        inference = TemporalMaxerInference(model_path, device="cpu")
     expected_dim = inference.model.config.feature_dim
     if features.shape[1] < expected_dim and video_id is not None:
         from rallycut.temporal.ball_features import (
@@ -506,7 +515,7 @@ def _run_evaluation(
     """Run evaluation on a list of videos.
 
     Pipeline priority:
-    1. If use_temporal_maxer: use TemporalMaxer TAS model
+    1. If use_temporal_maxer: use TemporalMaxer / MS-TCN++ TAS model
     2. If use_heuristics: use heuristics
     3. Auto: TemporalMaxer if model+features exist, else heuristics
     """
@@ -524,29 +533,16 @@ def _run_evaluation(
         # Get predictions
         start_time = time.time()
 
-        # Get cached analysis (or run analysis if needed)
-        cached = cache.get(video.content_hash, stride, model_id) if use_cache else None
-        if cached is None:
-            video_path = resolver.resolve(video.s3_key, video.content_hash)
-            cached = analyze_and_cache(
-                video_path,
-                video.id,
-                video.content_hash,
-                stride=stride,
-                cache=cache,
-                model_path=model_path,
-                model_id=model_id,
-            )
-
         # Apply post-processing pipeline
         segments = None
 
         if use_temporal_maxer or not use_heuristics:
-            # TemporalMaxer TAS model (explicit or auto-selection)
+            # TemporalMaxer / MS-TCN++ TAS model (explicit or auto-selection)
             segments = _apply_temporal_maxer(
                 video.content_hash, stride, feature_cache_dir,
                 video_id=video.id,
             )
+
             if segments is not None and (ball_validation or ball_boundary):
                 video_path = resolver.resolve(video.s3_key, video.content_hash)
                 segments = _apply_ball_tracking(
@@ -562,8 +558,20 @@ def _run_evaluation(
                     "No cached features/model for %s, using heuristics", video.filename
                 )
 
-        # Fallback to heuristics
+        # Fallback to heuristics (only load/run analysis when needed)
         if segments is None:
+            cached = cache.get(video.content_hash, stride, model_id) if use_cache else None
+            if cached is None:
+                video_path = resolver.resolve(video.s3_key, video.content_hash)
+                cached = analyze_and_cache(
+                    video_path,
+                    video.id,
+                    video.content_hash,
+                    stride=stride,
+                    cache=cache,
+                    model_path=model_path,
+                    model_id=model_id,
+                )
             segments = apply_post_processing_custom(cached, params)
 
         processing_time = time.time() - start_time
@@ -709,7 +717,7 @@ def evaluate(
         bool,
         typer.Option(
             "--temporal-maxer",
-            help="Use TemporalMaxer TAS model (88%% LOO F1 at IoU=0.4)",
+            help="Use TemporalMaxer / MS-TCN++ TAS model for rally detection",
         ),
     ] = False,
     use_heuristics: Annotated[
@@ -771,7 +779,7 @@ def evaluate(
 
     # Show pipeline info
     if temporal_maxer:
-        console.print("Pipeline: [green]TemporalMaxer TAS model (88% LOO F1)[/green]")
+        console.print("Pipeline: [green]MS-TCN++ TAS model[/green]")
     elif use_heuristics:
         console.print("Pipeline: [dim]Heuristics (57% F1)[/dim]")
     else:

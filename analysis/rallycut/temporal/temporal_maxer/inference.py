@@ -62,8 +62,8 @@ class TemporalMaxerInference:
         valley_threshold: float = 0.5,
         min_valley_duration: float = 2.0,
         tta_shifts: int = 0,
-        rescue_min_avg_prob: float = 0.50,
-        rescue_min_windows: int = 6,
+        rescue_min_avg_prob: float = 0.30,
+        rescue_min_windows: int = 5,
         rescue_max_duration: float = 10.0,
         ball_features: np.ndarray | None = None,
     ) -> TemporalMaxerResult:
