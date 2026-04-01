@@ -11,7 +11,7 @@ import json
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import numpy as np
 from platformdirs import user_cache_dir
@@ -19,7 +19,6 @@ from platformdirs import user_cache_dir
 from rallycut.core.video import Video
 
 if TYPE_CHECKING:
-    from lib.volleyball_ml.video_mae import GameStateClassifier
     from rallycut.evaluation.ground_truth import EvaluationVideo, GroundTruthRally
 
 
@@ -27,6 +26,42 @@ if TYPE_CHECKING:
 FEATURE_DIM = 768
 # Default window size for VideoMAE
 WINDOW_SIZE = 16
+# Default backbone identifier
+DEFAULT_BACKBONE = "videomae-v1"
+
+
+@runtime_checkable
+class FeatureExtractor(Protocol):
+    """Protocol for video feature extraction backends.
+
+    Implementations provide a backbone_id for cache keying, feature_dim
+    for downstream model configuration, and extract_batch for actual
+    feature extraction from frame windows.
+    """
+
+    @property
+    def backbone_id(self) -> str:
+        """Unique identifier for this backbone (e.g. 'videomae-v1', 'hiera-b')."""
+        ...
+
+    @property
+    def feature_dim(self) -> int:
+        """Output feature dimension (e.g. 768)."""
+        ...
+
+    def extract_batch(
+        self, batch_frames: list[list[np.ndarray]], pooling: str = "cls"
+    ) -> np.ndarray:
+        """Extract features from a batch of frame windows.
+
+        Args:
+            batch_frames: List of frame lists, each containing WINDOW_SIZE BGR frames.
+            pooling: Pooling method ('cls' or 'mean').
+
+        Returns:
+            Array of shape (batch_size, feature_dim).
+        """
+        ...
 
 
 @dataclass
@@ -40,6 +75,7 @@ class FeatureMetadata:
     fps: float
     duration_seconds: float
     feature_dim: int = FEATURE_DIM
+    backbone: str = DEFAULT_BACKBONE
 
 
 def _get_cache_dir() -> Path:
@@ -49,16 +85,25 @@ def _get_cache_dir() -> Path:
     return cache_dir
 
 
-def _compute_cache_key(content_hash: str, stride: int) -> str:
+def _compute_cache_key(
+    content_hash: str, stride: int, backbone: str = DEFAULT_BACKBONE
+) -> str:
     """Compute a unique cache key for video features.
 
     Args:
         content_hash: Video content hash (SHA-256).
         stride: Frame stride used for extraction.
+        backbone: Backbone identifier.
 
     Returns:
         Cache key string.
     """
+    key_data = f"{content_hash}:stride={stride}:backbone={backbone}"
+    return hashlib.sha256(key_data.encode()).hexdigest()[:16]
+
+
+def _compute_legacy_cache_key(content_hash: str, stride: int) -> str:
+    """Compute legacy cache key (without backbone) for backward compat."""
     key_data = f"{content_hash}:stride={stride}"
     return hashlib.sha256(key_data.encode()).hexdigest()[:16]
 
@@ -89,37 +134,64 @@ class FeatureCache:
         self.cache_dir = cache_dir or _get_cache_dir()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def _get_paths(self, content_hash: str, stride: int) -> tuple[Path, Path]:
+    def _get_paths(
+        self, content_hash: str, stride: int, backbone: str = DEFAULT_BACKBONE
+    ) -> tuple[Path, Path]:
         """Get paths for feature array and metadata files."""
-        cache_key = _compute_cache_key(content_hash, stride)
+        cache_key = _compute_cache_key(content_hash, stride, backbone)
         feature_path = self.cache_dir / f"{cache_key}.npy"
         metadata_path = self.cache_dir / f"{cache_key}.json"
         return feature_path, metadata_path
 
-    def has(self, content_hash: str, stride: int) -> bool:
+    def _get_legacy_paths(self, content_hash: str, stride: int) -> tuple[Path, Path]:
+        """Get paths using legacy cache key (no backbone)."""
+        cache_key = _compute_legacy_cache_key(content_hash, stride)
+        feature_path = self.cache_dir / f"{cache_key}.npy"
+        metadata_path = self.cache_dir / f"{cache_key}.json"
+        return feature_path, metadata_path
+
+    def has(
+        self, content_hash: str, stride: int, backbone: str = DEFAULT_BACKBONE
+    ) -> bool:
         """Check if features are cached for a video.
 
         Args:
             content_hash: Video content hash.
             stride: Frame stride used for extraction.
+            backbone: Backbone identifier.
 
         Returns:
             True if features are cached.
         """
-        feature_path, metadata_path = self._get_paths(content_hash, stride)
-        return feature_path.exists() and metadata_path.exists()
+        feature_path, metadata_path = self._get_paths(content_hash, stride, backbone)
+        if feature_path.exists() and metadata_path.exists():
+            return True
+        # Fall back to legacy key for videomae-v1
+        if backbone == DEFAULT_BACKBONE:
+            fp, mp = self._get_legacy_paths(content_hash, stride)
+            return fp.exists() and mp.exists()
+        return False
 
-    def get(self, content_hash: str, stride: int) -> tuple[np.ndarray, FeatureMetadata] | None:
+    def get(
+        self, content_hash: str, stride: int, backbone: str = DEFAULT_BACKBONE
+    ) -> tuple[np.ndarray, FeatureMetadata] | None:
         """Get cached features for a video.
 
         Args:
             content_hash: Video content hash.
             stride: Frame stride used for extraction.
+            backbone: Backbone identifier.
 
         Returns:
             Tuple of (features array, metadata) or None if not cached.
         """
-        feature_path, metadata_path = self._get_paths(content_hash, stride)
+        feature_path, metadata_path = self._get_paths(content_hash, stride, backbone)
+
+        # Fall back to legacy key for videomae-v1
+        if not feature_path.exists() and backbone == DEFAULT_BACKBONE:
+            legacy_fp, legacy_mp = self._get_legacy_paths(content_hash, stride)
+            if legacy_fp.exists() and legacy_mp.exists():
+                feature_path, metadata_path = legacy_fp, legacy_mp
 
         if not feature_path.exists() or not metadata_path.exists():
             return None
@@ -130,7 +202,7 @@ class FeatureCache:
                 meta_dict = json.load(f)
             metadata = FeatureMetadata(**meta_dict)
             return features, metadata
-        except (ValueError, json.JSONDecodeError, OSError):
+        except (ValueError, json.JSONDecodeError, OSError, TypeError):
             # Corrupted cache, remove it
             feature_path.unlink(missing_ok=True)
             metadata_path.unlink(missing_ok=True)
@@ -142,6 +214,7 @@ class FeatureCache:
         stride: int,
         features: np.ndarray,
         metadata: FeatureMetadata,
+        backbone: str = DEFAULT_BACKBONE,
     ) -> None:
         """Cache features for a video.
 
@@ -150,8 +223,10 @@ class FeatureCache:
             stride: Frame stride used for extraction.
             features: Feature array of shape (num_windows, feature_dim).
             metadata: Feature metadata.
+            backbone: Backbone identifier.
         """
-        feature_path, metadata_path = self._get_paths(content_hash, stride)
+        feature_path, metadata_path = self._get_paths(content_hash, stride, backbone)
+        metadata.backbone = backbone
 
         # Save features
         np.save(feature_path, features)
@@ -225,13 +300,13 @@ def iter_frame_windows(
 
 def extract_features_for_video(
     video_path: str | Path,
-    classifier: GameStateClassifier,
+    extractor: FeatureExtractor,
     stride: int = 8,
     batch_size: int = 8,
     pooling: str = "cls",
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> tuple[np.ndarray, FeatureMetadata]:
-    """Extract VideoMAE encoder features from a video.
+    """Extract encoder features from a video using the given backbone.
 
     Features are extracted at the specified stride using a sliding window
     of 16 frames. High-FPS videos (>40fps) are automatically subsampled
@@ -239,7 +314,7 @@ def extract_features_for_video(
 
     Args:
         video_path: Path to video file.
-        classifier: GameStateClassifier instance with loaded model.
+        extractor: Feature extraction backend (VideoMAE, Hiera, etc.).
         stride: Frame stride between windows (default 8 for fine resolution).
         batch_size: Number of windows to process at once.
         pooling: Feature pooling method ("cls" or "mean").
@@ -247,7 +322,7 @@ def extract_features_for_video(
 
     Returns:
         Tuple of (features array, metadata).
-        Features array has shape (num_windows, 768).
+        Features array has shape (num_windows, feature_dim).
     """
     from rallycut.core.proxy import ProxyGenerator
 
@@ -276,7 +351,7 @@ def extract_features_for_video(
 
         if len(window_batch) >= batch_size:
             # Process batch
-            batch_features = classifier.get_encoder_features_batch(window_batch, pooling=pooling)
+            batch_features = extractor.extract_batch(window_batch, pooling=pooling)
             all_features.append(batch_features)
             windows_processed += len(window_batch)
             window_batch = []
@@ -287,14 +362,14 @@ def extract_features_for_video(
 
     # Process remaining windows
     if window_batch:
-        batch_features = classifier.get_encoder_features_batch(window_batch, pooling=pooling)
+        batch_features = extractor.extract_batch(window_batch, pooling=pooling)
         all_features.append(batch_features)
 
     # Combine all features
     if all_features:
         features = np.concatenate(all_features, axis=0)
     else:
-        features = np.zeros((0, FEATURE_DIM), dtype=np.float32)
+        features = np.zeros((0, extractor.feature_dim), dtype=np.float32)
 
     # Create metadata
     metadata = FeatureMetadata(
@@ -304,6 +379,7 @@ def extract_features_for_video(
         num_windows=len(features),
         fps=effective_fps,
         duration_seconds=video.info.duration or 0.0,
+        backbone=extractor.backbone_id,
     )
 
     return features, metadata
@@ -312,7 +388,7 @@ def extract_features_for_video(
 def load_cached_features(
     video_path: str | Path,
     content_hash: str,
-    classifier: GameStateClassifier,
+    extractor: FeatureExtractor,
     stride: int = 8,
     cache: FeatureCache | None = None,
 ) -> tuple[np.ndarray, FeatureMetadata]:
@@ -321,7 +397,7 @@ def load_cached_features(
     Args:
         video_path: Path to video file.
         content_hash: Video content hash for caching.
-        classifier: GameStateClassifier instance.
+        extractor: Feature extraction backend.
         stride: Frame stride for extraction.
         cache: Feature cache instance. If None, uses default cache.
 
@@ -331,17 +407,21 @@ def load_cached_features(
     if cache is None:
         cache = FeatureCache()
 
+    backbone = extractor.backbone_id
+
     # Check cache first
-    cached = cache.get(content_hash, stride)
+    cached = cache.get(content_hash, stride, backbone=backbone)
     if cached is not None:
         return cached
 
     # Extract features
-    features, metadata = extract_features_for_video(video_path, classifier, stride=stride)
+    features, metadata = extract_features_for_video(
+        video_path, extractor, stride=stride,
+    )
     metadata.content_hash = content_hash
 
     # Cache for future use
-    cache.put(content_hash, stride, features, metadata)
+    cache.put(content_hash, stride, features, metadata, backbone=backbone)
 
     return features, metadata
 

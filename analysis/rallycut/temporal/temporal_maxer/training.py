@@ -90,24 +90,35 @@ class TemporalMaxerTrainingResult:
 
 
 class VideoSequenceDataset(Dataset):
-    """Dataset for full-video sequence training."""
+    """Dataset for full-video sequence training.
+
+    When ball_features are provided, they are stored separately and returned
+    as a third element. The model's ball_proj MLP handles projection.
+    """
 
     def __init__(
         self,
         video_features: list[np.ndarray],
         video_labels: list[np.ndarray],
         augmentation: AugmentationConfig | None = None,
+        ball_features: list[np.ndarray] | None = None,
     ) -> None:
         self.features = [torch.from_numpy(f).float() for f in video_features]
         self.labels = [torch.from_numpy(lbl).long() for lbl in video_labels]
         self.aug = augmentation if augmentation and augmentation.enabled else None
+        self.ball_features: list[torch.Tensor] | None = None
+        if ball_features is not None:
+            self.ball_features = [torch.from_numpy(bf).float() for bf in ball_features]
 
     def __len__(self) -> int:
         return len(self.features)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(
+        self, idx: int
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         features = self.features[idx]
         labels = self.labels[idx]
+        ball_feat = self.ball_features[idx] if self.ball_features is not None else None
 
         if self.aug is not None:
             # Temporal crop
@@ -117,64 +128,80 @@ class VideoSequenceDataset(Dataset):
                 start = random.randint(0, seq_len - crop_len)
                 features = features[start:start + crop_len]
                 labels = labels[start:start + crop_len]
+                if ball_feat is not None:
+                    ball_feat = ball_feat[start:start + crop_len]
 
-            # Gaussian feature noise
+            # Gaussian feature noise (visual features only)
             if self.aug.feature_noise_std > 0:
                 features = features + torch.randn_like(features) * self.aug.feature_noise_std
 
-            # Feature dropout
+            # Feature dropout (visual features only)
             if self.aug.feature_dropout > 0:
                 mask = torch.bernoulli(
                     torch.full_like(features, 1.0 - self.aug.feature_dropout)
                 )
                 features = features * mask
 
-            # Ball feature (modality) dropout: zero out all ball feature dims
+            # Ball feature modality dropout: zero out entire ball feature tensor
             if (
-                self.aug.ball_feature_dropout > 0
-                and self.aug.ball_feature_dim > 0
+                ball_feat is not None
+                and self.aug.ball_feature_dropout > 0
                 and random.random() < self.aug.ball_feature_dropout
             ):
-                features[:, -self.aug.ball_feature_dim:] = 0.0
+                ball_feat = torch.zeros_like(ball_feat)
 
-        return features, labels
+        return features, labels, ball_feat
 
 
 def collate_video_sequences(
-    batch: list[tuple[torch.Tensor, torch.Tensor]],
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    batch: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
     """Collate variable-length sequences with padding.
 
     Returns:
-        Tuple of (padded_features, padded_labels, mask).
+        Tuple of (padded_features, padded_labels, mask, padded_ball_features).
         Features: (batch, feature_dim, max_len) — transposed for Conv1d.
         Labels: (batch, max_len).
         Mask: (batch, 1, max_len) — binary mask for valid positions.
+        Ball features: (batch, ball_dim, max_len) or None if no ball features.
     """
     if not batch:
         return (
             torch.zeros(0, 0, 0),
             torch.zeros(0, 0, dtype=torch.long),
             torch.zeros(0, 1, 0),
+            None,
         )
 
-    features, labels = zip(*batch)
-    lengths = [len(f) for f in features]
+    features_list, labels_list, ball_list = zip(*batch)
+    lengths = [len(f) for f in features_list]
     max_len = max(lengths)
-    feature_dim = features[0].shape[-1]
+    feature_dim = features_list[0].shape[-1]
+    batch_size = len(features_list)
 
     # Pad and transpose features: (batch, seq_len, dim) → (batch, dim, seq_len)
-    padded_features = torch.zeros(len(features), feature_dim, max_len)
-    padded_labels = torch.zeros(len(features), max_len, dtype=torch.long)
-    mask = torch.zeros(len(features), 1, max_len)
+    padded_features = torch.zeros(batch_size, feature_dim, max_len)
+    padded_labels = torch.zeros(batch_size, max_len, dtype=torch.long)
+    mask = torch.zeros(batch_size, 1, max_len)
 
-    for i, (feat, lbl) in enumerate(zip(features, labels)):
+    for i, (feat, lbl) in enumerate(zip(features_list, labels_list)):
         seq_len = len(feat)
-        padded_features[i, :, :seq_len] = feat.T  # Transpose (seq, dim) → (dim, seq)
+        padded_features[i, :, :seq_len] = feat.T
         padded_labels[i, :seq_len] = lbl
         mask[i, 0, :seq_len] = 1.0
 
-    return padded_features, padded_labels, mask
+    # Pad ball features if present
+    has_ball = ball_list[0] is not None
+    padded_ball: torch.Tensor | None = None
+    if has_ball:
+        ball_dim = ball_list[0].shape[-1]
+        padded_ball = torch.zeros(batch_size, ball_dim, max_len)
+        for i, bf in enumerate(ball_list):
+            if bf is not None:
+                seq_len = len(bf)
+                padded_ball[i, :, :seq_len] = bf.T
+
+    return padded_features, padded_labels, mask, padded_ball
 
 
 def compute_tmse_loss(logits: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -247,6 +274,8 @@ class TemporalMaxerTrainer:
         val_features: list[np.ndarray],
         val_labels: list[np.ndarray],
         output_dir: Path,
+        train_ball_features: list[np.ndarray] | None = None,
+        val_ball_features: list[np.ndarray] | None = None,
     ) -> TemporalMaxerTrainingResult:
         """Train TemporalMaxer model.
 
@@ -256,6 +285,8 @@ class TemporalMaxerTrainer:
             val_features: List of (seq_len, feature_dim) feature arrays per video.
             val_labels: List of (seq_len,) binary label arrays per video.
             output_dir: Directory to save model and results.
+            train_ball_features: Optional list of (seq_len, ball_dim) arrays.
+            val_ball_features: Optional list of (seq_len, ball_dim) arrays.
 
         Returns:
             Training result with metrics.
@@ -274,8 +305,11 @@ class TemporalMaxerTrainer:
         # Create datasets
         train_dataset = VideoSequenceDataset(
             train_features, train_labels, augmentation=cfg.augmentation,
+            ball_features=train_ball_features,
         )
-        val_dataset = VideoSequenceDataset(val_features, val_labels)
+        val_dataset = VideoSequenceDataset(
+            val_features, val_labels, ball_features=val_ball_features,
+        )
 
         train_generator = torch.Generator().manual_seed(cfg.seed)
         train_loader = DataLoader(
@@ -334,14 +368,15 @@ class TemporalMaxerTrainer:
             train_loss = 0.0
             num_batches = 0
 
-            for features, labels, mask in train_loader:
+            for features, labels, mask, ball_feat in train_loader:
                 features = features.to(device)
                 labels = labels.to(device)
                 mask = mask.to(device)
+                bf = ball_feat.to(device) if ball_feat is not None else None
 
                 optimizer.zero_grad()
 
-                logits = model(features, mask)  # (batch, 2, T)
+                logits = model(features, mask, ball_features=bf)  # (batch, 2, T)
 
                 # Cross-entropy loss (masked)
                 ce_loss = criterion(logits, labels)  # (batch, T)
@@ -375,12 +410,13 @@ class TemporalMaxerTrainer:
                 all_labels_flat: list[int] = []
 
                 with torch.no_grad():
-                    for features, labels, mask in val_loader:
+                    for features, labels, mask, ball_feat in val_loader:
                         features = features.to(device)
                         labels = labels.to(device)
                         mask = mask.to(device)
+                        bf = ball_feat.to(device) if ball_feat is not None else None
 
-                        logits = model(features, mask)
+                        logits = model(features, mask, ball_features=bf)
                         preds = logits.argmax(dim=1)  # (batch, T)
 
                         # Extract valid predictions

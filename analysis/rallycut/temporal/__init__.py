@@ -8,6 +8,7 @@ This module provides:
 
 from rallycut.temporal.features import (
     FeatureCache,
+    FeatureExtractor,
     extract_features_for_video,
     generate_overlap_labels,
     load_cached_features,
@@ -16,6 +17,7 @@ from rallycut.temporal.features import (
 
 __all__ = [
     "FeatureCache",
+    "FeatureExtractor",
     "extract_features_for_video",
     "generate_overlap_labels",
     "load_cached_features",

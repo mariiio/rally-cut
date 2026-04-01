@@ -65,11 +65,12 @@ class TemporalMaxerInference:
         rescue_min_avg_prob: float = 0.50,
         rescue_min_windows: int = 6,
         rescue_max_duration: float = 10.0,
+        ball_features: np.ndarray | None = None,
     ) -> TemporalMaxerResult:
         """Run full-sequence inference and extract segments.
 
         Args:
-            features: (num_windows, feature_dim) feature array.
+            features: (num_windows, feature_dim) visual feature array.
             fps: Video frame rate.
             stride: Frame stride between windows.
             window_size: Frames per window.
@@ -82,6 +83,8 @@ class TemporalMaxerInference:
                 below this threshold. 0.0 disables valley splitting.
             min_valley_duration: Minimum duration (seconds) of a low-probability
                 region to trigger a split.
+            ball_features: (num_windows, ball_dim) raw ball features. Passed to
+                model's ball_proj MLP when config.ball_feature_dim > 0.
 
         Returns:
             TemporalMaxerResult with segments and probabilities.
@@ -98,11 +101,19 @@ class TemporalMaxerInference:
         features_t = torch.from_numpy(features).float().T.unsqueeze(0).to(self.device)
         # features_t shape: (1, feature_dim, T)
 
+        # Prepare ball features tensor if provided
+        ball_t: torch.Tensor | None = None
+        if ball_features is not None and self.model.config.ball_feature_dim > 0:
+            min_len = min(features_t.shape[2], len(ball_features))
+            bf = ball_features[:min_len]
+            ball_t = torch.from_numpy(bf).float().T.unsqueeze(0).to(self.device)
+            features_t = features_t[:, :, :min_len]
+
         with torch.no_grad():
             if tta_shifts > 0:
-                rally_probs = self._predict_with_tta(features_t, tta_shifts)
+                rally_probs = self._predict_with_tta(features_t, tta_shifts, ball_t)
             else:
-                logits = self.model(features_t)  # (1, 2, T)
+                logits = self.model(features_t, ball_features=ball_t)  # (1, 2, T)
                 probs = torch.softmax(logits, dim=1)  # (1, 2, T)
                 rally_probs = probs[0, 1].cpu().numpy()  # (T,)
             predictions = (rally_probs > 0.5).astype(np.int64)
@@ -147,6 +158,7 @@ class TemporalMaxerInference:
         self,
         features_t: torch.Tensor,
         num_shifts: int,
+        ball_t: torch.Tensor | None = None,
     ) -> np.ndarray:
         """Test-time augmentation via temporal shifts.
 
@@ -158,6 +170,7 @@ class TemporalMaxerInference:
         for shift in range(-num_shifts, num_shifts + 1):
             if shift == 0:
                 shifted = features_t
+                shifted_ball = ball_t
             else:
                 shifted = torch.roll(features_t, shift, dims=2)
                 # Zero out wrapped-around edges
@@ -165,8 +178,15 @@ class TemporalMaxerInference:
                     shifted[:, :, :shift] = 0
                 else:
                     shifted[:, :, shift:] = 0
+                shifted_ball = None
+                if ball_t is not None:
+                    shifted_ball = torch.roll(ball_t, shift, dims=2)
+                    if shift > 0:
+                        shifted_ball[:, :, :shift] = 0
+                    else:
+                        shifted_ball[:, :, shift:] = 0
 
-            logits = self.model(shifted)
+            logits = self.model(shifted, ball_features=shifted_ball)
             probs = torch.softmax(logits, dim=1)
             rally_p = probs[0, 1].cpu().numpy()
 

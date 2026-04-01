@@ -105,7 +105,7 @@ class TestCollation:
             [np.zeros(10).astype(np.int64)] * 2,
         )
         batch = [dataset[0], dataset[1]]
-        features, labels, mask = collate_video_sequences(batch)
+        features, labels, mask, _ball = collate_video_sequences(batch)
 
         assert features.shape == (2, 32, 10)
         assert labels.shape == (2, 10)
@@ -124,7 +124,7 @@ class TestCollation:
             ],
         )
         batch = [dataset[0], dataset[1]]
-        features, labels, mask = collate_video_sequences(batch)
+        features, labels, mask, _ball = collate_video_sequences(batch)
 
         assert features.shape == (2, 32, 10)  # Padded to max_len=10
         assert labels.shape == (2, 10)
@@ -134,8 +134,9 @@ class TestCollation:
         assert torch.all(mask[1, 0, 5:] == 0.0)
 
     def test_collate_empty(self) -> None:
-        features, labels, mask = collate_video_sequences([])
+        features, labels, mask, ball = collate_video_sequences([])
         assert features.shape[0] == 0
+        assert ball is None
 
 
 def _make_inference() -> TemporalMaxerInference:
@@ -379,3 +380,97 @@ class TestValleySplitting:
         assert segments[0][0] == pytest.approx(3 * 0.8)
         # Rally ends at original segment end (trailing valley trims it)
         assert segments[0][1] < 11 * 0.8  # Shorter than full segment
+
+
+class TestMSTCNModel:
+    """Tests for MS-TCN++ model."""
+
+    def test_forward_shape(self) -> None:
+        from rallycut.temporal.ms_tcn.model import MSTCN, MSTCNConfig
+
+        config = MSTCNConfig(feature_dim=32, hidden_dim=16, num_stages=2, num_layers=4)
+        model = MSTCN(config)
+        x = torch.randn(1, 32, 100)
+        logits = model(x)
+        assert logits.shape == (1, 2, 100)
+
+    def test_forward_all_stages(self) -> None:
+        from rallycut.temporal.ms_tcn.model import MSTCN, MSTCNConfig
+
+        config = MSTCNConfig(feature_dim=32, hidden_dim=16, num_stages=3, num_layers=4)
+        model = MSTCN(config)
+        x = torch.randn(2, 32, 50)
+        stages = model.forward_all_stages(x)
+        assert len(stages) == 3
+        for s in stages:
+            assert s.shape == (2, 2, 50)
+
+    def test_forward_with_mask(self) -> None:
+        from rallycut.temporal.ms_tcn.model import MSTCN, MSTCNConfig
+
+        config = MSTCNConfig(feature_dim=32, hidden_dim=16, num_stages=2, num_layers=4)
+        model = MSTCN(config)
+        x = torch.randn(2, 32, 50)
+        mask = torch.ones(2, 1, 50)
+        mask[1, :, 30:] = 0
+        logits = model(x, mask)
+        assert logits.shape == (2, 2, 50)
+
+    def test_forward_with_ball_features(self) -> None:
+        from rallycut.temporal.ms_tcn.model import MSTCN, MSTCNConfig
+
+        config = MSTCNConfig(
+            feature_dim=32, hidden_dim=16, num_stages=2, num_layers=4,
+            ball_feature_dim=5, ball_projection_dim=16,
+        )
+        model = MSTCN(config)
+        x = torch.randn(1, 32, 100)
+        bf = torch.randn(1, 5, 100)
+        logits = model(x, ball_features=bf)
+        assert logits.shape == (1, 2, 100)
+
+    def test_gradient_flow(self) -> None:
+        from rallycut.temporal.ms_tcn.model import MSTCN, MSTCNConfig
+
+        config = MSTCNConfig(feature_dim=32, hidden_dim=16, num_stages=2, num_layers=4)
+        model = MSTCN(config)
+        x = torch.randn(1, 32, 50, requires_grad=True)
+        # Multi-stage loss: sum all stage outputs (stage 2+ detach input
+        # from previous stage, so we need stage 1 loss for grad flow)
+        stages = model.forward_all_stages(x)
+        loss = sum(s.sum() for s in stages)
+        loss.backward()
+        assert x.grad is not None
+        assert x.grad.abs().sum() > 0
+
+
+class TestTemporalMaxerBallFeatures:
+    """Tests for ball feature MLP projection in TemporalMaxer."""
+
+    def test_forward_with_ball_features(self) -> None:
+        config = TemporalMaxerConfig(
+            feature_dim=32, hidden_dim=32, ball_feature_dim=5, ball_projection_dim=16,
+        )
+        model = TemporalMaxer(config)
+        x = torch.randn(1, 32, 100)
+        bf = torch.randn(1, 5, 100)
+        logits = model(x, ball_features=bf)
+        assert logits.shape == (1, 2, 100)
+
+    def test_forward_without_ball_features_zero_fill(self) -> None:
+        config = TemporalMaxerConfig(
+            feature_dim=32, hidden_dim=32, ball_feature_dim=5, ball_projection_dim=16,
+        )
+        model = TemporalMaxer(config)
+        x = torch.randn(1, 32, 100)
+        logits = model(x)  # ball_features=None, should zero-fill
+        assert logits.shape == (1, 2, 100)
+
+    def test_backward_compat_no_ball(self) -> None:
+        """Model with ball_feature_dim=0 behaves like original."""
+        config = TemporalMaxerConfig(feature_dim=32, hidden_dim=32)
+        model = TemporalMaxer(config)
+        assert not hasattr(model, "ball_proj")
+        x = torch.randn(1, 32, 50)
+        logits = model(x)
+        assert logits.shape == (1, 2, 50)

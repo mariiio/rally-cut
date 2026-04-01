@@ -914,6 +914,18 @@ class VideoCutter:
         from rallycut.core.models import GameState
         from rallycut.temporal.temporal_maxer.inference import TemporalMaxerInference
 
+        def _load_inference(model_path: Path, device: str) -> TemporalMaxerInference:
+            """Load the right inference class based on checkpoint head_type."""
+            import torch
+
+            ckpt = torch.load(model_path, map_location="cpu", weights_only=True)
+            head_type = ckpt.get("head_type", "temporalmaxer")
+            if head_type == "mstcn":
+                from rallycut.temporal.ms_tcn.inference import MSTCNInference
+
+                return MSTCNInference(model_path, device=device)
+            return TemporalMaxerInference(model_path, device=device)
+
         # Get source video info
         with Video(input_path) as video:
             source_fps = video.info.fps
@@ -944,7 +956,7 @@ class VideoCutter:
             content_hash[:12] if content_hash else "?",
         )
 
-        inference = TemporalMaxerInference(model_path, device=self.device)
+        inference = _load_inference(model_path, device=self.device)
 
         # Load cached features (or extract inline if not cached)
         if progress_callback:
@@ -989,15 +1001,39 @@ class VideoCutter:
                 progress_callback=feature_progress,
             )
             metadata.content_hash = content_hash
-            cache.put(content_hash, stride, features, metadata)
+            cache.put(
+                content_hash, stride, features, metadata,
+                backbone=classifier.backbone_id,
+            )
             feature_fps = metadata.fps
         else:
             features, cached_metadata = cached
             feature_fps = cached_metadata.fps
 
-        # Combine with ball features if model expects them
+        # Handle ball features based on model configuration
+        ball_feats_for_inference: np.ndarray | None = None
         expected_dim = inference.model.config.feature_dim
-        if expected_dim > features.shape[1]:
+
+        if inference.model.config.ball_feature_dim > 0:
+            # New MLP projection path: pass ball features separately
+            try:
+                from rallycut.temporal.ball_features import extract_ball_features
+
+                ball_data = self._load_ball_density_for_hash(content_hash)
+                if ball_data is not None:
+                    confs, ball_fps = ball_data
+                    ball_feats_for_inference = extract_ball_features(
+                        confs, ball_fps,
+                        feature_fps=feature_fps, stride=stride,
+                    )
+                    logger.info(
+                        "TemporalMaxer: loaded ball features for MLP projection "
+                        "(raw_dim=%d)", inference.model.config.ball_feature_dim,
+                    )
+            except Exception:
+                logger.debug("Ball feature loading failed, model will use zero ball features")
+        elif expected_dim > features.shape[1]:
+            # Legacy concat path: model trained with feature_dim=773 (768+5 concat)
             ball_dim = expected_dim - features.shape[1]
             try:
                 from rallycut.temporal.ball_features import (
@@ -1007,7 +1043,6 @@ class VideoCutter:
                 )
 
                 if ball_dim == BALL_FEATURE_DIM:
-                    # Try loading cached ball density (keyed by content_hash → video_id)
                     ball_data = self._load_ball_density_for_hash(content_hash)
                     if ball_data is not None:
                         confs, ball_fps = ball_data
@@ -1016,7 +1051,7 @@ class VideoCutter:
                             feature_fps=feature_fps, stride=stride,
                         )
                         features = combine_features(features, ball_feats)
-                        logger.info("TemporalMaxer: combined with ball features (%d-dim)", ball_dim)
+                        logger.info("TemporalMaxer: legacy concat with ball features (%d-dim)", ball_dim)
             except Exception:
                 logger.debug("Ball feature loading failed, using zero-padded features")
 
@@ -1046,6 +1081,7 @@ class VideoCutter:
             min_segment_confidence=0.6,
             valley_threshold=0.5,
             min_valley_duration=2.0,
+            ball_features=ball_feats_for_inference,
         )
 
         logger.info(

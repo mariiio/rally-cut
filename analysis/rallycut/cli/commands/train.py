@@ -2471,6 +2471,9 @@ def extract_features(
     force: bool = typer.Option(
         False, "--force", "-f", help="Force re-extraction even if cached"
     ),
+    backbone: str = typer.Option(
+        "v1", "--backbone", help="VideoMAE variant: 'v1' (default) or 'v2' (better features)"
+    ),
 ) -> None:
     """Extract VideoMAE encoder features for temporal model training.
 
@@ -2497,6 +2500,7 @@ def extract_features(
     rprint("[bold]Feature Extraction for Temporal Model[/bold]")
     rprint(f"  Stride: {stride}")
     rprint(f"  Model: {model}")
+    rprint(f"  Backbone: VideoMAE {backbone}")
     rprint()
 
     # Initialize model
@@ -2532,8 +2536,9 @@ def extract_features(
 
             config = get_config()
             classifier = GameStateClassifier(
-                model_path=model_path,
+                model_path=model_path if backbone == "v1" else None,
                 device=config.device,
+                model_variant=backbone,
             )
         return classifier
 
@@ -2554,7 +2559,9 @@ def extract_features(
             progress.update(task, description=f"Processing {video_name}...")
 
             # Check cache
-            if not force and cache.has(video.content_hash, stride):
+            cls = get_classifier()
+            backbone = cls.backbone_id
+            if not force and cache.has(video.content_hash, stride, backbone=backbone):
                 skipped += 1
                 progress.update(task, advance=1)
                 continue
@@ -2565,7 +2572,7 @@ def extract_features(
             # Extract features
             features, metadata = extract_features_for_video(
                 video_path,
-                get_classifier(),
+                cls,
                 stride=stride,
                 batch_size=batch_size,
             )
@@ -2573,7 +2580,7 @@ def extract_features(
             metadata.content_hash = video.content_hash
 
             # Cache features
-            cache.put(video.content_hash, stride, features, metadata)
+            cache.put(video.content_hash, stride, features, metadata, backbone=backbone)
 
             extracted += 1
             total_windows += len(features)
@@ -2652,7 +2659,6 @@ def train_temporal_maxer_cmd(
 
     # Ball features setup
     ball_density_dir: Path | None = None
-    feature_dim = 768
     ball_feat_dim = 0
     if ball_features:
         from rallycut.temporal.ball_features import BALL_FEATURE_DIM, DEFAULT_BALL_DENSITY_DIR
@@ -2660,9 +2666,9 @@ def train_temporal_maxer_cmd(
         ball_density_dir = DEFAULT_BALL_DENSITY_DIR
         if ball_density_dir.exists():
             n_cached = len(list(ball_density_dir.glob("*.npz")))
-            feature_dim = 768 + BALL_FEATURE_DIM
             ball_feat_dim = BALL_FEATURE_DIM
-            rprint(f"  Ball features: [green]enabled[/green] ({n_cached} density files, dim={feature_dim})")
+            rprint(f"  Ball features: [green]enabled via MLP projection[/green] "
+                   f"({n_cached} density files, raw_dim={BALL_FEATURE_DIM}→proj_dim=64)")
             if ball_feature_dropout > 0:
                 rprint(f"  Ball feature dropout: {ball_feature_dropout}")
         else:
@@ -2719,19 +2725,20 @@ def train_temporal_maxer_cmd(
 
     def load_video_data(
         video_list: list[EvaluationVideo],
-    ) -> tuple[list[np.ndarray], list[np.ndarray]]:
+    ) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray] | None]:
         features_list: list[np.ndarray] = []
         labels_list: list[np.ndarray] = []
+        ball_list: list[np.ndarray] | None = [] if ball_feat_dim > 0 else None
         for video in video_list:
             cached_data = cache.get(video.content_hash, stride)
             if cached_data is None:
                 continue
             features, metadata = cached_data
 
-            # Combine with ball features if available
-            if ball_density_dir is not None:
+            # Extract ball features separately for MLP projection
+            if ball_density_dir is not None and ball_list is not None:
                 from rallycut.temporal.ball_features import (
-                    combine_features,
+                    BALL_FEATURE_DIM,
                     extract_ball_features,
                     load_ball_density,
                 )
@@ -2739,17 +2746,15 @@ def train_temporal_maxer_cmd(
                 ball_data = load_ball_density(video.id, ball_density_dir)
                 if ball_data is not None:
                     confs, ball_fps = ball_data
-                    ball_feats = extract_ball_features(
+                    bf = extract_ball_features(
                         confs, ball_fps,
                         feature_fps=metadata.fps, stride=stride,
                     )
-                    features = combine_features(features, ball_feats)
-
-                # Zero-pad if ball density not available (modality dropout handles this)
-                if features.shape[1] < feature_dim:
-                    pad_width = feature_dim - features.shape[1]
-                    padding = np.zeros((features.shape[0], pad_width), dtype=features.dtype)
-                    features = np.concatenate([features, padding], axis=1)
+                else:
+                    bf = np.zeros(
+                        (features.shape[0], BALL_FEATURE_DIM), dtype=features.dtype,
+                    )
+                ball_list.append(bf[:min(len(features), len(bf))])
 
             duration_ms = int(metadata.duration_seconds * 1000)
             labels = generate_overlap_labels(
@@ -2762,10 +2767,13 @@ def train_temporal_maxer_cmd(
             min_len = min(len(features), len(labels))
             features_list.append(features[:min_len])
             labels_list.append(np.array(labels[:min_len], dtype=np.float32))
-        return features_list, labels_list
+            if ball_list is not None:
+                # Ensure ball features are also aligned
+                ball_list[-1] = ball_list[-1][:min_len]
+        return features_list, labels_list, ball_list
 
-    train_features, train_labels = load_video_data(train_videos)
-    val_features, val_labels = load_video_data(val_videos)
+    train_features, train_labels, train_ball = load_video_data(train_videos)
+    val_features, val_labels, val_ball = load_video_data(val_videos)
 
     if not train_features:
         rprint("[red]No training data found![/red]")
@@ -2782,10 +2790,12 @@ def train_temporal_maxer_cmd(
         enabled=aug_enabled,
         feature_noise_std=feature_noise,
         ball_feature_dropout=ball_feature_dropout if ball_feat_dim > 0 else 0.0,
-        ball_feature_dim=ball_feat_dim,
     )
     config = TemporalMaxerTrainingConfig(
-        model_config=TemporalMaxerConfig(feature_dim=feature_dim),
+        model_config=TemporalMaxerConfig(
+            feature_dim=768,
+            ball_feature_dim=ball_feat_dim,
+        ),
         learning_rate=lr,
         epochs=epochs,
         batch_size=batch_size,
@@ -2805,6 +2815,8 @@ def train_temporal_maxer_cmd(
         val_features=val_features,
         val_labels=val_labels,
         output_dir=Path(output_dir),
+        train_ball_features=train_ball,
+        val_ball_features=val_ball,
     )
 
     # Report results

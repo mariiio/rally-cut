@@ -68,6 +68,7 @@ dependencies = [
     "tensorboard>=2.20.0",
     # Action spotting (E2E-Spot)
     "timm>=1.0.0",
+    "easydict>=1.13",
 ]
 
 [project.optional-dependencies]

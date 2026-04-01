@@ -119,6 +119,25 @@ class GameStateClassifier:
         else:
             self._use_onnx = False  # Disable on MPS/CPU (native PyTorch is faster)
 
+    @property
+    def backbone_id(self) -> str:
+        """Unique backbone identifier for feature caching."""
+        return f"videomae-{self.model_variant}"
+
+    @property
+    def feature_dim(self) -> int:
+        """Output feature dimension."""
+        return 768
+
+    def extract_batch(
+        self, batch_frames: list[list[np.ndarray]], pooling: str = "cls"
+    ) -> np.ndarray:
+        """Extract features from a batch of frame windows.
+
+        Satisfies the FeatureExtractor protocol.
+        """
+        return self.get_encoder_features_batch(batch_frames, pooling=pooling)
+
     def _load_model(self) -> None:
         """Lazy load the model with optimizations."""
         if self._model is not None:
@@ -742,26 +761,49 @@ class GameStateClassifier:
                     else torch.no_grad()
                 )
                 with ctx:
-                    # Access the underlying VideoMAE encoder directly
-                    # VideoMAEForVideoClassification has: videomae (encoder), fc_norm, classifier
-                    encoder = self._model.videomae
-                    outputs = encoder(pixel_values=inputs["pixel_values"])
+                    pixel_values = inputs["pixel_values"]
 
-                    # outputs.last_hidden_state: (batch, num_patches+1, hidden_size)
-                    # Position 0 is the CLS token, rest are patch tokens
-                    hidden_states = outputs.last_hidden_state
+                    if self.model_variant == "v2":
+                        # VideoMAEv2 (AutoModel): model.model is VisionTransformer
+                        # Expects (B, C, T, H, W) but processor gives (B, T, C, H, W)
+                        pixel_values = pixel_values.permute(0, 2, 1, 3, 4)
+                        vt = self._model.model
 
-                    if pooling == "cls":
-                        # Use CLS token
-                        features = hidden_states[:, 0, :]  # (batch, 768)
-                    elif pooling == "mean":
-                        # Mean pooling over all tokens
-                        features = hidden_states.mean(dim=1)  # (batch, 768)
+                        # Run through patch embed + transformer blocks
+                        x = vt.patch_embed(pixel_values)
+                        if vt.pos_embed is not None:
+                            x = x + vt.pos_embed.expand(
+                                x.size(0), -1, -1
+                            ).type_as(x).to(x.device)
+                        x = vt.pos_drop(x)
+                        for blk in vt.blocks:
+                            x = blk(x)
+
+                        # x: (batch, num_patches, 768)
+                        if pooling == "cls":
+                            features = vt.fc_norm(x[:, 0, :])
+                        elif pooling == "mean":
+                            features = vt.fc_norm(x.mean(dim=1))
+                        else:
+                            raise ValueError(f"Unknown pooling method: {pooling}")
                     else:
-                        raise ValueError(f"Unknown pooling method: {pooling}")
+                        # VideoMAE v1: VideoMAEForVideoClassification
+                        # has: videomae (encoder), fc_norm, classifier
+                        encoder = self._model.videomae
+                        outputs = encoder(pixel_values=pixel_values)
 
-                    # Apply the layer norm (fc_norm) for consistency with classification
-                    features = self._model.fc_norm(features)
+                        # outputs.last_hidden_state: (batch, num_patches+1, hidden_size)
+                        hidden_states = outputs.last_hidden_state
+
+                        if pooling == "cls":
+                            features = hidden_states[:, 0, :]
+                        elif pooling == "mean":
+                            features = hidden_states.mean(dim=1)
+                        else:
+                            raise ValueError(f"Unknown pooling method: {pooling}")
+
+                        features = self._model.fc_norm(features)
+
                     features_np: np.ndarray = features.cpu().numpy()
 
         return features_np

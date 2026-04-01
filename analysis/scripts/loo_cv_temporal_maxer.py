@@ -104,27 +104,40 @@ def auto_detect_device() -> str:
     return "cpu"
 
 
+@dataclass
+class VideoData:
+    """Loaded features, labels, and optional ball features for a video."""
+
+    features: np.ndarray  # (seq_len, 768) visual features
+    labels: np.ndarray  # (seq_len,) binary labels
+    fps: float
+    duration_seconds: float
+    ball_features: np.ndarray | None = None  # (seq_len, 5) raw ball features
+
+
 def load_video_data(
     video: EvaluationVideo,
     cache: FeatureCache,
     stride: int,
     ball_density_dir: Path | None = None,
-    feature_dim: int = 768,
-) -> tuple[np.ndarray, np.ndarray, float, float] | None:
+    backbone: str = "videomae-v1",
+) -> VideoData | None:
     """Load features and generate labels for a single video.
 
-    Returns (features, labels, fps, duration_seconds) or None if no cache.
+    Returns VideoData or None if no cache. Ball features are returned
+    separately (not concatenated) for the MLP projection path.
     """
-    cached_data = cache.get(video.content_hash, stride=stride)
+    cached_data = cache.get(video.content_hash, stride=stride, backbone=backbone)
     if cached_data is None:
         return None
 
     features, metadata = cached_data
 
-    # Optionally combine with ball trajectory features
+    # Extract ball features separately (not concatenated)
+    ball_feats: np.ndarray | None = None
     if ball_density_dir is not None:
         from rallycut.temporal.ball_features import (
-            combine_features,
+            BALL_FEATURE_DIM,
             extract_ball_features,
             load_ball_density,
         )
@@ -136,13 +149,11 @@ def load_video_data(
                 confs, ball_fps,
                 feature_fps=metadata.fps, stride=stride,
             )
-            features = combine_features(features, ball_feats)
-
-        # Zero-pad if ball density not available (modality dropout handles this)
-        if features.shape[1] < feature_dim:
-            pad_width = feature_dim - features.shape[1]
-            padding = np.zeros((features.shape[0], pad_width), dtype=features.dtype)
-            features = np.concatenate([features, padding], axis=1)
+        else:
+            # Zero ball features if density not available (modality dropout handles)
+            ball_feats = np.zeros(
+                (features.shape[0], BALL_FEATURE_DIM), dtype=features.dtype,
+            )
 
     duration_ms = int(metadata.duration_seconds * 1000)
     labels = generate_overlap_labels(
@@ -154,7 +165,16 @@ def load_video_data(
     min_len = min(len(features), len(labels))
     features = features[:min_len]
     labels_arr = np.array(labels[:min_len], dtype=np.float32)
-    return features, labels_arr, metadata.fps, metadata.duration_seconds
+    if ball_feats is not None:
+        ball_feats = ball_feats[:min_len]
+
+    return VideoData(
+        features=features,
+        labels=labels_arr,
+        fps=metadata.fps,
+        duration_seconds=metadata.duration_seconds,
+        ball_features=ball_feats,
+    )
 
 
 def run_fold(
@@ -176,7 +196,10 @@ def run_fold(
     tta_shifts: int = 0,
     num_seeds: int = 1,
     ball_density_dir: Path | None = None,
-    feature_dim: int = 768,
+    ball_feature_dim: int = 0,
+    head: str = "temporalmaxer",
+    epochs: int = 30,
+    backbone: str = "videomae-v1",
 ) -> FoldResult:
     """Run a single LOO fold: train on N-1, evaluate on held-out."""
     print(
@@ -187,14 +210,17 @@ def run_fold(
     # Load training data
     train_features: list[np.ndarray] = []
     train_labels: list[np.ndarray] = []
+    train_ball: list[np.ndarray] | None = [] if ball_feature_dim > 0 else None
     for video in train_videos:
-        data = load_video_data(video, cache, stride, ball_density_dir, feature_dim)
+        data = load_video_data(video, cache, stride, ball_density_dir, backbone=backbone)
         if data is not None:
-            train_features.append(data[0])
-            train_labels.append(data[1])
+            train_features.append(data.features)
+            train_labels.append(data.labels)
+            if train_ball is not None and data.ball_features is not None:
+                train_ball.append(data.ball_features)
 
     # Load held-out data
-    held_out_data = load_video_data(held_out, cache, stride, ball_density_dir, feature_dim)
+    held_out_data = load_video_data(held_out, cache, stride, ball_density_dir, backbone=backbone)
     if held_out_data is None:
         print(f"  WARNING: No cached features for held-out video {held_out.filename}")
         return FoldResult(
@@ -204,10 +230,57 @@ def run_fold(
             pred_count=0,
         )
 
-    ho_features, ho_labels, ho_fps, ho_duration = held_out_data
+    ho_features = held_out_data.features
+    ho_fps = held_out_data.fps
+    ho_ball = held_out_data.ball_features
 
-    # Train model(s) in a temp directory
+    # Build model config and select trainer/inference based on head
+    feature_dim = 768  # Visual features only
     aug_cfg = augmentation or AugmentationConfig()
+
+    def _make_trainer_and_inference(
+        seed: int, out_dir: Path
+    ) -> tuple[TemporalMaxerInference, Path]:
+        """Create trainer, train, and return (inference, model_path)."""
+        if head == "mstcn":
+            from rallycut.temporal.ms_tcn.inference import MSTCNInference
+            from rallycut.temporal.ms_tcn.model import MSTCNConfig
+            from rallycut.temporal.ms_tcn.training import MSTCNTrainer, MSTCNTrainingConfig
+
+            mcfg = MSTCNTrainingConfig(
+                model_config=MSTCNConfig(
+                    feature_dim=feature_dim,
+                    ball_feature_dim=ball_feature_dim,
+                ),
+                learning_rate=5e-4, epochs=epochs, batch_size=4, patience=15,
+                device=device, seed=seed,
+                augmentation=aug_cfg, label_smoothing=label_smoothing,
+            )
+            mstcn_trainer = MSTCNTrainer(config=mcfg)
+            mstcn_trainer.train(
+                train_features, train_labels, [], [], out_dir,
+                train_ball_features=train_ball,
+            )
+            mp = out_dir / "best_temporal_maxer.pt"
+            return MSTCNInference(mp, device="cpu"), mp
+        else:
+            tcfg = TemporalMaxerTrainingConfig(
+                model_config=TemporalMaxerConfig(
+                    feature_dim=feature_dim,
+                    ball_feature_dim=ball_feature_dim,
+                ),
+                learning_rate=5e-4, epochs=epochs, batch_size=4, patience=15,
+                device=device, seed=seed,
+                augmentation=aug_cfg, label_smoothing=label_smoothing,
+                focal_loss=focal_loss, focal_gamma=focal_gamma,
+            )
+            tmaxer_trainer = TemporalMaxerTrainer(config=tcfg)
+            tmaxer_trainer.train(
+                train_features, train_labels, [], [], out_dir,
+                train_ball_features=train_ball,
+            )
+            mp = out_dir / "best_temporal_maxer.pt"
+            return TemporalMaxerInference(mp, device="cpu"), mp
 
     with tempfile.TemporaryDirectory() as tmpdir:
         t0 = time.time()
@@ -217,32 +290,19 @@ def run_fold(
             all_rally_probs: list[np.ndarray] = []
             for seed_idx in range(num_seeds):
                 seed = 42 + seed_idx
-                config = TemporalMaxerTrainingConfig(
-                    model_config=TemporalMaxerConfig(feature_dim=feature_dim),
-                    learning_rate=5e-4, epochs=50, batch_size=4, patience=15,
-                    device=device, seed=seed,
-                    augmentation=aug_cfg, label_smoothing=label_smoothing,
-                    focal_loss=focal_loss, focal_gamma=focal_gamma,
-                )
-                trainer = TemporalMaxerTrainer(config=config)
                 seed_dir = Path(tmpdir) / f"seed_{seed}"
-                trainer.train(train_features, train_labels, [], [], seed_dir)
-
-                model_path = seed_dir / "best_temporal_maxer.pt"
-                inf = TemporalMaxerInference(model_path, device="cpu")
+                inf, _ = _make_trainer_and_inference(seed, seed_dir)
                 r = inf.predict(
                     features=ho_features, fps=ho_fps, stride=stride,
-                    min_segment_confidence=0.0,  # Don't filter yet
-                    valley_threshold=0.0,  # Don't split yet
+                    min_segment_confidence=0.0,
+                    valley_threshold=0.0,
+                    ball_features=ho_ball,
                 )
                 all_rally_probs.append(r.window_probs)
 
             # Average probabilities and re-predict
             avg_probs = np.mean(all_rally_probs, axis=0)
-            # Create a dummy inference for post-processing
-            inference = TemporalMaxerInference(
-                Path(tmpdir) / "seed_42" / "best_temporal_maxer.pt", device="cpu"
-            )
+            inference, _ = _make_trainer_and_inference(42, Path(tmpdir) / "seed_42")
             predictions = (avg_probs > 0.5).astype(np.int64)
             from rallycut.temporal.temporal_maxer.inference import TemporalMaxerResult
             result = TemporalMaxerResult(
@@ -256,19 +316,8 @@ def run_fold(
                 window_predictions=predictions,
             )
         else:
-            config = TemporalMaxerTrainingConfig(
-                model_config=TemporalMaxerConfig(feature_dim=feature_dim),
-                learning_rate=5e-4, epochs=50, batch_size=4, patience=15,
-                device=device, seed=42,
-                augmentation=aug_cfg, label_smoothing=label_smoothing,
-                focal_loss=focal_loss, focal_gamma=focal_gamma,
-            )
-            trainer = TemporalMaxerTrainer(config=config)
             output_dir = Path(tmpdir)
-            trainer.train(train_features, train_labels, [], [], output_dir)
-
-            model_path = output_dir / "best_temporal_maxer.pt"
-            inference = TemporalMaxerInference(model_path, device="cpu")
+            inference, _ = _make_trainer_and_inference(42, output_dir)
             result = inference.predict(
                 features=ho_features, fps=ho_fps, stride=stride,
                 min_segment_confidence=min_segment_confidence,
@@ -276,6 +325,7 @@ def run_fold(
                 min_valley_duration=min_valley_duration,
                 tta_shifts=tta_shifts,
                 rescue_min_avg_prob=rescue_min_avg_prob,
+                ball_features=ho_ball,
             )
 
         train_time = time.time() - t0
@@ -452,11 +502,42 @@ def main() -> None:
     # Ball features
     parser.add_argument(
         "--ball-features", action="store_true",
-        help="Concatenate ball trajectory features with VideoMAE features",
+        help="Enable ball features via learned MLP projection (5→64 dims)",
     )
     parser.add_argument(
         "--ball-feature-dropout", type=float, default=0.0,
         help="Modality dropout rate for ball features (0 = disabled, try 0.5)",
+    )
+    # Temporal head selection
+    parser.add_argument(
+        "--head", type=str, default="temporalmaxer",
+        choices=["temporalmaxer", "mstcn"],
+        help="Temporal head architecture (default: temporalmaxer)",
+    )
+    # Device override
+    parser.add_argument(
+        "--device", type=str, default=None,
+        help="Force device (cpu, mps, cuda). Default: auto-detect.",
+    )
+    # Training epochs override
+    parser.add_argument(
+        "--epochs", type=int, default=30,
+        help="Training epochs per fold (default: 30, no val set = no early stopping)",
+    )
+    # Backbone selection
+    parser.add_argument(
+        "--backbone", type=str, default="videomae-v1",
+        help="Feature backbone for cache lookup (default: videomae-v1, or videomae-v2)",
+    )
+    # Cross-backbone comparison: limit to videos that also have features for another backbone
+    parser.add_argument(
+        "--match-backbone", type=str, default=None,
+        help="Only include videos that also have cached features for this backbone+stride "
+             "(for apples-to-apples comparison across backbones)",
+    )
+    parser.add_argument(
+        "--match-stride", type=int, default=None,
+        help="Stride to check with --match-backbone (defaults to --stride)",
     )
     args = parser.parse_args()
     stride = args.stride
@@ -487,7 +568,7 @@ def main() -> None:
     print("=" * 80)
     print()
 
-    device = auto_detect_device()
+    device = args.device or auto_detect_device()
     print(f"Device: {device}")
     print(f"Feature stride: {stride}")
     if min_confidence > 0:
@@ -515,10 +596,14 @@ def main() -> None:
         print(f"TTA shifts: ±{args.tta}")
     if args.num_seeds > 1:
         print(f"Multi-seed ensemble: {args.num_seeds} seeds")
+    if args.head != "temporalmaxer":
+        print(f"Temporal head: {args.head}")
+    if args.backbone != "videomae-v1":
+        print(f"Backbone: {args.backbone}")
 
     # Ball features setup
     ball_density_dir: Path | None = None
-    feature_dim = 768
+    ball_feature_dim = 0
     if args.ball_features:
         from rallycut.temporal.ball_features import BALL_FEATURE_DIM, DEFAULT_BALL_DENSITY_DIR
 
@@ -526,10 +611,10 @@ def main() -> None:
         if not ball_density_dir.exists():
             print("ERROR: Ball density dir not found. Run extract_ball_density.py first.")
             sys.exit(1)
-        feature_dim = 768 + BALL_FEATURE_DIM
-        aug_config.ball_feature_dim = BALL_FEATURE_DIM
+        ball_feature_dim = BALL_FEATURE_DIM
         n_cached = len(list(ball_density_dir.glob("*.npz")))
-        print(f"Ball features: ENABLED ({n_cached} density files, dim={feature_dim})")
+        print(f"Ball features: ENABLED via MLP projection ({n_cached} density files, "
+              f"raw_dim={BALL_FEATURE_DIM}→proj_dim=64)")
         if args.ball_feature_dropout > 0:
             print(f"Ball feature dropout: {args.ball_feature_dropout}")
 
@@ -543,11 +628,27 @@ def main() -> None:
 
     # Filter to those with cached features
     cache = FeatureCache(cache_dir=FEATURE_DIR)
-    videos_with_features = [v for v in videos if cache.has(v.content_hash, stride=stride)]
+    videos_with_features = [
+        v for v in videos
+        if cache.has(v.content_hash, stride=stride, backbone=args.backbone)
+    ]
     print(
         f"Videos with cached features at stride={stride}: "
         f"{len(videos_with_features)}/{len(videos)}"
     )
+
+    # Cross-backbone filtering for fair comparison
+    if args.match_backbone:
+        match_stride = args.match_stride or stride
+        before = len(videos_with_features)
+        videos_with_features = [
+            v for v in videos_with_features
+            if cache.has(v.content_hash, stride=match_stride, backbone=args.match_backbone)
+        ]
+        print(
+            f"Filtered to videos also having {args.match_backbone}@stride={match_stride}: "
+            f"{len(videos_with_features)}/{before}"
+        )
 
     if len(videos_with_features) < 2:
         print("ERROR: Need at least 2 videos with cached features for LOO CV")
@@ -576,7 +677,10 @@ def main() -> None:
             tta_shifts=args.tta,
             num_seeds=args.num_seeds,
             ball_density_dir=ball_density_dir,
-            feature_dim=feature_dim,
+            ball_feature_dim=ball_feature_dim,
+            head=args.head,
+            epochs=args.epochs,
+            backbone=args.backbone,
         )
         fold_results.append(fold)
 
