@@ -106,6 +106,14 @@ def classify_actions(
         if team_assignments_raw else None
     )
 
+    # Verify team assignments against actual player positions (fixes inversions)
+    if team_assignments and player_positions:
+        from rallycut.tracking.match_tracker import verify_team_assignments
+
+        team_assignments = verify_team_assignments(
+            team_assignments, player_positions,
+        )
+
     # Step 1: Contact detection
     contact_seq = detect_contacts(
         ball_positions=ball_positions,
@@ -265,6 +273,10 @@ def rank_highlights(
         court_split_y = data.get("courtSplitY")
         ta_raw = data.get("teamAssignments", {})
         ta = {int(k): v for k, v in ta_raw.items()} if ta_raw else None
+        if ta and player_positions:
+            from rallycut.tracking.match_tracker import verify_team_assignments
+
+            ta = verify_team_assignments(ta, player_positions)
         contact_seq = detect_contacts(
             ball_positions, player_positions or None, net_y=court_split_y,
             frame_count=data.get("frameCount"),

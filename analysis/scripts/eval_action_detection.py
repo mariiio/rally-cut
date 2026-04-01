@@ -152,12 +152,17 @@ def load_rallies_with_action_gt(
 def _load_match_team_assignments(
     video_ids: set[str],
     min_confidence: float = 0.70,
+    rally_positions: dict[str, list[Any]] | None = None,
 ) -> dict[str, dict[int, int]]:
     """Load match-level team assignments from match_analysis_json.
 
     Only includes rallies where assignment confidence >= min_confidence.
     Convention: players 1-2 = team 0 (near), 3-4 = team 1 (far),
     flipped by cumulative side switches.
+
+    When rally_positions is provided, each rally's team labels are verified
+    against actual player Y positions (fixes ~8% inversions from wrong
+    initial assignment or missed side switches).
     """
     from rallycut.tracking.match_tracker import build_match_team_assignments
 
@@ -182,7 +187,9 @@ def _load_match_team_assignments(
     for _video_id_val, ma_json in rows:
         if not isinstance(ma_json, dict):
             continue
-        result.update(build_match_team_assignments(ma_json, min_confidence))
+        result.update(build_match_team_assignments(
+            ma_json, min_confidence, rally_positions=rally_positions,
+        ))
 
     return result
 
@@ -687,7 +694,22 @@ def _run_threshold_sweep(
             calibrators[vid] = cal
         else:
             calibrators[vid] = None
-    match_teams_by_rally = _load_match_team_assignments(video_ids, min_confidence=0.70)
+    # Build positions lookup for team assignment verification
+    rally_pos_lookup: dict[str, list[PlayerPos]] = {}
+    for r in rallies:
+        if r.positions_json:
+            rally_pos_lookup[r.rally_id] = [
+                PlayerPos(
+                    frame_number=pp["frameNumber"], track_id=pp["trackId"],
+                    x=pp["x"], y=pp["y"],
+                    width=pp["width"], height=pp["height"],
+                    confidence=pp.get("confidence", 1.0),
+                )
+                for pp in r.positions_json
+            ]
+    match_teams_by_rally = _load_match_team_assignments(
+        video_ids, min_confidence=0.70, rally_positions=rally_pos_lookup,
+    )
 
     console.print(f"\n[bold]Threshold sweep on {len(rallies)} rallies[/bold]\n")
 
@@ -881,8 +903,26 @@ def main() -> None:
         else:
             calibrators[vid] = None
 
+    # Build positions lookup for team assignment verification
+    from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
+
+    rally_pos_lookup: dict[str, list[PlayerPos]] = {}
+    for r in rallies:
+        if r.positions_json:
+            rally_pos_lookup[r.rally_id] = [
+                PlayerPos(
+                    frame_number=pp["frameNumber"], track_id=pp["trackId"],
+                    x=pp["x"], y=pp["y"],
+                    width=pp["width"], height=pp["height"],
+                    confidence=pp.get("confidence", 1.0),
+                )
+                for pp in r.positions_json
+            ]
+
     # Load match-level team assignments for re-attribution (confidence-gated)
-    match_teams_by_rally = _load_match_team_assignments(video_ids, min_confidence=0.70)
+    match_teams_by_rally = _load_match_team_assignments(
+        video_ids, min_confidence=0.70, rally_positions=rally_pos_lookup,
+    )
     n_with_match = sum(1 for r in rallies if r.rally_id in match_teams_by_rally)
 
     # Load ReID classifiers if requested

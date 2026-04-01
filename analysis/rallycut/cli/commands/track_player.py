@@ -895,17 +895,26 @@ def _run_tracking(
         if not quiet:
             console.print("\n[dim]Running action classification...[/dim]")
 
+        # Verify team assignments against actual positions (fixes inversions)
+        verified_teams = result.team_assignments
+        if verified_teams and result.positions:
+            from rallycut.tracking.match_tracker import verify_team_assignments
+
+            verified_teams = verify_team_assignments(
+                verified_teams, result.positions,
+            )
+
         contact_seq = detect_contacts(
             ball_positions=ball_positions,
             player_positions=result.positions,
             net_y=result.court_split_y,
             frame_count=result.frame_count or None,
-            team_assignments=result.team_assignments,
+            team_assignments=verified_teams,
             court_calibrator=calibrator,
         )
         rally_actions = classify_rally_actions(
             contact_seq,
-            team_assignments=result.team_assignments,
+            team_assignments=verified_teams,
         )
 
         actions_data = {

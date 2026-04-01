@@ -85,9 +85,52 @@ REID_BLEND = 0.50
 REID_MIN_MARGIN = 0.08
 
 
+def verify_team_assignments(
+    team_assignments: dict[int, int],
+    player_positions: list[PlayerPosition],
+    min_gap: float = 0.02,
+) -> dict[int, int]:
+    """Verify team assignments match actual player positions; flip if inverted.
+
+    Checks whether team 0 tracks have higher avg Y (near court) than team 1.
+    If inverted (team 0 is on far side), flips all labels.
+
+    Args:
+        team_assignments: track_id -> team (0=near, 1=far).
+        player_positions: Player positions for this rally.
+        min_gap: Minimum avg Y gap between teams to trigger a flip.
+            Below this threshold, the assignment is ambiguous.
+
+    Returns:
+        Corrected team assignments (flipped if inverted, unchanged otherwise).
+    """
+    if not team_assignments or not player_positions:
+        return team_assignments
+
+    team_ys: dict[int, list[float]] = {0: [], 1: []}
+    for p in player_positions:
+        team = team_assignments.get(p.track_id)
+        if team is not None:
+            team_ys[team].append(p.y)
+
+    if not team_ys[0] or not team_ys[1]:
+        return team_assignments
+
+    avg_0 = sum(team_ys[0]) / len(team_ys[0])
+    avg_1 = sum(team_ys[1]) / len(team_ys[1])
+
+    # Team 0 should have higher Y (near court, closer to camera).
+    # If team 1 has clearly higher Y, the assignment is inverted.
+    if avg_1 - avg_0 > min_gap:
+        return {tid: 1 - team for tid, team in team_assignments.items()}
+
+    return team_assignments
+
+
 def build_match_team_assignments(
     match_analysis: dict[str, Any],
     min_confidence: float = 0.0,
+    rally_positions: dict[str, list[PlayerPosition]] | None = None,
 ) -> dict[str, dict[int, int]]:
     """Build per-rally team assignments from match analysis JSON.
 
@@ -97,12 +140,18 @@ def build_match_team_assignments(
     Convention: player IDs 1-2 = team 0 (near), 3-4 = team 1 (far)
     at baseline. Each side switch flips the mapping.
 
+    When rally_positions is provided, each rally's team labels are verified
+    against actual player Y positions and flipped if inverted (team 0 on
+    far side). This corrects errors from wrong initial assignment or missed
+    side switches.
+
     Accepts both camelCase (from API JSON) and snake_case (from Python)
     field names (e.g. sideSwitchDetected / side_switch_detected).
 
     Args:
         match_analysis: The match_analysis_json from the videos table.
         min_confidence: Skip rallies below this assignment confidence.
+        rally_positions: Optional rally_id -> player positions for verification.
 
     Returns:
         Dict of rally_id -> {track_id: team (0 or 1)}.
@@ -143,6 +192,13 @@ def build_match_team_assignments(
 
         if teams:
             result[rid] = teams
+
+    # Verify against actual positions when available
+    if rally_positions:
+        for rid, teams in result.items():
+            positions = rally_positions.get(rid)
+            if positions:
+                result[rid] = verify_team_assignments(teams, positions)
 
     return result
 
