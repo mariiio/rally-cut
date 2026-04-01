@@ -1548,9 +1548,10 @@ def _compute_defensive_heatmap(
     is_calibrated = calibrator is not None and calibrator.is_calibrated
 
     # Determine which half-court to map
-    # Defending team: "A" is near (y > 8m), "B" is far (y < 8m)
-    half_y_start = (COURT_LENGTH / 2) if defending_team == "A" else 0.0
-    half_y_end = COURT_LENGTH if defending_team == "A" else (COURT_LENGTH / 2)
+    # Defending team: "A" is near (y < 8m), "B" is far (y > 8m)
+    # Court origin at near-left corner: near = 0-8m, far = 8-16m
+    half_y_start = 0.0 if defending_team == "A" else (COURT_LENGTH / 2)
+    half_y_end = (COURT_LENGTH / 2) if defending_team == "A" else COURT_LENGTH
 
     for rs in rally_stats:
         if rs.point_winner == "unknown":

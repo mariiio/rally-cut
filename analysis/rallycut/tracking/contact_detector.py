@@ -33,10 +33,6 @@ logger = logging.getLogger(__name__)
 # Ball detector confidence is bimodal: either 0.0 (no detection) or >=0.3 (confident).
 _CONFIDENCE_THRESHOLD = 0.3
 
-# Valid range for court_split_y / net_y.  Values outside this range indicate
-# extreme camera angles where bbox-clustering estimation breaks down.
-_VALID_NET_Y_RANGE = (0.30, 0.70)
-
 # Cached temporal attributor (loaded once from disk on first use)
 _temporal_attributor_cache: dict[str, TemporalAttributionInference | None] = {}
 
@@ -1456,13 +1452,15 @@ def _resolve_court_side(
     team_assignments: dict[int, int] | None,
     court_calibrator: CourtCalibrator | None,
     estimated_net_y: float,
+    player_y: float | None = None,
 ) -> str:
     """Determine which court side the ball is on using multiple signals.
 
     Signal priority:
     1. Per-rally player identity (median Y based)
     2. Calibration projection — perspective-correct via homography
-    3. Y-threshold fallback — simple horizontal split (current behavior)
+    3. Nearest player Y position (more reliable than ball Y for near-net contacts)
+    4. Ball Y-threshold fallback
     """
     # Signal 1: Per-rally player identity
     if team_assignments and player_track_id >= 0 and player_track_id in team_assignments:
@@ -1476,13 +1474,20 @@ def _resolve_court_side(
             court_x, court_y = court_calibrator.image_to_court(
                 (ball_x, ball_y), 1, 1,
             )
-            # Beach volleyball: 8m x 16m, near side y >= 8.0
+            # Beach volleyball: 8m x 16m, near side y < 8.0 (origin at near-left)
             if 0.0 <= court_y <= 16.0:
-                return "near" if court_y >= 8.0 else "far"
+                return "near" if court_y < 8.0 else "far"
         except (RuntimeError, np.linalg.LinAlgError):
             pass  # Calibration failed, fall through
 
-    # Signal 3: Y-threshold fallback (current behavior)
+    # Signal 3: Player Y position — player stays on their side even during
+    # near-net actions. Uses ball-trajectory net_y as threshold: despite being
+    # computed from ball positions, it separates near/far players better than
+    # court_split_y because it sits cleanly between the two teams.
+    if player_y is not None:
+        return "far" if player_y < estimated_net_y else "near"
+
+    # Signal 4: Ball Y-threshold fallback
     return "far" if ball_y < estimated_net_y else "near"
 
 
@@ -1490,7 +1495,7 @@ def detect_contacts(
     ball_positions: list[BallPosition],
     player_positions: list[PlayerPosition] | None = None,
     config: ContactDetectionConfig | None = None,
-    net_y: float | None = None,
+    net_y: float | None = None,  # deprecated: ignored, kept for caller compat
     frame_count: int | None = None,
     classifier: ContactClassifier | None = None,
     use_classifier: bool = True,
@@ -1501,7 +1506,7 @@ def detect_contacts(
 
     Algorithm:
     1. Pre-filter noise spikes (single-frame false positives)
-    2. Estimate net position (or use provided net_y)
+    2. Estimate net position from ball trajectory
     3. Compute smoothed ball velocity signal
     4. Find velocity peak candidates (local maxima)
     5. Find inflection candidates (direction changes)
@@ -1513,9 +1518,9 @@ def detect_contacts(
         ball_positions: Ball tracking positions.
         player_positions: Player tracking positions (optional but recommended).
         config: Detection configuration.
-        net_y: Explicit net Y position override. If provided, skips auto-estimation.
-            Pass court_split_y from player tracking for more reliable court side
-            classification.
+        net_y: Deprecated — ignored. Net position is always estimated from ball
+            trajectory (court_split_y from player tracking is not an accurate
+            proxy for the net's image-space position).
         frame_count: Total rally frames. If provided, candidates beyond this frame
             are suppressed (post-rally ball pickup/warmdown).
         classifier: Optional trained ContactClassifier. When provided, replaces the
@@ -1556,17 +1561,11 @@ def detect_contacts(
             ball_positions, cfg.noise_spike_max_jump
         )
 
-    # Step 2: Estimate net position
-    if net_y is not None and _VALID_NET_Y_RANGE[0] <= net_y <= _VALID_NET_Y_RANGE[1]:
-        estimated_net_y = net_y
-    else:
-        if net_y is not None:
-            logger.warning(
-                "Rejecting extreme net_y=%.3f (outside [%.2f, %.2f]), "
-                "using ball trajectory estimate instead",
-                net_y, _VALID_NET_Y_RANGE[0], _VALID_NET_Y_RANGE[1],
-            )
-        estimated_net_y = estimate_net_position(ball_positions)
+    # Step 2: Estimate net position from ball trajectory.
+    # Always use ball trajectory — the external net_y (often court_split_y from
+    # player tracking) reflects where players stand, NOT where the net appears
+    # in image space. Ball trajectory extrema bracket the net more accurately.
+    estimated_net_y = estimate_net_position(ball_positions)
 
     # Step 3: Compute velocities from filtered positions
     velocities = _compute_velocities(ball_positions)
@@ -1779,8 +1778,9 @@ def detect_contacts(
 
         # Find nearest player (narrow window — matches classifier training semantics)
         # MUST use image-space distance to preserve classifier feature distribution.
+        nearest_player_y: float | None = None
         if player_positions:
-            track_id, player_dist, _player_y = _find_nearest_player(
+            track_id, player_dist, nearest_player_y = _find_nearest_player(
                 frame, ball.x, ball.y, player_positions,
                 search_frames=cfg.player_search_frames,
             )
@@ -1809,10 +1809,11 @@ def detect_contacts(
         if velocity < cfg.min_candidate_velocity:
             continue
 
-        # Determine court side: per-rally > calibration > Y-threshold
+        # Determine court side: per-rally > calibration > player Y > ball Y
         court_side = _resolve_court_side(
             ball.x, ball.y, track_id, team_assignments,
             court_calibrator, estimated_net_y,
+            player_y=nearest_player_y,
         )
 
         # Check if at net

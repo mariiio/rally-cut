@@ -1021,7 +1021,7 @@ def detect_server(
                         confidence = min(confidence + 0.1, 1.0)
                     else:
                         confidence = max(confidence - 0.2, 0.0)
-                    is_near_court = court_point[1] > 8.0  # Near court is Y > 8m
+                    is_near_court = court_point[1] < 8.0  # Near court is Y < 8m (origin at near-left)
                 except (RuntimeError, ValueError):
                     pass
                 break

@@ -541,7 +541,9 @@ class TestDetectContacts:
                 positions.append(_bp(i, 0.5 - (i - 15) * 0.02, 0.5, conf=0.9))
 
         result = detect_contacts(positions, config=config, net_y=0.45, use_classifier=False)
-        assert result.net_y == 0.45
+        # net_y is now always estimated from ball trajectory (not the passed value),
+        # because court_split_y ≠ ball-trajectory net position.
+        assert result.net_y == 0.5  # flat Y=0.5 trajectory → midpoint = 0.5
 
     def test_frame_count_suppresses_post_rally(self) -> None:
         """Candidates beyond frame_count are suppressed."""
@@ -580,8 +582,8 @@ class TestDetectContacts:
         for f in post_rally:
             assert f not in limited_frames
 
-    def test_extreme_net_y_rejected(self) -> None:
-        """Extreme net_y values are rejected and internal estimate is used."""
+    def test_net_y_always_from_trajectory(self) -> None:
+        """External net_y is ignored — always estimated from ball trajectory."""
         config = ContactDetectionConfig(
             min_peak_velocity=0.005,
             min_peak_prominence=0.002,
@@ -599,45 +601,42 @@ class TestDetectContacts:
                 y = 0.3 + i * 0.04
                 positions.append(_bp(base + 10 + i, 0.4 - i * 0.01, y))
 
-        # Extreme net_y=0.18 (like cici.mp4) should be rejected
+        # Extreme values ignored — trajectory estimate used
         result = detect_contacts(positions, config=config, net_y=0.18, use_classifier=False)
-        # Internal estimate from oscillating trajectory should be ~0.5, not 0.18
         assert result.net_y != 0.18
         assert 0.30 <= result.net_y <= 0.70
 
-        # Extreme net_y=0.80 should also be rejected
         result2 = detect_contacts(positions, config=config, net_y=0.80, use_classifier=False)
         assert result2.net_y != 0.80
         assert 0.30 <= result2.net_y <= 0.70
 
-        # Normal net_y=0.45 should be accepted as-is
+        # Even a "normal" net_y=0.45 is ignored — ball trajectory always used
         result3 = detect_contacts(positions, config=config, net_y=0.45, use_classifier=False)
-        assert result3.net_y == 0.45
+        assert 0.30 <= result3.net_y <= 0.70  # trajectory estimate
 
-    def test_court_side_uses_net_y(self) -> None:
-        """Court side is determined purely by net_y, not baseline thresholds."""
-        # With net_y=0.60, ball at y=0.85 should be "near" (above net)
-        # and ball at y=0.15 should be "far" (below net)
+    def test_court_side_from_trajectory(self) -> None:
+        """Court side uses ball-trajectory estimated net, not external net_y."""
         config = ContactDetectionConfig(
             min_peak_velocity=0.005,
             min_peak_prominence=0.002,
             enable_noise_filter=False,
         )
 
-        # Create trajectory on far side (y=0.15, well below any net_y)
+        # Oscillating trajectory: Y oscillates between 0.2 (far) and 0.6 (near)
+        # → estimated net_y ≈ 0.4 (midpoint of extrema)
         positions = []
-        for i in range(30):
-            if i < 15:
-                positions.append(_bp(i, 0.2 + i * 0.02, 0.15, conf=0.9))
-            else:
-                positions.append(_bp(i, 0.5 - (i - 15) * 0.02, 0.15, conf=0.9))
+        for cycle in range(3):
+            base = cycle * 20
+            for i in range(10):
+                y = 0.6 - i * 0.04  # 0.6 → 0.24
+                positions.append(_bp(base + i, 0.3 + i * 0.01, y, conf=0.9))
+            for i in range(10):
+                y = 0.2 + i * 0.04  # 0.2 → 0.56
+                positions.append(_bp(base + 10 + i, 0.4 - i * 0.01, y, conf=0.9))
 
-        players = [_pp(15, 1, 0.5, 0.20)]
-
-        result = detect_contacts(positions, players, config, net_y=0.50, use_classifier=False)
-        # All contacts at y=0.15 should be "far" with net_y=0.50
-        for c in result.contacts:
-            assert c.court_side == "far"
+        result = detect_contacts(positions, config=config, use_classifier=False)
+        # Net should be estimated from trajectory, not from external net_y
+        assert 0.30 <= result.net_y <= 0.50
 
     def test_court_side_classification(self) -> None:
         """Contacts are classified as near/far based on ball Y."""
