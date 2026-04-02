@@ -1275,6 +1275,7 @@ export async function reindexTrackingData(
       ballPositionsJson: true,
       contactsJson: true,
       actionsJson: true,
+      actionGroundTruthJson: true,
       frameCount: true,
     },
   });
@@ -1338,6 +1339,12 @@ export async function reindexTrackingData(
     };
   }
 
+  // Action ground truth: shift frame on each label
+  let actionGtData = track.actionGroundTruthJson as Array<{ frame: number }> | null;
+  if (actionGtData && Array.isArray(actionGtData)) {
+    actionGtData = shiftFrameField(actionGtData);
+  }
+
   await tx.playerTrack.update({
     where: { id: track.id },
     data: {
@@ -1347,6 +1354,9 @@ export async function reindexTrackingData(
       ballPositionsJson: ballPositions as unknown as Prisma.JsonArray,
       contactsJson: contactsData ? (contactsData as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
       actionsJson: actionsData ? (actionsData as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
+      ...(actionGtData !== null
+        ? { actionGroundTruthJson: actionGtData as unknown as Prisma.JsonArray }
+        : {}),
     },
   });
 
