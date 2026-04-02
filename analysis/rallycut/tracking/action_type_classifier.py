@@ -64,8 +64,8 @@ class ActionFeatures:
     max_d_y: float  # Peak frame-to-frame Y shift (jumps/dives)
     max_d_height: float  # Peak frame-to-frame height change (arm swings/crouching)
 
-    # Net-crossing and player context (v2 features)
-    post_contact_crosses_net: float  # 1.0=crosses, 0.0=same side, 0.5=unknown
+    # Team-based transition and player context (v4 features)
+    next_contact_team_transition: float  # 1.0=different team, 0.0=same, 0.5=unknown
     player_y_relative_net: float  # Player bbox center Y minus net_y
     post_contact_speed: float  # Mean ball speed over 5 frames post-contact
 
@@ -74,6 +74,10 @@ class ActionFeatures:
     prev_action_encoded: float = -1.0  # serve=0,..,dig=4, -1=unknown
     prev_action_confidence: float = 0.0
     prev_same_side: float = 0.5  # 1.0=same, 0.0=different, 0.5=unknown
+
+    # Speed profile features (v4)
+    ball_vertical_velocity: float = 0.0  # Signed Y velocity at contact (+ = down)
+    pre_contact_speed: float = 0.0  # Mean ball speed 5 frames before contact
 
     def to_array(self) -> np.ndarray:
         """Convert to numpy feature array for classifier input."""
@@ -96,12 +100,14 @@ class ActionFeatures:
             self.distance_from_last_contact,
             self.max_d_y,
             self.max_d_height,
-            self.post_contact_crosses_net,
+            self.next_contact_team_transition,
             self.player_y_relative_net,
             self.post_contact_speed,
             self.prev_action_encoded,
             self.prev_action_confidence,
             self.prev_same_side,
+            self.ball_vertical_velocity,
+            self.pre_contact_speed,
         ], dtype=np.float64)
 
     @staticmethod
@@ -124,12 +130,14 @@ class ActionFeatures:
             "distance_from_last_contact",
             "max_d_y",
             "max_d_height",
-            "post_contact_crosses_net",
+            "next_contact_team_transition",
             "player_y_relative_net",
             "post_contact_speed",
             "prev_action_encoded",
             "prev_action_confidence",
             "prev_same_side",
+            "ball_vertical_velocity",
+            "pre_contact_speed",
         ]
 
 
@@ -331,18 +339,16 @@ def extract_action_features(
         frames_since_last = 0
         dist_from_last = 0.0
 
-    # --- v2 features ---
+    # --- v4 features ---
 
-    # Post-contact net crossing (attack vs set discriminator)
-    crosses_net = 0.5  # unknown
-    if ball_positions:
-        crossed = ball_crossed_net(
-            ball_positions, contact.frame, contact.frame + 15, net_y,
-        )
-        if crossed is True:
-            crosses_net = 1.0
-        elif crossed is False:
-            crosses_net = 0.0
+    # Team-based transition: does the next contact belong to a different team?
+    team_transition = 0.5  # unknown
+    if team_assignments and index < len(all_contacts) - 1:
+        cur_team = team_assignments.get(contact.player_track_id)
+        next_contact = all_contacts[index + 1]
+        next_team = team_assignments.get(next_contact.player_track_id)
+        if cur_team is not None and next_team is not None:
+            team_transition = 0.0 if cur_team == next_team else 1.0
 
     # Player Y relative to net (attacks happen closer to net)
     player_y_rel = _get_player_y_relative_net(
@@ -363,6 +369,28 @@ def extract_action_features(
         if speeds:
             post_speed = sum(speeds) / len(speeds)
 
+    # Ball vertical velocity at contact (signed, + = downward in image)
+    ball_vert_vel = 0.0
+    if ball_by_frame:
+        bp_at = ball_by_frame.get(contact.frame)
+        bp_after = ball_by_frame.get(contact.frame + 3)
+        if bp_at is not None and bp_after is not None:
+            ball_vert_vel = (bp_after.y - bp_at.y) / 3.0
+
+    # Pre-contact ball speed (mean over 5 frames before contact)
+    pre_speed = 0.0
+    if ball_by_frame:
+        pre_speeds: list[float] = []
+        for f in range(contact.frame - 5, contact.frame):
+            bp_cur = ball_by_frame.get(f)
+            bp_prev = ball_by_frame.get(f - 1)
+            if bp_cur is not None and bp_prev is not None:
+                dx = bp_cur.x - bp_prev.x
+                dy = bp_cur.y - bp_prev.y
+                pre_speeds.append(math.sqrt(dx * dx + dy * dy))
+        if pre_speeds:
+            pre_speed = sum(pre_speeds) / len(pre_speeds)
+
     return ActionFeatures(
         velocity=contact.velocity,
         direction_change_deg=contact.direction_change_deg,
@@ -381,9 +409,11 @@ def extract_action_features(
         distance_from_last_contact=dist_from_last,
         max_d_y=max_d_y,
         max_d_height=max_d_height,
-        post_contact_crosses_net=crosses_net,
+        next_contact_team_transition=team_transition,
         player_y_relative_net=player_y_rel,
         post_contact_speed=post_speed,
+        ball_vertical_velocity=ball_vert_vel,
+        pre_contact_speed=pre_speed,
     )
 
 
@@ -418,7 +448,7 @@ def set_prev_action_context(
 
 
 # Bump when feature vector changes (forces retrain of stale pickles).
-FEATURE_VERSION = 3
+FEATURE_VERSION = 4
 
 
 class ActionTypeClassifier:

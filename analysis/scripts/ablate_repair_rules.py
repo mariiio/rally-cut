@@ -356,7 +356,9 @@ def main() -> None:
     console.print(f"  Match teams: {n_with_match}/{len(rallies)} rallies")
 
     # --- Pre-extract features ---
-    cached_features = preextract_all_features(rallies, rallies_temporal)
+    cached_features = preextract_all_features(
+        rallies, rallies_temporal, match_teams_by_rally,
+    )
 
     # --- Build configs ---
     configs = build_configs(combos=args.combos)

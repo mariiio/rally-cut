@@ -206,6 +206,7 @@ class RallyFeatures:
 def preextract_all_features(
     rallies: list[RallyData],
     rallies_temporal: list[dict],
+    match_teams_by_rally: dict[str, dict[int, int]] | None = None,
 ) -> list[RallyFeatures]:
     """Pre-extract features for all rallies once."""
     console.print("[bold]Pre-extracting features for all rallies...[/bold]")
@@ -220,7 +221,10 @@ def preextract_all_features(
 
     for i, rally in enumerate(rallies):
         # Action GBM features (runs detect_contacts internally)
-        action_feats, action_labels, _ = extract_features_for_rally(rally, tolerance=5)
+        rally_teams = (match_teams_by_rally or {}).get(rally.rally_id)
+        action_feats, action_labels, _ = extract_features_for_rally(
+            rally, tolerance=5, team_assignments=rally_teams,
+        )
 
         # Temporal attribution features for this rally only
         temporal_rally = temporal_by_id.get(rally.rally_id)
@@ -513,7 +517,9 @@ def main() -> None:
     console.print(f"  Match teams: {n_with_match}/{len(rallies)} rallies")
 
     # --- Pre-extract features (one-time cost) ---
-    cached_features = preextract_all_features(rallies, rallies_temporal)
+    cached_features = preextract_all_features(
+        rallies, rallies_temporal, match_teams_by_rally,
+    )
 
     # Index by video for fast fold splitting
     features_by_video: dict[str, list[RallyFeatures]] = defaultdict(list)

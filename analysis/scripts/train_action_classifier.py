@@ -36,6 +36,7 @@ from rallycut.tracking.contact_detector import (
 from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
 from scripts.eval_action_detection import (
     RallyData,
+    _load_match_team_assignments,
     load_rallies_with_action_gt,
     match_contacts,
 )
@@ -47,6 +48,7 @@ def extract_features_for_rally(
     rally: RallyData,
     config: ContactDetectionConfig | None = None,
     tolerance: int = 5,
+    team_assignments: dict[int, int] | None = None,
 ) -> tuple[list[np.ndarray], list[str], list[str]]:
     """Extract action features for matched contacts in a rally.
 
@@ -146,6 +148,7 @@ def extract_features_for_rally(
             ball_positions=contact_seq.ball_positions or None,
             net_y=contact_seq.net_y,
             rally_start_frame=contact_seq.rally_start_frame,
+            team_assignments=team_assignments,
             player_positions=player_positions or None,
         )
 
@@ -202,6 +205,26 @@ def main() -> None:
         console.print("[red]No rallies with action GT found.[/red]")
         return
 
+    # Load match-level team assignments for team-based features
+    video_ids = {r.video_id for r in rallies}
+    rally_pos_lookup: dict[str, list] = {}
+    for r in rallies:
+        if r.positions_json:
+            rally_pos_lookup[r.rally_id] = [
+                PlayerPos(
+                    frame_number=pp["frameNumber"], track_id=pp["trackId"],
+                    x=pp["x"], y=pp["y"],
+                    width=pp["width"], height=pp["height"],
+                    confidence=pp.get("confidence", 1.0),
+                )
+                for pp in r.positions_json
+            ]
+    match_teams_by_rally = _load_match_team_assignments(
+        video_ids, min_confidence=0.70, rally_positions=rally_pos_lookup,
+    )
+    n_with_teams = sum(1 for r in rallies if r.rally_id in match_teams_by_rally)
+    console.print(f"  Match teams: {n_with_teams}/{len(rallies)} rallies")
+
     console.print(
         f"\n[bold]Extracting action features from {len(rallies)} rallies[/bold]\n"
     )
@@ -218,7 +241,8 @@ def main() -> None:
 
     for rally in rallies:
         features, labels, rids = extract_features_for_rally(
-            rally, tolerance=args.tolerance
+            rally, tolerance=args.tolerance,
+            team_assignments=match_teams_by_rally.get(rally.rally_id),
         )
 
         all_features.extend(features)
