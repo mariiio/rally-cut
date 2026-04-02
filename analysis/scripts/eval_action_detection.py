@@ -446,8 +446,9 @@ def match_contacts(
     Returns:
         Tuple of (matched GT results, unmatched predictions).
     """
+    from scipy.optimize import linear_sum_assignment
+
     results: list[MatchResult] = []
-    used_preds: set[int] = set()
 
     # Sort GT and predictions by frame
     gt_sorted = sorted(gt_labels, key=lambda gt: gt.frame)
@@ -455,26 +456,43 @@ def match_contacts(
 
     team_to_side = {0: "near", 1: "far"}
 
-    for gt in gt_sorted:
-        best_idx: int | None = None
-        best_dist = tolerance + 1
+    # Build cost matrix for Hungarian matching (optimal bipartite assignment)
+    # Cost = frame distance; entries beyond tolerance get a large cost to prevent matching
+    big_cost = tolerance + 1
+    n_gt = len(gt_sorted)
+    n_pred = len(pred_sorted)
 
-        for i, pred in enumerate(pred_sorted):
-            if i in used_preds:
-                continue
-            dist = abs(gt.frame - pred.get("frame", 0))
-            if dist <= tolerance and dist < best_dist:
-                best_dist = dist
-                best_idx = i
+    if n_gt > 0 and n_pred > 0:
+        import numpy as np
 
+        cost = np.full((n_gt, n_pred), big_cost, dtype=np.float64)
+        for gi, gt in enumerate(gt_sorted):
+            for pi, pred in enumerate(pred_sorted):
+                dist = abs(gt.frame - pred.get("frame", 0))
+                if dist <= tolerance:
+                    cost[gi][pi] = dist
+
+        gt_inds, pred_inds = linear_sum_assignment(cost)
+
+        # Build match mapping (only keep pairs within tolerance)
+        gt_to_pred: dict[int, int] = {}
+        for gi, pi in zip(gt_inds, pred_inds):
+            if cost[gi][pi] <= tolerance:
+                gt_to_pred[gi] = pi
+        used_preds = set(gt_to_pred.values())
+    else:
+        gt_to_pred = {}
+        used_preds: set[int] = set()
+
+    for gi, gt in enumerate(gt_sorted):
         # Determine if GT track_id is evaluable
         evaluable = True
         if available_track_ids is not None and gt.player_track_id >= 0:
             evaluable = gt.player_track_id in available_track_ids
 
-        if best_idx is not None:
-            used_preds.add(best_idx)
-            pred = pred_sorted[best_idx]
+        pi = gt_to_pred.get(gi)
+        if pi is not None:
+            pred = pred_sorted[pi]
 
             # Court-side accuracy: check if predicted court_side matches
             # expected side for the GT player's team
