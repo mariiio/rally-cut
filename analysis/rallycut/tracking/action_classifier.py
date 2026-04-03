@@ -2440,7 +2440,7 @@ def classify_rally_actions(
         net_y=contact_sequence.net_y,
         ball_positions=contact_sequence.ball_positions,
         rally_start_frame=contact_sequence.rally_start_frame,
-        disabled_rules={0, 2, 3, 4, 5, 6},
+        disabled_rules={0, 2, 3, 5, 6},
     )
 
     result.actions = viterbi_decode_actions(result.actions)
