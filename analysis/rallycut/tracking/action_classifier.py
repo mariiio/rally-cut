@@ -1335,7 +1335,7 @@ def repair_action_sequence(
     _track_triggers = disabled_rules is not None
     _disabled = (disabled_rules if disabled_rules is not None
                  else _RULES_DISABLED_BY_DEFAULT)
-    _triggers: dict[int, int] = {r: 0 for r in range(7)}
+    _triggers: dict[int, int] = {r: 0 for r in range(9)}
 
     if len(actions) < 2:
         if _track_triggers:
@@ -2378,6 +2378,80 @@ def viterbi_decode_actions(
     return result
 
 
+def attack_anchored_relabel(
+    actions: list[ClassifiedAction],
+    *,
+    min_attack_confidence: float = 0.7,
+    max_target_confidence: float = 0.6,
+) -> list[ClassifiedAction]:
+    """Relabel dig/set contacts adjacent to high-confidence attacks.
+
+    Attacks are the most reliably classified action (F1=87.9%). When we
+    trust an attack, the surrounding actions are structurally constrained:
+    - Contact immediately before attack on the SAME team → set
+    - Contact immediately after attack on a DIFFERENT team → dig
+
+    Only fires when:
+    - The attack confidence >= min_attack_confidence
+    - Both contacts have known team labels (not "unknown")
+    - The target contact's confidence < max_target_confidence
+
+    This bypasses broken side counting (55.7% accuracy) by using
+    team membership (80.8% per-contact accuracy) directly.
+    """
+    result = list(actions)
+    n_relabeled = 0
+
+    for i, action in enumerate(result):
+        if action.action_type != ActionType.ATTACK:
+            continue
+        if action.confidence < min_attack_confidence:
+            continue
+        if action.team == "unknown":
+            continue
+
+        # Look backward: same-team contact before attack → set
+        if i > 0:
+            prev = result[i - 1]
+            if (
+                prev.action_type == ActionType.DIG
+                and prev.team == action.team
+                and prev.team != "unknown"
+                and prev.confidence < max_target_confidence
+            ):
+                logger.debug(
+                    "Attack-anchor: relabel dig→set at frame %d "
+                    "(before attack at frame %d, team %s)",
+                    prev.frame, action.frame, action.team,
+                )
+                result[i - 1] = _reclassify(prev, ActionType.SET)
+                n_relabeled += 1
+
+        # Look forward: different-team contact after attack → dig
+        if i < len(result) - 1:
+            nxt = result[i + 1]
+            if (
+                nxt.action_type == ActionType.SET
+                and nxt.team != action.team
+                and nxt.team != "unknown"
+                and nxt.confidence < max_target_confidence
+            ):
+                logger.debug(
+                    "Attack-anchor: relabel set→dig at frame %d "
+                    "(after attack at frame %d, team %s→%s)",
+                    nxt.frame, action.frame, action.team, nxt.team,
+                )
+                result[i + 1] = _reclassify(nxt, ActionType.DIG)
+                n_relabeled += 1
+
+    if n_relabeled > 0:
+        logger.info(
+            "Attack-anchored relabeling: changed %d actions", n_relabeled,
+        )
+
+    return result
+
+
 def classify_rally_actions(
     contact_sequence: ContactSequence,
     rally_id: str = "",
@@ -2404,9 +2478,10 @@ def classify_rally_actions(
        (uses match_team_assignments for team-aware touch counting when available)
     2. repair_action_sequence(Rule 1 only) — fix consecutive recv/dig → set
     3. viterbi_decode_actions() — sequence-level smoothing
-    4. validate_action_sequence() — log constraint violations
-    5. assign_court_side_from_teams() — overwrite court_side from match teams
-    6. reattribute_players() — server exclusion + server-seeded team chain
+    4. attack_anchored_relabel() — relabel dig/set near high-confidence attacks
+    5. validate_action_sequence() — log constraint violations
+    6. assign_court_side_from_teams() — overwrite court_side from match teams
+    7. reattribute_players() — server exclusion + server-seeded team chain
        for player re-attribution
 
     Args:
@@ -2464,6 +2539,7 @@ def classify_rally_actions(
     )
 
     result.actions = viterbi_decode_actions(result.actions)
+    result.actions = attack_anchored_relabel(result.actions)
     result.actions = validate_action_sequence(result.actions, rally_id)
 
     if match_team_assignments:

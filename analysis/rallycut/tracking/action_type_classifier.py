@@ -73,7 +73,6 @@ class ActionFeatures:
     # Set by second pass; defaults = no context (first pass / unknown)
     prev_action_encoded: float = -1.0  # serve=0,..,dig=4, -1=unknown
     prev_action_confidence: float = 0.0
-    prev_same_side: float = 0.5  # 1.0=same, 0.0=different, 0.5=unknown
 
     # Speed profile features (v4)
     ball_vertical_velocity: float = 0.0  # Signed Y velocity at contact (+ = down)
@@ -105,7 +104,6 @@ class ActionFeatures:
             self.post_contact_speed,
             self.prev_action_encoded,
             self.prev_action_confidence,
-            self.prev_same_side,
             self.ball_vertical_velocity,
             self.pre_contact_speed,
         ], dtype=np.float64)
@@ -135,7 +133,6 @@ class ActionFeatures:
             "post_contact_speed",
             "prev_action_encoded",
             "prev_action_confidence",
-            "prev_same_side",
             "ball_vertical_velocity",
             "pre_contact_speed",
         ]
@@ -434,21 +431,15 @@ def set_prev_action_context(
     features: ActionFeatures,
     prev_action: str,
     prev_confidence: float,
-    same_side: bool | None,
+    same_side: bool | None = None,
 ) -> None:
     """Set previous-action context on a feature vector (mutates in place)."""
     features.prev_action_encoded = _ACTION_ENCODING.get(prev_action, -1.0)
     features.prev_action_confidence = prev_confidence
-    if same_side is True:
-        features.prev_same_side = 1.0
-    elif same_side is False:
-        features.prev_same_side = 0.0
-    else:
-        features.prev_same_side = 0.5
 
 
 # Bump when feature vector changes (forces retrain of stale pickles).
-FEATURE_VERSION = 4
+FEATURE_VERSION = 5
 
 
 class ActionTypeClassifier:
