@@ -1454,26 +1454,6 @@ def repair_action_sequence(
                     )
 
     # ------------------------------------------------------------------
-    # Rule 7 (pre-pass): Consecutive set → second becomes attack.
-    # Two sets in a row is never valid in volleyball.
-    # ------------------------------------------------------------------
-    if 7 not in _disabled:
-        for i in range(1, len(repaired)):
-            if repair_count >= _MAX_SEQUENCE_REPAIRS:
-                break
-            if (
-                repaired[i].action_type == ActionType.SET
-                and repaired[i - 1].action_type == ActionType.SET
-            ):
-                _triggers[7] += 1
-                repaired[i] = _reclassify(repaired[i], ActionType.ATTACK)
-                repair_count += 1
-                logger.debug(
-                    "Repair rule 7: consecutive set at f%d → attack",
-                    repaired[i].frame,
-                )
-
-    # ------------------------------------------------------------------
     # Rule 8 (pre-pass): Dig immediately after serve → receive.
     # Dig is only valid after an opponent's attack, not after serve.
     # ------------------------------------------------------------------
