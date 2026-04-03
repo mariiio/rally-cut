@@ -117,13 +117,25 @@ class TestBallCrossedNet:
         ]
         assert ball_crossed_net(positions, from_frame=9, to_frame=21, net_y=0.5) is True
 
-    def test_both_contacts_near_net_returns_none(self) -> None:
-        """When start and end are both within dead zone of net, return None."""
+    def test_small_displacement_near_net_returns_false(self) -> None:
+        """Small Y displacement near net is not a crossing (below threshold)."""
         positions = [
             _bp(10, 0.51), _bp(11, 0.52),   # Just barely near side
             _bp(12, 0.48), _bp(13, 0.47),   # Just barely far side
         ]
-        assert ball_crossed_net(positions, from_frame=9, to_frame=14, net_y=0.5) is None
+        # y_delta = |0.475 - 0.515| = 0.04 < 0.14 threshold → False
+        assert ball_crossed_net(positions, from_frame=9, to_frame=14, net_y=0.5) is False
+
+    def test_net_y_not_used_in_decision(self) -> None:
+        """Crossing detected by Y displacement regardless of net_y value."""
+        positions = [
+            _bp(10, 0.7), _bp(11, 0.65),    # Start: high Y
+            _bp(14, 0.4), _bp(15, 0.35),    # End: low Y
+        ]
+        # y_delta = |0.375 - 0.675| = 0.3 > threshold → True
+        # Even with wildly wrong net_y, displacement still detects crossing
+        assert ball_crossed_net(positions, from_frame=9, to_frame=16, net_y=0.1) is True
+        assert ball_crossed_net(positions, from_frame=9, to_frame=16, net_y=0.9) is True
 
 
 class TestCountContactsOnSide:
