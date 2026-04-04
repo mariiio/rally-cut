@@ -391,11 +391,13 @@ def replay_pipeline_stages(rd: RallyData) -> list[StageResult]:
     )
     snapshot("height_swap")
 
-    # Stages 4-6: color split, spatial relink, appearance link
+    # Stages 4-6: color split, spatial relink, primary relink, appearance link
     if color_store is not None and color_store.has_data():
         from rallycut.tracking.color_repair import split_tracks_by_color
         from rallycut.tracking.tracklet_link import (
-            link_tracklets_by_appearance, relink_spatial_splits,
+            link_tracklets_by_appearance,
+            relink_primary_fragments,
+            relink_spatial_splits,
         )
 
         positions, _ = split_tracks_by_color(positions, color_store)
@@ -406,6 +408,22 @@ def replay_pipeline_stages(rd: RallyData) -> list[StageResult]:
         )
         snapshot("spatial_relink")
 
+        # Primary fragment linking: identify primaries, link non-primary
+        # fragments to nearest primary before appearance-based merging
+        pre_pf = PlayerFilter(
+            ball_positions=rd.ball_positions,
+            total_frames=rd.frame_count,
+            config=config,
+            court_calibrator=rd.court_calibrator,
+        )
+        pre_pf.analyze_tracks(positions)
+        pre_primary_ids = sorted(pre_pf.primary_tracks)
+        positions, pre_primary_ids, _ = relink_primary_fragments(
+            positions, pre_primary_ids, color_store,
+            appearance_store=appearance_store,
+        )
+        snapshot("primary_relink")
+
         positions, _ = link_tracklets_by_appearance(
             positions, color_store, appearance_store=appearance_store,
         )
@@ -413,6 +431,7 @@ def replay_pipeline_stages(rd: RallyData) -> list[StageResult]:
     else:
         snapshot("color_split")
         snapshot("spatial_relink")
+        snapshot("primary_relink")
         snapshot("appearance_link")
 
     # Stage 7: stabilize IDs

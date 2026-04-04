@@ -687,3 +687,191 @@ def relink_spatial_splits(
     )
 
     return positions, num_relinks
+
+
+# ---------------------------------------------------------------------------
+# Relaxed fragment linking for primary tracks (Step 0b3)
+# ---------------------------------------------------------------------------
+
+# Thresholds for linking non-primary fragments into primary tracks.
+# Much more relaxed than SPATIAL_RELINK because the primary anchor is a
+# known player — no risk of merging background or spectator tracks.
+PRIMARY_RELINK_MAX_GAP = 50  # ~1.7s at 30fps
+PRIMARY_RELINK_MAX_DISTANCE = 0.08  # normalized, ~100px at 1280w
+PRIMARY_RELINK_MAX_APPEARANCE = 0.20  # Bhattacharyya gate — reject if too dissimilar
+
+
+def relink_primary_fragments(
+    positions: list[PlayerPosition],
+    primary_track_ids: list[int] | set[int],
+    color_store: ColorHistogramStore,
+    appearance_store: AppearanceDescriptorStore | None = None,
+    max_gap: int = PRIMARY_RELINK_MAX_GAP,
+    max_distance: float = PRIMARY_RELINK_MAX_DISTANCE,
+    max_appearance: float = PRIMARY_RELINK_MAX_APPEARANCE,
+) -> tuple[list[PlayerPosition], list[int], int]:
+    """Link non-primary fragments into primary tracks by spatial proximity.
+
+    After primary track selection (Step 2), some fragments of a primary
+    player may exist as separate non-primary tracks (too short/weak to be
+    selected individually). This pass links them into the nearest primary
+    track using relaxed spatial thresholds.
+
+    Safety: the primary track anchor is a known player, and the non-primary
+    fragment fills a gap in that player's timeline. Appearance similarity
+    gates the merge (must be below max_appearance) and breaks ties when
+    multiple primaries could accept a fragment.
+
+    Args:
+        positions: Player positions (modified in place).
+        primary_track_ids: Set of track IDs identified as primary players.
+        color_store: Color histogram store for appearance gating/tiebreaking.
+        appearance_store: Updated with remap after merges (optional).
+        max_gap: Maximum frame gap for re-linking.
+        max_distance: Maximum endpoint distance (normalized).
+        max_appearance: Maximum Bhattacharyya distance (0=identical, 1=different).
+            Fragments with appearance distance above this are rejected.
+
+    Returns:
+        Tuple of (modified positions, updated primary_track_ids, num re-links).
+    """
+    primary_set = set(primary_track_ids)
+    if not positions or not primary_set:
+        return positions, sorted(primary_set), 0
+
+    tracks = _compute_track_summary(positions)
+    non_primary_ids = [tid for tid in tracks if tid not in primary_set]
+
+    if not non_primary_ids:
+        return positions, sorted(primary_set), 0
+
+    logger.info(
+        f"Primary re-link: {len(non_primary_ids)} non-primary fragments, "
+        f"{len(primary_set)} primary tracks "
+        f"(max_gap={max_gap}, max_dist={max_distance})"
+    )
+
+    # Pre-compute average histograms for appearance tiebreaking
+    avg_hists: dict[int, np.ndarray | None] = {}
+    for tid in tracks:
+        avg_hists[tid] = _compute_average_histogram(tid, color_store)
+
+    # For each non-primary fragment, find the best primary track to merge into.
+    # A fragment can link to a primary track if:
+    #  1. It fills a gap (no frame overlap with the primary)
+    #  2. The temporal gap at the join point is ≤ max_gap
+    #  3. The spatial distance at the join point is ≤ max_distance
+    id_mapping: dict[int, int] = {}
+
+    # Work on a mutable copy of primary track info for updating after merges
+    primary_info: dict[int, dict] = {
+        tid: dict(tracks[tid]) for tid in primary_set if tid in tracks
+    }
+    # Deep-copy frame sets so mutations don't affect originals
+    for info in primary_info.values():
+        info["frames"] = set(info["frames"])
+
+    for np_tid in non_primary_ids:
+        np_info = tracks[np_tid]
+
+        best_primary: int | None = None
+        best_dist: float = float("inf")
+        best_appearance: float = float("inf")
+
+        for p_tid, p_info in primary_info.items():
+            # Check frame overlap
+            if p_info["frames"] & np_info["frames"]:
+                continue
+
+            # Compute gap: check both forward and backward linkage
+            # (fragment could precede or follow the primary's range)
+            gap_forward = np_info["first_frame"] - p_info["last_frame"]
+            gap_backward = p_info["first_frame"] - np_info["last_frame"]
+
+            if gap_forward >= 0:
+                gap = gap_forward
+                end_pos = p_info["last_pos"]
+                start_pos = np_info["first_pos"]
+            elif gap_backward >= 0:
+                gap = gap_backward
+                end_pos = np_info["last_pos"]
+                start_pos = p_info["first_pos"]
+            else:
+                continue  # Fully overlapping ranges
+
+            if gap > max_gap:
+                continue
+
+            dx = end_pos[0] - start_pos[0]
+            dy = end_pos[1] - start_pos[1]
+            dist = (dx * dx + dy * dy) ** 0.5
+
+            if dist > max_distance:
+                continue
+
+            # Appearance gate + tiebreaker
+            appearance_dist = float("inf")
+            p_hist = avg_hists.get(p_tid)
+            np_hist = avg_hists.get(np_tid)
+            if p_hist is not None and np_hist is not None:
+                appearance_dist = _bhattacharyya_distance(
+                    p_hist.astype(np.float32),
+                    np_hist.astype(np.float32),
+                )
+
+            # Reject if appearance is too dissimilar
+            if appearance_dist > max_appearance:
+                continue
+
+            # Prefer better appearance match; use spatial distance to break
+            # ties.  All candidates already passed spatial/temporal gates,
+            # so appearance is the stronger discriminator.
+            if appearance_dist < best_appearance or (
+                appearance_dist == best_appearance and dist < best_dist
+            ):
+                best_primary = p_tid
+                best_dist = dist
+                best_appearance = appearance_dist
+
+        if best_primary is not None:
+            id_mapping[np_tid] = best_primary
+
+            # Update primary track info to include merged fragment
+            p_info = primary_info[best_primary]
+            p_info["frames"] |= np_info["frames"]
+            p_info["count"] += np_info["count"]
+            if np_info["first_frame"] < p_info["first_frame"]:
+                p_info["first_frame"] = np_info["first_frame"]
+                p_info["first_pos"] = np_info["first_pos"]
+            if np_info["last_frame"] > p_info["last_frame"]:
+                p_info["last_frame"] = np_info["last_frame"]
+                p_info["last_pos"] = np_info["last_pos"]
+
+            logger.debug(
+                f"Primary re-link: T{np_tid} -> T{best_primary} "
+                f"(dist={best_dist:.4f}, appearance={best_appearance:.4f})"
+            )
+
+    if not id_mapping:
+        return positions, sorted(primary_set), 0
+
+    # Apply remapping (no transitive chains — all map directly to primaries)
+    remapped = 0
+    for p in positions:
+        new_tid = id_mapping.get(p.track_id)
+        if new_tid is not None:
+            p.track_id = new_tid
+            remapped += 1
+
+    color_store.remap_ids(id_mapping)
+    if appearance_store is not None:
+        appearance_store.remap_ids(id_mapping)
+
+    num_relinks = len(id_mapping)
+    logger.info(
+        f"Primary re-link: {num_relinks} re-links, "
+        f"remapped {remapped} positions"
+    )
+
+    # Primary set unchanged — non-primary fragments merge INTO primaries
+    return positions, sorted(primary_set), num_relinks

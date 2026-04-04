@@ -1544,6 +1544,30 @@ class PlayerTracker:
                     appearance_store=appearance_store,
                 )
 
+                # Step 0b3: Relaxed fragment linking for primary tracks
+                # Runs before appearance linking to give spatial proximity
+                # priority for fragments close to identified players.
+                from rallycut.tracking.tracklet_link import (
+                    relink_primary_fragments,
+                )
+
+                pre_link_filter = PlayerFilter(
+                    ball_positions=ball_positions,
+                    total_frames=frame_count,
+                    config=config,
+                    court_calibrator=court_calibrator,
+                )
+                pre_link_filter.analyze_tracks(positions)
+                pre_primary_ids = sorted(pre_link_filter.primary_tracks)
+                positions, pre_primary_ids, num_primary_relinks = (
+                    relink_primary_fragments(
+                        positions,
+                        pre_primary_ids,
+                        color_store,
+                        appearance_store=appearance_store,
+                    )
+                )
+
                 # Step 0c: Appearance-based tracklet linking
                 positions, num_appearance_links = link_tracklets_by_appearance(
                     positions, color_store,

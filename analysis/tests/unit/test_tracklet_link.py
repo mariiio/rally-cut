@@ -6,7 +6,10 @@ import numpy as np
 
 from rallycut.tracking.color_repair import ColorHistogramStore
 from rallycut.tracking.player_tracker import PlayerPosition
-from rallycut.tracking.tracklet_link import link_tracklets_by_appearance
+from rallycut.tracking.tracklet_link import (
+    link_tracklets_by_appearance,
+    relink_primary_fragments,
+)
 
 
 def _make_positions(
@@ -202,3 +205,188 @@ class TestLinkTrackletsByAppearance:
             positions, store, target_track_count=4
         )
         assert merges == 0
+
+
+class TestRelinkPrimaryFragments:
+    def test_merges_non_primary_into_primary(self) -> None:
+        """Non-primary fragment near a primary track gets merged into it."""
+        # Track 1 is primary (f0-50), track 2 is non-primary (f70-120)
+        positions = (
+            _make_positions(1, range(0, 50), x=0.3, y=0.4)
+            + _make_positions(2, range(70, 120), x=0.34, y=0.44)
+        )
+        store = ColorHistogramStore()
+        hist = _make_histogram(hue_peak=5)
+        for f in range(0, 50, 3):
+            store.add(1, f, hist)
+        for f in range(70, 120, 3):
+            store.add(2, f, hist)
+
+        result, updated_ids, num = relink_primary_fragments(
+            positions, {1}, store,
+        )
+        assert num == 1
+        # Track 2 merged into track 1
+        assert all(p.track_id == 1 for p in result)
+        assert updated_ids == [1]
+
+    def test_no_non_primary_fragments(self) -> None:
+        """When all tracks are primary, nothing to link."""
+        positions = (
+            _make_positions(1, range(0, 50), x=0.3, y=0.4)
+            + _make_positions(2, range(0, 50), x=0.7, y=0.7)
+        )
+        store = ColorHistogramStore()
+        hist = _make_histogram(hue_peak=5)
+        for f in range(0, 50, 3):
+            store.add(1, f, hist)
+            store.add(2, f, hist)
+
+        result, updated_ids, num = relink_primary_fragments(
+            positions, {1, 2}, store,
+        )
+        assert num == 0
+
+    def test_appearance_tiebreaker(self) -> None:
+        """Non-primary fragment links to the primary with closest appearance."""
+        # Two primaries (1, 2) and one non-primary (3)
+        positions = (
+            _make_positions(1, range(0, 50), x=0.3, y=0.4)
+            + _make_positions(2, range(0, 50), x=0.7, y=0.7)
+            + _make_positions(3, range(70, 120), x=0.34, y=0.44)  # near both
+        )
+        store = ColorHistogramStore()
+        hist_a = _make_histogram(hue_peak=2)
+        hist_b = _make_histogram(hue_peak=10)
+        for f in range(0, 50, 3):
+            store.add(1, f, hist_a)
+            store.add(2, f, hist_b)
+        for f in range(70, 120, 3):
+            store.add(3, f, hist_a)  # same appearance as track 1
+
+        result, updated_ids, num = relink_primary_fragments(
+            positions, {1, 2}, store,
+        )
+        assert num == 1
+        # Track 3 should merge into track 1 (matching appearance)
+        assert all(p.track_id != 3 for p in result)
+        merged_into_1 = [p for p in result if p.track_id == 1]
+        assert len(merged_into_1) == 100  # 50 original + 50 from track 3
+
+    def test_gap_too_large(self) -> None:
+        """Non-primary fragment too far temporally is not merged."""
+        positions = (
+            _make_positions(1, range(0, 50), x=0.3, y=0.4)
+            + _make_positions(2, range(110, 160), x=0.34, y=0.44)  # gap=60
+        )
+        store = ColorHistogramStore()
+        hist = _make_histogram(hue_peak=5)
+        for f in range(0, 50, 3):
+            store.add(1, f, hist)
+        for f in range(110, 160, 3):
+            store.add(2, f, hist)
+
+        result, updated_ids, num = relink_primary_fragments(
+            positions, {1}, store,
+        )
+        assert num == 0
+
+    def test_distance_too_large(self) -> None:
+        """Non-primary fragment too far spatially is not merged."""
+        positions = (
+            _make_positions(1, range(0, 50), x=0.1, y=0.2)
+            + _make_positions(2, range(60, 100), x=0.9, y=0.8)  # dist~1.0
+        )
+        store = ColorHistogramStore()
+        hist = _make_histogram(hue_peak=5)
+        for f in range(0, 50, 3):
+            store.add(1, f, hist)
+        for f in range(60, 100, 3):
+            store.add(2, f, hist)
+
+        result, updated_ids, num = relink_primary_fragments(
+            positions, {1}, store,
+        )
+        assert num == 0
+
+    def test_overlapping_fragments(self) -> None:
+        """Non-primary fragment overlapping primary must not merge."""
+        positions = (
+            _make_positions(1, range(0, 60), x=0.3, y=0.4)
+            + _make_positions(2, range(50, 100), x=0.34, y=0.44)
+        )
+        store = ColorHistogramStore()
+        hist = _make_histogram(hue_peak=5)
+        for f in range(0, 60, 3):
+            store.add(1, f, hist)
+        for f in range(50, 100, 3):
+            store.add(2, f, hist)
+
+        result, updated_ids, num = relink_primary_fragments(
+            positions, {1}, store,
+        )
+        assert num == 0
+
+    def test_primary_set_unchanged(self) -> None:
+        """Primary set stays the same — non-primary merges INTO primaries."""
+        positions = (
+            _make_positions(1, range(0, 50), x=0.3, y=0.4)
+            + _make_positions(2, range(70, 120), x=0.34, y=0.44)
+            + _make_positions(3, range(0, 120), x=0.7, y=0.7)
+        )
+        store = ColorHistogramStore()
+        hist = _make_histogram(hue_peak=5)
+        for f in range(0, 50, 3):
+            store.add(1, f, hist)
+        for f in range(70, 120, 3):
+            store.add(2, f, hist)
+        for f in range(0, 120, 3):
+            store.add(3, f, hist)
+
+        # Tracks 1 and 3 are primary; track 2 is non-primary
+        result, updated_ids, num = relink_primary_fragments(
+            positions, {1, 3}, store,
+        )
+        assert num == 1
+        assert set(updated_ids) == {1, 3}  # unchanged
+        # Track 2 merged into track 1 (closer spatially)
+        assert all(p.track_id in {1, 3} for p in result)
+
+    def test_backward_linking(self) -> None:
+        """Non-primary fragment that precedes a primary gets merged."""
+        # Track 2 (non-primary) comes BEFORE track 1 (primary)
+        positions = (
+            _make_positions(1, range(70, 120), x=0.3, y=0.4)
+            + _make_positions(2, range(0, 50), x=0.34, y=0.44)
+        )
+        store = ColorHistogramStore()
+        hist = _make_histogram(hue_peak=5)
+        for f in range(70, 120, 3):
+            store.add(1, f, hist)
+        for f in range(0, 50, 3):
+            store.add(2, f, hist)
+
+        result, updated_ids, num = relink_primary_fragments(
+            positions, {1}, store,
+        )
+        assert num == 1
+        assert all(p.track_id == 1 for p in result)
+
+    def test_appearance_gate_rejects_dissimilar(self) -> None:
+        """Non-primary fragment with dissimilar appearance is rejected."""
+        positions = (
+            _make_positions(1, range(0, 50), x=0.3, y=0.4)
+            + _make_positions(2, range(70, 120), x=0.34, y=0.44)
+        )
+        store = ColorHistogramStore()
+        hist_a = _make_histogram(hue_peak=2)
+        hist_b = _make_histogram(hue_peak=10)  # very different
+        for f in range(0, 50, 3):
+            store.add(1, f, hist_a)
+        for f in range(70, 120, 3):
+            store.add(2, f, hist_b)
+
+        result, updated_ids, num = relink_primary_fragments(
+            positions, {1}, store, max_appearance=0.20,
+        )
+        assert num == 0  # rejected by appearance gate
