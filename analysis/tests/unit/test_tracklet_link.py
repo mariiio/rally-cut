@@ -223,8 +223,7 @@ class TestRelinkPrimaryFragments:
             store.add(2, f, hist)
 
         result, updated_ids, num = relink_primary_fragments(
-            positions, {1}, store,
-        )
+            positions, {1}, store,         )
         assert num == 1
         # Track 2 merged into track 1
         assert all(p.track_id == 1 for p in result)
@@ -265,8 +264,7 @@ class TestRelinkPrimaryFragments:
             store.add(3, f, hist_a)  # same appearance as track 1
 
         result, updated_ids, num = relink_primary_fragments(
-            positions, {1, 2}, store,
-        )
+            positions, {1, 2}, store,         )
         assert num == 1
         # Track 3 should merge into track 1 (matching appearance)
         assert all(p.track_id != 3 for p in result)
@@ -345,15 +343,18 @@ class TestRelinkPrimaryFragments:
 
         # Tracks 1 and 3 are primary; track 2 is non-primary
         result, updated_ids, num = relink_primary_fragments(
-            positions, {1, 3}, store,
-        )
+            positions, {1, 3}, store,         )
         assert num == 1
         assert set(updated_ids) == {1, 3}  # unchanged
         # Track 2 merged into track 1 (closer spatially)
         assert all(p.track_id in {1, 3} for p in result)
 
-    def test_backward_linking(self) -> None:
-        """Non-primary fragment that precedes a primary gets merged."""
+    def test_backward_linking_blocked(self) -> None:
+        """Non-primary fragment that precedes a primary is NOT merged.
+
+        A fragment predating a primary is likely a different player who
+        was there first, not a continuation of the primary.
+        """
         # Track 2 (non-primary) comes BEFORE track 1 (primary)
         positions = (
             _make_positions(1, range(70, 120), x=0.3, y=0.4)
@@ -367,10 +368,8 @@ class TestRelinkPrimaryFragments:
             store.add(2, f, hist)
 
         result, updated_ids, num = relink_primary_fragments(
-            positions, {1}, store,
-        )
-        assert num == 1
-        assert all(p.track_id == 1 for p in result)
+            positions, {1}, store,         )
+        assert num == 0  # backward link blocked
 
     def test_appearance_gate_rejects_dissimilar(self) -> None:
         """Non-primary fragment with dissimilar appearance is rejected."""
@@ -390,3 +389,27 @@ class TestRelinkPrimaryFragments:
             positions, {1}, store, max_appearance=0.20,
         )
         assert num == 0  # rejected by appearance gate
+
+    def test_forward_merge_allowed(self) -> None:
+        """Fragment after a primary's last frame gets merged (forward)."""
+        # Primary T4 drops out at f100. Fragment T5 starts at f110.
+        positions = (
+            _make_positions(1, range(0, 150), x=0.2, y=0.3)
+            + _make_positions(2, range(0, 150), x=0.4, y=0.3)
+            + _make_positions(3, range(0, 150), x=0.6, y=0.7)
+            + _make_positions(4, range(0, 100), x=0.8, y=0.7)
+            + _make_positions(5, range(110, 150), x=0.82, y=0.72)
+        )
+        store = ColorHistogramStore()
+        hist = _make_histogram(hue_peak=5)
+        for tid in [1, 2, 3, 4]:
+            for f in range(0, 150, 3):
+                if f < 100 or tid != 4:
+                    store.add(tid, f, hist)
+        for f in range(110, 150, 3):
+            store.add(5, f, hist)
+
+        result, updated_ids, num = relink_primary_fragments(
+            positions, {1, 2, 3, 4}, store,
+        )
+        assert num == 1  # fragment 5 continues T4

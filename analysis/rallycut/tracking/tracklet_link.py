@@ -712,15 +712,15 @@ def relink_primary_fragments(
 ) -> tuple[list[PlayerPosition], list[int], int]:
     """Link non-primary fragments into primary tracks by spatial proximity.
 
-    After primary track selection (Step 2), some fragments of a primary
-    player may exist as separate non-primary tracks (too short/weak to be
-    selected individually). This pass links them into the nearest primary
-    track using relaxed spatial thresholds.
+    After primary track selection, some fragments of a primary player may
+    exist as separate non-primary tracks (too short/weak to be selected
+    individually). This pass links them into the nearest primary track
+    using relaxed spatial thresholds.
 
-    Safety: the primary track anchor is a known player, and the non-primary
-    fragment fills a gap in that player's timeline. Appearance similarity
-    gates the merge (must be below max_appearance) and breaks ties when
-    multiple primaries could accept a fragment.
+    Only forward merges are allowed: the fragment must start AFTER the
+    primary's last frame (continuation of a dropped track). Backward
+    merges are blocked because a fragment predating a primary is more
+    likely a separate player than a predecessor.
 
     Args:
         positions: Player positions (modified in place).
@@ -751,7 +751,7 @@ def relink_primary_fragments(
         f"(max_gap={max_gap}, max_dist={max_distance})"
     )
 
-    # Pre-compute average histograms for appearance tiebreaking
+    # Pre-compute average histograms for appearance gating/tiebreaking
     avg_hists: dict[int, np.ndarray | None] = {}
     for tid in tracks:
         avg_hists[tid] = _compute_average_histogram(tid, color_store)
@@ -761,6 +761,7 @@ def relink_primary_fragments(
     #  1. It fills a gap (no frame overlap with the primary)
     #  2. The temporal gap at the join point is ≤ max_gap
     #  3. The spatial distance at the join point is ≤ max_distance
+    #  4. Primary coverage is already full during the fragment's lifetime
     id_mapping: dict[int, int] = {}
 
     # Work on a mutable copy of primary track info for updating after merges
@@ -783,21 +784,16 @@ def relink_primary_fragments(
             if p_info["frames"] & np_info["frames"]:
                 continue
 
-            # Compute gap: check both forward and backward linkage
-            # (fragment could precede or follow the primary's range)
-            gap_forward = np_info["first_frame"] - p_info["last_frame"]
-            gap_backward = p_info["first_frame"] - np_info["last_frame"]
-
-            if gap_forward >= 0:
-                gap = gap_forward
-                end_pos = p_info["last_pos"]
-                start_pos = np_info["first_pos"]
-            elif gap_backward >= 0:
-                gap = gap_backward
-                end_pos = np_info["last_pos"]
-                start_pos = p_info["first_pos"]
-            else:
-                continue  # Fully overlapping ranges
+            # Forward-only linkage: the fragment must come AFTER the
+            # primary's last frame (continuation of a dropped track).
+            # Backward merges (fragment precedes target) are blocked
+            # because a pre-existing fragment is more likely a separate
+            # player than a predecessor of a primary that starts later.
+            gap = np_info["first_frame"] - p_info["last_frame"]
+            if gap < 0:
+                continue  # Fragment precedes or overlaps primary
+            end_pos = p_info["last_pos"]
+            start_pos = np_info["first_pos"]
 
             if gap > max_gap:
                 continue
