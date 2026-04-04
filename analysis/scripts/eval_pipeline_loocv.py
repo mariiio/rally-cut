@@ -37,7 +37,6 @@ from rallycut.tracking.action_classifier import (
     ActionClassifier,
     ActionClassifierConfig,
     assign_court_side_from_teams,
-    attack_anchored_relabel,
     correct_team_from_propagation,
     propagate_court_side,
     reattribute_players,
@@ -96,7 +95,6 @@ class PipelineConfig:
     use_propagate_court_side: bool = True
     use_repair_action_sequence: bool = True
     use_viterbi: bool = True
-    use_attack_anchor: bool = True
     use_reattribute_players: bool = True
     use_correct_team: bool = True
 
@@ -107,7 +105,6 @@ ABLATION_CONFIGS = [
     PipelineConfig(name="no_propagate_cs", use_propagate_court_side=False),
     PipelineConfig(name="no_repair_seq", use_repair_action_sequence=False),
     PipelineConfig(name="no_viterbi", use_viterbi=False),
-    PipelineConfig(name="no_attack_anchor", use_attack_anchor=False),
     PipelineConfig(name="no_reattribute", use_reattribute_players=False),
     PipelineConfig(name="no_correct_team", use_correct_team=False),
 ]
@@ -162,9 +159,6 @@ def run_pipeline(
 
     if cfg.use_viterbi:
         result.actions = viterbi_decode_actions(result.actions)
-
-    if cfg.use_attack_anchor:
-        result.actions = attack_anchored_relabel(result.actions)
 
     result.actions = validate_action_sequence(result.actions, rally_id)
 
