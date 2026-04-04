@@ -413,3 +413,113 @@ class TestRelinkPrimaryFragments:
             positions, {1, 2, 3, 4}, store,
         )
         assert num == 1  # fragment 5 continues T4
+
+
+class TestOptimalPartition:
+    """Tests for branch-and-bound optimal K-partition."""
+
+    def test_optimal_beats_greedy(self) -> None:
+        """Optimal partition picks globally better assignment than greedy.
+
+        4 fragments in 2 time slots (T1/T2 concurrent, T3/T4 concurrent).
+        Gaussian histograms with sigma=2: T1(c=8), T2(c=7), T3(c=9), T4(c=7.5).
+        Greedy picks T1-T4 (0.09) then T2-T3 (0.34), total=0.43.
+        Optimal picks T1-T3 (0.18) + T2-T4 (0.09), total=0.27.
+        """
+
+        def _gauss_hist(center: float, sigma: float = 2.0) -> np.ndarray:
+            hist = np.zeros((16, 8), dtype=np.float32)
+            for i in range(16):
+                hist[i, 4] = np.exp(-0.5 * ((i - center) / sigma) ** 2)
+            hist /= hist.sum()
+            return hist
+
+        # T1/T2 concurrent (f0-50), T3/T4 concurrent (f60-110)
+        positions = (
+            _make_positions(1, range(0, 50), x=0.3, y=0.3)
+            + _make_positions(2, range(0, 50), x=0.7, y=0.7)
+            + _make_positions(3, range(60, 110), x=0.32, y=0.32)
+            + _make_positions(4, range(60, 110), x=0.72, y=0.72)
+        )
+
+        store = ColorHistogramStore()
+        hist_t1 = _gauss_hist(8.0)   # Player A, time 1
+        hist_t2 = _gauss_hist(7.0)   # Player B, time 1
+        hist_t3 = _gauss_hist(9.0)   # Player A, time 2
+        hist_t4 = _gauss_hist(7.5)   # Player B, time 2 (close to T1!)
+
+        for f in range(0, 50, 3):
+            store.add(1, f, hist_t1)
+            store.add(2, f, hist_t2)
+        for f in range(60, 110, 3):
+            store.add(3, f, hist_t3)
+            store.add(4, f, hist_t4)
+
+        result, merges = link_tracklets_by_appearance(
+            positions, store, target_track_count=2,
+        )
+        track_ids = {p.track_id for p in result if p.track_id >= 0}
+        assert len(track_ids) == 2
+        assert merges == 2
+
+        # Verify optimal grouping: T1+T3 and T2+T4 (not T1+T4 and T2+T3)
+        t1_id = next(p.track_id for p in result if p.frame_number == 25 and p.x < 0.5)
+        t3_id = next(p.track_id for p in result if p.frame_number == 85 and p.x < 0.5)
+        assert t1_id == t3_id, "T1 and T3 should be grouped (same player A)"
+
+    def test_dissimilar_fragment_stays_separate(self) -> None:
+        """Fragments too different from all groups stay unlinked."""
+        # 4 full-length tracks + 1 short fragment with very different appearance
+        positions = (
+            _make_positions(1, range(0, 100), x=0.2, y=0.3)
+            + _make_positions(2, range(0, 100), x=0.4, y=0.3)
+            + _make_positions(3, range(0, 100), x=0.6, y=0.7)
+            + _make_positions(4, range(0, 100), x=0.8, y=0.7)
+            + _make_positions(5, range(110, 140), x=0.5, y=0.5)
+        )
+
+        store = ColorHistogramStore()
+        for tid, peak in [(1, 2), (2, 5), (3, 8), (4, 12)]:
+            hist = _make_histogram(hue_peak=peak)
+            for f in range(0, 100, 3):
+                store.add(tid, f, hist)
+        # T5 has completely different appearance
+        hist_outlier = _make_histogram(hue_peak=15, sat_peak=7)
+        for f in range(110, 140, 3):
+            store.add(5, f, hist_outlier)
+
+        result, merges = link_tracklets_by_appearance(positions, store)
+        # T5 should NOT be merged into any group (distance too high)
+        track_ids = {p.track_id for p in result if p.track_id >= 0}
+        assert 5 in track_ids or merges == 0  # T5 stays separate
+
+    def test_swap_does_not_break_existing(self) -> None:
+        """Swap optimization preserves correct greedy merges."""
+        # 5 tracks, target=4. Track 5 is a fragment of track 1.
+        # Greedy should merge T5→T1. Swap should not undo it.
+        positions = (
+            _make_positions(1, range(0, 50), x=0.3, y=0.4)
+            + _make_positions(2, range(0, 100), x=0.7, y=0.4)
+            + _make_positions(3, range(0, 100), x=0.3, y=0.7)
+            + _make_positions(4, range(0, 100), x=0.7, y=0.7)
+            + _make_positions(5, range(60, 110), x=0.32, y=0.42)
+        )
+
+        store = ColorHistogramStore()
+        hist_1 = _make_histogram(hue_peak=2)
+        hist_2 = _make_histogram(hue_peak=5)
+        hist_3 = _make_histogram(hue_peak=8)
+        hist_4 = _make_histogram(hue_peak=12)
+
+        for f in range(0, 100, 3):
+            store.add(1, f, hist_1) if f < 50 else None
+            store.add(2, f, hist_2)
+            store.add(3, f, hist_3)
+            store.add(4, f, hist_4)
+        for f in range(60, 110, 3):
+            store.add(5, f, hist_1)
+
+        result, merges = link_tracklets_by_appearance(positions, store)
+        assert merges == 1
+        track_ids = {p.track_id for p in result if p.track_id >= 0}
+        assert len(track_ids) == 4

@@ -13,7 +13,9 @@ This module adds appearance-based matching:
 1. Compute average color histogram per track from ColorHistogramStore
 2. Build pairwise Bhattacharyya distance matrix between all tracks
 3. Greedily merge closest pairs (temporal non-overlap + spatial constraints)
-4. Stop when distance exceeds threshold
+4. Swap-optimize: check if moving any fragment to a different group
+   reduces total intra-group cost (catches greedy's suboptimal merges)
+5. Stop when distance exceeds threshold
 
 For beach volleyball (4 players), this is dramatically simpler than
 general MOT linking because we know the target track count.
@@ -224,6 +226,291 @@ def _tracks_overlap_temporally(
     return len(overlap) > max_allowed_overlap
 
 
+def _greedy_merge(
+    hist_ids: list[int],
+    n: int,
+    dist_matrix: np.ndarray,
+    tracks: dict[int, dict],
+    avg_hists: dict[int, np.ndarray],
+    positions: list[PlayerPosition],
+    merge_distance_threshold: float,
+    max_overlap_frames: int,
+    target_track_count: int | None,
+) -> tuple[dict[int, int], int]:
+    """Greedy hierarchical merging: always merge the closest valid pair.
+
+    Returns (id_mapping, num_merges).
+    """
+    id_mapping: dict[int, int] = {}
+    num_merges = 0
+    active_mask = np.ones(n, dtype=bool)
+    current_track_count = n
+
+    while True:
+        if target_track_count is not None and current_track_count <= target_track_count:
+            break
+
+        min_dist = float("inf")
+        best_i, best_j = -1, -1
+
+        for i in range(n):
+            if not active_mask[i]:
+                continue
+            for j in range(i + 1, n):
+                if not active_mask[j]:
+                    continue
+                if dist_matrix[i, j] < min_dist:
+                    min_dist = dist_matrix[i, j]
+                    best_i, best_j = i, j
+
+        if min_dist >= merge_distance_threshold:
+            break
+
+        tid_i, tid_j = hist_ids[best_i], hist_ids[best_j]
+        canon_i = id_mapping.get(tid_i, tid_i)
+        canon_j = id_mapping.get(tid_j, tid_j)
+
+        if tracks[canon_j]["count"] > tracks[canon_i]["count"]:
+            canonical, merged = canon_j, canon_i
+            keep_idx, remove_idx = best_j, best_i
+        else:
+            canonical, merged = canon_i, canon_j
+            keep_idx, remove_idx = best_i, best_j
+
+        if _tracks_overlap_temporally(
+            tracks[canonical]["frames"], tracks[merged]["frames"],
+            max_allowed_overlap=max_overlap_frames,
+        ):
+            dist_matrix[best_i, best_j] = 1.0
+            dist_matrix[best_j, best_i] = 1.0
+            continue
+
+        if _would_create_velocity_anomaly(positions, canonical, merged):
+            logger.debug(
+                f"Tracklet link: blocked merge {merged} -> {canonical} "
+                f"(velocity anomaly at junction)"
+            )
+            dist_matrix[best_i, best_j] = 1.0
+            dist_matrix[best_j, best_i] = 1.0
+            continue
+
+        id_mapping[merged] = canonical
+        tracks[canonical]["frames"] |= tracks[merged]["frames"]
+        tracks[canonical]["count"] += tracks[merged]["count"]
+        tracks[canonical]["first_frame"] = min(
+            tracks[canonical]["first_frame"], tracks[merged]["first_frame"]
+        )
+        tracks[canonical]["last_frame"] = max(
+            tracks[canonical]["last_frame"], tracks[merged]["last_frame"]
+        )
+
+        hist_c = avg_hists.get(canonical)
+        hist_m = avg_hists.get(merged)
+        if hist_c is not None and hist_m is not None:
+            count_c = tracks[canonical]["count"] - tracks[merged]["count"]
+            count_m = tracks[merged]["count"]
+            total = count_c + count_m
+            avg_hists[canonical] = (hist_c * count_c + hist_m * count_m) / total
+
+        active_mask[remove_idx] = False
+
+        for k in range(n):
+            if not active_mask[k] or k == keep_idx:
+                continue
+            tid_k = hist_ids[k]
+            canon_k = id_mapping.get(tid_k, tid_k)
+
+            if _tracks_overlap_temporally(
+                tracks[canonical]["frames"], tracks[canon_k]["frames"],
+                max_allowed_overlap=max_overlap_frames,
+            ):
+                dist_matrix[keep_idx, k] = 1.0
+                dist_matrix[k, keep_idx] = 1.0
+            elif (
+                avg_hists.get(canonical) is not None
+                and avg_hists.get(canon_k) is not None
+            ):
+                new_dist = _bhattacharyya_distance(
+                    avg_hists[canonical], avg_hists[canon_k]
+                )
+                dist_matrix[keep_idx, k] = new_dist
+                dist_matrix[k, keep_idx] = new_dist
+
+        num_merges += 1
+        current_track_count -= 1
+
+        logger.debug(
+            f"Tracklet link: merged track {merged} -> {canonical} "
+            f"(bhatt={min_dist:.3f}, tracks remaining={current_track_count})"
+        )
+
+    return id_mapping, num_merges
+
+
+def _swap_optimize(
+    id_mapping: dict[int, int],
+    hist_ids: list[int],
+    n: int,
+    dist_matrix: np.ndarray,
+    tracks: dict[int, dict],
+    positions: list[PlayerPosition],
+    merge_distance_threshold: float,
+    max_overlap_frames: int,
+) -> dict[int, int]:
+    """Improve greedy partition by reassigning fragments to better groups.
+
+    After greedy merging, check if any non-canonical fragment has a lower
+    distance to another group's canonical than to its current canonical.
+    Uses the ORIGINAL (pre-greedy) distance matrix and track data to
+    avoid artifacts from greedy's incremental histogram blending.
+
+    The cost metric is distance-to-canonical (not pairwise sum), which
+    correctly handles chain-connected groups where intermediate fragments
+    may have high original pairwise distance to distant group members.
+
+    Returns improved id_mapping (may be unchanged if no swap helps).
+    """
+
+    def _resolve(tid: int) -> int:
+        visited: set[int] = set()
+        while tid in id_mapping and tid not in visited:
+            visited.add(tid)
+            tid = id_mapping[tid]
+        return tid
+
+    # Build groups: canonical_tid -> set of member indices
+    groups: dict[int, set[int]] = {}
+    for i in range(n):
+        canon = _resolve(hist_ids[i])
+        groups.setdefault(canon, set()).add(i)
+
+    # Find canonical index (longest track) in each group
+    def _canon_idx(members: set[int]) -> int:
+        return max(members, key=lambda i: tracks[hist_ids[i]]["count"])
+
+    canon_indices: dict[int, int] = {
+        canon_tid: _canon_idx(members)
+        for canon_tid, members in groups.items()
+    }
+
+    def _can_join(frag_idx: int, members: set[int]) -> bool:
+        """Check if fragment can join a group (all pairwise constraints)."""
+        frag_tid = hist_ids[frag_idx]
+        for m_idx in members:
+            if float(dist_matrix[frag_idx, m_idx]) >= merge_distance_threshold:
+                return False
+            m_tid = hist_ids[m_idx]
+            if _tracks_overlap_temporally(
+                tracks[frag_tid]["frames"], tracks[m_tid]["frames"],
+                max_allowed_overlap=max_overlap_frames,
+            ):
+                return False
+            if _would_create_velocity_anomaly(positions, frag_tid, m_tid):
+                return False
+        return True
+
+    total_swaps = 0
+    max_passes = 10
+    for _ in range(max_passes):
+        swapped = False
+
+        for frag_i in range(n):
+            frag_tid = hist_ids[frag_i]
+            src_canon_tid = _resolve(frag_tid)
+            if src_canon_tid not in groups:
+                continue
+            src_members = groups[src_canon_tid]
+
+            # Don't move the canonical track itself
+            if frag_i == canon_indices.get(src_canon_tid):
+                continue
+            # Don't empty a group
+            if len(src_members) <= 1:
+                continue
+
+            # Current distance to source canonical
+            src_canon_i = canon_indices[src_canon_tid]
+            current_dist = float(dist_matrix[frag_i, src_canon_i])
+
+            # Find best destination group
+            best_dst_tid: int | None = None
+            best_dist = current_dist
+
+            for dst_canon_tid, dst_members in groups.items():
+                if dst_canon_tid == src_canon_tid:
+                    continue
+                dst_canon_i = canon_indices[dst_canon_tid]
+                candidate_dist = float(dist_matrix[frag_i, dst_canon_i])
+
+                if candidate_dist >= best_dist:
+                    continue
+
+                # Verify all constraints against destination members
+                if not _can_join(frag_i, dst_members):
+                    continue
+
+                best_dst_tid = dst_canon_tid
+                best_dist = candidate_dist
+
+            if best_dst_tid is not None:
+                # Move fragment from source to destination
+                groups[src_canon_tid].discard(frag_i)
+                groups[best_dst_tid].add(frag_i)
+                id_mapping[frag_tid] = best_dst_tid
+                total_swaps += 1
+                swapped = True
+                break  # Restart scan (group composition changed)
+
+        if not swapped:
+            break
+
+    if total_swaps > 0:
+        logger.info(
+            f"Tracklet linking: {total_swaps} swap(s) improved partition"
+        )
+
+    return id_mapping
+
+
+def _greedy_then_optimize(
+    hist_ids: list[int],
+    n: int,
+    dist_matrix: np.ndarray,
+    tracks: dict[int, dict],
+    avg_hists: dict[int, np.ndarray],
+    positions: list[PlayerPosition],
+    merge_distance_threshold: float,
+    max_overlap_frames: int,
+    target_track_count: int,
+) -> tuple[dict[int, int], int]:
+    """Run greedy merging, then optimize with pairwise swaps.
+
+    Greedy mutates dist_matrix, tracks, and avg_hists during merging
+    (blends histograms, accumulates frame sets, blocks pairs). The swap
+    optimizer needs the ORIGINAL values to make unbiased decisions, so
+    we snapshot them before greedy runs.
+    """
+    # Snapshot originals — greedy will mutate these in place
+    orig_dist = dist_matrix.copy()
+    orig_tracks = {
+        tid: {**info, "frames": set(info["frames"])}
+        for tid, info in tracks.items()
+    }
+
+    id_mapping, num_merges = _greedy_merge(
+        hist_ids, n, dist_matrix, tracks, avg_hists, positions,
+        merge_distance_threshold, max_overlap_frames, target_track_count,
+    )
+
+    if num_merges > 0:
+        id_mapping = _swap_optimize(
+            id_mapping, hist_ids, n, orig_dist, orig_tracks,
+            positions, merge_distance_threshold, max_overlap_frames,
+        )
+
+    return id_mapping, num_merges
+
+
 def link_tracklets_by_appearance(
     positions: list[PlayerPosition],
     color_store: ColorHistogramStore,
@@ -366,116 +653,30 @@ def link_tracklets_by_appearance(
             dist_matrix[i, j] = dist
             dist_matrix[j, i] = dist
 
-    # Greedy hierarchical merging
-    id_mapping: dict[int, int] = {}  # merged_id -> canonical_id
-    num_merges = 0
-    active_mask = np.ones(n, dtype=bool)
-    current_track_count = len(eligible_ids)
-
-    while True:
-        # Stop if at target count
-        if target_track_count is not None and current_track_count <= target_track_count:
-            break
-
-        # Find minimum distance among active tracks
-        min_dist = float("inf")
-        best_i, best_j = -1, -1
-
-        for i in range(n):
-            if not active_mask[i]:
-                continue
-            for j in range(i + 1, n):
-                if not active_mask[j]:
-                    continue
-                if dist_matrix[i, j] < min_dist:
-                    min_dist = dist_matrix[i, j]
-                    best_i, best_j = i, j
-
-        if min_dist >= merge_distance_threshold:
-            break  # No more eligible pairs
-
-        tid_i, tid_j = hist_ids[best_i], hist_ids[best_j]
-
-        # Resolve canonical IDs through any existing mappings
-        canon_i = id_mapping.get(tid_i, tid_i)
-        canon_j = id_mapping.get(tid_j, tid_j)
-
-        # Keep the longer track as canonical
-        if tracks[canon_j]["count"] > tracks[canon_i]["count"]:
-            canonical, merged = canon_j, canon_i
-            keep_idx, remove_idx = best_j, best_i
-        else:
-            canonical, merged = canon_i, canon_j
-            keep_idx, remove_idx = best_i, best_j
-
-        # Verify no large temporal overlap after resolving canonical IDs
-        if _tracks_overlap_temporally(
-            tracks[canonical]["frames"], tracks[merged]["frames"],
-            max_allowed_overlap=max_overlap_frames,
-        ):
-            dist_matrix[best_i, best_j] = 1.0
-            dist_matrix[best_j, best_i] = 1.0
-            continue
-
-        # Verify merge doesn't create impossible velocity at the junction
-        if _would_create_velocity_anomaly(positions, canonical, merged):
-            logger.debug(
-                f"Tracklet link: blocked merge {merged} -> {canonical} "
-                f"(velocity anomaly at junction)"
-            )
-            dist_matrix[best_i, best_j] = 1.0
-            dist_matrix[best_j, best_i] = 1.0
-            continue
-
-        # Perform merge
-        id_mapping[merged] = canonical
-        tracks[canonical]["frames"] |= tracks[merged]["frames"]
-        tracks[canonical]["count"] += tracks[merged]["count"]
-        tracks[canonical]["first_frame"] = min(
-            tracks[canonical]["first_frame"], tracks[merged]["first_frame"]
+    # Greedy merge + swap optimization
+    if target_track_count is not None and target_track_count > 0:
+        id_mapping, num_merges = _greedy_then_optimize(
+            hist_ids,
+            n,
+            dist_matrix,
+            tracks,
+            avg_hists,
+            positions,
+            merge_distance_threshold,
+            max_overlap_frames,
+            target_track_count,
         )
-        tracks[canonical]["last_frame"] = max(
-            tracks[canonical]["last_frame"], tracks[merged]["last_frame"]
-        )
-
-        # Update average histogram for canonical track
-        # (count was already updated above; recover pre-merge canonical count)
-        hist_c = avg_hists.get(canonical)
-        hist_m = avg_hists.get(merged)
-        if hist_c is not None and hist_m is not None:
-            count_c = tracks[canonical]["count"] - tracks[merged]["count"]
-            count_m = tracks[merged]["count"]
-            total = count_c + count_m
-            avg_hists[canonical] = (hist_c * count_c + hist_m * count_m) / total
-
-        # Deactivate merged track
-        active_mask[remove_idx] = False
-
-        # Update distance matrix for canonical track
-        for k in range(n):
-            if not active_mask[k] or k == keep_idx:
-                continue
-            tid_k = hist_ids[k]
-            canon_k = id_mapping.get(tid_k, tid_k)
-
-            # Recheck temporal overlap
-            if _tracks_overlap_temporally(
-                tracks[canonical]["frames"], tracks[canon_k]["frames"],
-                max_allowed_overlap=max_overlap_frames,
-            ):
-                dist_matrix[keep_idx, k] = 1.0
-                dist_matrix[k, keep_idx] = 1.0
-            elif avg_hists.get(canonical) is not None and avg_hists.get(canon_k) is not None:
-                new_dist = _bhattacharyya_distance(avg_hists[canonical], avg_hists[canon_k])
-                dist_matrix[keep_idx, k] = new_dist
-                dist_matrix[k, keep_idx] = new_dist
-
-        num_merges += 1
-        current_track_count -= 1
-
-        logger.debug(
-            f"Tracklet link: merged track {merged} -> {canonical} "
-            f"(bhatt={min_dist:.3f}, tracks remaining={current_track_count})"
+    else:
+        id_mapping, num_merges = _greedy_merge(
+            hist_ids,
+            n,
+            dist_matrix,
+            tracks,
+            avg_hists,
+            positions,
+            merge_distance_threshold,
+            max_overlap_frames,
+            target_track_count,
         )
 
     if num_merges == 0:
@@ -532,10 +733,11 @@ def link_tracklets_by_appearance(
     if appearance_store is not None:
         appearance_store.remap_ids(resolved_mapping)
 
+    remaining_tracks = len({p.track_id for p in positions if p.track_id >= 0})
     logger.info(
         f"Tracklet linking: {num_merges} merges, "
         f"remapped {remapped} positions, "
-        f"{current_track_count} tracks remaining"
+        f"{remaining_tracks} tracks remaining"
     )
 
     return positions, num_merges
