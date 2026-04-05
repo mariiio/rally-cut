@@ -7,7 +7,7 @@ Individual trajectory features (velocity, direction change, player distance)
 overlap between TP and FP in marginal distributions, but a learned model can
 exploit correlations between features to separate them.
 
-Features per candidate (20 total):
+Features per candidate (27 total):
 - Ball velocity magnitude, direction change angle, vertical velocity, speed ratio
 - Arc fit residual, acceleration, trajectory curvature
 - Player distance to nearest player
@@ -15,6 +15,8 @@ Features per candidate (20 total):
 - Ball (x, y) position, ball Y relative to net, net crossing flag
 - Time since last candidate (frames), frames since rally start
 - Ball detection density, consecutive detections
+- MS-TCN++ sequence model probabilities (7 features): background + 6 action classes
+  When available, the GBM learns whether to trust trajectory vs sequence signal.
 
 Model: scikit-learn GradientBoostingClassifier. A simple ensemble model is
 appropriate for this dataset size and resistant to overfitting.
@@ -64,6 +66,14 @@ class CandidateFeatures:
     ball_detection_density: float = 1.0  # fraction of frames with ball in ±10 window
     consecutive_detections: int = 0  # consecutive ball detections around candidate
     frames_since_rally_start: int = 0  # frames from rally start (early = serve)
+    # MS-TCN++ sequence model probabilities at this frame (0 when model unavailable)
+    seq_p_background: float = 0.0
+    seq_p_serve: float = 0.0
+    seq_p_receive: float = 0.0
+    seq_p_set: float = 0.0
+    seq_p_attack: float = 0.0
+    seq_p_dig: float = 0.0
+    seq_p_block: float = 0.0
 
     def to_array(self) -> np.ndarray:
         """Convert to numpy feature array for classifier input."""
@@ -89,6 +99,13 @@ class CandidateFeatures:
             self.ball_detection_density,
             self.consecutive_detections,
             self.frames_since_rally_start,
+            self.seq_p_background,
+            self.seq_p_serve,
+            self.seq_p_receive,
+            self.seq_p_set,
+            self.seq_p_attack,
+            self.seq_p_dig,
+            self.seq_p_block,
         ], dtype=np.float64)
 
     @staticmethod
@@ -114,6 +131,13 @@ class CandidateFeatures:
             "ball_detection_density",
             "consecutive_detections",
             "frames_since_rally_start",
+            "seq_p_background",
+            "seq_p_serve",
+            "seq_p_receive",
+            "seq_p_set",
+            "seq_p_attack",
+            "seq_p_dig",
+            "seq_p_block",
         ]
 
 

@@ -1,23 +1,21 @@
-"""Hybrid action classifier: full pipeline contacts + sequence model labels.
+"""Evaluate the contact-anchored sequence decoder.
 
-Uses the existing classify_rally_actions() pipeline for *when* contacts
-happen (90% F1, including synthetic serves and all heuristics), then
-the MS-TCN++ sequence model for *what* action each contact is (93.6%
-action accuracy). The pipeline provides contact frames; the model
-provides action types.
+Tests the full pipeline: MS-TCN++ sequence model + trajectory contact
+proposals → merged decoder with constrained Viterbi → optional
+team-based attribution.
 
-Pipeline per rally:
-  1. classify_rally_actions() → contact list (90% F1, with synthetic serves)
-  2. MS-TCN++ on full trajectory → per-frame action probabilities
-  3. For each contact, replace action type with model's prediction at that frame
-  4. reattribute_players() already ran inside classify_rally_actions()
+Compares three modes:
+  1. Trajectory-only: contacts from detect_contacts() (baseline)
+  2. Sequence-only: peaks from MS-TCN++ contact score
+  3. Anchored: merged proposals (trajectory + sequence)
 
 Evaluation: leave-one-video-out CV.
 
 Usage:
     cd analysis
-    uv run python scripts/eval_hybrid_action.py
-    uv run python scripts/eval_hybrid_action.py --hidden-dim 128
+    uv run python scripts/eval_anchored_decoder.py
+    uv run python scripts/eval_anchored_decoder.py --no-viterbi
+    uv run python scripts/eval_anchored_decoder.py --attribution
 """
 
 from __future__ import annotations
@@ -40,15 +38,20 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, str(Path(__file__).parent))
 
 from eval_action_detection import (  # noqa: E402
+    GtLabel,
     MatchResult,
     RallyData,
     _load_match_team_assignments,
-    _match_synthetic_serves,
     compute_metrics,
     load_rallies_with_action_gt,
     match_contacts,
 )
 
+from rallycut.actions.contact_decoder import (
+    DecoderConfig,
+    attribute_with_team_hint,
+    decode_actions,
+)
 from rallycut.actions.sequence_dataset import (
     SequenceActionDataset,
     collate_rally_sequences,
@@ -63,10 +66,6 @@ from rallycut.actions.trajectory_features import (
 )
 from rallycut.temporal.ms_tcn.model import MSTCN, MSTCNConfig
 from rallycut.temporal.temporal_maxer.training import FocalLoss, compute_tmse_loss
-from rallycut.tracking.action_classifier import (
-    ActionType,
-    classify_rally_actions,
-)
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.contact_detector import (
     ContactDetectionConfig,
@@ -75,7 +74,6 @@ from rallycut.tracking.contact_detector import (
 )
 from rallycut.tracking.player_tracker import PlayerPosition
 
-# Suppress verbose logging from contact detection
 logging.getLogger("rallycut.tracking.contact_detector").setLevel(logging.WARNING)
 logging.getLogger("rallycut.tracking.action_classifier").setLevel(logging.WARNING)
 
@@ -128,6 +126,7 @@ class RallyBundle:
     trajectory_features: np.ndarray  # (num_frames, FEATURE_DIM)
     trajectory_labels: np.ndarray  # (num_frames,) for training
     match_teams: dict[int, int] | None
+    gt_labels: list[GtLabel]
 
 
 def prepare_rallies(
@@ -138,11 +137,10 @@ def prepare_rallies(
     rallies = load_rallies_with_action_gt()
     console.print(f"  {len(rallies)} rallies loaded")
 
-    # Load team assignments and court calibrations for enhanced features
+    # Load team assignments and court calibrations
     video_ids = {r.video_id for r in rallies}
     rally_team_map = _load_match_team_assignments(video_ids)
 
-    # Load court homographies for court-space features
     from rallycut.court.calibration import CourtCalibrator
     from rallycut.evaluation.tracking.db import load_court_calibration
 
@@ -172,7 +170,7 @@ def prepare_rallies(
             skipped += 1
             continue
 
-        # Run contact detection (same as production pipeline)
+        # Run contact detection for trajectory proposals
         contact_seq = detect_contacts(
             ball_positions=ball_positions,
             player_positions=player_positions,
@@ -183,7 +181,7 @@ def prepare_rallies(
 
         match_teams = rally_team_map.get(rally.rally_id)
 
-        # Extract trajectory features for sequence model (enhanced 26-dim)
+        # Extract enhanced trajectory features
         features = extract_trajectory_features(
             ball_positions=ball_positions,
             player_positions=player_positions,
@@ -204,6 +202,7 @@ def prepare_rallies(
             trajectory_features=features,
             trajectory_labels=labels,
             match_teams=match_teams,
+            gt_labels=rally.gt_labels,
         ))
 
         if (i + 1) % 50 == 0 or i == len(rallies) - 1:
@@ -212,12 +211,15 @@ def prepare_rallies(
     if skipped:
         console.print(f"  [yellow]Skipped {skipped} rallies (missing data)[/yellow]")
 
-    console.print(f"  Total: {len(bundles)} rallies with contacts + features")
+    n_teams = sum(1 for b in bundles if b.match_teams)
+    console.print(
+        f"  Total: {len(bundles)} rallies, {n_teams} with team assignments"
+    )
     return bundles
 
 
 # ---------------------------------------------------------------------------
-# Training (same as train_sequence_action.py)
+# Training (reused from train_sequence_action.py)
 # ---------------------------------------------------------------------------
 
 
@@ -239,7 +241,7 @@ def train_sequence_model(
     )
     model = MSTCN(config).to(device)
 
-    # Class weights from training labels
+    # Class weights
     all_labels = np.concatenate([b.trajectory_labels for b in train_bundles])
     class_counts = np.bincount(all_labels, minlength=NUM_CLASSES).astype(float)
     class_counts = np.maximum(class_counts, 1.0)
@@ -247,7 +249,7 @@ def train_sequence_model(
     weights = torch.tensor(
         [max_count / c for c in class_counts], dtype=torch.float32, device=device,
     )
-    weights[0] = weights[0].clamp(max=1.0)  # Cap background weight
+    weights[0] = weights[0].clamp(max=1.0)
 
     criterion = FocalLoss(weight=weights, gamma=args.focal_gamma, reduction="none")
 
@@ -275,15 +277,17 @@ def train_sequence_model(
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     best_val_acc = 0.0
-    best_model_state = None
+    best_state = None
     patience_counter = 0
 
     for epoch in range(args.epochs):
         model.train()
         for features, labels, mask in train_loader:
-            features, labels, mask = features.to(device), labels.to(device), mask.to(device)
-            optimizer.zero_grad()
+            features = features.to(device)
+            labels = labels.to(device)
+            mask = mask.to(device)
 
+            optimizer.zero_grad()
             stage_outputs = model.forward_all_stages(features, mask)
             total_loss = torch.tensor(0.0, device=device)
             for logits in stage_outputs:
@@ -292,7 +296,6 @@ def train_sequence_model(
                 ce_loss = (ce_loss * mask_sq).sum() / mask_sq.sum()
                 tmse_loss = compute_tmse_loss(logits, mask)
                 total_loss = total_loss + ce_loss + args.tmse_weight * tmse_loss
-
             if torch.isnan(total_loss) or torch.isinf(total_loss):
                 continue
             total_loss.backward()
@@ -301,13 +304,15 @@ def train_sequence_model(
 
         scheduler.step()
 
-        # Validate: action accuracy on GT action frames
+        # Validate: action accuracy on GT frames
         model.eval()
         all_preds: list[int] = []
         all_targets: list[int] = []
         with torch.no_grad():
             for features, labels, mask in val_loader:
-                features, labels, mask = features.to(device), labels.to(device), mask.to(device)
+                features = features.to(device)
+                labels = labels.to(device)
+                mask = mask.to(device)
                 logits = model(features, mask)
                 preds = logits.argmax(dim=1)
                 mask_flat = mask.squeeze(1).bool()
@@ -326,7 +331,7 @@ def train_sequence_model(
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            best_model_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             patience_counter = 0
         else:
             patience_counter += 1
@@ -334,200 +339,233 @@ def train_sequence_model(
         if patience_counter >= args.patience:
             break
 
-    if best_model_state:
-        model.load_state_dict(best_model_state)
+    if best_state:
+        model.load_state_dict(best_state)
         model = model.to(device)
 
     return model
 
 
 # ---------------------------------------------------------------------------
-# Hybrid classification: contacts from detector + actions from sequence model
+# Inference
 # ---------------------------------------------------------------------------
 
 
-def classify_hybrid(
-    bundle: RallyBundle,
+def get_frame_probs(
     model: MSTCN,
+    bundle: RallyBundle,
     device: torch.device,
-) -> list[dict]:
-    """Classify contacts using the full pipeline + sequence model.
-
-    Pipeline:
-      1. classify_rally_actions() → full contact list (90% F1, includes
-         synthetic serves, receive detection, block detection, player
-         re-attribution — the entire existing pipeline).
-      2. MS-TCN++ on full trajectory → per-frame action probabilities.
-      3. For each contact, replace action type with model's prediction
-         at that frame. The pipeline provides *when*, the model provides *what*.
-
-    Returns list of predicted action dicts for eval matching.
-    """
-    num_frames = bundle.trajectory_features.shape[0]
-
-    # Step 1: Run full existing pipeline for contact detection
-    result = classify_rally_actions(
-        bundle.contact_sequence,
-        rally_id=bundle.rally.rally_id,
-        match_team_assignments=bundle.match_teams,
-    )
-
-    if not result.actions:
-        return []
-
-    # Step 2: Run sequence model on full trajectory
+) -> np.ndarray:
+    """Run MS-TCN++ and return per-frame probabilities (NUM_CLASSES, T)."""
     model.eval()
     features = torch.from_numpy(bundle.trajectory_features).float().unsqueeze(0)
     features = features.transpose(1, 2).to(device)  # (1, F, T)
-    mask = torch.ones(1, 1, num_frames, device=device)
+    mask = torch.ones(1, 1, bundle.rally.frame_count, device=device)
 
     with torch.no_grad():
-        logits = model(features, mask)  # (1, C, T)
+        logits = model(features, mask)
         probs = torch.softmax(logits, dim=1)[0].cpu().numpy()  # (C, T)
 
-    # Step 3: Override each action's type with model prediction
-    for action in result.actions:
-        frame = action.frame
-        if frame < 0 or frame >= num_frames:
-            continue
-
-        # Find best action class at this frame (±2 window, center-weighted)
-        best_cls = 0
-        best_prob = 0.0
-        for offset in range(-2, 3):
-            f = frame + offset
-            if 0 <= f < num_frames:
-                weight = 1.0 if offset == 0 else 0.6
-                for cls in range(1, NUM_CLASSES):
-                    p = float(probs[cls, f]) * weight
-                    if p > best_prob:
-                        best_prob = p
-                        best_cls = cls
-
-        if best_cls > 0:
-            action.action_type = ActionType(IDX_TO_ACTION[best_cls])
-            action.confidence = float(probs[best_cls, frame])
-
-    # Convert to prediction dicts for matching (include isSynthetic + courtSide
-    # for two-pass matching with wider tolerance on synthetic serves)
-    pred_actions: list[dict] = []
-    for a in result.actions:
-        d: dict = {
-            "frame": a.frame,
-            "action": a.action_type.value,
-            "playerTrackId": a.player_track_id,
-            "courtSide": a.court_side,
-        }
-        if a.is_synthetic:
-            d["isSynthetic"] = True
-        pred_actions.append(d)
-    return pred_actions
+    return probs
 
 
 # ---------------------------------------------------------------------------
-# LOO-video CV
+# Evaluation
 # ---------------------------------------------------------------------------
 
 
-def run_loo_cv(bundles: list[RallyBundle], args: argparse.Namespace) -> None:
-    """Leave-one-video-out cross-validation of hybrid approach."""
+def evaluate_mode(
+    bundles: list[RallyBundle],
+    model: MSTCN,
+    device: torch.device,
+    mode: str,
+    args: argparse.Namespace,
+) -> tuple[list[MatchResult], list[dict], int]:
+    """Evaluate one decoding mode on a list of rallies.
+
+    Args:
+        mode: "trajectory" | "sequence" | "anchored"
+
+    Returns:
+        (matches, unmatched_preds, attribution_correct_count)
+    """
+    all_matches: list[MatchResult] = []
+    all_unmatched: list[dict] = []
+    attr_correct = 0
+    attr_total = 0
+
+    decoder_config = DecoderConfig()
+
+    for bundle in bundles:
+        frame_probs = get_frame_probs(model, bundle, device)
+
+        if mode == "trajectory":
+            # Baseline: contacts from trajectory only, action from sequence model
+            decoded = decode_actions(
+                frame_probs,
+                contact_sequence=bundle.contact_sequence,
+                config=DecoderConfig(
+                    sequence_peak_threshold=1.1,  # Effectively disable sequence proposals
+                ),
+                net_y=bundle.rally.court_split_y or 0.5,
+            )
+        elif mode == "sequence":
+            # Sequence-only: no trajectory anchors
+            decoded = decode_actions(
+                frame_probs,
+                contact_sequence=None,
+                config=decoder_config,
+                net_y=bundle.rally.court_split_y or 0.5,
+            )
+        else:  # anchored
+            decoded = decode_actions(
+                frame_probs,
+                contact_sequence=bundle.contact_sequence,
+                config=decoder_config,
+                net_y=bundle.rally.court_split_y or 0.5,
+            )
+
+        # Apply team-based attribution if requested
+        if args.attribution and bundle.match_teams:
+            decoded = attribute_with_team_hint(
+                decoded,
+                team_assignments=bundle.match_teams,
+                net_y=bundle.rally.court_split_y or 0.5,
+            )
+
+        # Convert to match format
+        preds = [
+            {
+                "frame": d.frame,
+                "action": d.action,
+                "playerTrackId": d.player_track_id,
+            }
+            for d in decoded
+        ]
+
+        matches, unmatched = match_contacts(bundle.gt_labels, preds, tolerance=5)
+        all_matches.extend(matches)
+        all_unmatched.extend(unmatched)
+
+        # Attribution accuracy: check if matched predictions have correct player
+        if args.attribution:
+            for m in matches:
+                if m.pred_frame is not None and m.player_evaluable:
+                    attr_total += 1
+                    if m.player_correct:
+                        attr_correct += 1
+
+    return all_matches, all_unmatched, attr_correct
+
+
+# ---------------------------------------------------------------------------
+# LOO-CV
+# ---------------------------------------------------------------------------
+
+
+def run_cv(
+    bundles: list[RallyBundle],
+    args: argparse.Namespace,
+) -> None:
+    """Run k-fold cross-validation (default 5-fold, or LOO with --folds 0)."""
     videos: dict[str, list[RallyBundle]] = defaultdict(list)
     for b in bundles:
         videos[b.rally.video_id].append(b)
 
     video_ids = sorted(videos.keys())
-    console.print(f"\n[bold]Hybrid LOO-CV: {len(video_ids)} videos[/bold]")
+    n_folds = args.folds if args.folds > 0 else len(video_ids)
 
-    all_matches: list[MatchResult] = []
-    all_unmatched: list[dict] = []
+    # Assign videos to folds (round-robin)
+    fold_for_video: dict[str, int] = {}
+    for i, vid in enumerate(video_ids):
+        fold_for_video[vid] = i % n_folds
+
+    cv_label = "LOO-CV" if n_folds == len(video_ids) else f"{n_folds}-fold CV"
+    console.print(f"\n[bold]{cv_label}: {len(video_ids)} videos, {len(bundles)} rallies[/bold]")
+
+    modes = ["trajectory", "sequence", "anchored"]
+    results_by_mode: dict[str, tuple[list[MatchResult], list[dict], int]] = {
+        m: ([], [], 0) for m in modes
+    }
+
     device = torch.device(args.device)
     start_time = time.time()
 
-    for fold_idx, held_out_vid in enumerate(video_ids):
-        test_bundles = videos[held_out_vid]
-        train_bundles = [
-            b for vid, bs in videos.items() if vid != held_out_vid for b in bs
-        ]
-
+    for fold_idx in range(n_folds):
+        test_bundles = [b for b in bundles if fold_for_video[b.rally.video_id] == fold_idx]
+        train_bundles = [b for b in bundles if fold_for_video[b.rally.video_id] != fold_idx]
         if not test_bundles or not train_bundles:
             continue
 
         fold_start = time.time()
-
-        # Train sequence model
         model = train_sequence_model(train_bundles, test_bundles, args)
 
-        # Evaluate each test rally
-        fold_matches: list[MatchResult] = []
-        fold_unmatched: list[dict] = []
-
-        for bundle in test_bundles:
-            preds = classify_hybrid(bundle, model, device)
-            fps = bundle.rally.fps if bundle.rally.fps > 0 else 30.0
-            tolerance_frames = max(1, round(fps * 0.167))  # ~5 frames
-
-            # Two-pass matching (same as GBM pipeline eval):
-            # Pass 1: real predictions at strict tolerance
-            real_preds = [p for p in preds if not p.get("isSynthetic")]
-            matches, unmatched = match_contacts(
-                bundle.rally.gt_labels, real_preds, tolerance=tolerance_frames,
+        for mode in modes:
+            matches, unmatched, attr_ok = evaluate_mode(
+                test_bundles, model, device, mode, args,
+            )
+            old_matches, old_unmatched, old_attr = results_by_mode[mode]
+            results_by_mode[mode] = (
+                old_matches + matches,
+                old_unmatched + unmatched,
+                old_attr + attr_ok,
             )
 
-            # Pass 2: synthetic serves at wider tolerance (~1s)
-            synth_serves = [
-                p for p in preds
-                if p.get("isSynthetic") and p.get("action") == "serve"
-            ]
-            if synth_serves:
-                synth_tol = max(tolerance_frames, round(fps * 1.0))
-                _match_synthetic_serves(
-                    matches, synth_serves, bundle.rally.gt_labels, synth_tol,
-                )
-
-            fold_matches.extend(matches)
-            fold_unmatched.extend(unmatched)
-
-        fold_metrics = compute_metrics(fold_matches, fold_unmatched)
         fold_time = time.time() - fold_start
 
-        n_gt = fold_metrics["total_gt"]
-        n_tp = fold_metrics["tp"]
-        action_acc = fold_metrics["action_accuracy"]
-        f1 = fold_metrics["f1"]
-
+        # Print anchored mode per-fold summary
+        anch_matches = results_by_mode["anchored"][0]
+        recent = [m for m in anch_matches[-len(test_bundles) * 20:]]
+        anch_metrics = compute_metrics(recent, [])
+        n_test_vids = len({b.rally.video_id for b in test_bundles})
         console.print(
-            f"  [{fold_idx + 1}/{len(video_ids)}] video={held_out_vid[:8]}… "
-            f"rallies={len(test_bundles)} GT={n_gt} TP={n_tp} "
-            f"F1={f1:.1%} action_acc={action_acc:.1%} "
+            f"  [{fold_idx + 1}/{n_folds}] videos={n_test_vids} "
+            f"rallies={len(test_bundles)} "
+            f"action_acc={anch_metrics['action_accuracy']:.1%} "
             f"time={fold_time:.0f}s"
         )
 
-        all_matches.extend(fold_matches)
-        all_unmatched.extend(fold_unmatched)
-
     total_time = time.time() - start_time
+    console.print(f"\n[bold]Results ({total_time:.0f}s total)[/bold]")
 
-    # --- Aggregate results ---
-    console.print(f"\n[bold]Aggregate Hybrid LOO-CV Results ({total_time:.0f}s total)[/bold]")
-    overall = compute_metrics(all_matches, all_unmatched)
+    # Summary comparison table
+    summary = Table(title=f"Decoder Mode Comparison ({cv_label})")
+    summary.add_column("Mode")
+    summary.add_column("Contact F1", justify="right")
+    summary.add_column("Precision", justify="right")
+    summary.add_column("Recall", justify="right")
+    summary.add_column("Action Acc", justify="right")
+    if args.attribution:
+        summary.add_column("Attrib Acc", justify="right")
 
-    summary = Table(title="Hybrid: Contact Detector + Sequence Model")
-    summary.add_column("Metric")
-    summary.add_column("Value", justify="right")
-    summary.add_row("GT contacts", str(overall["total_gt"]))
-    summary.add_row("Predicted", str(overall["total_pred"]))
-    summary.add_row("TP", str(overall["tp"]))
-    summary.add_row("FP", str(overall["fp"]))
-    summary.add_row("FN", str(overall["fn"]))
-    summary.add_row("Contact Recall", f"{overall['recall']:.1%}")
-    summary.add_row("Contact Precision", f"{overall['precision']:.1%}")
-    summary.add_row("[bold]Contact F1[/bold]", f"[bold]{overall['f1']:.1%}[/bold]")
-    summary.add_row("[bold]Action Accuracy[/bold]", f"[bold]{overall['action_accuracy']:.1%}[/bold]")
+    for mode in modes:
+        matches, unmatched, attr_ok = results_by_mode[mode]
+        metrics = compute_metrics(matches, unmatched)
+
+        row = [
+            mode,
+            f"{metrics['f1']:.1%}",
+            f"{metrics['precision']:.1%}",
+            f"{metrics['recall']:.1%}",
+            f"{metrics['action_accuracy']:.1%}",
+        ]
+        if args.attribution:
+            attr_total = sum(
+                1 for m in matches
+                if m.pred_frame is not None and m.player_evaluable
+            )
+            attr_acc = attr_ok / attr_total if attr_total > 0 else 0.0
+            row.append(f"{attr_acc:.1%}")
+        summary.add_row(*row)
+
     console.print(summary)
 
-    # Per-class table
+    # Per-class for anchored mode
+    anch_matches, anch_unmatched, _ = results_by_mode["anchored"]
+    overall = compute_metrics(anch_matches, anch_unmatched)
+
     if "per_class" in overall:
-        cls_table = Table(title="Per-Class Metrics (LOO-CV)")
+        cls_table = Table(title=f"Anchored Decoder Per-Class ({cv_label})")
         cls_table.add_column("Action")
         cls_table.add_column("TP", justify="right")
         cls_table.add_column("FP", justify="right")
@@ -542,35 +580,23 @@ def run_loo_cv(bundles: list[RallyBundle], args: argparse.Namespace) -> None:
                 cls_table.add_row(
                     action,
                     str(c["tp"]), str(c["fp"]), str(c["fn"]),
-                    f"{c['precision']:.1%}", f"{c['recall']:.1%}", f"{c['f1']:.1%}",
+                    f"{c['precision']:.1%}",
+                    f"{c['recall']:.1%}",
+                    f"{c['f1']:.1%}",
                 )
         console.print(cls_table)
 
-    # Comparison
-    console.print("\n[bold]Comparison[/bold]")
-    comp = Table()
-    comp.add_column("Model")
-    comp.add_column("Contact F1", justify="right")
-    comp.add_column("Action Acc", justify="right")
-    comp.add_row("GBM pipeline (baseline)", "90.0%", "83.1%")
-    comp.add_row(
-        f"Hybrid (h={args.hidden_dim}, s={args.num_stages}, L={args.num_layers})",
-        f"{overall['f1']:.1%}",
-        f"{overall['action_accuracy']:.1%}",
-    )
-    console.print(comp)
-
     # Confusion matrix
-    _print_confusion_matrix(all_matches)
+    _print_confusion_matrix(anch_matches)
 
 
 def _print_confusion_matrix(matches: list[MatchResult]) -> None:
+    """Print confusion matrix from matched predictions."""
     matched = [m for m in matches if m.pred_frame is not None]
     if not matched:
         return
 
-    action_list = ACTION_TYPES
-    cm: dict[str, dict[str, int]] = {a: {b: 0 for b in action_list} for a in action_list}
+    cm: dict[str, dict[str, int]] = {a: {b: 0 for b in ACTION_TYPES} for a in ACTION_TYPES}
     for m in matched:
         gt_a = m.gt_action
         pred_a = m.pred_action or ""
@@ -579,21 +605,21 @@ def _print_confusion_matrix(matches: list[MatchResult]) -> None:
 
     table = Table(title="Confusion Matrix (GT rows x Pred cols)")
     table.add_column("GT \\ Pred")
-    for a in action_list:
+    for a in ACTION_TYPES:
         table.add_column(a[:3], justify="right")
     table.add_column("N", justify="right")
 
-    for gt_action in action_list:
+    for gt_action in ACTION_TYPES:
         row_total = sum(cm[gt_action].values())
         cells = []
-        for pred_action in action_list:
+        for pred_action in ACTION_TYPES:
             count = cm[gt_action][pred_action]
             if count > 0 and gt_action == pred_action:
                 cells.append(f"[green]{count}[/green]")
             elif count > 0:
                 cells.append(f"[red]{count}[/red]")
             else:
-                cells.append("·")
+                cells.append(".")
         table.add_row(gt_action, *cells, str(row_total))
     console.print(table)
 
@@ -604,7 +630,9 @@ def _print_confusion_matrix(matches: list[MatchResult]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Hybrid action classifier evaluation")
+    parser = argparse.ArgumentParser(
+        description="Evaluate contact-anchored sequence decoder",
+    )
 
     # Model
     parser.add_argument("--hidden-dim", type=int, default=64)
@@ -613,18 +641,23 @@ def main() -> None:
     parser.add_argument("--dropout", type=float, default=0.3)
 
     # Training
-    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--patience", type=int, default=10)
+    parser.add_argument("--patience", type=int, default=15)
     parser.add_argument("--focal-gamma", type=float, default=2.0)
     parser.add_argument("--tmse-weight", type=float, default=0.15)
     parser.add_argument("--noise-std", type=float, default=0.01)
     parser.add_argument("--label-spread", type=int, default=2)
 
-    # Pipeline (no flags needed — uses full classify_rally_actions)
+    # Evaluation
+    parser.add_argument("--attribution", action="store_true",
+                        help="Evaluate team-based player attribution")
+    parser.add_argument("--no-viterbi", action="store_true",
+                        help="Disable Viterbi decoding (test raw decoder)")
+    parser.add_argument("--folds", type=int, default=5,
+                        help="Number of CV folds (0 = LOO-CV, default 5)")
 
-    # Runtime
     parser.add_argument(
         "--device", type=str,
         default="mps" if torch.backends.mps.is_available()
@@ -644,7 +677,7 @@ def main() -> None:
         console.print("[red]No rallies loaded.[/red]")
         return
 
-    run_loo_cv(bundles, args)
+    run_cv(bundles, args)
 
 
 if __name__ == "__main__":

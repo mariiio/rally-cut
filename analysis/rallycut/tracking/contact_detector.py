@@ -161,6 +161,10 @@ class ContactDetectionConfig:
     use_temporal_attribution: bool = True
     temporal_attribution_min_confidence: float = 0.6  # Min softmax confidence to accept
 
+    # Adaptive deduplication: use shorter min distance for cross-side contacts.
+    # Empirically 0% impact on 5-fold CV (2026-04-05) — disabled by default.
+    adaptive_dedup: bool = False
+
 
 @dataclass
 class Contact:
@@ -1420,25 +1424,53 @@ def _find_proximity_frame(
     return best_frame
 
 
+# Minimum frames between contacts on different court sides.
+# Attack → block/dig across the net happens in 2-4 frames, so we allow
+# much closer spacing than same-side contacts (which are physically
+# impossible within ~0.4s = 12 frames).
+_CROSS_SIDE_MIN_DISTANCE = 4
+
+
 def _deduplicate_contacts(
-    contacts: list[Contact], min_distance: int
+    contacts: list[Contact],
+    min_distance: int,
+    adaptive: bool = False,
 ) -> list[Contact]:
-    """Remove duplicate contacts within min_distance frames, keeping higher confidence."""
+    """Remove duplicate contacts within min_distance frames, keeping higher confidence.
+
+    When adaptive=True, uses shorter distance for cross-side contacts:
+    same-side must be min_distance apart, but cross-side (different
+    court_side) only need _CROSS_SIDE_MIN_DISTANCE frames apart, since
+    attack→block/dig across the net is physically valid in 2-4 frames.
+    """
     if not contacts:
         return contacts
 
-    # Sort by confidence descending (keep best)
     sorted_contacts = sorted(contacts, key=lambda c: c.confidence, reverse=True)
     result: list[Contact] = []
-    used_frames: list[int] = []
 
     for contact in sorted_contacts:
-        if any(abs(contact.frame - f) < min_distance for f in used_frames):
-            continue
-        result.append(contact)
-        used_frames.append(contact.frame)
+        too_close = False
+        for existing in result:
+            frame_gap = abs(contact.frame - existing.frame)
+            if adaptive:
+                sides_known = (
+                    contact.court_side in ("near", "far")
+                    and existing.court_side in ("near", "far")
+                )
+                if sides_known and contact.court_side != existing.court_side:
+                    effective_min = _CROSS_SIDE_MIN_DISTANCE
+                else:
+                    effective_min = min_distance
+            else:
+                effective_min = min_distance
 
-    # Return in frame order
+            if frame_gap < effective_min:
+                too_close = True
+                break
+        if not too_close:
+            result.append(contact)
+
     return sorted(result, key=lambda c: c.frame)
 
 
@@ -1498,6 +1530,7 @@ def detect_contacts(
     use_classifier: bool = True,
     team_assignments: dict[int, int] | None = None,
     court_calibrator: CourtCalibrator | None = None,
+    sequence_probs: np.ndarray | None = None,
 ) -> ContactSequence:
     """Detect ball contacts from trajectory inflection points and velocity peaks.
 
@@ -1529,6 +1562,10 @@ def detect_contacts(
             from median Y position.
         court_calibrator: Calibrated court projector. When provided, ball side uses
             perspective-correct projection via homography.
+        sequence_probs: Optional (NUM_CLASSES, T) per-frame action probabilities
+            from MS-TCN++ sequence model. When provided, probabilities at each
+            candidate frame are added as features to the contact classifier,
+            letting the GBM learn whether to trust trajectory vs sequence signal.
 
     Returns:
         ContactSequence with all detected contacts.
@@ -1861,6 +1898,19 @@ def detect_contacts(
             nearest_d_y = bbox_motion.get(track_id, (0.0, 0.0))[0] if track_id >= 0 else 0.0
             nearest_d_h = bbox_motion.get(track_id, (0.0, 0.0))[1] if track_id >= 0 else 0.0
 
+            # Sequence model probabilities at this frame (when available)
+            seq_bg, seq_srv, seq_rcv, seq_set, seq_att, seq_dig, seq_blk = (
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            )
+            if sequence_probs is not None and 0 <= frame < sequence_probs.shape[1]:
+                seq_bg = float(sequence_probs[0, frame])
+                seq_srv = float(sequence_probs[1, frame])
+                seq_rcv = float(sequence_probs[2, frame])
+                seq_set = float(sequence_probs[3, frame])
+                seq_att = float(sequence_probs[4, frame])
+                seq_dig = float(sequence_probs[5, frame])
+                seq_blk = float(sequence_probs[6, frame])
+
             features = CandidateFeatures(
                 frame=frame,
                 velocity=velocity,
@@ -1883,6 +1933,13 @@ def detect_contacts(
                 ball_detection_density=ball_detection_density,
                 consecutive_detections=consec,
                 frames_since_rally_start=frame - first_frame,
+                seq_p_background=seq_bg,
+                seq_p_serve=seq_srv,
+                seq_p_receive=seq_rcv,
+                seq_p_set=seq_set,
+                seq_p_attack=seq_att,
+                seq_p_dig=seq_dig,
+                seq_p_block=seq_blk,
             )
             results = classifier.predict([features])
             is_validated, confidence = results[0]
@@ -1983,7 +2040,9 @@ def detect_contacts(
 
     # Deduplicate contacts from proximity + standard candidates at similar frames
     pre_dedup = len(contacts)
-    contacts = _deduplicate_contacts(contacts, cfg.min_peak_distance_frames)
+    contacts = _deduplicate_contacts(
+        contacts, cfg.min_peak_distance_frames, adaptive=cfg.adaptive_dedup,
+    )
 
     logger.info(
         f"Detected {len(contacts)} contacts "

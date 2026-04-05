@@ -115,6 +115,72 @@ class RallySequenceData:
     frame_count: int
 
 
+def _load_team_assignments_and_calibrations(
+    rallies: list,
+) -> tuple[dict[str, dict[int, int]], dict[str, np.ndarray]]:
+    """Load match-level team assignments and court homographies for all rallies.
+
+    Returns:
+        team_assignments_by_rally: rally_id → {track_id: team (0/1)}
+        homographies_by_video: video_id → 3×3 homography matrix
+    """
+    from rallycut.court.calibration import CourtCalibrator
+    from rallycut.evaluation.tracking.db import load_court_calibration
+    from rallycut.tracking.match_tracker import build_match_team_assignments
+    from rallycut.tracking.player_tracker import PlayerPosition
+
+    video_ids = {r.video_id for r in rallies}
+
+    # --- Team assignments ---
+    rally_pos_lookup: dict[str, list[PlayerPosition]] = {}
+    for r in rallies:
+        if r.positions_json:
+            rally_pos_lookup[r.rally_id] = [
+                PlayerPosition(
+                    frame_number=pp["frameNumber"], track_id=pp["trackId"],
+                    x=pp["x"], y=pp["y"],
+                    width=pp.get("width", 0.05), height=pp.get("height", 0.10),
+                    confidence=pp.get("confidence", 1.0),
+                )
+                for pp in r.positions_json
+            ]
+
+    # Load from DB
+    from rallycut.evaluation.db import get_connection
+    team_assignments_by_rally: dict[str, dict[int, int]] = {}
+    placeholders = ", ".join(["%s"] * len(video_ids))
+    query = f"""
+        SELECT id, match_analysis_json
+        FROM videos
+        WHERE id IN ({placeholders})
+          AND match_analysis_json IS NOT NULL
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, list(video_ids))
+            rows = cur.fetchall()
+    for _vid, ma_json in rows:
+        if isinstance(ma_json, dict):
+            team_assignments_by_rally.update(
+                build_match_team_assignments(
+                    ma_json, min_confidence=0.70,
+                    rally_positions=rally_pos_lookup,
+                )
+            )
+
+    # --- Court homographies ---
+    homographies_by_video: dict[str, np.ndarray] = {}
+    for vid in video_ids:
+        corners = load_court_calibration(vid)
+        if corners and len(corners) == 4:
+            cal = CourtCalibrator()
+            cal.calibrate([(c["x"], c["y"]) for c in corners])
+            if cal.is_calibrated and cal.homography is not None:
+                homographies_by_video[vid] = cal.homography.homography
+
+    return team_assignments_by_rally, homographies_by_video
+
+
 def load_sequences(
     label_spread: int = 2,
 ) -> list[RallySequenceData]:
@@ -122,6 +188,15 @@ def load_sequences(
     console.print("[bold]Loading rallies with action GT...[/bold]")
     rallies = load_rallies_with_action_gt()
     console.print(f"  {len(rallies)} rallies loaded")
+
+    # Load team assignments and court calibrations for enhanced features
+    team_by_rally, homographies = _load_team_assignments_and_calibrations(rallies)
+    n_teams = sum(1 for r in rallies if r.rally_id in team_by_rally)
+    n_courts = sum(1 for v in {r.video_id for r in rallies} if v in homographies)
+    console.print(
+        f"  Enhanced features: {n_teams}/{len(rallies)} rallies with teams, "
+        f"{n_courts}/{len({r.video_id for r in rallies})} videos with court calibration"
+    )
 
     sequences: list[RallySequenceData] = []
     skipped = 0
@@ -148,6 +223,8 @@ def load_sequences(
             player_positions=player_positions,
             net_y=rally.court_split_y,
             frame_count=frame_count,
+            team_assignments=team_by_rally.get(rally.rally_id),
+            homography=homographies.get(rally.video_id),
         )
 
         # Build labels from GT
@@ -656,6 +733,9 @@ def run_sanity_check(sequences: list[RallySequenceData]) -> None:
         "ball_x", "ball_y", "ball_conf", "ball_dx", "ball_dy", "ball_speed",
         "p0_x", "p0_y", "p1_x", "p1_y", "p2_x", "p2_y", "p3_x", "p3_y",
         "dist_p0", "dist_p1", "dist_p2", "dist_p3", "ball_y_rel_net",
+        "court_ball_x", "court_ball_y",
+        "ball_det_density",
+        "p0_team", "p1_team", "p2_team", "p3_team",
     ]
     for i, name in enumerate(feature_names):
         vals = all_features[:, i]

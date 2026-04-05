@@ -5,7 +5,7 @@ tracking data. Features are designed so a temporal model can learn
 possession structure and action types directly from trajectories,
 bypassing explicit contact detection.
 
-Feature layout (19 dims):
+Feature layout (26 dims):
     [0]  ball_x            — normalized ball x position
     [1]  ball_y            — normalized ball y position
     [2]  ball_conf         — ball detection confidence (0 = missing)
@@ -15,6 +15,13 @@ Feature layout (19 dims):
     [6:14] player_xy       — 4 players × (x, y), sorted by y each frame
     [14:18] ball_player_dist — distance from ball to each sorted player
     [18] ball_y_rel_net    — ball_y minus net_y
+    [19:21] court_ball_xy  — homography-projected court coordinates (meters)
+    [21] ball_det_density  — rolling 21-frame detection density (tracking gap signal)
+    [22:26] player_team    — team indicator per sorted player (0/1/0.5=unknown)
+
+Pruned features (empirically dead via permutation importance):
+    - player_delta_y: +0.0% importance, model learns motion from position diffs
+    - ball_accel: +0.0% importance, model learns from velocity diffs via convolutions
 """
 
 from __future__ import annotations
@@ -24,12 +31,18 @@ import numpy as np
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.player_tracker import PlayerPosition
 
-FEATURE_DIM = 19
+FEATURE_DIM = 26
 NUM_PLAYERS = 4
 
 ACTION_TYPES = ["serve", "receive", "set", "attack", "dig", "block"]
 ACTION_TO_IDX = {a: i + 1 for i, a in enumerate(ACTION_TYPES)}
 NUM_CLASSES = 7  # background + 6 actions
+
+# Rolling window size for ball detection density
+_DENSITY_WINDOW = 21
+# Court dimensions for normalizing court-space features (beach volleyball: 8m × 16m)
+_COURT_WIDTH = 8.0
+_COURT_LENGTH = 16.0
 
 
 def extract_trajectory_features(
@@ -37,6 +50,9 @@ def extract_trajectory_features(
     player_positions: list[PlayerPosition],
     net_y: float | None,
     frame_count: int,
+    *,
+    team_assignments: dict[int, int] | None = None,
+    homography: np.ndarray | None = None,
 ) -> np.ndarray:
     """Extract per-frame trajectory features for a rally.
 
@@ -45,17 +61,19 @@ def extract_trajectory_features(
         player_positions: Player detections (frame_number, track_id, x, y, ...).
         net_y: Estimated net y-coordinate in normalized image space.
         frame_count: Total number of frames in the rally.
+        team_assignments: Optional track_id → team (0=near, 1=far) mapping.
+        homography: Optional 3×3 image→court homography matrix. When provided,
+            ball positions are projected to court coordinates (meters).
 
     Returns:
-        (frame_count, 19) float32 array of trajectory features.
+        (frame_count, 26) float32 array of trajectory features.
     """
     if net_y is None:
         net_y = 0.5
 
     features = np.zeros((frame_count, FEATURE_DIM), dtype=np.float32)
 
-    # --- Ball features ---
-    # Index ball positions by frame
+    # --- Ball features [0:6] ---
     ball_by_frame: dict[int, BallPosition] = {}
     for bp in ball_positions:
         if 0 <= bp.frame_number < frame_count:
@@ -88,8 +106,7 @@ def extract_trajectory_features(
     features[:, 4] = ball_dy
     features[:, 5] = np.sqrt(ball_dx ** 2 + ball_dy ** 2)
 
-    # --- Player features ---
-    # Group player positions by frame
+    # --- Player features [6:18] ---
     players_by_frame: dict[int, list[PlayerPosition]] = {}
     for pp in player_positions:
         if 0 <= pp.frame_number < frame_count:
@@ -105,19 +122,51 @@ def extract_trajectory_features(
             features[f, 6 + i * 2] = p.x
             features[f, 6 + i * 2 + 1] = p.y
 
-        # Ball-player distances
+        # Ball-player distances [14:18]
         bx, by = ball_x[f], ball_y[f]
         if ball_conf[f] > 0:
             for i in range(min(NUM_PLAYERS, len(frame_players))):
                 p = frame_players[i]
                 dist = np.sqrt((bx - p.x) ** 2 + (by - p.y) ** 2)
                 features[f, 14 + i] = dist
-        # else: distances stay 0 (no ball)
 
-    # --- Court context ---
-    features[:, 18] = ball_y - net_y  # 0 when ball missing (ball_y=0)
-    # Mask out net-relative feature when ball is missing
+        # --- Player team indicators [22:26] ---
+        if team_assignments:
+            for i in range(min(NUM_PLAYERS, len(frame_players))):
+                p = frame_players[i]
+                team = team_assignments.get(p.track_id)
+                features[f, 22 + i] = float(team) if team is not None else 0.5
+        else:
+            for i in range(min(NUM_PLAYERS, len(frame_players))):
+                features[f, 22 + i] = 0.5
+
+    # --- Court context [18] ---
+    features[:, 18] = ball_y - net_y
     features[ball_conf == 0, 18] = 0.0
+
+    # --- Court-space ball position [19:21] ---
+    if homography is not None:
+        for f in range(frame_count):
+            if ball_conf[f] > 0:
+                pt = np.array([ball_x[f], ball_y[f], 1.0], dtype=np.float64)
+                result = homography @ pt
+                if abs(result[2]) > 1e-8:
+                    result = result / result[2]
+                    cx = float(result[0]) / _COURT_WIDTH
+                    cy = float(result[1]) / _COURT_LENGTH
+                    if -0.5 <= cx <= 1.5 and -0.5 <= cy <= 1.5:
+                        features[f, 19] = cx
+                        features[f, 20] = cy
+
+    # --- Ball detection density [21] ---
+    half_w = _DENSITY_WINDOW // 2
+    det_mask = (ball_conf > 0.3).astype(np.float32)
+    cumsum = np.concatenate([[0.0], np.cumsum(det_mask)])
+    for f in range(frame_count):
+        lo = max(0, f - half_w)
+        hi = min(frame_count, f + half_w + 1)
+        window_size = hi - lo
+        features[f, 21] = (cumsum[hi] - cumsum[lo]) / window_size
 
     return features
 

@@ -64,8 +64,16 @@ _CONFIDENCE_THRESHOLD = 0.3
 def extract_candidate_features(
     rally: RallyData,
     config: ContactDetectionConfig | None = None,
+    sequence_probs: np.ndarray | None = None,
 ) -> tuple[list[CandidateFeatures], list[int]]:
     """Extract features for ALL candidates in a rally (before validation gate).
+
+    Args:
+        rally: Rally data with ball/player positions.
+        config: Contact detection configuration.
+        sequence_probs: Optional (NUM_CLASSES, T) per-frame action probabilities
+            from MS-TCN++. When provided, the 7 seq_p_* fields on each
+            CandidateFeatures are populated from the model's predictions.
 
     Returns:
         Tuple of (features_list, candidate_frames).
@@ -319,6 +327,19 @@ def extract_candidate_features(
         # Consecutive ball detections around frame
         consec = _count_consecutive_detections(ball_by_frame, frame)
 
+        # Sequence model probabilities at this frame
+        seq_probs_at_frame: dict[str, float] = {}
+        if sequence_probs is not None and 0 <= frame < sequence_probs.shape[1]:
+            seq_probs_at_frame = {
+                "seq_p_background": float(sequence_probs[0, frame]),
+                "seq_p_serve": float(sequence_probs[1, frame]),
+                "seq_p_receive": float(sequence_probs[2, frame]),
+                "seq_p_set": float(sequence_probs[3, frame]),
+                "seq_p_attack": float(sequence_probs[4, frame]),
+                "seq_p_dig": float(sequence_probs[5, frame]),
+                "seq_p_block": float(sequence_probs[6, frame]),
+            }
+
         features = CandidateFeatures(
             frame=frame,
             velocity=velocity,
@@ -341,6 +362,7 @@ def extract_candidate_features(
             ball_detection_density=ball_detection_density,
             consecutive_detections=consec,
             frames_since_rally_start=frame - first_frame,
+            **seq_probs_at_frame,
         )
 
         features_list.append(features)
