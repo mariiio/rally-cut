@@ -1,24 +1,23 @@
-"""Hybrid action classifier: contact detector + sequence model.
+"""Hybrid action classifier: full pipeline contacts + sequence model labels.
 
-Uses the existing contact detector for *when* contacts happen (90% F1),
-then the MS-TCN++ sequence model for *what* action each contact is (93.6%
-action accuracy). Replaces the GBM classifier, Viterbi, and repair rules.
+Uses the existing classify_rally_actions() pipeline for *when* contacts
+happen (90% F1, including synthetic serves and all heuristics), then
+the MS-TCN++ sequence model for *what* action each contact is (93.6%
+action accuracy). The pipeline provides contact frames; the model
+provides action types.
 
 Pipeline per rally:
-  1. detect_contacts() → contact frames (existing pipeline)
+  1. classify_rally_actions() → contact list (90% F1, with synthetic serves)
   2. MS-TCN++ on full trajectory → per-frame action probabilities
-  3. At each contact frame, read model's argmax prediction → action type
-  4. Build ClassifiedAction objects
-  5. reattribute_players() (kept — orthogonal to action classification)
+  3. For each contact, replace action type with model's prediction at that frame
+  4. reattribute_players() already ran inside classify_rally_actions()
 
 Evaluation: leave-one-video-out CV.
-Target: ~90% contact F1 (from detector) + ~93% action accuracy (from model).
 
 Usage:
     cd analysis
     uv run python scripts/eval_hybrid_action.py
     uv run python scripts/eval_hybrid_action.py --hidden-dim 128
-    uv run python scripts/eval_hybrid_action.py --skip-reattribute
 """
 
 from __future__ import annotations
@@ -44,6 +43,7 @@ from eval_action_detection import (  # noqa: E402
     MatchResult,
     RallyData,
     _load_match_team_assignments,
+    _match_synthetic_serves,
     compute_metrics,
     load_rallies_with_action_gt,
     match_contacts,
@@ -65,10 +65,7 @@ from rallycut.temporal.ms_tcn.model import MSTCN, MSTCNConfig
 from rallycut.temporal.temporal_maxer.training import FocalLoss, compute_tmse_loss
 from rallycut.tracking.action_classifier import (
     ActionType,
-    ClassifiedAction,
-    _find_server_by_position,
-    assign_court_side_from_teams,
-    reattribute_players,
+    classify_rally_actions,
 )
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.contact_detector import (
@@ -338,24 +335,33 @@ def classify_hybrid(
     bundle: RallyBundle,
     model: MSTCN,
     device: torch.device,
-    do_reattribute: bool = True,
 ) -> list[dict]:
-    """Classify contacts using the hybrid approach.
+    """Classify contacts using the full pipeline + sequence model.
 
     Pipeline:
-      1. Run MS-TCN++ on full trajectory → per-frame action probabilities.
-      2. For each detected contact, look up the model's prediction.
-      3. If no serve detected among contacts, inject a synthetic serve
-         using the existing position-based server detection heuristic.
-      4. Run reattribute_players() (orthogonal to action classification).
+      1. classify_rally_actions() → full contact list (90% F1, includes
+         synthetic serves, receive detection, block detection, player
+         re-attribution — the entire existing pipeline).
+      2. MS-TCN++ on full trajectory → per-frame action probabilities.
+      3. For each contact, replace action type with model's prediction
+         at that frame. The pipeline provides *when*, the model provides *what*.
 
     Returns list of predicted action dicts for eval matching.
     """
-    contacts = bundle.contact_sequence.contacts
-
-    # Step 1: Run sequence model on full rally
-    model.eval()
     num_frames = bundle.trajectory_features.shape[0]
+
+    # Step 1: Run full existing pipeline for contact detection
+    result = classify_rally_actions(
+        bundle.contact_sequence,
+        rally_id=bundle.rally.rally_id,
+        match_team_assignments=bundle.match_teams,
+    )
+
+    if not result.actions:
+        return []
+
+    # Step 2: Run sequence model on full trajectory
+    model.eval()
     features = torch.from_numpy(bundle.trajectory_features).float().unsqueeze(0)
     features = features.transpose(1, 2).to(device)  # (1, F, T)
     mask = torch.ones(1, 1, num_frames, device=device)
@@ -364,11 +370,9 @@ def classify_hybrid(
         logits = model(features, mask)  # (1, C, T)
         probs = torch.softmax(logits, dim=1)[0].cpu().numpy()  # (C, T)
 
-    # Step 2: Classify each contact using model prediction at that frame
-    actions: list[ClassifiedAction] = []
-
-    for contact in contacts:
-        frame = contact.frame
+    # Step 3: Override each action's type with model prediction
+    for action in result.actions:
+        frame = action.frame
         if frame < 0 or frame >= num_frames:
             continue
 
@@ -386,100 +390,22 @@ def classify_hybrid(
                         best_cls = cls
 
         if best_cls > 0:
-            action_name = IDX_TO_ACTION[best_cls]
-            confidence = float(probs[best_cls, frame])
-        else:
-            # No signal — use positional fallback
-            action_name = "attack"
-            confidence = 0.3
+            action.action_type = ActionType(IDX_TO_ACTION[best_cls])
+            action.confidence = float(probs[best_cls, frame])
 
-        actions.append(ClassifiedAction(
-            action_type=ActionType(action_name),
-            frame=contact.frame,
-            ball_x=contact.ball_x,
-            ball_y=contact.ball_y,
-            velocity=contact.velocity,
-            player_track_id=contact.player_track_id,
-            court_side=contact.court_side,
-            confidence=confidence,
-        ))
-
-    # Step 3: Model-guided synthetic serve injection.
-    # Every rally has exactly one serve. If no contact was classified as
-    # serve, find the peak serve probability in the model's output within
-    # the first ~90 frames and insert a synthetic serve there.
-    net_y = bundle.contact_sequence.net_y
-    start_frame = bundle.contact_sequence.rally_start_frame
-    serve_search_frames = 90  # ~3s at 30fps
-
-    has_serve = any(a.action_type == ActionType.SERVE for a in actions)
-
-    if not has_serve:
-        # Find peak serve probability (class 1) in first 90 frames
-        serve_cls = ACTION_TO_IDX["serve"]  # 1
-        search_end = min(serve_search_frames, num_frames)
-        serve_probs = probs[serve_cls, :search_end]
-
-        if len(serve_probs) > 0 and serve_probs.max() > 0.05:
-            serve_frame = int(np.argmax(serve_probs))
-            serve_conf = float(serve_probs[serve_frame])
-
-            # Determine serve side from ball position at serve frame
-            ball_y_at_serve = bundle.trajectory_features[serve_frame, 1]  # ball_y
-            ball_conf_at_serve = bundle.trajectory_features[serve_frame, 2]
-            if ball_conf_at_serve > 0 and net_y > 0:
-                serve_side = "near" if ball_y_at_serve > net_y else "far"
-            else:
-                serve_side = "near"
-
-            # Find server track ID from nearest player at serve frame
-            server_tid = -1
-            if bundle.contact_sequence.player_positions:
-                server_tid, server_pos_side, _ = _find_server_by_position(
-                    bundle.contact_sequence.player_positions,
-                    start_frame, net_y,
-                )
-                if server_pos_side:
-                    serve_side = server_pos_side
-
-            synth = ClassifiedAction(
-                action_type=ActionType.SERVE,
-                frame=serve_frame,
-                ball_x=float(bundle.trajectory_features[serve_frame, 0]),
-                ball_y=float(ball_y_at_serve),
-                velocity=0.0,
-                player_track_id=server_tid,
-                court_side=serve_side,
-                confidence=serve_conf,
-                is_synthetic=True,
-            )
-
-            # Insert before first action that comes after the serve frame
-            insert_idx = next(
-                (i for i, a in enumerate(actions) if a.frame > serve_frame),
-                len(actions),
-            )
-            actions.insert(insert_idx, synth)
-
-    # Step 4: Court side + player re-attribution
-    if bundle.match_teams:
-        assign_court_side_from_teams(actions, bundle.match_teams)
-
-    if do_reattribute and bundle.match_teams:
-        actions = reattribute_players(
-            actions, contacts, bundle.match_teams,
-            max_distance_ratio=1.5,
-        )
-
-    # Convert to prediction dicts for matching
+    # Convert to prediction dicts for matching (include isSynthetic + courtSide
+    # for two-pass matching with wider tolerance on synthetic serves)
     pred_actions: list[dict] = []
-    for a in actions:
-        pred_actions.append({
+    for a in result.actions:
+        d: dict = {
             "frame": a.frame,
             "action": a.action_type.value,
             "playerTrackId": a.player_track_id,
-        })
-
+            "courtSide": a.court_side,
+        }
+        if a.is_synthetic:
+            d["isSynthetic"] = True
+        pred_actions.append(d)
     return pred_actions
 
 
@@ -521,20 +447,35 @@ def run_loo_cv(bundles: list[RallyBundle], args: argparse.Namespace) -> None:
         fold_unmatched: list[dict] = []
 
         for bundle in test_bundles:
-            preds = classify_hybrid(
-                bundle, model, device,
-                do_reattribute=not args.skip_reattribute,
-            )
+            preds = classify_hybrid(bundle, model, device)
+            fps = bundle.rally.fps if bundle.rally.fps > 0 else 30.0
+            tolerance_frames = max(1, round(fps * 0.167))  # ~5 frames
+
+            # Two-pass matching (same as GBM pipeline eval):
+            # Pass 1: real predictions at strict tolerance
+            real_preds = [p for p in preds if not p.get("isSynthetic")]
             matches, unmatched = match_contacts(
-                bundle.rally.gt_labels, preds, tolerance=5,
+                bundle.rally.gt_labels, real_preds, tolerance=tolerance_frames,
             )
+
+            # Pass 2: synthetic serves at wider tolerance (~1s)
+            synth_serves = [
+                p for p in preds
+                if p.get("isSynthetic") and p.get("action") == "serve"
+            ]
+            if synth_serves:
+                synth_tol = max(tolerance_frames, round(fps * 1.0))
+                _match_synthetic_serves(
+                    matches, synth_serves, bundle.rally.gt_labels, synth_tol,
+                )
+
             fold_matches.extend(matches)
             fold_unmatched.extend(unmatched)
 
         fold_metrics = compute_metrics(fold_matches, fold_unmatched)
         fold_time = time.time() - fold_start
 
-        n_gt = len(fold_matches)
+        n_gt = fold_metrics["total_gt"]
         n_tp = fold_metrics["tp"]
         action_acc = fold_metrics["action_accuracy"]
         f1 = fold_metrics["f1"]
@@ -597,7 +538,6 @@ def run_loo_cv(bundles: list[RallyBundle], args: argparse.Namespace) -> None:
     comp.add_column("Contact F1", justify="right")
     comp.add_column("Action Acc", justify="right")
     comp.add_row("GBM pipeline (baseline)", "90.0%", "83.1%")
-    comp.add_row("Seq-only (t=0.3)", "68.9%", "93.6%")
     comp.add_row(
         f"Hybrid (h={args.hidden_dim}, s={args.num_stages}, L={args.num_layers})",
         f"{overall['f1']:.1%}",
@@ -667,9 +607,7 @@ def main() -> None:
     parser.add_argument("--noise-std", type=float, default=0.01)
     parser.add_argument("--label-spread", type=int, default=2)
 
-    # Pipeline
-    parser.add_argument("--skip-reattribute", action="store_true",
-                        help="Skip player re-attribution stage")
+    # Pipeline (no flags needed — uses full classify_rally_actions)
 
     # Runtime
     parser.add_argument(
