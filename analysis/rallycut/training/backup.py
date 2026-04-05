@@ -97,6 +97,7 @@ WEIGHT_GROUPS: dict[str, list[str]] = {
         "temporal_maxer/temporal_maxer_result.json",
         "wasb/wasb_finetuned.pth.tar",
         "contact_classifier/contact_classifier.pkl",
+        "sequence_action/ms_tcn_production.pt",
         "action_classifier/action_classifier.pkl",
         "court_keypoint/court_keypoint_best.pt",
         "reid/general_reid.pt",
