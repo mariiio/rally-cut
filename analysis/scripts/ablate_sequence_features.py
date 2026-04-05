@@ -1,7 +1,7 @@
-"""Feature importance analysis for the enhanced 26-dim sequence model.
+"""Feature importance analysis for the sequence model.
 
 Two-phase approach:
-  Phase A: Train ONE model on all data with all 31 features (~30 min).
+  Phase A: Train ONE model on all data with all features (~30 min).
   Phase B: Permutation importance — for each feature group, shuffle those
            columns N times and measure accuracy drop on held-out folds.
 
@@ -69,11 +69,12 @@ console = Console()
 IDX_TO_ACTION = {v: k for k, v in ACTION_TO_IDX.items()}
 
 
-# Feature groups: name → list of column indices (26-dim layout)
+# Feature groups: name → list of column indices (27-dim layout)
 FEATURE_GROUPS: dict[str, list[int]] = {
     "court_ball": [19, 20],                   # Court-space position
     "det_density": [21],                      # Ball detection density
     "team_indicators": [22, 23, 24, 25],     # Player team labels
+    "ball_nearest_height_ratio": [26],        # Ball Y relative to nearest player's head
 }
 
 # Also test individual baseline sub-groups for completeness
@@ -90,14 +91,14 @@ BASELINE_SUBGROUPS: dict[str, list[int]] = {
 class AblationSequence:
     rally_id: str
     video_id: str
-    features: np.ndarray  # (T, 26)
+    features: np.ndarray  # (T, FEATURE_DIM)
     labels: np.ndarray    # (T,) int64
     gt_labels: list[GtLabel]
     frame_count: int
 
 
 def load_all_sequences(label_spread: int = 2) -> list[AblationSequence]:
-    """Load rallies and extract full 26-dim features."""
+    """Load rallies and extract trajectory features."""
     console.print("[bold]Loading rallies...[/bold]")
     rallies = load_rallies_with_action_gt()
     team_by_rally, homographies = _load_team_assignments_and_calibrations(rallies)

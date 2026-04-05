@@ -5,7 +5,7 @@ tracking data. Features are designed so a temporal model can learn
 possession structure and action types directly from trajectories,
 bypassing explicit contact detection.
 
-Feature layout (26 dims):
+Feature layout (27 dims):
     [0]  ball_x            — normalized ball x position
     [1]  ball_y            — normalized ball y position
     [2]  ball_conf         — ball detection confidence (0 = missing)
@@ -18,6 +18,9 @@ Feature layout (26 dims):
     [19:21] court_ball_xy  — homography-projected court coordinates (meters)
     [21] ball_det_density  — rolling 21-frame detection density (tracking gap signal)
     [22:26] player_team    — team indicator per sorted player (0/1/0.5=unknown)
+    [26] ball_nearest_height_ratio — (ball_y - nearest_bbox_top) / player_height
+                                     Positive = ball below head, negative = above.
+                                     In body-height units. 0 when ball missing or no players.
 
 Pruned features (empirically dead via permutation importance):
     - player_delta_y: +0.0% importance, model learns motion from position diffs
@@ -31,7 +34,7 @@ import numpy as np
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.player_tracker import PlayerPosition
 
-FEATURE_DIM = 26
+FEATURE_DIM = 27
 NUM_PLAYERS = 4
 
 ACTION_TYPES = ["serve", "receive", "set", "attack", "dig", "block"]
@@ -66,7 +69,7 @@ def extract_trajectory_features(
             ball positions are projected to court coordinates (meters).
 
     Returns:
-        (frame_count, 26) float32 array of trajectory features.
+        (frame_count, 27) float32 array of trajectory features.
     """
     if net_y is None:
         net_y = 0.5
@@ -139,6 +142,21 @@ def extract_trajectory_features(
         else:
             for i in range(min(NUM_PLAYERS, len(frame_players))):
                 features[f, 22 + i] = 0.5
+
+        # --- Ball-nearest-player height ratio [26] ---
+        if ball_conf[f] > 0 and frame_players:
+            nearest_idx = 0
+            min_dist_sq = float("inf")
+            for i in range(min(NUM_PLAYERS, len(frame_players))):
+                p = frame_players[i]
+                d_sq = (bx - p.x) ** 2 + (by - p.y) ** 2
+                if d_sq < min_dist_sq:
+                    min_dist_sq = d_sq
+                    nearest_idx = i
+            p = frame_players[nearest_idx]
+            if p.height > 0:
+                bbox_top_y = p.y - p.height / 2
+                features[f, 26] = (by - bbox_top_y) / p.height
 
     # --- Court context [18] ---
     features[:, 18] = ball_y - net_y

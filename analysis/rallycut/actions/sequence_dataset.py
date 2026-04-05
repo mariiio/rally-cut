@@ -13,8 +13,8 @@ from scipy.interpolate import interp1d
 from torch.utils.data import Dataset
 
 # Ball feature indices (dims 0-5: ball_x, ball_y, ball_conf, ball_dx, ball_dy, ball_speed)
-# Plus derived: court_ball [19:21], ball_det_density [21]
-_BALL_FEATURE_INDICES = [0, 1, 2, 3, 4, 5, 19, 20, 21]
+# Plus derived: court_ball [19:21], ball_det_density [21], ball_nearest_height_ratio [26]
+_BALL_FEATURE_INDICES = [0, 1, 2, 3, 4, 5, 19, 20, 21, 26]
 # Player slot indices for permutation: player_xy [6:14], ball_player_dist [14:18],
 # player_team [22:26]
 _PLAYER_SLOT_RANGES = [(6, 14, 2), (14, 18, 1), (22, 26, 1)]
