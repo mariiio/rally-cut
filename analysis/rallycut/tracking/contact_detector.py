@@ -1812,6 +1812,9 @@ def detect_contacts(
 
         # Find nearest player (narrow window — matches classifier training semantics)
         # MUST use image-space distance to preserve classifier feature distribution.
+        # Note: velocity peaks from backward difference are ~1 frame late, but
+        # player_search_frames=5 already covers this — tested frame-1 offset
+        # and it changes <1% of attributions (2026-04-05).
         nearest_player_y: float | None = None
         if player_positions:
             track_id, player_dist, nearest_player_y = _find_nearest_player(

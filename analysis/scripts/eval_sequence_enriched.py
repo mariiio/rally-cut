@@ -101,13 +101,19 @@ class AblationConfig:
     use_team_reattribution: bool = False  # Sequence-model team hints
 
 
-ABLATION_CONFIGS = [
+ALL_ABLATION_CONFIGS = [
     AblationConfig("baseline"),
     AblationConfig("+seq_gbm", use_sequence_gbm=True),
     AblationConfig("+adaptive_dedup", use_adaptive_dedup=True),
     AblationConfig("+team_reattr", use_team_reattribution=True),
     AblationConfig("combined", use_sequence_gbm=True, use_adaptive_dedup=True,
                    use_team_reattribution=True),
+]
+
+# Default: only baseline vs seq_gbm (the only change with impact)
+ABLATION_CONFIGS = [
+    AblationConfig("baseline"),
+    AblationConfig("+seq_gbm", use_sequence_gbm=True),
 ]
 
 
@@ -451,7 +457,8 @@ def run_cv(
         videos[b.rally.video_id].append(b)
 
     video_ids = sorted(videos.keys())
-    n_folds = min(args.folds, len(video_ids))
+    n_folds = args.folds if args.folds > 0 else len(video_ids)
+    n_folds = min(n_folds, len(video_ids))
     fold_map = {vid: i % n_folds for i, vid in enumerate(video_ids)}
 
     cv_label = f"{n_folds}-fold CV"
@@ -491,15 +498,15 @@ def run_cv(
                 results[cfg.name][0].extend(matches)
                 results[cfg.name][1].extend(unmatched)
 
-        # Per-fold summary (combined config)
-        comb = results["combined"]
-        recent = comb[0][-len(test_bundles) * 20:]
-        m = compute_metrics(recent, [])
+        # Per-fold summary (last config)
+        last_cfg = ABLATION_CONFIGS[-1]
+        last_matches = results[last_cfg.name][0][-len(test_bundles) * 20:]
+        m = compute_metrics(last_matches, [])
         fold_time = time.time() - fold_start
         console.print(
             f"  [{fold + 1}/{n_folds}] rallies={len(test_bundles)} "
             f"train={train_time:.0f}s total={fold_time:.0f}s "
-            f"combined: F1={m['f1']:.1%} action={m['action_accuracy']:.1%}"
+            f"{last_cfg.name}: F1={m['f1']:.1%} action={m['action_accuracy']:.1%}"
         )
 
     total_time = time.time() - start_time
@@ -547,8 +554,9 @@ def run_cv(
 
     console.print(table)
 
-    # --- Per-class for combined ---
-    comb_matches, comb_unmatched = results["combined"]
+    # --- Per-class for last config ---
+    last_cfg_name = ABLATION_CONFIGS[-1].name
+    comb_matches, comb_unmatched = results[last_cfg_name]
     overall = compute_metrics(comb_matches, comb_unmatched)
     if "per_class" in overall:
         cls_table = Table(title="Combined Config Per-Class")

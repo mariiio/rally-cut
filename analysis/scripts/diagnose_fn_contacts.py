@@ -1,17 +1,22 @@
 """Diagnose false negative contacts — categorize each missed GT contact by failure mode.
 
-For each FN, determines WHY the contact was missed:
-- no_ball_data:       No ball position within ±5 frames — upstream ball tracking failure
-- no_candidate:       Ball data exists but no candidate generator fired — generator gap
-- rejected_candidate: Candidate existed but classifier/gates rejected it — threshold issue
+For each FN, determines WHY the contact was missed (7 categories):
+- ball_dropout:           No ball detection within ±5 frames — tracker lost ball
+- low_conf_ball:          Ball detected but confidence < 0.3 — filtered by threshold
+- no_candidate:           Ball tracked + confident, no candidate generator fired
+- rejected_by_classifier: Candidate generated, classifier scored below 0.40
+- rejected_by_gates:      Candidate generated, hand-tuned gates rejected
+- deduplicated:           Candidate existed but merged with nearby stronger candidate
+- no_player_nearby:       Candidate existed but no player within 0.15 radius
 
 Outputs:
-1. Category summary (counts + percentages)
-2. Per-action breakdown
+1. Category summary with actionable fixes
+2. Per-action breakdown (7 categories)
 3. Per-rally breakdown (top 15 worst)
 4. Signal statistics (velocity, direction change, player distance distributions)
-5. Rejected candidate analysis (classifier confidence buckets, generator coverage)
-6. Full per-FN detail table
+5. Rejected candidate analysis (classifier threshold waterfall)
+6. Recall ceiling waterfall (cumulative if each category fixed)
+7. Full per-FN detail table
 
 Usage:
     cd analysis
@@ -73,8 +78,10 @@ class FNDiagnostic:
     gt_frame: int
     gt_action: str
 
-    # Category
-    category: str  # no_ball_data | no_candidate | rejected_candidate
+    # Category (7 granular failure modes)
+    # ball_dropout | low_conf_ball | no_candidate | rejected_by_classifier |
+    # rejected_by_gates | deduplicated | no_player_nearby
+    category: str
 
     # Ball data
     ball_present: bool  # Ball detected at GT frame
@@ -417,13 +424,18 @@ def diagnose_rally_fns(
     else:
         filtered_bp = ball_positions
 
-    # Build ball lookup
+    # Build ball lookup (confident only, matching detect_contacts behavior)
     ball_by_frame: dict[int, BallPos] = {
         bp.frame_number: bp
         for bp in filtered_bp
         if bp.confidence >= _CONFIDENCE_THRESHOLD
     }
     confident_frames = sorted(ball_by_frame.keys())
+
+    # Build unfiltered ball lookup (all detections, for low_conf_ball detection)
+    all_ball_by_frame: dict[int, BallPos] = {
+        bp.frame_number: bp for bp in filtered_bp
+    }
 
     # Compute velocities and smooth
     velocities = _compute_velocities(filtered_bp)
@@ -518,18 +530,52 @@ def diagnose_rally_fns(
         # Check if raw candidates (pre-validation) exist near this frame
         raw_near = any(abs(c - frame) <= tolerance_frames for c in raw_candidates)
 
-        # Categorize
+        # Check for low-confidence ball near GT frame (detected but filtered)
+        has_low_conf_nearby = False
+        low_conf_value = 0.0
         if not has_ball_nearby:
-            category = "no_ball_data"
+            for offset in range(-BALL_SEARCH_WINDOW, BALL_SEARCH_WINDOW + 1):
+                bp = all_ball_by_frame.get(frame + offset)
+                if bp is not None and bp.confidence > 0 and bp.confidence < _CONFIDENCE_THRESHOLD:
+                    has_low_conf_nearby = True
+                    low_conf_value = max(low_conf_value, bp.confidence)
+                    break
+
+        # Check for deduplication: candidate in permissive run near GT frame,
+        # but another accepted candidate is within min_peak_distance_frames
+        was_deduplicated = False
+        if (
+            nearest_candidate_distance <= tolerance_frames
+            and not nearest_candidate_accepted
+            and nearest_candidate_frame is not None
+        ):
+            for cand_frame, _cand_conf, cand_accepted in all_candidates:
+                if cand_accepted and cand_frame != nearest_candidate_frame:
+                    if abs(cand_frame - nearest_candidate_frame) <= cfg.min_peak_distance_frames:
+                        was_deduplicated = True
+                        break
+
+        # Categorize with 7 granular failure modes
+        if not has_ball_nearby and has_low_conf_nearby:
+            category = "low_conf_ball"
+        elif not has_ball_nearby:
+            category = "ball_dropout"
+        elif was_deduplicated:
+            category = "deduplicated"
         elif nearest_candidate_distance <= tolerance_frames and not nearest_candidate_accepted:
-            # A candidate was generated but rejected by the classifier
-            category = "rejected_candidate"
+            if not player_present:
+                category = "no_player_nearby"
+            elif classifier_confidence > 0:
+                category = "rejected_by_classifier"
+            else:
+                category = "rejected_by_gates"
         elif raw_near and nearest_candidate_distance > tolerance_frames:
-            # Raw candidate existed but got filtered by velocity floor/warmup/dedup
-            category = "rejected_candidate"
+            category = "deduplicated"
         elif generators_fired:
-            # Generators fired individually but no merged candidate survived
-            category = "rejected_candidate"
+            if not player_present:
+                category = "no_player_nearby"
+            else:
+                category = "rejected_by_gates"
         else:
             category = "no_candidate"
 
@@ -643,16 +689,31 @@ def main() -> None:
     )
 
     # === 2. Category breakdown ===
+    all_categories = [
+        "ball_dropout", "low_conf_ball", "no_candidate",
+        "rejected_by_classifier", "rejected_by_gates",
+        "deduplicated", "no_player_nearby",
+    ]
     cat_counts: dict[str, int] = Counter(d.category for d in all_diagnostics)
 
     cat_table = Table(title="FN Categories")
     cat_table.add_column("Category", style="bold")
     cat_table.add_column("Count", justify="right")
     cat_table.add_column("%", justify="right")
-    for cat in ["no_ball_data", "no_candidate", "rejected_candidate"]:
+    cat_table.add_column("Actionable Fix")
+    fix_map = {
+        "ball_dropout": "Improve WASB ball tracker",
+        "low_conf_ball": "Lower _CONFIDENCE_THRESHOLD (0.3)",
+        "no_candidate": "New generator or lower thresholds",
+        "rejected_by_classifier": "Lower classifier threshold (0.40)",
+        "rejected_by_gates": "Relax hand-tuned gate thresholds",
+        "deduplicated": "Reduce min_peak_distance_frames (12)",
+        "no_player_nearby": "Increase player_contact_radius (0.15)",
+    }
+    for cat in all_categories:
         count = cat_counts.get(cat, 0)
         pct = count / len(all_diagnostics) * 100
-        cat_table.add_row(cat, str(count), f"{pct:.1f}%")
+        cat_table.add_row(cat, str(count), f"{pct:.1f}%", fix_map.get(cat, ""))
     console.print(cat_table)
 
     # === 3. Per-action breakdown ===
@@ -664,17 +725,25 @@ def main() -> None:
     action_table = Table(title="\nFN by Action Type")
     action_table.add_column("Action", style="bold")
     action_table.add_column("Total FN", justify="right")
-    action_table.add_column("no_ball", justify="right")
-    action_table.add_column("no_cand", justify="right")
-    action_table.add_column("rejected", justify="right")
+    action_table.add_column("dropout", justify="right")
+    action_table.add_column("lowcnf", justify="right")
+    action_table.add_column("nocand", justify="right")
+    action_table.add_column("clf", justify="right")
+    action_table.add_column("gates", justify="right")
+    action_table.add_column("dedup", justify="right")
+    action_table.add_column("noplr", justify="right")
     for action in sorted(action_cat.keys(), key=lambda a: -action_cat[a]["total"]):
         cats = action_cat[action]
         action_table.add_row(
             action,
             str(cats["total"]),
-            str(cats.get("no_ball_data", 0)),
+            str(cats.get("ball_dropout", 0)),
+            str(cats.get("low_conf_ball", 0)),
             str(cats.get("no_candidate", 0)),
-            str(cats.get("rejected_candidate", 0)),
+            str(cats.get("rejected_by_classifier", 0)),
+            str(cats.get("rejected_by_gates", 0)),
+            str(cats.get("deduplicated", 0)),
+            str(cats.get("no_player_nearby", 0)),
         )
     console.print(action_table)
 
@@ -686,9 +755,13 @@ def main() -> None:
     rally_table = Table(title="\nFN by Rally (top 15)")
     rally_table.add_column("Rally", style="dim", max_width=10)
     rally_table.add_column("FN", justify="right")
-    rally_table.add_column("no_ball", justify="right")
-    rally_table.add_column("no_cand", justify="right")
-    rally_table.add_column("rejected", justify="right")
+    rally_table.add_column("dropout", justify="right")
+    rally_table.add_column("lowcnf", justify="right")
+    rally_table.add_column("nocand", justify="right")
+    rally_table.add_column("clf", justify="right")
+    rally_table.add_column("gates", justify="right")
+    rally_table.add_column("dedup", justify="right")
+    rally_table.add_column("noplr", justify="right")
     rally_table.add_column("Actions", max_width=30)
 
     sorted_rallies = sorted(rally_fns.items(), key=lambda x: -len(x[1]))
@@ -699,15 +772,19 @@ def main() -> None:
         rally_table.add_row(
             rally_id[:8],
             str(len(diags)),
-            str(rally_cats.get("no_ball_data", 0)),
+            str(rally_cats.get("ball_dropout", 0)),
+            str(rally_cats.get("low_conf_ball", 0)),
             str(rally_cats.get("no_candidate", 0)),
-            str(rally_cats.get("rejected_candidate", 0)),
+            str(rally_cats.get("rejected_by_classifier", 0)),
+            str(rally_cats.get("rejected_by_gates", 0)),
+            str(rally_cats.get("deduplicated", 0)),
+            str(rally_cats.get("no_player_nearby", 0)),
             action_str,
         )
     console.print(rally_table)
 
     # === 5. Signal statistics for FNs with ball data ===
-    signal_fns = [d for d in all_diagnostics if d.category != "no_ball_data"]
+    signal_fns = [d for d in all_diagnostics if d.category not in ("ball_dropout", "low_conf_ball")]
     if signal_fns:
         console.print("\n[bold]Signal Statistics (FNs with ball data)[/bold]")
 
@@ -755,31 +832,29 @@ def main() -> None:
                 )
 
     # === 6. Rejected candidate analysis ===
-    rejected = [d for d in all_diagnostics if d.category == "rejected_candidate"]
-    if rejected:
-        console.print(f"\n[bold]Rejected Candidates ({len(rejected)})[/bold]")
-        confidences = [d.classifier_confidence for d in rejected if d.classifier_confidence > 0]
+    clf_rejected = [d for d in all_diagnostics if d.category == "rejected_by_classifier"]
+    if clf_rejected:
+        console.print(f"\n[bold]Rejected by Classifier ({len(clf_rejected)})[/bold]")
+        confidences = [d.classifier_confidence for d in clf_rejected if d.classifier_confidence > 0]
         if confidences:
             console.print(
                 f"  Classifier confidence: median={np.median(confidences):.3f}, "
                 f"mean={np.mean(confidences):.3f}, "
                 f"max={max(confidences):.3f}"
             )
-            buckets = [(0.0, 0.1), (0.1, 0.2), (0.2, 0.3), (0.3, 0.4), (0.4, 0.5)]
-            bucket_strs = []
-            for lo, hi in buckets:
-                n = sum(1 for c in confidences if lo <= c < hi)
-                if n > 0:
-                    bucket_strs.append(f"[{lo:.1f},{hi:.1f}):{n}")
-            if bucket_strs:
-                console.print(f"  Confidence buckets: {', '.join(bucket_strs)}")
-        else:
-            console.print("  No classifier confidence data (hand-tuned gates)")
+            # Threshold waterfall: how many recovered at each threshold?
+            console.print("  Threshold waterfall (FNs recovered if threshold lowered):")
+            for threshold in [0.35, 0.30, 0.25, 0.20, 0.15, 0.10]:
+                recovered = sum(1 for c in confidences if c >= threshold)
+                console.print(f"    threshold={threshold:.2f}: +{recovered}/{len(confidences)}")
 
-        # Generator coverage
+    # Gate-rejected analysis
+    gate_rejected = [d for d in all_diagnostics if d.category == "rejected_by_gates"]
+    if gate_rejected:
+        console.print(f"\n[bold]Rejected by Gates ({len(gate_rejected)})[/bold]")
         gen_counts: dict[str, int] = defaultdict(int)
         no_gen = 0
-        for d in rejected:
+        for d in gate_rejected:
             if d.generators_fired:
                 for g in d.generators_fired:
                     gen_counts[g] += 1
@@ -791,21 +866,35 @@ def main() -> None:
         if no_gen:
             console.print(f"    (no generator fired): {no_gen}")
 
-        # Nearest candidate distance distribution
-        dists = [d.nearest_candidate_distance for d in rejected if d.nearest_candidate_frame is not None]
+    # Deduplication analysis
+    deduped = [d for d in all_diagnostics if d.category == "deduplicated"]
+    if deduped:
+        console.print(f"\n[bold]Deduplicated ({len(deduped)})[/bold]")
+        dists = [d.nearest_candidate_distance for d in deduped if d.nearest_candidate_frame is not None]
         if dists:
             console.print(
-                f"  Nearest candidate distance: median={int(np.median(dists))}f, "
-                f"mean={np.mean(dists):.1f}f, "
-                f"within tolerance: {sum(1 for d in dists if d <= 5)}/{len(dists)}"
+                f"  Nearest accepted candidate: median={int(np.median(dists))}f, "
+                f"mean={np.mean(dists):.1f}f"
             )
+
+    # === 6b. Recall ceiling waterfall ===
+    console.print("\n[bold]Recall Ceiling Waterfall[/bold]")
+    current_recall = total_tp / max(1, total_gt)
+    console.print(f"  Current recall:             {current_recall:.1%}")
+    cumulative = total_tp
+    for cat in all_categories:
+        count = cat_counts.get(cat, 0)
+        if count > 0:
+            cumulative += count
+            console.print(f"  + fix {cat:<24s} {cumulative / max(1, total_gt):.1%} (+{count})")
+    console.print(f"  Theoretical ceiling:        {cumulative / max(1, total_gt):.1%}")
 
     # === 7. Full per-FN detail table ===
     detail_table = Table(title=f"\nAll FN Contacts ({len(all_diagnostics)})")
     detail_table.add_column("Rally", style="dim", max_width=8)
     detail_table.add_column("Frame", justify="right")
     detail_table.add_column("Action", max_width=7)
-    detail_table.add_column("Category", max_width=12)
+    detail_table.add_column("Category", max_width=18)
     detail_table.add_column("Ball", justify="center", max_width=4)
     detail_table.add_column("Gap", justify="right", max_width=4)
     detail_table.add_column("Vel", justify="right", max_width=7)
@@ -825,7 +914,7 @@ def main() -> None:
             d.rally_id[:8],
             str(d.gt_frame),
             d.gt_action,
-            d.category.replace("_candidate", ""),
+            d.category,
             "Y" if d.ball_present else "N",
             str(d.ball_gap_frames) if d.ball_gap_frames > 0 else "-",
             f"{d.velocity:.4f}" if d.velocity > 0 else "-",
