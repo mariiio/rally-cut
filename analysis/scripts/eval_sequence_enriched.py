@@ -89,6 +89,27 @@ IDX_TO_ACTION = {v: k for k, v in ACTION_TO_IDX.items()}
 
 
 # ---------------------------------------------------------------------------
+# Rally-level serve evaluation
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ServeResult:
+    """Rally-level serve evaluation — separate from contact-level metrics.
+
+    Every rally has exactly 1 GT serve and the pipeline always produces 1
+    serve (real or synthetic).  This evaluates action-sequence correctness
+    independent of whether the contact detector found the serve contact.
+    """
+    rally_id: str
+    gt_side: str          # GT serve court side ("near" or "far")
+    pred_side: str        # predicted serve court side
+    pred_is_synthetic: bool
+    side_correct: bool
+    player_correct: bool | None  # None if GT player not evaluable
+
+
+# ---------------------------------------------------------------------------
 # Ablation config
 # ---------------------------------------------------------------------------
 
@@ -380,8 +401,14 @@ def evaluate_rally(
     gbm: ContactClassifier,
     config: AblationConfig,
     device: torch.device,
-) -> tuple[list[MatchResult], list[dict]]:
-    """Run the full pipeline on one rally and return match results."""
+) -> tuple[list[MatchResult], list[dict], ServeResult | None]:
+    """Run the full pipeline on one rally and return match results.
+
+    Returns:
+        Tuple of (frame-level matches, unmatched preds, rally-level serve result).
+        Frame-level matching excludes synthetic actions (contact detection eval).
+        Serve result evaluates the pipeline's serve independently (always 1 per rally).
+    """
     probs = get_sequence_probs(model, bundle, device)
 
     # Contact detection with optional sequence probs and adaptive dedup
@@ -403,9 +430,12 @@ def evaluate_rally(
         match_team_assignments=bundle.match_teams,
     )
 
-    # Override action types with MS-TCN++ predictions (hybrid approach)
+    # Override action types with MS-TCN++ predictions (hybrid approach).
+    # Exempt serve — it uses structural rally constraints (first action,
+    # baseline position, arc crossing) that the per-frame model cannot learn.
+    # Receive and block benefit from the model despite having heuristic rules.
     for action in rally_actions.actions:
-        if action.is_synthetic:
+        if action.is_synthetic or action.action_type == ActionType.SERVE:
             continue
         frame = action.frame
         if 0 <= frame < probs.shape[1]:
@@ -424,7 +454,36 @@ def evaluate_rally(
             sequence_action_types=seq_types,
         )
 
-    # Convert to match format
+    # --- Rally-level serve evaluation ---
+    # Every rally has 1 GT serve and the pipeline always produces 1 serve
+    # (real or synthetic). Evaluate independently of contact detection.
+    serve_result: ServeResult | None = None
+    gt_serves = [gt for gt in bundle.gt_labels if gt.action == "serve"]
+    pred_serves = [a for a in rally_actions.actions
+                   if a.action_type == ActionType.SERVE]
+    if gt_serves and pred_serves:
+        gt_s = gt_serves[0]
+        pred_s = pred_serves[0]
+        # Determine GT side from team assignments or ball position
+        gt_side = ""
+        if bundle.match_teams and gt_s.player_track_id >= 0:
+            team = bundle.match_teams.get(gt_s.player_track_id)
+            if team is not None:
+                gt_side = "near" if team == 0 else "far"
+        # Player attribution check
+        player_correct: bool | None = None
+        if gt_s.player_track_id >= 0:
+            player_correct = pred_s.player_track_id == gt_s.player_track_id
+        serve_result = ServeResult(
+            rally_id=bundle.rally.rally_id,
+            gt_side=gt_side,
+            pred_side=pred_s.court_side,
+            pred_is_synthetic=pred_s.is_synthetic,
+            side_correct=(gt_side == pred_s.court_side) if gt_side else True,
+            player_correct=player_correct,
+        )
+
+    # --- Frame-level contact matching (excludes synthetic) ---
     preds = [
         {
             "frame": a.frame,
@@ -440,7 +499,7 @@ def evaluate_rally(
         bundle.gt_labels, preds, tolerance=5,
         team_assignments=bundle.match_teams,
     )
-    return matches, unmatched
+    return matches, unmatched, serve_result
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +531,9 @@ def run_cv(
     results: dict[str, tuple[list[MatchResult], list[dict]]] = {
         c.name: ([], []) for c in ABLATION_CONFIGS
     }
+    serve_results: dict[str, list[ServeResult]] = {
+        c.name: [] for c in ABLATION_CONFIGS
+    }
 
     for fold in range(n_folds):
         train_bundles = [b for b in bundles if fold_map[b.rally.video_id] != fold]
@@ -494,9 +556,13 @@ def run_cv(
         for cfg in ABLATION_CONFIGS:
             gbm = gbm_27 if cfg.use_sequence_gbm else gbm_20
             for bundle in test_bundles:
-                matches, unmatched = evaluate_rally(bundle, model, gbm, cfg, device)
+                matches, unmatched, serve_res = evaluate_rally(
+                    bundle, model, gbm, cfg, device,
+                )
                 results[cfg.name][0].extend(matches)
                 results[cfg.name][1].extend(unmatched)
+                if serve_res is not None:
+                    serve_results[cfg.name].append(serve_res)
 
         # Per-fold summary (last config)
         last_cfg = ABLATION_CONFIGS[-1]
@@ -559,7 +625,7 @@ def run_cv(
     comb_matches, comb_unmatched = results[last_cfg_name]
     overall = compute_metrics(comb_matches, comb_unmatched)
     if "per_class" in overall:
-        cls_table = Table(title="Combined Config Per-Class")
+        cls_table = Table(title="Per-Class (contact-level, excludes synthetic)")
         cls_table.add_column("Action")
         cls_table.add_column("TP", justify="right")
         cls_table.add_column("FP", justify="right")
@@ -571,6 +637,41 @@ def run_cv(
                 cls_table.add_row(action, str(c["tp"]), str(c["fp"]), str(c["fn"]),
                                   f"{c['f1']:.1%}")
         console.print(cls_table)
+
+    # --- Rally-level serve evaluation ---
+    last_serves = serve_results[last_cfg_name]
+    if last_serves:
+        n_total = len(last_serves)
+        n_synthetic = sum(1 for s in last_serves if s.pred_is_synthetic)
+        n_real = n_total - n_synthetic
+        side_eval = [s for s in last_serves if s.gt_side]
+        n_side_correct = sum(1 for s in side_eval if s.side_correct)
+        player_eval = [s for s in last_serves if s.player_correct is not None]
+        n_player_correct = sum(1 for s in player_eval if s.player_correct)
+
+        serve_table = Table(title="Rally-Level Serve Evaluation")
+        serve_table.add_column("Metric", style="bold")
+        serve_table.add_column("Value", justify="right")
+        serve_table.add_row("Rallies with GT serve", str(n_total))
+        serve_table.add_row("Serve detected (real contact)", str(n_real))
+        serve_table.add_row("Serve inferred (synthetic)", str(n_synthetic))
+        serve_table.add_row(
+            "Serve present",
+            f"{n_total}/{n_total} (100%)",
+        )
+        if side_eval:
+            serve_table.add_row(
+                "Serve side correct",
+                f"{n_side_correct}/{len(side_eval)} "
+                f"({n_side_correct / len(side_eval):.1%})",
+            )
+        if player_eval:
+            serve_table.add_row(
+                "Server attribution correct",
+                f"{n_player_correct}/{len(player_eval)} "
+                f"({n_player_correct / len(player_eval):.1%})",
+            )
+        console.print(serve_table)
 
 
 def main() -> None:
