@@ -288,7 +288,11 @@ def _compute_velocities(
     ball_positions: list[BallPosition],
     confidence_threshold: float = _CONFIDENCE_THRESHOLD,
 ) -> dict[int, tuple[float, float, float]]:
-    """Compute ball velocity at each frame.
+    """Compute ball velocity at each frame using central differences.
+
+    Uses central difference (F+1 − F−1) for interior frames to avoid the
+    +1-frame lag inherent in backward differences.  Falls back to forward
+    or backward difference at sequence boundaries / detection gaps.
 
     Returns:
         Dict mapping frame_number to (velocity, vx, vy) in normalized units/frame.
@@ -302,21 +306,46 @@ def _compute_velocities(
     if len(confident) < 2:
         return {}
 
+    max_gap = 5  # max frame gap to consider consecutive
+
     velocities: dict[int, tuple[float, float, float]] = {}
 
-    for i in range(1, len(confident)):
-        prev = confident[i - 1]
-        curr = confident[i]
+    for i in range(len(confident)):
+        has_prev = (
+            i > 0
+            and 0 < confident[i].frame_number - confident[i - 1].frame_number <= max_gap
+        )
+        has_next = (
+            i < len(confident) - 1
+            and 0 < confident[i + 1].frame_number - confident[i].frame_number <= max_gap
+        )
 
-        frame_gap = curr.frame_number - prev.frame_number
-        if frame_gap <= 0 or frame_gap > 5:
+        if has_prev and has_next:
+            # Central difference — no directional lag
+            prev_bp = confident[i - 1]
+            nxt_bp = confident[i + 1]
+            total_gap = nxt_bp.frame_number - prev_bp.frame_number
+            dx = (nxt_bp.x - prev_bp.x) / total_gap
+            dy = (nxt_bp.y - prev_bp.y) / total_gap
+        elif has_next:
+            # Forward difference (first frame or gap before)
+            curr_bp = confident[i]
+            nxt_bp = confident[i + 1]
+            gap = nxt_bp.frame_number - curr_bp.frame_number
+            dx = (nxt_bp.x - curr_bp.x) / gap
+            dy = (nxt_bp.y - curr_bp.y) / gap
+        elif has_prev:
+            # Backward difference (last frame or gap after)
+            prev_bp = confident[i - 1]
+            curr_bp = confident[i]
+            gap = curr_bp.frame_number - prev_bp.frame_number
+            dx = (curr_bp.x - prev_bp.x) / gap
+            dy = (curr_bp.y - prev_bp.y) / gap
+        else:
             continue
 
-        dx = (curr.x - prev.x) / frame_gap
-        dy = (curr.y - prev.y) / frame_gap
         speed = math.sqrt(dx * dx + dy * dy)
-
-        velocities[curr.frame_number] = (speed, dx, dy)
+        velocities[confident[i].frame_number] = (speed, dx, dy)
 
     return velocities
 
@@ -1851,9 +1880,8 @@ def detect_contacts(
 
         # Find nearest player (narrow window — matches classifier training semantics)
         # MUST use image-space distance to preserve classifier feature distribution.
-        # Note: velocity peaks from backward difference are ~1 frame late, but
-        # player_search_frames=5 already covers this — tested frame-1 offset
-        # and it changes <1% of attributions (2026-04-05).
+        # Note: velocities now use central differences (reduced lag vs old backward
+        # difference).  player_search_frames=5 still covers residual timing jitter.
         nearest_player_y: float | None = None
         if player_positions:
             track_id, player_dist, nearest_player_y = _find_nearest_player(

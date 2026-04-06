@@ -47,7 +47,9 @@ class TestComputeVelocities:
         """Constant horizontal motion produces constant velocity."""
         positions = [_bp(i, 0.1 + i * 0.02, 0.5) for i in range(10)]
         velocities = _compute_velocities(positions)
-        assert len(velocities) == 9
+        # Central differences produce velocity for all 10 frames
+        # (forward diff at frame 0, central for 1-8, backward for 9)
+        assert len(velocities) == 10
         for v, vx, vy in velocities.values():
             assert abs(v - 0.02) < 0.001
 
@@ -555,30 +557,30 @@ class TestDetectContacts:
 
         # Trajectory with reversals at frame 15 and frame 35
         positions = []
-        for i in range(50):
+        for i in range(60):
             if i < 15:
                 positions.append(_bp(i, 0.2 + i * 0.02, 0.6, conf=0.9))
-            elif i < 35:
-                positions.append(_bp(i, 0.5 - (i - 15) * 0.015, 0.6, conf=0.9))
+            elif i < 40:
+                positions.append(_bp(i, 0.5 - (i - 15) * 0.02, 0.6, conf=0.9))
             else:
-                positions.append(_bp(i, 0.2 + (i - 35) * 0.02, 0.6, conf=0.9))
+                positions.append(_bp(i, 0.0 + (i - 40) * 0.02, 0.6, conf=0.9))
 
         players = [
             _pp(15, 1, 0.5, 0.65),
-            _pp(35, 2, 0.2, 0.65),
+            _pp(40, 2, 0.0, 0.65),
         ]
 
         # Without frame_count: both contacts detected
         result_all = detect_contacts(positions, players, config, use_classifier=False)
         all_frames = {c.frame for c in result_all.contacts}
 
-        # With frame_count=30: frame 35 should be suppressed
-        result_limited = detect_contacts(positions, players, config, frame_count=30, use_classifier=False)
+        # With frame_count=35: contact near frame 40 should be suppressed
+        result_limited = detect_contacts(positions, players, config, frame_count=35, use_classifier=False)
         limited_frames = {c.frame for c in result_limited.contacts}
 
-        # The contact near frame 35 should be gone
-        post_rally = [f for f in all_frames if f > 30]
-        assert len(post_rally) > 0, "Need a contact after frame 30 for this test"
+        # The contact near frame 40 should be gone
+        post_rally = [f for f in all_frames if f > 35]
+        assert len(post_rally) > 0, "Need a contact after frame 35 for this test"
         for f in post_rally:
             assert f not in limited_frames
 
@@ -838,8 +840,8 @@ class TestCandidateFeatures:
             frames_since_last=15,
         )
         arr = f.to_array()
-        assert arr.shape == (20,)
-        assert len(CandidateFeatures.feature_names()) == 20
+        assert arr.shape == (27,)
+        assert len(CandidateFeatures.feature_names()) == 27
 
     def test_infinite_player_distance_handled(self) -> None:
         """Infinite player distance maps to 1.0."""
