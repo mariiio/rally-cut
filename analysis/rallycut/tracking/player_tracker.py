@@ -520,7 +520,7 @@ YOLO_MODELS = {
     "yolo11m": "yolo11m.pt",  # YOLO11 Medium: 20.1M params
     "yolo11l": "yolo11l.pt",  # YOLO11 Large: 25.3M params
 }
-DEFAULT_YOLO_MODEL = "yolo11s-pose"
+DEFAULT_YOLO_MODEL = "yolo11s"
 
 # Tracker configs for better tracking stability
 BYTETRACK_CONFIG = Path(__file__).parent / "bytetrack_volleyball.yaml"
