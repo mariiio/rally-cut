@@ -49,8 +49,13 @@ def extract_features_for_rally(
     config: ContactDetectionConfig | None = None,
     tolerance: int = 5,
     team_assignments: dict[int, int] | None = None,
+    inject_pose: bool = False,
 ) -> tuple[list[np.ndarray], list[str], list[str]]:
     """Extract action features for matched contacts in a rally.
+
+    Args:
+        inject_pose: If True, inject keypoints from pose cache into
+            PlayerPosition objects so pose features are populated.
 
     Returns:
         Tuple of (feature_arrays, action_labels, rally_ids).
@@ -72,10 +77,22 @@ def extract_features_for_rally(
     if not ball_positions:
         return [], [], []
 
+    # Build pose keypoint lookup from cache if requested
+    pose_kps: dict[tuple[int, int], list[list[float]]] = {}
+    if inject_pose:
+        from rallycut.tracking.pose_attribution.pose_cache import load_pose_cache
+
+        pose_data = load_pose_cache(rally.rally_id)
+        if pose_data is not None and len(pose_data["frames"]) > 0:
+            for i in range(len(pose_data["frames"])):
+                key = (int(pose_data["frames"][i]), int(pose_data["track_ids"][i]))
+                pose_kps[key] = pose_data["keypoints"][i].tolist()
+
     player_positions: list[PlayerPos] = []
     if rally.positions_json:
-        player_positions = [
-            PlayerPos(
+        for pp in rally.positions_json:
+            kps = pose_kps.get((pp["frameNumber"], pp["trackId"])) if pose_kps else None
+            player_positions.append(PlayerPos(
                 frame_number=pp["frameNumber"],
                 track_id=pp["trackId"],
                 x=pp["x"],
@@ -83,9 +100,8 @@ def extract_features_for_rally(
                 width=pp["width"],
                 height=pp["height"],
                 confidence=pp.get("confidence", 1.0),
-            )
-            for pp in rally.positions_json
-        ]
+                keypoints=kps,
+            ))
 
     # Re-run contact detection
     contact_seq = detect_contacts(
@@ -191,6 +207,11 @@ def main() -> None:
         type=str,
         help="Comma-separated video ID prefixes to exclude from training (held-out test set)",
     )
+    parser.add_argument(
+        "--pose",
+        action="store_true",
+        help="Inject YOLO-Pose keypoints from pose cache for pose-aware features",
+    )
     add_split_argument(parser)
     args = parser.parse_args()
 
@@ -239,10 +260,15 @@ def main() -> None:
     per_rally_table.add_column("GT Labels", justify="right")
     per_rally_table.add_column("Actions", justify="right")
 
+    use_pose = getattr(args, "pose", False)
+    if use_pose:
+        console.print("  [bold]Pose features enabled[/bold] (injecting keypoints from cache)")
+
     for rally in rallies:
         features, labels, rids = extract_features_for_rally(
             rally, tolerance=args.tolerance,
             team_assignments=match_teams_by_rally.get(rally.rally_id),
+            inject_pose=use_pose,
         )
 
         all_features.extend(features)

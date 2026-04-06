@@ -618,6 +618,13 @@ class ActionTypeClassifier:
             return [("unknown", 0.0)] * len(features)
 
         x_mat = np.array([f.to_array() for f in features])
+
+        # Handle models trained with fewer features (before pose features added).
+        # Truncate to the model's expected feature count for backward compatibility.
+        expected = self.model.n_features_in_
+        if x_mat.shape[1] > expected:
+            x_mat = x_mat[:, :expected]
+
         probas = self.model.predict_proba(x_mat)
         classes = list(self.model.classes_)
 

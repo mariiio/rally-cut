@@ -171,6 +171,16 @@ class ContactClassifier:
             return [(False, 0.0)] * len(features)
 
         x_mat = np.array([f.to_array() for f in features])
+
+        # Handle models trained with different feature counts (backward compat).
+        expected = self.model.n_features_in_
+        if x_mat.shape[1] > expected:
+            x_mat = x_mat[:, :expected]
+        elif x_mat.shape[1] < expected:
+            # Pad with zeros for features removed from code but expected by model
+            pad = np.zeros((x_mat.shape[0], expected - x_mat.shape[1]))
+            x_mat = np.hstack([x_mat, pad])
+
         probas = self.model.predict_proba(x_mat)[:, 1]
 
         return [
