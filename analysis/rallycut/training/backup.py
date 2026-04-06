@@ -102,6 +102,7 @@ WEIGHT_GROUPS: dict[str, list[str]] = {
         "court_keypoint/court_keypoint_best.pt",
         "reid/general_reid.pt",
         "visual_attribution/visual_attribution.pkl",
+        "pose_attribution/pose_attribution.joblib",
     ],
     "external": [
         "videomae/game_state_classifier/model.safetensors",
