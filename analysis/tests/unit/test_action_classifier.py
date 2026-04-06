@@ -24,6 +24,7 @@ from rallycut.tracking.action_classifier import (
     validate_action_sequence,
     viterbi_decode_actions,
 )
+from rallycut.court.calibration import CourtCalibrator
 from rallycut.tracking.action_type_classifier import _count_contacts_on_side
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.contact_detector import Contact, ContactSequence, ball_crossed_net
@@ -1914,6 +1915,142 @@ class TestFindServerByPosition:
             positions.append(_player_pos(f, 2, y=0.55))
         tid, side, conf = _find_server_by_position(positions, 0, 0.5)
         assert tid == -1  # Should not detect late positions
+
+
+class TestFindServerByPositionCourtSpace:
+    """Tests for court-space server detection with calibrator."""
+
+    @staticmethod
+    def _make_calibrator() -> CourtCalibrator:
+        """Create a calibrator with a simple linear mapping.
+
+        Camera convention: bottom of frame (large y) = near court (small court-y).
+        Maps image coords linearly to 8m×16m court.
+        """
+        calibrator = CourtCalibrator()
+        # near-left at bottom-left, far-right at top-right
+        image_corners = [
+            (0.0, 1.0),   # near-left  → court (0, 0)
+            (1.0, 1.0),   # near-right → court (8, 0)
+            (1.0, 0.0),   # far-right  → court (8, 16)
+            (0.0, 0.0),   # far-left   → court (0, 16)
+        ]
+        calibrator.calibrate(image_corners)
+        return calibrator
+
+    def test_far_side_server_detected_in_court_space(self) -> None:
+        """Far-side players close in image-space but separated in court-space.
+
+        In image space, 0.05 separation is barely above separation_min=0.04
+        after foot offset.  But in court space the server is at the far
+        baseline (~14m) vs teammate near the net (~9m) — 5m separation.
+        """
+        # Perspective-like mapping: far court compressed into small image region
+        # Near corners at image y=0.55..0.95, far corners at image y=0.05..0.15
+        calibrator = CourtCalibrator()
+        calibrator.calibrate([
+            (0.05, 0.95),  # near-left  → court (0, 0)
+            (0.95, 0.95),  # near-right → court (8, 0)
+            (0.65, 0.10),  # far-right  → court (8, 16)
+            (0.35, 0.10),  # far-left   → court (0, 16)
+        ])
+        positions = []
+        for f in range(45):
+            # Near side: clear server at baseline
+            positions.append(_player_pos(f, 1, y=0.55, x=0.3))  # near, near net
+            positions.append(_player_pos(f, 2, y=0.80, x=0.7))  # near, at baseline
+            # Far side: both in a small image-Y band (compressed)
+            positions.append(_player_pos(f, 3, y=0.22, x=0.45))  # far, near net
+            positions.append(_player_pos(f, 4, y=0.08, x=0.50))  # far, at baseline
+        tid, side, conf = _find_server_by_position(
+            positions, 0, 0.50, calibrator=calibrator,
+        )
+        # Court-space should detect a server (either near or far side)
+        assert tid != -1
+        assert side in ("near", "far")
+        assert conf > 0.0
+
+    def test_near_side_server_agrees_with_image_space(self) -> None:
+        """Near-side server detected in court-space agrees with image-space."""
+        calibrator = self._make_calibrator()
+        positions = []
+        for f in range(45):
+            positions.append(_player_pos(f, 1, y=0.60, x=0.3))  # near-ish
+            positions.append(_player_pos(f, 2, y=0.80, x=0.7))  # near baseline
+            positions.append(_player_pos(f, 3, y=0.35, x=0.4))  # far
+            positions.append(_player_pos(f, 4, y=0.40, x=0.6))  # far
+        # Without calibrator (image-space)
+        tid_img, side_img, _ = _find_server_by_position(positions, 0, 0.5)
+        # With calibrator (court-space)
+        tid_court, side_court, _ = _find_server_by_position(
+            positions, 0, 0.5, calibrator=calibrator,
+        )
+        assert tid_img == tid_court
+        assert side_img == side_court
+
+    def test_fallback_when_no_calibrator(self) -> None:
+        """Without calibrator, behaves identically to image-space."""
+        positions = []
+        for f in range(45):
+            positions.append(_player_pos(f, 1, y=0.60))
+            positions.append(_player_pos(f, 2, y=0.80))
+            positions.append(_player_pos(f, 3, y=0.35))
+            positions.append(_player_pos(f, 4, y=0.40))
+        tid_none, side_none, conf_none = _find_server_by_position(
+            positions, 0, 0.5, calibrator=None,
+        )
+        tid_default, side_default, conf_default = _find_server_by_position(
+            positions, 0, 0.5,
+        )
+        assert tid_none == tid_default
+        assert side_none == side_default
+        assert conf_none == conf_default
+
+    def test_fallback_on_bad_projection(self) -> None:
+        """When calibrator produces out-of-bounds projections, falls back."""
+        # Create a degenerate calibrator that maps everything to crazy values
+        # by using very tight image corners
+        calibrator = CourtCalibrator()
+        calibrator.calibrate([
+            (0.499, 0.499),
+            (0.501, 0.499),
+            (0.501, 0.501),
+            (0.499, 0.501),
+        ])
+        positions = []
+        for f in range(45):
+            positions.append(_player_pos(f, 1, y=0.60, x=0.3))
+            positions.append(_player_pos(f, 2, y=0.80, x=0.7))
+            positions.append(_player_pos(f, 3, y=0.35, x=0.4))
+            positions.append(_player_pos(f, 4, y=0.15, x=0.5))
+        # Court-space projection gives wild values → should fall back to image-space
+        tid_bad, side_bad, conf_bad = _find_server_by_position(
+            positions, 0, 0.5, calibrator=calibrator,
+        )
+        # Compare against no-calibrator (pure image-space) result
+        tid_none, side_none, conf_none = _find_server_by_position(
+            positions, 0, 0.5, calibrator=None,
+        )
+        assert tid_bad == tid_none
+        assert side_bad == side_none
+        assert conf_bad == conf_none
+
+    def test_court_space_ambiguous_both_sides(self) -> None:
+        """Both sides have small court-space separation → no detection."""
+        calibrator = self._make_calibrator()
+        # Place all players near the net in court space
+        # With linear mapping: y=0.45 → court_y=7.2, y=0.55 → court_y=8.8
+        positions = []
+        for f in range(45):
+            positions.append(_player_pos(f, 1, y=0.42, x=0.3))  # court~6.7
+            positions.append(_player_pos(f, 2, y=0.48, x=0.7))  # court~7.7
+            positions.append(_player_pos(f, 3, y=0.52, x=0.4))  # court~8.3
+            positions.append(_player_pos(f, 4, y=0.58, x=0.6))  # court~9.3
+        tid, side, conf = _find_server_by_position(
+            positions, 0, 0.5, calibrator=calibrator,
+        )
+        # Court-space separations: near ~0.96m, far ~0.08m — both < 1.0m min
+        assert tid == -1
 
 
 class TestPositionBasedServePass:

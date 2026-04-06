@@ -1022,6 +1022,7 @@ def _run_tracking(
         rally_actions = classify_rally_actions(
             contact_seq,
             team_assignments=verified_teams,
+            calibrator=calibrator,
         )
 
         # Hybrid override: replace non-serve action types with MS-TCN++ argmax.

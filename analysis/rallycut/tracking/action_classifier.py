@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, overload
 from rallycut.tracking.contact_detector import Contact, ContactSequence, ball_crossed_net
 
 if TYPE_CHECKING:
+    from rallycut.court.calibration import CourtCalibrator
     from rallycut.tracking.action_type_classifier import ActionTypeClassifier
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.player_tracker import PlayerPosition
@@ -263,16 +264,23 @@ def _find_server_by_position(
     net_y: float,
     window_frames: int = 45,
     separation_min: float = 0.04,
+    calibrator: CourtCalibrator | None = None,
 ) -> tuple[int, str, float]:
     """Identify the server from player positions at rally start.
 
     In beach volleyball (2v2), the server is the only player standing near a
     baseline at rally start.  All others are mid-court or at the net.
 
-    Strategy: split players into near-side (foot_y > net_y) and far-side
-    (foot_y < net_y).  On each side, the player furthest from the net is the
-    server candidate.  The candidate must be separated from their same-side
-    teammate by *separation_min*.  The side with the larger separation wins.
+    Strategy: split players into near-side and far-side.  On each side, the
+    player furthest from the net is the server candidate.  The candidate must
+    be separated from their same-side teammate by *separation_min*.  The side
+    with the larger separation wins.
+
+    When *calibrator* is provided and calibrated, player foot positions are
+    projected to court-space meters (8m × 16m, net at y=8).  This eliminates
+    perspective compression that makes far-side detection unreliable in image
+    space.  Falls back to image-space when calibrator is unavailable or
+    projection produces out-of-bounds results.
 
     Returns:
         (server_track_id, court_side, confidence).
@@ -280,33 +288,158 @@ def _find_server_by_position(
     """
     end_frame = start_frame + window_frames
 
-    # Gather foot-Y per track (foot ≈ bottom of bbox = y + height/2)
+    # Gather foot positions per track (foot ≈ bottom of bbox)
     track_foot_ys: dict[int, list[float]] = defaultdict(list)
+    track_foot_xs: dict[int, list[float]] = defaultdict(list)
     for p in player_positions:
         if start_frame <= p.frame_number < end_frame:
             track_foot_ys[p.track_id].append(p.y + p.height / 2.0)
+            track_foot_xs[p.track_id].append(p.x)
 
     if not track_foot_ys:
         return -1, "", 0.0
 
-    # Mean foot-Y per track
-    track_means: dict[int, float] = {
+    # Mean foot position per track (image-space, normalized 0-1)
+    track_mean_y: dict[int, float] = {
         tid: sum(ys) / len(ys) for tid, ys in track_foot_ys.items()
     }
+    track_mean_x: dict[int, float] = {
+        tid: sum(xs) / len(xs) for tid, xs in track_foot_xs.items()
+    }
 
-    # Split into near (foot_y > net_y) and far (foot_y <= net_y) sides.
-    # Distance from net = how far toward the baseline the player is.
+    # --- Court-space path (when calibrator available) ---
+    if calibrator is not None and calibrator.is_calibrated:
+        result = _find_server_court_space(
+            track_mean_x, track_mean_y, calibrator,
+        )
+        if result is not None:
+            return result
+        # Fall through to image-space on projection failure
+
+    # --- Image-space path (fallback) ---
+    return _find_server_image_space(track_mean_y, net_y, separation_min)
+
+
+# Court-space constants (meters)
+_COURT_NET_Y = 8.0  # Net position in court coords
+_COURT_LENGTH = 16.0  # Full court length
+_COURT_SEP_MIN = 1.0  # Minimum teammate separation to qualify as server candidate
+_COURT_BASELINE_FULL_CONF = 3.0  # Baseline gap for confidence=1.0
+_COURT_Y_MIN = -3.0  # Sanity bound (baseline - 3m for serving position)
+_COURT_Y_MAX = 19.0  # Sanity bound (far baseline + 3m)
+
+
+def _find_server_court_space(
+    track_mean_x: dict[int, float],
+    track_mean_y: dict[int, float],
+    calibrator: CourtCalibrator,
+) -> tuple[int, str, float] | None:
+    """Court-space server detection: separation qualifies, baseline decides.
+
+    Combines two signals available in court-space:
+
+    1. **Teammate separation** (relative): the server candidate on each side
+       must be separated from their teammate by at least 1m. This filters out
+       compact formations where no player is clearly in a serving position.
+
+    2. **Baseline proximity** (absolute): among qualified candidates, the one
+       closer to their respective baseline is the server. This is the unique
+       advantage of court-space — in image-space, perspective makes baseline
+       distance unreliable.
+
+    The key insight: separation qualifies candidates (removes noise), then
+    baseline proximity picks the winner (leverages absolute position).  This
+    avoids the image-space failure mode where the far side always has more
+    separation due to perspective, while also avoiding the pure-baseline
+    failure mode where both sides have a player near the baseline.
+
+    Returns None to signal fallback to image-space.
+    """
+    track_court_y: dict[int, float] = {}
+    for tid, foot_y in track_mean_y.items():
+        foot_x = track_mean_x.get(tid, 0.5)
+        try:
+            _, cy = calibrator.image_to_court((foot_x, foot_y), 1, 1)
+        except Exception:
+            return None
+        if cy < _COURT_Y_MIN or cy > _COURT_Y_MAX:
+            return None  # Bad projection — fall back
+        track_court_y[tid] = cy
+
+    if not track_court_y:
+        return None
+
+    # Split into near (court_y < net) and far (court_y >= net)
     near_tracks: list[tuple[int, float]] = []  # (tid, dist_from_net)
     far_tracks: list[tuple[int, float]] = []
-    for tid, foot_y in track_means.items():
+    for tid, cy in track_court_y.items():
+        dist = abs(cy - _COURT_NET_Y)
+        if cy < _COURT_NET_Y:
+            near_tracks.append((tid, dist))
+        else:
+            far_tracks.append((tid, dist))
+
+    # For each side: find server candidate (furthest from net), compute
+    # separation from teammate, and baseline distance.
+    #   (side, tid, separation, baseline_dist)
+    candidates: list[tuple[str, int, float, float]] = []
+    for side, tracks in [("near", near_tracks), ("far", far_tracks)]:
+        if not tracks:
+            continue
+        tracks.sort(key=lambda t: t[1], reverse=True)  # Furthest from net first
+        best_tid, best_dist = tracks[0]
+        # Separation from teammate; for solo player, use distance from net
+        # (a solo player far from the net is a strong server signal).
+        sep = best_dist - tracks[1][1] if len(tracks) >= 2 else best_dist
+
+        # Baseline distance: near baseline at cy=0, far baseline at cy=16
+        cy = track_court_y[best_tid]
+        bl_dist = cy if side == "near" else _COURT_LENGTH - cy
+
+        candidates.append((side, best_tid, sep, bl_dist))
+
+    if not candidates:
+        return None
+
+    # Filter to candidates with meaningful teammate separation
+    qualified = [(s, t, sep, bl) for s, t, sep, bl in candidates
+                 if sep >= _COURT_SEP_MIN]
+
+    if not qualified:
+        return -1, "", 0.0
+
+    if len(qualified) == 1:
+        side, tid, sep, bl_dist = qualified[0]
+        confidence = min(1.0, sep / 5.0)
+        return tid, side, confidence
+
+    # Both sides qualified: pick by baseline proximity (closer = more likely server)
+    qualified.sort(key=lambda c: c[3])  # Sort by baseline_dist ascending
+    winner_side, winner_tid, winner_sep, winner_bl = qualified[0]
+    other_side, other_tid, other_sep, other_bl = qualified[1]
+
+    bl_gap = other_bl - winner_bl  # How much closer winner is to baseline
+
+    confidence = min(1.0, bl_gap / _COURT_BASELINE_FULL_CONF)
+    confidence = max(confidence, 0.15)  # Floor for close calls
+    return winner_tid, winner_side, confidence
+
+
+def _find_server_image_space(
+    track_mean_y: dict[int, float],
+    net_y: float,
+    separation_min: float,
+) -> tuple[int, str, float]:
+    """Original image-space server detection logic."""
+    near_tracks: list[tuple[int, float]] = []
+    far_tracks: list[tuple[int, float]] = []
+    for tid, foot_y in track_mean_y.items():
         if foot_y > net_y:
             near_tracks.append((tid, foot_y - net_y))
         else:
             far_tracks.append((tid, net_y - foot_y))
 
-    # On each side, find the server candidate (furthest from net) and the
-    # separation from their teammate.
-    candidates: list[tuple[int, str, float, float]] = []  # tid, side, sep, dist
+    candidates: list[tuple[int, str, float, float]] = []
     for side, tracks in [("near", near_tracks), ("far", far_tracks)]:
         if not tracks:
             continue
@@ -316,22 +449,19 @@ def _find_server_by_position(
             teammate_dist = tracks[1][1]
             sep = best_dist - teammate_dist
         else:
-            sep = best_dist  # Only player on this side
+            sep = best_dist
         candidates.append((best_tid, side, sep, best_dist))
 
     if not candidates:
         return -1, "", 0.0
 
-    # Pick the side with the largest separation
     candidates.sort(key=lambda t: t[2], reverse=True)
     best_tid, best_side, best_sep, best_dist = candidates[0]
 
     if best_sep < separation_min:
         return -1, "", 0.0
 
-    # Confidence: based on separation from teammate
     confidence = min(1.0, best_sep / 0.10)
-
     return best_tid, best_side, confidence
 
 
@@ -566,6 +696,7 @@ class ActionClassifier:
         team_assignments: dict[int, int] | None = None,
         classifier: ActionTypeClassifier | None = None,
         match_team_assignments: dict[int, int] | None = None,
+        calibrator: CourtCalibrator | None = None,
     ) -> RallyActions:
         """Classify all contacts in a rally into action types.
 
@@ -580,6 +711,7 @@ class ActionClassifier:
             classifier: Optional trained action type classifier for dig/set/attack.
             match_team_assignments: Optional high-confidence match-level team mapping
                 (track_id → team). Used for team-aware touch counting.
+            calibrator: Optional court calibrator for court-space server detection.
 
         Returns:
             RallyActions with classified actions.
@@ -615,6 +747,7 @@ class ActionClassifier:
             server_pos_tid, server_pos_side, pos_conf = _find_server_by_position(
                 contact_sequence.player_positions, start_frame,
                 contact_sequence.net_y,
+                calibrator=calibrator,
             )
 
         # Determine which contact is the serve (may be outside window if
@@ -2446,6 +2579,7 @@ def classify_rally_actions(
     visual_rally_start_frame: int = 0,
     visual_frame_w: int = 0,
     visual_frame_h: int = 0,
+    calibrator: CourtCalibrator | None = None,
 ) -> RallyActions:
     """Convenience function to classify actions in a rally.
 
@@ -2485,6 +2619,7 @@ def classify_rally_actions(
         visual_rally_start_frame: Absolute frame of rally start.
         visual_frame_w: Video frame width in pixels.
         visual_frame_h: Video frame height in pixels.
+        calibrator: Optional court calibrator for court-space server detection.
 
     Returns:
         RallyActions with all classified actions.
@@ -2505,6 +2640,7 @@ def classify_rally_actions(
         team_assignments=team_assignments,
         classifier=learned,
         match_team_assignments=match_team_assignments,
+        calibrator=calibrator,
     )
 
     # Repair with only Rule 1 (consecutive recv/dig → set, +0.8pp LOO-CV).
