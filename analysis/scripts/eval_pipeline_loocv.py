@@ -23,7 +23,7 @@ import sys
 import tempfile
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclasses_field
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +51,15 @@ from rallycut.tracking.contact_detector import (
     detect_contacts,
 )
 from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
+from rallycut.tracking.pose_attribution.features import (
+    extract_candidate_features as extract_pose_candidate_features,
+)
+from rallycut.tracking.pose_attribution.inference import PoseAttributionInference
+from rallycut.tracking.pose_attribution.pose_cache import load_pose_cache
+from rallycut.tracking.pose_attribution.training import (
+    TrainingConfig as PoseTrainingConfig,
+)
+from rallycut.tracking.pose_attribution.training import train_model as train_pose_model
 from rallycut.tracking.temporal_attribution.inference import (
     TemporalAttributionInference,
 )
@@ -92,6 +101,7 @@ class PipelineConfig:
     """Toggle individual post-classification stages."""
     name: str = "full"
     use_temporal_attribution: bool = True
+    use_pose_attribution: bool = False
     use_propagate_court_side: bool = True
     use_repair_action_sequence: bool = True
     use_viterbi: bool = True
@@ -201,12 +211,16 @@ class RallyFeatures:
     # Temporal attribution features
     temporal_features: list[np.ndarray]
     temporal_labels: list[int]
+    # Pose attribution features (per-candidate binary)
+    pose_features: list[np.ndarray] = dataclasses_field(default_factory=list)
+    pose_labels: list[int] = dataclasses_field(default_factory=list)
 
 
 def preextract_all_features(
     rallies: list[RallyData],
     rallies_temporal: list[dict],
     match_teams_by_rally: dict[str, dict[int, int]] | None = None,
+    inject_pose: bool = False,
 ) -> list[RallyFeatures]:
     """Pre-extract features for all rallies once."""
     console.print("[bold]Pre-extracting features for all rallies...[/bold]")
@@ -224,6 +238,7 @@ def preextract_all_features(
         rally_teams = (match_teams_by_rally or {}).get(rally.rally_id)
         action_feats, action_labels, _ = extract_features_for_rally(
             rally, tolerance=5, team_assignments=rally_teams,
+            inject_pose=inject_pose,
         )
 
         # Temporal attribution features for this rally only
@@ -235,6 +250,12 @@ def preextract_all_features(
         else:
             t_feats, t_labels = [], []
 
+        # Pose attribution features: per-candidate from detected contacts
+        p_feats: list[np.ndarray] = []
+        p_labels: list[int] = []
+        if rally.ball_positions_json and rally.positions_json:
+            p_feats, p_labels = _extract_pose_features_for_rally(rally, rally_teams)
+
         results.append(RallyFeatures(
             rally_id=rally.rally_id,
             video_id=rally.video_id,
@@ -242,6 +263,8 @@ def preextract_all_features(
             action_labels=action_labels,
             temporal_features=t_feats,
             temporal_labels=t_labels,
+            pose_features=p_feats,
+            pose_labels=p_labels,
         ))
 
         if (i + 1) % 20 == 0 or i == len(rallies) - 1:
@@ -326,6 +349,129 @@ def train_temporal_from_cache(
     return inference
 
 
+def _extract_pose_features_for_rally(
+    rally: RallyData,
+    team_assignments: dict[int, int] | None = None,
+) -> tuple[list[np.ndarray], list[int]]:
+    """Extract per-candidate pose features from detected contacts in a rally.
+
+    Runs contact detection (same as pipeline), matches to GT, and extracts
+    per-candidate features at DETECTED frames. Labels: 1 if candidate matches
+    GT track_id, 0 otherwise.
+    """
+    ball_positions = [
+        BallPos(
+            frame_number=bp["frameNumber"], x=bp["x"], y=bp["y"],
+            confidence=bp.get("confidence", 1.0),
+        )
+        for bp in rally.ball_positions_json  # type: ignore[union-attr]
+        if bp.get("x", 0) > 0 or bp.get("y", 0) > 0
+    ]
+    player_positions = [
+        PlayerPos(
+            frame_number=pp["frameNumber"], track_id=pp["trackId"],
+            x=pp["x"], y=pp["y"], width=pp["width"], height=pp["height"],
+            confidence=pp.get("confidence", 1.0),
+        )
+        for pp in rally.positions_json  # type: ignore[union-attr]
+    ]
+
+    contact_seq = detect_contacts(
+        ball_positions=ball_positions,
+        player_positions=player_positions,
+        net_y=rally.court_split_y,
+        frame_count=rally.frame_count or None,
+        team_assignments=team_assignments,
+    )
+    if not contact_seq.contacts:
+        return [], []
+
+    # Match detected contacts to GT
+    tolerance_frames = max(1, round(rally.fps * 167 / 1000))
+    pred_actions = [
+        {"frame": c.frame, "action": "unknown", "playerTrackId": c.player_track_id}
+        for c in contact_seq.contacts
+    ]
+    matches, _ = match_contacts(rally.gt_labels, pred_actions, tolerance=tolerance_frames)
+
+    # Load pose cache
+    pose_data = load_pose_cache(rally.rally_id)
+
+    frame_to_idx = {c.frame: i for i, c in enumerate(contact_seq.contacts)}
+
+    features: list[np.ndarray] = []
+    labels: list[int] = []
+
+    for m in matches:
+        if m.pred_frame is None:
+            continue
+        gt_label = next((g for g in rally.gt_labels if g.frame == m.gt_frame), None)
+        if gt_label is None or gt_label.player_track_id < 0:
+            continue
+
+        det_frame = m.pred_frame
+        contact_index = frame_to_idx.get(det_frame, 0)
+
+        side_count = 1
+        for prev_c in reversed(contact_seq.contacts[:contact_index]):
+            if prev_c.court_side == "unknown":
+                break
+            side_count += 1
+            if side_count >= 3:
+                break
+
+        result = extract_pose_candidate_features(
+            contact_frame=det_frame,
+            ball_positions=ball_positions,
+            player_positions=player_positions,
+            contact_index=contact_index,
+            side_count=min(side_count, 3),
+            pose_data=pose_data,
+        )
+        if result is None:
+            continue
+
+        for tid, feat in result:
+            features.append(feat)
+            labels.append(1 if tid == gt_label.player_track_id else 0)
+
+    return features, labels
+
+
+def train_pose_from_cache(
+    all_features: list[RallyFeatures],
+    exclude_video: str,
+) -> PoseAttributionInference | None:
+    """Train pose attribution from pre-extracted features, excluding one video."""
+    feats: list[np.ndarray] = []
+    labels: list[int] = []
+
+    for rf in all_features:
+        if rf.video_id == exclude_video:
+            continue
+        feats.extend(rf.pose_features)
+        labels.extend(rf.pose_labels)
+
+    if len(feats) < 10:
+        return None
+
+    config = PoseTrainingConfig(positive_weight=3.0, max_depth=5, seed=42)
+    all_f = np.array(feats)
+    all_l = np.array(labels, dtype=np.int32)
+
+    with tempfile.NamedTemporaryFile(suffix=".joblib", delete=False) as f:
+        tmp_path = Path(f.name)
+
+    train_pose_model(all_f, all_l, config, output_path=tmp_path)
+    inference = PoseAttributionInference(tmp_path)
+    tmp_path.unlink(missing_ok=True)
+    # Remove metadata.json if created
+    meta_path = tmp_path.parent / "metadata.json"
+    if meta_path.exists():
+        meta_path.unlink()
+    return inference
+
+
 # ---------------------------------------------------------------------------
 # Evaluation
 # ---------------------------------------------------------------------------
@@ -352,6 +498,7 @@ def evaluate_fold(
     calibrators: dict[str, CourtCalibrator | None],
     pipeline_cfg: PipelineConfig,
     tolerance_ms: int = 167,
+    inject_pose: bool = False,
 ) -> FoldResult:
     """Evaluate pipeline on held-out rallies for one config."""
     result = FoldResult(
@@ -364,6 +511,7 @@ def evaluate_fold(
 
     contact_config = ContactDetectionConfig(
         use_temporal_attribution=pipeline_cfg.use_temporal_attribution,
+        use_pose_attribution=pipeline_cfg.use_pose_attribution,
     )
 
     for rally in rallies:
@@ -382,16 +530,24 @@ def evaluate_fold(
 
         player_positions: list[PlayerPos] = []
         if rally.positions_json:
-            player_positions = [
-                PlayerPos(
+            pose_kps: dict[tuple[int, int], list[list[float]]] = {}
+            if inject_pose:
+                pd = load_pose_cache(rally.rally_id)
+                if pd is not None and len(pd["frames"]) > 0:
+                    for k in range(len(pd["frames"])):
+                        pose_kps[(int(pd["frames"][k]), int(pd["track_ids"][k]))] = (
+                            pd["keypoints"][k].tolist()
+                        )
+            for pp in rally.positions_json:
+                kps = pose_kps.get((pp["frameNumber"], pp["trackId"])) if pose_kps else None
+                player_positions.append(PlayerPos(
                     frame_number=pp["frameNumber"],
                     track_id=pp["trackId"],
                     x=pp["x"], y=pp["y"],
                     width=pp["width"], height=pp["height"],
                     confidence=pp.get("confidence", 1.0),
-                )
-                for pp in rally.positions_json
-            ]
+                    keypoints=kps,
+                ))
 
         match_teams = match_teams_by_rally.get(rally.rally_id)
 
@@ -474,6 +630,10 @@ def main() -> None:
                         help="Only run one fold (debug)")
     parser.add_argument("--tolerance-ms", type=int, default=167,
                         help="Frame tolerance in ms (default: 167)")
+    parser.add_argument("--pose-attribution", action="store_true",
+                        help="Include pose attribution config in the run")
+    parser.add_argument("--pose", action="store_true",
+                        help="Inject pose keypoints into action features from cache")
     args = parser.parse_args()
 
     t_total_start = time.monotonic()
@@ -517,8 +677,12 @@ def main() -> None:
     console.print(f"  Match teams: {n_with_match}/{len(rallies)} rallies")
 
     # --- Pre-extract features (one-time cost) ---
+    use_pose = getattr(args, "pose", False)
+    if use_pose:
+        console.print("  [bold]Pose keypoint injection enabled[/bold]")
     cached_features = preextract_all_features(
         rallies, rallies_temporal, match_teams_by_rally,
+        inject_pose=use_pose,
     )
 
     # Index by video for fast fold splitting
@@ -533,6 +697,13 @@ def main() -> None:
         configs = [PipelineConfig(name="full")]
     else:
         configs = ABLATION_CONFIGS
+
+    if args.pose_attribution:
+        configs.append(PipelineConfig(
+            name="pose_attribution",
+            use_temporal_attribution=False,
+            use_pose_attribution=True,
+        ))
 
     console.print(f"\n[bold]Running {len(configs)} config(s) × {len(video_ids)} folds[/bold]\n")
 
@@ -556,14 +727,22 @@ def main() -> None:
         # Train temporal attribution from cached features
         temporal_model = train_temporal_from_cache(cached_features, held_out_video)
 
+        # Train pose attribution from cached features
+        pose_model = train_pose_from_cache(cached_features, held_out_video)
+
         # Run each config
         for cfg in configs:
-            # Inject temporal model into cache
+            # Inject models into cache
             import rallycut.tracking.contact_detector as cd
             if cfg.use_temporal_attribution and temporal_model is not None:
                 cd._temporal_attributor_cache["default"] = temporal_model
             else:
                 cd._temporal_attributor_cache["default"] = None
+
+            if cfg.use_pose_attribution and pose_model is not None:
+                cd._pose_attributor_cache["default"] = pose_model
+            else:
+                cd._pose_attributor_cache["default"] = None
 
             fold_result = evaluate_fold(
                 held_out_rallies,
@@ -572,6 +751,7 @@ def main() -> None:
                 calibrators=calibrators,
                 pipeline_cfg=cfg,
                 tolerance_ms=args.tolerance_ms,
+                inject_pose=use_pose,
             )
             fold_result.video_id = held_out_video
             results[cfg.name].append(fold_result)
@@ -587,9 +767,10 @@ def main() -> None:
             flush=True,
         )
 
-    # --- Restore default temporal model cache ---
+    # --- Restore default model caches ---
     import rallycut.tracking.contact_detector as cd
     cd._temporal_attributor_cache.clear()
+    cd._pose_attributor_cache.clear()
 
     # --- Aggregate and report ---
     print(flush=True)

@@ -1472,6 +1472,7 @@ class PlayerTracker:
                 width=p.width,
                 height=p.height,
                 confidence=p.confidence,
+                keypoints=p.keypoints,
             )
             for p in positions
         ]
@@ -2318,6 +2319,7 @@ class PlayerTracker:
                         verbose=False,
                     )
                     dets_array = np.empty((0, 6), dtype=np.float32)
+                    det_kps: np.ndarray | None = None
                     if results and len(results) > 0 and results[0].boxes is not None:
                         boxes = results[0].boxes
                         if len(boxes.xyxy) > 0:
@@ -2325,10 +2327,23 @@ class PlayerTracker:
                             conf = boxes.conf.cpu().numpy().reshape(-1, 1)
                             cls = boxes.cls.cpu().numpy().reshape(-1, 1)
                             dets_array = np.hstack([xyxy, conf, cls]).astype(np.float32)
+
+                        r0 = results[0]
+                        if (
+                            hasattr(r0, "keypoints")
+                            and r0.keypoints is not None
+                            and r0.keypoints.data is not None
+                            and len(r0.keypoints.data) > 0
+                        ):
+                            det_kps = r0.keypoints.data.cpu().numpy()
+                            det_kps[:, :, 0] /= video_width
+                            det_kps[:, :, 1] /= video_height
+
                     embs = self._extract_reid_embeddings(frame_to_track, dets_array)
                     tracks = self._boxmot_tracker.update(dets_array, frame_to_track, embs)
                     frame_positions = self._decode_boxmot_results(
-                        tracks, frame_idx, video_width, video_height
+                        tracks, frame_idx, video_width, video_height,
+                        det_keypoints=det_kps,
                     )
                 else:
                     # Ultralytics path: YOLO detect + track in one call
