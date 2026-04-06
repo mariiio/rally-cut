@@ -43,6 +43,40 @@ console = Console()
 ACTION_TYPES = ["serve", "receive", "set", "attack", "block", "dig"]
 
 
+def _build_player_positions(
+    positions_json: list[dict],
+    rally_id: str | None = None,
+    inject_pose: bool = False,
+) -> list:
+    """Build PlayerPosition list from stored JSON, optionally injecting pose keypoints."""
+    from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
+
+    pose_kps: dict[tuple[int, int], list[list[float]]] = {}
+    if inject_pose and rally_id:
+        from rallycut.tracking.pose_attribution.pose_cache import load_pose_cache
+
+        pose_data = load_pose_cache(rally_id)
+        if pose_data is not None and len(pose_data["frames"]) > 0:
+            for i in range(len(pose_data["frames"])):
+                key = (int(pose_data["frames"][i]), int(pose_data["track_ids"][i]))
+                pose_kps[key] = pose_data["keypoints"][i].tolist()
+
+    result = []
+    for pp in positions_json:
+        kps = pose_kps.get((pp["frameNumber"], pp["trackId"])) if pose_kps else None
+        result.append(PlayerPos(
+            frame_number=pp["frameNumber"],
+            track_id=pp["trackId"],
+            x=pp["x"],
+            y=pp["y"],
+            width=pp["width"],
+            height=pp["height"],
+            confidence=pp.get("confidence", 1.0),
+            keypoints=kps,
+        ))
+    return result
+
+
 @dataclass
 class GtLabel:
     frame: int
@@ -857,6 +891,7 @@ def main() -> None:
     parser.add_argument("--visual", action="store_true", help="Enable visual attribution using VideoMAE per-player action classifier")
     parser.add_argument("--exclude-videos", type=str, help="Comma-separated video ID prefixes to exclude (held-out test set)")
     parser.add_argument("--only-videos", type=str, help="Comma-separated video ID prefixes to include (held-out test set eval)")
+    parser.add_argument("--pose", action="store_true", help="Inject YOLO-Pose keypoints from cache into player positions (enables pose action features)")
     add_split_argument(parser)
     args = parser.parse_args()
 
@@ -963,6 +998,8 @@ def main() -> None:
         if visual_classifier is None:
             console.print("[yellow]Warning: No trained visual attribution model found.[/yellow]")
 
+    use_pose = getattr(args, "pose", False)
+
     console.print(f"\n[bold]Evaluating {len(rallies)} rallies with action ground truth[/bold]")
     console.print(f"  Court calibration: {n_calibrated}/{len(video_ids)} videos")
     console.print(f"  Match teams (conf>=0.70): {n_with_match}/{len(rallies)} rallies")
@@ -970,6 +1007,8 @@ def main() -> None:
         console.print(f"  ReID classifiers: {len(reid_classifiers)}/{len(video_ids)} videos")
     if visual_classifier is not None:
         console.print("  Visual attribution classifier: loaded")
+    if use_pose:
+        console.print("  Pose keypoint injection: enabled")
     console.print()
 
     all_matches: list[MatchResult] = []
@@ -1023,20 +1062,15 @@ def main() -> None:
                 if bp.get("x", 0) > 0 or bp.get("y", 0) > 0
             ]
 
-            player_positions = []
-            if rally.positions_json:
-                player_positions = [
-                    PlayerPos(
-                        frame_number=pp["frameNumber"],
-                        track_id=pp["trackId"],
-                        x=pp["x"],
-                        y=pp["y"],
-                        width=pp["width"],
-                        height=pp["height"],
-                        confidence=pp.get("confidence", 1.0),
-                    )
-                    for pp in rally.positions_json
-                ]
+            player_positions = (
+                _build_player_positions(
+                    rally.positions_json,
+                    rally_id=rally.rally_id,
+                    inject_pose=use_pose,
+                )
+                if rally.positions_json
+                else []
+            )
 
             match_teams = match_teams_by_rally.get(rally.rally_id)
 
