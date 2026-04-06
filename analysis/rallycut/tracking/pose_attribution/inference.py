@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -16,7 +17,19 @@ class PoseAttributionInference:
 
     def __init__(self, model_path: Path) -> None:
         self.model = joblib.load(model_path)
-        logger.info(f"Loaded pose attribution model from {model_path}")
+
+        # Load metadata to determine expected feature count/set
+        meta_path = model_path.parent / "metadata.json"
+        self.n_features = self.model.n_features_in_
+        self.feature_set = "combined"
+        if meta_path.exists():
+            meta = json.loads(meta_path.read_text())
+            self.feature_set = meta.get("feature_set", "combined")
+
+        logger.info(
+            f"Loaded pose attribution model from {model_path} "
+            f"({self.feature_set}, {self.n_features} features)"
+        )
 
     def predict(
         self,
@@ -27,6 +40,8 @@ class PoseAttributionInference:
 
         Args:
             candidate_features: List of feature arrays, one per candidate.
+                May have more features than the model expects — truncated
+                automatically based on the model's expected feature count.
             candidate_track_ids: Corresponding track IDs.
 
         Returns:
@@ -36,8 +51,13 @@ class PoseAttributionInference:
         if not candidate_features or not candidate_track_ids:
             return -1, 0.0
 
-        # Stack features and predict
         x = np.stack(candidate_features)  # (N_candidates, NUM_FEATURES)
+
+        # Truncate to model's expected feature count (handles pose-only
+        # models receiving full 30-feature vectors from the pipeline)
+        if x.shape[1] > self.n_features:
+            x = x[:, :self.n_features]
+
         probs = self.model.predict_proba(x)  # (N_candidates, 2)
 
         # P(touching) is class 1

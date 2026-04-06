@@ -121,7 +121,7 @@ def extract_samples(
         if use_pose:
             pose_data = load_pose_cache(rally.rally_id)
 
-        # Detect contacts to get contact sequence context
+        # Detect contacts (same as pipeline does at inference)
         contact_seq = detect_contacts(
             ball_positions=ball_positions,
             player_positions=player_positions,
@@ -129,37 +129,52 @@ def extract_samples(
             frame_count=rally.frame_count or None,
         )
 
-        # Build contact frame lookup for sequence context
-        contact_frames = [c.frame for c in contact_seq.contacts]
+        if not contact_seq.contacts:
+            n_skipped += len(rally.gt_labels)
+            continue
 
-        for gt in rally.gt_labels:
-            if gt.player_track_id < 0:
+        # Match GT contacts to detected contacts (same tolerance as pipeline eval)
+        tolerance_frames = max(1, round(rally.fps * 167 / 1000))
+        pred_actions = [
+            {"frame": c.frame, "action": "unknown", "playerTrackId": c.player_track_id}
+            for c in contact_seq.contacts
+        ]
+        from scripts.eval_action_detection import match_contacts
+        matches, _ = match_contacts(rally.gt_labels, pred_actions, tolerance=tolerance_frames)
+
+        # Build contact index lookup: frame -> index in contacts list
+        frame_to_idx: dict[int, int] = {
+            c.frame: i for i, c in enumerate(contact_seq.contacts)
+        }
+
+        for m in matches:
+            if m.pred_frame is None:
+                n_skipped += 1  # FN — no detected contact for this GT
+                continue
+
+            gt_label = next(
+                (gt for gt in rally.gt_labels if gt.frame == m.gt_frame), None,
+            )
+            if gt_label is None or gt_label.player_track_id < 0:
                 n_skipped += 1
                 continue
 
-            # Find the detected contact nearest to this GT frame
-            # Use GT frame directly for feature extraction
-            gt_frame = gt.frame
+            # Use the DETECTED frame (not GT frame) — matches inference distribution
+            det_frame = m.pred_frame
+            contact_index = frame_to_idx.get(det_frame, 0)
 
-            # Compute contact_index and side_count from detected contacts
-            contact_index = 0
+            # Side count from detected contacts
             side_count = 1
-            for i, cf in enumerate(contact_frames):
-                if cf <= gt_frame:
-                    contact_index = i
+            for prev_c in reversed(contact_seq.contacts[:contact_index]):
+                if prev_c.court_side == "unknown":
+                    break
+                side_count += 1
+                if side_count >= 3:
+                    break
 
-            # Side count: how many consecutive contacts on same side
-            if contact_seq.contacts:
-                for prev_c in reversed(contact_seq.contacts[:contact_index + 1]):
-                    if prev_c.court_side == "unknown":
-                        break
-                    side_count += 1
-                    if side_count >= 3:
-                        break
-
-            # Extract per-candidate features
+            # Extract features at DETECTED frame
             result = extract_candidate_features(
-                contact_frame=gt_frame,
+                contact_frame=det_frame,
                 ball_positions=ball_positions,
                 player_positions=player_positions,
                 contact_index=contact_index,
@@ -174,20 +189,20 @@ def extract_samples(
             candidate_tids = [tid for tid, _ in result]
             candidate_feats = [feat for _, feat in result]
 
-            # Check that GT track is among candidates
-            if gt.player_track_id not in candidate_tids:
+            # Check that GT track is among candidates at the detected frame
+            if gt_label.player_track_id not in candidate_tids:
                 n_skipped += 1
                 continue
 
             samples.append(ContactSample(
                 rally_id=rally.rally_id,
                 video_id=rally.video_id,
-                gt_frame=gt_frame,
-                gt_action=gt.action,
-                gt_track_id=gt.player_track_id,
+                gt_frame=m.gt_frame,
+                gt_action=m.gt_action,
+                gt_track_id=gt_label.player_track_id,
                 candidate_features=candidate_feats,
                 candidate_track_ids=candidate_tids,
-                proximity_track_id=candidate_tids[0],  # nearest
+                proximity_track_id=candidate_tids[0],
             ))
 
     if n_skipped > 0:
