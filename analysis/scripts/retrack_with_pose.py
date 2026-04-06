@@ -72,10 +72,27 @@ def main() -> None:
             # Compute end_ms from start_ms + frame_count
             end_ms = rally.start_ms + int((rally.frame_count or 300) / rally.fps * 1000)
 
+            # Get ball positions for player filter
+            from rallycut.tracking.ball_tracker import BallPosition
+            from rallycut.tracking.player_filter import PlayerFilterConfig
+            ball_pos = []
+            if rally.ball_positions_json:
+                ball_pos = [
+                    BallPosition(
+                        frame_number=bp["frameNumber"], x=bp["x"], y=bp["y"],
+                        confidence=bp.get("confidence", 1.0),
+                    )
+                    for bp in rally.ball_positions_json
+                    if bp.get("x", 0) > 0 or bp.get("y", 0) > 0
+                ]
+
             result = tracker.track_video(
                 video_path=str(video_path),
                 start_ms=rally.start_ms,
                 end_ms=end_ms,
+                filter_enabled=True,
+                filter_config=PlayerFilterConfig(),
+                ball_positions=ball_pos,
             )
 
             positions = [p.to_dict() for p in result.positions]
