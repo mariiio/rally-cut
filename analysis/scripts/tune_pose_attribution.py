@@ -22,7 +22,6 @@ from rallycut.tracking.pose_attribution.pose_cache import load_pose_cache
 from rallycut.tracking.pose_attribution.training import TrainingConfig, train_model
 from scripts.eval_action_detection import load_rallies_with_action_gt
 from scripts.eval_pose_attribution import (
-    ContactSample,
     compute_proximity_baseline,
     extract_samples,
     run_loocv,

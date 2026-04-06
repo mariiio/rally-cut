@@ -232,7 +232,7 @@ def run_loocv(
         held_out_indices = set(by_video[held_out_vid])
 
         # Build training data: per-candidate samples from other videos
-        train_X: list[np.ndarray] = []
+        train_x: list[np.ndarray] = []
         train_y: list[int] = []
 
         for i, s in enumerate(samples):
@@ -240,14 +240,14 @@ def run_loocv(
                 continue
             for feat, tid in zip(s.candidate_features, s.candidate_track_ids):
                 f = feat if feature_mask is None else feat[feature_mask]
-                train_X.append(f)
+                train_x.append(f)
                 train_y.append(1 if tid == s.gt_track_id else 0)
 
-        train_X_arr = np.stack(train_X)
+        train_features = np.stack(train_x)
         train_y_arr = np.array(train_y, dtype=np.int32)
 
         # Train binary classifier
-        clf, _ = train_model(train_X_arr, train_y_arr, config)
+        clf, _ = train_model(train_features, train_y_arr, config)
 
         # Evaluate on held-out video
         for i in by_video[held_out_vid]:
@@ -258,13 +258,13 @@ def run_loocv(
                 f if feature_mask is None else f[feature_mask]
                 for f in s.candidate_features
             ]
-            X = np.stack(feats)
-            probs = clf.predict_proba(X)
+            x_cand = np.stack(feats)
+            probs = clf.predict_proba(x_cand)
 
             # P(touching) for class 1
             class_idx = list(clf.classes_).index(1) if 1 in clf.classes_ else -1
             if class_idx < 0:
-                touch_probs = np.ones(len(X)) * 0.5
+                touch_probs = np.ones(len(x_cand)) * 0.5
             else:
                 touch_probs = probs[:, class_idx]
 
@@ -388,19 +388,19 @@ def print_results(results: list[EvalResult]) -> None:
 
 def print_feature_importance(samples: list[ContactSample], feature_mask: np.ndarray | None = None) -> None:
     """Train on all data and print feature importance."""
-    all_X: list[np.ndarray] = []
+    all_x: list[np.ndarray] = []
     all_y: list[int] = []
 
     for s in samples:
         for feat, tid in zip(s.candidate_features, s.candidate_track_ids):
             f = feat if feature_mask is None else feat[feature_mask]
-            all_X.append(f)
+            all_x.append(f)
             all_y.append(1 if tid == s.gt_track_id else 0)
 
-    X = np.stack(all_X)
+    x_all = np.stack(all_x)
     y = np.array(all_y, dtype=np.int32)
 
-    clf, result = train_model(X, y)
+    clf, result = train_model(x_all, y)
 
     # Map importances to correct feature names
     names = FEATURE_NAMES if feature_mask is None else [
@@ -410,7 +410,7 @@ def print_feature_importance(samples: list[ContactSample], feature_mask: np.ndar
     from sklearn.inspection import permutation_importance
 
     console.print("\n[bold]Feature Importance (permutation, 5 repeats)[/bold]")
-    perm_imp = permutation_importance(clf, X, y, n_repeats=5, random_state=42, n_jobs=-1)
+    perm_imp = permutation_importance(clf, x_all, y, n_repeats=5, random_state=42, n_jobs=-1)
     pairs = sorted(
         zip(names, perm_imp.importances_mean),
         key=lambda x: x[1],
@@ -441,7 +441,7 @@ def print_error_analysis(
         else:
             prox_correct.append(s)
 
-    console.print(f"\n[bold]Error Analysis[/bold]")
+    console.print("\n[bold]Error Analysis[/bold]")
     console.print(f"Proximity errors: {len(prox_errors)}/{len(samples)}")
     console.print(f"Proximity correct: {len(prox_correct)}/{len(samples)}")
 
