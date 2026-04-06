@@ -23,6 +23,9 @@ if TYPE_CHECKING:
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.contact_classifier import ContactClassifier
     from rallycut.tracking.player_tracker import PlayerPosition
+    from rallycut.tracking.pose_attribution.inference import (
+        PoseAttributionInference,
+    )
     from rallycut.tracking.temporal_attribution.inference import (
         TemporalAttributionInference,
     )
@@ -63,6 +66,33 @@ def _get_temporal_attributor() -> TemporalAttributionInference | None:
         else:
             _temporal_attributor_cache["default"] = None
     return _temporal_attributor_cache["default"]
+
+
+# Cached pose attributor (loaded once from disk on first use)
+_pose_attributor_cache: dict[str, PoseAttributionInference | None] = {}
+
+
+def _get_pose_attributor() -> PoseAttributionInference | None:
+    """Load and cache the pose attribution model from disk."""
+    if "default" not in _pose_attributor_cache:
+        from pathlib import Path
+
+        from rallycut.tracking.pose_attribution.inference import (
+            PoseAttributionInference,
+        )
+
+        model_path = (
+            Path(__file__).parent.parent.parent
+            / "weights"
+            / "pose_attribution"
+            / "pose_attribution.joblib"
+        )
+        if model_path.exists():
+            _pose_attributor_cache["default"] = PoseAttributionInference(model_path)
+            logger.info("Auto-loaded pose attribution model from default path")
+        else:
+            _pose_attributor_cache["default"] = None
+    return _pose_attributor_cache["default"]
 
 
 # Cached default classifier (loaded once from disk on first use)
@@ -160,6 +190,10 @@ class ContactDetectionConfig:
     # Temporal attribution: use trajectory-based model to override proximity attribution
     use_temporal_attribution: bool = True
     temporal_attribution_min_confidence: float = 0.6  # Min softmax confidence to accept
+
+    # Pose attribution: per-candidate binary classifier (replaces temporal attribution)
+    use_pose_attribution: bool = False
+    pose_attribution_min_confidence: float = 0.5  # Min P(touching) to accept
 
     # Adaptive deduplication: use shorter min distance for cross-side contacts.
     # Empirically 0% impact on 5-fold CV (2026-04-05) — disabled by default.
@@ -1581,9 +1615,14 @@ def detect_contacts(
 
     cfg = config or ContactDetectionConfig()
 
-    # Auto-load temporal attribution model if enabled
+    # Auto-load attribution models
+    pose_attributor = (
+        _get_pose_attributor() if cfg.use_pose_attribution else None
+    )
     temporal_attributor = (
-        _get_temporal_attributor() if cfg.use_temporal_attribution else None
+        _get_temporal_attributor()
+        if cfg.use_temporal_attribution and pose_attributor is None
+        else None
     )
 
     if not ball_positions:
@@ -1982,9 +2021,51 @@ def detect_contacts(
                 track_id = alt_tid
                 player_dist = d2
 
-        # Temporal attribution: override track_id using trajectory-based model.
+        # Attribution model override: either pose-based or temporal.
+        # Pose attribution uses per-candidate binary scoring;
+        # temporal attribution uses canonical-slot prediction.
         # Only applied when ≥2 candidates exist.
         if (
+            pose_attributor is not None
+            and player_positions
+            and len(candidates) >= 2
+        ):
+            from rallycut.tracking.pose_attribution.features import (
+                extract_candidate_features,
+            )
+
+            pa_contact_index = len(contacts)
+            pa_side_count = 1
+            for prev_c in reversed(contacts):
+                if prev_c.court_side == court_side:
+                    pa_side_count += 1
+                else:
+                    break
+            pa_side_count = min(pa_side_count, 3)
+
+            cand_result = extract_candidate_features(
+                contact_frame=frame,
+                ball_positions=ball_positions,
+                player_positions=player_positions,
+                contact_index=pa_contact_index,
+                side_count=pa_side_count,
+            )
+            if cand_result is not None:
+                cand_feats = [f for _, f in cand_result]
+                cand_tids = [tid for tid, _ in cand_result]
+                pred_tid, pred_conf = pose_attributor.predict(
+                    cand_feats, cand_tids
+                )
+                if (
+                    pred_conf >= cfg.pose_attribution_min_confidence
+                    and pred_tid >= 0
+                ):
+                    track_id = pred_tid
+                    for cand_tid, cand_dist, _ in candidates:
+                        if cand_tid == pred_tid:
+                            player_dist = cand_dist
+                            break
+        elif (
             temporal_attributor is not None
             and player_positions
             and len(candidates) >= 2

@@ -78,6 +78,14 @@ class ActionFeatures:
     ball_vertical_velocity: float = 0.0  # Signed Y velocity at contact (+ = down)
     pre_contact_speed: float = 0.0  # Mean ball speed 5 frames before contact
 
+    # Pose features (v5) — from YOLO-Pose keypoints of attributed player
+    # NaN when no pose data available; HGBC handles missing values natively
+    pose_wrist_elevation: float = 0.0  # Active wrist elevation relative to shoulder
+    pose_arm_asymmetry: float = 0.0  # |left - right| elevation; high=attack, low=set
+    pose_both_arms_raised: float = 0.0  # Fraction of frames both wrists above shoulders
+    pose_vertical_disp: float = 0.0  # Hip Y range in ±5 frames (jump/dive magnitude)
+    pose_active_arm_extension: float = 0.0  # Elbow angle of ball-nearest arm
+
     def to_array(self) -> np.ndarray:
         """Convert to numpy feature array for classifier input."""
         player_dist = self.player_distance if math.isfinite(self.player_distance) else 1.0
@@ -106,6 +114,11 @@ class ActionFeatures:
             self.prev_action_confidence,
             self.ball_vertical_velocity,
             self.pre_contact_speed,
+            self.pose_wrist_elevation,
+            self.pose_arm_asymmetry,
+            self.pose_both_arms_raised,
+            self.pose_vertical_disp,
+            self.pose_active_arm_extension,
         ], dtype=np.float64)
 
     @staticmethod
@@ -135,6 +148,11 @@ class ActionFeatures:
             "prev_action_confidence",
             "ball_vertical_velocity",
             "pre_contact_speed",
+            "pose_wrist_elevation",
+            "pose_arm_asymmetry",
+            "pose_both_arms_raised",
+            "pose_vertical_disp",
+            "pose_active_arm_extension",
         ]
 
 
@@ -388,6 +406,21 @@ def extract_action_features(
         if pre_speeds:
             pre_speed = sum(pre_speeds) / len(pre_speeds)
 
+    # --- v5 pose features (from keypoints on attributed player) ---
+    pose_wrist_elev = 0.0
+    pose_asym = 0.0
+    pose_both_raised = 0.0
+    pose_vert_disp = 0.0
+    pose_arm_ext = 0.0
+
+    if player_positions:
+        pose_wrist_elev, pose_asym, pose_both_raised, pose_vert_disp, pose_arm_ext = (
+            _extract_pose_action_features(
+                player_positions, contact.player_track_id,
+                contact.frame, contact.ball_x, contact.ball_y,
+            )
+        )
+
     return ActionFeatures(
         velocity=contact.velocity,
         direction_change_deg=contact.direction_change_deg,
@@ -411,7 +444,121 @@ def extract_action_features(
         post_contact_speed=post_speed,
         ball_vertical_velocity=ball_vert_vel,
         pre_contact_speed=pre_speed,
+        pose_wrist_elevation=pose_wrist_elev,
+        pose_arm_asymmetry=pose_asym,
+        pose_both_arms_raised=pose_both_raised,
+        pose_vertical_disp=pose_vert_disp,
+        pose_active_arm_extension=pose_arm_ext,
     )
+
+
+def _extract_pose_action_features(
+    player_positions: list[Any],
+    track_id: int,
+    contact_frame: int,
+    ball_x: float,
+    ball_y: float,
+    window: int = 5,
+) -> tuple[float, float, float, float, float]:
+    """Extract pose features for action classification from player keypoints.
+
+    Returns (wrist_elevation, arm_asymmetry, both_arms_raised, vertical_disp,
+             active_arm_extension). All default to 0.0 when no pose data available.
+    """
+    from rallycut.tracking.pose_attribution import features as pf
+
+    # Collect keypoints for attributed player in ±window frames
+    kps_by_frame: dict[int, list[list[float]]] = {}
+    for pp in player_positions:
+        if (
+            pp.track_id == track_id
+            and abs(pp.frame_number - contact_frame) <= window
+            and pp.keypoints is not None
+        ):
+            kps_by_frame[pp.frame_number] = pp.keypoints
+
+    if not kps_by_frame:
+        return 0.0, 0.0, 0.0, 0.0, 0.0
+
+    left_elevs: list[float] = []
+    right_elevs: list[float] = []
+    active_elevs: list[float] = []
+    hip_ys: list[float] = []
+    active_exts: list[float] = []
+    both_raised = 0
+    total_both = 0
+
+    for frame, kps in sorted(kps_by_frame.items()):
+        ls, rs = kps[pf.KPT_LEFT_SHOULDER], kps[pf.KPT_RIGHT_SHOULDER]
+        lw, rw = kps[pf.KPT_LEFT_WRIST], kps[pf.KPT_RIGHT_WRIST]
+        le, re = kps[pf.KPT_LEFT_ELBOW], kps[pf.KPT_RIGHT_ELBOW]
+        lh, rh = kps[pf.KPT_LEFT_HIP], kps[pf.KPT_RIGHT_HIP]
+
+        # Wrist elevation per side
+        l_elev = None
+        if ls[2] > pf.MIN_KPT_CONF and lw[2] > pf.MIN_KPT_CONF:
+            l_elev = ls[1] - lw[1]  # positive = wrist above shoulder
+            left_elevs.append(l_elev)
+        r_elev = None
+        if rs[2] > pf.MIN_KPT_CONF and rw[2] > pf.MIN_KPT_CONF:
+            r_elev = rs[1] - rw[1]
+            right_elevs.append(r_elev)
+
+        # Both arms raised
+        if l_elev is not None and r_elev is not None:
+            total_both += 1
+            if l_elev > 0 and r_elev > 0:
+                both_raised += 1
+
+        # Active hand: closest to ball
+        active_w = None
+        active_s = None
+        active_e = None
+        min_d = float("inf")
+        for w, s, e in [(lw, ls, le), (rw, rs, re)]:
+            if w[2] > pf.MIN_KPT_CONF:
+                d = math.sqrt((w[0] - ball_x) ** 2 + (w[1] - ball_y) ** 2)
+                if d < min_d:
+                    min_d = d
+                    active_w, active_s, active_e = w, s, e
+
+        if active_w is not None and active_s is not None and active_s[2] > pf.MIN_KPT_CONF:
+            active_elevs.append(active_s[1] - active_w[1])
+
+        # Active arm extension (elbow angle)
+        if (
+            active_w is not None
+            and active_s is not None and active_s[2] > pf.MIN_KPT_CONF
+            and active_e is not None and active_e[2] > pf.MIN_KPT_CONF
+        ):
+            v1 = (active_s[0] - active_e[0], active_s[1] - active_e[1])
+            v2 = (active_w[0] - active_e[0], active_w[1] - active_e[1])
+            dot = v1[0] * v2[0] + v1[1] * v2[1]
+            m1 = math.sqrt(v1[0] ** 2 + v1[1] ** 2)
+            m2 = math.sqrt(v2[0] ** 2 + v2[1] ** 2)
+            if m1 > 1e-6 and m2 > 1e-6:
+                cos_a = max(-1.0, min(1.0, dot / (m1 * m2)))
+                active_exts.append(math.degrees(math.acos(cos_a)))
+
+        # Hip Y for vertical displacement
+        if lh[2] > pf.MIN_KPT_CONF and rh[2] > pf.MIN_KPT_CONF:
+            hip_ys.append((lh[1] + rh[1]) / 2)
+
+    # Aggregate
+    wrist_elev = max(active_elevs) if active_elevs else 0.0
+
+    asym = 0.0
+    if left_elevs and right_elevs:
+        n = min(len(left_elevs), len(right_elevs))
+        asym = sum(abs(left_elevs[i] - right_elevs[i]) for i in range(n)) / n
+
+    both_frac = both_raised / total_both if total_both > 0 else 0.0
+
+    vert_disp = (max(hip_ys) - min(hip_ys)) if len(hip_ys) >= 2 else 0.0
+
+    arm_ext = max(active_exts) if active_exts else 0.0
+
+    return wrist_elev, asym, both_frac, vert_disp, arm_ext
 
 
 ACTION_CLASSES = ["serve", "receive", "set", "attack", "dig"]

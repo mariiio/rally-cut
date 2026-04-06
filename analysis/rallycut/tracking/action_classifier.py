@@ -804,6 +804,60 @@ class ActionClassifier:
                                 contact.frame,
                             )
 
+                    # Pre-contact ball trajectory: check where the ball
+                    # was in the ~1.5s before the first contact.  This
+                    # window captures the serve flight (ball crossing
+                    # from server to receiver) while excluding stale
+                    # detections from before the serve (ball at rest,
+                    # previous rally, etc.).
+                    # Post-contact trajectory can't distinguish serve
+                    # from receive (both send ball toward net), but
+                    # pre-contact origin is unambiguous.
+                    if (
+                        not is_phantom
+                        and serve_pass == 3
+                        and not suppress_phantom
+                        and ball_positions
+                    ):
+                        flight_window = 45  # ~1.5s at 30fps
+                        pre = [
+                            bp for bp in ball_positions
+                            if (contact.frame - flight_window
+                                <= bp.frame_number < contact.frame)
+                        ]
+                        if len(pre) >= 3:
+                            margin = 0.05
+                            net = contact_sequence.net_y
+                            # Use the EARLIEST positions in the window
+                            # (where the ball is still on the server's
+                            # side, before crossing).  The median of all
+                            # positions is dominated by the later half
+                            # (ball already on receiver's side) and
+                            # washes out the crossing signal.
+                            early_ys = [bp.y for bp in pre[:5]]
+                            med_y = sorted(early_ys)[
+                                len(early_ys) // 2
+                            ]
+                            started_near = med_y > net + margin
+                            started_far = med_y < net - margin
+                            if (
+                                (started_far
+                                 and contact.court_side == "near")
+                                or (started_near
+                                    and contact.court_side == "far")
+                            ):
+                                is_phantom = True
+                                logger.debug(
+                                    "Ball flight from opposite side "
+                                    "(median_y=%.3f, net=%.3f, %d pts"
+                                    " in %d-frame window) vs contact "
+                                    "side (%s) at frame %d — phantom",
+                                    med_y, net, len(pre),
+                                    flight_window,
+                                    contact.court_side,
+                                    contact.frame,
+                                )
+
                     # Court-side check for Pass 3 fallback: if ball is
                     # clearly on the wrong side of the net for a serve
                     # from this court side, it's likely a receive.

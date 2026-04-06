@@ -520,7 +520,7 @@ YOLO_MODELS = {
     "yolo11m": "yolo11m.pt",  # YOLO11 Medium: 20.1M params
     "yolo11l": "yolo11l.pt",  # YOLO11 Large: 25.3M params
 }
-DEFAULT_YOLO_MODEL = "yolo11s"
+DEFAULT_YOLO_MODEL = "yolo11s-pose"
 
 # Tracker configs for better tracking stability
 BYTETRACK_CONFIG = Path(__file__).parent / "bytetrack_volleyball.yaml"
@@ -603,9 +603,12 @@ class PlayerPosition:
     width: float  # Normalized bbox width
     height: float  # Normalized bbox height
     confidence: float  # Detection confidence 0-1
+    # COCO 17-keypoint pose data from YOLO-Pose: shape (17, 3) with (x, y, conf)
+    # normalized 0-1. None when detection model doesn't produce keypoints.
+    keypoints: list[list[float]] | None = None
 
     def to_dict(self) -> dict:
-        return {
+        d: dict = {
             "frameNumber": self.frame_number,
             "trackId": self.track_id,
             "x": self.x,
@@ -614,6 +617,9 @@ class PlayerPosition:
             "height": self.height,
             "confidence": self.confidence,
         }
+        if self.keypoints is not None:
+            d["keypoints"] = self.keypoints
+        return d
 
 
 @dataclass
@@ -1117,6 +1123,7 @@ class PlayerTracker:
         frame_number: int,
         video_width: int,
         video_height: int,
+        det_keypoints: np.ndarray | None = None,
     ) -> list[PlayerPosition]:
         """Decode BoxMOT tracker output to PlayerPosition list.
 
@@ -1126,6 +1133,8 @@ class PlayerTracker:
             frame_number: Current frame index.
             video_width: Video frame width.
             video_height: Video frame height.
+            det_keypoints: YOLO-Pose keypoints (N_dets, 17, 3) normalized 0-1.
+                    Index matches original detection order. Use det_idx to look up.
 
         Returns:
             List of PlayerPosition for this frame.
@@ -1147,6 +1156,13 @@ class PlayerTracker:
             w = (x2 - x1) / video_width
             h = (y2 - y1) / video_height
 
+            # Look up keypoints via det_idx (column 7)
+            kps = None
+            if det_keypoints is not None and len(row) > 7:
+                det_idx = int(row[7])
+                if 0 <= det_idx < len(det_keypoints):
+                    kps = det_keypoints[det_idx].tolist()
+
             positions.append(PlayerPosition(
                 frame_number=frame_number,
                 track_id=int(track_id),
@@ -1155,6 +1171,7 @@ class PlayerTracker:
                 width=float(w),
                 height=float(h),
                 confidence=float(conf),
+                keypoints=kps,
             ))
 
         return positions
@@ -2037,6 +2054,7 @@ class PlayerTracker:
 
                         # Convert YOLO detections to BoxMOT format (N, 6)
                         dets_array = np.empty((0, 6), dtype=np.float32)
+                        det_keypoints: np.ndarray | None = None
                         if results and len(results) > 0 and results[0].boxes is not None:
                             boxes = results[0].boxes
                             if len(boxes.xyxy) > 0:
@@ -2044,6 +2062,19 @@ class PlayerTracker:
                                 conf = boxes.conf.cpu().numpy().reshape(-1, 1)
                                 cls = boxes.cls.cpu().numpy().reshape(-1, 1)
                                 dets_array = np.hstack([xyxy, conf, cls]).astype(np.float32)
+
+                            # Capture keypoints from pose model (if available)
+                            r0 = results[0]
+                            if (
+                                hasattr(r0, "keypoints")
+                                and r0.keypoints is not None
+                                and r0.keypoints.data is not None
+                                and len(r0.keypoints.data) > 0
+                            ):
+                                det_keypoints = r0.keypoints.data.cpu().numpy()
+                                # Normalize to 0-1
+                                det_keypoints[:, :, 0] /= video_width
+                                det_keypoints[:, :, 1] /= video_height
 
                         # Extract ReID embeddings from our fine-tuned OSNet
                         embs = self._extract_reid_embeddings(frame_to_track, dets_array)
@@ -2053,7 +2084,8 @@ class PlayerTracker:
 
                         # Decode BoxMOT output to PlayerPosition
                         frame_positions = self._decode_boxmot_results(
-                            tracks, frame_idx, video_width, video_height
+                            tracks, frame_idx, video_width, video_height,
+                            det_keypoints=det_keypoints,
                         )
                     else:
                         # Ultralytics path: YOLO detect + track in one call
