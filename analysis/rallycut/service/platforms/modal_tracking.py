@@ -56,8 +56,14 @@ image = (
         # Web endpoint
         "fastapi",
     )
-    # Pre-download YOLO11s weights during image build
-    .run_commands("python -c \"from ultralytics import YOLO; YOLO('yolo11s.pt')\"")
+    # Pre-download YOLO11s + YOLO11s-pose weights during image build.
+    # yolo11s-pose is used by the pose attribution path: at contact frames,
+    # we run pose inference to enrich PlayerPosition.keypoints with wrist /
+    # arm features that the per-candidate attribution model consumes.
+    .run_commands(
+        "python -c \"from ultralytics import YOLO; YOLO('yolo11s.pt'); "
+        "YOLO('yolo11s-pose.pt')\""
+    )
     .workdir("/app")
     .env({"PYTHONPATH": "/app"})
     .add_local_dir("rallycut", "/app/rallycut")

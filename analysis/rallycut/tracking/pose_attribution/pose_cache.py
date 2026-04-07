@@ -27,6 +27,20 @@ KPT_RIGHT_HIP = 12
 
 CACHE_DIR = Path("training_data/pose_cache")
 
+# Lazily-loaded singleton YOLO-Pose model. Loaded once per process so the
+# tracking service can reuse it across rallies without reload overhead.
+_POSE_MODEL: object | None = None
+
+
+def _get_pose_model() -> object:
+    """Return the singleton YOLO-Pose model, loading it on first call."""
+    global _POSE_MODEL
+    if _POSE_MODEL is None:
+        from ultralytics import YOLO
+
+        _POSE_MODEL = YOLO("yolo11s-pose.pt")
+    return _POSE_MODEL
+
 
 def _bbox_iou(
     box1: tuple[float, float, float, float],
@@ -252,3 +266,143 @@ def load_pose_cache(
         return None
     data = np.load(path)
     return {k: data[k] for k in data.files}
+
+
+def enrich_positions_with_pose(
+    player_positions: list,  # list[PlayerPosition] — typed as list to avoid circular import
+    video_path: str,
+    contact_frames: list[int],
+    rally_start_ms: int = 0,
+    window_half: int = 10,
+    iou_threshold: float = 0.3,
+    batch_size: int = 8,
+    imgsz: int = 1280,
+    pose_model: object | None = None,
+) -> int:
+    """Run YOLO-Pose around contact frames and inject keypoints into PlayerPositions.
+
+    Production-grade pose enrichment for the tracking service. Reads only frames
+    within ±window_half of each contact, runs batched YOLO-Pose inference, matches
+    detections to existing tracks via bbox IoU, and mutates `PlayerPosition.keypoints`
+    in place. The returned count is the number of (frame, track) tuples enriched.
+
+    Args:
+        player_positions: PlayerPosition objects from player tracking.
+            Mutated in place: `.keypoints` is set on matched (frame, track) pairs.
+        video_path: Path to the video file the positions were tracked from.
+        contact_frames: Rally-relative frame numbers of contact candidates.
+        rally_start_ms: Start time of the rally segment in the video (0 if the
+            video is already a per-rally segment).
+        window_half: Half-window of frames to enrich around each contact.
+        iou_threshold: Minimum bbox IoU to match a pose detection to a track.
+        batch_size: YOLO-Pose batch size for GPU inference.
+        imgsz: Inference resolution.
+        pose_model: Optional pre-loaded model. Defaults to the singleton.
+
+    Returns:
+        Number of (frame, track_id) entries enriched with keypoints.
+    """
+    if not contact_frames or not player_positions:
+        return 0
+
+    if pose_model is None:
+        pose_model = _get_pose_model()
+
+    # Determine which rally-relative frames we need
+    needed: set[int] = set()
+    for cf in contact_frames:
+        for offset in range(-window_half, window_half + 1):
+            f = cf + offset
+            if f >= 0:
+                needed.add(f)
+    if not needed:
+        return 0
+
+    # Build (frame -> list of PlayerPosition) lookup, restricted to needed frames
+    pos_by_frame: dict[int, list] = {}
+    for pp in player_positions:
+        if pp.frame_number in needed and pp.track_id >= 0:
+            pos_by_frame.setdefault(pp.frame_number, []).append(pp)
+
+    if not pos_by_frame:
+        return 0
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        logger.warning("enrich_positions_with_pose: cannot open %s", video_path)
+        return 0
+
+    img_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    img_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    abs_offset = int(rally_start_ms / 1000 * fps)
+
+    sorted_frames = sorted(pos_by_frame.keys())
+    first_abs = abs_offset + sorted_frames[0]
+    cap.set(cv2.CAP_PROP_POS_FRAMES, first_abs)
+    current_abs = first_abs
+
+    n_enriched = 0
+    batch: list[tuple[int, np.ndarray]] = []
+
+    def _flush_batch() -> int:
+        if not batch:
+            return 0
+        frames_imgs = [f for _, f in batch]
+        rally_frames_in_batch = [rf for rf, _ in batch]
+        try:
+            results = pose_model.predict(  # type: ignore[attr-defined]
+                frames_imgs, verbose=False, imgsz=imgsz,
+            )
+        except Exception as exc:
+            logger.warning("YOLO-Pose batch failed: %s", exc)
+            return 0
+        enriched = 0
+        for result, rally_frame in zip(results, rally_frames_in_batch):
+            if result.keypoints is None or result.boxes is None:
+                continue
+            kps_all = result.keypoints.data.cpu().numpy()  # (N, 17, 3)
+            boxes = result.boxes.xyxy.cpu().numpy()  # (N, 4) pixel
+            if len(kps_all) == 0:
+                continue
+            boxes_norm = boxes.copy()
+            boxes_norm[:, [0, 2]] /= img_w
+            boxes_norm[:, [1, 3]] /= img_h
+
+            for pp in pos_by_frame.get(rally_frame, []):
+                cx, cy = pp.x, pp.y
+                w, h = pp.width, pp.height
+                pp_box = (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+                best_iou = 0.0
+                best_idx = -1
+                for det_idx in range(len(boxes_norm)):
+                    iou = _bbox_iou(pp_box, tuple(boxes_norm[det_idx]))
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_idx = det_idx
+                if best_iou >= iou_threshold and best_idx >= 0:
+                    kps = kps_all[best_idx].copy()
+                    kps[:, 0] /= img_w
+                    kps[:, 1] /= img_h
+                    pp.keypoints = kps.tolist()
+                    enriched += 1
+        return enriched
+
+    for rally_frame in sorted_frames:
+        target_abs = abs_offset + rally_frame
+        while current_abs < target_abs:
+            cap.grab()
+            current_abs += 1
+        ret, frame = cap.read()
+        if not ret:
+            current_abs += 1
+            continue
+        current_abs += 1
+        batch.append((rally_frame, frame))
+        if len(batch) >= batch_size:
+            n_enriched += _flush_batch()
+            batch = []
+
+    n_enriched += _flush_batch()
+    cap.release()
+    return n_enriched

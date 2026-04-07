@@ -526,6 +526,14 @@ def track_players(
         "--actions/--no-actions",
         help="Run action classification (contact detection + rule-based classification)",
     ),
+    pose: bool = typer.Option(
+        True,
+        "--pose/--no-pose",
+        help=(
+            "Enrich PlayerPositions with YOLO-Pose keypoints around contact frames "
+            "(used by pose attribution model). Only applies with --actions."
+        ),
+    ),
 ) -> None:
     """Track player positions in a beach volleyball video.
 
@@ -634,6 +642,7 @@ def track_players(
             reid_model=reid_model,
             court_roi_str=court_roi_str,
             actions=actions,
+            pose=pose,
         )
     finally:
         if segment_tmp_dir is not None:
@@ -663,6 +672,7 @@ def _run_tracking(
     reid_model: str | None,
     court_roi_str: str | None,
     actions: bool,
+    pose: bool,
 ) -> None:
     """Core tracking implementation, separated for segment extraction cleanup."""
 
@@ -990,7 +1000,10 @@ def _run_tracking(
     actions_data = None
     if actions and ball_positions and result.positions:
         from rallycut.tracking.action_classifier import classify_rally_actions
-        from rallycut.tracking.contact_detector import detect_contacts
+        from rallycut.tracking.contact_detector import (
+            ContactDetectionConfig,
+            detect_contacts,
+        )
 
         if not quiet:
             console.print("\n[dim]Running action classification...[/dim]")
@@ -1009,6 +1022,54 @@ def _run_tracking(
             ball_positions, result.positions, result.court_split_y,
             result.frame_count or 0, verified_teams, calibrator,
         )
+
+        # Two-pass contact detection for pose enrichment:
+        #   1. Cheap pre-pass with pose disabled gives us contact frame locations.
+        #   2. Run YOLO-Pose only on ±10 frame windows around those contacts and
+        #      inject keypoints into player_positions in place.
+        #   3. Re-run detection with default config (pose attribution enabled).
+        # The pre-pass is pure Python (no model inference) so it's ~tens of ms;
+        # the bulk of the work is the windowed YOLO-Pose inference (~1-2s/rally
+        # on T4). This avoids running pose on every frame and avoids refactoring
+        # contact_detector to separate detection from attribution.
+        if pose:
+            try:
+                from rallycut.tracking.pose_attribution.pose_cache import (
+                    enrich_positions_with_pose,
+                )
+
+                pre_seq = detect_contacts(
+                    ball_positions=ball_positions,
+                    player_positions=result.positions,
+                    config=ContactDetectionConfig(use_pose_attribution=False),
+                    net_y=result.court_split_y,
+                    frame_count=result.frame_count or None,
+                    team_assignments=verified_teams,
+                    court_calibrator=calibrator,
+                    sequence_probs=sequence_probs,
+                )
+                contact_frames = [c.frame for c in pre_seq.contacts]
+                if contact_frames:
+                    # By the time we reach _run_tracking, `video` is always
+                    # the rally segment (segment extraction happened earlier
+                    # in track_players), so start offset is 0.
+                    n_enriched = enrich_positions_with_pose(
+                        player_positions=result.positions,
+                        video_path=str(video),
+                        contact_frames=contact_frames,
+                        rally_start_ms=0,
+                    )
+                    if not quiet:
+                        console.print(
+                            f"[dim]Pose enrichment: {n_enriched} keypoints "
+                            f"injected across {len(contact_frames)} contacts[/dim]"
+                        )
+            except Exception as exc:
+                if not quiet:
+                    console.print(
+                        f"[yellow]Pose enrichment failed (continuing without): "
+                        f"{exc}[/yellow]"
+                    )
 
         contact_seq = detect_contacts(
             ball_positions=ball_positions,
