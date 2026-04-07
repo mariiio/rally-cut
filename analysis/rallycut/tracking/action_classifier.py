@@ -57,6 +57,25 @@ def _get_default_action_classifier() -> ActionTypeClassifier | None:
     return _default_action_classifier_cache["default"]
 
 
+# Cached default server classifier (loaded once from disk on first use)
+_default_server_classifier_cache: dict[str, Any] = {}
+
+
+def _get_default_server_classifier() -> Any:
+    """Load and cache the default server classifier from disk.
+
+    Returns None if no trained model exists at the default path.
+    """
+    if "default" not in _default_server_classifier_cache:
+        from rallycut.tracking.server_classifier import load_server_classifier
+
+        clf = load_server_classifier()
+        _default_server_classifier_cache["default"] = clf
+        if clf is not None:
+            logger.info("Auto-loaded server classifier from default path")
+    return _default_server_classifier_cache["default"]
+
+
 class ActionType(str, Enum):
     """Volleyball action types."""
 
@@ -465,6 +484,258 @@ def _find_server_image_space(
     return best_tid, best_side, confidence
 
 
+# ---------------------------------------------------------------------------
+# Serve pose scoring from YOLO-Pose keypoints
+# ---------------------------------------------------------------------------
+
+# COCO keypoint indices
+_KPT_L_SHOULDER = 5
+_KPT_R_SHOULDER = 6
+_KPT_L_WRIST = 9
+_KPT_R_WRIST = 10
+_KPT_MIN_CONF = 0.3
+
+
+def _score_server_candidates_by_pose(
+    player_positions: list[PlayerPosition],
+    start_frame: int,
+    window_frames: int = 45,
+) -> dict[int, float]:
+    """Score each player as a server candidate from keypoint pose features.
+
+    A beach volleyball serve has a distinctive pose: one arm raised high
+    (ball toss), then overhead swing.  No other action in the first ~2s
+    looks like this (receivers wait, net player crouches).
+
+    Features per player (normalized by bbox height for scale invariance):
+    - max wrist elevation above shoulder
+    - peak arm asymmetry (one arm high, other low = toss)
+    - peak wrist velocity (arm swing)
+    - fraction of frames with exactly one arm raised
+
+    Returns dict[track_id, score] (0-1).  Empty dict when no keypoints.
+    """
+    end_frame = start_frame + window_frames
+
+    # Collect per-track keypoint time series
+    track_kpts: dict[int, list[tuple[int, list[list[float]], float]]] = defaultdict(
+        list,
+    )
+    for p in player_positions:
+        if start_frame <= p.frame_number < end_frame and p.keypoints is not None:
+            if p.height > 0.01:
+                track_kpts[p.track_id].append(
+                    (p.frame_number, p.keypoints, p.height),
+                )
+
+    if not track_kpts:
+        return {}
+
+    raw_features: dict[int, tuple[float, float, float, float]] = {}
+    for tid, frames_data in track_kpts.items():
+        if len(frames_data) < 3:
+            continue
+
+        frames_data.sort(key=lambda x: x[0])
+        max_elev = 0.0
+        max_asym = 0.0
+        max_wrist_vel = 0.0
+        single_arm_frames = 0
+        valid_frames = 0
+
+        prev_l_wrist: tuple[float, float] | None = None
+        prev_r_wrist: tuple[float, float] | None = None
+
+        for _frame, kpts, bbox_h in frames_data:
+            if len(kpts) < 11:
+                continue
+
+            ls = kpts[_KPT_L_SHOULDER]
+            rs = kpts[_KPT_R_SHOULDER]
+            lw = kpts[_KPT_L_WRIST]
+            rw = kpts[_KPT_R_WRIST]
+
+            if ls[2] < _KPT_MIN_CONF or rs[2] < _KPT_MIN_CONF:
+                prev_l_wrist = None
+                prev_r_wrist = None
+                continue
+
+            l_wrist_ok = lw[2] >= _KPT_MIN_CONF
+            r_wrist_ok = rw[2] >= _KPT_MIN_CONF
+
+            if not (l_wrist_ok or r_wrist_ok):
+                prev_l_wrist = None
+                prev_r_wrist = None
+                continue
+
+            valid_frames += 1
+            shoulder_y = (ls[1] + rs[1]) / 2.0
+
+            # Wrist elevation above shoulder (image Y increases downward)
+            l_elev = (shoulder_y - lw[1]) / bbox_h if l_wrist_ok else 0.0
+            r_elev = (shoulder_y - rw[1]) / bbox_h if r_wrist_ok else 0.0
+
+            frame_elev = max(l_elev, r_elev)
+            if frame_elev > max_elev:
+                max_elev = frame_elev
+
+            if l_wrist_ok and r_wrist_ok:
+                asym = abs(l_elev - r_elev)
+                if asym > max_asym:
+                    max_asym = asym
+                l_above = l_elev > 0.1
+                r_above = r_elev > 0.1
+                if l_above != r_above:
+                    single_arm_frames += 1
+
+            # Wrist velocity (frame-to-frame displacement / bbox_height)
+            if l_wrist_ok and prev_l_wrist is not None:
+                dx = lw[0] - prev_l_wrist[0]
+                dy = lw[1] - prev_l_wrist[1]
+                vel = math.sqrt(dx * dx + dy * dy) / bbox_h
+                if vel > max_wrist_vel:
+                    max_wrist_vel = vel
+            if r_wrist_ok and prev_r_wrist is not None:
+                dx = rw[0] - prev_r_wrist[0]
+                dy = rw[1] - prev_r_wrist[1]
+                vel = math.sqrt(dx * dx + dy * dy) / bbox_h
+                if vel > max_wrist_vel:
+                    max_wrist_vel = vel
+
+            prev_l_wrist = (lw[0], lw[1]) if l_wrist_ok else None
+            prev_r_wrist = (rw[0], rw[1]) if r_wrist_ok else None
+
+        if valid_frames < 3:
+            continue
+
+        single_frac = single_arm_frames / valid_frames
+        raw_features[tid] = (max_elev, max_asym, max_wrist_vel, single_frac)
+
+    if not raw_features:
+        return {}
+
+    # Normalize across candidates (relative ranking matters)
+    all_elevs = [f[0] for f in raw_features.values()]
+    all_asyms = [f[1] for f in raw_features.values()]
+    all_vels = [f[2] for f in raw_features.values()]
+    all_fracs = [f[3] for f in raw_features.values()]
+
+    def _norm(val: float, vals: list[float]) -> float:
+        mn, mx = min(vals), max(vals)
+        return (val - mn) / (mx - mn) if mx > mn else 0.5
+
+    scores: dict[int, float] = {}
+    for tid, (elev, asym, vel, frac) in raw_features.items():
+        score = (
+            0.35 * _norm(elev, all_elevs)
+            + 0.30 * _norm(asym, all_asyms)
+            + 0.20 * _norm(vel, all_vels)
+            + 0.15 * _norm(frac, all_fracs)
+        )
+        scores[tid] = score
+
+    return scores
+
+
+# ---------------------------------------------------------------------------
+# Multi-signal server identification
+# ---------------------------------------------------------------------------
+
+def _identify_server(
+    player_positions: list[PlayerPosition],
+    start_frame: int,
+    net_y: float,
+    window_frames: int = 45,
+    calibrator: CourtCalibrator | None = None,
+) -> tuple[int, str, float]:
+    """Identify the server using position + pose signals.
+
+    Position-based detection (existing) is the primary signal.  When
+    keypoints are available, pose scoring (serve arm-raise detection)
+    provides a secondary signal that can override position in cases
+    of strong disagreement.
+
+    Returns:
+        (server_track_id, court_side, confidence).
+        (-1, "", 0.0) when no server can be identified.
+    """
+    # Primary: position-based (unchanged, threshold=0.04)
+    pos_tid, pos_side, pos_conf = _find_server_by_position(
+        player_positions, start_frame, net_y, window_frames,
+        calibrator=calibrator,
+    )
+
+    # Secondary: pose-based (only when keypoints available)
+    pose_scores = _score_server_candidates_by_pose(
+        player_positions, start_frame, window_frames,
+    )
+
+    if not pose_scores:
+        # No keypoints — fall back to position-only (existing behavior)
+        return pos_tid, pos_side, pos_conf
+
+    pose_best_tid = max(pose_scores, key=pose_scores.get)  # type: ignore[arg-type]
+    pose_best_score = pose_scores[pose_best_tid]
+
+    # If position found no server, use pose
+    if pos_tid < 0:
+        # Determine side from foot position
+        end_frame = start_frame + window_frames
+        foot_ys: list[float] = []
+        for p in player_positions:
+            if (
+                p.track_id == pose_best_tid
+                and start_frame <= p.frame_number < end_frame
+            ):
+                foot_ys.append(p.y + p.height / 2.0)
+        if foot_ys:
+            foot_ys.sort()
+            median_y = foot_ys[len(foot_ys) // 2]
+            side = "near" if median_y > net_y else "far"
+            logger.debug(
+                "Server from pose only: tid=%d side=%s score=%.2f",
+                pose_best_tid, side, pose_best_score,
+            )
+            return pose_best_tid, side, pose_best_score * 0.7
+        return -1, "", 0.0
+
+    # Both signals available — pose can override when it strongly disagrees
+    if pose_best_tid == pos_tid:
+        # Agreement: boost confidence
+        combined_conf = min(1.0, pos_conf + 0.1)
+        return pos_tid, pos_side, combined_conf
+
+    # Disagreement: pose overrides only if position is weak AND pose is strong
+    pose_runner_up = max(
+        (s for t, s in pose_scores.items() if t != pose_best_tid),
+        default=0.0,
+    )
+    pose_margin = pose_best_score - pose_runner_up
+    if pos_conf < 0.3 and pose_margin > 0.15:
+        end_frame = start_frame + window_frames
+        foot_ys = []
+        for p in player_positions:
+            if (
+                p.track_id == pose_best_tid
+                and start_frame <= p.frame_number < end_frame
+            ):
+                foot_ys.append(p.y + p.height / 2.0)
+        if foot_ys:
+            foot_ys.sort()
+            median_y = foot_ys[len(foot_ys) // 2]
+            side = "near" if median_y > net_y else "far"
+            logger.debug(
+                "Pose overrides position: pose_tid=%d (score=%.2f, margin=%.2f) "
+                "vs pos_tid=%d (conf=%.2f)",
+                pose_best_tid, pose_best_score, pose_margin,
+                pos_tid, pos_conf,
+            )
+            return pose_best_tid, side, pose_best_score * 0.6
+
+    # Default: trust position
+    return pos_tid, pos_side, pos_conf
+
+
 def _is_ball_on_serve_side(
     ball_y: float,
     court_side: str,
@@ -738,17 +1009,36 @@ class ActionClassifier:
 
         ball_positions = contact_sequence.ball_positions or None
 
-        # Position-based server detection: identify who the server is from
-        # player positions at rally start (before ball tracking kicks in).
+        # Server identification: prefer learned GBM classifier when available,
+        # fall back to multi-signal heuristic (position + pose).
         server_pos_tid = -1
         server_pos_side = ""
         pos_conf = 0.0
         if contact_sequence.player_positions:
-            server_pos_tid, server_pos_side, pos_conf = _find_server_by_position(
-                contact_sequence.player_positions, start_frame,
-                contact_sequence.net_y,
-                calibrator=calibrator,
-            )
+            server_clf = _get_default_server_classifier()
+            if server_clf is not None and server_clf.is_trained:
+                from rallycut.tracking.server_classifier import (
+                    extract_server_features,
+                )
+
+                feats = extract_server_features(
+                    player_positions=contact_sequence.player_positions,
+                    ball_positions=ball_positions,
+                    net_y=contact_sequence.net_y,
+                    start_frame=start_frame,
+                    calibrator=calibrator,
+                )
+                server_pos_tid, server_pos_side, pos_conf = server_clf.predict(
+                    feats, net_y=contact_sequence.net_y,
+                )
+
+            if server_pos_tid < 0:
+                # Fall back to heuristic when classifier missing or uncertain
+                server_pos_tid, server_pos_side, pos_conf = _identify_server(
+                    contact_sequence.player_positions, start_frame,
+                    contact_sequence.net_y,
+                    calibrator=calibrator,
+                )
 
         # Determine which contact is the serve (may be outside window if
         # ball tracking starts late — common with detector warmup).
