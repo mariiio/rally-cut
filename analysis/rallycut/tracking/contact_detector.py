@@ -192,7 +192,9 @@ class ContactDetectionConfig:
     temporal_attribution_min_confidence: float = 0.6  # Min softmax confidence to accept
 
     # Pose attribution: per-candidate binary classifier (replaces temporal attribution)
-    use_pose_attribution: bool = False
+    # Enabled 2026-04-07: +1.7pp attribution, +2.5pp court-side when pose keypoints
+    # are populated on PlayerPositions (via inject_keypoints.py or inline tracking).
+    use_pose_attribution: bool = True
     pose_attribution_min_confidence: float = 0.5  # Min P(touching) to accept
 
     # Adaptive deduplication: use shorter min distance for cross-side contacts.

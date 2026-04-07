@@ -190,6 +190,14 @@ def extract_candidate_features(
         for i in range(len(pose_data["frames"])):
             key = (int(pose_data["frames"][i]), int(pose_data["track_ids"][i]))
             pose_lookup[key] = pose_data["keypoints"][i]  # (17, 3)
+    # Fallback: read inline keypoints from PlayerPosition (populated via
+    # inject_keypoints.py into positions_json).
+    for pp in player_positions:
+        if pp.keypoints is None:
+            continue
+        key = (pp.frame_number, pp.track_id)
+        if key not in pose_lookup:
+            pose_lookup[key] = np.asarray(pp.keypoints, dtype=np.float32)
 
     # --- Extract features per candidate ---
     result: list[tuple[int, np.ndarray]] = []

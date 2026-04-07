@@ -697,19 +697,19 @@ class ActionTypeClassifier:
         Returns:
             Dictionary with LOO CV metrics.
         """
+        from joblib import Parallel, delayed
         from sklearn.ensemble import GradientBoostingClassifier
 
         unique_rallies = np.unique(rally_ids)
         all_preds = np.empty(len(y), dtype=y.dtype)
 
-        for rally in unique_rallies:
+        def _fold(rally: Any) -> tuple[np.ndarray, np.ndarray]:
             test_mask = rally_ids == rally
             train_mask = ~test_mask
-
             if np.sum(train_mask) < 10:
-                all_preds[test_mask] = "unknown"
-                continue
-
+                return test_mask, np.array(
+                    ["unknown"] * int(np.sum(test_mask)), dtype=y.dtype
+                )
             model = GradientBoostingClassifier(
                 n_estimators=200,
                 max_depth=4,
@@ -719,7 +719,13 @@ class ActionTypeClassifier:
                 random_state=42,
             )
             model.fit(x_all[train_mask], y[train_mask])
-            all_preds[test_mask] = model.predict(x_all[test_mask])
+            return test_mask, model.predict(x_all[test_mask])
+
+        results = Parallel(n_jobs=-1, verbose=1)(
+            delayed(_fold)(rally) for rally in unique_rallies
+        )
+        for test_mask, preds in results:
+            all_preds[test_mask] = preds
 
         accuracy = float(np.mean(all_preds == y))
 

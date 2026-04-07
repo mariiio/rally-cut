@@ -64,6 +64,8 @@ def _build_player_positions(
     result = []
     for pp in positions_json:
         kps = pose_kps.get((pp["frameNumber"], pp["trackId"])) if pose_kps else None
+        if kps is None and "keypoints" in pp:
+            kps = pp["keypoints"]
         result.append(PlayerPos(
             frame_number=pp["frameNumber"],
             track_id=pp["trackId"],
