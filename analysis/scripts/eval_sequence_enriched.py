@@ -181,7 +181,17 @@ def prepare_rallies(label_spread: int = 2) -> list[RallyBundle]:
     rallies = load_rallies_with_action_gt()
 
     video_ids = {r.video_id for r in rallies}
-    rally_team_map = _load_match_team_assignments(video_ids)
+    # Pass rally_positions so match_team_assignments triggers
+    # verify_team_assignments — mirrors production (track_player.py:1016).
+    # Without this the eval/diagnose numbers measure an unverified-team path
+    # that production does not actually run.
+    rally_pos_lookup: dict[str, list[PlayerPosition]] = {}
+    for r in rallies:
+        if r.positions_json:
+            rally_pos_lookup[r.rally_id] = _parse_players(r.positions_json)
+    rally_team_map = _load_match_team_assignments(
+        video_ids, rally_positions=rally_pos_lookup,
+    )
 
     # Court calibrations for enhanced features
     from rallycut.court.calibration import CourtCalibrator
