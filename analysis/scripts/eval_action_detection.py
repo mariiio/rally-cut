@@ -748,19 +748,15 @@ def _run_threshold_sweep(
             calibrators[vid] = cal
         else:
             calibrators[vid] = None
-    # Build positions lookup for team assignment verification
+    # Build positions lookup for team assignment verification.
+    # Use _build_player_positions so inline DB keypoints flow to pose_attribution —
+    # parity with main() so sweep attribution metrics are comparable.
     rally_pos_lookup: dict[str, list[PlayerPos]] = {}
     for r in rallies:
         if r.positions_json:
-            rally_pos_lookup[r.rally_id] = [
-                PlayerPos(
-                    frame_number=pp["frameNumber"], track_id=pp["trackId"],
-                    x=pp["x"], y=pp["y"],
-                    width=pp["width"], height=pp["height"],
-                    confidence=pp.get("confidence", 1.0),
-                )
-                for pp in r.positions_json
-            ]
+            rally_pos_lookup[r.rally_id] = _build_player_positions(
+                r.positions_json, rally_id=r.rally_id, inject_pose=args.pose
+            )
     match_teams_by_rally = _load_match_team_assignments(
         video_ids, min_confidence=0.70, rally_positions=rally_pos_lookup,
     )
@@ -776,6 +772,8 @@ def _run_threshold_sweep(
     sweep_table.add_column("Recall", justify="right")
     sweep_table.add_column("F1", justify="right")
     sweep_table.add_column("Action Acc", justify="right")
+    sweep_table.add_column("Attribution", justify="right")
+    sweep_table.add_column("Court-Side", justify="right")
 
     for threshold in thresholds:
         # Load classifier with this threshold
@@ -804,16 +802,11 @@ def _run_threshold_sweep(
 
             player_positions = []
             if rally.positions_json:
-                player_positions = [
-                    PlayerPos(
-                        frame_number=pp["frameNumber"],
-                        track_id=pp["trackId"],
-                        x=pp["x"], y=pp["y"],
-                        width=pp["width"], height=pp["height"],
-                        confidence=pp.get("confidence", 1.0),
-                    )
-                    for pp in rally.positions_json
-                ]
+                player_positions = _build_player_positions(
+                    rally.positions_json,
+                    rally_id=rally.rally_id,
+                    inject_pose=args.pose,
+                )
 
             match_teams = match_teams_by_rally.get(rally.rally_id)
 
@@ -843,6 +836,7 @@ def _run_threshold_sweep(
                 rally.gt_labels, real_pred,
                 tolerance=tolerance_frames,
                 available_track_ids=avail_tids,
+                team_assignments=match_teams,
             )
 
             # Pass 2: synthetic serves → unmatched GT serves
@@ -855,6 +849,7 @@ def _run_threshold_sweep(
                 _match_synthetic_serves(
                     matches, sweep_synth, rally.gt_labels,
                     synth_tol, avail_tids,
+                    team_assignments=match_teams,
                 )
             all_matches_sweep.extend(matches)
             all_unmatched_sweep.extend(unmatched)
@@ -862,6 +857,9 @@ def _run_threshold_sweep(
         metrics = compute_metrics(all_matches_sweep, all_unmatched_sweep)
         is_current = threshold == 0.35
         style = "bold" if is_current else ""
+        cs_acc = metrics.get("court_side_accuracy")
+        cs_str = f"{cs_acc:.1%}" if cs_acc is not None else "-"
+        attr_str = f"{metrics['player_accuracy']:.1%}"
         sweep_table.add_row(
             f"{threshold:.2f}" + (" *" if is_current else ""),
             str(metrics["tp"]),
@@ -871,9 +869,15 @@ def _run_threshold_sweep(
             f"{metrics['recall']:.1%}",
             f"{metrics['f1']:.1%}",
             f"{metrics['action_accuracy']:.1%}",
+            attr_str,
+            cs_str,
             style=style,
         )
-        console.print(f"  threshold={threshold:.2f}: F1={metrics['f1']:.1%} P={metrics['precision']:.1%} R={metrics['recall']:.1%}")
+        console.print(
+            f"  threshold={threshold:.2f}: F1={metrics['f1']:.1%} "
+            f"ActAcc={metrics['action_accuracy']:.1%} "
+            f"Attr={attr_str} CS={cs_str}"
+        )
 
     console.print(sweep_table)
     console.print("\n[dim]* = current default threshold[/dim]")

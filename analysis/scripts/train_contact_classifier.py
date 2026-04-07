@@ -80,6 +80,10 @@ def extract_candidate_features(
     """
     from scipy.signal import find_peaks
 
+    from rallycut.tracking.pose_attribution.features import (
+        extract_contact_pose_features_for_nearest,
+    )
+
     cfg = config or ContactDetectionConfig()
 
     if not rally.ball_positions_json:
@@ -211,6 +215,7 @@ def extract_candidate_features(
                 width=pp["width"],
                 height=pp["height"],
                 confidence=pp.get("confidence", 1.0),
+                keypoints=pp.get("keypoints"),
             )
             for pp in rally.positions_json
         ]
@@ -340,6 +345,21 @@ def extract_candidate_features(
                 "seq_p_block": float(sequence_probs[6, frame]),
             }
 
+        # Pose features for nearest player (0.0 when keypoints unavailable)
+        (
+            pose_wrist_vel_max,
+            pose_hand_ball_dist_min,
+            pose_arm_ext_change,
+            pose_conf_mean,
+            pose_both_arms_raised,
+        ) = extract_contact_pose_features_for_nearest(
+            contact_frame=frame,
+            nearest_track_id=track_id,
+            player_positions=player_positions,
+            ball_at_contact=(ball.x, ball.y),
+            ball_by_frame=ball_by_frame,
+        )
+
         features = CandidateFeatures(
             frame=frame,
             velocity=velocity,
@@ -362,6 +382,11 @@ def extract_candidate_features(
             ball_detection_density=ball_detection_density,
             consecutive_detections=consec,
             frames_since_rally_start=frame - first_frame,
+            nearest_active_wrist_velocity_max=pose_wrist_vel_max,
+            nearest_hand_ball_dist_min=pose_hand_ball_dist_min,
+            nearest_active_arm_extension_change=pose_arm_ext_change,
+            nearest_pose_confidence_mean=pose_conf_mean,
+            nearest_both_arms_raised=pose_both_arms_raised,
             **seq_probs_at_frame,
         )
 

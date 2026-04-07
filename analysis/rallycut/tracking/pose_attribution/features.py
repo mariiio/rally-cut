@@ -9,6 +9,8 @@ classifier that scores each candidate independently.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 
@@ -530,6 +532,89 @@ def _fill_bbox_motion(
 
     features[start_idx] = max_dy
     features[start_idx + 1] = max_dh
+
+
+def extract_contact_pose_features_for_nearest(
+    contact_frame: int,
+    nearest_track_id: int,
+    player_positions: list[PlayerPosition],
+    ball_at_contact: tuple[float, float],
+    ball_by_frame: Mapping[int, Any] | None = None,
+) -> tuple[float, float, float, float, float]:
+    """Compute 5 pose features for the nearest player at a contact candidate.
+
+    Reuses the active-hand logic from `_fill_pose_features`. Returns zeros on
+    any failure (no track id, no keypoints, malformed data) so the classifier
+    can safely fall back to non-pose features.
+
+    The returned tuple contains, in order:
+      0. nearest_active_wrist_velocity_max (slot 0 from _fill_pose_features)
+      1. nearest_hand_ball_dist_min        (slot 7)
+      2. nearest_active_arm_extension_change (slot 3)
+      3. nearest_pose_confidence_mean      (slot 10)
+      4. nearest_both_arms_raised          (slot 14)
+
+    Args:
+        contact_frame: Rally-relative frame number of the candidate.
+        nearest_track_id: track_id of the nearest player; <0 means no player.
+        player_positions: Full rally player position list (must have .keypoints).
+        ball_at_contact: (x, y) of the ball at the contact frame.
+        ball_by_frame: Optional mapping frame -> object with .x, .y for the
+            ±POSE_WINDOW_HALF window; used for per-frame hand-ball distance.
+    """
+    if nearest_track_id < 0 or not player_positions:
+        return (0.0, 0.0, 0.0, 0.0, 0.0)
+
+    try:
+        pose_lookup: dict[tuple[int, int], np.ndarray] = {}
+        for pp in player_positions:
+            if pp.track_id != nearest_track_id:
+                continue
+            if pp.keypoints is None:
+                continue
+            if abs(pp.frame_number - contact_frame) > POSE_WINDOW_HALF:
+                continue
+            kps = np.asarray(pp.keypoints, dtype=np.float64)
+            if kps.shape != (17, 3):
+                continue
+            pose_lookup[(pp.frame_number, nearest_track_id)] = kps
+
+        if not pose_lookup:
+            return (0.0, 0.0, 0.0, 0.0, 0.0)
+
+        window_len = 2 * POSE_WINDOW_HALF + 1
+        mid = POSE_WINDOW_HALF
+        ball_xy: list[tuple[float, float] | None] = [None] * window_len
+        for i in range(window_len):
+            frame = contact_frame + (i - mid)
+            if ball_by_frame is not None and frame in ball_by_frame:
+                bp = ball_by_frame[frame]
+                ball_xy[i] = (float(bp.x), float(bp.y))
+        ball_xy[mid] = (float(ball_at_contact[0]), float(ball_at_contact[1]))
+
+        features = np.zeros(POSE_FEATURE_COUNT, dtype=np.float64)
+        _fill_pose_features(
+            features=features,
+            track_id=nearest_track_id,
+            contact_frame=contact_frame,
+            ball_xy=ball_xy,
+            ball_at_contact=ball_at_contact,
+            pose_lookup=pose_lookup,
+            mid=mid,
+        )
+        return (
+            float(features[0]),
+            float(features[7]),
+            float(features[3]),
+            float(features[10]),
+            float(features[14]),
+        )
+    except Exception:
+        # Best-effort fallback: pose features are optional signal and the
+        # classifier handles zeros as "no pose info". We swallow failures
+        # here rather than fail the whole contact detection pipeline if
+        # keypoint data is malformed for a single candidate.
+        return (0.0, 0.0, 0.0, 0.0, 0.0)
 
 
 def extract_spatial_only_features(

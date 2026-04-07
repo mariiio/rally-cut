@@ -7,7 +7,7 @@ Individual trajectory features (velocity, direction change, player distance)
 overlap between TP and FP in marginal distributions, but a learned model can
 exploit correlations between features to separate them.
 
-Features per candidate (27 total):
+Features per candidate (32 total):
 - Ball velocity magnitude, direction change angle, vertical velocity, speed ratio
 - Arc fit residual, acceleration, trajectory curvature
 - Player distance to nearest player
@@ -17,6 +17,11 @@ Features per candidate (27 total):
 - Ball detection density, consecutive detections
 - MS-TCN++ sequence model probabilities (7 features): background + 6 action classes
   When available, the GBM learns whether to trust trajectory vs sequence signal.
+- Nearest-player pose features (5): active wrist velocity max, hand-ball distance min,
+  arm extension change, pose confidence mean, both-arms-raised fraction. Computed
+  from YOLO-Pose keypoints via
+  pose_attribution.features.extract_contact_pose_features_for_nearest and default
+  to 0.0 when keypoints are unavailable.
 
 Model: scikit-learn GradientBoostingClassifier. A simple ensemble model is
 appropriate for this dataset size and resistant to overfitting.
@@ -74,6 +79,12 @@ class CandidateFeatures:
     seq_p_attack: float = 0.0
     seq_p_dig: float = 0.0
     seq_p_block: float = 0.0
+    # Pose features for nearest player (0.0 when keypoints unavailable)
+    nearest_active_wrist_velocity_max: float = 0.0
+    nearest_hand_ball_dist_min: float = 0.0
+    nearest_active_arm_extension_change: float = 0.0
+    nearest_pose_confidence_mean: float = 0.0
+    nearest_both_arms_raised: float = 0.0
 
     def to_array(self) -> np.ndarray:
         """Convert to numpy feature array for classifier input."""
@@ -106,6 +117,11 @@ class CandidateFeatures:
             self.seq_p_attack,
             self.seq_p_dig,
             self.seq_p_block,
+            self.nearest_active_wrist_velocity_max,
+            self.nearest_hand_ball_dist_min,
+            self.nearest_active_arm_extension_change,
+            self.nearest_pose_confidence_mean,
+            self.nearest_both_arms_raised,
         ], dtype=np.float64)
 
     @staticmethod
@@ -138,6 +154,11 @@ class CandidateFeatures:
             "seq_p_attack",
             "seq_p_dig",
             "seq_p_block",
+            "nearest_active_wrist_velocity_max",
+            "nearest_hand_ball_dist_min",
+            "nearest_active_arm_extension_change",
+            "nearest_pose_confidence_mean",
+            "nearest_both_arms_raised",
         ]
 
 

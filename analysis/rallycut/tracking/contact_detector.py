@@ -1997,6 +1997,24 @@ def detect_contacts(
                 seq_dig = float(sequence_probs[5, frame])
                 seq_blk = float(sequence_probs[6, frame])
 
+            # Pose features for nearest player (0.0 if no keypoints)
+            from rallycut.tracking.pose_attribution.features import (
+                extract_contact_pose_features_for_nearest,
+            )
+            (
+                pose_wrist_vel_max,
+                pose_hand_ball_dist_min,
+                pose_arm_ext_change,
+                pose_conf_mean,
+                pose_both_arms_raised,
+            ) = extract_contact_pose_features_for_nearest(
+                contact_frame=frame,
+                nearest_track_id=track_id,
+                player_positions=player_positions or [],
+                ball_at_contact=(ball.x, ball.y),
+                ball_by_frame=ball_by_frame,
+            )
+
             features = CandidateFeatures(
                 frame=frame,
                 velocity=velocity,
@@ -2026,6 +2044,11 @@ def detect_contacts(
                 seq_p_attack=seq_att,
                 seq_p_dig=seq_dig,
                 seq_p_block=seq_blk,
+                nearest_active_wrist_velocity_max=pose_wrist_vel_max,
+                nearest_hand_ball_dist_min=pose_hand_ball_dist_min,
+                nearest_active_arm_extension_change=pose_arm_ext_change,
+                nearest_pose_confidence_mean=pose_conf_mean,
+                nearest_both_arms_raised=pose_both_arms_raised,
             )
             results = classifier.predict([features])
             is_validated, confidence = results[0]
