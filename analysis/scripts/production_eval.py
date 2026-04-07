@@ -113,8 +113,10 @@ from eval_action_detection import (  # type: ignore[import-not-found]  # noqa: E
 from rallycut.tracking.action_classifier import classify_rally_actions  # noqa: E402
 from rallycut.tracking.ball_tracker import BallPosition  # noqa: E402
 from rallycut.tracking.contact_detector import (  # noqa: E402
+    ContactDetectionConfig,
     detect_contacts,
 )
+from rallycut.tracking import action_classifier as _action_classifier_mod  # noqa: E402
 from rallycut.tracking.match_tracker import verify_team_assignments  # noqa: E402
 from rallycut.tracking.player_tracker import PlayerPosition  # noqa: E402
 from rallycut.tracking.sequence_action_runtime import (  # noqa: E402
@@ -133,7 +135,6 @@ WEIGHTS_PATHS: dict[str, Path] = {
     "contact_classifier": Path("weights/contact_classifier/contact_classifier.pkl"),
     "pose_attribution":   Path("weights/pose_attribution/pose_attribution.joblib"),
     "action_classifier":  Path("weights/action_classifier/action_classifier.pkl"),
-    "server_classifier":  Path("weights/server_classifier/server_classifier.pkl"),
     "sequence_action":    Path("weights/sequence_action/ms_tcn_production.pt"),
 }
 
@@ -186,13 +187,22 @@ class PipelineContext:
     """Runtime toggles consumed by `_run_rally`. Ablations mutate this."""
 
     skip_sequence_override: bool = False
-    # Phase 3 will add: skip_pose_enrich, skip_verify_teams, skip_adaptive_dedup, ...
+    skip_verify_teams: bool = False
+    skip_pose_attribution: bool = False
+    skip_contact_classifier: bool = False
+    skip_adaptive_dedup: bool = False
+    skip_seq_enriched_contact_gbm: bool = False
 
 
 # Each ablation is a one-line mutator. Extension pattern is documented in the
 # module docstring. Keep these under 10 lines apiece.
 ABLATIONS: dict[str, Callable[[PipelineContext], None]] = {
-    "mstcn_override": lambda ctx: setattr(ctx, "skip_sequence_override", True),
+    "mstcn_override":           lambda ctx: setattr(ctx, "skip_sequence_override", True),
+    "verify_team_assignments":  lambda ctx: setattr(ctx, "skip_verify_teams", True),
+    "pose_attribution":         lambda ctx: setattr(ctx, "skip_pose_attribution", True),
+    "contact_classifier":       lambda ctx: setattr(ctx, "skip_contact_classifier", True),
+    "adaptive_dedup":           lambda ctx: setattr(ctx, "skip_adaptive_dedup", True),
+    "seq_enriched_contact_gbm": lambda ctx: setattr(ctx, "skip_seq_enriched_contact_gbm", True),
 }
 
 
@@ -291,7 +301,7 @@ def _run_rally(
 
     # Stage 9 — verify team assignments (per-rally bulk flip).
     teams: dict[int, int] | None = dict(match_teams) if match_teams else None
-    if teams is not None:
+    if teams is not None and not ctx.skip_verify_teams:
         teams = verify_team_assignments(teams, player_positions)
 
     # Stage 10 — MS-TCN++ per-frame action probabilities. Calibrator is
@@ -309,16 +319,31 @@ def _run_rally(
 
     # Stages 11+12 — pose-informed contact detection. Pose keypoints are
     # already injected via pose_cache above; production's default
-    # ContactDetectionConfig is used implicitly (no config= kwarg) so the
-    # eval picks up any new defaults automatically — mirrors
-    # track_player.py:978 which also omits `config=`.
+    # ContactDetectionConfig is used implicitly unless an ablation toggles
+    # a flag on it. When any contact-stage toggle is active we materialize
+    # a ContactDetectionConfig() (same defaults) and mutate the specific
+    # fields, so the non-ablated flags remain production-identical.
+    cfg: ContactDetectionConfig | None = None
+    use_classifier = True
+    if (ctx.skip_pose_attribution or ctx.skip_adaptive_dedup
+            or ctx.skip_contact_classifier):
+        cfg = ContactDetectionConfig()
+        if ctx.skip_pose_attribution:
+            cfg.use_pose_attribution = False
+        if ctx.skip_adaptive_dedup:
+            cfg.adaptive_dedup = False
+        if ctx.skip_contact_classifier:
+            use_classifier = False
+
     contact_sequence = detect_contacts(
         ball_positions=ball_positions,
         player_positions=player_positions,
+        config=cfg,
+        use_classifier=use_classifier,
         frame_count=rally.frame_count or None,
         team_assignments=teams,
         court_calibrator=calibrator,
-        sequence_probs=sequence_probs,
+        sequence_probs=None if ctx.skip_seq_enriched_contact_gbm else sequence_probs,
     )
 
     # Stage 13 — action classification (state machine + GBM + repair + etc.).
