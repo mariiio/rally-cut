@@ -133,9 +133,30 @@ def get_sequence_probs(
     return probs
 
 
+# Dig-preserving guard threshold for apply_sequence_override.
+#
+# When the GBM action classifier predicts `dig` but MS-TCN++'s argmax wants
+# to overwrite it with `set`, refuse the override unless MS-TCN++ is at least
+# DIG_GUARD_RATIO times more confident in `set` than in `dig`. The 2026-04-07
+# contact-classifier audit confusion matrix found MS-TCN++ over-confidently
+# rewrites 9 GT-dig contacts as `set` (a low set and a defensive dig produce
+# nearly identical trajectory features), while removing the override entirely
+# costs +13.8pp on block F1. The guard targets only the dig→set leak and
+# leaves every other class transition untouched.
+#
+# Chosen value: 2.5 — see sweep results in sequence_action_classifier.md
+# (2026-04-07). Sweep over {1.0, 1.5, 2.0, 2.5, 3.0, 4.0} chose 2.5 as the
+# smallest τ that maximised action_accuracy on the 339-rally dashboard while
+# meeting the dig F1 ≥ baseline + 0.5pp hard constraint. τ ∈ {2.5, 3.0, 4.0}
+# all produce identical metrics, so 2.5 is the minimal-intervention choice.
+# Hardcoded by intent: this is a production parameter, not a runtime knob.
+DIG_GUARD_RATIO: float = 2.5
+
+
 def apply_sequence_override(
     rally_actions: Any,
     sequence_probs: np.ndarray,
+    dig_guard_ratio: float | None = None,
 ) -> None:
     """Override non-serve action types with MS-TCN++ argmax predictions.
 
@@ -143,14 +164,44 @@ def apply_sequence_override(
     rally constraints (first action, baseline position, arc crossing) are
     stronger than per-frame model predictions. Synthetic actions are also
     skipped because they have no ground frame to look up in the probs array.
+
+    Dig-preserving guard: when the existing GBM prediction is `dig` and
+    MS-TCN++'s argmax would overwrite it with `set`, the guard refuses the
+    overwrite unless `seq_probs[set] >= dig_guard_ratio * seq_probs[dig]`.
+    This recovers GBM digs that MS-TCN++ misclassifies as low sets without
+    affecting any other class transition.
     """
     from rallycut.actions.trajectory_features import ACTION_TYPES
     from rallycut.tracking.action_classifier import ActionType
+
+    # Read the global at call time (not via default arg) so test/sweep
+    # harnesses can monkey-patch DIG_GUARD_RATIO between runs.
+    ratio = dig_guard_ratio if dig_guard_ratio is not None else DIG_GUARD_RATIO
+
+    # Index of `set` and `dig` inside sequence_probs[1:, :] (NUM_CLASSES − 1
+    # offset because index 0 is background).
+    set_idx = ACTION_TYPES.index("set")
+    dig_idx = ACTION_TYPES.index("dig")
 
     for action in rally_actions.actions:
         if action.is_synthetic or action.action_type == ActionType.SERVE:
             continue
         frame = action.frame
-        if 0 <= frame < sequence_probs.shape[1]:
-            cls = int(np.argmax(sequence_probs[1:, frame]))
-            action.action_type = ActionType(ACTION_TYPES[cls])
+        if not (0 <= frame < sequence_probs.shape[1]):
+            continue
+        per_frame = sequence_probs[1:, frame]
+        cls = int(np.argmax(per_frame))
+        new_type = ActionType(ACTION_TYPES[cls])
+
+        # Dig guard: GBM said dig, MS-TCN++ wants set — only override if
+        # MS-TCN++ is much more confident in set than in dig.
+        if (
+            action.action_type == ActionType.DIG
+            and new_type == ActionType.SET
+        ):
+            seq_set = float(per_frame[set_idx])
+            seq_dig = float(per_frame[dig_idx])
+            if seq_set < ratio * seq_dig:
+                continue
+
+        action.action_type = new_type
