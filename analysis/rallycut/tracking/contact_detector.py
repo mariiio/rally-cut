@@ -1641,10 +1641,12 @@ def detect_contacts(
             from median Y position.
         court_calibrator: Calibrated court projector. When provided, ball side uses
             perspective-correct projection via homography.
-        sequence_probs: Optional (NUM_CLASSES, T) per-frame action probabilities
-            from MS-TCN++ sequence model. When provided, probabilities at each
-            candidate frame are added as features to the contact classifier,
-            letting the GBM learn whether to trust trajectory vs sequence signal.
+        sequence_probs: Accepted for backward compat. The 7 seq_p_* features
+            were dropped from the contact classifier on 2026-04-07 after an
+            importance audit found their GBM contribution was exactly 0.0000
+            (the trainer had been passing None all along). This argument is
+            now a no-op; the MS-TCN++ signal still reaches actions via
+            sequence_action_runtime.apply_sequence_override at stage 14.
 
     Returns:
         ContactSequence with all detected contacts.

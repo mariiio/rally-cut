@@ -71,9 +71,14 @@ def extract_candidate_features(
     Args:
         rally: Rally data with ball/player positions.
         config: Contact detection configuration.
-        sequence_probs: Optional (NUM_CLASSES, T) per-frame action probabilities
-            from MS-TCN++. When provided, the 7 seq_p_* fields on each
-            CandidateFeatures are populated from the model's predictions.
+        sequence_probs: Accepted for backward compatibility with diagnostic
+            scripts that still pass it (eval_sequence_enriched,
+            train_production_sequence, diagnose_serve_*). The 7 seq_p_*
+            features were dropped from CandidateFeatures on 2026-04-07 after
+            an importance audit found their GBM contribution was exactly
+            0.0000 (the trainer had been passing None all along, so the
+            features were constant zeros at training time and the trees
+            never split on them). This argument is now a no-op.
 
     Returns:
         Tuple of (features_list, candidate_frames).

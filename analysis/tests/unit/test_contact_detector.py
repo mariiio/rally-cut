@@ -840,8 +840,8 @@ class TestCandidateFeatures:
             frames_since_last=15,
         )
         arr = f.to_array()
-        assert arr.shape == (27,)
-        assert len(CandidateFeatures.feature_names()) == 27
+        assert arr.shape == (25,)
+        assert len(CandidateFeatures.feature_names()) == 25
 
     def test_infinite_player_distance_handled(self) -> None:
         """Infinite player distance maps to 1.0."""
