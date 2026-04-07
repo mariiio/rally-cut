@@ -190,8 +190,11 @@ def extract_candidate_features(
         for i in range(len(pose_data["frames"])):
             key = (int(pose_data["frames"][i]), int(pose_data["track_ids"][i]))
             pose_lookup[key] = pose_data["keypoints"][i]  # (17, 3)
-    # Fallback: read inline keypoints from PlayerPosition (populated via
-    # inject_keypoints.py into positions_json).
+    # Read inline keypoints from PlayerPosition. This is the primary source
+    # in production (populated by enrich_positions_with_pose during tracking)
+    # and the offline fallback for rallies enriched via inject_keypoints.py.
+    # The pose_data argument above is kept for backward compatibility with
+    # the .npz cache format used by older eval scripts.
     for pp in player_positions:
         if pp.keypoints is None:
             continue

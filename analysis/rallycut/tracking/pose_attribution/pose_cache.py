@@ -332,77 +332,88 @@ def enrich_positions_with_pose(
         logger.warning("enrich_positions_with_pose: cannot open %s", video_path)
         return 0
 
-    img_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    img_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    abs_offset = int(rally_start_ms / 1000 * fps)
+    try:
+        img_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        img_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        abs_offset = int(rally_start_ms / 1000 * fps)
 
-    sorted_frames = sorted(pos_by_frame.keys())
-    first_abs = abs_offset + sorted_frames[0]
-    cap.set(cv2.CAP_PROP_POS_FRAMES, first_abs)
-    current_abs = first_abs
+        sorted_frames = sorted(pos_by_frame.keys())
+        first_abs = abs_offset + sorted_frames[0]
+        cap.set(cv2.CAP_PROP_POS_FRAMES, first_abs)
+        current_abs = first_abs
 
-    n_enriched = 0
-    batch: list[tuple[int, np.ndarray]] = []
+        n_enriched = 0
+        batch: list[tuple[int, np.ndarray]] = []
 
-    def _flush_batch() -> int:
-        if not batch:
-            return 0
-        frames_imgs = [f for _, f in batch]
-        rally_frames_in_batch = [rf for rf, _ in batch]
-        try:
-            results = pose_model.predict(  # type: ignore[attr-defined]
-                frames_imgs, verbose=False, imgsz=imgsz,
-            )
-        except Exception as exc:
-            logger.warning("YOLO-Pose batch failed: %s", exc)
-            return 0
-        enriched = 0
-        for result, rally_frame in zip(results, rally_frames_in_batch):
-            if result.keypoints is None or result.boxes is None:
+        def _flush_batch(b: list[tuple[int, np.ndarray]]) -> int:
+            if not b:
+                return 0
+            frames_imgs = [f for _, f in b]
+            rally_frames_in_batch = [rf for rf, _ in b]
+            try:
+                results = pose_model.predict(  # type: ignore[attr-defined]
+                    frames_imgs, verbose=False, imgsz=imgsz,
+                )
+            except Exception as exc:
+                logger.warning("YOLO-Pose batch failed: %s", exc)
+                return 0
+            enriched = 0
+            for result, rally_frame in zip(results, rally_frames_in_batch):
+                if result.keypoints is None or result.boxes is None:
+                    continue
+                kps_all = result.keypoints.data.cpu().numpy()  # (N, 17, 3)
+                boxes = result.boxes.xyxy.cpu().numpy()  # (N, 4) pixel
+                if len(kps_all) == 0:
+                    continue
+                boxes_norm = boxes.copy()
+                boxes_norm[:, [0, 2]] /= img_w
+                boxes_norm[:, [1, 3]] /= img_h
+
+                # Pre-build det boxes as tuples once per frame (avoids per-pp tuple alloc)
+                det_boxes = [
+                    (
+                        float(boxes_norm[i, 0]), float(boxes_norm[i, 1]),
+                        float(boxes_norm[i, 2]), float(boxes_norm[i, 3]),
+                    )
+                    for i in range(len(boxes_norm))
+                ]
+
+                for pp in pos_by_frame.get(rally_frame, []):
+                    cx, cy = pp.x, pp.y
+                    w, h = pp.width, pp.height
+                    pp_box = (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+                    best_iou = 0.0
+                    best_idx = -1
+                    for det_idx, det_box in enumerate(det_boxes):
+                        iou = _bbox_iou(pp_box, det_box)
+                        if iou > best_iou:
+                            best_iou = iou
+                            best_idx = det_idx
+                    if best_iou >= iou_threshold and best_idx >= 0:
+                        kps = kps_all[best_idx].copy()
+                        kps[:, 0] /= img_w
+                        kps[:, 1] /= img_h
+                        pp.keypoints = kps.tolist()
+                        enriched += 1
+            return enriched
+
+        for rally_frame in sorted_frames:
+            target_abs = abs_offset + rally_frame
+            while current_abs < target_abs:
+                cap.grab()
+                current_abs += 1
+            ret, frame = cap.read()
+            if not ret:
+                current_abs += 1
                 continue
-            kps_all = result.keypoints.data.cpu().numpy()  # (N, 17, 3)
-            boxes = result.boxes.xyxy.cpu().numpy()  # (N, 4) pixel
-            if len(kps_all) == 0:
-                continue
-            boxes_norm = boxes.copy()
-            boxes_norm[:, [0, 2]] /= img_w
-            boxes_norm[:, [1, 3]] /= img_h
-
-            for pp in pos_by_frame.get(rally_frame, []):
-                cx, cy = pp.x, pp.y
-                w, h = pp.width, pp.height
-                pp_box = (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
-                best_iou = 0.0
-                best_idx = -1
-                for det_idx in range(len(boxes_norm)):
-                    iou = _bbox_iou(pp_box, tuple(boxes_norm[det_idx]))
-                    if iou > best_iou:
-                        best_iou = iou
-                        best_idx = det_idx
-                if best_iou >= iou_threshold and best_idx >= 0:
-                    kps = kps_all[best_idx].copy()
-                    kps[:, 0] /= img_w
-                    kps[:, 1] /= img_h
-                    pp.keypoints = kps.tolist()
-                    enriched += 1
-        return enriched
-
-    for rally_frame in sorted_frames:
-        target_abs = abs_offset + rally_frame
-        while current_abs < target_abs:
-            cap.grab()
             current_abs += 1
-        ret, frame = cap.read()
-        if not ret:
-            current_abs += 1
-            continue
-        current_abs += 1
-        batch.append((rally_frame, frame))
-        if len(batch) >= batch_size:
-            n_enriched += _flush_batch()
-            batch = []
+            batch.append((rally_frame, frame))
+            if len(batch) >= batch_size:
+                n_enriched += _flush_batch(batch)
+                batch = []
 
-    n_enriched += _flush_batch()
-    cap.release()
-    return n_enriched
+        n_enriched += _flush_batch(batch)
+        return n_enriched
+    finally:
+        cap.release()

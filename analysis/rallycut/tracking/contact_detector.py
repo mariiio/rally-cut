@@ -187,13 +187,17 @@ class ContactDetectionConfig:
     player_motion_min_d_height: float = 0.015  # Min peak height change to qualify
     player_motion_max_ball_distance: float = 0.20  # Max ball-player distance for motion candidate
 
-    # Temporal attribution: use trajectory-based model to override proximity attribution
+    # Temporal attribution: trajectory-based model that overrides proximity
+    # attribution. Used as a fallback when pose attribution is unavailable
+    # (no pose model on disk or use_pose_attribution=False).
     use_temporal_attribution: bool = True
     temporal_attribution_min_confidence: float = 0.6  # Min softmax confidence to accept
 
-    # Pose attribution: per-candidate binary classifier (replaces temporal attribution)
-    # Enabled 2026-04-07: +1.7pp attribution, +2.5pp court-side when pose keypoints
-    # are populated on PlayerPositions (via inject_keypoints.py or inline tracking).
+    # Pose attribution: per-candidate binary classifier using YOLO-Pose keypoints.
+    # Takes precedence over temporal_attribution when both are enabled and the
+    # pose model loads successfully. Enabled 2026-04-07: +1.7pp attribution,
+    # +2.5pp court-side. Requires PlayerPosition.keypoints to be populated
+    # (via inline tracking enrichment or inject_keypoints.py for offline eval).
     use_pose_attribution: bool = True
     pose_attribution_min_confidence: float = 0.5  # Min P(touching) to accept
 

@@ -331,7 +331,8 @@ def _track_single_rally(
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg failed: {result.stderr[-500:]}")
 
-        # Run track-players CLI
+        # Run track-players CLI. --pose enables YOLO-Pose enrichment around
+        # contact frames so the pose attribution model can run downstream.
         cli_cmd = [
             "python", "-m", "rallycut.cli.main",
             "track-players",
@@ -339,6 +340,7 @@ def _track_single_rally(
             "--output", output_path,
             "--filter",
             "--actions",
+            "--pose",
             "--quiet",
         ]
         if calibration_corners and len(calibration_corners) == 4:

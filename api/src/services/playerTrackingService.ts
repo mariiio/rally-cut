@@ -295,6 +295,7 @@ async function runPlayerTracker(
       videoPath,
       '--output', outputPath,
       '--actions',  // Enable contact detection + action classification
+      '--pose',     // Enrich PlayerPositions with YOLO-Pose keypoints at contact frames
       // Note: Not using --quiet so we can see filter logs
     ];
 

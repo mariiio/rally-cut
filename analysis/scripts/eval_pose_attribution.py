@@ -93,6 +93,7 @@ def _parse_positions(rally: RallyData) -> tuple[list[BallPosition], list[PlayerP
                 width=pp["width"],
                 height=pp["height"],
                 confidence=pp.get("confidence", 1.0),
+                keypoints=pp.get("keypoints"),
             ))
 
     return ball_positions, player_positions
