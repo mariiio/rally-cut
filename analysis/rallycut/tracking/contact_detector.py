@@ -195,9 +195,10 @@ class ContactDetectionConfig:
 
     # Pose attribution: per-candidate binary classifier using YOLO-Pose keypoints.
     # Takes precedence over temporal_attribution when both are enabled and the
-    # pose model loads successfully. Enabled 2026-04-07: +1.7pp attribution,
-    # +2.5pp court-side. Requires PlayerPosition.keypoints to be populated
-    # (via inline tracking enrichment or inject_keypoints.py for offline eval).
+    # pose model loads successfully. Enabled 2026-04-07 with combined md=6 model:
+    # +3.4pp player attribution (68.7% -> 72.1%), +4.1pp court-side (82.0% -> 86.1%),
+    # dig +8.4pp, set +5.0pp, attack +3.8pp. Requires PlayerPosition.keypoints
+    # to be populated (via inline tracking enrichment or inject_keypoints.py).
     use_pose_attribution: bool = True
     pose_attribution_min_confidence: float = 0.5  # Min P(touching) to accept
 
