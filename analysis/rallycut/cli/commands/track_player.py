@@ -61,11 +61,21 @@ def _load_sequence_model() -> tuple[MSTCN, torch.device] | None:
     import torch
 
     # parents[3] = analysis/ root (commands/ → cli/ → rallycut/ → analysis/)
-    weights_path = Path(__file__).resolve().parents[3] / "weights" / "sequence_action" / "ms_tcn_production.pt"
-    # Fallback for Modal containers where weights are mounted at /app/weights
+    local_path = Path(__file__).resolve().parents[3] / "weights" / "sequence_action" / "ms_tcn_production.pt"
+    modal_path = Path("/app/weights/sequence_action/ms_tcn_production.pt")
+    weights_path = local_path if local_path.exists() else modal_path
     if not weights_path.exists():
-        weights_path = Path("/app/weights/sequence_action/ms_tcn_production.pt")
-    if not weights_path.exists():
+        # Cache the miss so we don't re-check disk on every rally, AND warn
+        # exactly once per process. Without this warning, the action pipeline
+        # silently degrades to non-MS-TCN++ classification when weights are
+        # missing — a latent quality bug that hides production drift.
+        console.print(
+            "[yellow]WARNING: MS-TCN++ weights not found at "
+            f"{local_path} or {modal_path}. Action classification will "
+            "skip the sequence-model override and use heuristics + GBM only. "
+            "Run `rallycut train sequence-action --modal` to retrain, or "
+            "`rallycut train pull-weights` to fetch from S3.[/yellow]"
+        )
         _sequence_model_cache["model"] = None
         return None
 
