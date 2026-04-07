@@ -202,9 +202,18 @@ class ContactDetectionConfig:
     use_pose_attribution: bool = True
     pose_attribution_min_confidence: float = 0.5  # Min P(touching) to accept
 
-    # Adaptive deduplication: use shorter min distance for cross-side contacts.
-    # Empirically 0% impact on 5-fold CV (2026-04-05) — disabled by default.
-    adaptive_dedup: bool = False
+    # Adaptive deduplication: use shorter min distance (_CROSS_SIDE_MIN_DISTANCE=4)
+    # for cross-side contacts, preserving the full 12-frame gap same-side.
+    # Enabled 2026-04-07 to rescue block contacts — attack→block transitions
+    # are 3-5 frames apart and were being merged with the attack by the
+    # final dedup pass. Evaluated on the 339-rally action set:
+    #   Action Acc 87.1% → 86.9% (-0.2pp)
+    #   Attribution 72.1% → 72.1% (unchanged)
+    #   Court-Side 79.6% → 86.1% (+6.5pp) ← the real win
+    #   Block F1 0.0% → 7.1% (1/27 TP, 0 FP)
+    # The large court-side gain comes from more cross-side candidates
+    # surviving dedup, letting the resolver disambiguate sides more often.
+    adaptive_dedup: bool = True
 
 
 @dataclass
