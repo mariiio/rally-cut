@@ -332,18 +332,10 @@ def extract_candidate_features(
         # Consecutive ball detections around frame
         consec = _count_consecutive_detections(ball_by_frame, frame)
 
-        # Sequence model probabilities at this frame
-        seq_probs_at_frame: dict[str, float] = {}
-        if sequence_probs is not None and 0 <= frame < sequence_probs.shape[1]:
-            seq_probs_at_frame = {
-                "seq_p_background": float(sequence_probs[0, frame]),
-                "seq_p_serve": float(sequence_probs[1, frame]),
-                "seq_p_receive": float(sequence_probs[2, frame]),
-                "seq_p_set": float(sequence_probs[3, frame]),
-                "seq_p_attack": float(sequence_probs[4, frame]),
-                "seq_p_dig": float(sequence_probs[5, frame]),
-                "seq_p_block": float(sequence_probs[6, frame]),
-            }
+        # NOTE 2026-04-07: seq_p_* features removed from CandidateFeatures
+        # (audit found GBM importance exactly 0). `sequence_probs` parameter
+        # is retained on this function for backward compat with callers.
+        _ = sequence_probs  # explicitly mark as unused
 
         # Pose features for nearest player (0.0 when keypoints unavailable)
         (
@@ -387,7 +379,6 @@ def extract_candidate_features(
             nearest_active_arm_extension_change=pose_arm_ext_change,
             nearest_pose_confidence_mean=pose_conf_mean,
             nearest_both_arms_raised=pose_both_arms_raised,
-            **seq_probs_at_frame,
         )
 
         features_list.append(features)

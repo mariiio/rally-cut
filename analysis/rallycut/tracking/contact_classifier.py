@@ -7,7 +7,7 @@ Individual trajectory features (velocity, direction change, player distance)
 overlap between TP and FP in marginal distributions, but a learned model can
 exploit correlations between features to separate them.
 
-Features per candidate (32 total):
+Features per candidate (25 total):
 - Ball velocity magnitude, direction change angle, vertical velocity, speed ratio
 - Arc fit residual, acceleration, trajectory curvature
 - Player distance to nearest player
@@ -15,13 +15,17 @@ Features per candidate (32 total):
 - Ball (x, y) position, ball Y relative to net, net crossing flag
 - Time since last candidate (frames), frames since rally start
 - Ball detection density, consecutive detections
-- MS-TCN++ sequence model probabilities (7 features): background + 6 action classes
-  When available, the GBM learns whether to trust trajectory vs sequence signal.
 - Nearest-player pose features (5): active wrist velocity max, hand-ball distance min,
   arm extension change, pose confidence mean, both-arms-raised fraction. Computed
   from YOLO-Pose keypoints via
   pose_attribution.features.extract_contact_pose_features_for_nearest and default
   to 0.0 when keypoints are unavailable.
+
+Note 2026-04-07: 7 MS-TCN++ `seq_p_*` features were removed after the
+contact_classifier_audit found their GBM importance was exactly 0.0000 (the
+trainer was always passing zero-filled sequence probs, so the trees never
+split on them). The MS-TCN++ signal still reaches action classification via
+`sequence_action_runtime.apply_sequence_override` at stage 14.
 
 Model: scikit-learn GradientBoostingClassifier. A simple ensemble model is
 appropriate for this dataset size and resistant to overfitting.
@@ -71,14 +75,6 @@ class CandidateFeatures:
     ball_detection_density: float = 1.0  # fraction of frames with ball in ±10 window
     consecutive_detections: int = 0  # consecutive ball detections around candidate
     frames_since_rally_start: int = 0  # frames from rally start (early = serve)
-    # MS-TCN++ sequence model probabilities at this frame (0 when model unavailable)
-    seq_p_background: float = 0.0
-    seq_p_serve: float = 0.0
-    seq_p_receive: float = 0.0
-    seq_p_set: float = 0.0
-    seq_p_attack: float = 0.0
-    seq_p_dig: float = 0.0
-    seq_p_block: float = 0.0
     # Pose features for nearest player (0.0 when keypoints unavailable)
     nearest_active_wrist_velocity_max: float = 0.0
     nearest_hand_ball_dist_min: float = 0.0
@@ -110,13 +106,6 @@ class CandidateFeatures:
             self.ball_detection_density,
             self.consecutive_detections,
             self.frames_since_rally_start,
-            self.seq_p_background,
-            self.seq_p_serve,
-            self.seq_p_receive,
-            self.seq_p_set,
-            self.seq_p_attack,
-            self.seq_p_dig,
-            self.seq_p_block,
             self.nearest_active_wrist_velocity_max,
             self.nearest_hand_ball_dist_min,
             self.nearest_active_arm_extension_change,
@@ -147,13 +136,6 @@ class CandidateFeatures:
             "ball_detection_density",
             "consecutive_detections",
             "frames_since_rally_start",
-            "seq_p_background",
-            "seq_p_serve",
-            "seq_p_receive",
-            "seq_p_set",
-            "seq_p_attack",
-            "seq_p_dig",
-            "seq_p_block",
             "nearest_active_wrist_velocity_max",
             "nearest_hand_ball_dist_min",
             "nearest_active_arm_extension_change",

@@ -1984,18 +1984,12 @@ def detect_contacts(
             nearest_d_y = bbox_motion.get(track_id, (0.0, 0.0))[0] if track_id >= 0 else 0.0
             nearest_d_h = bbox_motion.get(track_id, (0.0, 0.0))[1] if track_id >= 0 else 0.0
 
-            # Sequence model probabilities at this frame (when available)
-            seq_bg, seq_srv, seq_rcv, seq_set, seq_att, seq_dig, seq_blk = (
-                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-            )
-            if sequence_probs is not None and 0 <= frame < sequence_probs.shape[1]:
-                seq_bg = float(sequence_probs[0, frame])
-                seq_srv = float(sequence_probs[1, frame])
-                seq_rcv = float(sequence_probs[2, frame])
-                seq_set = float(sequence_probs[3, frame])
-                seq_att = float(sequence_probs[4, frame])
-                seq_dig = float(sequence_probs[5, frame])
-                seq_blk = float(sequence_probs[6, frame])
+            # NOTE 2026-04-07: MS-TCN++ seq_p_* features removed from
+            # CandidateFeatures after the contact_classifier_audit found
+            # importance == 0.0000 (trainer always passed zero-filled probs).
+            # `sequence_probs` is still accepted for backward compat with
+            # callers but no longer feeds the contact GBM. The MS-TCN++ signal
+            # still reaches actions via apply_sequence_override at stage 14.
 
             # Pose features for nearest player (0.0 if no keypoints)
             from rallycut.tracking.pose_attribution.features import (
@@ -2037,13 +2031,6 @@ def detect_contacts(
                 ball_detection_density=ball_detection_density,
                 consecutive_detections=consec,
                 frames_since_rally_start=frame - first_frame,
-                seq_p_background=seq_bg,
-                seq_p_serve=seq_srv,
-                seq_p_receive=seq_rcv,
-                seq_p_set=seq_set,
-                seq_p_attack=seq_att,
-                seq_p_dig=seq_dig,
-                seq_p_block=seq_blk,
                 nearest_active_wrist_velocity_max=pose_wrist_vel_max,
                 nearest_hand_ball_dist_min=pose_hand_ball_dist_min,
                 nearest_active_arm_extension_change=pose_arm_ext_change,
