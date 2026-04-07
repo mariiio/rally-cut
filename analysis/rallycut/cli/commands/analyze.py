@@ -54,6 +54,10 @@ def classify_actions(
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.contact_detector import detect_contacts
     from rallycut.tracking.player_tracker import PlayerPosition
+    from rallycut.tracking.sequence_action_runtime import (
+        apply_sequence_override,
+        get_sequence_probs,
+    )
 
     # Load tracking data
     with open(input_json) as f:
@@ -131,6 +135,15 @@ def classify_actions(
     rally_actions = classify_rally_actions(
         contact_seq, team_assignments=team_assignments,
     )
+
+    # Step 2b: MS-TCN++ sequence-model override (mirrors track-players --actions
+    # so this CLI matches production action classification behavior).
+    sequence_probs = get_sequence_probs(
+        ball_positions, player_positions, court_split_y,
+        data.get("frameCount") or 0, team_assignments,
+    )
+    if sequence_probs is not None:
+        apply_sequence_override(rally_actions, sequence_probs)
 
     if not quiet:
         console.print(f"  Actions classified: {len(rally_actions.actions)}")
@@ -229,6 +242,10 @@ def rank_highlights(
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.contact_detector import detect_contacts
     from rallycut.tracking.player_tracker import PlayerPosition
+    from rallycut.tracking.sequence_action_runtime import (
+        apply_sequence_override,
+        get_sequence_probs,
+    )
 
     all_features: list[HighlightFeatures] = []
 
@@ -285,6 +302,15 @@ def rank_highlights(
         rally_actions = classify_rally_actions(
             contact_seq, rally_id=rally_id, team_assignments=ta,
         )
+
+        # MS-TCN++ sequence-model override (mirrors track-players --actions
+        # so highlight scoring sees the same action types production produces).
+        sequence_probs = get_sequence_probs(
+            ball_positions, player_positions, court_split_y,
+            data.get("frameCount") or 0, ta,
+        )
+        if sequence_probs is not None:
+            apply_sequence_override(rally_actions, sequence_probs)
 
         # Compute rally stats
         stats = compute_match_stats(

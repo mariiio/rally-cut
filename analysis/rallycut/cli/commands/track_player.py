@@ -7,7 +7,6 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
 
 import cv2
 import numpy as np
@@ -41,117 +40,12 @@ from rallycut.tracking.player_tracker import (
     compute_court_roi_from_ball,
     compute_court_roi_from_calibration,
 )
-
-if TYPE_CHECKING:
-    import torch
-
-    from rallycut.temporal.ms_tcn.model import MSTCN
+from rallycut.tracking.sequence_action_runtime import (
+    apply_sequence_override,
+    get_sequence_probs,
+)
 
 console = Console()
-
-_sequence_model_cache: dict[str, Any] = {}
-
-
-def _load_sequence_model() -> tuple[MSTCN, torch.device] | None:
-    """Lazy-load MS-TCN++ production model. Returns (model, device) or None."""
-    if "model" in _sequence_model_cache:
-        cached = _sequence_model_cache["model"]
-        return cached if cached is not None else None
-
-    import torch
-
-    # parents[3] = analysis/ root (commands/ → cli/ → rallycut/ → analysis/)
-    local_path = Path(__file__).resolve().parents[3] / "weights" / "sequence_action" / "ms_tcn_production.pt"
-    modal_path = Path("/app/weights/sequence_action/ms_tcn_production.pt")
-    weights_path = local_path if local_path.exists() else modal_path
-    if not weights_path.exists():
-        # Cache the miss so we don't re-check disk on every rally, AND warn
-        # exactly once per process. Without this warning, the action pipeline
-        # silently degrades to non-MS-TCN++ classification when weights are
-        # missing — a latent quality bug that hides production drift.
-        console.print(
-            "[yellow]WARNING: MS-TCN++ weights not found at "
-            f"{local_path} or {modal_path}. Action classification will "
-            "skip the sequence-model override and use heuristics + GBM only. "
-            "Run `rallycut train sequence-action --modal` to retrain, or "
-            "`rallycut train pull-weights` to fetch from S3.[/yellow]"
-        )
-        _sequence_model_cache["model"] = None
-        return None
-
-    from rallycut.temporal.ms_tcn.model import MSTCN, MSTCNConfig
-
-    checkpoint = torch.load(weights_path, map_location="cpu", weights_only=False)
-    config = MSTCNConfig(**checkpoint["config"])
-    model = MSTCN(config)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model.eval()
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
-    _sequence_model_cache["model"] = (model, device)
-    return (model, device)
-
-
-def _get_sequence_probs(
-    ball_positions: list[BallPosition],
-    player_positions: list[PlayerPosition],
-    court_split_y: float | None,
-    frame_count: int,
-    team_assignments: dict[int, int] | None,
-    calibrator: Any,
-) -> np.ndarray | None:
-    """Compute MS-TCN++ per-frame action probabilities.
-
-    Returns (NUM_CLASSES, T) array or None if model unavailable.
-    """
-    loaded = _load_sequence_model()
-    if loaded is None:
-        return None
-    if not frame_count or frame_count < 10:
-        return None
-
-    import torch
-
-    from rallycut.actions.trajectory_features import extract_trajectory_features
-
-    homography = None
-    if calibrator is not None:
-        h = getattr(calibrator, "homography", None)
-        if h is not None:
-            homography = h.homography
-
-    features = extract_trajectory_features(
-        ball_positions, player_positions, court_split_y, frame_count,
-        team_assignments=team_assignments,
-        homography=homography,
-    )
-
-    model, device = loaded
-    feat = torch.from_numpy(features).float().unsqueeze(0).transpose(1, 2).to(device)
-    mask = torch.ones(1, 1, frame_count, device=device)
-    with torch.no_grad():
-        logits = model(feat, mask)
-        probs = torch.softmax(logits, dim=1)[0].cpu().numpy()
-    return probs
-
-
-def _apply_sequence_override(rally_actions: Any, sequence_probs: np.ndarray) -> None:
-    """Override non-serve action types with MS-TCN++ argmax predictions.
-
-    Serve is exempt — structural rally constraints (first action, baseline
-    position, arc crossing) are stronger than per-frame model predictions.
-    """
-    from rallycut.actions.trajectory_features import ACTION_TYPES
-    from rallycut.tracking.action_classifier import ActionType
-
-    for action in rally_actions.actions:
-        if action.is_synthetic or action.action_type == ActionType.SERVE:
-            continue
-        frame = action.frame
-        if 0 <= frame < sequence_probs.shape[1]:
-            cls = int(np.argmax(sequence_probs[1:, frame]))
-            action.action_type = ActionType(ACTION_TYPES[cls])
 
 
 # Colors for different track IDs (BGR format for OpenCV)
@@ -1028,7 +922,7 @@ def _run_tracking(
             )
 
         # Compute MS-TCN++ sequence probabilities (graceful fallback if unavailable)
-        sequence_probs = _get_sequence_probs(
+        sequence_probs = get_sequence_probs(
             ball_positions, result.positions, result.court_split_y,
             result.frame_count or 0, verified_teams, calibrator,
         )
@@ -1100,7 +994,7 @@ def _run_tracking(
         # Serve is exempt — structural rally constraints are stronger than
         # per-frame model predictions.
         if sequence_probs is not None:
-            _apply_sequence_override(rally_actions, sequence_probs)
+            apply_sequence_override(rally_actions, sequence_probs)
 
         actions_data = {
             "contacts": contact_seq.to_dict(),
