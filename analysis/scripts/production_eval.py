@@ -192,6 +192,7 @@ class PipelineContext:
     skip_contact_classifier: bool = False
     skip_adaptive_dedup: bool = False
     skip_seq_enriched_contact_gbm: bool = False
+    skip_sequence_recovery: bool = False
 
 
 # Each ablation is a one-line mutator. Extension pattern is documented in the
@@ -203,6 +204,7 @@ ABLATIONS: dict[str, Callable[[PipelineContext], None]] = {
     "contact_classifier":       lambda ctx: setattr(ctx, "skip_contact_classifier", True),
     "adaptive_dedup":           lambda ctx: setattr(ctx, "skip_adaptive_dedup", True),
     "seq_enriched_contact_gbm": lambda ctx: setattr(ctx, "skip_seq_enriched_contact_gbm", True),
+    "sequence_recovery":        lambda ctx: setattr(ctx, "skip_sequence_recovery", True),
 }
 
 
@@ -334,6 +336,16 @@ def _run_rally(
             cfg.adaptive_dedup = False
         if ctx.skip_contact_classifier:
             use_classifier = False
+
+    # Sequence recovery is integrated into `detect_contacts` itself: the
+    # ContactDetectionConfig flag `enable_sequence_recovery` gates whether
+    # the two-signal agreement rescue fires. The ablation zeros the config
+    # flag on a fresh cfg so the ablated run mirrors production minus the
+    # one stage.
+    if ctx.skip_sequence_recovery:
+        if cfg is None:
+            cfg = ContactDetectionConfig()
+        cfg.enable_sequence_recovery = False
 
     contact_sequence = detect_contacts(
         ball_positions=ball_positions,

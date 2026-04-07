@@ -215,6 +215,16 @@ class ContactDetectionConfig:
     # surviving dedup, letting the resolver disambiguate sides more often.
     adaptive_dedup: bool = True
 
+    # Sequence-based contact recovery (shipped 2026-04-07).
+    # Two-signal agreement gate: a trajectory candidate the GBM rejects is
+    # rescued iff (1) the MS-TCN++ sequence model has a non-background peak
+    # >= SEQ_RECOVERY_TAU within +-5 frames AND (2) the GBM still gave the
+    # candidate a non-trivial score >= SEQ_RECOVERY_CLF_FLOOR. Both
+    # thresholds live as module-level constants in
+    # `sequence_action_runtime.py` (read at call time so sweep harnesses can
+    # monkey-patch them). Empirical basis: memory/fn_sequence_signal_2026_04.md.
+    enable_sequence_recovery: bool = True
+
 
 @dataclass
 class Contact:
@@ -1641,12 +1651,16 @@ def detect_contacts(
             from median Y position.
         court_calibrator: Calibrated court projector. When provided, ball side uses
             perspective-correct projection via homography.
-        sequence_probs: Accepted for backward compat. The 7 seq_p_* features
-            were dropped from the contact classifier on 2026-04-07 after an
-            importance audit found their GBM contribution was exactly 0.0000
-            (the trainer had been passing None all along). This argument is
-            now a no-op; the MS-TCN++ signal still reaches actions via
-            sequence_action_runtime.apply_sequence_override at stage 14.
+        sequence_probs: MS-TCN++ per-frame action probabilities, shape
+            (NUM_CLASSES, T). When provided and `cfg.enable_sequence_recovery`
+            is True, the main classifier loop rescues trajectory candidates
+            the GBM rejected if `max(sequence_probs[1:, f+-5]) >=
+            SEQ_RECOVERY_TAU` AND the GBM score >= SEQ_RECOVERY_CLF_FLOOR
+            (both constants in `sequence_action_runtime.py`, read at call
+            time). This is a two-signal agreement gate — no new candidates
+            are injected; only pre-existing trajectory candidates are
+            rescued. The old 7 `seq_p_*` features on `CandidateFeatures`
+            were dropped pre-2026-04-07.
 
     Returns:
         ContactSequence with all detected contacts.
@@ -1865,6 +1879,35 @@ def detect_contacts(
     # Build velocity lookup for any frame
     velocity_lookup = dict(zip(frames, smoothed))
 
+    # Sequence-model support helper. Returns True iff any frame in [f-W, f+W]
+    # has `max(sequence_probs[1:, :]) >= SEQ_RECOVERY_TAU`. Used below to
+    # rescue trajectory candidates the GBM rejects but the sequence model
+    # endorses (two-signal agreement gate). See the big note at step 5e in
+    # memory/fn_sequence_signal_2026_04.md for the empirical basis.
+    seq_peak_nonbg = None
+    seq_recovery_tau = 1.1  # Default: never triggers.
+    if (
+        cfg.enable_sequence_recovery
+        and sequence_probs is not None
+        and sequence_probs.ndim == 2
+        and sequence_probs.shape[0] >= 2
+    ):
+        from rallycut.tracking.sequence_action_runtime import (  # noqa: PLC0415
+            SEQ_RECOVERY_TAU,
+        )
+        seq_peak_nonbg = sequence_probs[1:, :].max(axis=0)
+        seq_recovery_tau = SEQ_RECOVERY_TAU
+
+    def _has_sequence_support(frame: int, window: int = 5) -> bool:
+        if seq_peak_nonbg is None:
+            return False
+        t_seq = seq_peak_nonbg.shape[0]
+        lo = max(0, frame - window)
+        hi = min(t_seq - 1, frame + window)
+        if hi < lo:
+            return False
+        return bool(seq_peak_nonbg[lo:hi + 1].max() >= seq_recovery_tau)
+
     net_zone = 0.08  # ±8% of screen around net
     contacts: list[Contact] = []
     prev_candidate_frame = 0  # Track ALL candidates, not just accepted ones
@@ -2041,6 +2084,28 @@ def detect_contacts(
             )
             results = classifier.predict([features])
             is_validated, confidence = results[0]
+            # Two-signal agreement rescue: if the classifier rejected this
+            # candidate but the sequence model has a non-background peak
+            # >= SEQ_RECOVERY_TAU within +-5 frames AND the classifier gave
+            # it a non-trivial score >= SEQ_RECOVERY_CLF_FLOOR, accept it.
+            #
+            # This rescues the 181 rejected_by_classifier FNs documented in
+            # memory/fn_sequence_signal_2026_04.md: trajectory candidates
+            # where the GBM scores median 0.22 (under 0.35 gate) but MS-TCN++
+            # endorses the frame with peak >= 0.80. Two detectors with
+            # asymmetric strengths agreeing is stronger evidence than either
+            # alone, so their conjunction warrants a lower single-source
+            # confidence requirement.
+            if (
+                not is_validated
+                and seq_peak_nonbg is not None
+                and _has_sequence_support(frame)
+            ):
+                from rallycut.tracking.sequence_action_runtime import (  # noqa: PLC0415
+                    SEQ_RECOVERY_CLF_FLOOR,
+                )
+                if confidence >= SEQ_RECOVERY_CLF_FLOOR:
+                    is_validated = True
         else:
             # Fallback: Hand-tuned 3-tier validation gates
             # Tier 1: Strong signal — high velocity + direction change (definitive)

@@ -205,3 +205,38 @@ def apply_sequence_override(
                 continue
 
         action.action_type = new_type
+
+
+# --------------------------------------------------------------------------- #
+# Sequence-based contact recovery (shipped 2026-04-07).                       #
+#                                                                             #
+# Empirical basis (see memory/fn_sequence_signal_2026_04.md): on the 339-     #
+# rally canonical pool, MS-TCN++ puts a non-background peak >= 0.80 within    #
+# +-5 frames of 99.4% of GT contacts the trajectory+pose classifier           #
+# confidently rejects. Per-class peak matches GT 93.4% of the time. Control   #
+# frame trigger rate at the same threshold is 17.8% (discriminative ratio     #
+# 5.6x). The two signals are complementary: trajectory features see single-  #
+# frame physics, the sequence model sees temporal action patterns.            #
+#                                                                             #
+# Integration: `contact_detector.detect_contacts()` uses the two constants    #
+# below to rescue trajectory candidates the GBM confidently rejects. A       #
+# trajectory candidate at frame f is rescued iff:                             #
+#   1. max(sequence_probs[1:, f-5:f+6]) >= SEQ_RECOVERY_TAU   (sequence       #
+#      model endorses the frame as non-background action)                     #
+#   2. GBM(features_at_f) >= SEQ_RECOVERY_CLF_FLOOR           (classifier     #
+#      still gives it a non-trivial score)                                    #
+#                                                                             #
+# This is a two-signal agreement gate — not a threshold hack. It is the       #
+# principled way to combine complementary detectors with asymmetric FP rates: #
+# relax each detector's single-source confidence requirement only when an     #
+# independent signal already endorses the frame. No new candidates are        #
+# injected — only existing trajectory candidates are rescued, so dedup,       #
+# player attribution, and pose features remain unchanged.                     #
+# --------------------------------------------------------------------------- #
+
+SEQ_RECOVERY_TAU: float = 0.80
+# Two-signal gate: trajectory candidates the GBM rejected are rescued only
+# if the GBM still gave them a non-trivial score >= this floor. Read at call
+# time by `contact_detector.detect_contacts` so sweep harnesses can
+# monkey-patch it between runs without plumbing arguments.
+SEQ_RECOVERY_CLF_FLOOR: float = 0.20

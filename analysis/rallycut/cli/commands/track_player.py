@@ -975,6 +975,9 @@ def _run_tracking(
                         f"{exc}[/yellow]"
                     )
 
+        # Sequence recovery is integrated into `detect_contacts` itself when
+        # `sequence_probs` is passed — see `ContactDetectionConfig.enable_sequence_recovery`
+        # and `SEQ_RECOVERY_TAU` / `SEQ_RECOVERY_CLF_FLOOR` in sequence_action_runtime.py.
         contact_seq = detect_contacts(
             ball_positions=ball_positions,
             player_positions=result.positions,
@@ -984,6 +987,7 @@ def _run_tracking(
             court_calibrator=calibrator,
             sequence_probs=sequence_probs,
         )
+
         rally_actions = classify_rally_actions(
             contact_seq,
             team_assignments=verified_teams,
