@@ -276,6 +276,9 @@ model Rally {
   scoreA           Int?              @map("score_a")
   scoreB           Int?              @map("score_b")
   servingTeam      ServingTeam?      @map("serving_team")
+  gtServingTeam    ServingTeam?      @map("gt_serving_team")
+  gtPointWinner    ServingTeam?      @map("gt_point_winner")
+  gtSideSwitch     Boolean?          @map("gt_side_switch")
   notes            String?
   order            Int               @default(0)
   createdAt        DateTime          @default(now()) @map("created_at")

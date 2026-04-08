@@ -101,6 +101,9 @@ class RallyData:
     fps: float
     court_split_y: float | None
     start_ms: int = 0
+    # Session 5: per-rally score GT ('A' | 'B' | None each).
+    gt_serving_team: str | None = None
+    gt_point_winner: str | None = None
 
 
 def load_rallies_with_action_gt(
@@ -128,7 +131,9 @@ def load_rallies_with_action_gt(
             pt.frame_count,
             pt.fps,
             pt.court_split_y,
-            r.start_ms
+            r.start_ms,
+            r.gt_serving_team,
+            r.gt_point_winner
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
         WHERE {where_sql}
@@ -155,6 +160,8 @@ def load_rallies_with_action_gt(
                     fps,
                     court_split_y,
                     start_ms_val,
+                    gt_serving_team_val,
+                    gt_point_winner_val,
                 ) = row
 
                 gt_labels = []
@@ -180,6 +187,8 @@ def load_rallies_with_action_gt(
                     fps=fps or 30.0,
                     court_split_y=court_split_y,
                     start_ms=start_ms_val or 0,
+                    gt_serving_team=gt_serving_team_val,
+                    gt_point_winner=gt_point_winner_val,
                 ))
 
     return results

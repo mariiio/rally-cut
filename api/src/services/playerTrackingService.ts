@@ -1097,6 +1097,194 @@ export async function saveActionGroundTruth(
   return { savedCount: sorted.length };
 }
 
+/**
+ * Score ground truth for a single rally (two enums: serving team, point winner).
+ * Either value may be null when unlabeled.
+ */
+export interface ScoreGroundTruth {
+  gtServingTeam: 'A' | 'B' | null;
+  gtPointWinner: 'A' | 'B' | null;
+}
+
+/** PUT body may also (optionally) set the manual side-switch override. */
+export interface ScoreGroundTruthInput extends ScoreGroundTruth {
+  /** null = use analysis flag, true = force switch here, false = force none. */
+  gtSideSwitch?: boolean | null;
+}
+
+export interface ScoreGroundTruthResult extends ScoreGroundTruth {
+  gtSideSwitch: boolean | null;
+}
+
+/**
+ * Save score ground truth for a rally. Owner-gated like action GT.
+ */
+export async function saveScoreGroundTruth(
+  rallyId: string,
+  userId: string,
+  input: ScoreGroundTruthInput,
+): Promise<ScoreGroundTruthResult> {
+  const rally = await prisma.rally.findUnique({
+    where: { id: rallyId },
+    include: { video: true },
+  });
+  if (!rally) throw new NotFoundError('Rally', rallyId);
+  if (rally.video.userId !== userId) {
+    throw new ForbiddenError('You do not have permission to modify score ground truth for this rally');
+  }
+  const data: {
+    gtServingTeam: 'A' | 'B' | null;
+    gtPointWinner: 'A' | 'B' | null;
+    gtSideSwitch?: boolean | null;
+  } = {
+    gtServingTeam: input.gtServingTeam ?? null,
+    gtPointWinner: input.gtPointWinner ?? null,
+  };
+  if (input.gtSideSwitch !== undefined) {
+    data.gtSideSwitch = input.gtSideSwitch;
+  }
+  const updated = await prisma.rally.update({
+    where: { id: rallyId },
+    data,
+    select: { gtServingTeam: true, gtPointWinner: true, gtSideSwitch: true },
+  });
+  return {
+    gtServingTeam: updated.gtServingTeam,
+    gtPointWinner: updated.gtPointWinner,
+    gtSideSwitch: updated.gtSideSwitch,
+  };
+}
+
+/**
+ * Extract per-rally side-switch flags from a video's match_analysis_json.
+ *
+ * Accepts both camelCase and snake_case field names.
+ */
+function extractAnalysisSwitchFlags(matchAnalysis: unknown): Map<string, boolean> {
+  const out = new Map<string, boolean>();
+  if (!matchAnalysis || typeof matchAnalysis !== 'object') return out;
+  const rallies = (matchAnalysis as { rallies?: unknown }).rallies;
+  if (!Array.isArray(rallies)) return out;
+  for (const entry of rallies) {
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as Record<string, unknown>;
+    const rid = (e.rallyId ?? e.rally_id) as string | undefined;
+    if (!rid) continue;
+    const flag = e.sideSwitchDetected === true || e.side_switch_detected === true;
+    out.set(rid, flag);
+  }
+  return out;
+}
+
+/**
+ * Compute per-rally near-side team for a video.
+ *
+ * Beach volleyball swaps court sides every 7 points. Team identity itself
+ * (A vs B) is stable across the match, but which team is physically on the
+ * near / far court flips each side switch.
+ *
+ * Priority per rally:
+ *   1. `gt_side_switch` on the Rally row (manual override: `true`=force
+ *      switch here, `false`=force no switch, `null`=use analysis flag)
+ *   2. `sideSwitchDetected` from `match_analysis_json`
+ *
+ * Convention (matches `match_tracker.build_match_team_assignments`):
+ * baseline has Team A on the near court; each recognized switch flips the
+ * near team.
+ *
+ * Walks the supplied rallies in order (caller sorts) so both sources of
+ * truth compose cleanly.
+ */
+interface NearSideResolution {
+  nearSide: Map<string, 'A' | 'B'>;
+  /** Resolved "did a switch happen here" per rally (override ?? analysis). */
+  switchedHere: Map<string, boolean>;
+}
+
+function computeNearSideByRally(
+  matchAnalysis: unknown,
+  rallies: Array<{ id: string; gtSideSwitch: boolean | null }>,
+): NearSideResolution {
+  const nearSide = new Map<string, 'A' | 'B'>();
+  const switchedHere = new Map<string, boolean>();
+  const analysisFlags = extractAnalysisSwitchFlags(matchAnalysis);
+  const anyInfo =
+    analysisFlags.size > 0 || rallies.some((r) => r.gtSideSwitch !== null);
+  let switchCount = 0;
+  for (const r of rallies) {
+    const override = r.gtSideSwitch;
+    const analysisFlag = analysisFlags.get(r.id) === true;
+    const switched = override === null ? analysisFlag : override;
+    switchedHere.set(r.id, switched);
+    if (switched) switchCount += 1;
+    if (anyInfo) {
+      nearSide.set(r.id, switchCount % 2 === 0 ? 'A' : 'B');
+    }
+  }
+  return { nearSide, switchedHere };
+}
+
+/**
+ * Fetch per-rally score GT for every rally in a video. Returns rallies in
+ * temporal order. Used by the editor panel's progress view and by the
+ * analysis-side score metric loader.
+ *
+ * Includes `nearSideTeam` per rally when match_analysis_json is available
+ * on the video — lets the editor show labelers which team is currently on
+ * the near court at rally N, accounting for cumulative side switches.
+ */
+export async function getScoreGroundTruthForVideo(
+  videoId: string,
+  userId: string,
+): Promise<
+  Array<{
+    rallyId: string;
+    order: number;
+    startMs: number;
+    servingTeam: 'A' | 'B' | null;
+    gtServingTeam: 'A' | 'B' | null;
+    gtPointWinner: 'A' | 'B' | null;
+    nearSideTeam: 'A' | 'B' | null;
+    gtSideSwitch: boolean | null;
+    /** Resolved: did a side switch happen at this rally? Override ?? analysis. */
+    sideSwitchHere: boolean;
+  }>
+> {
+  const video = await prisma.video.findUnique({
+    where: { id: videoId },
+    select: { userId: true, matchAnalysisJson: true },
+  });
+  if (!video) throw new NotFoundError('Video', videoId);
+  if (video.userId !== userId) {
+    throw new ForbiddenError('You do not have permission to view score ground truth for this video');
+  }
+  const rallies = await prisma.rally.findMany({
+    where: { videoId, status: 'CONFIRMED' },
+    orderBy: [{ order: 'asc' }, { startMs: 'asc' }],
+    select: {
+      id: true,
+      order: true,
+      startMs: true,
+      servingTeam: true,
+      gtServingTeam: true,
+      gtPointWinner: true,
+      gtSideSwitch: true,
+    },
+  });
+  const resolution = computeNearSideByRally(video.matchAnalysisJson, rallies);
+  return rallies.map((r) => ({
+    rallyId: r.id,
+    order: r.order,
+    startMs: r.startMs,
+    servingTeam: r.servingTeam,
+    gtServingTeam: r.gtServingTeam,
+    gtPointWinner: r.gtPointWinner,
+    nearSideTeam: resolution.nearSide.get(r.id) ?? null,
+    gtSideSwitch: r.gtSideSwitch,
+    sideSwitchHere: resolution.switchedHere.get(r.id) === true,
+  }));
+}
+
 // Calibration corner from frontend
 interface CalibrationCorner {
   x: number;

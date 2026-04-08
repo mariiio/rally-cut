@@ -100,7 +100,7 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from eval_action_detection import (  # type: ignore[import-not-found]  # noqa: E402
+from eval_action_detection import (  # noqa: E402
     MatchResult,
     RallyData,
     _build_player_positions,
@@ -110,13 +110,16 @@ from eval_action_detection import (  # type: ignore[import-not-found]  # noqa: E
     match_contacts,
 )
 
+from rallycut.evaluation.score_ground_truth import (  # noqa: E402
+    ScoreMetrics,
+    compute_score_metrics,
+)
 from rallycut.tracking.action_classifier import classify_rally_actions  # noqa: E402
 from rallycut.tracking.ball_tracker import BallPosition  # noqa: E402
 from rallycut.tracking.contact_detector import (  # noqa: E402
     ContactDetectionConfig,
     detect_contacts,
 )
-from rallycut.tracking import action_classifier as _action_classifier_mod  # noqa: E402
 from rallycut.tracking.match_tracker import verify_team_assignments  # noqa: E402
 from rallycut.tracking.player_tracker import PlayerPosition  # noqa: E402
 from rallycut.tracking.sequence_action_runtime import (  # noqa: E402
@@ -285,8 +288,12 @@ def _run_rally(
     match_teams: dict[int, int] | None,
     calibrator: Any,
     ctx: PipelineContext,
-) -> list[dict]:
-    """Mirror `track_player.py:1011–1093` stages 9–14. Returns prediction dicts.
+) -> tuple[list[dict], Any]:
+    """Mirror `track_player.py:1011–1093` stages 9–14.
+
+    Returns (pred_action_dicts, rally_actions). The structured `RallyActions`
+    is kept so downstream score-metric code can chain rallies into
+    `compute_match_scores` without re-parsing dicts.
 
     Any exception is raised to the caller, which records it in
     `production_rejected`. The caller also handles the "missing inputs"
@@ -371,7 +378,7 @@ def _run_rally(
     if sequence_probs is not None and not ctx.skip_sequence_override:
         apply_sequence_override(rally_actions, sequence_probs)
 
-    return [a.to_dict() for a in rally_actions.actions]
+    return [a.to_dict() for a in rally_actions.actions], rally_actions
 
 
 # --------------------------------------------------------------------------- #
@@ -390,11 +397,25 @@ def _run_once(
     ctx: PipelineContext,
     *,
     print_progress: bool = True,
-) -> tuple[list[MatchResult], list[dict], list[dict[str, str]]]:
-    """Run the full 339-rally loop once. Returns (matches, unmatched_preds, rejections)."""
+) -> tuple[
+    list[MatchResult],
+    list[dict],
+    list[dict[str, str]],
+    dict[str, list[tuple[int, Any]]],
+    dict[str, tuple[str | None, str | None]],
+]:
+    """Run the full 339-rally loop once.
+
+    Returns (matches, unmatched_preds, rejections, pred_by_video, gt_lookup).
+    The last two feed the Session-5 score metric: ``pred_by_video`` maps
+    video_id to a list of ``(start_ms, RallyActions)`` tuples; ``gt_lookup``
+    maps rally_id to ``(gt_serving_team, gt_point_winner)``.
+    """
     all_matches: list[MatchResult] = []
     all_unmatched: list[dict] = []
     rejections: list[dict[str, str]] = []
+    pred_by_video: dict[str, list[tuple[int, Any]]] = {}
+    gt_lookup: dict[str, tuple[str | None, str | None]] = {}
 
     for idx, rally in enumerate(rallies, start=1):
         # Rejection gate — surface rather than silently skip.
@@ -412,7 +433,7 @@ def _run_once(
             continue
 
         try:
-            pred_actions = _run_rally(
+            pred_actions, rally_actions_obj = _run_rally(
                 rally,
                 team_map.get(rally.rally_id),
                 calibrators.get(rally.video_id),
@@ -444,10 +465,17 @@ def _run_once(
         all_matches.extend(matches)
         all_unmatched.extend(unmatched)
 
+        # Session 5 — capture predicted RallyActions and per-rally score GT
+        # for the match-level score metric.
+        pred_by_video.setdefault(rally.video_id, []).append(
+            (rally.start_ms, rally_actions_obj)
+        )
+        gt_lookup[rally.rally_id] = (rally.gt_serving_team, rally.gt_point_winner)
+
         if print_progress and (idx % 20 == 0 or idx == len(rallies)):
             console.print(f"  [{idx}/{len(rallies)}] processed")
 
-    return all_matches, all_unmatched, rejections
+    return all_matches, all_unmatched, rejections, pred_by_video, gt_lookup
 
 
 def _serve_metrics(matches: list[MatchResult]) -> tuple[float, int, float, int]:
@@ -471,7 +499,11 @@ def _serve_metrics(matches: list[MatchResult]) -> tuple[float, int, float, int]:
     return id_acc, id_n, attr_acc, attr_n
 
 
-def _flatten_run(matches: list[MatchResult], unmatched: list[dict]) -> dict[str, float]:
+def _flatten_run(
+    matches: list[MatchResult],
+    unmatched: list[dict],
+    score_metrics: ScoreMetrics | None = None,
+) -> dict[str, float]:
     """Collapse a single run into scalar metrics consumed by the aggregator."""
     m = compute_metrics(matches, unmatched)
     serve_id, _, serve_attr, _ = _serve_metrics(matches)
@@ -485,6 +517,13 @@ def _flatten_run(matches: list[MatchResult], unmatched: list[dict]) -> dict[str,
         "serve_id_accuracy":           float(serve_id),
         "serve_attr_accuracy":         float(serve_attr),
     }
+    # Session 5 — score metric. Only emitted when GT is available for at
+    # least one fully-labeled match; otherwise the keys are absent and the
+    # summary prints "n/a".
+    if score_metrics is not None and score_metrics.n_matches_scored > 0:
+        out["score_accuracy"] = float(score_metrics.score_accuracy)
+        out["score_chain_accuracy"] = float(score_metrics.score_chain_accuracy)
+        out["score_final_accuracy"] = float(score_metrics.final_score_accuracy)
     # Per-class F1 goes in with a prefix so the aggregator treats each as
     # its own metric for variance purposes.
     for cls, stats in m["per_class"].items():
@@ -538,7 +577,7 @@ def _parity_check(rally_id: str) -> int:
 
     calibrators = _build_calibrators({rally.video_id})
     ctx = PipelineContext()
-    pred_actions = _run_rally(
+    pred_actions, _ = _run_rally(
         rally,
         team_map.get(rally.rally_id),
         calibrators.get(rally.video_id),
@@ -652,12 +691,14 @@ def _print_summary(
     n_eval: int,
     rejections: list[dict[str, str]],
     warning: str | None,
+    score_metrics: ScoreMetrics | None = None,
 ) -> None:
     headline_keys = [
         "contact_f1", "contact_recall", "contact_precision",
         "action_accuracy", "court_side_accuracy",
         "player_attribution_accuracy",
         "serve_id_accuracy", "serve_attr_accuracy",
+        "score_accuracy",
     ]
     table = Table(title="production_eval — aggregate (mean ± std across reruns)")
     table.add_column("metric")
@@ -680,6 +721,30 @@ def _print_summary(
             cls = k.split("::")[1]
             pc.add_row(cls, f"{v['mean']:.1%}", f"{v['std'] * 100:.2f}pp")
         console.print(pc)
+
+    # Session 5 — score breakdown sub-table.
+    if score_metrics is not None:
+        if score_metrics.n_matches_scored > 0:
+            st = Table(title="score breakdown (Session 5)")
+            st.add_column("metric")
+            st.add_column("value", justify="right")
+            st.add_row("score_accuracy (per-rally transition)",
+                       f"{score_metrics.score_accuracy:.1%}")
+            st.add_row("score_chain_accuracy (running score strict)",
+                       f"{score_metrics.score_chain_accuracy:.1%}")
+            st.add_row("final_score_accuracy (per-match final)",
+                       f"{score_metrics.final_score_accuracy:.1%}")
+            st.add_row("rallies scored", str(score_metrics.n_rallies_scored))
+            st.add_row("matches scored", str(score_metrics.n_matches_scored))
+            st.add_row("matches skipped (partial GT)",
+                       str(score_metrics.n_matches_skipped_partial_gt))
+            console.print(st)
+        else:
+            console.print(
+                "[yellow]score_accuracy: n/a[/yellow] — no video has every "
+                "rally labeled with gt_serving_team + gt_point_winner yet. "
+                "Label in the editor's Ground Truth panel to populate."
+            )
 
     console.print(
         f"[bold]rallies:[/bold] loaded={n_loaded}  evaluated={n_eval}  "
@@ -743,20 +808,25 @@ def main() -> int:
     # Run N times.
     run_scalars: list[dict[str, float]] = []
     last_rejections: list[dict[str, str]] = []
+    last_score_metrics: ScoreMetrics | None = None
     n_eval = 0
     for run_i in range(args.reruns):
         console.print(f"[bold]Run {run_i + 1}/{args.reruns}[/bold]")
         t0 = time.time()
-        matches, unmatched, rejections = _run_once(rallies, team_map, calibrators, ctx)
+        matches, unmatched, rejections, pred_by_video, gt_lookup = _run_once(
+            rallies, team_map, calibrators, ctx
+        )
         dt = time.time() - t0
         console.print(f"  run {run_i + 1} done in {dt:.1f}s  "
                       f"(matches={len(matches)}, rejections={len(rejections)})")
-        run_scalars.append(_flatten_run(matches, unmatched))
+        score_metrics = compute_score_metrics(pred_by_video, gt_lookup)
+        run_scalars.append(_flatten_run(matches, unmatched, score_metrics))
         last_rejections = rejections
+        last_score_metrics = score_metrics
         n_eval = n_loaded - len(rejections)
 
     agg, warning = _aggregate_runs(run_scalars)
-    _print_summary(agg, n_loaded, n_eval, last_rejections, warning)
+    _print_summary(agg, n_loaded, n_eval, last_rejections, warning, last_score_metrics)
 
     # Write JSON.
     out_dir = analysis_root / "outputs" / "production_eval"

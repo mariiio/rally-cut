@@ -10,7 +10,7 @@ import {
   listRallies,
   updateRally,
 } from "../services/rallyService.js";
-import { trackPlayersForRally, getPlayerTrack, swapPlayerTracks, promoteRawTrack, getActionGroundTruth, saveActionGroundTruth } from "../services/playerTrackingService.js";
+import { trackPlayersForRally, getPlayerTrack, swapPlayerTracks, promoteRawTrack, getActionGroundTruth, saveActionGroundTruth, saveScoreGroundTruth, getScoreGroundTruthForVideo } from "../services/playerTrackingService.js";
 import {
   exportToLabelStudio,
   importFromLabelStudio,
@@ -219,6 +219,44 @@ router.put(
     try {
       const result = await saveActionGroundTruth(req.params.id, req.userId!, req.body.labels);
       res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Score ground truth (Session 5)
+const teamEnum = z.enum(["A", "B"]).nullable();
+
+router.put(
+  "/v1/rallies/:id/score-ground-truth",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: z.object({
+      gtServingTeam: teamEnum,
+      gtPointWinner: teamEnum,
+      gtSideSwitch: z.boolean().nullable().optional(),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const result = await saveScoreGroundTruth(req.params.id, req.userId!, req.body);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
+  "/v1/videos/:videoId/score-ground-truth",
+  requireUser,
+  validateRequest({ params: z.object({ videoId: uuidSchema }) }),
+  async (req, res, next) => {
+    try {
+      const rallies = await getScoreGroundTruthForVideo(req.params.videoId, req.userId!);
+      res.json({ rallies });
     } catch (error) {
       next(error);
     }
