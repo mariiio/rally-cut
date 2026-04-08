@@ -59,6 +59,7 @@ class ContactRow:
     bucket: str
     court_side: str
     cs_correct: bool | None
+    player_correct: bool | None
     action: str
     confidence: float
     is_rescued: bool
@@ -135,9 +136,14 @@ def _collect_contact_rows(
             rally.gt_labels, resc_preds,
             tolerance=tol, team_assignments=team_asgs,
         )
-        # Map pred_frame -> cs_correct (only for matched preds).
+        # Map pred_frame -> (cs_correct, player_correct) for matched preds.
         pred_cs = {
             m.pred_frame: m.court_side_correct
+            for m in matches
+            if m.pred_frame is not None
+        }
+        pred_pc: dict[int, bool | None] = {
+            m.pred_frame: (m.player_correct if m.player_evaluable else None)
             for m in matches
             if m.pred_frame is not None
         }
@@ -158,6 +164,7 @@ def _collect_contact_rows(
                 bucket=_bucket(d),
                 court_side=str(p.get("courtSide") or "unknown"),
                 cs_correct=pred_cs.get(f),
+                player_correct=pred_pc.get(f),
                 action=str(p.get("action") or "?"),
                 confidence=float(p.get("confidence", 0.0)),
                 is_rescued=(f not in base_frames),
@@ -301,6 +308,52 @@ def main() -> None:
             console.print(
                 f"[yellow]< 60% ({pct_near:.0f}%) near-net. "
                 "No-go: accept as compositional noise (Phase B2).[/yellow]"
+            )
+
+    # ---- cs_correct vs player_correct overlap on rescued contacts ----
+    rescued_eval = [
+        r for r in rescued_rows
+        if r.cs_correct is not None and r.player_correct is not None
+    ]
+    cs_wrong = [r for r in rescued_eval if r.cs_correct is False]
+    player_wrong = [r for r in rescued_eval if r.player_correct is False]
+    both_wrong = [
+        r for r in rescued_eval
+        if r.cs_correct is False and r.player_correct is False
+    ]
+    cs_wrong_player_right = [
+        r for r in rescued_eval
+        if r.cs_correct is False and r.player_correct is True
+    ]
+    console.print(
+        f"\n[bold]cs_correct vs player_correct overlap "
+        f"(rescued, eval denom = {len(rescued_eval)}):[/bold]"
+    )
+    console.print(f"  cs_wrong total:                    {len(cs_wrong)}")
+    console.print(f"  player_wrong total:                {len(player_wrong)}")
+    console.print(
+        f"  cs_wrong AND player_wrong:         {len(both_wrong)}"
+        f"  ({(len(both_wrong)/len(cs_wrong)*100 if cs_wrong else 0):.0f}% of cs errors)"
+    )
+    console.print(
+        f"  cs_wrong BUT player_correct:       {len(cs_wrong_player_right)}"
+        f"  ({(len(cs_wrong_player_right)/len(cs_wrong)*100 if cs_wrong else 0):.0f}% of cs errors)"
+    )
+    if cs_wrong:
+        pct_attr = len(both_wrong) / len(cs_wrong) * 100
+        console.print()
+        if pct_attr >= 70:
+            console.print(
+                f"[green]>= 70% ({pct_attr:.0f}%) of rescued cs errors co-occur "
+                "with attribution errors. The court_side drop is downstream of "
+                "player attribution — a per-player pose floor for rescued "
+                "contacts is the real lever.[/green]"
+            )
+        else:
+            console.print(
+                f"[yellow]< 70% ({pct_attr:.0f}%) overlap — attribution is "
+                "not the dominant cause. cs drop is genuine compositional "
+                "noise; close the workstream.[/yellow]"
             )
 
     # ---- Action breakdown of rescued errors ----
