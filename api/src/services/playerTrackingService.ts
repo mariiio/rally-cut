@@ -1258,8 +1258,11 @@ export async function getScoreGroundTruthForVideo(
   if (video.userId !== userId) {
     throw new ForbiddenError('You do not have permission to view score ground truth for this video');
   }
+  // No status filter: SUGGESTED rallies (e.g. ball-pass demotions from
+  // rallyValidation) are still shown in the editor and should be labelable.
+  // Score GT is orthogonal to rally confirmation state.
   const rallies = await prisma.rally.findMany({
-    where: { videoId, status: 'CONFIRMED' },
+    where: { videoId },
     orderBy: [{ order: 'asc' }, { startMs: 'asc' }],
     select: {
       id: true,
