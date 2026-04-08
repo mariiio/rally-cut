@@ -167,7 +167,21 @@ export function ScoreGtSection({ renderSection }: Props) {
   const backendRallyId = selectedRally?._backendId ?? null;
   const currentEntryIdx = entries.findIndex((e) => e.rallyId === backendRallyId);
   const currentEntry = currentEntryIdx >= 0 ? entries[currentEntryIdx] : null;
-  const isLastRally = entries.length > 0 && currentEntryIdx === entries.length - 1;
+
+  // "Last rally" is defined as the chronologically last rally the user sees
+  // in the editor (rallies with a backend mapping). Computing it from
+  // `entries` would be wrong now that the backend returns all rallies
+  // including REJECTED ones that aren't surfaced in the editor.
+  const lastEditorRallyBackendId = (() => {
+    const mapped = rallies
+      .filter((r) => r._backendId)
+      .sort((a, b) => a.start_time - b.start_time);
+    return mapped.length > 0 ? mapped[mapped.length - 1]._backendId ?? null : null;
+  })();
+  const isLastRally =
+    !!currentEntry &&
+    !!lastEditorRallyBackendId &&
+    currentEntry.rallyId === lastEditorRallyBackendId;
 
   // A rally is "labeled" when gt_serving_team is set. Point winner is
   // derived from the next rally's serving team (exact in volleyball), so
