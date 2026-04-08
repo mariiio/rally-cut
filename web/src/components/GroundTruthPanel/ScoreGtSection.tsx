@@ -167,36 +167,29 @@ export function ScoreGtSection({ renderSection }: Props) {
   const backendRallyId = selectedRally?._backendId ?? null;
   const currentEntryIdx = entries.findIndex((e) => e.rallyId === backendRallyId);
   const currentEntry = currentEntryIdx >= 0 ? entries[currentEntryIdx] : null;
-  const isLastRally = entries.length > 0 && currentEntryIdx === entries.length - 1;
 
-  /**
-   * GT point winner for rally `i`:
-   *   - i < N-1: next rally's gt_serving_team (exact in volleyball)
-   *   - i == N-1: the labeler's explicit gt_point_winner (no next rally)
-   * Returns null when the value cannot be determined yet.
-   */
-  const deriveGtPointWinner = (i: number): ScoreTeam => {
-    if (i < 0 || i >= entries.length) return null;
-    if (i < entries.length - 1) return entries[i + 1].gtServingTeam;
-    return entries[i].gtPointWinner;
-  };
-
-  // "Labeled" = serving team is set, AND (for the last rally) point winner too.
-  const labeledCount = entries.filter(
-    (e, i) =>
-      e.gtServingTeam !== null &&
-      (i < entries.length - 1 ? true : e.gtPointWinner !== null),
-  ).length;
+  // A rally is "labeled" when gt_serving_team is set. Point winner is
+  // derived from the next rally's serving team (exact in volleyball), so
+  // we don't store or require it — the GT set is also a subset of each
+  // match, which rules out any end-rule heuristic for the last rally.
+  const labeledCount = entries.filter((e) => e.gtServingTeam !== null).length;
   const total = entries.length;
 
-  // Running score walking from the start; null if there is a gap before current.
+  /**
+   * Running score for the preview: cumulative points **up to and including
+   * the currently selected rally**, derived from rallies[i+1].gtServingTeam.
+   * Because the current rally's point winner needs the next rally's GT
+   * serving team to be set, the preview returns null if the chain is broken
+   * anywhere from rally 0 through rally currentIdx+1.
+   */
   const runningScore: { scoreA: number; scoreB: number } | null = (() => {
-    if (!currentEntry || currentEntryIdx < 0) return null;
+    if (currentEntryIdx < 0) return null;
     let scoreA = 0;
     let scoreB = 0;
     for (let i = 0; i <= currentEntryIdx; i++) {
-      const winner = deriveGtPointWinner(i);
-      if (winner === null) return null; // chain broken before/at current
+      if (i >= entries.length - 1) return null; // no next rally to derive from
+      const winner = entries[i + 1].gtServingTeam;
+      if (winner === null) return null; // chain broken
       if (winner === 'A') scoreA += 1;
       else if (winner === 'B') scoreB += 1;
     }
@@ -208,7 +201,6 @@ export function ScoreGtSection({ renderSection }: Props) {
     ? (currentEntry.gtServingTeam ?? currentEntry.servingTeam)
     : null;
   const servingIsConfirmed = currentEntry?.gtServingTeam !== null;
-  const pointWinner = currentEntry?.gtPointWinner ?? null;
 
   const handleSetServing = useCallback(
     async (team: ScoreTeam) => {
@@ -216,22 +208,6 @@ export function ScoreGtSection({ renderSection }: Props) {
       await saveScoreGt(activeMatchId, currentEntry.rallyId, {
         gtServingTeam: team,
         gtPointWinner: currentEntry.gtPointWinner,
-      }).catch(() => {
-        /* store already reverted + logged */
-      });
-    },
-    [activeMatchId, currentEntry, saveScoreGt],
-  );
-
-  const handleSetWinner = useCallback(
-    async (team: ScoreTeam) => {
-      if (!activeMatchId || !currentEntry) return;
-      // When the user confirms a point winner, also lock in the serving team shown
-      // (either the already-confirmed GT or the predicted value).
-      const servingToSave = currentEntry.gtServingTeam ?? currentEntry.servingTeam ?? null;
-      await saveScoreGt(activeMatchId, currentEntry.rallyId, {
-        gtServingTeam: servingToSave,
-        gtPointWinner: team,
       }).catch(() => {
         /* store already reverted + logged */
       });
@@ -258,27 +234,21 @@ export function ScoreGtSection({ renderSection }: Props) {
       const currentIdx = currentEntry
         ? entries.findIndex((e) => e.rallyId === currentEntry.rallyId)
         : -1;
-      // Serving team must be set for every rally; point winner is only
-      // required on the last rally (others are derived from the next rally's
-      // serving team).
-      const isUnlabeled = (e: ScoreGtEntry, i: number) => {
-        if (e.gtServingTeam === null) return true;
-        if (i === entries.length - 1 && e.gtPointWinner === null) return true;
-        return false;
-      };
+      // Serving team is the only required label per rally.
+      const isUnlabeled = (e: ScoreGtEntry) => e.gtServingTeam === null;
       if (direction === 'next') {
         for (let i = currentIdx + 1; i < entries.length; i++) {
-          if (isUnlabeled(entries[i], i)) return entries[i];
+          if (isUnlabeled(entries[i])) return entries[i];
         }
         for (let i = 0; i <= currentIdx && i < entries.length; i++) {
-          if (isUnlabeled(entries[i], i)) return entries[i];
+          if (isUnlabeled(entries[i])) return entries[i];
         }
       } else {
         for (let i = currentIdx - 1; i >= 0; i--) {
-          if (isUnlabeled(entries[i], i)) return entries[i];
+          if (isUnlabeled(entries[i])) return entries[i];
         }
         for (let i = entries.length - 1; i >= currentIdx && i >= 0; i--) {
-          if (isUnlabeled(entries[i], i)) return entries[i];
+          if (isUnlabeled(entries[i])) return entries[i];
         }
       }
       return null;
@@ -395,64 +365,37 @@ export function ScoreGtSection({ renderSection }: Props) {
         </Typography>
       ) : (
         <>
-          <Stack direction="row" spacing={1} alignItems="stretch">
-            <Box sx={{ flex: 1, minWidth: 0 }}>
-              <Stack
-                direction="row"
-                alignItems="center"
-                spacing={0.5}
-                sx={{ mb: 0.5, minHeight: 18 }}
-              >
-                <Typography variant="caption" color="text.secondary">
-                  Serving team
-                </Typography>
-                {!servingIsConfirmed && effectiveServing && (
-                  <Chip
-                    label="unconfirmed"
-                    size="small"
-                    sx={{
-                      height: 14,
-                      fontSize: '0.58rem',
-                      bgcolor: 'warning.light',
-                      color: 'warning.contrastText',
-                      '& .MuiChip-label': { px: 0.5 },
-                    }}
-                  />
-                )}
-              </Stack>
-              <TeamSelector
-                value={effectiveServing}
-                onChange={handleSetServing}
-                unconfirmed={!servingIsConfirmed && effectiveServing !== null}
-                nearSide={nearSide}
-              />
-            </Box>
-
-            {isLastRally && (
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Stack
-                  direction="row"
-                  alignItems="center"
-                  sx={{ mb: 0.5, minHeight: 18 }}
-                >
-                  <Typography variant="caption" color="text.secondary">
-                    Point winner
-                  </Typography>
-                </Stack>
-                <TeamSelector
-                  value={pointWinner}
-                  onChange={handleSetWinner}
-                  nearSide={nearSide}
+          <Box>
+            <Stack
+              direction="row"
+              alignItems="center"
+              spacing={0.5}
+              sx={{ mb: 0.5, minHeight: 18 }}
+            >
+              <Typography variant="caption" color="text.secondary">
+                Serving team
+              </Typography>
+              {!servingIsConfirmed && effectiveServing && (
+                <Chip
+                  label="unconfirmed"
+                  size="small"
+                  sx={{
+                    height: 14,
+                    fontSize: '0.58rem',
+                    bgcolor: 'warning.light',
+                    color: 'warning.contrastText',
+                    '& .MuiChip-label': { px: 0.5 },
+                  }}
                 />
-              </Box>
-            )}
-          </Stack>
-
-          {!isLastRally && (
-            <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-              Point winner auto-inferred from the next rally&apos;s serving team.
-            </Typography>
-          )}
+              )}
+            </Stack>
+            <TeamSelector
+              value={effectiveServing}
+              onChange={handleSetServing}
+              unconfirmed={!servingIsConfirmed && effectiveServing !== null}
+              nearSide={nearSide}
+            />
+          </Box>
 
           <Box>
             <Typography

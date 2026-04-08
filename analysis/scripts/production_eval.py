@@ -517,13 +517,11 @@ def _flatten_run(
         "serve_id_accuracy":           float(serve_id),
         "serve_attr_accuracy":         float(serve_attr),
     }
-    # Session 5 — score metric. Only emitted when GT is available for at
-    # least one fully-labeled match; otherwise the keys are absent and the
-    # summary prints "n/a".
-    if score_metrics is not None and score_metrics.n_matches_scored > 0:
+    # Session 5 — score metric. Emitted whenever at least one rally has
+    # `gt_serving_team` labeled; otherwise the key is absent and the summary
+    # prints "n/a".
+    if score_metrics is not None and score_metrics.n_rallies_scored > 0:
         out["score_accuracy"] = float(score_metrics.score_accuracy)
-        out["score_chain_accuracy"] = float(score_metrics.score_chain_accuracy)
-        out["score_final_accuracy"] = float(score_metrics.final_score_accuracy)
     # Per-class F1 goes in with a prefix so the aggregator treats each as
     # its own metric for variance purposes.
     for cls, stats in m["per_class"].items():
@@ -722,28 +720,22 @@ def _print_summary(
             pc.add_row(cls, f"{v['mean']:.1%}", f"{v['std'] * 100:.2f}pp")
         console.print(pc)
 
-    # Session 5 — score breakdown sub-table.
+    # Session 5 — score coverage sub-table.
     if score_metrics is not None:
-        if score_metrics.n_matches_scored > 0:
+        if score_metrics.n_rallies_scored > 0:
             st = Table(title="score breakdown (Session 5)")
             st.add_column("metric")
             st.add_column("value", justify="right")
-            st.add_row("score_accuracy (per-rally transition)",
+            st.add_row("score_accuracy (pred serving == gt serving)",
                        f"{score_metrics.score_accuracy:.1%}")
-            st.add_row("score_chain_accuracy (running score strict)",
-                       f"{score_metrics.score_chain_accuracy:.1%}")
-            st.add_row("final_score_accuracy (per-match final)",
-                       f"{score_metrics.final_score_accuracy:.1%}")
             st.add_row("rallies scored", str(score_metrics.n_rallies_scored))
-            st.add_row("matches scored", str(score_metrics.n_matches_scored))
-            st.add_row("matches skipped (partial GT)",
-                       str(score_metrics.n_matches_skipped_partial_gt))
+            st.add_row("videos with GT", str(score_metrics.n_videos_with_any_gt))
             console.print(st)
         else:
             console.print(
-                "[yellow]score_accuracy: n/a[/yellow] — no video has every "
-                "rally labeled with gt_serving_team + gt_point_winner yet. "
-                "Label in the editor's Ground Truth panel to populate."
+                "[yellow]score_accuracy: n/a[/yellow] — no rally has "
+                "gt_serving_team labeled yet. Label in the editor's "
+                "Ground Truth panel to populate."
             )
 
     console.print(
