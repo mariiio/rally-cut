@@ -40,6 +40,16 @@ class BallFilterConfig:
     warmup_protect_frames: int = 0  # 0 = disabled, >0 = protect first N frames
     warmup_protect_confidence: float = 0.50  # Min confidence to protect
 
+    # Far-court protection: preserve high-confidence detections in the upper
+    # band of the frame (y < far_court_protect_y) from segment/chain pruning.
+    # The chain-based anchor pruning builds its trajectory around the longest
+    # anchor segment, which tends to be near-court action or (worse) a static
+    # distractor like a flag at the net. Real far-court contacts (back-row
+    # serves/sets/attacks) form short high-confidence segments that get pruned
+    # as non-chain anchors. Same re-injection semantics as warmup protection.
+    far_court_protect_y: float = 0.0  # 0 = disabled, >0 = protect y < this
+    far_court_protect_confidence: float = 0.30  # Min confidence to protect
+
     # Interpolation for missing frames
     enable_interpolation: bool = True
     max_interpolation_gap: int = 10  # Max frames to interpolate (larger gaps left empty)
@@ -176,7 +186,13 @@ def get_wasb_filter_config() -> BallFilterConfig:
         # pruning kills them (ball crosses net = spatial discontinuity).
         # 120 frames covers ~95% of serves (median serve at frame 64).
         warmup_protect_frames=120,
-        warmup_protect_confidence=0.50,
+        warmup_protect_confidence=0.30,
+        # Far-court protection: preserve high-conf detections with y < 0.33
+        # from segment/chain pruning. Addresses the dominant filter-loss slice
+        # in the Session 3 ball_dropout diagnostic (far_court: 78% raw →
+        # 39% filtered, −39pp).
+        far_court_protect_y=0.33,
+        far_court_protect_confidence=0.30,
         # Segment pruning (removes false segments at boundaries)
         enable_segment_pruning=True,
         segment_jump_threshold=0.20,
@@ -248,6 +264,16 @@ class BallTemporalFilter:
             for p in filtered:
                 if p.frame_number < wp_frames and p.confidence >= wp_conf:
                     warmup_protected[p.frame_number] = p
+
+        # Far-court protection: capture high-confidence detections in the
+        # upper (far-side) band before pruning. See config docstring.
+        far_court_protected: dict[int, BallPosition] = {}
+        fc_y = self.config.far_court_protect_y
+        fc_conf = self.config.far_court_protect_confidence
+        if fc_y > 0:
+            for p in filtered:
+                if p.y < fc_y and p.confidence >= fc_conf:
+                    far_court_protected[p.frame_number] = p
 
         # Track counts for logging
         input_count = len(filtered)
@@ -367,6 +393,21 @@ class BallTemporalFilter:
                 logger.info(
                     f"Warmup protection: restored {warmup_restored} "
                     f"high-confidence detections in first {wp_frames} frames"
+                )
+
+        # Re-inject far-court protected detections that were removed.
+        far_court_restored = 0
+        if far_court_protected:
+            surviving_frames = {p.frame_number for p in filtered}
+            for frame, bp in sorted(far_court_protected.items()):
+                if frame not in surviving_frames:
+                    filtered.append(bp)
+                    far_court_restored += 1
+            if far_court_restored > 0:
+                filtered.sort(key=lambda p: p.frame_number)
+                logger.info(
+                    f"Far-court protection: restored {far_court_restored} "
+                    f"high-confidence detections with y < {fc_y}"
                 )
 
         # Interpolation: fill small gaps
