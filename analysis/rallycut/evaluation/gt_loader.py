@@ -179,7 +179,19 @@ def load_player_matching_gt(
                 logger.warning(msg)
                 out.warnings.append(msg)
                 continue
-            rally_map[str(track_id)] = int(label["playerId"])
+            track_key = str(track_id)
+            if track_key in rally_map:
+                msg = (
+                    f"{rid_str}: two labels resolved to track {track_id} "
+                    f"(existing playerId={rally_map[track_key]}, new "
+                    f"playerId={label['playerId']}); keeping the first, "
+                    f"dropping the second — labels likely anchored on "
+                    f"overlapping frames"
+                )
+                logger.warning(msg)
+                out.warnings.append(msg)
+                continue
+            rally_map[track_key] = int(label["playerId"])
 
         if rally_map:
             out.rallies[rid_str] = rally_map
@@ -190,9 +202,12 @@ def load_player_matching_gt(
 def build_positions_lookup_from_db(cursor: Any) -> PositionsLookup:
     """Build a PositionsLookup that reads player_tracks.positions_json on demand.
 
-    Uses a small cache so repeated lookups for the same rally during one
-    script run hit the DB exactly once. The cursor is only used for
-    lookups — callers must not interleave other queries on it.
+    Lazy per-rally fetch with a small cache. Prefer `prefetch_positions` for
+    bulk eval/diagnostic workloads — it issues a single batched SELECT
+    instead of one query per label resolution.
+
+    The cursor is only used for lookups; callers must not interleave
+    other queries on it.
     """
     cache: dict[str, Sequence[Position] | None] = {}
 
@@ -213,6 +228,34 @@ def build_positions_lookup_from_db(cursor: Any) -> PositionsLookup:
         positions = cast(Sequence[Position], raw or [])
         cache[rally_id] = positions
         return positions
+
+    return lookup
+
+
+def prefetch_positions(
+    cursor: Any,
+    rally_ids: Sequence[str],
+) -> PositionsLookup:
+    """Load positions for many rallies in a single query and return a lookup.
+
+    Use this when you already know which rally ids you need (e.g., bulk
+    GT eval across every video in the DB). Avoids the N+1 round-trips
+    `build_positions_lookup_from_db` would issue under per-label calls.
+    """
+    cache: dict[str, Sequence[Position] | None] = {rid: None for rid in rally_ids}
+    if rally_ids:
+        cursor.execute(
+            "SELECT rally_id, positions_json FROM player_tracks "
+            "WHERE rally_id = ANY(%s)",
+            (list(rally_ids),),
+        )
+        for rid, raw in cursor.fetchall():
+            if isinstance(raw, str):
+                raw = json.loads(raw)
+            cache[str(rid)] = cast(Sequence[Position], raw or [])
+
+    def lookup(rally_id: str) -> Sequence[Position] | None:
+        return cache.get(rally_id)
 
     return lookup
 
@@ -245,9 +288,24 @@ def load_all_from_db(
     cursor.execute(query, params)
     rows = cursor.fetchall()
 
-    lookup = build_positions_lookup_from_db(cursor)
-    results: list[DbGtRow] = []
+    # Collect every rally id up front so we can batch-fetch positions in
+    # one SELECT, avoiding N+1 round-trips during label resolution.
+    rally_ids: list[str] = []
+    parsed_rows: list[tuple[str, Mapping[str, Any] | None]] = []
     for vid, gt_json in rows:
+        if gt_json is None:
+            parsed_rows.append((str(vid), None))
+            continue
+        if isinstance(gt_json, str):
+            gt_json = cast(Mapping[str, Any], json.loads(gt_json))
+        parsed_rows.append((str(vid), gt_json))
+        rally_ids.extend(
+            str(rid) for rid in cast(Mapping[str, Any], gt_json.get("rallies") or {}).keys()
+        )
+
+    lookup = prefetch_positions(cursor, rally_ids)
+    results: list[DbGtRow] = []
+    for video_id, gt_json in parsed_rows:
         gt = load_player_matching_gt(gt_json, positions_lookup=lookup)
-        results.append(DbGtRow(video_id=str(vid), gt=gt))
+        results.append(DbGtRow(video_id=video_id, gt=gt))
     return results

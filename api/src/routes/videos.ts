@@ -1008,15 +1008,21 @@ router.put(
       rallies: z.record(
         z.string(),
         z.object({
+          // Bbox coords are center-normalized in [0,1] (same convention
+          // as PlayerPosition). Clients must send values inside the
+          // frame — negative or >1 values would poison the IoU resolver.
+          // Partial rallies (< 4 labels) are intentionally allowed to
+          // support intermediate save states from the web dialog; the
+          // evaluator treats missing players as unlabeled.
           labels: z
             .array(
               z.object({
                 playerId: z.number().int().min(1).max(4),
                 frame: z.number().int().min(0),
-                cx: z.number(),
-                cy: z.number(),
-                w: z.number(),
-                h: z.number(),
+                cx: z.number().gte(0).lte(1),
+                cy: z.number().gte(0).lte(1),
+                w: z.number().gt(0).lte(1),
+                h: z.number().gt(0).lte(1),
               })
             )
             .min(1)

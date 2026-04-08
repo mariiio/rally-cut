@@ -43,10 +43,11 @@ import argparse
 import json
 import logging
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping, cast
+from typing import Any, cast
 
 from psycopg.types.json import Json
 
@@ -293,9 +294,21 @@ def main() -> None:
                 rally_positions = _load_all_positions(cur, rally_ids)
                 plan = _plan_video(video_id, gt_data, rally_positions)
 
-                # If every rally has empty source triples, the input is
-                # already pure v2 (bbox-only, no legacyTrackId). Skip.
-                if all(not r.source_triples for r in plan.rallies):
+                # Skip videos whose input is already pure v2. That means
+                # every rally has the v2 `{"labels": [...]}` shape AND
+                # zero labels carry legacyTrackId (which is the only thing
+                # migration can rewrite). A rally with a v1 dict but no
+                # entries still counts as "needs migration" because its
+                # container shape is wrong — we check container + triples
+                # separately to avoid false positives on empty v1 inputs.
+                raw_rallies = cast(Mapping[str, Any], gt_data.get("rallies") or {})
+                container_is_v2 = all(
+                    isinstance(entry, Mapping) and "labels" in entry
+                    for entry in raw_rallies.values()
+                ) if raw_rallies else False
+                if container_is_v2 and all(
+                    not r.source_triples for r in plan.rallies
+                ):
                     already_pure.append(video_id)
                     continue
 

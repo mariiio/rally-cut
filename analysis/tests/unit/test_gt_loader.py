@@ -107,3 +107,19 @@ def test_none_returns_empty() -> None:
 
 def test_iou_threshold_sane() -> None:
     assert 0 < IOU_THRESHOLD < 1
+
+
+def test_two_labels_resolving_to_same_track_warns_and_drops_second() -> None:
+    # Both labels at the same frame, both closest to track 1 — the second
+    # should be dropped with a warning rather than silently overwriting.
+    positions = {"r": [_pos(0, 1, 0.50, 0.50)]}
+    gt = load_player_matching_gt({
+        "rallies": {"r": {"labels": [
+            {"playerId": 1, "frame": 0,
+             "cx": 0.50, "cy": 0.50, "w": 0.05, "h": 0.2},
+            {"playerId": 2, "frame": 0,
+             "cx": 0.50, "cy": 0.50, "w": 0.05, "h": 0.2},
+        ]}},
+    }, positions_lookup=positions.get)
+    assert gt.rallies == {"r": {"1": 1}}  # first wins
+    assert any("resolved to track 1" in w for w in gt.warnings)

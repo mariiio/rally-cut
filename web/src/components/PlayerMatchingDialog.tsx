@@ -216,6 +216,11 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
   useEffect(() => {
     if (!open || !videoId) return;
 
+    // Clear any positions cached from a previous dialog session — stale
+    // entries would cause GT labels to resolve against the wrong video's
+    // tracking data when the dialog is opened for a different video.
+    rallyPositionsRef.current = new Map();
+
     let cancelled = false;
 
     async function load() {
