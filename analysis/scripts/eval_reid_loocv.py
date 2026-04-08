@@ -218,22 +218,18 @@ def main() -> None:
     args = parser.parse_args()
 
     from rallycut.evaluation.db import get_connection
+    from rallycut.evaluation.gt_loader import load_all_from_db
 
-    # Load all GT videos
+    # Load all GT videos via shared loader (handles v1+v2 transparently).
     with get_connection() as conn:
         with conn.cursor() as cur:
-            query = """
-                SELECT v.id, v.player_matching_gt_json
-                FROM videos v
-                WHERE v.player_matching_gt_json IS NOT NULL
-                ORDER BY v.id
-            """
-            cur.execute(query)
-            all_rows = cur.fetchall()
+            db_rows = load_all_from_db(cur)
 
+    # Legacy shape: list of (video_id, {"rallies": {...}})
+    all_rows = [(r.video_id, {"rallies": r.gt.rallies}) for r in db_rows]
     video_rows = [
-        (str(vid), gt) for vid, gt in all_rows
-        if args.video_id is None or str(vid).startswith(args.video_id)
+        (vid, gt) for vid, gt in all_rows
+        if args.video_id is None or vid.startswith(args.video_id)
     ]
     if args.max_folds is not None:
         video_rows = video_rows[:args.max_folds]
@@ -268,12 +264,7 @@ def main() -> None:
     }
 
     for fold_idx, (video_id, gt_json) in enumerate(video_rows):
-        gt_data = cast(dict[str, Any], gt_json)
-        gt_rallies_raw = gt_data.get("rallies", {})
-        gt_rallies: dict[str, dict[str, int]] = {
-            rid: {str(k): int(v) for k, v in mapping.items()}
-            for rid, mapping in gt_rallies_raw.items()
-        }
+        gt_rallies: dict[str, dict[str, int]] = gt_json["rallies"]
 
         n_gt = sum(len(m) for m in gt_rallies.values())
         logger.info(

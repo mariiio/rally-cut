@@ -26,7 +26,7 @@ import itertools
 import logging
 import sys
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -134,30 +134,17 @@ def _classify_error(gt_pid: int, mapped_pid: int | None) -> str:
 def collect_data(video_id_filter: str | None = None) -> list[VideoResult]:
     """Re-run match-players on all GT videos, collecting full diagnostics."""
     from rallycut.evaluation.db import get_connection
+    from rallycut.evaluation.gt_loader import load_all_from_db
     from rallycut.evaluation.tracking.db import get_video_path, load_rallies_for_video
     from rallycut.tracking.match_tracker import (
         MatchPlayerTracker,
         extract_rally_appearances,
     )
 
-    # Load GT videos
+    # Load GT videos via shared loader (handles v1+v2 transparently).
     with get_connection() as conn:
         with conn.cursor() as cur:
-            query = """
-                SELECT id, player_matching_gt_json
-                FROM videos WHERE player_matching_gt_json IS NOT NULL
-                ORDER BY name
-            """
-            params: list[str] = []
-            if video_id_filter:
-                query = """
-                    SELECT id, player_matching_gt_json
-                    FROM videos WHERE player_matching_gt_json IS NOT NULL
-                    AND id LIKE %s ORDER BY name
-                """
-                params.append(f"{video_id_filter}%")
-            cur.execute(query, params)
-            rows = cur.fetchall()
+            rows = load_all_from_db(cur, video_id_prefix=video_id_filter)
 
     if not rows:
         print("No videos with GT found")
@@ -165,17 +152,10 @@ def collect_data(video_id_filter: str | None = None) -> list[VideoResult]:
 
     results: list[VideoResult] = []
 
-    for row_idx, row in enumerate(rows):
-        vid = str(row[0])
-        gt_data = cast(dict[str, Any], row[1])
-        gt_rallies_raw = gt_data.get("rallies", {})
-        gt_rallies: dict[str, dict[str, int]] = {
-            rid: {str(k): int(v) for k, v in mapping.items()}
-            for rid, mapping in gt_rallies_raw.items()
-        }
-        gt_switches = gt_data.get(
-            "sideSwitches", gt_data.get("side_switches", [])
-        )
+    for row_idx, db_row in enumerate(rows):
+        vid = db_row.video_id
+        gt_rallies = db_row.gt.rallies
+        gt_switches = db_row.gt.side_switches
 
         rallies = load_rallies_for_video(vid)
         if not rallies:

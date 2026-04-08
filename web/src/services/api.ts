@@ -2617,8 +2617,26 @@ export async function getAnalysisPipelineStatus(videoId: string): Promise<Pipeli
 // Player Matching Ground Truth
 // ============================================================================
 
+// Player matching GT label: anchors a player id to a (frame, bbox) in the
+// rally's positions_json coordinate system. The loader IoU-matches the
+// bbox to the current track at that frame, so labels survive re-tracks
+// without needing to carry a (volatile) track id.
+// See analysis/rallycut/evaluation/gt_loader.py for the full spec.
+export interface PlayerMatchingGtLabel {
+  playerId: number;
+  frame: number;
+  cx: number;
+  cy: number;
+  w: number;
+  h: number;
+}
+
+export interface PlayerMatchingGtRally {
+  labels: PlayerMatchingGtLabel[];
+}
+
 export interface PlayerMatchingGt {
-  rallies: Record<string, Record<string, number>>; // rallyId -> {trackId: playerId}
+  rallies: Record<string, PlayerMatchingGtRally>;
   sideSwitches: number[];
   excludedRallies?: string[];
   savedAt?: string;
@@ -2652,7 +2670,11 @@ export async function savePlayerMatchingGtApi(
   const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/player-matching-gt`, {
     method: 'PUT',
     headers: getHeaders('application/json'),
-    body: JSON.stringify({ rallies: gt.rallies, sideSwitches: gt.sideSwitches, excludedRallies: gt.excludedRallies }),
+    body: JSON.stringify({
+      rallies: gt.rallies,
+      sideSwitches: gt.sideSwitches,
+      excludedRallies: gt.excludedRallies,
+    }),
   });
 
   if (!response.ok) {

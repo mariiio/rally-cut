@@ -348,10 +348,28 @@ export async function getAnalysisPipelineStatus(
 /**
  * Save player matching ground truth labels.
  */
+// Player matching GT payload. Each rally carries a list of bbox-keyed
+// labels — see analysis/rallycut/evaluation/gt_loader.py for the format
+// spec and the IoU-based resolver used at load time.
+type PlayerMatchingGtLabel = {
+  playerId: number;
+  frame: number;
+  cx: number;
+  cy: number;
+  w: number;
+  h: number;
+};
+
+type PlayerMatchingGtRally = { labels: PlayerMatchingGtLabel[] };
+
 export async function savePlayerMatchingGt(
   videoId: string,
   userId: string,
-  gt: { rallies: Record<string, Record<string, number>>; sideSwitches: number[]; excludedRallies?: string[] },
+  gt: {
+    rallies: Record<string, PlayerMatchingGtRally>;
+    sideSwitches: number[];
+    excludedRallies?: string[];
+  },
 ) {
   const video = await prisma.video.findFirst({
     where: { id: videoId, userId, deletedAt: null },

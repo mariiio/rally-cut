@@ -14,7 +14,7 @@ import itertools
 import logging
 import sys
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -68,23 +68,11 @@ def evaluate_switches(
 
 
 def load_gt_entries() -> list[tuple[str, dict[str, dict[str, int]], list[int]]]:
+    from rallycut.evaluation.gt_loader import load_all_from_db
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, player_matching_gt_json FROM videos "
-                "WHERE player_matching_gt_json IS NOT NULL"
-            )
-            rows = cur.fetchall()
-    entries = []
-    for vid, gt_json in rows:
-        gt_data = cast(dict[str, Any], gt_json)
-        gt_rallies = {
-            rid: {str(k): int(v) for k, v in mapping.items()}
-            for rid, mapping in gt_data.get("rallies", {}).items()
-        }
-        gt_switches = gt_data.get("sideSwitches", gt_data.get("side_switches", []))
-        entries.append((str(vid), gt_rallies, gt_switches))
-    return entries
+            db_rows = load_all_from_db(cur)
+    return [(r.video_id, r.gt.rallies, r.gt.side_switches) for r in db_rows]
 
 
 # Cached data per video: rally appearances + rally metadata
@@ -122,13 +110,18 @@ def extract_video_cache(video_id: str) -> CachedVideo | None:
 def run_matching_with_cache(
     cache: CachedVideo,
     penalty: float | None = None,
+    scale: float | None = None,
 ) -> list[dict[str, Any]]:
     """Run matching pipeline using cached appearances.
 
-    If penalty is set, overrides switch_penalty via module global.
+    If penalty is set, overrides base switch_penalty via module global.
+    If scale is set, overrides the penalty scale factor (default: log2(n)).
+    Set scale=1.0 for the old flat-penalty behavior.
     """
     if penalty is not None:
         mt_module._SWITCH_PENALTY_OVERRIDE = penalty  # type: ignore[attr-defined]
+    if scale is not None:
+        mt_module._SWITCH_PENALTY_SCALE = scale  # type: ignore[attr-defined]
 
     tracker = MatchPlayerTracker()
     results: list[RallyTrackingResult] = []
@@ -147,6 +140,8 @@ def run_matching_with_cache(
 
     if penalty is not None:
         mt_module._SWITCH_PENALTY_OVERRIDE = None  # type: ignore[attr-defined]
+    if scale is not None:
+        mt_module._SWITCH_PENALTY_SCALE = None  # type: ignore[attr-defined]
 
     pred_list: list[dict[str, Any]] = []
     pred_rallies: dict[str, dict[str, int]] = {}
@@ -163,12 +158,33 @@ def run_matching_with_cache(
 
 
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--max-videos", type=int, default=0,
+                        help="Limit to N videos (0=all)")
+    parser.add_argument("--videos", type=str, default="",
+                        help="Comma-separated video ID prefixes to include")
+    args = parser.parse_args()
+
     print("Loading GT entries from DB...", flush=True)
     gt_entries = load_gt_entries()
     print(f"Found {len(gt_entries)} videos with GT\n", flush=True)
 
+    # Filter to specific videos if requested
+    if args.videos:
+        prefixes = [v.strip() for v in args.videos.split(",")]
+        gt_entries = [
+            e for e in gt_entries
+            if any(e[0].startswith(p) for p in prefixes)
+        ]
+        print(f"Filtered to {len(gt_entries)} videos matching: {args.videos}\n", flush=True)
+    elif args.max_videos > 0:
+        gt_entries = gt_entries[:args.max_videos]
+        print(f"Limited to {len(gt_entries)} videos\n", flush=True)
+
     # Phase 1: Extract appearances once
-    print("Phase 1: Extracting appearances (one-time, ~8 min)...", flush=True)
+    print("Phase 1: Extracting appearances...", flush=True)
     video_caches: dict[str, CachedVideo] = {}
 
     for i, (video_id, _, _) in enumerate(gt_entries):
@@ -188,10 +204,40 @@ def main() -> None:
     # Phase 2: Sweep penalties (fast — no video I/O)
     print("Phase 2: Sweeping penalties...", flush=True)
 
-    penalties = [0.8, 1.0, 1.2, 1.3, 1.4, 1.5, 1.8, 2.0, 2.5]
+    # Sweep configurations: (base_penalty, scale_factor, label)
+    # scale=1.0 = flat (old behavior), scale=None = log2(n) (new default)
+    configs: list[tuple[float, float | None, str]] = [
+        # Flat baselines (old behavior)
+        (0.8, 1.0, "flat 0.8"),
+        (1.0, 1.0, "flat 1.0 (old default)"),
+        (1.2, 1.0, "flat 1.2"),
+        (1.5, 1.0, "flat 1.5"),
+        (2.0, 1.0, "flat 2.0"),
+        # log2(n) scaled (new default)
+        (0.3, None, "0.3×log2(n)"),
+        (0.4, None, "0.4×log2(n)"),
+        (0.5, None, "0.5×log2(n)"),
+        (0.6, None, "0.6×log2(n)"),
+        (0.8, None, "0.8×log2(n)"),
+        (1.0, None, "1.0×log2(n) (new default)"),
+        (1.2, None, "1.2×log2(n)"),
+        # sqrt(n) scaled
+        (0.3, -1.0, "0.3×sqrt(n)"),
+        (0.5, -1.0, "0.5×sqrt(n)"),
+        (0.8, -1.0, "0.8×sqrt(n)"),
+        (1.0, -1.0, "1.0×sqrt(n)"),
+    ]
     results: list[dict[str, Any]] = []
 
-    for pi, penalty in enumerate(penalties):
+    for pi, (penalty, scale_val, label) in enumerate(configs):
+        # For sqrt(n), use a special sentinel and compute in the function
+        import math
+        if scale_val == -1.0:
+            # sqrt(n) mode — approximate with a fixed scale per video
+            # We need to compute sqrt(n) per video, so we'll use a custom approach
+            pass  # handled below
+        actual_scale = scale_val
+
         total_correct = total_total = 0
         total_sw_tp = total_sw_fp = total_sw_fn = 0
         per_video: list[dict[str, Any]] = []
@@ -200,7 +246,14 @@ def main() -> None:
             if video_id not in video_caches:
                 continue
 
-            pred_list = run_matching_with_cache(video_caches[video_id], penalty)
+            # For sqrt(n) mode, compute per-video scale
+            if scale_val == -1.0:
+                n_rallies = len(video_caches[video_id])
+                actual_scale = math.sqrt(max(n_rallies, 2))
+
+            pred_list = run_matching_with_cache(
+                video_caches[video_id], penalty, scale=actual_scale,
+            )
             pred_rallies = {
                 e["rallyId"]: e["trackToPlayer"] for e in pred_list
             }
@@ -226,14 +279,15 @@ def main() -> None:
         sw_f1 = 2 * sw_p * sw_r / (sw_p + sw_r) if (sw_p + sw_r) else 0
 
         r = {
-            "penalty": penalty, "accuracy": acc,
+            "penalty": penalty, "scale": scale_val, "label": label,
+            "accuracy": acc,
             "correct": total_correct, "total": total_total,
             "sw_tp": total_sw_tp, "sw_fp": total_sw_fp, "sw_fn": total_sw_fn,
             "sw_f1": sw_f1 * 100, "per_video": per_video,
         }
         results.append(r)
         print(
-            f"  [{pi+1}/{len(penalties)}] penalty={penalty:.1f}: "
+            f"  [{pi+1}/{len(configs)}] {label:>22s}: "
             f"Acc={acc:.1f}% ({total_correct}/{total_total})  "
             f"Switch: TP={total_sw_tp} FP={total_sw_fp} FN={total_sw_fn} F1={r['sw_f1']:.1f}%",
             flush=True,
@@ -243,9 +297,9 @@ def main() -> None:
     print(f"\n{'='*80}", flush=True)
     print(f"SWITCH PENALTY SWEEP ({len(video_caches)} videos)", flush=True)
     print(f"{'='*80}", flush=True)
-    print(f"{'Penalty':>8s} {'Accuracy':>9s} {'Correct':>8s} "
+    print(f"{'Config':>24s} {'Accuracy':>9s} {'Correct':>8s} "
           f"{'SW_TP':>6s} {'SW_FP':>6s} {'SW_FN':>6s} {'SW_F1':>7s}", flush=True)
-    print("-" * 60, flush=True)
+    print("-" * 76, flush=True)
 
     best_acc = max(r["accuracy"] for r in results)
     best_f1 = max(r["sw_f1"] for r in results)
@@ -257,35 +311,16 @@ def main() -> None:
         if r["sw_f1"] == best_f1:
             marks += " [best F1]"
         print(
-            f"{r['penalty']:>8.1f} {r['accuracy']:>8.1f}% {r['correct']:>8d} "
+            f"{r['label']:>24s} {r['accuracy']:>8.1f}% {r['correct']:>8d} "
             f"{r['sw_tp']:>6d} {r['sw_fp']:>6d} {r['sw_fn']:>6d} "
             f"{r['sw_f1']:>6.1f}%{marks}",
             flush=True,
         )
 
-    # Per-video diff: show only videos that change across penalties
+    # Per-video diff: show only videos that change across configs
     print(f"\n{'='*80}", flush=True)
     print("PER-VIDEO ACCURACY (videos that vary)", flush=True)
     print(f"{'='*80}", flush=True)
-    header = f"{'Video':>10s}"
-    for r in results:
-        header += f" {r['penalty']:>5.1f}"
-    print(header, flush=True)
-
-    all_vids = sorted({v["video_id"] for r in results for v in r["per_video"]})
-    for vid in all_vids:
-        accs = []
-        row = f"{vid:>10s}"
-        for r in results:
-            v_data = next((v for v in r["per_video"] if v["video_id"] == vid), None)
-            if v_data:
-                accs.append(v_data["accuracy"])
-                row += f" {v_data['accuracy']:>4.1f}%"
-            else:
-                row += "   N/A"
-        # Only show if accuracy varies
-        if accs and max(accs) - min(accs) > 0.1:
-            print(row, flush=True)
 
 
 if __name__ == "__main__":

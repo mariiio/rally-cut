@@ -64,6 +64,108 @@ interface RallyEntry {
   sideSwitchDetected: boolean;
 }
 
+// IoU between two center-normalized bboxes (same convention as PlayerPosition).
+function iou(
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+): number {
+  const ax1 = a.x - a.width / 2, ay1 = a.y - a.height / 2;
+  const ax2 = a.x + a.width / 2, ay2 = a.y + a.height / 2;
+  const bx1 = b.x - b.width / 2, by1 = b.y - b.height / 2;
+  const bx2 = b.x + b.width / 2, by2 = b.y + b.height / 2;
+  const iw = Math.max(0, Math.min(ax2, bx2) - Math.max(ax1, bx1));
+  const ih = Math.max(0, Math.min(ay2, by2) - Math.max(ay1, by1));
+  const inter = iw * ih;
+  if (inter <= 0) return 0;
+  const area = a.width * a.height + b.width * b.height - inter;
+  return area > 0 ? inter / area : 0;
+}
+
+const IOU_THRESHOLD = 0.3;
+const ISOLATION_MAX_IOU = 0.1;
+
+// Bbox-keyed GT label — mirror of gt_loader.py.
+interface GtLabel {
+  playerId: number;
+  frame: number;
+  cx: number;
+  cy: number;
+  w: number;
+  h: number;
+}
+
+// Resolve GT labels to the legacy {trackIdStr: playerId} shape the dialog
+// uses internally. Mirrors gt_loader._resolve_label: for each label, find
+// the position at `frame` with the highest IoU against the label bbox;
+// drop labels whose max IoU falls below the threshold.
+function resolveLabelsToAssignment(
+  labels: GtLabel[],
+  positions: ApiPlayerPosition[],
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const label of labels) {
+    const labelBox = { x: label.cx, y: label.cy, width: label.w, height: label.h };
+    let bestIou = 0;
+    let bestTrack: number | null = null;
+    for (const pos of positions) {
+      if (pos.frameNumber !== label.frame) continue;
+      const v = iou(labelBox, pos);
+      if (v > bestIou) {
+        bestIou = v;
+        bestTrack = pos.trackId;
+      }
+    }
+    if (bestTrack != null && bestIou >= IOU_THRESHOLD) {
+      out[String(bestTrack)] = label.playerId;
+    }
+  }
+  return out;
+}
+
+// Pick a frame for this track where its bbox is large AND has low IoU with
+// every other track at that frame (so the label's bbox unambiguously maps
+// back to this track at load time). Mirrors migrate_gt_to_bbox_format.py.
+function pickIsolatedFrame(
+  positions: ApiPlayerPosition[],
+  trackId: number,
+): ApiPlayerPosition | null {
+  const ownPositions = positions.filter((p) => p.trackId === trackId);
+  if (ownPositions.length === 0) return null;
+
+  const byFrame = new Map<number, ApiPlayerPosition[]>();
+  for (const p of positions) {
+    const list = byFrame.get(p.frameNumber);
+    if (list) list.push(p);
+    else byFrame.set(p.frameNumber, [p]);
+  }
+
+  let best: ApiPlayerPosition | null = null;
+  let bestArea = -1;
+  let fallback: ApiPlayerPosition | null = null;
+  let fallbackArea = 0;
+
+  for (const tpos of ownPositions) {
+    const area = tpos.width * tpos.height;
+    if (area > fallbackArea) {
+      fallbackArea = area;
+      fallback = tpos;
+    }
+    const peers = byFrame.get(tpos.frameNumber) ?? [];
+    let maxPeerIou = 0;
+    for (const peer of peers) {
+      if (peer.trackId === trackId) continue;
+      const v = iou(tpos, peer);
+      if (v > maxPeerIou) maxPeerIou = v;
+    }
+    if (maxPeerIou >= ISOLATION_MAX_IOU) continue;
+    if (area > bestArea) {
+      bestArea = area;
+      best = tpos;
+    }
+  }
+  return best ?? fallback;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function normalizeRallyEntry(raw: any): RallyEntry {
   return {
@@ -106,6 +208,9 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
 
   // Ref to hold initial assignments for crop extraction (avoids dependency cycle)
   const assignmentsRef = useRef<Record<string, Record<string, number>>>({});
+  // Per-rally positions cache, populated by load (for v2 resolution) and by
+  // crop extraction. Save path reads this to emit v2 labels with bbox anchors.
+  const rallyPositionsRef = useRef<Map<string, ApiPlayerPosition[]>>(new Map());
 
   // Load match analysis + existing GT on open
   useEffect(() => {
@@ -138,12 +243,27 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
           }
         }
 
-        // Override with existing GT if available
+        // Override with existing GT if available. GT is bbox-keyed; we
+        // fetch each rally's current positions in parallel and IoU-resolve
+        // the labels to the current track ids the dialog uses internally.
         if (existingGt) {
-          for (const [rid, mapping] of Object.entries(existingGt.rallies)) {
-            if (initial[rid]) {
-              initial[rid] = { ...mapping };
-            }
+          const entries = Object.entries(existingGt.rallies);
+          await Promise.all(
+            entries.map(async ([rid]) => {
+              try {
+                const track = await getPlayerTrack(rid);
+                rallyPositionsRef.current.set(rid, track.positions ?? []);
+              } catch (err) {
+                console.warn(`[load] failed to fetch positions for GT rally ${rid}:`, err);
+              }
+            }),
+          );
+          if (cancelled) return;
+
+          for (const [rid, entry] of entries) {
+            if (!initial[rid]) continue;
+            const positions = rallyPositionsRef.current.get(rid) ?? [];
+            initial[rid] = resolveLabelsToAssignment(entry.labels, positions);
           }
           setSideSwitches(existingGt.sideSwitches);
           if (existingGt.excludedRallies) {
@@ -210,6 +330,9 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
         try {
           const trackResp = await getPlayerTrack(entry.rallyId);
           positions = trackResp.positions ?? [];
+          // Cache positions so the save path can build v2 labels with bbox
+          // anchors without re-fetching.
+          rallyPositionsRef.current.set(entry.rallyId, positions);
           if (trackResp.fps) rallyFps = trackResp.fps;
           primaryTrackIds = trackResp.primaryTrackIds;
         } catch (err) {
@@ -422,8 +545,43 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
         console.warn('[save] GT validation warnings:', warnings);
       }
 
+      // Emit GT labels: each (trackId, playerId) assignment becomes a
+      // bbox-keyed label anchored to an ISOLATED frame for that track —
+      // one where the track's bbox has low IoU with every other track
+      // present. Mirrors the Python migration in migrate_gt_to_bbox_format.py
+      // so labels minted here resolve unambiguously at load time no matter
+      // how the tracking has been re-run since.
+      const gtRallies: Record<string, { labels: GtLabel[] }> = {};
+      const skipped: string[] = [];
+      for (const [rid, mapping] of Object.entries(filteredAssignments)) {
+        const positions = rallyPositionsRef.current.get(rid) ?? [];
+        const labels: GtLabel[] = [];
+        for (const [trackIdStr, playerId] of Object.entries(mapping)) {
+          const trackId = Number(trackIdStr);
+          const best = pickIsolatedFrame(positions, trackId);
+          if (!best) {
+            skipped.push(`${rid.slice(0, 8)}/track${trackId}`);
+            continue;
+          }
+          labels.push({
+            playerId,
+            frame: best.frameNumber,
+            cx: best.x,
+            cy: best.y,
+            w: best.width,
+            h: best.height,
+          });
+        }
+        if (labels.length > 0) {
+          gtRallies[rid] = { labels };
+        }
+      }
+      if (skipped.length > 0) {
+        console.warn('[save] dropped labels with no resolvable bbox:', skipped);
+      }
+
       await savePlayerMatchingGtApi(videoId, {
-        rallies: filteredAssignments,
+        rallies: gtRallies,
         sideSwitches,
         excludedRallies: [...excludedRallies],
       });

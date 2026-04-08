@@ -21,7 +21,7 @@ import logging
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -123,26 +123,36 @@ def collect_data(
 def _collect_data_impl(video_id_filter: str | None = None) -> list[VideoData]:
     """Extract track features for all GT videos (one-time video read)."""
     from rallycut.evaluation.db import get_connection
+    from rallycut.evaluation.gt_loader import (
+        build_positions_lookup_from_db,
+        load_player_matching_gt,
+    )
     from rallycut.evaluation.tracking.db import get_video_path, load_rallies_for_video
     from rallycut.tracking.match_tracker import extract_rally_appearances
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            query = """
-                SELECT id, player_matching_gt_json, court_calibration_json
-                FROM videos WHERE player_matching_gt_json IS NOT NULL
-                ORDER BY name
-            """
+            query = (
+                "SELECT id, player_matching_gt_json, court_calibration_json "
+                "FROM videos WHERE player_matching_gt_json IS NOT NULL"
+            )
             params: list[str] = []
             if video_id_filter:
-                query = """
-                    SELECT id, player_matching_gt_json, court_calibration_json
-                    FROM videos WHERE player_matching_gt_json IS NOT NULL
-                    AND id LIKE %s ORDER BY name
-                """
+                query += " AND id LIKE %s"
                 params.append(f"{video_id_filter}%")
+            query += " ORDER BY name"
             cur.execute(query, params)
-            rows = cur.fetchall()
+            raw_rows = cur.fetchall()
+            positions_lookup = build_positions_lookup_from_db(cur)
+            # Normalize GT while cursor is still open (v2 lookups need it).
+            rows = [
+                (
+                    r[0],
+                    load_player_matching_gt(r[1], positions_lookup=positions_lookup),
+                    r[2],
+                )
+                for r in raw_rows
+            ]
 
     if not rows:
         print("No videos with GT found")
@@ -152,16 +162,10 @@ def _collect_data_impl(video_id_filter: str | None = None) -> list[VideoData]:
 
     for row_idx, row in enumerate(rows):
         vid = str(row[0])
-        gt_data = cast(dict[str, Any], row[1])
+        gt_normalized = row[1]
         cal_json = row[2]  # court_calibration_json
-        gt_rallies_raw = gt_data.get("rallies", {})
-        gt_rallies: dict[str, dict[str, int]] = {
-            rid: {str(k): int(v) for k, v in mapping.items()}
-            for rid, mapping in gt_rallies_raw.items()
-        }
-        gt_switches = gt_data.get(
-            "sideSwitches", gt_data.get("side_switches", [])
-        )
+        gt_rallies = gt_normalized.rallies
+        gt_switches = gt_normalized.side_switches
 
         # Parse court calibration corners
         court_cal_corners: list[tuple[float, float]] | None = None

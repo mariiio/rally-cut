@@ -28,6 +28,7 @@ import torch.nn.functional as functional
 from rich.console import Console
 
 from rallycut.evaluation.db import get_connection
+from rallycut.evaluation.gt_loader import load_all_from_db
 from rallycut.evaluation.tracking.db import get_video_path, load_rallies_for_video
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
@@ -36,27 +37,27 @@ console = Console()
 
 def load_gt_videos() -> list[dict]:
     """Load videos that have player matching ground truth."""
-    query = """
-        SELECT id, name, player_matching_gt_json
-        FROM videos
-        WHERE player_matching_gt_json IS NOT NULL
-        ORDER BY name
-    """
     results = []
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(query)
-            for row in cur.fetchall():
-                vid, name, gt_json = row
-                if gt_json:
-                    video_path = get_video_path(vid)
-                    if video_path:
-                        results.append({
-                            "video_id": vid,
-                            "title": name or vid[:8],
-                            "local_path": str(video_path),
-                            "gt": gt_json,
-                        })
+            db_rows = load_all_from_db(cur)
+            # Also fetch name via a second query keyed by id.
+            cur.execute(
+                "SELECT id, name FROM videos WHERE player_matching_gt_json IS NOT NULL"
+            )
+            name_by_id = {str(r[0]): r[1] for r in cur.fetchall()}
+    for db_row in db_rows:
+        vid = db_row.video_id
+        video_path = get_video_path(vid)
+        if video_path:
+            results.append({
+                "video_id": vid,
+                "title": name_by_id.get(vid) or vid[:8],
+                "local_path": str(video_path),
+                # Shape matches what analyze_discriminability expects:
+                # {"rallies": {rally_id: {track_id_str: player_id_int}}}
+                "gt": {"rallies": db_row.gt.rallies},
+            })
     return results
 
 

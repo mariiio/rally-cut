@@ -74,6 +74,10 @@ def _classify_error(
 def diagnose_from_db(video_id_filter: str | None = None) -> None:
     """Diagnose matching errors using GT and predictions from DB."""
     from rallycut.evaluation.db import get_connection
+    from rallycut.evaluation.gt_loader import (
+        build_positions_lookup_from_db,
+        load_player_matching_gt,
+    )
 
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -86,7 +90,13 @@ def diagnose_from_db(video_id_filter: str | None = None) -> None:
                 query += " AND id LIKE %s"
                 params.append(f"{video_id_filter}%")
             cur.execute(query, params)
-            rows = cur.fetchall()
+            raw_rows = cur.fetchall()
+            positions_lookup = build_positions_lookup_from_db(cur)
+            # Normalize GT while cursor is still open (v2 lookups need it).
+            rows = [
+                (r[0], r[1], load_player_matching_gt(r[2], positions_lookup=positions_lookup))
+                for r in raw_rows
+            ]
 
     if not rows:
         print("No videos with GT found")
@@ -99,14 +109,8 @@ def diagnose_from_db(video_id_filter: str | None = None) -> None:
 
     for row in rows:
         vid = str(row[0])
-        gt_data = cast(dict[str, Any], row[2])
         match_data = cast(dict[str, Any], row[1]) if row[1] else {}
-
-        gt_rallies_raw = gt_data.get("rallies", {})
-        gt_rallies: dict[str, dict[str, int]] = {
-            rid: {str(k): int(v) for k, v in mapping.items()}
-            for rid, mapping in gt_rallies_raw.items()
-        }
+        gt_rallies = row[2].rallies
 
         # Build predictions
         pred_rallies: dict[str, dict[str, int]] = {}
@@ -209,6 +213,7 @@ def diagnose_from_db(video_id_filter: str | None = None) -> None:
 def diagnose_with_rerun(video_id_filter: str | None = None) -> None:
     """Re-run match-players with diagnostics collection and analyze."""
     from rallycut.evaluation.db import get_connection
+    from rallycut.evaluation.gt_loader import load_all_from_db
     from rallycut.evaluation.tracking.db import get_video_path, load_rallies_for_video
     from rallycut.tracking.match_tracker import (
         RallyAssignmentDiagnostics,
@@ -217,16 +222,7 @@ def diagnose_with_rerun(video_id_filter: str | None = None) -> None:
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            query = """
-                SELECT id, player_matching_gt_json
-                FROM videos WHERE player_matching_gt_json IS NOT NULL
-            """
-            params: list[str] = []
-            if video_id_filter:
-                query += " AND id LIKE %s"
-                params.append(f"{video_id_filter}%")
-            cur.execute(query, params)
-            rows = cur.fetchall()
+            rows = load_all_from_db(cur, video_id_prefix=video_id_filter)
 
     if not rows:
         print("No videos with GT found")
@@ -235,14 +231,9 @@ def diagnose_with_rerun(video_id_filter: str | None = None) -> None:
     total_correct = 0
     total_assignments = 0
 
-    for row in rows:
-        vid = str(row[0])
-        gt_data = cast(dict[str, Any], row[1])
-        gt_rallies_raw = gt_data.get("rallies", {})
-        gt_rallies: dict[str, dict[str, int]] = {
-            rid: {str(k): int(v) for k, v in mapping.items()}
-            for rid, mapping in gt_rallies_raw.items()
-        }
+    for db_row in rows:
+        vid = db_row.video_id
+        gt_rallies = db_row.gt.rallies
 
         # Load rallies and get video path
         rallies = load_rallies_for_video(vid)

@@ -31,6 +31,7 @@ def main() -> None:
     args = parser.parse_args()
 
     from rallycut.evaluation.db import get_connection
+    from rallycut.evaluation.gt_loader import load_all_from_db
     from rallycut.evaluation.tracking.db import (
         get_video_path,
         load_rallies_for_video,
@@ -41,24 +42,13 @@ def main() -> None:
     )
     from rallycut.tracking.player_features import compute_track_similarity
 
-    # Load GT entries
+    # Load GT entries via shared loader (handles v1+v2 transparently).
     gt_entries: list[tuple[str, list[int]]] = []
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, player_matching_gt_json FROM videos "
-                "WHERE player_matching_gt_json IS NOT NULL ORDER BY name"
-            )
-            for row in cur.fetchall():
-                vid, gt_json = row[0], row[1]
-                if not gt_json:
-                    continue
-                if args.video_id and not vid.startswith(args.video_id):
-                    continue
-                switches = gt_json.get(
-                    "sideSwitches", gt_json.get("side_switches", [])
-                )
-                gt_entries.append((vid, switches))
+            db_rows = load_all_from_db(cur, video_id_prefix=args.video_id)
+    for db_row in db_rows:
+        gt_entries.append((db_row.video_id, db_row.gt.side_switches))
 
     if not gt_entries:
         print("No videos found")

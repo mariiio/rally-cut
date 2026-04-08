@@ -218,6 +218,10 @@ def main() -> None:
     args = parser.parse_args()
 
     from rallycut.evaluation.db import get_connection
+    from rallycut.evaluation.gt_loader import (
+        build_positions_lookup_from_db,
+        load_player_matching_gt,
+    )
     from rallycut.evaluation.tracking.db import get_video_path
 
     with get_connection() as conn:
@@ -226,14 +230,29 @@ def main() -> None:
                 SELECT v.id, v.player_matching_gt_json, v.match_analysis_json
                 FROM videos v
                 WHERE v.player_matching_gt_json IS NOT NULL
-                ORDER BY v.id
             """
             params: list[str] = []
             if args.video_id:
-                query = query.replace("ORDER BY", "AND v.id LIKE %s ORDER BY")
+                query += " AND v.id LIKE %s"
                 params.append(f"{args.video_id}%")
+            query += " ORDER BY v.id"
             cur.execute(query, params)
-            video_rows = cur.fetchall()
+            raw_rows = cur.fetchall()
+            positions_lookup = build_positions_lookup_from_db(cur)
+            # Normalize GT while cursor is open (v2 lookups need it). Shape it
+            # as a dict with a "rallies" key so downstream code keeps working.
+            video_rows = [
+                (
+                    r[0],
+                    {
+                        "rallies": load_player_matching_gt(
+                            r[1], positions_lookup=positions_lookup,
+                        ).rallies,
+                    },
+                    r[2],
+                )
+                for r in raw_rows
+            ]
 
     if not video_rows:
         logger.error("No videos with GT found.")

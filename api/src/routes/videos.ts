@@ -999,8 +999,30 @@ router.put(
   requireUser,
   validateRequest({
     params: z.object({ id: uuidSchema }),
+    // Player matching GT is bbox-keyed: each label anchors a player to a
+    // (frame, bbox) in the rally's positions_json coordinate system, so the
+    // same label resolves to the current track id via IoU matching no
+    // matter how many times tracking has been re-run. See
+    // analysis/rallycut/evaluation/gt_loader.py for the format + resolver.
     body: z.object({
-      rallies: z.record(z.string(), z.record(z.string(), z.number())),
+      rallies: z.record(
+        z.string(),
+        z.object({
+          labels: z
+            .array(
+              z.object({
+                playerId: z.number().int().min(1).max(4),
+                frame: z.number().int().min(0),
+                cx: z.number(),
+                cy: z.number(),
+                w: z.number(),
+                h: z.number(),
+              })
+            )
+            .min(1)
+            .max(4),
+        })
+      ),
       sideSwitches: z.array(z.number()),
       excludedRallies: z.array(z.string()).optional(),
     }),

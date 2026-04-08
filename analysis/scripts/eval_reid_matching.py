@@ -15,7 +15,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 
@@ -148,9 +148,15 @@ def main() -> None:
     args = parser.parse_args()
 
     from rallycut.evaluation.db import get_connection
+    from rallycut.evaluation.gt_loader import (
+        build_positions_lookup_from_db,
+        load_player_matching_gt,
+    )
     from rallycut.evaluation.tracking.db import get_video_path, load_rallies_for_video
 
-    # Find videos with reference crops + GT
+    # Find videos with reference crops + GT. Custom SELECT because we need to
+    # join against player_reference_crops. Route each row's gt_json through the
+    # shared loader so v1 + v2 both work.
     with get_connection() as conn:
         with conn.cursor() as cur:
             query = """
@@ -164,7 +170,12 @@ def main() -> None:
                 query += " AND v.id LIKE %s"
                 params.append(f"{args.video_id}%")
             cur.execute(query, params)
-            rows = cur.fetchall()
+            raw_rows = cur.fetchall()
+            positions_lookup = build_positions_lookup_from_db(cur)
+            rows = [
+                (r[0], load_player_matching_gt(r[1], positions_lookup=positions_lookup))
+                for r in raw_rows
+            ]
 
     if not rows:
         logger.error("No videos with both GT and reference crops found.")
@@ -182,14 +193,9 @@ def main() -> None:
     total_hsv_team = 0
     total_reid_team = 0
 
-    for video_id, gt_json in rows:
+    for video_id, gt_normalized in rows:
         video_id = str(video_id)
-        gt_data = cast(dict[str, Any], gt_json)
-        gt_rallies_raw = gt_data.get("rallies", {})
-        gt_rallies: dict[str, dict[str, int]] = {
-            rid: {str(k): int(v) for k, v in mapping.items()}
-            for rid, mapping in gt_rallies_raw.items()
-        }
+        gt_rallies = gt_normalized.rallies
 
         rallies = load_rallies_for_video(video_id)
         video_path = get_video_path(video_id)

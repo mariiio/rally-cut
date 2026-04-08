@@ -164,38 +164,27 @@ def main() -> None:
     args = parser.parse_args()
 
     from rallycut.evaluation.db import get_connection
+    from rallycut.evaluation.gt_loader import load_all_from_db
 
     # Load GT entries: list of (video_id, gt_rallies, gt_switches, notes)
     gt_entries: list[tuple[str, dict[str, dict[str, int]], list[int], str]] = []
 
     if args.from_db:
-        # Load GT from player_matching_gt_json in DB
+        # Load GT from player_matching_gt_json in DB. The shared loader
+        # normalizes both v1 (track-id keyed) and v2 (bbox keyed) formats
+        # to the legacy track-id-keyed shape this script expects.
         with get_connection() as conn:
             with conn.cursor() as cur:
-                query = "SELECT id, player_matching_gt_json FROM videos WHERE player_matching_gt_json IS NOT NULL"
-                params: list[str] = []
-                if args.video_id:
-                    query += " AND id LIKE %s"
-                    params.append(f"{args.video_id}%")
-                cur.execute(query, params)
-                rows = cur.fetchall()
+                db_rows = load_all_from_db(cur, video_id_prefix=args.video_id)
 
-        if not rows:
+        if not db_rows:
             logger.error("No videos with player_matching_gt_json found in DB.")
             sys.exit(1)
 
-        for vid, gt_json in rows:
-            video_id = str(vid)
-            gt_data = cast(dict[str, Any], gt_json)
-            gt_rallies_raw = gt_data.get("rallies", {})
-            gt_rallies: dict[str, dict[str, int]] = {
-                rid: {str(k): int(v) for k, v in mapping.items()}
-                for rid, mapping in gt_rallies_raw.items()
-            }
-            gt_switches: list[int] = gt_data.get(
-                "sideSwitches", gt_data.get("side_switches", [])
+        for db_row in db_rows:
+            gt_entries.append(
+                (db_row.video_id, db_row.gt.rallies, db_row.gt.side_switches, "from-db")
             )
-            gt_entries.append((video_id, gt_rallies, gt_switches, "from-db"))
     else:
         # Load GT from JSON files
         gt_dir: Path = args.gt_dir

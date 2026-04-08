@@ -23,7 +23,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import cv2
 import numpy as np
@@ -174,23 +174,16 @@ def main() -> None:
     args = parser.parse_args()
 
     from rallycut.evaluation.db import get_connection
+    from rallycut.evaluation.gt_loader import load_all_from_db
     from rallycut.evaluation.tracking.db import get_video_path
 
-    # Find videos with GT
+    # Find videos with GT via shared loader (handles v1+v2 transparently).
     with get_connection() as conn:
         with conn.cursor() as cur:
-            query = """
-                SELECT v.id, v.player_matching_gt_json
-                FROM videos v
-                WHERE v.player_matching_gt_json IS NOT NULL
-            """
-            params: list[str] = []
-            if args.video_id:
-                query += " AND v.id LIKE %s"
-                params.append(f"{args.video_id}%")
-            query += " ORDER BY v.id"
-            cur.execute(query, params)
-            video_rows = cur.fetchall()
+            db_rows = load_all_from_db(cur, video_id_prefix=args.video_id)
+
+    # Legacy shape for extract_crops_for_video: (video_id, {"rallies": {...}}).
+    video_rows = [(r.video_id, {"rallies": r.gt.rallies}) for r in db_rows]
 
     if not video_rows:
         logger.error("No videos with player_matching_gt_json found.")
@@ -205,9 +198,7 @@ def main() -> None:
     total_crops = 0
     total_players = 0
 
-    for video_id, gt_json in video_rows:
-        video_id = str(video_id)
-        gt_data = cast(dict[str, Any], gt_json)
+    for video_id, gt_data in video_rows:
 
         video_path = get_video_path(video_id)
         if video_path is None:
