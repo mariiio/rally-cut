@@ -94,10 +94,10 @@ interface GtLabel {
   h: number;
 }
 
-// Resolve GT labels to the legacy {trackIdStr: playerId} shape the dialog
-// uses internally. Mirrors gt_loader._resolve_label: for each label, find
-// the position at `frame` with the highest IoU against the label bbox;
-// drop labels whose max IoU falls below the threshold.
+// Resolve GT labels to the {trackIdStr: playerId} runtime shape the
+// dialog uses internally. Mirrors gt_loader._resolve_label: for each
+// label, find the position at `frame` with the highest IoU against the
+// label bbox; drop labels whose max IoU falls below the threshold.
 function resolveLabelsToAssignment(
   labels: GtLabel[],
   positions: ApiPlayerPosition[],
@@ -122,9 +122,9 @@ function resolveLabelsToAssignment(
   return out;
 }
 
-// Pick a frame for this track where its bbox is large AND has low IoU with
-// every other track at that frame (so the label's bbox unambiguously maps
-// back to this track at load time). Mirrors migrate_gt_to_bbox_format.py.
+// Pick a frame for this track where its bbox is large AND has low IoU
+// with every other track at that frame, so the label's bbox can be
+// IoU-resolved unambiguously back to this track at load time.
 function pickIsolatedFrame(
   positions: ApiPlayerPosition[],
   trackId: number,
@@ -553,9 +553,8 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
       // Emit GT labels: each (trackId, playerId) assignment becomes a
       // bbox-keyed label anchored to an ISOLATED frame for that track —
       // one where the track's bbox has low IoU with every other track
-      // present. Mirrors the Python migration in migrate_gt_to_bbox_format.py
-      // so labels minted here resolve unambiguously at load time no matter
-      // how the tracking has been re-run since.
+      // present. This guarantees the label resolves unambiguously at
+      // load time no matter how the tracking has been re-run since.
       const gtRallies: Record<string, { labels: GtLabel[] }> = {};
       const skipped: string[] = [];
       for (const [rid, mapping] of Object.entries(filteredAssignments)) {

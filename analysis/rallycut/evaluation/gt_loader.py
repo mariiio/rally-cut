@@ -67,11 +67,6 @@ class NormalizedGt:
     # Per-rally warnings raised during label resolution.
     warnings: list[str] = field(default_factory=list)
 
-    @property
-    def rallies_legacy(self) -> dict[str, dict[str, int]]:
-        """Alias matching the variable name most scripts use."""
-        return self.rallies
-
 
 def _iou(a_cx: float, a_cy: float, a_w: float, a_h: float,
          b_cx: float, b_cy: float, b_w: float, b_h: float) -> float:
