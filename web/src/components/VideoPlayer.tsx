@@ -19,6 +19,7 @@ import { CourtDebugOverlay } from './CourtDebugOverlay';
 import { PlayerOverlay } from './PlayerOverlay';
 import { ActionOverlay } from './ActionOverlay';
 import { ActionLabelingMode } from './ActionLabelingMode';
+import { LabelingModeBanner } from './LabelingModeBanner';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { AspectRatio } from '@/constants/enums';
 
@@ -735,6 +736,9 @@ export function VideoPlayer() {
           </Typography>
         </Box>
       )}
+
+      {/* Action labeling mode banner */}
+      <LabelingModeBanner />
 
       {/* Buffering indicator - during playback stalls */}
       {isBuffering && !isLoading && (

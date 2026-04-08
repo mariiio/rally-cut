@@ -1,27 +1,19 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Box, Button, IconButton, CircularProgress, Tooltip, Typography, Chip, Divider, Dialog, DialogTitle, DialogContent, DialogActions, TextField, FormControl, InputLabel, Select, MenuItem, FormControlLabel, Checkbox, ToggleButtonGroup, ToggleButton, Menu } from '@mui/material';
+import { Box, Button, IconButton, CircularProgress, Tooltip, Typography, Chip, Divider, Dialog, DialogTitle, DialogContent, DialogActions, FormControl, InputLabel, Select, MenuItem, FormControlLabel, Checkbox, ToggleButtonGroup, ToggleButton } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import CropFreeIcon from '@mui/icons-material/CropFree';
 import GridOnIcon from '@mui/icons-material/GridOn';
 import PersonSearchIcon from '@mui/icons-material/PersonSearch';
 import SportsVolleyballIcon from '@mui/icons-material/SportsVolleyball';
-import EditIcon from '@mui/icons-material/Edit';
-import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import SaveIcon from '@mui/icons-material/Save';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
-import LabelIcon from '@mui/icons-material/Label';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import PeopleIcon from '@mui/icons-material/People';
-import MoreVertIcon from '@mui/icons-material/MoreVert';
 import LayersIcon from '@mui/icons-material/Layers';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import type { ActionsData } from '@/services/api';
-import { getLabelStudioStatus, exportToLabelStudio, importFromLabelStudio, API_BASE_URL } from '@/services/api';
 
 // Action colors for classified contacts
 const ACTION_COLORS: Record<string, string> = {
@@ -39,17 +31,7 @@ function formatPhase(phase: string): string {
   return phase.charAt(0).toUpperCase() + phase.slice(1);
 }
 
-interface PlayerTrackingToolbarProps {
-  onOpenPlayerMatching?: () => void;
-  onOpenReferenceCrops?: () => void;
-}
-
-export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCrops }: PlayerTrackingToolbarProps = {}) {
-  const [labelStudioLoading, setLabelStudioLoading] = useState(false);
-  const [hasGroundTruth, setHasGroundTruth] = useState(false);
-  const [labelStudioTaskId, setLabelStudioTaskId] = useState<number | null>(null);
-  const [showImportDialog, setShowImportDialog] = useState(false);
-  const [importTaskId, setImportTaskId] = useState('');
+export function PlayerTrackingToolbar() {
   const [showSwapDialog, setShowSwapDialog] = useState(false);
   const [calibrationPromptDismissed, setCalibrationPromptDismissed] = useState<Record<string, boolean>>({});
   const [swapTrackA, setSwapTrackA] = useState<number | ''>('');
@@ -59,8 +41,6 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
   const [swapMode, setSwapMode] = useState<'swap' | 'promote'>('swap');
   const [demoteTrackId, setDemoteTrackId] = useState<number | ''>('');
   const [promoteTrackId, setPromoteTrackId] = useState<number | ''>('');
-
-  const [toolsMenuAnchor, setToolsMenuAnchor] = useState<null | HTMLElement>(null);
 
   const activeMatchId = useEditorStore((state) => state.activeMatchId);
   const selectedRallyId = useEditorStore((state) => state.selectedRallyId);
@@ -87,12 +67,8 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
     swapTracks,
     promoteTracks,
     isLabelingActions,
-    setIsLabelingActions,
     actionGroundTruth,
-    actionGtDirty,
-    actionGtSaving,
     loadActionGroundTruth,
-    saveActionGroundTruth,
     removeActionLabel,
     batchTracking,
   } = usePlayerTrackingStore();
@@ -127,25 +103,6 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
     }
   }, [backendRallyId, hasTrackingData, loadActionGroundTruth]);
 
-  // Check Label Studio status when tracking data is available
-  useEffect(() => {
-    const checkLabelStudioStatus = async () => {
-      if (!backendRallyId || !hasTrackingData) {
-        setHasGroundTruth(false);
-        setLabelStudioTaskId(null);
-        return;
-      }
-      try {
-        const status = await getLabelStudioStatus(backendRallyId);
-        setHasGroundTruth(status.hasGroundTruth);
-        setLabelStudioTaskId(status.taskId ?? null);
-      } catch (error) {
-        console.error('Failed to get Label Studio status:', error);
-      }
-    };
-    checkLabelStudioStatus();
-  }, [backendRallyId, hasTrackingData]);
-
   const batchStatus = activeMatchId ? batchTracking[activeMatchId] : undefined;
   const isBatchActive = batchStatus?.status === 'pending' || batchStatus?.status === 'processing';
 
@@ -159,9 +116,6 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
   }, [trackData?.tracks]);
 
   const gtLabels = backendRallyId ? actionGroundTruth[backendRallyId] : undefined;
-  const gtCount = gtLabels?.length ?? 0;
-  const isDirty = backendRallyId ? actionGtDirty[backendRallyId] : false;
-  const isSaving = backendRallyId ? actionGtSaving[backendRallyId] : false;
 
   // Find which action is active based on current playback time
   const currentActionIndex = useMemo(() => {
@@ -234,89 +188,6 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
     await trackPlayersForRally(backendRallyId, activeMatchId, fps);
   };
 
-  // Open Label Studio — fresh export (forceRegenerate) or resume existing task
-  const handleOpenLabelStudio = async (forceRegenerate: boolean) => {
-    if (!backendRallyId || !activeMatch?.videoUrl) return;
-
-    setLabelStudioLoading(true);
-    try {
-      const videoUrl = new URL(activeMatch.videoUrl, API_BASE_URL).href;
-      const opts = forceRegenerate ? { forceRegenerate: true as const } : undefined;
-      const result = await exportToLabelStudio(backendRallyId, videoUrl, opts);
-      if (result.success && result.taskUrl) {
-        setLabelStudioTaskId(result.taskId ?? null);
-        window.open(result.taskUrl, '_blank');
-      } else {
-        console.error('Failed to open Label Studio:', result.error);
-        alert(result.error || 'Failed to open Label Studio');
-      }
-    } catch (error) {
-      console.error('Failed to open Label Studio:', error);
-      alert(error instanceof Error ? error.message : 'Failed to open Label Studio');
-    } finally {
-      setLabelStudioLoading(false);
-    }
-  };
-
-  // Import corrected annotations from Label Studio
-  const handleSaveGroundTruth = async () => {
-    if (!backendRallyId) return;
-
-    // If we have a known task ID, use it directly
-    if (labelStudioTaskId) {
-      setLabelStudioLoading(true);
-      try {
-        const result = await importFromLabelStudio(backendRallyId, labelStudioTaskId);
-        if (result.success) {
-          setHasGroundTruth(true);
-          alert(`Ground truth saved! ${result.playerCount} player annotations, ${result.ballCount} ball annotations across ${result.frameCount} frames.`);
-        } else {
-          console.error('Failed to import from Label Studio:', result.error);
-          alert(result.error || 'Failed to save ground truth');
-        }
-      } catch (error) {
-        console.error('Failed to save ground truth:', error);
-        alert(error instanceof Error ? error.message : 'Failed to save ground truth');
-      } finally {
-        setLabelStudioLoading(false);
-      }
-    } else {
-      // Show dialog to enter task ID manually
-      setShowImportDialog(true);
-    }
-  };
-
-  // Handle import dialog submission
-  const handleImportSubmit = async () => {
-    if (!backendRallyId || !importTaskId) return;
-
-    const taskId = parseInt(importTaskId, 10);
-    if (isNaN(taskId) || taskId <= 0) {
-      alert('Please enter a valid task ID');
-      return;
-    }
-
-    setShowImportDialog(false);
-    setLabelStudioLoading(true);
-    try {
-      const result = await importFromLabelStudio(backendRallyId, taskId);
-      if (result.success) {
-        setHasGroundTruth(true);
-        setLabelStudioTaskId(taskId);
-        setImportTaskId('');
-        alert(`Ground truth saved! ${result.playerCount} player annotations, ${result.ballCount} ball annotations across ${result.frameCount} frames.`);
-      } else {
-        console.error('Failed to import from Label Studio:', result.error);
-        alert(result.error || 'Failed to save ground truth');
-      }
-    } catch (error) {
-      console.error('Failed to save ground truth:', error);
-      alert(error instanceof Error ? error.message : 'Failed to save ground truth');
-    } finally {
-      setLabelStudioLoading(false);
-    }
-  };
-
   // Available track IDs for swap dialog
   const availableTrackIds = trackData?.tracks?.map(t => t.trackId) ?? [];
   const availableRawTrackIds = trackData?.rawTracks?.map(t => t.trackId) ?? [];
@@ -362,10 +233,6 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
 
   const showTrackingTools = hasTrackingData && !isCalibrating;
 
-  const handleToggleActionLabeling = () => {
-    setIsLabelingActions(!isLabelingActions);
-  };
-
   const handleSeekToLabel = (frame: number) => {
     if (!selectedRally || !trackData) return;
     const time = selectedRally.start_time + frame / trackData.fps;
@@ -376,17 +243,6 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
     if (!backendRallyId) return;
     removeActionLabel(backendRallyId, frame);
   };
-
-  const handleSaveActionGt = async () => {
-    if (!backendRallyId) return;
-    try {
-      await saveActionGroundTruth(backendRallyId);
-    } catch (error) {
-      console.error('Failed to save action GT:', error);
-      alert(error instanceof Error ? error.message : 'Failed to save action ground truth');
-    }
-  };
-
 
   // Keycap style for keyboard shortcuts
   const kbdSx = {
@@ -444,29 +300,6 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
               </Button>
             )}
 
-            {onOpenReferenceCrops && (
-              <Tooltip title="Select player reference crops for attribution">
-                <IconButton
-                  size="small"
-                  onClick={onOpenReferenceCrops}
-                  color="default"
-                >
-                  <PersonSearchIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-            )}
-
-            {onOpenPlayerMatching && (
-              <Tooltip title="Label cross-rally player matching ground truth">
-                <IconButton
-                  size="small"
-                  onClick={onOpenPlayerMatching}
-                  color="default"
-                >
-                  <PeopleIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-            )}
           </>
         )}
 
@@ -530,87 +363,15 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
           </>
         )}
 
-        {/* ── Action Labeling ── */}
-        {showTrackingTools && hasBallPositions && (
+        {/* ── Swap Tracks (direct access) ── */}
+        {showTrackingTools && availableTrackIds.length >= 2 && (
           <>
             <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
-            <Button
-              size="small"
-              variant={isLabelingActions ? 'contained' : 'outlined'}
-              startIcon={<LabelIcon />}
-              onClick={handleToggleActionLabeling}
-              color={isLabelingActions ? 'warning' : 'primary'}
-            >
-              {isLabelingActions ? 'Labeling...' : 'Label Actions'}
-            </Button>
-            {gtCount > 0 && (
-              <Button
-                size="small"
-                variant={isDirty ? 'contained' : 'outlined'}
-                startIcon={isSaving ? <CircularProgress size={14} /> : <SaveIcon />}
-                onClick={handleSaveActionGt}
-                disabled={isSaving || !isDirty}
-                color={isDirty ? 'primary' : 'success'}
-              >
-                {isSaving ? 'Saving...' : isDirty ? `Save GT (${gtCount})` : `GT Saved (${gtCount})`}
-              </Button>
-            )}
-          </>
-        )}
-
-        {/* ── Tools Menu (Swap Tracks, Label Studio) ── */}
-        {showTrackingTools && (
-          <>
-            <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
-            <Tooltip title="More tools">
-              <IconButton
-                size="small"
-                onClick={(e) => setToolsMenuAnchor(e.currentTarget)}
-              >
-                <MoreVertIcon fontSize="small" />
+            <Tooltip title="Swap player tracks">
+              <IconButton size="small" onClick={handleOpenSwapDialog} disabled={isSwapping}>
+                <SwapHorizIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Menu
-              anchorEl={toolsMenuAnchor}
-              open={!!toolsMenuAnchor}
-              onClose={() => setToolsMenuAnchor(null)}
-              slotProps={{ paper: { sx: { minWidth: 200 } } }}
-            >
-              {availableTrackIds.length >= 2 && (
-                <MenuItem
-                  onClick={() => { setToolsMenuAnchor(null); handleOpenSwapDialog(); }}
-                  disabled={isSwapping}
-                >
-                  <SwapHorizIcon sx={{ mr: 1, fontSize: 18 }} />
-                  Swap Tracks
-                </MenuItem>
-              )}
-              <MenuItem
-                onClick={() => { setToolsMenuAnchor(null); handleOpenLabelStudio(true); }}
-                disabled={labelStudioLoading}
-              >
-                <EditIcon sx={{ mr: 1, fontSize: 18 }} />
-                Export to Label Studio
-              </MenuItem>
-              {labelStudioTaskId && (
-                <MenuItem
-                  onClick={() => { setToolsMenuAnchor(null); handleOpenLabelStudio(false); }}
-                  disabled={labelStudioLoading}
-                >
-                  <OpenInNewIcon sx={{ mr: 1, fontSize: 18 }} />
-                  Resume Label Studio
-                </MenuItem>
-              )}
-              <MenuItem
-                onClick={() => { setToolsMenuAnchor(null); handleSaveGroundTruth(); }}
-                disabled={labelStudioLoading}
-              >
-                {hasGroundTruth
-                  ? <CheckCircleIcon sx={{ mr: 1, fontSize: 18, color: 'success.main' }} />
-                  : <SaveIcon sx={{ mr: 1, fontSize: 18 }} />}
-                {hasGroundTruth ? 'GT Saved' : 'Save GT from Label Studio'}
-              </MenuItem>
-            </Menu>
           </>
         )}
       </Box>
@@ -930,30 +691,6 @@ export function PlayerTrackingToolbar({ onOpenPlayerMatching, onOpenReferenceCro
         </DialogActions>
       </Dialog>
 
-      {/* Import Task ID Dialog */}
-      <Dialog open={showImportDialog} onClose={() => setShowImportDialog(false)}>
-        <DialogTitle>Import Ground Truth from Label Studio</DialogTitle>
-        <DialogContent>
-          <Typography variant="body2" sx={{ mb: 2 }}>
-            Enter the Label Studio task ID to import corrected annotations.
-          </Typography>
-          <TextField
-            autoFocus
-            label="Task ID"
-            type="number"
-            fullWidth
-            value={importTaskId}
-            onChange={(e) => setImportTaskId(e.target.value)}
-            helperText="Find the task ID in the Label Studio URL (e.g., .../task=123)"
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setShowImportDialog(false)}>Cancel</Button>
-          <Button onClick={handleImportSubmit} variant="contained" disabled={!importTaskId}>
-            Import
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Box>
   );
 }

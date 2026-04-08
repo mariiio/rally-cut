@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { trackPlayers, getPlayerTrack, swapPlayerTracks, promoteRawTrack, saveCourtCalibration, deleteCourtCalibration, getActionGroundTruth, saveActionGroundTruth as apiSaveActionGroundTruth, trackAllRallies as apiTrackAllRallies, getBatchTrackingStatus as apiGetBatchTrackingStatus, getPlayerReferenceCrops, uploadPlayerReferenceCrop, deletePlayerReferenceCrop, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData, type ActionGroundTruthLabel, type QualityReport, type BatchTrackingStatus, type PlayerReferenceCrop } from '@/services/api';
+import { trackPlayers, getPlayerTrack, swapPlayerTracks, promoteRawTrack, saveCourtCalibration, deleteCourtCalibration, getActionGroundTruth, saveActionGroundTruth as apiSaveActionGroundTruth, trackAllRallies as apiTrackAllRallies, getBatchTrackingStatus as apiGetBatchTrackingStatus, getPlayerReferenceCrops, uploadPlayerReferenceCrop, deletePlayerReferenceCrop, getVideoScoreGt, saveRallyScoreGt, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData, type ActionGroundTruthLabel, type QualityReport, type BatchTrackingStatus, type PlayerReferenceCrop, type ScoreGtEntry, type ScoreTeam } from '@/services/api';
 
 // Types for player tracking data (store format)
 export interface PlayerPosition {
@@ -90,6 +90,30 @@ interface PlayerTrackingState {
   // Reference crops state
   referenceCrops: PlayerReferenceCrop[];
   referenceCropsLoading: boolean;
+
+  // Score ground truth (Session 5) — keyed by videoId
+  scoreGt: Record<string, ScoreGtEntry[]>;
+  scoreGtLoading: Record<string, boolean>;
+  fetchScoreGt: (videoId: string) => Promise<void>;
+  /**
+   * Save the serving-team and point-winner GT for a single rally (optimistic).
+   * Does **not** touch `gtSideSwitch` — use `setRallySideSwitch` for that.
+   */
+  saveScoreGt: (
+    videoId: string,
+    rallyId: string,
+    body: { gtServingTeam: ScoreTeam; gtPointWinner: ScoreTeam },
+  ) => Promise<void>;
+  /**
+   * Set (or clear) the manual side-switch override for a rally. Refetches
+   * the whole video's score GT after the PUT so every downstream
+   * `nearSideTeam` recomputes server-side.
+   */
+  setRallySideSwitch: (
+    videoId: string,
+    rallyId: string,
+    gtSideSwitch: boolean | null,
+  ) => Promise<void>;
 
   // Actions
   togglePlayerOverlay: () => void;
@@ -241,6 +265,109 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
       actionGtSaving: {},
       referenceCrops: [],
       referenceCropsLoading: false,
+      scoreGt: {},
+      scoreGtLoading: {},
+
+      fetchScoreGt: async (videoId: string) => {
+        if (get().scoreGtLoading[videoId]) return;
+        set((state) => ({
+          scoreGtLoading: { ...state.scoreGtLoading, [videoId]: true },
+        }));
+        try {
+          const result = await getVideoScoreGt(videoId);
+          const sorted = [...result.rallies].sort(
+            (a, b) => a.order - b.order || a.startMs - b.startMs,
+          );
+          set((state) => ({
+            scoreGt: { ...state.scoreGt, [videoId]: sorted },
+            scoreGtLoading: { ...state.scoreGtLoading, [videoId]: false },
+          }));
+        } catch (error) {
+          console.error('[PlayerTrackingStore] Failed to load score GT:', error);
+          set((state) => ({
+            scoreGtLoading: { ...state.scoreGtLoading, [videoId]: false },
+          }));
+        }
+      },
+
+      setRallySideSwitch: async (videoId, rallyId, gtSideSwitch) => {
+        const state = get();
+        const prevList = state.scoreGt[videoId] ?? [];
+        const prevEntry = prevList.find((r) => r.rallyId === rallyId);
+        if (!prevEntry) return;
+        // Optimistic update on just this rally; near-side recompute happens
+        // after the refetch (server is the source of truth for the chain).
+        const optimistic = prevList.map((r) =>
+          r.rallyId === rallyId ? { ...r, gtSideSwitch } : r,
+        );
+        set((s) => ({ scoreGt: { ...s.scoreGt, [videoId]: optimistic } }));
+        try {
+          await saveRallyScoreGt(rallyId, {
+            gtServingTeam: prevEntry.gtServingTeam,
+            gtPointWinner: prevEntry.gtPointWinner,
+            gtSideSwitch,
+          });
+          // Refetch so downstream nearSideTeam updates for every rally.
+          const refreshed = await getVideoScoreGt(videoId);
+          const sorted = [...refreshed.rallies].sort(
+            (a, b) => a.order - b.order || a.startMs - b.startMs,
+          );
+          set((s) => ({ scoreGt: { ...s.scoreGt, [videoId]: sorted } }));
+        } catch (error) {
+          // Revert
+          set((s) => {
+            const list = s.scoreGt[videoId] ?? [];
+            return {
+              scoreGt: {
+                ...s.scoreGt,
+                [videoId]: list.map((r) => (r.rallyId === rallyId ? prevEntry : r)),
+              },
+            };
+          });
+          console.error('[PlayerTrackingStore] Failed to set side switch:', error);
+          throw error;
+        }
+      },
+
+      saveScoreGt: async (videoId, rallyId, body) => {
+        const state = get();
+        const prevList = state.scoreGt[videoId] ?? [];
+        const prevEntry = prevList.find((r) => r.rallyId === rallyId);
+        // Optimistic update
+        const optimistic = prevList.map((r) =>
+          r.rallyId === rallyId
+            ? { ...r, gtServingTeam: body.gtServingTeam, gtPointWinner: body.gtPointWinner }
+            : r,
+        );
+        set((s) => ({ scoreGt: { ...s.scoreGt, [videoId]: optimistic } }));
+        try {
+          const updated = await saveRallyScoreGt(rallyId, body);
+          set((s) => {
+            const list = s.scoreGt[videoId] ?? [];
+            return {
+              scoreGt: {
+                ...s.scoreGt,
+                [videoId]: list.map((r) => (r.rallyId === rallyId ? { ...r, ...updated } : r)),
+              },
+            };
+          });
+        } catch (error) {
+          // Revert only if we had a prior entry to restore.
+          if (prevEntry) {
+            set((s) => {
+              const list = s.scoreGt[videoId] ?? [];
+              return {
+                scoreGt: {
+                  ...s.scoreGt,
+                  [videoId]: list.map((r) => (r.rallyId === rallyId ? prevEntry : r)),
+                },
+              };
+            });
+          }
+          console.error('[PlayerTrackingStore] Failed to save score GT:', error);
+          throw error;
+        }
+      },
 
       togglePlayerOverlay: () => {
         set((state) => ({ showPlayerOverlay: !state.showPlayerOverlay }));

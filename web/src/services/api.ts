@@ -2234,6 +2234,81 @@ export async function saveActionGroundTruth(
 }
 
 // ============================================================================
+// Score Ground Truth (Session 5)
+// ============================================================================
+
+export type ScoreTeam = 'A' | 'B' | null;
+
+export interface ScoreGtEntry {
+  rallyId: string;
+  order: number;
+  startMs: number;
+  /** Server-detected serving team (pre-fills GT). May be null. */
+  servingTeam: ScoreTeam;
+  gtServingTeam: ScoreTeam;
+  gtPointWinner: ScoreTeam;
+  /**
+   * Which team (A or B) is physically on the near court for this rally,
+   * accounting for cumulative side switches. Null when neither
+   * match_analysis_json nor any gt_side_switch override is available.
+   */
+  nearSideTeam: ScoreTeam;
+  /**
+   * Manual override for side-switch detection at this rally.
+   * null = use analysis flag, true = force switch here, false = force none.
+   */
+  gtSideSwitch: boolean | null;
+  /** Resolved: did a side switch happen at this rally? (override ?? analysis) */
+  sideSwitchHere: boolean;
+}
+
+/** PUT response — only the fields the backend actually writes. */
+export interface ScoreGtSaveResult {
+  gtServingTeam: ScoreTeam;
+  gtPointWinner: ScoreTeam;
+  gtSideSwitch: boolean | null;
+}
+
+/**
+ * Fetch per-rally score ground truth for a video.
+ */
+export async function getVideoScoreGt(
+  videoId: string,
+): Promise<{ rallies: ScoreGtEntry[] }> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/score-ground-truth`, {
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get score ground truth: ${response.status}`);
+  }
+  return response.json();
+}
+
+/**
+ * Save score ground truth for a single rally. Returns the updated entry.
+ */
+export async function saveRallyScoreGt(
+  rallyId: string,
+  body: {
+    gtServingTeam: ScoreTeam;
+    gtPointWinner: ScoreTeam;
+    gtSideSwitch?: boolean | null;
+  },
+): Promise<ScoreGtSaveResult> {
+  const response = await fetch(`${API_BASE_URL}/v1/rallies/${rallyId}/score-ground-truth`, {
+    method: 'PUT',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to save score ground truth: ${response.status}`);
+  }
+  return response.json();
+}
+
+// ============================================================================
 // Batch Tracking
 // ============================================================================
 

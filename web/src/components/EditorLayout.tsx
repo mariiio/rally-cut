@@ -12,6 +12,7 @@ import { Timeline } from './Timeline';
 import { RallyList } from './RallyList';
 import { HighlightsPanel } from './HighlightsPanel';
 import { CameraPanel } from './CameraPanel';
+import { GroundTruthPanel } from './GroundTruthPanel/GroundTruthPanel';
 import { EditorHeader } from './EditorHeader';
 import { CollapsiblePanel } from './CollapsiblePanel';
 import { ExportProgress } from './ExportProgress';
@@ -454,10 +455,7 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
             <OriginalQualityBanner currentMatch={currentMatch} />
             <VideoInsightsBanner currentMatch={currentMatch} />
             {/* Player tracking toolbar */}
-            <PlayerTrackingToolbar
-              onOpenPlayerMatching={currentMatch?.id ? () => setPlayerMatchingVideoId(currentMatch.id) : undefined}
-              onOpenReferenceCrops={currentMatch?.id ? () => setReferenceCropVideoId(currentMatch.id) : undefined}
-            />
+            <PlayerTrackingToolbar />
             <Box sx={{ flex: 1, minHeight: 0 }}>
               <VideoPlayer />
             </Box>
@@ -482,7 +480,10 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
             </Tooltip>
           }
         >
-          <CameraPanel />
+          <RightSidebarTabs
+            onOpenPlayerMatching={currentMatch?.id ? () => setPlayerMatchingVideoId(currentMatch.id) : undefined}
+            onOpenReferenceCrops={currentMatch?.id ? () => setReferenceCropVideoId(currentMatch.id) : undefined}
+          />
         </CollapsiblePanel>
       </Box>
 
@@ -528,5 +529,36 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
       )}
       </Box>
     </TutorialProvider>
+  );
+}
+
+interface RightSidebarTabsProps {
+  onOpenPlayerMatching?: () => void;
+  onOpenReferenceCrops?: () => void;
+}
+
+function RightSidebarTabs({ onOpenPlayerMatching, onOpenReferenceCrops }: RightSidebarTabsProps) {
+  const [tab, setTab] = useState<'camera' | 'gt'>('camera');
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      <Tabs
+        value={tab}
+        onChange={(_, v) => setTab(v)}
+        variant="fullWidth"
+        sx={{ minHeight: 36, borderBottom: '1px solid', borderColor: 'divider' }}
+      >
+        <Tab value="camera" label="Camera" sx={{ minHeight: 36, py: 0.5, fontSize: '0.75rem' }} />
+        <Tab value="gt" label="Ground Truth" sx={{ minHeight: 36, py: 0.5, fontSize: '0.75rem' }} />
+      </Tabs>
+      <Box sx={{ flex: 1, minHeight: 0, display: tab === 'camera' ? 'block' : 'none' }}>
+        <CameraPanel />
+      </Box>
+      <Box sx={{ flex: 1, minHeight: 0, display: tab === 'gt' ? 'block' : 'none' }}>
+        <GroundTruthPanel
+          onOpenPlayerMatching={onOpenPlayerMatching}
+          onOpenReferenceCrops={onOpenReferenceCrops}
+        />
+      </Box>
+    </Box>
   );
 }
