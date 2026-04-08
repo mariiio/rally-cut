@@ -165,30 +165,42 @@ export function ScoreGtSection({ renderSection }: Props) {
 
   const selectedRally = rallies.find((r) => r.id === selectedRallyId);
   const backendRallyId = selectedRally?._backendId ?? null;
-  const currentEntry = entries.find((e) => e.rallyId === backendRallyId) ?? null;
+  const currentEntryIdx = entries.findIndex((e) => e.rallyId === backendRallyId);
+  const currentEntry = currentEntryIdx >= 0 ? entries[currentEntryIdx] : null;
+  const isLastRally = entries.length > 0 && currentEntryIdx === entries.length - 1;
 
+  /**
+   * GT point winner for rally `i`:
+   *   - i < N-1: next rally's gt_serving_team (exact in volleyball)
+   *   - i == N-1: the labeler's explicit gt_point_winner (no next rally)
+   * Returns null when the value cannot be determined yet.
+   */
+  const deriveGtPointWinner = (i: number): ScoreTeam => {
+    if (i < 0 || i >= entries.length) return null;
+    if (i < entries.length - 1) return entries[i + 1].gtServingTeam;
+    return entries[i].gtPointWinner;
+  };
+
+  // "Labeled" = serving team is set, AND (for the last rally) point winner too.
   const labeledCount = entries.filter(
-    (e) => e.gtServingTeam !== null && e.gtPointWinner !== null,
+    (e, i) =>
+      e.gtServingTeam !== null &&
+      (i < entries.length - 1 ? true : e.gtPointWinner !== null),
   ).length;
   const total = entries.length;
 
   // Running score walking from the start; null if there is a gap before current.
   const runningScore: { scoreA: number; scoreB: number } | null = (() => {
-    if (!currentEntry) return null;
+    if (!currentEntry || currentEntryIdx < 0) return null;
     let scoreA = 0;
     let scoreB = 0;
-    for (const e of entries) {
-      if (e.gtPointWinner === null) {
-        // Any unlabeled rally before current (or current itself unlabeled) breaks the chain.
-        return null;
-      }
-      if (e.gtPointWinner === 'A') scoreA += 1;
-      else if (e.gtPointWinner === 'B') scoreB += 1;
-      if (e.rallyId === currentEntry.rallyId) {
-        return { scoreA, scoreB };
-      }
+    for (let i = 0; i <= currentEntryIdx; i++) {
+      const winner = deriveGtPointWinner(i);
+      if (winner === null) return null; // chain broken before/at current
+      if (winner === 'A') scoreA += 1;
+      else if (winner === 'B') scoreB += 1;
     }
-    return null;
+    return { scoreA, scoreB };
   })();
 
   // Effective serving team display: GT if set, otherwise predicted (unconfirmed).
@@ -246,21 +258,27 @@ export function ScoreGtSection({ renderSection }: Props) {
       const currentIdx = currentEntry
         ? entries.findIndex((e) => e.rallyId === currentEntry.rallyId)
         : -1;
-      const isUnlabeled = (e: ScoreGtEntry) =>
-        e.gtServingTeam === null || e.gtPointWinner === null;
+      // Serving team must be set for every rally; point winner is only
+      // required on the last rally (others are derived from the next rally's
+      // serving team).
+      const isUnlabeled = (e: ScoreGtEntry, i: number) => {
+        if (e.gtServingTeam === null) return true;
+        if (i === entries.length - 1 && e.gtPointWinner === null) return true;
+        return false;
+      };
       if (direction === 'next') {
         for (let i = currentIdx + 1; i < entries.length; i++) {
-          if (isUnlabeled(entries[i])) return entries[i];
+          if (isUnlabeled(entries[i], i)) return entries[i];
         }
         for (let i = 0; i <= currentIdx && i < entries.length; i++) {
-          if (isUnlabeled(entries[i])) return entries[i];
+          if (isUnlabeled(entries[i], i)) return entries[i];
         }
       } else {
         for (let i = currentIdx - 1; i >= 0; i--) {
-          if (isUnlabeled(entries[i])) return entries[i];
+          if (isUnlabeled(entries[i], i)) return entries[i];
         }
         for (let i = entries.length - 1; i >= currentIdx && i >= 0; i--) {
-          if (isUnlabeled(entries[i])) return entries[i];
+          if (isUnlabeled(entries[i], i)) return entries[i];
         }
       }
       return null;
@@ -410,23 +428,31 @@ export function ScoreGtSection({ renderSection }: Props) {
               />
             </Box>
 
-            <Box sx={{ flex: 1, minWidth: 0 }}>
-              <Stack
-                direction="row"
-                alignItems="center"
-                sx={{ mb: 0.5, minHeight: 18 }}
-              >
-                <Typography variant="caption" color="text.secondary">
-                  Point winner
-                </Typography>
-              </Stack>
-              <TeamSelector
-                value={pointWinner}
-                onChange={handleSetWinner}
-                nearSide={nearSide}
-              />
-            </Box>
+            {isLastRally && (
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Stack
+                  direction="row"
+                  alignItems="center"
+                  sx={{ mb: 0.5, minHeight: 18 }}
+                >
+                  <Typography variant="caption" color="text.secondary">
+                    Point winner
+                  </Typography>
+                </Stack>
+                <TeamSelector
+                  value={pointWinner}
+                  onChange={handleSetWinner}
+                  nearSide={nearSide}
+                />
+              </Box>
+            )}
           </Stack>
+
+          {!isLastRally && (
+            <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+              Point winner auto-inferred from the next rally&apos;s serving team.
+            </Typography>
+          )}
 
           <Box>
             <Typography

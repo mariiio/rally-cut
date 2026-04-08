@@ -2,16 +2,32 @@
 
 The score metric is the fraction of GT rallies whose predicted
 (serving_team, point_winner) both match GT, chained at the match level via
-``compute_match_scores``. This module:
+``compute_match_scores``.
+
+**GT storage & inference**
+
+The labeler only writes ``gt_serving_team`` for every rally, plus
+``gt_point_winner`` for the **last** rally of a match. Per-rally GT point
+winners are then derived:
+
+- Rally ``i`` (``i < N-1``): ``gt_point_winner = rally[i+1].gt_serving_team``.
+  In volleyball the team that wins a rally serves the next one, so this is
+  exact.
+- Last rally ``N-1``: the labeler's explicit ``gt_point_winner`` is
+  authoritative. A match is only scored when its last rally has an explicit
+  label.
+
+This module:
 
 1. Groups per-rally predictions by video into match-ordered sequences.
-2. Runs the production scorer (`compute_match_scores`) on each match.
-3. Compares the resulting per-rally ``RallyScoreState`` to the GT stored on
-   the Rally row (``gt_serving_team`` / ``gt_point_winner``).
+2. Runs the production scorer (`compute_match_scores`) on each match. The
+   predicted last rally is resolved by the volleyball end-rule heuristic
+   already baked into that function.
+3. Compares the resulting per-rally ``RallyScoreState`` to the derived GT.
 
-Only matches where **every** evaluated rally has both GT fields populated are
-scored; partial matches are skipped and their count is reported back to the
-caller so the eval dashboard can surface it.
+Only matches where every rally has ``gt_serving_team`` set and the last
+rally additionally has ``gt_point_winner`` set are scored; partial matches
+are skipped and their count is reported back to the caller.
 
 No DB access here — GT arrives on ``RallyData`` via the rally loader.
 """
@@ -53,29 +69,51 @@ def _collect_gt(
     rallies_by_video: dict[str, list[tuple[int, RallyActions]]],
     gt_lookup: dict[str, tuple[str | None, str | None]],
 ) -> dict[str, list[ScoreGtEntry]]:
-    """Return per-video GT lists for videos where **every** rally has both
-    GT fields set. Videos with any missing GT are dropped.
+    """Return per-video GT lists for videos where every rally has
+    ``gt_serving_team`` set and the last rally additionally has an explicit
+    ``gt_point_winner``. Videos missing any of those are dropped.
+
+    Each entry's ``gt_point_winner`` is either the user's explicit label
+    (last rally only) or the next rally's ``gt_serving_team`` (all others).
     """
     out: dict[str, list[ScoreGtEntry]] = {}
     for video_id, rally_order in rallies_by_video.items():
-        entries: list[ScoreGtEntry] = []
+        # Sort by start_ms so "next rally" is well-defined.
+        ordered = sorted(rally_order, key=lambda t: t[0])
+        # First pass: must have gt_serving_team on every rally, and an
+        # explicit gt_point_winner on the last.
+        raw: list[tuple[int, str, str, str | None]] = []  # (start_ms, rid, serving, explicit_winner)
         complete = True
-        for start_ms, ra in rally_order:
+        for start_ms, ra in ordered:
             rid = getattr(ra, "rally_id", "")
             serving, winner = gt_lookup.get(rid, (None, None))
-            if serving is None or winner is None:
+            if serving is None:
                 complete = False
                 break
+            raw.append((start_ms, rid, serving, winner))
+        if not complete or not raw:
+            continue
+        if raw[-1][3] is None:
+            # Last rally lacks an explicit point winner — skip this match.
+            continue
+        # Second pass: derive point winner for each rally.
+        entries: list[ScoreGtEntry] = []
+        for i, (start_ms, rid, serving, explicit) in enumerate(raw):
+            derived: str
+            if i < len(raw) - 1:
+                derived = raw[i + 1][2]  # next rally's serving team
+            else:
+                assert explicit is not None  # verified above
+                derived = explicit
             entries.append(
                 ScoreGtEntry(
                     rally_id=rid,
-                    order_key=(start_ms, len(entries)),
+                    order_key=(start_ms, i),
                     gt_serving_team=serving,
-                    gt_point_winner=winner,
+                    gt_point_winner=derived,
                 )
             )
-        if complete and entries:
-            out[video_id] = entries
+        out[video_id] = entries
     return out
 
 
