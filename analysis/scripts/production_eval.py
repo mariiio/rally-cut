@@ -399,7 +399,7 @@ def _tolerance_frames(fps: float, tolerance_ms: int = 167) -> int:
 
 def _rally_permutation_oracle(
     rally_matches: list[MatchResult],
-) -> tuple[int, int]:
+) -> tuple[int, int, dict[int, int]]:
     """Compute the best within-rally permutation of pred→GT player IDs.
 
     For each rally we observe a set of ``(gt.player_track_id, pred_tid)``
@@ -416,17 +416,27 @@ def _rally_permutation_oracle(
     upper bound of within-rally attribution consistency — i.e., how well
     the pred attribution layer did, *modulo* GT's labeling convention.
 
-    Reported as ``player_attribution_oracle`` alongside the literal
-    ``player_attribution_accuracy`` in the aggregate table. The literal
-    metric is still the production number; this one is a diagnostic that
-    separates "identity convention drift" from "real attribution errors".
+    Canonical as of 2026-04-10: this IS the production player_attribution
+    metric. The literal-compare ``player_attribution_accuracy`` is retained
+    in the summary table as a drift-sensitive diagnostic only — do not use
+    it for go/no-go decisions. Rationale: the literal compare is not
+    retrack-stable (any rebase of tracker integer IDs silently shifts the
+    number), so it cannot be trusted as a go-forward metric without a
+    permutation-invariant wrapper like this one.
+
+    This implementation only fixes the *measurement* side of the drift
+    problem. The underlying tracker/GT integer convention is still brittle;
+    the production architectural fix is DINOv2 user-crop canonical-identity
+    anchoring in ``match_tracker.py`` (Workstream W0). Until W0 ships, the
+    oracle metric prevents retrack accidents from contaminating go/no-go
+    decisions.
     """
     evaluable = [
         m for m in rally_matches
         if m.player_evaluable and m.pred_frame is not None and m.gt_action != "block"
     ]
     if not evaluable:
-        return 0, 0
+        return 0, 0, {}
 
     # Collect unique GT and pred IDs observed in this rally.
     gt_ids: list[int] = []
@@ -445,7 +455,7 @@ def _rally_permutation_oracle(
             pred_ids.append(pred_tid)
 
     if not gt_ids or not pred_ids:
-        return 0, len(evaluable)
+        return 0, len(evaluable), {}
 
     size = max(len(gt_ids), len(pred_ids))
     cost = np.zeros((size, size), dtype=np.float64)
@@ -476,7 +486,7 @@ def _rally_permutation_oracle(
             continue
         if permutation.get(gt_tid) == pred_tid:
             correct += 1
-    return correct, len(evaluable)
+    return correct, len(evaluable), permutation
 
 
 def _run_once(
@@ -494,13 +504,15 @@ def _run_once(
     dict[str, list[tuple[int, Any]]],
     dict[str, tuple[str | None, str | None]],
     tuple[int, int],
+    tuple[int, int],
 ]:
     """Run the full 339-rally loop once.
 
     Returns (matches, unmatched_preds, rejections, pred_by_video, gt_lookup,
-    oracle_counts). ``oracle_counts`` is a (correct, total) tuple feeding the
-    within-rally permutation oracle diagnostic — see
-    ``_rally_permutation_oracle`` for rationale.
+    oracle_counts, serve_oracle_counts). The two ``*_oracle_counts`` tuples
+    are ``(correct, total)`` accumulators feeding the within-rally
+    permutation-invariant canonical metrics ``player_attribution_oracle`` and
+    ``serve_attr_oracle`` — see ``_rally_permutation_oracle`` for rationale.
     """
     all_matches: list[MatchResult] = []
     all_unmatched: list[dict] = []
@@ -509,6 +521,8 @@ def _run_once(
     gt_lookup: dict[str, tuple[str | None, str | None]] = {}
     oracle_correct_total = 0
     oracle_evaluable_total = 0
+    serve_oracle_correct_total = 0
+    serve_oracle_evaluable_total = 0
 
     for idx, rally in enumerate(rallies, start=1):
         # Rejection gate — surface rather than silently skip.
@@ -597,9 +611,28 @@ def _run_once(
             else:
                 m._pred_tid = None  # type: ignore[attr-defined]
 
-        rc, rn = _rally_permutation_oracle(matches)
+        rc, rn, rally_permutation = _rally_permutation_oracle(matches)
         oracle_correct_total += rc
         oracle_evaluable_total += rn
+
+        # Apply the same rally-local permutation to GT serves for
+        # `serve_attr_oracle`. This keeps serve_attr drift-proof the same
+        # way `player_attribution_oracle` is. Without this, serve_attr
+        # still uses the literal-compare path via `m.player_correct` and
+        # remains vulnerable to retrack label shuffling.
+        for m in matches:
+            if (
+                m.gt_action == "serve"
+                and m.pred_frame is not None
+                and m.player_evaluable
+            ):
+                gt_tid = getattr(m, "_gt_tid", None)
+                pred_tid = getattr(m, "_pred_tid", None)
+                if gt_tid is None or pred_tid is None:
+                    continue
+                serve_oracle_evaluable_total += 1
+                if rally_permutation.get(gt_tid) == pred_tid:
+                    serve_oracle_correct_total += 1
 
         all_matches.extend(matches)
         all_unmatched.extend(unmatched)
@@ -621,6 +654,7 @@ def _run_once(
         pred_by_video,
         gt_lookup,
         (oracle_correct_total, oracle_evaluable_total),
+        (serve_oracle_correct_total, serve_oracle_evaluable_total),
     )
 
 
@@ -650,6 +684,7 @@ def _flatten_run(
     unmatched: list[dict],
     score_metrics: ScoreMetrics | None = None,
     oracle_counts: tuple[int, int] | None = None,
+    serve_oracle_counts: tuple[int, int] | None = None,
 ) -> dict[str, float]:
     """Collapse a single run into scalar metrics consumed by the aggregator."""
     m = compute_metrics(matches, unmatched)
@@ -668,6 +703,10 @@ def _flatten_run(
         oc, on = oracle_counts
         if on > 0:
             out["player_attribution_oracle"] = oc / on
+    if serve_oracle_counts is not None:
+        soc, son = serve_oracle_counts
+        if son > 0:
+            out["serve_attr_oracle"] = soc / son
     # Session 5 — score metric. Emitted whenever at least one rally has
     # `gt_serving_team` labeled; otherwise the key is absent and the summary
     # prints "n/a".
@@ -842,12 +881,21 @@ def _print_summary(
     warning: str | None,
     score_metrics: ScoreMetrics | None = None,
 ) -> None:
+    # `player_attribution_oracle` is the CANONICAL player-attribution metric
+    # going forward (2026-04-10). It is permutation-invariant over within-rally
+    # pred trackIds — no retrack can produce the illusion of a regression by
+    # reshuffling integer labels. The literal-compare metric
+    # `player_attribution_accuracy` is kept as a drift-sensitive diagnostic
+    # only; do NOT use it for go/no-go decisions. See
+    # `memory/diagnosis_2026-04-10.md` §Oracle diagnostic for rationale.
     headline_keys = [
         "contact_f1", "contact_recall", "contact_precision",
         "action_accuracy", "court_side_accuracy",
-        "player_attribution_accuracy",
         "player_attribution_oracle",
-        "serve_id_accuracy", "serve_attr_accuracy",
+        "player_attribution_accuracy",  # diagnostic only — drift-sensitive
+        "serve_id_accuracy",
+        "serve_attr_oracle",
+        "serve_attr_accuracy",          # diagnostic only — drift-sensitive
         "score_accuracy",
     ]
     table = Table(title="production_eval — aggregate (mean ± std across reruns)")
@@ -961,14 +1009,22 @@ def main() -> int:
     for run_i in range(args.reruns):
         console.print(f"[bold]Run {run_i + 1}/{args.reruns}[/bold]")
         t0 = time.time()
-        matches, unmatched, rejections, pred_by_video, gt_lookup, oracle_counts = _run_once(
-            rallies, team_map, calibrators, ctx, t2p_by_rally
-        )
+        (
+            matches,
+            unmatched,
+            rejections,
+            pred_by_video,
+            gt_lookup,
+            oracle_counts,
+            serve_oracle_counts,
+        ) = _run_once(rallies, team_map, calibrators, ctx, t2p_by_rally)
         dt = time.time() - t0
         console.print(f"  run {run_i + 1} done in {dt:.1f}s  "
                       f"(matches={len(matches)}, rejections={len(rejections)})")
         score_metrics = compute_score_metrics(pred_by_video, gt_lookup)
-        run_scalars.append(_flatten_run(matches, unmatched, score_metrics, oracle_counts))
+        run_scalars.append(_flatten_run(
+            matches, unmatched, score_metrics, oracle_counts, serve_oracle_counts
+        ))
         last_rejections = rejections
         last_score_metrics = score_metrics
         n_eval = n_loaded - len(rejections)
