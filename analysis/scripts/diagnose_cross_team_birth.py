@@ -259,9 +259,13 @@ def analyse_video(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--video-id", type=str, default=None,
-                        help="Video ID prefix; if unset, runs the default focus pair.")
+                        help="Single video ID prefix; if unset, runs the full 51-video GT pool.")
+    parser.add_argument("--focus-pair", action="store_true",
+                        help="Run only the b03b461b + fb83f876 focus pair (fast).")
     args = parser.parse_args()
 
+    from rallycut.evaluation.db import get_connection
+    from rallycut.evaluation.gt_loader import load_all_from_db
     from rallycut.tracking.reid_general import (
         WEIGHTS_PATH as REID_WEIGHTS_PATH,
     )
@@ -275,7 +279,16 @@ def main() -> None:
     reid_model = GeneralReIDModel(weights_path=REID_WEIGHTS_PATH)
     logger.info("Loaded general ReID (OSNet SupCon)")
 
-    targets = [args.video_id] if args.video_id else DEFAULT_FOCUS
+    if args.video_id:
+        targets = [args.video_id]
+    elif args.focus_pair:
+        targets = DEFAULT_FOCUS
+    else:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                rows = load_all_from_db(cur)
+        targets = [r.video_id[:8] for r in rows if r.gt.rallies]
+        logger.info("Loaded %d GT videos from the pool", len(targets))
     results: list[dict[str, Any]] = []
     started = time.time()
     for i, vid in enumerate(targets, start=1):
@@ -308,24 +321,56 @@ def main() -> None:
     if not results:
         return
 
-    # Aggregate category counts
-    all_cats: Counter[str] = Counter()
+    # Aggregate: raw, real (perm-artifact filtered), and per-video
+    raw_cats: Counter[str] = Counter()
+    real_cats: Counter[str] = Counter()
+    videos_by_mechanism: dict[str, list[str]] = defaultdict(list)
+    n_artifact_videos = 0
     for r in results:
+        is_artifact = r["rally0_is_perm_artifact"]
+        if is_artifact:
+            n_artifact_videos += 1
+        real_by_video: Counter[str] = Counter()
         for b in r["births"]:
-            all_cats[b["category"]] += 1
+            raw_cats[b["category"]] += 1
+            if is_artifact and b["category"] == "rally_0":
+                continue  # filtered perm artifact
+            real_cats[b["category"]] += 1
+            real_by_video[b["category"]] += 1
+        for cat in real_by_video:
+            videos_by_mechanism[cat].append(r["short"])
 
     logger.info("\n" + "=" * 70)
-    logger.info("CROSS-TEAM BIRTH CATEGORIES (aggregate)")
+    logger.info("RAW CROSS-TEAM BIRTH CATEGORIES (all %d videos)", len(results))
     logger.info("=" * 70)
-    total = sum(all_cats.values())
+    total_raw = sum(raw_cats.values())
     for cat in ("rally_0", "new_track", "switch_rally", "pair_swap", "solo_flip"):
-        n = all_cats.get(cat, 0)
-        pct = n / total * 100 if total else 0
+        n = raw_cats.get(cat, 0)
+        pct = n / total_raw * 100 if total_raw else 0
         logger.info("  %-14s : %3d  (%.1f%%)", cat, n, pct)
-    logger.info("  %-14s : %3d", "TOTAL", total)
+    logger.info("  %-14s : %3d", "TOTAL", total_raw)
+
+    logger.info("\n" + "=" * 70)
+    logger.info(
+        "REAL CROSS-TEAM BIRTHS (perm-artifact filtered; %d/%d videos were artifacts)",
+        n_artifact_videos, len(results),
+    )
+    logger.info("=" * 70)
+    total_real = sum(real_cats.values())
+    for cat in ("rally_0", "new_track", "switch_rally", "pair_swap", "solo_flip"):
+        n = real_cats.get(cat, 0)
+        pct = n / total_real * 100 if total_real else 0
+        vids = videos_by_mechanism.get(cat, [])
+        vids_str = (
+            ", ".join(sorted(set(vids))[:8])
+            + (f" +{len(set(vids)) - 8} more" if len(set(vids)) > 8 else "")
+        )
+        logger.info("  %-14s : %3d  (%.1f%%)  [%s]", cat, n, pct, vids_str)
+    logger.info("  %-14s : %3d", "TOTAL", total_real)
 
     # Verdict hint
     logger.info("\n" + "=" * 70)
+    all_cats = real_cats  # drive verdict off real counts
     dominant = all_cats.most_common(1)[0][0] if all_cats else "none"
     logger.info("Dominant mechanism: %s", dominant)
     if dominant == "pair_swap":
@@ -349,7 +394,10 @@ def main() -> None:
     with out_path.open("w") as fh:
         json.dump(
             {
-                "aggregate": dict(all_cats),
+                "raw_aggregate": dict(raw_cats),
+                "real_aggregate": dict(real_cats),
+                "n_artifact_videos": n_artifact_videos,
+                "videos_by_mechanism": {k: sorted(set(v)) for k, v in videos_by_mechanism.items()},
                 "per_video": results,
             },
             fh,
