@@ -105,6 +105,7 @@ from eval_action_detection import (  # noqa: E402
     RallyData,
     _build_player_positions,
     _load_match_team_assignments,
+    _load_track_to_player_maps,
     compute_metrics,
     load_rallies_with_action_gt,
     match_contacts,
@@ -196,6 +197,11 @@ class PipelineContext:
     skip_adaptive_dedup: bool = False
     skip_seq_enriched_contact_gbm: bool = False
     skip_sequence_recovery: bool = False
+    # Session 11: when True, eval reverts to pre-fix literal-ID comparison
+    # between gt.player_track_id and pred.playerTrackId (no trackId
+    # normalization via match_analysis.trackToPlayer). Used to reproduce
+    # the pre-Session-11 baseline bit-exactly.
+    skip_trackid_normalization: bool = False
 
 
 # Each ablation is a one-line mutator. Extension pattern is documented in the
@@ -208,6 +214,7 @@ ABLATIONS: dict[str, Callable[[PipelineContext], None]] = {
     "adaptive_dedup":           lambda ctx: setattr(ctx, "skip_adaptive_dedup", True),
     "seq_enriched_contact_gbm": lambda ctx: setattr(ctx, "skip_seq_enriched_contact_gbm", True),
     "sequence_recovery":        lambda ctx: setattr(ctx, "skip_sequence_recovery", True),
+    "literal_id_match":         lambda ctx: setattr(ctx, "skip_trackid_normalization", True),
 }
 
 
@@ -395,6 +402,7 @@ def _run_once(
     team_map: dict[str, dict[int, int]],
     calibrators: dict[str, Any],
     ctx: PipelineContext,
+    t2p_by_rally: dict[str, dict[int, int]] | None = None,
     *,
     print_progress: bool = True,
 ) -> tuple[
@@ -452,8 +460,20 @@ def _run_once(
             continue
 
         real_pred = [a for a in pred_actions if not a.get("isSynthetic")]
-        avail_tids = {pp["trackId"] for pp in rally.positions_json}
+        raw_avail_tids = {pp["trackId"] for pp in rally.positions_json}
         match_teams = team_map.get(rally.rally_id)
+
+        # Session 11: normalize raw trackIds → canonical player IDs (1-4)
+        # via match_analysis.trackToPlayer so the literal ID compare in
+        # match_contacts becomes robust to trackId rebases. The ablation
+        # flag `literal_id_match` reverts to the pre-fix path bit-exactly.
+        rally_t2p: dict[int, int] | None = None
+        if t2p_by_rally is not None and not ctx.skip_trackid_normalization:
+            rally_t2p = t2p_by_rally.get(rally.rally_id) or None
+        if rally_t2p:
+            avail_tids = {rally_t2p.get(tid, tid) for tid in raw_avail_tids}
+        else:
+            avail_tids = raw_avail_tids
 
         matches, unmatched = match_contacts(
             rally.gt_labels,
@@ -461,6 +481,7 @@ def _run_once(
             tolerance=_tolerance_frames(rally.fps),
             available_track_ids=avail_tids,
             team_assignments=match_teams,
+            track_id_map=rally_t2p,
         )
         all_matches.extend(matches)
         all_unmatched.extend(unmatched)
@@ -784,6 +805,10 @@ def main() -> int:
             rally_pos_lookup[r.rally_id] = _parse_positions(r.positions_json)
     video_ids = {r.video_id for r in rallies}
     team_map = _load_match_team_assignments(video_ids, rally_positions=rally_pos_lookup)
+    # Session 11: load per-rally trackId → canonical player-ID (1-4) mappings
+    # so match_contacts can normalize predicted trackIds before comparing
+    # against GT. See memory/housekeeping_retrack_2026_04_09.md.
+    t2p_by_rally = _load_track_to_player_maps(video_ids)
 
     # Production passes a real `CourtCalibrator` into the three enrichment
     # stages when calibration is available. Build them once up front.
@@ -806,7 +831,7 @@ def main() -> int:
         console.print(f"[bold]Run {run_i + 1}/{args.reruns}[/bold]")
         t0 = time.time()
         matches, unmatched, rejections, pred_by_video, gt_lookup = _run_once(
-            rallies, team_map, calibrators, ctx
+            rallies, team_map, calibrators, ctx, t2p_by_rally
         )
         dt = time.time() - t0
         console.print(f"  run {run_i + 1} done in {dt:.1f}s  "

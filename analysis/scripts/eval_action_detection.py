@@ -475,6 +475,7 @@ def match_contacts(
     tolerance: int = 3,
     available_track_ids: set[int] | None = None,
     team_assignments: dict[int, int] | None = None,
+    track_id_map: dict[int, int] | None = None,
 ) -> tuple[list[MatchResult], list[dict]]:
     """Match GT labels to predicted actions using frame tolerance.
 
@@ -484,9 +485,16 @@ def match_contacts(
         tolerance: Frame tolerance for matching.
         available_track_ids: Track IDs present in current tracking data.
             When provided, marks matches as player_evaluable=False if the GT
-            track_id doesn't exist in the current tracking data.
+            track_id doesn't exist in the current tracking data. When
+            `track_id_map` is also provided, callers should extend this set
+            with the mapped canonical IDs.
         team_assignments: Optional track_id -> team (0=near, 1=far) for
             court_side accuracy evaluation.
+        track_id_map: Optional raw-trackId → canonical-playerId (1-4) mapping
+            from `match_analysis_json.rallies[i].trackToPlayer`. When present,
+            predicted `playerTrackId`s are normalized through this map before
+            the literal compare against `gt.player_track_id`. Makes identity
+            evaluation robust to trackId rebases (Session 11).
 
     Returns:
         Tuple of (matched GT results, unmatched predictions).
@@ -548,12 +556,15 @@ def match_contacts(
                 if gt_team is not None and pred_cs in ("near", "far"):
                     cs_correct = pred_cs == team_to_side[gt_team]
 
+            pred_tid = pred.get("playerTrackId", -1)
+            if track_id_map is not None:
+                pred_tid = track_id_map.get(pred_tid, pred_tid)
             results.append(MatchResult(
                 gt_frame=gt.frame,
                 gt_action=gt.action,
                 pred_frame=pred.get("frame"),
                 pred_action=pred.get("action"),
-                player_correct=(gt.player_track_id == pred.get("playerTrackId", -1)),
+                player_correct=(gt.player_track_id == pred_tid),
                 player_evaluable=evaluable,
                 court_side_correct=cs_correct,
             ))
@@ -579,6 +590,7 @@ def _match_synthetic_serves(
     synth_tolerance: int,
     available_track_ids: set[int] | None = None,
     team_assignments: dict[int, int] | None = None,
+    track_id_map: dict[int, int] | None = None,
 ) -> None:
     """Match synthetic serves against unmatched GT serves (in-place).
 
@@ -621,12 +633,15 @@ def _match_synthetic_serves(
                 if gt_team is not None and pred_cs in ("near", "far"):
                     cs_correct = pred_cs == team_to_side[gt_team]
 
+            synth_tid = synth.get("playerTrackId", -1)
+            if track_id_map is not None:
+                synth_tid = track_id_map.get(synth_tid, synth_tid)
             matches[m_idx] = MatchResult(
                 gt_frame=m.gt_frame,
                 gt_action=m.gt_action,
                 pred_frame=s_frame,
                 pred_action=synth.get("action"),
-                player_correct=(gt_tid == synth.get("playerTrackId", -1)),
+                player_correct=(gt_tid == synth_tid),
                 player_evaluable=evaluable,
                 court_side_correct=cs_correct,
             )
