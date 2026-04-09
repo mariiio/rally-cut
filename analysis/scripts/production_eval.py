@@ -397,6 +397,88 @@ def _tolerance_frames(fps: float, tolerance_ms: int = 167) -> int:
     return max(1, round(fps * tolerance_ms / 1000))
 
 
+def _rally_permutation_oracle(
+    rally_matches: list[MatchResult],
+) -> tuple[int, int]:
+    """Compute the best within-rally permutation of pred→GT player IDs.
+
+    For each rally we observe a set of ``(gt.player_track_id, pred_tid)``
+    pairs. The literal ID compare in ``match_contacts`` assumes GT's canonical
+    numbering matches the current tracker's canonical numbering — but that
+    assumption breaks whenever a retrack rebases trackIds, because GT's
+    integer labels are frozen against an older track run.
+
+    This oracle asks a retrack-stable question instead: "within this rally,
+    is there ANY consistent relabeling of predicted player IDs that aligns
+    with GT?". We build a cost matrix ``cost[g, p] = -count(gt=g ∧ pred=p)``
+    over evaluable matched contacts, solve a Hungarian assignment, and
+    recount ``player_correct`` under that permutation. This measures the
+    upper bound of within-rally attribution consistency — i.e., how well
+    the pred attribution layer did, *modulo* GT's labeling convention.
+
+    Reported as ``player_attribution_oracle`` alongside the literal
+    ``player_attribution_accuracy`` in the aggregate table. The literal
+    metric is still the production number; this one is a diagnostic that
+    separates "identity convention drift" from "real attribution errors".
+    """
+    evaluable = [
+        m for m in rally_matches
+        if m.player_evaluable and m.pred_frame is not None and m.gt_action != "block"
+    ]
+    if not evaluable:
+        return 0, 0
+
+    # Collect unique GT and pred IDs observed in this rally.
+    gt_ids: list[int] = []
+    pred_ids: list[int] = []
+    # MatchResult doesn't carry the raw tids — we reconstruct via a
+    # caller-provided list. But we only have the booleans here, so use a
+    # side-channel attached to each MatchResult by _run_once below.
+    for m in evaluable:
+        gt_tid = getattr(m, "_gt_tid", None)
+        pred_tid = getattr(m, "_pred_tid", None)
+        if gt_tid is None or pred_tid is None:
+            continue
+        if gt_tid not in gt_ids:
+            gt_ids.append(gt_tid)
+        if pred_tid not in pred_ids:
+            pred_ids.append(pred_tid)
+
+    if not gt_ids or not pred_ids:
+        return 0, len(evaluable)
+
+    size = max(len(gt_ids), len(pred_ids))
+    cost = np.zeros((size, size), dtype=np.float64)
+    for m in evaluable:
+        gt_tid = getattr(m, "_gt_tid", None)
+        pred_tid = getattr(m, "_pred_tid", None)
+        if gt_tid is None or pred_tid is None:
+            continue
+        g_idx = gt_ids.index(gt_tid)
+        p_idx = pred_ids.index(pred_tid)
+        cost[g_idx, p_idx] -= 1.0  # maximize agreement → minimize negative count
+
+    from scipy.optimize import linear_sum_assignment  # noqa: PLC0415
+    row_ind, col_ind = linear_sum_assignment(cost)
+
+    # Build the permutation: gt_id → pred_id that it's assigned to
+    permutation: dict[int, int] = {}
+    for r, c in zip(row_ind, col_ind):
+        if r < len(gt_ids) and c < len(pred_ids):
+            permutation[gt_ids[r]] = pred_ids[c]
+
+    # Recount under the permutation.
+    correct = 0
+    for m in evaluable:
+        gt_tid = getattr(m, "_gt_tid", None)
+        pred_tid = getattr(m, "_pred_tid", None)
+        if gt_tid is None or pred_tid is None:
+            continue
+        if permutation.get(gt_tid) == pred_tid:
+            correct += 1
+    return correct, len(evaluable)
+
+
 def _run_once(
     rallies: list[RallyData],
     team_map: dict[str, dict[int, int]],
@@ -411,19 +493,22 @@ def _run_once(
     list[dict[str, str]],
     dict[str, list[tuple[int, Any]]],
     dict[str, tuple[str | None, str | None]],
+    tuple[int, int],
 ]:
     """Run the full 339-rally loop once.
 
-    Returns (matches, unmatched_preds, rejections, pred_by_video, gt_lookup).
-    The last two feed the Session-5 score metric: ``pred_by_video`` maps
-    video_id to a list of ``(start_ms, RallyActions)`` tuples; ``gt_lookup``
-    maps rally_id to ``(gt_serving_team, gt_point_winner)``.
+    Returns (matches, unmatched_preds, rejections, pred_by_video, gt_lookup,
+    oracle_counts). ``oracle_counts`` is a (correct, total) tuple feeding the
+    within-rally permutation oracle diagnostic — see
+    ``_rally_permutation_oracle`` for rationale.
     """
     all_matches: list[MatchResult] = []
     all_unmatched: list[dict] = []
     rejections: list[dict[str, str]] = []
     pred_by_video: dict[str, list[tuple[int, Any]]] = {}
     gt_lookup: dict[str, tuple[str | None, str | None]] = {}
+    oracle_correct_total = 0
+    oracle_evaluable_total = 0
 
     for idx, rally in enumerate(rallies, start=1):
         # Rejection gate — surface rather than silently skip.
@@ -483,6 +568,39 @@ def _run_once(
             team_assignments=match_teams,
             track_id_map=rally_t2p,
         )
+
+        # Attach raw (gt_tid, pred_tid) side-channel to each match for the
+        # within-rally permutation oracle. match_contacts doesn't carry these
+        # on MatchResult, so we recover them here by looking up the originals
+        # on gt_labels / real_pred keyed on (frame, action).
+        gt_by_frame_action: dict[tuple[int, str], int] = {
+            (gl.frame, gl.action): gl.player_track_id for gl in rally.gt_labels
+        }
+        pred_by_frame_action: dict[tuple[int, str], int] = {
+            (a.get("frame", -1), a.get("action", "")): a.get("playerTrackId", -1)
+            for a in real_pred
+        }
+        for m in matches:
+            gt_tid = gt_by_frame_action.get((m.gt_frame, m.gt_action))
+            m._gt_tid = gt_tid if (gt_tid is not None and gt_tid >= 0) else None  # type: ignore[attr-defined]
+            if m.pred_frame is not None and m.pred_action is not None:
+                raw_pred_tid = pred_by_frame_action.get((m.pred_frame, m.pred_action))
+                if raw_pred_tid is not None and raw_pred_tid >= 0:
+                    # Apply the same Session-11 normalization the literal
+                    # compare uses, so the oracle measures residual
+                    # mismatch on top of the canonical mapping.
+                    if rally_t2p is not None:
+                        raw_pred_tid = rally_t2p.get(raw_pred_tid, raw_pred_tid)
+                    m._pred_tid = raw_pred_tid  # type: ignore[attr-defined]
+                else:
+                    m._pred_tid = None  # type: ignore[attr-defined]
+            else:
+                m._pred_tid = None  # type: ignore[attr-defined]
+
+        rc, rn = _rally_permutation_oracle(matches)
+        oracle_correct_total += rc
+        oracle_evaluable_total += rn
+
         all_matches.extend(matches)
         all_unmatched.extend(unmatched)
 
@@ -496,7 +614,14 @@ def _run_once(
         if print_progress and (idx % 20 == 0 or idx == len(rallies)):
             console.print(f"  [{idx}/{len(rallies)}] processed")
 
-    return all_matches, all_unmatched, rejections, pred_by_video, gt_lookup
+    return (
+        all_matches,
+        all_unmatched,
+        rejections,
+        pred_by_video,
+        gt_lookup,
+        (oracle_correct_total, oracle_evaluable_total),
+    )
 
 
 def _serve_metrics(matches: list[MatchResult]) -> tuple[float, int, float, int]:
@@ -524,6 +649,7 @@ def _flatten_run(
     matches: list[MatchResult],
     unmatched: list[dict],
     score_metrics: ScoreMetrics | None = None,
+    oracle_counts: tuple[int, int] | None = None,
 ) -> dict[str, float]:
     """Collapse a single run into scalar metrics consumed by the aggregator."""
     m = compute_metrics(matches, unmatched)
@@ -538,6 +664,10 @@ def _flatten_run(
         "serve_id_accuracy":           float(serve_id),
         "serve_attr_accuracy":         float(serve_attr),
     }
+    if oracle_counts is not None:
+        oc, on = oracle_counts
+        if on > 0:
+            out["player_attribution_oracle"] = oc / on
     # Session 5 — score metric. Emitted whenever at least one rally has
     # `gt_serving_team` labeled; otherwise the key is absent and the summary
     # prints "n/a".
@@ -716,6 +846,7 @@ def _print_summary(
         "contact_f1", "contact_recall", "contact_precision",
         "action_accuracy", "court_side_accuracy",
         "player_attribution_accuracy",
+        "player_attribution_oracle",
         "serve_id_accuracy", "serve_attr_accuracy",
         "score_accuracy",
     ]
@@ -830,14 +961,14 @@ def main() -> int:
     for run_i in range(args.reruns):
         console.print(f"[bold]Run {run_i + 1}/{args.reruns}[/bold]")
         t0 = time.time()
-        matches, unmatched, rejections, pred_by_video, gt_lookup = _run_once(
+        matches, unmatched, rejections, pred_by_video, gt_lookup, oracle_counts = _run_once(
             rallies, team_map, calibrators, ctx, t2p_by_rally
         )
         dt = time.time() - t0
         console.print(f"  run {run_i + 1} done in {dt:.1f}s  "
                       f"(matches={len(matches)}, rejections={len(rejections)})")
         score_metrics = compute_score_metrics(pred_by_video, gt_lookup)
-        run_scalars.append(_flatten_run(matches, unmatched, score_metrics))
+        run_scalars.append(_flatten_run(matches, unmatched, score_metrics, oracle_counts))
         last_rejections = rejections
         last_score_metrics = score_metrics
         n_eval = n_loaded - len(rejections)
