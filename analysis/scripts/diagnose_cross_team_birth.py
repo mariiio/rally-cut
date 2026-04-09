@@ -22,12 +22,16 @@ pid disagrees with GT at the cross-team level. Classify the birth:
   * `solo_flip`         — single track's mapped pid crosses team boundary
                           on an existing track without a switch or pair
 
-Secondary output: per-video table of birth rallies with surrounding context
-(rally index, side_switch flag, number of cross-team errors at this rally).
+Includes a perm-artifact check: the raw rally_0 bucket inflates because
+the global 4-permutation steers toward the post-mid-match-flip
+orientation, making a locally-correct rally 0 look wrong. Any video
+where rally-0 births vanish under a rally-0-optimal perm is flagged as
+a perm artifact, and those rally_0 births are filtered out of the
+"real" aggregate.
 
-Focused by default on b03b461b and fb83f876. Pass --video-id to override.
-
-Read-only. Runtime: ~1-2 min per video (OSNet baseline).
+Read-only. Defaults to the full 51-video GT pool (~30-40 min OSNet
+re-run; background it). Use --focus-pair for the fast b03b461b +
+fb83f876 sanity check (~2 min), or --video-id for a single video.
 """
 
 from __future__ import annotations
@@ -223,7 +227,7 @@ def analyse_video(
                 is_pair_swap = True
 
         for b in bs:
-            if rally_idx == 0 or b["prev_state"] == "absent" and rally_idx == 0:
+            if rally_idx == 0:
                 cat = "rally_0"
             elif b["prev_state"] == "absent":
                 cat = "new_track"
