@@ -12,6 +12,7 @@ from rallycut.tracking.contact_detector import (
     Contact,
     ContactDetectionConfig,
     ContactSequence,
+    _player_to_ball_dist,
     compute_direction_change,
     _compute_velocities,
     _filter_noise_spikes,
@@ -38,6 +39,30 @@ def _pp(frame: int, track_id: int, x: float, y: float) -> PlayerPosition:
         frame_number=frame, track_id=track_id,
         x=x, y=y, width=0.05, height=0.15, confidence=0.9,
     )
+
+
+def _pp_with_pose(
+    frame: int, track_id: int, x: float, y: float,
+    keypoints: list[list[float]] | None = None,
+) -> PlayerPosition:
+    """Helper to create a PlayerPosition with optional pose keypoints."""
+    return PlayerPosition(
+        frame_number=frame, track_id=track_id,
+        x=x, y=y, width=0.05, height=0.15, confidence=0.9,
+        keypoints=keypoints,
+    )
+
+
+def _make_coco_keypoints(
+    left_wrist: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    right_wrist: tuple[float, float, float] = (0.0, 0.0, 0.0),
+) -> list[list[float]]:
+    """Build a 17-keypoint COCO array with only wrists specified."""
+    kpts = [[0.0, 0.0, 0.0]] * 17
+    kpts = [list(k) for k in kpts]  # make mutable copies
+    kpts[9] = list(left_wrist)
+    kpts[10] = list(right_wrist)
+    return kpts
 
 
 class TestComputeVelocities:
@@ -170,6 +195,71 @@ class TestFindNearestPlayer:
         players = [_pp(100, 1, 0.5, 0.5)]  # Far from frame 10
         track_id, dist, _ = _find_nearest_player(10, 0.5, 0.5, players, search_frames=5)
         assert track_id == -1
+
+
+class TestPlayerToBallDist:
+    """Tests for _player_to_ball_dist helper."""
+
+    def test_uses_wrist_when_confident(self) -> None:
+        """With high-confidence wrist keypoints, distance uses wrist position."""
+        kpts = _make_coco_keypoints(
+            left_wrist=(0.5, 0.5, 0.9),   # exactly at ball
+            right_wrist=(0.3, 0.3, 0.9),  # farther
+        )
+        p = _pp_with_pose(10, 1, 0.6, 0.7, keypoints=kpts)
+        dist = _player_to_ball_dist(p, 0.5, 0.5)
+        # Left wrist is at (0.5, 0.5) = ball position, dist should be ~0
+        assert dist < 0.01
+
+    def test_falls_back_to_bbox_without_keypoints(self) -> None:
+        """Without keypoints, uses bbox upper-quarter."""
+        p = _pp_with_pose(10, 1, 0.5, 0.55, keypoints=None)
+        dist = _player_to_ball_dist(p, 0.5, 0.5)
+        # bbox upper-quarter: y = 0.55 - 0.15*0.25 = 0.5125
+        # dist = sqrt(0 + 0.0125^2) ≈ 0.0125
+        assert 0.01 < dist < 0.02
+
+    def test_falls_back_to_bbox_with_low_confidence(self) -> None:
+        """Low-confidence wrists fall back to bbox."""
+        kpts = _make_coco_keypoints(
+            left_wrist=(0.5, 0.5, 0.1),   # low conf
+            right_wrist=(0.5, 0.5, 0.1),  # low conf
+        )
+        p = _pp_with_pose(10, 1, 0.5, 0.55, keypoints=kpts)
+        dist_with_low_conf = _player_to_ball_dist(p, 0.5, 0.5)
+        p_no_kpts = _pp_with_pose(10, 1, 0.5, 0.55, keypoints=None)
+        dist_no_kpts = _player_to_ball_dist(p_no_kpts, 0.5, 0.5)
+        assert abs(dist_with_low_conf - dist_no_kpts) < 1e-9
+
+    def test_picks_closer_wrist(self) -> None:
+        """Uses the wrist closer to the ball."""
+        kpts = _make_coco_keypoints(
+            left_wrist=(0.1, 0.1, 0.9),   # far from ball at (0.5, 0.5)
+            right_wrist=(0.48, 0.48, 0.9),  # near ball
+        )
+        p = _pp_with_pose(10, 1, 0.3, 0.3, keypoints=kpts)
+        dist = _player_to_ball_dist(p, 0.5, 0.5)
+        # Should use right wrist: sqrt((0.5-0.48)^2 + (0.5-0.48)^2) ≈ 0.028
+        assert dist < 0.04
+
+
+class TestFindNearestPlayerWithPose:
+    """Tests that _find_nearest_player uses wrist keypoints when available."""
+
+    def test_wrist_beats_bbox_centroid(self) -> None:
+        """Player whose bbox is farther but wrist is closer should win."""
+        # Player 1: bbox far, but wrist right at ball
+        kpts1 = _make_coco_keypoints(
+            left_wrist=(0.5, 0.5, 0.9),
+            right_wrist=(0.4, 0.4, 0.9),
+        )
+        p1 = _pp_with_pose(10, 1, 0.7, 0.7, keypoints=kpts1)  # bbox center far
+
+        # Player 2: bbox close, no keypoints
+        p2 = _pp_with_pose(10, 2, 0.51, 0.55, keypoints=None)  # bbox near ball
+
+        track_id, dist, _ = _find_nearest_player(10, 0.5, 0.5, [p1, p2])
+        assert track_id == 1  # wrist proximity wins over bbox proximity
 
 
 class TestFilterNoiseSpikes:

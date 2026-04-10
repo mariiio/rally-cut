@@ -442,6 +442,46 @@ def compute_direction_change(
     return float(np.degrees(np.arccos(cos_angle)))
 
 
+# COCO keypoint indices for wrists
+_KPT_LEFT_WRIST = 9
+_KPT_RIGHT_WRIST = 10
+_MIN_WRIST_CONF = 0.3  # Minimum keypoint confidence to use wrist position
+
+
+def _player_to_ball_dist(
+    player: PlayerPosition,
+    ball_x: float,
+    ball_y: float,
+) -> float:
+    """Image-space distance from player to ball.
+
+    Uses the closer wrist keypoint when pose data is available with
+    sufficient confidence. Falls back to bbox upper-quarter (torso/arms)
+    when keypoints are absent or low-confidence.
+
+    Wrist distance is a +2.5pp improvement over bbox centroid for
+    attribution (diagnostic: scripts/diagnose_keypoint_attribution.py).
+    Volleyball contacts happen with hands/arms, so wrist position is a
+    better proxy for who is touching the ball.
+    """
+    # Try wrist keypoints first
+    if player.keypoints is not None and len(player.keypoints) > _KPT_RIGHT_WRIST:
+        best_wrist_dist = float("inf")
+        for kpt_idx in (_KPT_LEFT_WRIST, _KPT_RIGHT_WRIST):
+            kx, ky, kc = player.keypoints[kpt_idx]
+            if kc >= _MIN_WRIST_CONF:
+                d = math.sqrt((ball_x - kx) ** 2 + (ball_y - ky) ** 2)
+                if d < best_wrist_dist:
+                    best_wrist_dist = d
+        if best_wrist_dist < float("inf"):
+            return best_wrist_dist
+
+    # Fallback: bbox upper-quarter
+    player_x = player.x
+    player_y = player.y - player.height * 0.25
+    return math.sqrt((ball_x - player_x) ** 2 + (ball_y - player_y) ** 2)
+
+
 def _find_nearest_player(
     frame: int,
     ball_x: float,
@@ -449,12 +489,10 @@ def _find_nearest_player(
     player_positions: list[PlayerPosition],
     search_frames: int = 5,
 ) -> tuple[int, float, float]:
-    """Find nearest player to ball at given frame using image-space distance.
+    """Find nearest player to ball at given frame.
 
-    Uses image-space (Euclidean on normalized coords) for player selection.
-    This MUST match the distance metric the contact classifier was trained on —
-    switching to court-space distance shifts feature distributions and breaks
-    the classifier (tested: F1 89.4% → 76.0%).
+    Uses wrist keypoint distance when pose data is available, falling
+    back to bbox upper-quarter distance. See _player_to_ball_dist().
 
     Returns:
         (track_id, distance, player_center_y). track_id=-1 if no player found.
@@ -468,11 +506,7 @@ def _find_nearest_player(
         if abs(p.frame_number - frame) > search_frames:
             continue
 
-        # Use upper-quarter of bbox (torso/arms where volleyball contacts happen)
-        player_x = p.x
-        player_y = p.y - p.height * 0.25
-
-        dist = math.sqrt((ball_x - player_x) ** 2 + (ball_y - player_y) ** 2)
+        dist = _player_to_ball_dist(p, ball_x, ball_y)
 
         if dist < best_dist:
             best_dist = dist
