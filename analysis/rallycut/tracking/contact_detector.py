@@ -463,17 +463,21 @@ def _player_to_ball_dist(
     attribution (diagnostic: scripts/diagnose_keypoint_attribution.py).
     Volleyball contacts happen with hands/arms, so wrist position is a
     better proxy for who is touching the ball.
+
+    IMPORTANT: this MUST remain in image-space (normalized coords).
+    Switching to court-space distance shifts feature distributions and
+    breaks the contact classifier (tested: F1 89.4% -> 76.0%).
     """
-    # Try wrist keypoints first
-    if player.keypoints is not None and len(player.keypoints) > _KPT_RIGHT_WRIST:
-        best_wrist_dist = float("inf")
+    # Try wrist keypoints first (COCO 17-keypoint format)
+    if player.keypoints is not None and len(player.keypoints) >= 17:
+        best_wrist_dist = math.inf
         for kpt_idx in (_KPT_LEFT_WRIST, _KPT_RIGHT_WRIST):
             kx, ky, kc = player.keypoints[kpt_idx]
             if kc >= _MIN_WRIST_CONF:
                 d = math.sqrt((ball_x - kx) ** 2 + (ball_y - ky) ** 2)
                 if d < best_wrist_dist:
                     best_wrist_dist = d
-        if best_wrist_dist < float("inf"):
+        if best_wrist_dist < math.inf:
             return best_wrist_dist
 
     # Fallback: bbox upper-quarter
