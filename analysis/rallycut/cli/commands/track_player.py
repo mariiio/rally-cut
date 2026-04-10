@@ -1000,6 +1000,16 @@ def _run_tracking(
         if sequence_probs is not None:
             apply_sequence_override(rally_actions, sequence_probs)
 
+        # Play annotations: attack direction, set zones, action zones.
+        # No-op when calibrator is absent (uncalibrated videos).
+        from rallycut.statistics.play_annotations import annotate_rally_actions  # noqa: PLC0415
+        annotate_rally_actions(
+            rally_actions,
+            ball_positions,
+            [p.to_dict() for p in result.positions],
+            calibrator,
+        )
+
         actions_data = {
             "contacts": contact_seq.to_dict(),
             "actions": rally_actions.to_dict(),
