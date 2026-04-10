@@ -1,0 +1,188 @@
+"""Unit tests for 3D trajectory fitting."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+import pytest
+
+from rallycut.court.camera_model import CameraModel, calibrate_camera, project_3d_to_image
+from rallycut.court.trajectory_3d import (
+    GRAVITY,
+    FittedArc,
+    fit_arc,
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+COURT_CORNERS = [(0.0, 0.0), (8.0, 0.0), (8.0, 16.0), (0.0, 16.0)]
+
+
+def _make_camera() -> CameraModel:
+    """Build a synthetic camera behind the near baseline."""
+    # Use a synthetic camera: build K, R, t, project court corners, recover.
+    import cv2
+
+    focal = 1800.0
+    w, h = 1920, 1080
+    K = np.array([[focal, 0, w / 2], [0, focal, h / 2], [0, 0, 1]], dtype=np.float64)
+
+    cam_pos = np.array([4.0, -5.0, 5.0])
+    target = np.array([4.0, 8.0, 0.0])
+    fwd = target - cam_pos
+    fwd /= np.linalg.norm(fwd)
+    right = np.cross(fwd, [0, 0, 1])
+    right /= np.linalg.norm(right)
+    up = np.cross(right, fwd)
+    up /= np.linalg.norm(up)
+    R = np.array([right, -up, fwd], dtype=np.float64)
+    t = -R @ cam_pos
+    P = K @ np.hstack([R, t.reshape(3, 1)])
+
+    # Project court corners to normalised coords.
+    img_corners: list[tuple[float, float]] = []
+    for cx, cy in COURT_CORNERS:
+        pt = P @ np.array([cx, cy, 0.0, 1.0])
+        img_corners.append((float(pt[0] / pt[2] / w), float(pt[1] / pt[2] / h)))
+
+    cam = calibrate_camera(img_corners, COURT_CORNERS, w, h)
+    assert cam is not None and cam.is_valid
+    return cam
+
+
+@dataclass
+class FakeBallPosition:
+    """Minimal stand-in for BallPosition in tests."""
+
+    frame_number: int
+    x: float
+    y: float
+    confidence: float
+    motion_energy: float = 0.0
+
+
+def _generate_arc_observations(
+    camera: CameraModel,
+    pos0: np.ndarray,
+    vel0: np.ndarray,
+    fps: float,
+    n_frames: int,
+    noise_px: float = 0.0,
+) -> list[FakeBallPosition]:
+    """Generate synthetic 2D observations from a known 3D parabola."""
+    obs: list[FakeBallPosition] = []
+    rng = np.random.RandomState(42)
+
+    for i in range(n_frames):
+        t = i / fps
+        pt3d = np.array([
+            pos0[0] + vel0[0] * t,
+            pos0[1] + vel0[1] * t,
+            pos0[2] + vel0[2] * t - 0.5 * GRAVITY * t**2,
+        ])
+        u, v = project_3d_to_image(camera, pt3d)
+
+        if noise_px > 0:
+            w, h = camera.image_size
+            u += rng.normal(0, noise_px / w)
+            v += rng.normal(0, noise_px / h)
+
+        obs.append(FakeBallPosition(
+            frame_number=i,
+            x=float(u),
+            y=float(v),
+            confidence=0.9,
+        ))
+
+    return obs
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+class TestFitArc:
+    """Test parabolic arc fitting with synthetic data."""
+
+    def test_recovers_serve_speed(self) -> None:
+        """Fit a serve arc and check the recovered speed is close to truth."""
+        camera = _make_camera()
+        fps = 30.0
+
+        # Serve: starting at (1, 1, 3), going toward far court at 20 m/s.
+        pos0 = np.array([1.0, 1.0, 3.0])
+        vel0 = np.array([2.0, 18.0, 3.0])  # ~18.6 m/s total
+        true_speed = float(np.linalg.norm(vel0))
+
+        observations = _generate_arc_observations(camera, pos0, vel0, fps, n_frames=30)
+        arc = fit_arc(camera, observations, 0, 29, fps, z0_prior=3.0)  # type: ignore[arg-type]
+
+        assert arc is not None
+        assert arc.is_valid
+        # Speed should be within 20% of truth.
+        assert abs(arc.speed_at_start - true_speed) / true_speed < 0.20, (
+            f"Speed {arc.speed_at_start:.1f} vs truth {true_speed:.1f}"
+        )
+
+    def test_recovers_with_noise(self) -> None:
+        """Fit should be robust to moderate pixel noise."""
+        camera = _make_camera()
+        fps = 30.0
+
+        pos0 = np.array([4.0, 3.0, 2.5])
+        vel0 = np.array([1.0, 10.0, 5.0])
+        true_speed = float(np.linalg.norm(vel0))
+
+        observations = _generate_arc_observations(
+            camera, pos0, vel0, fps, n_frames=45, noise_px=2.0,
+        )
+        arc = fit_arc(camera, observations, 0, 44, fps, z0_prior=2.5)  # type: ignore[arg-type]
+
+        assert arc is not None
+        assert arc.is_valid
+        assert abs(arc.speed_at_start - true_speed) / true_speed < 0.30
+
+    def test_peak_height_plausible(self) -> None:
+        """Peak height should be close to the analytical value."""
+        camera = _make_camera()
+        fps = 30.0
+
+        pos0 = np.array([4.0, 4.0, 2.0])
+        vel0 = np.array([0.5, 8.0, 6.0])
+        # Analytical peak: z0 + vz0²/(2g) = 2.0 + 36/(2*9.81) ≈ 3.84
+        true_peak = 2.0 + 6.0**2 / (2 * GRAVITY)
+
+        observations = _generate_arc_observations(camera, pos0, vel0, fps, n_frames=40)
+        arc = fit_arc(camera, observations, 0, 39, fps, z0_prior=2.0)  # type: ignore[arg-type]
+
+        assert arc is not None
+        assert abs(arc.peak_height - true_peak) < 1.5, (
+            f"Peak {arc.peak_height:.1f} vs truth {true_peak:.1f}"
+        )
+
+    def test_too_few_observations_returns_none(self) -> None:
+        camera = _make_camera()
+        obs = [FakeBallPosition(i, 0.5, 0.5, 0.9) for i in range(3)]
+        arc = fit_arc(camera, obs, 0, 2, 30.0)  # type: ignore[arg-type]
+        assert arc is None
+
+    def test_gravity_residual_near_zero(self) -> None:
+        """Free-gravity refit should recover g ≈ 9.81."""
+        camera = _make_camera()
+        fps = 30.0
+
+        pos0 = np.array([4.0, 3.0, 2.5])
+        vel0 = np.array([1.0, 12.0, 4.0])
+
+        observations = _generate_arc_observations(camera, pos0, vel0, fps, n_frames=45)
+        arc = fit_arc(camera, observations, 0, 44, fps, z0_prior=2.5)  # type: ignore[arg-type]
+
+        assert arc is not None
+        assert arc.gravity_residual is not None
+        assert abs(arc.gravity_residual) < 0.3, (
+            f"Gravity residual {arc.gravity_residual:.2f} (expected near 0)"
+        )
