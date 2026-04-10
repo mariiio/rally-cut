@@ -9,8 +9,9 @@ court homography, and player positions — not on player attribution:
        net, or ≥20 frames out, whichever comes first).
 
     2. ``set_origin_zone`` / ``set_dest_zone`` — integers 1–5 spanning the
-       8m court width left→right. Origin is the **setter's** court-x at
-       the set contact frame. Destination is the **ball's** court-x at
+       8m court width left→right (team-relative: far-side zones are
+       inverted). Origin is the **setter's feet** court-x at the set
+       contact frame. Destination is the **attacker's feet** court-x at
        the next attack contact frame.
 
 Both stats are strictly additive: the helpers mutate optional fields on
@@ -47,14 +48,6 @@ CROSS_MAX_DEG = 40.0
 COURT_WIDTH_M = 8.0
 COURT_LENGTH_M = 16.0
 NET_Y_M = COURT_LENGTH_M / 2.0  # midline perpendicular to net
-
-# Look-ahead cap for locating an attack's landing point. 1.5s at 30fps is
-# longer than any plausible physically-realised attack flight.
-_LANDING_MAX_FRAMES = 45
-# Fallback horizon: if no net crossing is observed, use whatever sample
-# sits ≥ this many frames after contact. Ensures we don't emit "unknown"
-# on attacks where the ball gets dug before crossing.
-_LANDING_FALLBACK_FRAMES = 20
 
 # Maximum frame radius for nearest-ball / nearest-player lookups.
 _NEAREST_RADIUS = 3
@@ -122,16 +115,6 @@ def classify_attack_direction_from_xy(
 # --------------------------------------------------------------------------- #
 
 
-def _ball_court_xy(
-    calibrator: Any, bp: BallPosition
-) -> tuple[float, float] | None:
-    try:
-        pt = calibrator.image_to_court((bp.x, bp.y), 1, 1)
-    except Exception:  # noqa: BLE001
-        return None
-    return (float(pt[0]), float(pt[1]))
-
-
 def _nearest_ball(
     ball_positions: list[BallPosition], target_frame: int
 ) -> BallPosition | None:
@@ -143,35 +126,6 @@ def _nearest_ball(
             best = bp
             best_d = d
     return best
-
-
-def _find_landing(
-    ball_positions: list[BallPosition],
-    calibrator: Any,
-    contact_frame: int,
-    contact_y_court: float,
-) -> tuple[float, float] | None:
-    """Find the ball's (x, y) in court coords shortly after contact.
-
-    First sample that crosses the net midline, or first sample at least
-    ``_LANDING_FALLBACK_FRAMES`` after contact — whichever comes first.
-    """
-    for bp in ball_positions:
-        dt = bp.frame_number - contact_frame
-        if dt <= 0:
-            continue
-        if dt > _LANDING_MAX_FRAMES:
-            break
-        p = _ball_court_xy(calibrator, bp)
-        if p is None:
-            continue
-        crossed = (
-            (contact_y_court < NET_Y_M and p[1] >= NET_Y_M)
-            or (contact_y_court > NET_Y_M and p[1] <= NET_Y_M)
-        )
-        if crossed or dt >= _LANDING_FALLBACK_FRAMES:
-            return p
-    return None
 
 
 def _player_feet_court_xy(
@@ -284,6 +238,8 @@ def annotate_rally_actions(
         # Primary: next-contact player's feet.
         landing_court: tuple[float, float] | None = None
         for b in actions_sorted[i + 1 :]:
+            # Skip UNKNOWN only — any real action type (serve, dig,
+            # block, etc.) can be the first contact after an attack.
             if b.action_type in (ActionType.UNKNOWN,):
                 continue
             if b.player_track_id < 0:
@@ -294,9 +250,10 @@ def annotate_rally_actions(
             if bc is not None:
                 landing_court = bc
                 break
-        # Fallback: ball image-space direction (no homography, but
-        # still good enough for line/cross/cut since the court is
-        # roughly axis-aligned with the image in most camera setups).
+        # Fallback: ball image-space direction (no homography). Fires
+        # on terminal attacks (last action in rally / point scored).
+        # Systematically biased by perspective warp — treat labels from
+        # this path as approximate, not ground truth.
         if landing_court is None:
             contact_bp = _nearest_ball(ball_positions, a.frame)
             if contact_bp is not None:

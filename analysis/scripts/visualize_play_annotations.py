@@ -76,9 +76,9 @@ DIR_BGR: dict[str, tuple[int, int, int]] = {
 }
 SET_BGR = (0, 200, 0)
 NEUTRAL_BGR = (200, 200, 200)
-COURT_LINE_BGR = (255, 255, 0)  # cyan
-ZONE_LINE_BGR = (200, 200, 0)   # faded cyan
-NET_LINE_BGR = (0, 255, 255)    # yellow
+COURT_LINE_BGR = (255, 255, 0)  # yellow (BGR)
+ZONE_LINE_BGR = (200, 200, 0)   # faded yellow (BGR)
+NET_LINE_BGR = (0, 255, 255)    # cyan (BGR)
 TRAIL_LEN = 25  # frames of ball trail after contact
 
 

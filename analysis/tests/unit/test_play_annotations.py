@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import pytest
@@ -85,14 +86,12 @@ class TestClassifyAttackDirection:
 
     def test_line_boundary(self) -> None:
         # Just under LINE_MAX_DEG — still line.
-        import math
         just_under = math.tan(math.radians(LINE_MAX_DEG - 0.5))
         dy = 10.0
         dx = just_under * dy
         assert classify_attack_direction_from_xy(0.0, 0.0, dx, dy) == "line"
 
     def test_cut_boundary(self) -> None:
-        import math
         over = math.tan(math.radians(CROSS_MAX_DEG + 0.5))
         dy = 10.0
         dx = over * dy
@@ -253,6 +252,36 @@ class TestAnnotateRallyActions:
         annotate_rally_actions(rally, [], positions_raw, calibrator=cal)
         assert serve.action_zone == 1  # near side, left → zone 1
         assert dig.action_zone == 5    # far side, camera-left → team-right → zone 5
+
+    def test_attack_direction_fallback_ball_trajectory(self) -> None:
+        # Attack is the last action — no next-contact player. Fallback
+        # uses ball image-space delta. Ball moves mostly horizontally
+        # (dx_img large, dy_img small) → maps to a cut-like angle.
+        cal = _FakeCalibrator()
+        atk = _mk_action(ActionType.ATTACK, 300, player_track_id=1)
+        rally = RallyActions(actions=[atk])
+        positions_raw = [
+            {"frameNumber": 300, "trackId": 1, "x": 0.5, "y": 0.5,
+             "width": 0.05, "height": 0.1},
+        ]
+        ball_positions = [
+            _ball(300, 0.5, 0.5),
+            _ball(315, 0.8, 0.52),  # dt=15, mostly horizontal in image
+        ]
+        stats = annotate_rally_actions(rally, ball_positions, positions_raw, calibrator=cal)
+        assert stats.attacks_annotated == 1
+        assert atk.attack_direction is not None
+        assert atk.attack_direction != "unknown"
+
+    def test_attack_negative_track_id_skipped(self) -> None:
+        cal = _FakeCalibrator()
+        atk = _mk_action(ActionType.ATTACK, 100, player_track_id=-1)
+        rally = RallyActions(actions=[atk])
+        stats = annotate_rally_actions(rally, [], [], calibrator=cal)
+        assert stats.attacks_total == 1
+        assert stats.attacks_annotated == 0
+        assert atk.attack_direction is None
+        assert atk.action_zone is None
 
     def test_to_dict_emits_action_zone(self) -> None:
         a = _mk_action(ActionType.DIG, 10)
