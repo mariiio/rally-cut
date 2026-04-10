@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from rallycut.tracking.pose_attribution.features import KPT_LEFT_WRIST, KPT_RIGHT_WRIST
+
 if TYPE_CHECKING:
     from rallycut.court.calibration import CourtCalibrator
     from rallycut.tracking.ball_tracker import BallPosition
@@ -442,9 +444,6 @@ def compute_direction_change(
     return float(np.degrees(np.arccos(cos_angle)))
 
 
-# COCO keypoint indices for wrists
-_KPT_LEFT_WRIST = 9
-_KPT_RIGHT_WRIST = 10
 _MIN_WRIST_CONF = 0.3  # Minimum keypoint confidence to use wrist position
 
 
@@ -471,7 +470,7 @@ def _player_to_ball_dist(
     # Try wrist keypoints first (COCO 17-keypoint format)
     if player.keypoints is not None and len(player.keypoints) >= 17:
         best_wrist_dist = math.inf
-        for kpt_idx in (_KPT_LEFT_WRIST, _KPT_RIGHT_WRIST):
+        for kpt_idx in (KPT_LEFT_WRIST, KPT_RIGHT_WRIST):
             kx, ky, kc = player.keypoints[kpt_idx]
             if kc >= _MIN_WRIST_CONF:
                 d = math.sqrt((ball_x - kx) ** 2 + (ball_y - ky) ** 2)
@@ -701,7 +700,9 @@ def _find_player_motion_candidates(
         # Check each player visible at this frame
         players_at_frame = players_by_frame.get(bf, [])
         for player in players_at_frame:
-            # Player must be close to ball (upper-body center)
+            # Coarse proximity gate — intentionally uses bbox, not wrist keypoints.
+            # This is a disabled-by-default candidate generator, not attribution;
+            # we just need "is a player near the ball?" not "who touched it?"
             player_x = player.x
             player_y = player.y - player.height * 0.25
             dist = math.sqrt((ball.x - player_x) ** 2 + (ball.y - player_y) ** 2)

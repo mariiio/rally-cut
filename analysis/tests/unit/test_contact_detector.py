@@ -174,8 +174,7 @@ class TestFindNearestPlayer:
 
     def test_finds_closest_player(self) -> None:
         """Attributes contact to nearest player."""
-        # _find_nearest_player uses upper-quarter of bbox (y - height*0.25)
-        # for volleyball contact height (arms/torso)
+        # Without keypoints, falls back to bbox upper-quarter (y - height*0.25)
         players = [
             _pp(10, 1, 0.3, 0.7),  # Far from ball
             _pp(10, 2, 0.51, 0.51),  # Close to ball (upper-quarter at y=0.51-0.15*0.25=0.4725)
