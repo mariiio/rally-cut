@@ -288,7 +288,11 @@ def _collect_arc_metrics(arc: FittedArc, is_serve: bool, metrics: ArcMetrics) ->
 # Main evaluation
 # ---------------------------------------------------------------------------
 
-def run_evaluation(video_id: str | None = None, verbose: bool = False) -> dict[str, Any]:
+def run_evaluation(
+    video_id: str | None = None,
+    verbose: bool = False,
+    joint: bool = True,
+) -> dict[str, Any]:
     """Run 3D trajectory evaluation on all calibrated videos."""
     start_time = time.time()
 
@@ -419,7 +423,7 @@ def run_evaluation(video_id: str | None = None, verbose: bool = False) -> dict[s
             # Parse existing actions for z0 priors.
             actions = _parse_actions(rally.actions_json)
 
-            # Fit 3D trajectory.
+            # Fit 3D trajectory with geometric constraints.
             traj = fit_rally(
                 camera=camera,
                 contact_sequence=contact_seq,
@@ -427,6 +431,8 @@ def run_evaluation(video_id: str | None = None, verbose: bool = False) -> dict[s
                 fps=rally.fps,
                 rally_id=rally.rally_id,
                 video_id=vid_id,
+                net_height=2.24,
+                joint=joint,
             )
 
             for idx, arc in enumerate(traj.arcs):
@@ -650,9 +656,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate 3D ball trajectory estimation")
     parser.add_argument("--video-id", help="Evaluate a single video")
     parser.add_argument("--verbose", "-v", action="store_true", help="Per-arc detail")
+    parser.add_argument("--no-joint", action="store_true",
+                        help="Disable multi-arc joint fitting")
     args = parser.parse_args()
 
-    run_evaluation(video_id=args.video_id, verbose=args.verbose)
+    run_evaluation(
+        video_id=args.video_id,
+        verbose=args.verbose,
+        joint=not args.no_joint,
+    )
 
 
 if __name__ == "__main__":

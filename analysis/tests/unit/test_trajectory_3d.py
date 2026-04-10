@@ -22,16 +22,18 @@ from rallycut.court.trajectory_3d import (
 COURT_CORNERS = [(0.0, 0.0), (8.0, 0.0), (8.0, 16.0), (0.0, 16.0)]
 
 
-def _make_camera() -> CameraModel:
+def _make_camera(
+    cam_pos: np.ndarray | None = None,
+    focal: float = 1800.0,
+) -> CameraModel:
     """Build a synthetic camera behind the near baseline."""
-    # Use a synthetic camera: build K, R, t, project court corners, recover.
     import cv2
 
-    focal = 1800.0
     w, h = 1920, 1080
     K = np.array([[focal, 0, w / 2], [0, focal, h / 2], [0, 0, 1]], dtype=np.float64)
 
-    cam_pos = np.array([4.0, -5.0, 5.0])
+    if cam_pos is None:
+        cam_pos = np.array([4.0, -5.0, 5.0])
     target = np.array([4.0, 8.0, 0.0])
     fwd = target - cam_pos
     fwd /= np.linalg.norm(fwd)
@@ -186,3 +188,59 @@ class TestFitArc:
         assert abs(arc.gravity_residual) < 0.3, (
             f"Gravity residual {arc.gravity_residual:.2f} (expected near 0)"
         )
+
+    def test_net_constraint_improves_low_camera(self) -> None:
+        """Net-crossing constraint should improve serve speed recovery from low camera."""
+        # Low camera at 1.5m — typical amateur sideline setup.
+        camera = _make_camera(cam_pos=np.array([4.0, -3.0, 1.5]))
+        fps = 30.0
+
+        # Serve crossing the net: start near baseline, travel to far court.
+        pos0 = np.array([2.0, 1.0, 3.0])
+        vel0 = np.array([1.5, 16.0, 2.0])  # ~16.3 m/s
+        true_speed = float(np.linalg.norm(vel0))
+
+        observations = _generate_arc_observations(
+            camera, pos0, vel0, fps, n_frames=25, noise_px=1.0,
+        )
+
+        # With net constraint (default): should recover speed reasonably.
+        arc_constrained = fit_arc(
+            camera, observations, 0, 24, fps,  # type: ignore[arg-type]
+            z0_prior=3.0, net_height=2.24,
+        )
+        assert arc_constrained is not None
+        assert arc_constrained.is_valid
+
+        # Net crossing height should be plausible (ball must clear 2.24m net).
+        if arc_constrained.net_crossing_height is not None:
+            assert arc_constrained.net_crossing_height >= 1.5, (
+                f"Net crossing {arc_constrained.net_crossing_height:.1f}m too low"
+            )
+
+        # Speed should be within 30% of truth.
+        speed_err = abs(arc_constrained.speed_at_start - true_speed) / true_speed
+        assert speed_err < 0.30, (
+            f"Constrained speed {arc_constrained.speed_at_start:.1f} vs "
+            f"truth {true_speed:.1f} ({speed_err:.0%} error)"
+        )
+
+    def test_landing_constraint(self) -> None:
+        """Landing constraint should push end-of-arc height toward ground."""
+        camera = _make_camera()
+        fps = 30.0
+
+        # Attack arc that should land on the court (z reaches 0).
+        pos0 = np.array([4.0, 10.0, 3.0])
+        vel0 = np.array([1.0, 4.0, -2.0])  # descending
+        # Time to hit z=0: solve 3 - 2t - 0.5*9.81*t^2 = 0 → t ≈ 0.40s
+        n_frames = 12  # ~0.4s at 30fps
+
+        observations = _generate_arc_observations(
+            camera, pos0, vel0, fps, n_frames=n_frames,
+        )
+        arc = fit_arc(
+            camera, observations, 0, n_frames - 1, fps,  # type: ignore[arg-type]
+            z0_prior=3.0, landing=True,
+        )
+        assert arc is not None

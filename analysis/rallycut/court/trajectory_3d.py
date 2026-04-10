@@ -42,8 +42,21 @@ _MIN_OBS = 5
 # Net position in court Y coordinate (metres).
 _NET_Y = 8.0
 
-# Net height (metres) — men's beach volleyball.
-_NET_HEIGHT = 2.43
+# Net height (metres) — women's beach volleyball (default for our dataset).
+_NET_HEIGHT = 2.24
+
+# Maximum plausible ball height at net crossing (metres).
+_NET_CEILING = 4.5
+
+# Penalty weight for net-crossing constraint.
+# The net constraint residual is normalised: deviation / half_range, so
+# it's O(1) at the boundary.  Reprojection residuals are ~0.01–0.03 in
+# normalised coords.  A weight of 0.05 means a boundary violation is
+# comparable to ~5 px of reprojection error — a moderate steering force.
+_W_NET = 0.05
+
+# Penalty weight for landing constraint (weaker — less certain).
+_W_LAND = 0.02
 
 
 @dataclass
@@ -95,6 +108,8 @@ def fit_arc(
     fps: float,
     arc_index: int = 0,
     z0_prior: float = 2.0,
+    net_height: float = _NET_HEIGHT,
+    landing: bool = False,
 ) -> FittedArc | None:
     """Fit a 3D parabola to a single free-flight arc.
 
@@ -106,6 +121,8 @@ def fit_arc(
         fps: Video frame rate.
         arc_index: 0-based index within the rally.
         z0_prior: Initial height guess in metres.
+        net_height: Minimum ball height at net crossing (metres).
+        landing: If True, penalise positive Z at the arc's end.
 
     Returns:
         ``FittedArc`` or ``None`` if the fit fails or there are too few observations.
@@ -128,13 +145,21 @@ def fit_arc(
     uv = obs_arr[:, 1:3]
     weights = obs_arr[:, 3]
 
+    # Build constraint parameters.
+    net_constraint: tuple[float, float, float] | None = (
+        _NET_Y, net_height, _NET_CEILING,
+    )
+
     # --- Multi-start optimisation ---------------------------------------------
     # Try several initial guesses spanning plausible court positions and
     # heights.  Pick the fit with the lowest RMSE.
     best_result: tuple[NDArray[np.float64], float] | None = None
 
     for p0 in _multi_start_guesses(camera, uv, times, z0_prior):
-        result = _fit_parabola(camera, times, uv, weights, p0, free_gravity=False)
+        result = _fit_parabola(
+            camera, times, uv, weights, p0, free_gravity=False,
+            net_constraint=net_constraint, landing_constraint=landing,
+        )
         if result is None:
             continue
         if best_result is None or result[1] < best_result[1]:
@@ -146,8 +171,11 @@ def fit_arc(
     params, rmse = best_result
 
     # --- Optional: free-gravity refit for diagnostics -----------------------
+    # NOTE: no constraints here — this is a physics consistency check.
     g_residual: float | None = None
-    result_free = _fit_parabola(camera, times, uv, weights, params[:6], free_gravity=True)
+    result_free = _fit_parabola(
+        camera, times, uv, weights, params[:6], free_gravity=True,
+    )
     if result_free is not None:
         params_free, _ = result_free
         fitted_g = params_free[6]
@@ -167,7 +195,7 @@ def fit_arc(
     net_crossing = _compute_net_crossing(pos0, vel0, times[-1])
 
     # Landing position (Z = 0 intercept).
-    landing = _compute_landing(pos0, vel0)
+    landing_pos = _compute_landing(pos0, vel0)
 
     # Count inliers (reprojection error < 5 px).
     inlier_thresh_norm = 5.0 / max(camera.image_size)
@@ -199,7 +227,7 @@ def fit_arc(
         speed_at_start=speed,
         peak_height=peak_height,
         net_crossing_height=net_crossing,
-        landing_position=landing,
+        landing_position=landing_pos,
         reprojection_rmse=rmse_px,
         gravity_residual=g_residual,
         is_valid=is_valid,
@@ -213,11 +241,13 @@ def fit_rally(
     fps: float,
     rally_id: str = "",
     video_id: str = "",
+    net_height: float = _NET_HEIGHT,
+    joint: bool = False,
 ) -> TrajectoryResult:
     """Fit 3D trajectories for all free-flight arcs in a rally.
 
     Segments the ball trajectory at contact frames and fits each arc
-    independently.
+    independently, with geometric constraints (net crossing, landing).
     """
     result = TrajectoryResult(
         rally_id=rally_id,
@@ -231,25 +261,42 @@ def fit_rally(
     if not contacts or not ball_positions:
         return result
 
-    # Build (start_frame, end_frame, z0_prior) for each arc.
-    arc_specs: list[tuple[int, int, float]] = []
+    # Build (start_frame, end_frame, z0_prior, is_landing) for each arc.
+    arc_specs: list[tuple[int, int, float, bool]] = []
 
     for i in range(len(contacts) - 1):
         sf = contacts[i].frame
         ef = contacts[i + 1].frame
         z0 = _z0_for_action(classified_actions, i) if classified_actions else 2.0
-        arc_specs.append((sf, ef, z0))
+        is_landing = _is_landing_arc(classified_actions, i + 1)
+        arc_specs.append((sf, ef, z0, is_landing))
 
     # Also fit the arc after the last contact (ball flight until end of tracking).
     last_frame = max(bp.frame_number for bp in ball_positions)
     if last_frame > contacts[-1].frame + _MIN_OBS:
         z0 = _z0_for_action(classified_actions, len(contacts) - 1) if classified_actions else 2.0
-        arc_specs.append((contacts[-1].frame, last_frame, z0))
+        # Last arc in rally — ball likely lands.
+        arc_specs.append((contacts[-1].frame, last_frame, z0, True))
 
-    for idx, (sf, ef, z0) in enumerate(arc_specs):
-        arc = fit_arc(camera, ball_positions, sf, ef, fps, arc_index=idx, z0_prior=z0)
+    fitted_arc_specs: list[tuple[int, int, float, bool]] = []
+    for idx, (sf, ef, z0, is_landing) in enumerate(arc_specs):
+        arc = fit_arc(
+            camera, ball_positions, sf, ef, fps,
+            arc_index=idx, z0_prior=z0,
+            net_height=net_height, landing=is_landing,
+        )
         if arc is not None:
             result.arcs.append(arc)
+            fitted_arc_specs.append((sf, ef, z0, is_landing))
+
+    # --- Joint multi-arc refinement -------------------------------------------
+    if joint and len(result.arcs) >= 2:
+        joint_arcs = _fit_rally_joint(
+            camera, result.arcs, fitted_arc_specs, ball_positions, fps,
+            net_height=net_height,
+        )
+        if joint_arcs is not None:
+            result.arcs = joint_arcs
 
     # Serve speed = speed at the first arc (if it's a serve).
     if result.arcs:
@@ -261,6 +308,174 @@ def fit_rally(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _fit_rally_joint(
+    camera: CameraModel,
+    independent_arcs: list[FittedArc],
+    arc_specs: list[tuple[int, int, float, bool]],
+    ball_positions: list[BallPosition],
+    fps: float,
+    net_height: float = _NET_HEIGHT,
+) -> list[FittedArc] | None:
+    """Refit arcs jointly so consecutive arcs share their contact point.
+
+    Parameterisation: arc 0 has 6 params (pos0, vel0); arc i>0 has 3 params
+    (vel0 only — pos0 is the endpoint of the previous arc).  Total params =
+    3N + 3 for N arcs.
+
+    Returns a new list of FittedArc, or None if joint fit is worse.
+    """
+    n_arcs = len(independent_arcs)
+    if n_arcs < 2:
+        return None
+
+    # Collect per-arc observation arrays.
+    arc_data: list[tuple[NDArray[np.float64], NDArray[np.float64],
+                         NDArray[np.float64], float, bool]] = []
+    for arc, (sf, ef, _z0, is_landing) in zip(independent_arcs, arc_specs):
+        obs: list[tuple[float, float, float, float]] = []
+        for bp in ball_positions:
+            if bp.frame_number < sf or bp.frame_number > ef:
+                continue
+            if bp.confidence < 0.1:
+                continue
+            t = (bp.frame_number - sf) / fps
+            obs.append((t, bp.x, bp.y, bp.confidence))
+        if len(obs) < _MIN_OBS:
+            return None  # Can't joint-fit if any arc is missing data.
+        arr = np.array(obs, dtype=np.float64)
+        duration = (ef - sf) / fps
+        arc_data.append((arr[:, 0], arr[:, 1:3], arr[:, 3], duration, is_landing))
+
+    net_constraint = (_NET_Y, net_height, _NET_CEILING)
+
+    # Build initial guess from independent fits: [pos0_0, vel0_0, vel0_1, ..., vel0_{N-1}].
+    x0 = np.concatenate([
+        independent_arcs[0].initial_position,
+        independent_arcs[0].initial_velocity,
+    ] + [arc.initial_velocity for arc in independent_arcs[1:]])
+
+    n_params = 6 + 3 * (n_arcs - 1)
+    assert len(x0) == n_params
+
+    # Bounds.
+    lb = np.array([-10, -10, 0.0, -35, -35, -20] + [-35, -35, -20] * (n_arcs - 1))
+    ub = np.array([18, 26, 6.0, 35, 35, 20] + [35, 35, 20] * (n_arcs - 1))
+    x0 = np.clip(x0, lb + 1e-6, ub - 1e-6)
+
+    def joint_residuals(params: NDArray[np.float64]) -> NDArray[np.float64]:
+        all_residuals: list[NDArray[np.float64]] = []
+        pos0 = params[:3].copy()
+        vel0 = params[3:6].copy()
+
+        for i, (times, uv, weights, duration, is_landing) in enumerate(arc_data):
+            if i > 0:
+                vel0 = params[6 + 3 * (i - 1):6 + 3 * i].copy()
+
+            # Reprojection residuals for this arc.
+            arc_params = np.concatenate([pos0, vel0])
+            arc_resid = _residuals(
+                arc_params, camera, times, uv, weights,
+                free_gravity=False,
+                net_constraint=net_constraint,
+                landing_constraint=is_landing,
+            )
+            all_residuals.append(arc_resid)
+
+            # Compute endpoint for chaining to next arc.
+            t_end = duration
+            pos0 = np.array([
+                pos0[0] + vel0[0] * t_end,
+                pos0[1] + vel0[1] * t_end,
+                pos0[2] + vel0[2] * t_end - 0.5 * GRAVITY * t_end ** 2,
+            ])
+
+        return np.concatenate(all_residuals)
+
+    try:
+        result = least_squares(
+            joint_residuals, x0, bounds=(lb, ub),
+            loss="soft_l1", f_scale=0.01, max_nfev=5000,
+        )
+    except Exception:
+        return None
+
+    if not result.success and result.status not in (1, 2, 3, 4):
+        return None
+
+    # Extract per-arc results and compare with independent fits.
+    joint_params = result.x
+    pos0 = joint_params[:3].copy()
+    vel0 = joint_params[3:6].copy()
+
+    new_arcs: list[FittedArc] = []
+    total_joint_rmse = 0.0
+    total_indep_rmse = 0.0
+
+    for i, (times, uv, weights, duration, is_landing) in enumerate(arc_data):
+        if i > 0:
+            vel0 = joint_params[6 + 3 * (i - 1):6 + 3 * i].copy()
+
+        arc_params = np.concatenate([pos0, vel0])
+        old_arc = independent_arcs[i]
+
+        # Compute reprojection RMSE (without constraint penalties).
+        raw = _residuals(arc_params, camera, times, uv, np.ones(len(times)), False)
+        rmse_norm = float(np.sqrt(np.mean(raw ** 2)))
+        rmse_px = rmse_norm * max(camera.image_size)
+
+        total_joint_rmse += rmse_px
+        total_indep_rmse += old_arc.reprojection_rmse
+
+        speed = float(np.linalg.norm(vel0))
+        t_peak = vel0[2] / GRAVITY if vel0[2] > 0 else 0.0
+        peak_z = float(pos0[2] + vel0[2] * t_peak - 0.5 * GRAVITY * t_peak ** 2)
+        peak_height = max(float(pos0[2]), peak_z)
+        net_crossing = _compute_net_crossing(pos0, vel0, times[-1])
+        landing_pos = _compute_landing(pos0, vel0)
+
+        # Count inliers.
+        inlier_thresh = 5.0 / max(camera.image_size)
+        n_inliers = 0
+        for j in range(len(times)):
+            pt3d = _eval_trajectory(pos0, vel0, float(times[j]))
+            u_hat, v_hat = project_3d_to_image(camera, pt3d)
+            err = math.sqrt((u_hat - uv[j, 0]) ** 2 + (v_hat - uv[j, 1]) ** 2)
+            if err < inlier_thresh:
+                n_inliers += 1
+
+        is_valid = rmse_px < 10.0 and 0.0 <= pos0[2] <= 6.0 and speed < 40.0
+
+        new_arcs.append(FittedArc(
+            arc_index=old_arc.arc_index,
+            start_frame=old_arc.start_frame,
+            end_frame=old_arc.end_frame,
+            num_observations=old_arc.num_observations,
+            num_inliers=n_inliers,
+            initial_position=pos0.copy(),
+            initial_velocity=vel0.copy(),
+            speed_at_start=speed,
+            peak_height=peak_height,
+            net_crossing_height=net_crossing,
+            landing_position=landing_pos,
+            reprojection_rmse=rmse_px,
+            gravity_residual=old_arc.gravity_residual,
+            is_valid=is_valid,
+        ))
+
+        # Chain endpoint.
+        t_end = duration
+        pos0 = np.array([
+            pos0[0] + vel0[0] * t_end,
+            pos0[1] + vel0[1] * t_end,
+            pos0[2] + vel0[2] * t_end - 0.5 * GRAVITY * t_end ** 2,
+        ])
+
+    # Keep joint fit only if total RMSE improves (or is within 5% tolerance).
+    if total_joint_rmse <= total_indep_rmse * 1.05:
+        return new_arcs
+    return None
+
 
 def _eval_trajectory(
     pos0: NDArray[np.float64],
@@ -283,8 +498,16 @@ def _residuals(
     uv: NDArray[np.float64],
     weights: NDArray[np.float64],
     free_gravity: bool,
+    net_constraint: tuple[float, float, float] | None = None,
+    landing_constraint: bool = False,
 ) -> NDArray[np.float64]:
-    """Reprojection residuals for the parabolic fit (vectorised)."""
+    """Reprojection residuals for the parabolic fit (vectorised).
+
+    Args:
+        net_constraint: (net_y, z_min, z_max) — when the trajectory crosses
+            Y=net_y, penalise Z outside [z_min, z_max].
+        landing_constraint: If True, penalise positive Z at the last time step.
+    """
     pos0 = params[:3]
     vel0 = params[3:6]
     g = float(params[6]) if free_gravity else GRAVITY
@@ -306,11 +529,36 @@ def _residuals(
     pred_v = (proj[:, 1] / proj[:, 2]) / h_img
 
     w_sqrt = np.sqrt(weights)
-    residuals = np.empty(2 * n)
-    residuals[0::2] = w_sqrt * (pred_u - uv[:, 0])
-    residuals[1::2] = w_sqrt * (pred_v - uv[:, 1])
+    reproj = np.empty(2 * n)
+    reproj[0::2] = w_sqrt * (pred_u - uv[:, 0])
+    reproj[1::2] = w_sqrt * (pred_v - uv[:, 1])
 
-    return residuals
+    # --- Geometric constraint penalties ----------------------------------------
+    penalties: list[float] = []
+
+    # Net-crossing height constraint: smooth quadratic pull toward
+    # the midpoint of the expected net-crossing height range.
+    if net_constraint is not None:
+        net_y, z_min, z_max = net_constraint
+        if abs(vel0[1]) > 1e-6:
+            t_net = (net_y - pos0[1]) / vel0[1]
+            duration = float(times[-1])
+            if 0 < t_net < duration * 1.5:
+                z_net = pos0[2] + vel0[2] * t_net - 0.5 * g * t_net ** 2
+                z_target = 0.5 * (z_min + z_max)
+                z_range = 0.5 * (z_max - z_min)
+                # Normalised deviation: 0 at target, 1 at boundary.
+                deviation = (z_net - z_target) / z_range if z_range > 0 else 0.0
+                penalties.append(_W_NET * deviation)
+
+    # Landing constraint: ball should be near ground at arc end.
+    if landing_constraint:
+        z_end = pos0[2] + vel0[2] * times[-1] - 0.5 * g * times[-1] ** 2
+        penalties.append(_W_LAND * max(0.0, z_end - 0.5))
+
+    if penalties:
+        return np.concatenate([reproj, np.array(penalties)])
+    return reproj
 
 
 def _fit_parabola(
@@ -320,6 +568,8 @@ def _fit_parabola(
     weights: NDArray[np.float64],
     p0: NDArray[np.float64],
     free_gravity: bool,
+    net_constraint: tuple[float, float, float] | None = None,
+    landing_constraint: bool = False,
 ) -> tuple[NDArray[np.float64], float] | None:
     """Run least-squares optimisation.
 
@@ -341,7 +591,8 @@ def _fit_parabola(
         result = least_squares(
             _residuals,
             x0,
-            args=(camera, times, uv, weights, free_gravity),
+            args=(camera, times, uv, weights, free_gravity,
+                  net_constraint, landing_constraint),
             bounds=(lb, ub),
             loss="soft_l1",
             f_scale=0.01,  # ~10px / 1000px normalisation
@@ -353,7 +604,7 @@ def _fit_parabola(
     if not result.success and result.status not in (1, 2, 3, 4):
         return None
 
-    # RMSE in normalised image coordinates.
+    # RMSE in normalised image coordinates (exclude penalty residuals).
     n = len(times)
     raw_residuals = _residuals(
         result.x, camera, times, uv, np.ones(n), free_gravity,
@@ -497,6 +748,20 @@ def _z0_for_action(
         ActionType.BLOCK: 2.5,
         ActionType.DIG: 0.5,
     }.get(action, 2.0)
+
+
+def _is_landing_arc(
+    actions: list[ClassifiedAction] | None,
+    next_contact_idx: int,
+) -> bool:
+    """Determine if an arc ends in a ground contact (receive, dig)."""
+    if not actions or next_contact_idx >= len(actions):
+        return False
+    from rallycut.tracking.action_classifier import ActionType
+
+    return actions[next_contact_idx].action_type in (
+        ActionType.RECEIVE, ActionType.DIG,
+    )
 
 
 def _compute_net_crossing(
