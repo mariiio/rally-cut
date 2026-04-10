@@ -564,17 +564,16 @@ def _find_nearest_players(
 ) -> list[tuple[int, float, float]]:
     """Find nearest players to ball, ranked by perspective-corrected distance.
 
-    Ranks candidates by depth-scaled distance: image-space distance
+    Uses wrist keypoint distance when pose data is available, falling
+    back to bbox upper-quarter distance. See _player_to_ball_dist().
+
+    Ranks candidates by depth-scaled distance: wrist/bbox distance
     multiplied by a perspective correction factor derived from the court
     corners. Far-court distances are scaled up (they appear artificially
-    small due to perspective compression). This is numerically stable
-    unlike full homography inversion, and works for all calibrated videos.
-
-    Returns image-space distances for compatibility with classifier features
-    (classifier trained on image-space player_distance).
+    small due to perspective compression).
 
     Returns:
-        List of (track_id, image_distance, player_center_y), sorted by
+        List of (track_id, distance, player_center_y), sorted by
         depth-corrected distance. Up to max_candidates entries.
     """
     # Best distances per track (a track may appear in multiple frames)
@@ -585,15 +584,13 @@ def _find_nearest_players(
         if abs(p.frame_number - frame) > search_frames:
             continue
 
-        player_x = p.x
-        player_y = p.y - p.height * 0.25
-
-        img_dist = math.sqrt((ball_x - player_x) ** 2 + (ball_y - player_y) ** 2)
+        img_dist = _player_to_ball_dist(p, ball_x, ball_y)
 
         # Rank by depth-corrected distance: scale by perspective at player Y.
-        # Far-court players get higher corrected distances, preventing them
-        # from winning the nearest-player race due to perspective compression.
-        scale = _depth_scale_at_y(player_y, court_calibrator)
+        # Use bbox upper-quarter Y for perspective scaling (stable regardless
+        # of whether wrist or bbox was used for distance).
+        scale_y = p.y - p.height * 0.25
+        scale = _depth_scale_at_y(scale_y, court_calibrator)
         rank_dist = img_dist * scale
 
         if p.track_id not in best_per_track or rank_dist < best_per_track[p.track_id][0]:
