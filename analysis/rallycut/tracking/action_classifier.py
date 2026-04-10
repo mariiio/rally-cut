@@ -89,6 +89,7 @@ class ClassifiedAction:
     # court calibration is available. Left as ``None`` on every path that
     # doesn't opt in, and omitted from ``to_dict()`` when ``None`` so
     # existing stored JSON is bit-identical on the default pipeline.
+    action_zone: int | None = None       # player's court-x zone 1-5, team-relative
     attack_direction: str | None = None  # "line" | "cross" | "cut" | None
     set_origin_zone: int | None = None   # setter court-x zone 1-5 at set contact
     set_dest_zone: int | None = None     # ball court-x zone 1-5 at next attack
@@ -108,6 +109,8 @@ class ClassifiedAction:
         # Omitted when False for backward compatibility with existing stored data
         if self.is_synthetic:
             d["isSynthetic"] = True
+        if self.action_zone is not None:
+            d["actionZone"] = self.action_zone
         if self.attack_direction is not None:
             d["attackDirection"] = self.attack_direction
         if self.set_origin_zone is not None:

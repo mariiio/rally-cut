@@ -54,6 +54,14 @@ class TestXToZone:
         assert x_to_zone(2.1, num_zones=4) == 2
         assert x_to_zone(6.1, num_zones=4) == 4
 
+    def test_far_side_inversion(self) -> None:
+        # From camera's left (x=0.5 → zone 1), far-side team sees zone 5.
+        assert x_to_zone(0.5, far_side=True) == 5
+        # Center stays center.
+        assert x_to_zone(4.0, far_side=True) == 3
+        # Camera's right (zone 5) → far-side team's zone 1.
+        assert x_to_zone(7.5, far_side=True) == 1
+
     def test_invalid_num_zones(self) -> None:
         with pytest.raises(ValueError):
             x_to_zone(1.0, num_zones=0)
@@ -150,55 +158,68 @@ class TestAnnotateRallyActions:
         assert stats.attacks_total == 0
 
     def test_attack_direction_line(self) -> None:
-        # Attack contact at court (4, 2); ball flies to (4.1, 14). Small dx,
-        # big dy → line.
+        # Attacker at court (4, 2); next-contact player at (4.1, 14).
+        # Small dx, big dy → line.  Now uses player feet, not ball.
         cal = _FakeCalibrator()
-        atk = _mk_action(ActionType.ATTACK, 100, ball_x=0.5, ball_y=0.125)
-        rally = RallyActions(actions=[atk])
-        ball_positions = [
-            _ball(100, 0.5, 0.125),   # court (4, 2)  contact
-            _ball(106, 0.5125, 0.5),  # court (4.1, 8)  at net
-            _ball(112, 0.5125, 0.875),  # court (4.1, 14) landing on far side
+        atk_tid = 1
+        dig_tid = 2
+        atk = _mk_action(ActionType.ATTACK, 100, player_track_id=atk_tid)
+        dig = _mk_action(ActionType.DIG, 112, player_track_id=dig_tid)
+        rally = RallyActions(actions=[atk, dig])
+        positions_raw = [
+            # Attacker feet at (0.5, 0.175) → court (4, 2.8)
+            # (y=0.125 center + height=0.1 → feet at y=0.125+0.05=0.175)
+            {"frameNumber": 100, "trackId": atk_tid, "x": 0.5, "y": 0.125,
+             "width": 0.05, "height": 0.1},
+            # Next-contact player feet at (0.5125, 0.925) → court (4.1, 14.8)
+            {"frameNumber": 112, "trackId": dig_tid, "x": 0.5125, "y": 0.875,
+             "width": 0.05, "height": 0.1},
         ]
-        stats = annotate_rally_actions(rally, ball_positions, [], calibrator=cal)
+        stats = annotate_rally_actions(rally, [], positions_raw, calibrator=cal)
         assert stats.attacks_total == 1
         assert stats.attacks_annotated == 1
         assert atk.attack_direction == "line"
 
     def test_attack_direction_cut(self) -> None:
-        # Attack contact at court (1, 2); ball flies to (7, 6). Large dx
-        # relative to moderate dy → cut.
+        # Attacker at court (1, 2.8); next-contact player at (7, 6).
+        # Large dx relative to moderate dy → cut.
         cal = _FakeCalibrator()
-        atk = _mk_action(ActionType.ATTACK, 200, ball_x=0.125, ball_y=0.125)
-        rally = RallyActions(actions=[atk])
-        ball_positions = [
-            _ball(200, 0.125, 0.125),  # court (1, 2)
-            _ball(220, 0.875, 0.375),  # court (7, 6)  — dt=20 triggers fallback
+        atk_tid = 1
+        dig_tid = 2
+        atk = _mk_action(ActionType.ATTACK, 200, player_track_id=atk_tid)
+        dig = _mk_action(ActionType.DIG, 220, player_track_id=dig_tid)
+        rally = RallyActions(actions=[atk, dig])
+        positions_raw = [
+            {"frameNumber": 200, "trackId": atk_tid, "x": 0.125, "y": 0.125,
+             "width": 0.05, "height": 0.1},
+            {"frameNumber": 220, "trackId": dig_tid, "x": 0.875, "y": 0.325,
+             "width": 0.05, "height": 0.1},
         ]
-        stats = annotate_rally_actions(rally, ball_positions, [], calibrator=cal)
+        stats = annotate_rally_actions(rally, [], positions_raw, calibrator=cal)
         assert stats.attacks_annotated == 1
         assert atk.attack_direction == "cut"
 
     def test_set_zones_populated(self) -> None:
+        # Origin = setter feet court-x, dest = attacker feet court-x.
         cal = _FakeCalibrator()
         setter_tid = 7
+        attacker_tid = 9
         set_action = _mk_action(
             ActionType.SET, 50, player_track_id=setter_tid,
         )
         attack = _mk_action(
-            ActionType.ATTACK, 80, player_track_id=9,
+            ActionType.ATTACK, 80, player_track_id=attacker_tid,
         )
         rally = RallyActions(actions=[set_action, attack])
-        # Setter at normalized (0.1, 0.2) → court x = 0.8 → zone 1
+        # Setter feet at (0.1, 0.25) → court x = 0.8 → zone 1
+        # Attacker feet at (0.875, 0.55) → court x = 7.0 → zone 5
         positions_raw = [
             {"frameNumber": 50, "trackId": setter_tid, "x": 0.1, "y": 0.2,
-             "width": 0.05, "height": 0.1, "confidence": 1.0},
+             "width": 0.05, "height": 0.1},
+            {"frameNumber": 80, "trackId": attacker_tid, "x": 0.875, "y": 0.5,
+             "width": 0.05, "height": 0.1},
         ]
-        ball_positions = [
-            # Ball at attack contact: (0.875, 0.5) → court (7, 8) → zone 5
-            _ball(80, 0.875, 0.5),
-        ]
-        stats = annotate_rally_actions(rally, ball_positions, positions_raw, calibrator=cal)
+        stats = annotate_rally_actions(rally, [], positions_raw, calibrator=cal)
         assert stats.sets_total == 1
         assert stats.sets_annotated == 1
         assert set_action.set_origin_zone == 1
@@ -213,6 +234,30 @@ class TestAnnotateRallyActions:
         assert stats.sets_annotated == 0
         assert s.set_origin_zone is None
         assert s.set_dest_zone is None
+
+    def test_action_zone_on_all_actions(self) -> None:
+        cal = _FakeCalibrator()
+        serve = _mk_action(ActionType.SERVE, 10, player_track_id=1)
+        serve.court_side = "near"
+        dig = _mk_action(ActionType.DIG, 50, player_track_id=2)
+        dig.court_side = "far"
+        rally = RallyActions(actions=[serve, dig])
+        # Player 1 feet at (0.1, 0.55) → court x=0.8 → near zone 1
+        # Player 2 feet at (0.1, 0.55) → court x=0.8 → far zone 5 (inverted)
+        positions_raw = [
+            {"frameNumber": 10, "trackId": 1, "x": 0.1, "y": 0.5,
+             "width": 0.05, "height": 0.1},
+            {"frameNumber": 50, "trackId": 2, "x": 0.1, "y": 0.5,
+             "width": 0.05, "height": 0.1},
+        ]
+        annotate_rally_actions(rally, [], positions_raw, calibrator=cal)
+        assert serve.action_zone == 1  # near side, left → zone 1
+        assert dig.action_zone == 5    # far side, camera-left → team-right → zone 5
+
+    def test_to_dict_emits_action_zone(self) -> None:
+        a = _mk_action(ActionType.DIG, 10)
+        a.action_zone = 3
+        assert a.to_dict()["actionZone"] == 3
 
     def test_to_dict_omits_none_annotations(self) -> None:
         a = _mk_action(ActionType.ATTACK, 10)

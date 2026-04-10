@@ -65,12 +65,17 @@ _NEAREST_RADIUS = 3
 # --------------------------------------------------------------------------- #
 
 
-def x_to_zone(x_m: float, num_zones: int = 5) -> int:
+def x_to_zone(x_m: float, num_zones: int = 5, *, far_side: bool = False) -> int:
     """Bin a court-x coordinate in meters into a zone 1..num_zones.
 
     Clamps values outside the court width to the nearest edge zone so
     small projection errors don't produce out-of-band zone IDs. Zones
-    are left→right across the 8m court width.
+    are left→right across the 8m court width from the CAMERA's perspective.
+
+    When ``far_side=True``, the zone is flipped to be from the team's
+    perspective: zone 1 = the team's left (camera's right), zone 5 =
+    the team's right (camera's left). This matches how volleyball zones
+    are conventionally numbered relative to the team, not the observer.
     """
     if num_zones <= 0:
         raise ValueError("num_zones must be positive")
@@ -80,9 +85,11 @@ def x_to_zone(x_m: float, num_zones: int = 5) -> int:
     # previous zone.
     z = int((x_m + 1e-9) // width) + 1
     if z < 1:
-        return 1
-    if z > num_zones:
-        return num_zones
+        z = 1
+    elif z > num_zones:
+        z = num_zones
+    if far_side:
+        z = num_zones + 1 - z
     return z
 
 
@@ -167,25 +174,35 @@ def _find_landing(
     return None
 
 
-def _setter_court_x(
+def _player_feet_court_xy(
     positions_raw: list[dict],
-    setter_tid: int,
-    set_frame: int,
+    track_id: int,
+    frame: int,
     calibrator: Any,
-) -> float | None:
-    """Return the setter's court-x at set_frame via nearest-frame lookup."""
+) -> tuple[float, float] | None:
+    """Return a player's court (x, y) projected from their FEET position.
+
+    Uses the bottom-center of the bounding box ``(x, y + height/2)``
+    instead of the bbox center, so the projected point lies on the court
+    ground plane and the planar homography is accurate. Projecting the
+    bbox center (chest-height ≈ 1 m above court) gives wildly wrong
+    court positions on most camera angles — see the 2026-04-10 stats-pack
+    session debug dump.
+    """
     best_img: tuple[float, float] | None = None
     best_d = _NEAREST_RADIUS + 1
     for pp in positions_raw:
         try:
-            if int(pp["trackId"]) != setter_tid:
+            if int(pp["trackId"]) != track_id:
                 continue
-            d = abs(int(pp["frameNumber"]) - set_frame)
+            d = abs(int(pp["frameNumber"]) - frame)
         except (KeyError, TypeError, ValueError):
             continue
         if d <= _NEAREST_RADIUS and d < best_d:
             try:
-                best_img = (float(pp["x"]), float(pp["y"]))
+                px = float(pp["x"])
+                py = float(pp["y"]) + float(pp.get("height", 0.10)) / 2.0
+                best_img = (px, py)
                 best_d = d
             except (KeyError, TypeError, ValueError):
                 continue
@@ -195,7 +212,7 @@ def _setter_court_x(
         pc = calibrator.image_to_court(best_img, 1, 1)
     except Exception:  # noqa: BLE001
         return None
-    return float(pc[0])
+    return (float(pc[0]), float(pc[1]))
 
 
 # --------------------------------------------------------------------------- #
@@ -238,26 +255,77 @@ def annotate_rally_actions(
         rally_actions.actions, key=lambda a: a.frame
     )
 
-    # Attack direction.
+    # 1. action_zone on ALL actions — player feet court-x, team-relative.
     for a in actions_sorted:
+        if a.player_track_id < 0:
+            continue
+        pc = _player_feet_court_xy(
+            positions_raw, a.player_track_id, a.frame, calibrator
+        )
+        if pc is not None:
+            is_far = a.court_side == "far"
+            a.action_zone = x_to_zone(pc[0], far_side=is_far)
+
+    # 2. Attack direction — use PLAYER feet positions (ground plane) for
+    # both the attacker and the next-contact player. Fallback to ball
+    # image-space trajectory when no next-contact player is available
+    # (last action in rally, point scored, etc.).
+    for i, a in enumerate(actions_sorted):
         if a.action_type != ActionType.ATTACK:
             continue
         stats.attacks_total += 1
-        contact_bp = _nearest_ball(ball_positions, a.frame)
-        if contact_bp is None:
+        if a.player_track_id < 0:
             continue
-        pc = _ball_court_xy(calibrator, contact_bp)
-        if pc is None:
+        attacker_court = _player_feet_court_xy(
+            positions_raw, a.player_track_id, a.frame, calibrator
+        )
+        if attacker_court is None:
             continue
-        pl = _find_landing(ball_positions, calibrator, a.frame, pc[1])
-        if pl is None:
+        # Primary: next-contact player's feet.
+        landing_court: tuple[float, float] | None = None
+        for b in actions_sorted[i + 1 :]:
+            if b.action_type in (ActionType.UNKNOWN,):
+                continue
+            if b.player_track_id < 0:
+                continue
+            bc = _player_feet_court_xy(
+                positions_raw, b.player_track_id, b.frame, calibrator
+            )
+            if bc is not None:
+                landing_court = bc
+                break
+        # Fallback: ball image-space direction (no homography, but
+        # still good enough for line/cross/cut since the court is
+        # roughly axis-aligned with the image in most camera setups).
+        if landing_court is None:
+            contact_bp = _nearest_ball(ball_positions, a.frame)
+            if contact_bp is not None:
+                landing_bp = None
+                for bp in ball_positions:
+                    dt = bp.frame_number - a.frame
+                    if dt >= 15:
+                        landing_bp = bp
+                        break
+                if landing_bp is not None:
+                    # Use image-space delta scaled to court-like axes.
+                    # x_img → court_x (width), y_img → court_y (length).
+                    dx_img = landing_bp.x - contact_bp.x
+                    dy_img = landing_bp.y - contact_bp.y
+                    landing_court = (
+                        attacker_court[0] + dx_img * COURT_WIDTH_M,
+                        attacker_court[1] + dy_img * COURT_LENGTH_M,
+                    )
+        if landing_court is None:
             continue
         a.attack_direction = classify_attack_direction_from_xy(
-            pc[0], pc[1], pl[0], pl[1]
+            attacker_court[0], attacker_court[1],
+            landing_court[0], landing_court[1],
         )
         stats.attacks_annotated += 1
 
-    # Set zones (origin = setter x, dest = ball x at next attack contact).
+    # 3. Set zones — origin = setter feet court-x, dest = attacker feet
+    # court-x. Both use player feet (ground plane), not ball positions.
+    # Zones are team-relative (far-side inverted).
     for i, s in enumerate(actions_sorted):
         if s.action_type != ActionType.SET:
             continue
@@ -270,20 +338,24 @@ def annotate_rally_actions(
         if next_attack is None:
             continue
 
+        is_far = s.court_side == "far"
         origin_zone: int | None = None
         if s.player_track_id >= 0:
-            setter_x = _setter_court_x(
+            setter_court = _player_feet_court_xy(
                 positions_raw, s.player_track_id, s.frame, calibrator
             )
-            if setter_x is not None:
-                origin_zone = x_to_zone(setter_x)
+            if setter_court is not None:
+                origin_zone = x_to_zone(setter_court[0], far_side=is_far)
 
         dest_zone: int | None = None
-        atk_bp = _nearest_ball(ball_positions, next_attack.frame)
-        if atk_bp is not None:
-            pb = _ball_court_xy(calibrator, atk_bp)
-            if pb is not None:
-                dest_zone = x_to_zone(pb[0])
+        if next_attack.player_track_id >= 0:
+            atk_far = next_attack.court_side == "far"
+            attacker_court = _player_feet_court_xy(
+                positions_raw, next_attack.player_track_id,
+                next_attack.frame, calibrator,
+            )
+            if attacker_court is not None:
+                dest_zone = x_to_zone(attacker_court[0], far_side=atk_far)
 
         if origin_zone is not None and dest_zone is not None:
             s.set_origin_zone = origin_zone
