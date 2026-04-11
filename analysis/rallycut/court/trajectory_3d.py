@@ -127,20 +127,10 @@ def fit_arc(
     Returns:
         ``FittedArc`` or ``None`` if the fit fails or there are too few observations.
     """
-    # Collect observations within the arc.
-    obs: list[tuple[float, float, float, float]] = []  # (t_sec, u, v, confidence)
-    for bp in ball_positions:
-        if bp.frame_number < start_frame or bp.frame_number > end_frame:
-            continue
-        if bp.confidence < 0.1:
-            continue
-        t = (bp.frame_number - start_frame) / fps
-        obs.append((t, bp.x, bp.y, bp.confidence))
-
-    if len(obs) < _MIN_OBS:
+    obs_arr = _collect_observations(ball_positions, start_frame, end_frame, fps)
+    if obs_arr is None:
         return None
 
-    obs_arr = np.array(obs, dtype=np.float64)
     times = obs_arr[:, 0]
     uv = obs_arr[:, 1:3]
     weights = obs_arr[:, 3]
@@ -220,7 +210,7 @@ def fit_arc(
         arc_index=arc_index,
         start_frame=start_frame,
         end_frame=end_frame,
-        num_observations=len(obs),
+        num_observations=len(obs_arr),
         num_inliers=n_inliers,
         initial_position=pos0,
         initial_velocity=vel0,
@@ -333,17 +323,9 @@ def _fit_rally_joint(
     arc_data: list[tuple[NDArray[np.float64], NDArray[np.float64],
                          NDArray[np.float64], float, bool]] = []
     for arc, (sf, ef, _z0, is_landing) in zip(independent_arcs, arc_specs):
-        obs: list[tuple[float, float, float, float]] = []
-        for bp in ball_positions:
-            if bp.frame_number < sf or bp.frame_number > ef:
-                continue
-            if bp.confidence < 0.1:
-                continue
-            t = (bp.frame_number - sf) / fps
-            obs.append((t, bp.x, bp.y, bp.confidence))
-        if len(obs) < _MIN_OBS:
+        arr = _collect_observations(ball_positions, sf, ef, fps)
+        if arr is None:
             return None  # Can't joint-fit if any arc is missing data.
-        arr = np.array(obs, dtype=np.float64)
         duration = (ef - sf) / fps
         arc_data.append((arr[:, 0], arr[:, 1:3], arr[:, 3], duration, is_landing))
 
@@ -477,6 +459,29 @@ def _fit_rally_joint(
     return None
 
 
+def _collect_observations(
+    ball_positions: list[BallPosition],
+    start_frame: int,
+    end_frame: int,
+    fps: float,
+) -> NDArray[np.float64] | None:
+    """Collect ball observations in an arc as (t_sec, u, v, confidence) rows.
+
+    Returns an (N, 4) array, or None if fewer than ``_MIN_OBS`` are found.
+    """
+    obs: list[tuple[float, float, float, float]] = []
+    for bp in ball_positions:
+        if bp.frame_number < start_frame or bp.frame_number > end_frame:
+            continue
+        if bp.confidence < 0.1:
+            continue
+        t = (bp.frame_number - start_frame) / fps
+        obs.append((t, bp.x, bp.y, bp.confidence))
+    if len(obs) < _MIN_OBS:
+        return None
+    return np.array(obs, dtype=np.float64)
+
+
 def _eval_trajectory(
     pos0: NDArray[np.float64],
     vel0: NDArray[np.float64],
@@ -536,8 +541,19 @@ def _residuals(
     # --- Geometric constraint penalties ----------------------------------------
     penalties: list[float] = []
 
-    # Net-crossing height constraint: smooth quadratic pull toward
-    # the midpoint of the expected net-crossing height range.
+    # Net-crossing height constraint: continuous pull toward the midpoint
+    # of [z_min, z_max].  The residual is (z_net - midpoint) / half_range,
+    # which is 0 at the midpoint, ±1 at the boundaries.  least_squares
+    # squares this, so the cost is quadratic — a smooth, always-active
+    # attraction toward the expected height range.
+    #
+    # Design choice: centering pull (not dead-zone).  A dead-zone penalty
+    # (zero inside the range) provides no gradient when the height is
+    # already valid, and measured 66% vs 85% pass rate.  The centering
+    # pull actively steers trajectories toward plausible net heights even
+    # when the unconstrained fit is technically in-range but near a
+    # boundary — this is important because the depth axis is poorly
+    # conditioned from low cameras.
     if net_constraint is not None:
         net_y, z_min, z_max = net_constraint
         if abs(vel0[1]) > 1e-6:
@@ -546,9 +562,8 @@ def _residuals(
             if 0 < t_net < duration * 1.5:
                 z_net = pos0[2] + vel0[2] * t_net - 0.5 * g * t_net ** 2
                 z_target = 0.5 * (z_min + z_max)
-                z_range = 0.5 * (z_max - z_min)
-                # Normalised deviation: 0 at target, 1 at boundary.
-                deviation = (z_net - z_target) / z_range if z_range > 0 else 0.0
+                z_range = 0.5 * (z_max - z_min) if z_max > z_min else 1.0
+                deviation = (z_net - z_target) / z_range
                 penalties.append(_W_NET * deviation)
 
     # Landing constraint: ball should be near ground at arc end.

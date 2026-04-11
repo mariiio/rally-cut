@@ -656,14 +656,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate 3D ball trajectory estimation")
     parser.add_argument("--video-id", help="Evaluate a single video")
     parser.add_argument("--verbose", "-v", action="store_true", help="Per-arc detail")
-    parser.add_argument("--no-joint", action="store_true",
-                        help="Disable multi-arc joint fitting")
+    parser.add_argument("--joint", action="store_true",
+                        help="Enable multi-arc joint fitting (disabled by default)")
     args = parser.parse_args()
 
     run_evaluation(
         video_id=args.video_id,
         verbose=args.verbose,
-        joint=not args.no_joint,
+        joint=args.joint,
     )
 
 

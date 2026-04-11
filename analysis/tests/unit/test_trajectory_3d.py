@@ -5,15 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-import pytest
 
 from rallycut.court.camera_model import CameraModel, calibrate_camera, project_3d_to_image
 from rallycut.court.trajectory_3d import (
     GRAVITY,
-    FittedArc,
     fit_arc,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -27,8 +24,6 @@ def _make_camera(
     focal: float = 1800.0,
 ) -> CameraModel:
     """Build a synthetic camera behind the near baseline."""
-    import cv2
-
     w, h = 1920, 1080
     K = np.array([[focal, 0, w / 2], [0, focal, h / 2], [0, 0, 1]], dtype=np.float64)
 
@@ -190,7 +185,7 @@ class TestFitArc:
         )
 
     def test_net_constraint_improves_low_camera(self) -> None:
-        """Net-crossing constraint should improve serve speed recovery from low camera."""
+        """Net-crossing constraint should produce a plausible net crossing height."""
         # Low camera at 1.5m — typical amateur sideline setup.
         camera = _make_camera(cam_pos=np.array([4.0, -3.0, 1.5]))
         fps = 30.0
@@ -204,15 +199,23 @@ class TestFitArc:
             camera, pos0, vel0, fps, n_frames=25, noise_px=1.0,
         )
 
-        # With net constraint (default): should recover speed reasonably.
+        # Fit WITHOUT net constraint.
+        arc_unconstrained = fit_arc(
+            camera, observations, 0, 24, fps,  # type: ignore[arg-type]
+            z0_prior=3.0, net_height=0.0,  # net_height=0 ⇒ no effective penalty
+        )
+
+        # Fit WITH net constraint.
         arc_constrained = fit_arc(
             camera, observations, 0, 24, fps,  # type: ignore[arg-type]
             z0_prior=3.0, net_height=2.24,
         )
+
+        assert arc_unconstrained is not None
         assert arc_constrained is not None
         assert arc_constrained.is_valid
 
-        # Net crossing height should be plausible (ball must clear 2.24m net).
+        # Constrained net crossing should be in the plausible range.
         if arc_constrained.net_crossing_height is not None:
             assert arc_constrained.net_crossing_height >= 1.5, (
                 f"Net crossing {arc_constrained.net_crossing_height:.1f}m too low"
@@ -244,3 +247,12 @@ class TestFitArc:
             z0_prior=3.0, landing=True,
         )
         assert arc is not None
+
+        # End-of-arc Z should be near ground (< 1.5m).
+        t_end = (n_frames - 1) / fps
+        z_end = float(
+            arc.initial_position[2]
+            + arc.initial_velocity[2] * t_end
+            - 0.5 * GRAVITY * t_end ** 2,
+        )
+        assert z_end < 1.5, f"Landing Z={z_end:.1f}m, expected near ground"
