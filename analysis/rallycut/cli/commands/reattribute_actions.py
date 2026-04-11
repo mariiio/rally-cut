@@ -25,6 +25,34 @@ console = Console()
 logger = logging.getLogger(__name__)
 
 
+def _build_formation_semantic_flips(
+    match_analysis: dict[str, Any],
+) -> dict[str, bool]:
+    """Compute per-rally `semantic_flip` from `match_analysis_json`.
+
+    Returns `{rally_id: flipped}` where `flipped=True` when the cumulative
+    side-switch count BEFORE this rally is odd. Used by the formation-based
+    serving_team predictor to correct the physical-near team convention
+    (team 0 = near after `verify_team_assignments`) to the semantic team
+    identity on flipped rallies. Mirror of `_load_formation_semantic_flips`
+    in `scripts/production_eval.py`.
+    """
+    rallies = match_analysis.get("rallies", [])
+    if not isinstance(rallies, list):
+        return {}
+    result: dict[str, bool] = {}
+    count = 0
+    for rally_entry in rallies:
+        rid = rally_entry.get("rallyId") or rally_entry.get("rally_id")
+        if rid:
+            result[str(rid)] = (count % 2 == 1)
+        if rally_entry.get("sideSwitchDetected") or rally_entry.get(
+            "side_switch_detected"
+        ):
+            count += 1
+    return result
+
+
 def _reconstruct_contacts(
     contacts_data: dict[str, Any],
 ) -> list[Contact]:
@@ -57,12 +85,26 @@ def _reconstruct_contacts(
 def _reconstruct_actions(
     actions_data: dict[str, Any],
 ) -> list[ClassifiedAction]:
-    """Reconstruct ClassifiedAction objects from stored actions_json."""
+    """Reconstruct ClassifiedAction objects from stored actions_json.
+
+    Handles two on-disk schemas:
+      1. Flat: `actions_data["actions"]` is a list of action dicts
+         (produced by `RallyActions.to_dict()` + `_serialize_actions`).
+      2. Nested: `actions_data["actions"]` is itself a RallyActions dict
+         whose `.actions` key holds the list (older tracking writes).
+    """
     from rallycut.tracking.action_classifier import ActionType
     from rallycut.tracking.action_classifier import ClassifiedAction as ActionCls
 
+    raw_actions = actions_data.get("actions", [])
+    # Unwrap nested schema
+    if isinstance(raw_actions, dict):
+        raw_actions = raw_actions.get("actions", [])
+
     actions: list[ClassifiedAction] = []
-    for a in actions_data.get("actions", []):
+    for a in raw_actions:
+        if not isinstance(a, dict):
+            continue
         try:
             action_type = ActionType(a["action"])
         except (ValueError, KeyError):
@@ -398,6 +440,12 @@ def reattribute_actions_cmd(
     all_teams = build_match_team_assignments(match_analysis, min_confidence=0.0)
     reattrib_teams = build_match_team_assignments(match_analysis, min_confidence)
 
+    # Per-rally semantic flip for formation-based serving_team detection.
+    # Required to map physical-near (team_assignments team 0) to the
+    # correct semantic team on flipped rallies. See
+    # `score_tracking_architecture_2026_04.md`.
+    formation_flips = _build_formation_semantic_flips(match_analysis)
+
     if not all_teams:
         if not quiet:
             console.print("[yellow]No rallies with match teams[/yellow]")
@@ -435,7 +483,7 @@ def reattribute_actions_cmd(
     placeholders = ", ".join(["%s"] * len(rally_ids))
     query = f"""
         SELECT r.id, pt.id, pt.contacts_json, pt.actions_json,
-               pt.positions_json, r.start_ms
+               pt.positions_json, r.start_ms, pt.court_split_y
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
         WHERE r.id IN ({placeholders})
@@ -459,6 +507,11 @@ def reattribute_actions_cmd(
     total_reattributed = 0
     total_actions = 0
     updated_tracks: list[tuple[int, str]] = []  # (pt_id, new_actions_json)
+    # Formation-based serving_team updates for rallies where the new
+    # prediction differs from the current stored value.
+    # (rally_id, new_serving_team) pairs for rallies.serving_team column.
+    rally_serving_updates: list[tuple[str, str]] = []
+    formation_applied = 0
 
     # Open video for ReID/visual crop extraction (if classifier is available)
     video_cap = None
@@ -477,11 +530,15 @@ def reattribute_actions_cmd(
             else:
                 video_cap = None
 
-    for rally_id_val, pt_id_val, contacts_json_val, actions_json_val, positions_json_val, start_ms_val in rows:
+    for (
+        rally_id_val, pt_id_val, contacts_json_val, actions_json_val,
+        positions_json_val, start_ms_val, court_split_y_val,
+    ) in rows:
         rally_id = str(rally_id_val)
         pt_id = cast(int, pt_id_val)
         contacts_data = cast(dict[str, Any], contacts_json_val)
         actions_data = cast(dict[str, Any], actions_json_val)
+        court_split_y = cast("float | None", court_split_y_val)
 
         team_assignments = all_teams.get(rally_id)
         if not team_assignments:
@@ -583,6 +640,61 @@ def reattribute_actions_cmd(
             elif a.get("courtSide") in ("near", "far"):
                 a["team"] = "A" if a["courtSide"] == "near" else "B"
 
+        # Formation-based serving_team prediction. Overrides the
+        # contact-based `servingTeam` when the formation signal is
+        # confident. Uses semantic_flip from match_analysis_json to
+        # correct for side switches. +15.8pp over contact-based on
+        # canonical production_eval (see score_tracking_architecture).
+        # Internal function handles a bad `net_y` via auto-split fallback.
+        if positions_json_val:
+            from rallycut.tracking.action_classifier import (  # noqa: PLC0415
+                _find_serving_team_by_formation,
+            )
+            from rallycut.tracking.match_tracker import (  # noqa: PLC0415
+                verify_team_assignments,
+            )
+            from rallycut.tracking.player_tracker import PlayerPosition  # noqa: PLC0415
+
+            player_positions = [
+                PlayerPosition(
+                    frame_number=p["frameNumber"],
+                    track_id=p["trackId"],
+                    x=p["x"],
+                    y=p["y"],
+                    width=p.get("width", 0.05),
+                    height=p.get("height", 0.10),
+                    confidence=p.get("confidence", 1.0),
+                    keypoints=p.get("keypoints"),
+                )
+                for p in cast(list[dict[str, Any]], positions_json_val)
+            ]
+            # Enforce "team 0 = physical near" convention before calling
+            # the formation function — build_match_team_assignments leaves
+            # the assignment inverted on videos where the cross-rally
+            # matcher labeled players 1-2 on the far side at baseline.
+            verified_teams = verify_team_assignments(
+                team_assignments, player_positions,
+            )
+            formation_team, _ = _find_serving_team_by_formation(
+                player_positions,
+                start_frame=0,
+                net_y=court_split_y if court_split_y is not None else 0.5,
+                team_assignments=verified_teams,
+                semantic_flip=formation_flips.get(rally_id, False),
+            )
+            if formation_team is not None:
+                # Stamp `servingTeam` on the top-level JSON AND on any
+                # nested `actions` dict (older schema) so both the API
+                # reader and downstream stats see the updated value.
+                prior_serving = new_actions_data.get("servingTeam")
+                new_actions_data["servingTeam"] = formation_team
+                nested_actions = new_actions_data.get("actions")
+                if isinstance(nested_actions, dict):
+                    nested_actions["servingTeam"] = formation_team
+                if prior_serving != formation_team:
+                    formation_applied += 1
+                rally_serving_updates.append((rally_id, formation_team))
+
         updated_tracks.append((pt_id, json.dumps(new_actions_data)))
 
         if n_changed > 0:
@@ -612,15 +724,34 @@ def reattribute_actions_cmd(
                         "UPDATE player_tracks SET actions_json = %s WHERE id = %s",
                         [new_json, update_pt_id],
                     )
+                # Mirror formation-based serving_team to the rallies table
+                # so it surfaces in the editor UI and score_accuracy eval.
+                for rally_id_upd, serving in rally_serving_updates:
+                    cur.execute(
+                        "UPDATE rallies SET serving_team = %s WHERE id = %s",
+                        [serving, rally_id_upd],
+                    )
             conn.commit()
 
         if not quiet:
             console.print(
                 f"  [green]Updated {len(updated_tracks)} player tracks in DB[/green]"
             )
+            if rally_serving_updates:
+                console.print(
+                    f"  [green]Formation-based serving_team: "
+                    f"{formation_applied} changed / "
+                    f"{len(rally_serving_updates)} stamped[/green]"
+                )
     elif dry_run and updated_tracks:
         if not quiet:
             console.print(
                 f"  [yellow]Dry run: would update "
                 f"{len(updated_tracks)} player tracks[/yellow]"
             )
+            if rally_serving_updates:
+                console.print(
+                    f"  [yellow]Dry run: would stamp formation "
+                    f"serving_team on {len(rally_serving_updates)} rallies "
+                    f"({formation_applied} changed)[/yellow]"
+                )

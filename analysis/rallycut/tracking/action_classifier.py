@@ -143,6 +143,12 @@ class RallyActions:
     actions: list[ClassifiedAction] = field(default_factory=list)
     rally_id: str = ""
     team_assignments: dict[int, int] = field(default_factory=dict)
+    # Formation-based serving team prediction from player positions at rally
+    # start. Set by classify_rally_actions when use_formation_serving_team is
+    # enabled. Used as primary signal for `serving_team` (the contact-based
+    # signal is only 52% vs 72-76% for formation — see
+    # score_tracking_architecture_2026_04.md).
+    formation_serving_team: str | None = None
 
     @property
     def serve(self) -> ClassifiedAction | None:
@@ -154,7 +160,13 @@ class RallyActions:
 
     @property
     def serving_team(self) -> str | None:
-        """Get the team that served, or None if unknown."""
+        """Get the team that served, or None if unknown.
+
+        Prefers formation-based prediction (72-76% accuracy) over the
+        contact-based serve action team (52% accuracy) when available.
+        """
+        if self.formation_serving_team is not None:
+            return self.formation_serving_team
         serve = self.serve
         return serve.team if serve and serve.team != "unknown" else None
 
@@ -214,6 +226,23 @@ class ActionClassifierConfig:
     high_confidence: float = 0.9  # Confidence when rules match perfectly
     medium_confidence: float = 0.7  # Confidence with some ambiguity
     low_confidence: float = 0.5  # Confidence when classification is uncertain
+
+    # Formation-based serving team detection
+    # In beach volleyball, the serving team has one player behind the baseline
+    # (server) and one at the net (partner). The receiving team has both
+    # players in ready position mid-court. This creates a vertical separation
+    # asymmetry in tracked player positions. Measured: 72-76% LOO-video CV on
+    # 304 rallies vs 46.2% baseline (see score_tracking_architecture_2026_04.md).
+    use_formation_serving_team: bool = True
+    formation_window_frames: int = 120  # Frames at rally start to analyze
+    # Separation ratio margin: larger = stricter but lower coverage. Sweep
+    # on canonical 92-rally action_GT subset:
+    #   margin=1.00 → 56.5% (more track_to_player fallback = more noise)
+    #   margin=1.15 → 57.6% (best on canonical metric)
+    #   margin=1.30 → ~57%  (too strict, abstain loss > fallback gain)
+    # Broader 304-rally harness prefers 1.00 (68.8%) because it has fewer
+    # low-confidence rallies. 1.15 chosen for canonical metric parity.
+    formation_margin: float = 1.15
 
 
 def _ball_moving_toward_net(
@@ -481,6 +510,220 @@ def _find_server_image_space(
 
     confidence = min(1.0, best_sep / 0.10)
     return best_tid, best_side, confidence
+
+
+def _compute_auto_split_y(player_positions: list[PlayerPosition]) -> float | None:
+    """Recompute court split Y from player position clustering.
+
+    Falls back when `net_y` from `ContactSequence` misclassifies all players
+    to one side (observed in video 0a383519 where stored split_y=0.43 put all
+    4 tracked players on "near").
+
+    Splits at the biggest gap between consecutive player median Y positions.
+    Requires at least 3 tracked players.
+
+    Returns:
+        Split Y (0-1 normalized), or None when too few tracks.
+    """
+    by_track: dict[int, list[float]] = defaultdict(list)
+    for p in player_positions:
+        if p.track_id < 0:
+            continue
+        by_track[p.track_id].append(p.y + p.height / 2.0)  # foot Y
+
+    if len(by_track) < 3:
+        return None
+
+    medians = sorted(
+        sum(ys) / len(ys) for ys in by_track.values()
+    )
+    best_gap = 0.0
+    best_split: float | None = None
+    for i in range(len(medians) - 1):
+        gap = medians[i + 1] - medians[i]
+        if gap > best_gap:
+            best_gap = gap
+            best_split = (medians[i] + medians[i + 1]) / 2.0
+    return best_split
+
+
+def _find_serving_team_by_formation(
+    player_positions: list[PlayerPosition],
+    start_frame: int,
+    net_y: float,
+    team_assignments: dict[int, int] | None,
+    track_to_player: dict[int, int] | None = None,
+    semantic_flip: bool = False,
+    window_frames: int = 120,
+    margin: float = 1.15,
+) -> tuple[str | None, float]:
+    """Predict serving team from player formation at rally start.
+
+    The serving team has one player behind the baseline (server) and one at
+    the net (partner). The receiving team has both players mid-court in
+    ready position. This creates a vertical separation asymmetry: the
+    serving side's two players span a larger foot-Y range than the
+    receiving side's.
+
+    Unlike `_find_server_by_position`, this function operates on team-level
+    separation (not individual candidates) and does not depend on contact
+    detection. It is the primary serving_team signal because it:
+
+    - Runs on all rallies (not just those with a detected serve contact)
+    - Uses formation at the rally start (not ball trajectory after WASB
+      kicks in ~2s later — missed by contact-based serve detection)
+    - Measured delta on canonical `production_eval`: 46.2% → 62.0%
+      score_accuracy on 92-rally action_GT subset
+      (see score_tracking_architecture_2026_04.md)
+
+    Strategy:
+      1. Group tracked players into near/far sides via `net_y`. If that
+         misclassifies (both sides contain all players), auto-compute a
+         split from the biggest gap between player median foot-Y values.
+      2. Compute vertical separation per side.
+      3. The side with `margin`× larger separation serves.
+      4. Map "near"/"far" → "A"/"B" via `team_assignments` (primary,
+         physical near/far after `verify_team_assignments`), then invert
+         if `semantic_flip=True` to correct for side switches. Falls back
+         to `track_to_player` (semantic player IDs) when `team_assignments`
+         is unavailable.
+
+    Args:
+        player_positions: Tracked player positions for the rally.
+        start_frame: Rally start frame (rally-relative, usually 0).
+        net_y: Court split Y (from `ContactSequence.net_y`).
+        team_assignments: Mapping `track_id → 0/1`. Used as a fallback when
+            `track_to_player` is None. Note that `team_assignments` encodes
+            **physical** near/far after `verify_team_assignments`, not
+            semantic team identity — so it gives the wrong A/B label on
+            flipped rallies. Prefer `track_to_player`.
+        track_to_player: Mapping `track_id → player_id (1-4)` from the
+            match-level cross-rally identification. Player IDs 1-2 are
+            semantic team A, 3-4 are team B **when the video's player
+            identification started with the team-A players as 1-2**. This
+            convention is not universal — in some videos the cross-rally
+            matcher assigns 1-2 to the team-B players — so
+            `track_to_player` alone cannot recover semantic teams
+            reliably. Prefer `semantic_flip` when available.
+        semantic_flip: Invert the final A/B output. Used by the caller to
+            apply the semantic-vs-physical correction on flipped rallies:
+            when the cumulative side-switch count is odd, the
+            physical-near team (team_assignments team 0) is the semantic
+            team B, so the final output must be flipped. The caller
+            computes this from match_analysis_json's `sideSwitchDetected`
+            flags (cumulative count % 2 == 1). Measured +8.7pp on the
+            92-rally action_GT subset vs no flip.
+        window_frames: Frames after `start_frame` to analyze (default 120
+            ≈ 4s @ 30fps). Uses a longer window than `_find_server_by_position`
+            (default 45) because formation signal is more stable when
+            averaged over more frames.
+        margin: Required separation ratio (default 1.15). Higher = stricter
+            (fewer rallies predicted but higher per-scored accuracy).
+            Measured on canonical production_eval 92-rally action_GT subset:
+            1.15 peaks at 57.6%, 1.00 drops to 56.5% (more track_to_player
+            fallback noise), 1.30 drops to ~57% (abstain loss dominates).
+            Broader 304-rally harness prefers 1.00 (68.8%); 1.15 chosen
+            for canonical metric parity.
+
+    Returns:
+        (team, confidence) where team is "A", "B", or None (abstain).
+        Confidence is the separation ratio, clipped to [0, 1].
+    """
+    if not player_positions:
+        return None, 0.0
+
+    # Group foot positions per track within the formation window
+    end_frame = start_frame + window_frames
+    by_track: dict[int, list[float]] = defaultdict(list)
+    for p in player_positions:
+        if p.track_id < 0:
+            continue
+        if start_frame <= p.frame_number < end_frame:
+            by_track[p.track_id].append(p.y + p.height / 2.0)  # foot Y
+
+    if len(by_track) < 2:
+        return None, 0.0
+
+    # Determine effective split_y — verify stored net_y separates players
+    # into two groups, otherwise auto-compute.
+    effective_split = net_y
+    track_medians = {
+        tid: sum(ys) / len(ys) for tid, ys in by_track.items()
+    }
+    near_count = sum(1 for y in track_medians.values() if y > effective_split)
+    far_count = len(track_medians) - near_count
+    if near_count == 0 or far_count == 0:
+        auto_split = _compute_auto_split_y(player_positions)
+        if auto_split is None:
+            return None, 0.0
+        effective_split = auto_split
+
+    # Split tracks into near/far sides
+    near_tids: list[int] = []
+    far_tids: list[int] = []
+    for tid, med_y in track_medians.items():
+        if med_y > effective_split:
+            near_tids.append(tid)
+        else:
+            far_tids.append(tid)
+
+    if not near_tids or not far_tids:
+        return None, 0.0
+
+    # Compute vertical separation per side
+    def _side_separation(tids: list[int]) -> float:
+        if len(tids) >= 2:
+            ys = [track_medians[t] for t in tids]
+            return max(ys) - min(ys)
+        # Solo player: use distance from split as proxy (halved to not
+        # dominate when paired side has a real separation).
+        return abs(track_medians[tids[0]] - effective_split) * 0.5
+
+    near_sep = _side_separation(near_tids)
+    far_sep = _side_separation(far_tids)
+
+    # Determine serving side by margin
+    if near_sep > far_sep * margin:
+        serving_side = "near"
+        confidence = min(1.0, (near_sep / max(far_sep, 1e-6)) - 1.0)
+    elif far_sep > near_sep * margin:
+        serving_side = "far"
+        confidence = min(1.0, (far_sep / max(near_sep, 1e-6)) - 1.0)
+    else:
+        return None, 0.0
+
+    side_tids = near_tids if serving_side == "near" else far_tids
+
+    def _apply_flip(team: str) -> str:
+        if not semantic_flip:
+            return team
+        return "B" if team == "A" else "A"
+
+    # Primary: team_assignments (physical near/far convention, team 0 =
+    # near after `verify_team_assignments`). Caller supplies `semantic_flip`
+    # to correct physical→semantic on flipped rallies. Fall through to
+    # `track_to_player` when team_assignments has no entry for any
+    # serving-side track (happens when the serving side's tracks are
+    # unmapped, e.g. spectator/ref IDs like 101+).
+    if team_assignments is not None:
+        for tid in side_tids:
+            team_int = team_assignments.get(tid)
+            if team_int is not None:
+                return _apply_flip("A" if team_int == 0 else "B"), confidence
+
+    # Fallback: track_to_player (semantic via player IDs). Used when
+    # team_assignments is None (e.g. low-confidence match_analysis filters
+    # the rally out) or when none of the serving-side tracks are mapped.
+    # Less reliable because the "player 1-2 = team A" convention is not
+    # universal, but better than abstaining.
+    if track_to_player:
+        for tid in side_tids:
+            player_id = track_to_player.get(tid)
+            if player_id is None:
+                continue
+            return _apply_flip("A" if player_id <= 2 else "B"), confidence
+
+    return None, confidence
 
 
 def _is_ball_on_serve_side(
@@ -2598,6 +2841,8 @@ def classify_rally_actions(
     visual_frame_w: int = 0,
     visual_frame_h: int = 0,
     calibrator: CourtCalibrator | None = None,
+    track_to_player: dict[int, int] | None = None,
+    formation_semantic_flip: bool = False,
 ) -> RallyActions:
     """Convenience function to classify actions in a rally.
 
@@ -2638,9 +2883,20 @@ def classify_rally_actions(
         visual_frame_w: Video frame width in pixels.
         visual_frame_h: Video frame height in pixels.
         calibrator: Optional court calibrator for court-space server detection.
+        track_to_player: Optional mapping `track_id → player_id (1-4)` from
+            match-level cross-rally identification. Used as a fallback by
+            `_find_serving_team_by_formation` when `team_assignments` is
+            unavailable.
+        formation_semantic_flip: Passed to `_find_serving_team_by_formation`
+            to correct the physical-near team convention on flipped rallies.
+            True when the cumulative side-switch count before this rally is
+            odd. Caller computes from `match_analysis_json.sideSwitchDetected`.
 
     Returns:
-        RallyActions with all classified actions.
+        RallyActions with all classified actions. `serving_team` property
+        prefers the formation-based prediction (set via
+        `result.formation_serving_team`) over contact-based serve detection
+        when `config.use_formation_serving_team` is True (default).
     """
     # Only re-attribute with match-level teams (high-confidence cross-rally data).
     # Per-rally team_assignments are too unreliable and cause net regressions.
@@ -2693,5 +2949,29 @@ def classify_rally_actions(
             visual_rally_start_frame, visual_frame_w, visual_frame_h,
             visual_classifier, team_assignments=reattrib_teams,
         )
+
+    # Formation-based serving team prediction. Uses player positions at
+    # rally start (not contact-based). Set as primary signal on
+    # RallyActions.serving_team. See _find_serving_team_by_formation
+    # docstring for rationale and measured accuracy.
+    #
+    # NOTE: `start_frame=0` (rally-relative), not `rally_start_frame` which
+    # is the first *ball* detection frame (~60-90 in). We want the formation
+    # BEFORE the ball is in play — when the server is still behind the
+    # baseline and the partner is at the net.
+    cfg = config if config is not None else ActionClassifierConfig()
+    if cfg.use_formation_serving_team:
+        formation_team, _ = _find_serving_team_by_formation(
+            contact_sequence.player_positions,
+            start_frame=0,
+            net_y=contact_sequence.net_y,
+            team_assignments=reattrib_teams or team_assignments,
+            track_to_player=track_to_player,
+            semantic_flip=formation_semantic_flip,
+            window_frames=cfg.formation_window_frames,
+            margin=cfg.formation_margin,
+        )
+        if formation_team is not None:
+            result.formation_serving_team = formation_team
 
     return result

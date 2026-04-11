@@ -115,6 +115,7 @@ from rallycut.evaluation.score_ground_truth import (  # noqa: E402
     ScoreMetrics,
     compute_score_metrics,
 )
+from rallycut.evaluation.tracking.db import get_connection  # noqa: E402
 from rallycut.tracking.action_classifier import classify_rally_actions  # noqa: E402
 from rallycut.tracking.ball_tracker import BallPosition  # noqa: E402
 from rallycut.tracking.contact_detector import (  # noqa: E402
@@ -246,6 +247,51 @@ def _build_calibrators(video_ids: set[str]) -> dict[str, Any]:
     return out
 
 
+def _load_formation_semantic_flips(video_ids: set[str]) -> dict[str, bool]:
+    """Compute per-rally `semantic_flip` from `match_analysis_json`.
+
+    Reads each video's `sideSwitchDetected` flags in rally order and
+    returns `{rally_id: flipped}` where `flipped=True` when the
+    cumulative side-switch count BEFORE this rally is odd.
+
+    Used by the formation-based serving_team predictor to map the
+    physical-near team (team_assignments' team 0) to the correct semantic
+    team on flipped rallies. +8.7pp on the 92-rally action_GT subset vs
+    no flip (see score_tracking_architecture_2026_04.md).
+
+    Falls back to all-False when match_analysis_json is missing.
+    """
+    if not video_ids:
+        return {}
+    placeholders = ", ".join(["%s"] * len(video_ids))
+    query = f"""
+        SELECT id, match_analysis_json
+        FROM videos
+        WHERE id IN ({placeholders})
+          AND match_analysis_json IS NOT NULL
+    """
+    result: dict[str, bool] = {}
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(query, list(video_ids))
+        rows = cur.fetchall()
+    for _video_id, ma_json in rows:
+        if not isinstance(ma_json, dict):
+            continue
+        rally_entries = ma_json.get("rallies") or []
+        if not isinstance(rally_entries, list):
+            continue
+        count = 0
+        for rally_entry in rally_entries:
+            rid = rally_entry.get("rallyId") or rally_entry.get("rally_id")
+            if rid:
+                result[rid] = (count % 2 == 1)
+            if rally_entry.get("sideSwitchDetected") or rally_entry.get(
+                "side_switch_detected"
+            ):
+                count += 1
+    return result
+
+
 # --------------------------------------------------------------------------- #
 # Per-rally production-mirrored pipeline                                      #
 # --------------------------------------------------------------------------- #
@@ -295,6 +341,8 @@ def _run_rally(
     match_teams: dict[int, int] | None,
     calibrator: Any,
     ctx: PipelineContext,
+    track_to_player: dict[int, int] | None = None,
+    formation_semantic_flip: bool = False,
 ) -> tuple[list[dict], Any]:
     """Mirror `track_player.py:1011–1093` stages 9–14.
 
@@ -379,6 +427,8 @@ def _run_rally(
         team_assignments=teams,
         match_team_assignments=teams,
         calibrator=calibrator,
+        track_to_player=track_to_player,
+        formation_semantic_flip=formation_semantic_flip,
     )
 
     # Stage 14 — MS-TCN++ hybrid override (serves exempt).
@@ -495,6 +545,7 @@ def _run_once(
     calibrators: dict[str, Any],
     ctx: PipelineContext,
     t2p_by_rally: dict[str, dict[int, int]] | None = None,
+    formation_flip_by_rally: dict[str, bool] | None = None,
     *,
     print_progress: bool = True,
 ) -> tuple[
@@ -540,11 +591,21 @@ def _run_once(
             continue
 
         try:
+            rally_t2p_for_formation = None
+            if t2p_by_rally is not None:
+                rally_t2p_for_formation = t2p_by_rally.get(rally.rally_id)
+            rally_semantic_flip = False
+            if formation_flip_by_rally is not None:
+                rally_semantic_flip = formation_flip_by_rally.get(
+                    rally.rally_id, False
+                )
             pred_actions, rally_actions_obj = _run_rally(
                 rally,
                 team_map.get(rally.rally_id),
                 calibrators.get(rally.video_id),
                 ctx,
+                track_to_player=rally_t2p_for_formation,
+                formation_semantic_flip=rally_semantic_flip,
             )
         except Exception as exc:  # noqa: BLE001 — we want to surface any prod failure
             rejections.append({
@@ -988,6 +1049,11 @@ def main() -> int:
     # so match_contacts can normalize predicted trackIds before comparing
     # against GT. See memory/housekeeping_retrack_2026_04_09.md.
     t2p_by_rally = _load_track_to_player_maps(video_ids)
+    # Session W1: per-rally cumulative side-switch count, used by the
+    # formation-based serving_team predictor to convert physical→semantic
+    # team labels on flipped rallies.
+    # See memory/score_tracking_architecture_2026_04.md.
+    formation_flip_by_rally = _load_formation_semantic_flips(video_ids)
 
     # Production passes a real `CourtCalibrator` into the three enrichment
     # stages when calibration is available. Build them once up front.
@@ -1017,7 +1083,10 @@ def main() -> int:
             gt_lookup,
             oracle_counts,
             serve_oracle_counts,
-        ) = _run_once(rallies, team_map, calibrators, ctx, t2p_by_rally)
+        ) = _run_once(
+            rallies, team_map, calibrators, ctx, t2p_by_rally,
+            formation_flip_by_rally,
+        )
         dt = time.time() - t0
         console.print(f"  run {run_i + 1} done in {dt:.1f}s  "
                       f"(matches={len(matches)}, rejections={len(rejections)})")
