@@ -15,9 +15,7 @@ This tells us whether:
 from __future__ import annotations
 
 import sys
-from collections import defaultdict
 from pathlib import Path
-from typing import Any
 
 import cv2
 import numpy as np
@@ -26,18 +24,18 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from rallycut.court.camera_model import (  # noqa: E402
-    CameraModel,
-    _build_model,  # type: ignore[attr-defined]
-    image_ray,
-)
 from eval_ball_3d import (  # noqa: E402
     COURT_CORNERS,
+    _parse_player_positions,
     load_calibrated_videos,
     load_rallies_for_videos,
-    _parse_player_positions,
 )
 
+from rallycut.court.camera_model import (  # noqa: E402
+    CameraModel,
+    _build_model,
+    image_ray,
+)
 
 # Pick a typical video. 313c6c95 (meme) has 44 arcs and 17 serves —
 # best signal among session short.
@@ -51,7 +49,7 @@ def _ray_hit_ground(camera: CameraModel, u: float, v: float) -> np.ndarray | Non
     t = -origin[2] / direction[2]
     if t <= 0:
         return None
-    return origin + t * direction
+    return np.asarray(origin + t * direction, dtype=np.float64)
 
 
 def _implied_head_height(
@@ -91,7 +89,8 @@ def _build_camera_with_focal(
     obj_pts_3d = np.array([[c[0], c[1], 0.0] for c in COURT_CORNERS], dtype=np.float64)
     cx_px = width / 2.0
     cy_px = height / 2.0
-    K = np.array([[focal, 0, cx_px], [0, focal, cy_px], [0, 0, 1]], dtype=np.float64)
+    # K is the standard intrinsic matrix name in computer vision.
+    K = np.array([[focal, 0, cx_px], [0, focal, cy_px], [0, 0, 1]], dtype=np.float64)  # noqa: N806
     best: CameraModel | None = None
     for method in (cv2.SOLVEPNP_IPPE, cv2.SOLVEPNP_ITERATIVE):
         try:
@@ -205,19 +204,19 @@ def main() -> None:
 
     # Find the focal with lowest reproj.
     best_reproj = min(rows, key=lambda r: r[1])
-    print(f"  Best 4-corner reprojection:")
+    print("  Best 4-corner reprojection:")
     print(f"    focal={best_reproj[0]:.0f}px  reproj={best_reproj[1]:.2f}px  "
           f"cam_z={best_reproj[2]:.2f}m  upright_med={best_reproj[5]:.2f}m")
 
     # Sensitivity: as focal varies, how much does upright_med change?
     upright_meds = [r[5] for r in rows]
-    print(f"\n  Implied height range as focal sweeps:")
+    print("\n  Implied height range as focal sweeps:")
     print(f"    min={min(upright_meds):.2f}m  max={max(upright_meds):.2f}m  "
           f"spread={max(upright_meds) - min(upright_meds):.2f}m")
 
     # Reproj range.
     reprojs = [r[1] for r in rows]
-    print(f"  Reproj error range:")
+    print("  Reproj error range:")
     print(f"    min={min(reprojs):.2f}px  max={max(reprojs):.2f}px")
 
 

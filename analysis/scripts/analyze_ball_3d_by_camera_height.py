@@ -24,18 +24,18 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from rallycut.court.camera_model import calibrate_camera, calibrate_camera_with_net  # noqa: E402
-from rallycut.court.calibration import CourtCalibrator  # noqa: E402
 from eval_ball_3d import (  # noqa: E402
     COURT_CORNERS,
     GATE_SERVE_SPEED,
-    load_calibrated_videos,
-    load_rallies_for_videos,
     _build_contact_sequence,
     _parse_ball_positions,
     _parse_player_positions,
+    load_calibrated_videos,
+    load_rallies_for_videos,
 )
 
+from rallycut.court.calibration import CourtCalibrator  # noqa: E402
+from rallycut.court.camera_model import calibrate_camera, calibrate_camera_with_net  # noqa: E402
 
 TIERS: list[tuple[str, float, float]] = [
     ("<1.5m",   0.0,  1.5),

@@ -31,23 +31,23 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
+from eval_ball_3d import (  # noqa: E402
+    COURT_CORNERS,
+    _build_contact_sequence,
+    _parse_ball_positions,
+    _parse_player_positions,
+    load_calibrated_videos,
+    load_rallies_for_videos,
+)
+
+from rallycut.court.calibration import CourtCalibrator  # noqa: E402
 from rallycut.court.camera_model import (  # noqa: E402
     CameraModel,
     calibrate_camera,
     calibrate_camera_with_net,
     image_ray,
 )
-from rallycut.court.calibration import CourtCalibrator  # noqa: E402
-from eval_ball_3d import (  # noqa: E402
-    COURT_CORNERS,
-    load_calibrated_videos,
-    load_rallies_for_videos,
-    _build_contact_sequence,
-    _parse_ball_positions,
-    _parse_player_positions,
-)
 from rallycut.evaluation.db import get_connection  # noqa: E402
-
 
 SESSION_SHORT_ID = "41e1f30d-d5bb-4386-9908-fa37216eb535"
 
@@ -70,7 +70,7 @@ def _ray_hit_ground(camera: CameraModel, u_norm: float, v_norm: float) -> np.nda
     t = -origin[2] / direction[2]
     if t <= 0:
         return None
-    return origin + t * direction
+    return np.asarray(origin + t * direction, dtype=np.float64)
 
 
 def _implied_head_height(

@@ -18,18 +18,18 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from rallycut.court.camera_model import calibrate_camera, calibrate_camera_with_net  # noqa: E402
-from rallycut.court.calibration import CourtCalibrator  # noqa: E402
-from rallycut.evaluation.db import get_connection  # noqa: E402
 from eval_ball_3d import (  # noqa: E402
     COURT_CORNERS,
-    load_calibrated_videos,
-    load_rallies_for_videos,
     _build_contact_sequence,
     _parse_ball_positions,
     _parse_player_positions,
+    load_calibrated_videos,
+    load_rallies_for_videos,
 )
 
+from rallycut.court.calibration import CourtCalibrator  # noqa: E402
+from rallycut.court.camera_model import calibrate_camera, calibrate_camera_with_net  # noqa: E402
+from rallycut.evaluation.db import get_connection  # noqa: E402
 
 SESSION_SHORT_ID = "41e1f30d-d5bb-4386-9908-fa37216eb535"
 
@@ -133,7 +133,7 @@ def main() -> None:
     short_heights = {v: h for v, h in heights.items() if v in session_vids}
     other_heights = {v: h for v, h in heights.items() if v not in session_vids}
 
-    print(f"\n=== CAMERA HEIGHT DISTRIBUTIONS ===")
+    print("\n=== CAMERA HEIGHT DISTRIBUTIONS ===")
     for label, hs in [("session short", short_heights), ("other", other_heights)]:
         if not hs:
             print(f"  {label:<15s}: no heights")

@@ -31,26 +31,26 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from rallycut.court.camera_model import (  # noqa: E402
-    CameraModel,
-    _build_model,  # type: ignore[attr-defined]
-    calibrate_camera,
-    calibrate_camera_with_net,
-    image_ray,
-)
-from rallycut.court.calibration import CourtCalibrator  # noqa: E402
-from rallycut.court.trajectory_3d import fit_rally  # noqa: E402
-from rallycut.evaluation.db import get_connection  # noqa: E402
 from eval_ball_3d import (  # noqa: E402
     COURT_CORNERS,
-    load_calibrated_videos,
-    load_rallies_for_videos,
     _build_contact_sequence,
     _parse_actions,
     _parse_ball_positions,
     _parse_player_positions,
+    load_calibrated_videos,
+    load_rallies_for_videos,
 )
 
+from rallycut.court.calibration import CourtCalibrator  # noqa: E402
+from rallycut.court.camera_model import (  # noqa: E402
+    CameraModel,
+    _build_model,
+    calibrate_camera,
+    calibrate_camera_with_net,
+    image_ray,
+)
+from rallycut.court.trajectory_3d import fit_rally  # noqa: E402
+from rallycut.evaluation.db import get_connection  # noqa: E402
 
 SESSION_SHORT_ID = "41e1f30d-d5bb-4386-9908-fa37216eb535"
 TARGET_HEIGHT = 1.75   # midpoint of 1.65-1.85m
@@ -75,7 +75,7 @@ def _ray_hit_ground(camera: CameraModel, u_norm: float, v_norm: float) -> np.nda
     t = -origin[2] / direction[2]
     if t <= 0:
         return None
-    return origin + t * direction
+    return np.asarray(origin + t * direction, dtype=np.float64)
 
 
 def _implied_head_height(
@@ -158,7 +158,8 @@ def _build_camera_with_focal(
     obj_pts_3d = np.array([[c[0], c[1], 0.0] for c in COURT_CORNERS], dtype=np.float64)
     cx_px = width / 2.0
     cy_px = height / 2.0
-    K = np.array([[focal, 0, cx_px], [0, focal, cy_px], [0, 0, 1]], dtype=np.float64)
+    # K is the standard intrinsic matrix name in computer vision.
+    K = np.array([[focal, 0, cx_px], [0, focal, cy_px], [0, 0, 1]], dtype=np.float64)  # noqa: N806
     best: CameraModel | None = None
     for method in (cv2.SOLVEPNP_IPPE, cv2.SOLVEPNP_ITERATIVE):
         try:
