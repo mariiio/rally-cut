@@ -33,7 +33,6 @@ from pathlib import Path
 from typing import Any
 
 import cv2
-import matplotlib.pyplot as plt
 import numpy as np
 from rich.console import Console
 
@@ -79,7 +78,15 @@ NEUTRAL_BGR = (200, 200, 200)
 COURT_LINE_BGR = (255, 255, 0)  # yellow (BGR)
 ZONE_LINE_BGR = (200, 200, 0)   # faded yellow (BGR)
 NET_LINE_BGR = (0, 255, 255)    # cyan (BGR)
+BBOX_FOOT_BGR = (200, 0, 200)   # magenta — bbox bottom-center foot estimate
+ANKLE_FOOT_BGR = (255, 200, 0)  # cyan/teal — COCO-17 ankle midpoint foot estimate
 TRAIL_LEN = 25  # frames of ball trail after contact
+
+# COCO-17 pose indices for ankles. Matches the layout emitted by the
+# YOLO-Pose detector that populates ``PlayerPosition.keypoints``.
+_COCO_LEFT_ANKLE = 15
+_COCO_RIGHT_ANKLE = 16
+_MIN_ANKLE_CONF = 0.5
 
 
 # ---------------------- pipeline ---------------------- #
@@ -168,6 +175,86 @@ def _setter_image_xy(positions_raw: list[dict], setter_tid: int, frame: int) -> 
             except (KeyError, TypeError, ValueError):
                 continue
     return best
+
+
+def _nearest_position(
+    positions_raw: list[dict], tid: int, frame: int, radius: int = 3
+) -> dict | None:
+    """Return the closest-frame entry for ``tid`` within ``radius`` frames."""
+    best: dict | None = None
+    best_d = radius + 1
+    for pp in positions_raw:
+        try:
+            if int(pp["trackId"]) != tid:
+                continue
+            d = abs(int(pp["frameNumber"]) - frame)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if d <= radius and d < best_d:
+            best = pp
+            best_d = d
+    return best
+
+
+def _bbox_foot_xy(pos: dict) -> tuple[float, float] | None:
+    try:
+        return (float(pos["x"]), float(pos["y"]) + float(pos.get("height", 0.10)) / 2.0)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _ankle_foot_xy(pos: dict) -> tuple[float, float] | None:
+    kps = pos.get("keypoints")
+    if not kps or len(kps) <= _COCO_RIGHT_ANKLE:
+        return None
+    try:
+        left = kps[_COCO_LEFT_ANKLE]
+        right = kps[_COCO_RIGHT_ANKLE]
+        lx, ly, lc = float(left[0]), float(left[1]), float(left[2])
+        rx, ry, rc = float(right[0]), float(right[1]), float(right[2])
+    except (IndexError, TypeError, ValueError):
+        return None
+    left_ok = lc >= _MIN_ANKLE_CONF
+    right_ok = rc >= _MIN_ANKLE_CONF
+    if left_ok and right_ok:
+        return ((lx + rx) / 2.0, (ly + ry) / 2.0)
+    if left_ok:
+        return (lx, ly)
+    if right_ok:
+        return (rx, ry)
+    return None
+
+
+def _draw_foot_markers(
+    img: np.ndarray,
+    positions_raw: list[dict],
+    tid: int,
+    frame: int,
+    label: str,
+) -> np.ndarray:
+    """Draw bbox-foot (magenta) and ankle-foot (cyan) markers for a player."""
+    if tid < 0:
+        return img
+    pos = _nearest_position(positions_raw, tid, frame)
+    if pos is None:
+        return img
+    out = img.copy()
+    h, w = out.shape[:2]
+    bbox_xy = _bbox_foot_xy(pos)
+    ankle_xy = _ankle_foot_xy(pos)
+    if bbox_xy is not None:
+        px, py = int(bbox_xy[0] * w), int(bbox_xy[1] * h)
+        cv2.drawMarker(out, (px, py), BBOX_FOOT_BGR, cv2.MARKER_SQUARE, 18, 2)
+    if ankle_xy is not None:
+        px, py = int(ankle_xy[0] * w), int(ankle_xy[1] * h)
+        cv2.drawMarker(out, (px, py), ANKLE_FOOT_BGR, cv2.MARKER_DIAMOND, 18, 2)
+    if bbox_xy is not None:
+        lx, ly = int(bbox_xy[0] * w), int(bbox_xy[1] * h)
+        cv2.putText(
+            out, label, (lx + 12, ly - 8),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA,
+        )
+    return out
 
 
 class _FrameReader:
@@ -295,7 +382,9 @@ def _render_attack(
     rally: Any,
     rally_start_frame: int,
     action: Any,
+    next_contact: Any,
     ball_positions: list,
+    positions_raw: list[dict],
     calibrator: Any,
     out_dir: Path,
 ) -> bool:
@@ -312,7 +401,16 @@ def _render_attack(
     # 2. Ball trail.
     trail = _ball_trail(ball_positions, action.frame, TRAIL_LEN)
     frame = _draw_trail(frame, trail, color, action.frame)
-    # 3. Title.
+    # 3. Foot markers on attacker + next-contact player. Lets us eyeball
+    # whether bbox-foot vs ankle-foot vs pre-contact snapshot would shift
+    # the annotation.
+    frame = _draw_foot_markers(frame, positions_raw, action.player_track_id,
+                               action.frame, "A")
+    if next_contact is not None:
+        frame = _draw_foot_markers(frame, positions_raw,
+                                   next_contact.player_track_id,
+                                   next_contact.frame, "NC")
+    # 4. Title.
     frame = _draw_title(frame, title, color)
 
     out_path = out_dir / f"{rally.video_id[:8]}__{rally.rally_id[:8]}__f{action.frame:04d}__attack_{direction}.png"
@@ -345,15 +443,23 @@ def _render_set(
     trail = _ball_trail(ball_positions, set_action.frame, next_attack.frame - set_action.frame + 5)
     frame = _draw_trail(frame, trail, SET_BGR, set_action.frame)
 
-    # Circle the setter (green).
+    # Circle the setter (green) — historical bbox-center marker.
+    positions_raw = rally.positions_json or []
     setter_xy = (
-        _setter_image_xy(rally.positions_json or [], set_action.player_track_id, set_action.frame)
+        _setter_image_xy(positions_raw, set_action.player_track_id, set_action.frame)
         if set_action.player_track_id >= 0 else None
     )
     if setter_xy is not None:
         sx, sy = int(setter_xy[0] * w), int(setter_xy[1] * h)
         cv2.circle(frame, (sx, sy), 36, (0, 200, 0), 5)
         cv2.putText(frame, "SETTER", (sx - 40, sy - 42), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 0), 2, cv2.LINE_AA)
+
+    # Foot markers on setter (origin) and next attacker (destination) so
+    # we can eyeball both zone-binning inputs.
+    frame = _draw_foot_markers(frame, positions_raw,
+                               set_action.player_track_id, set_action.frame, "S")
+    frame = _draw_foot_markers(frame, positions_raw,
+                               next_attack.player_track_id, next_attack.frame, "A")
 
     frame = _draw_title(frame, title, SET_BGR)
 
@@ -425,10 +531,24 @@ def main() -> int:
             continue
         rally_start_frame = int(rally.start_ms / 1000.0 * rally.fps)
         actions_sorted = sorted(rally_actions.actions, key=lambda a: a.frame)
+        positions_raw = rally.positions_json or []
         try:
             for i, a in enumerate(actions_sorted):
                 if a.action_type == ActionType.ATTACK:
-                    if _render_attack(reader, rally, rally_start_frame, a, ball_positions, calibrator, out_dir):
+                    # Find the next real contact (mirrors play_annotations
+                    # attacker-landing search) for the foot-marker overlay.
+                    next_contact = None
+                    for b in actions_sorted[i + 1 :]:
+                        if b.action_type == ActionType.UNKNOWN:
+                            continue
+                        if b.player_track_id < 0:
+                            continue
+                        next_contact = b
+                        break
+                    if _render_attack(
+                        reader, rally, rally_start_frame, a, next_contact,
+                        ball_positions, positions_raw, calibrator, out_dir,
+                    ):
                         n_png += 1
                 elif a.action_type == ActionType.SET:
                     next_attack = None

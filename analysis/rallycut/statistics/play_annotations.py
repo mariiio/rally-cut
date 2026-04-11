@@ -52,6 +52,36 @@ NET_Y_M = COURT_LENGTH_M / 2.0  # midline perpendicular to net
 # Maximum frame radius for nearest-ball / nearest-player lookups.
 _NEAREST_RADIUS = 3
 
+# Pre-contact window for ATTACK feet snapshots. Beach attackers are almost
+# always airborne at the attack contact frame — their bbox bottom and even
+# their ankle keypoints are mid-air, so "y + height/2" misplaces their
+# ground position. Sampling their feet in the short takeoff window
+# ``[contact-12, contact-3]`` and taking the median gives a much more
+# stable estimate of *where the attack originated on the court*. At 30
+# FPS this spans ~300 ms before peak contact, which is typical takeoff
+# timing for a beach volleyball spike.
+_PRE_CONTACT_WINDOW_LOW = 12  # start this many frames before contact
+_PRE_CONTACT_WINDOW_HIGH = 3  # stop this many frames before contact
+
+# COCO-17 pose indices for ankles, matching ``PlayerPosition.keypoints``
+# which is populated by the YOLO-Pose detector. When both ankles have
+# confidence ≥ ``_MIN_ANKLE_CONF`` we use their midpoint as the feet
+# estimate instead of the bbox bottom-center, which is biased upward for
+# torso-biased boxes.
+_COCO_LEFT_ANKLE = 15
+_COCO_RIGHT_ANKLE = 16
+_MIN_ANKLE_CONF = 0.5
+
+# Terminal-attack ball-trajectory fallback window. The primary attacker
+# landing proxy is the next-contact player's feet; when there is no next
+# contact (point scored, last action in rally), we fall back to the
+# ball's position some frames later projected through the homography.
+# Lowered from 15 so short attacks that end quickly still find a landing
+# sample, capped at 25 so we don't accidentally pick up the next real
+# contact's ball position.
+_FALLBACK_MIN_DT = 10
+_FALLBACK_MAX_DT = 25
+
 
 # --------------------------------------------------------------------------- #
 # Pure helpers — easy to unit test without the full pipeline.
@@ -128,38 +158,127 @@ def _nearest_ball(
     return best
 
 
+def _ankle_midpoint_xy(pos: dict) -> tuple[float, float] | None:
+    """Image-space ankle midpoint from COCO-17 keypoints, if confident.
+
+    Prefers the midpoint of both ankles when both clear
+    ``_MIN_ANKLE_CONF``; falls back to a single confident ankle;
+    returns ``None`` when neither ankle is usable or keypoints are
+    missing. All coordinates are normalized 0-1 matching
+    ``PlayerPosition.keypoints``.
+    """
+    kps = pos.get("keypoints")
+    if not kps or len(kps) <= _COCO_RIGHT_ANKLE:
+        return None
+    try:
+        left = kps[_COCO_LEFT_ANKLE]
+        right = kps[_COCO_RIGHT_ANKLE]
+        lx, ly, lc = float(left[0]), float(left[1]), float(left[2])
+        rx, ry, rc = float(right[0]), float(right[1]), float(right[2])
+    except (IndexError, KeyError, TypeError, ValueError):
+        return None
+    left_ok = lc >= _MIN_ANKLE_CONF
+    right_ok = rc >= _MIN_ANKLE_CONF
+    if left_ok and right_ok:
+        return ((lx + rx) / 2.0, (ly + ry) / 2.0)
+    if left_ok:
+        return (lx, ly)
+    if right_ok:
+        return (rx, ry)
+    return None
+
+
+def _feet_image_xy(pos: dict) -> tuple[float, float] | None:
+    """Image-space feet estimate for a raw position dict.
+
+    Prefers ankle keypoints when confident, else falls back to
+    bbox bottom-center ``(x, y + height/2)``. The bbox fallback is still
+    correct when the player is standing (takeoff window), and is the
+    only signal we have on tracks without pose keypoints — roughly 60%
+    of production ``player_tracks`` as of 2026-04-11.
+    """
+    ankle_xy = _ankle_midpoint_xy(pos)
+    if ankle_xy is not None:
+        return ankle_xy
+    try:
+        px = float(pos["x"])
+        py = float(pos["y"]) + float(pos.get("height", 0.10)) / 2.0
+        return (px, py)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _median(values: list[float]) -> float:
+    s = sorted(values)
+    n = len(s)
+    mid = n // 2
+    if n % 2 == 1:
+        return s[mid]
+    return 0.5 * (s[mid - 1] + s[mid])
+
+
 def _player_feet_court_xy(
     positions_raw: list[dict],
     track_id: int,
     frame: int,
     calibrator: Any,
+    *,
+    pre_contact_window: bool = False,
 ) -> tuple[float, float] | None:
     """Return a player's court (x, y) projected from their FEET position.
 
-    Uses the bottom-center of the bounding box ``(x, y + height/2)``
-    instead of the bbox center, so the projected point lies on the court
-    ground plane and the planar homography is accurate. Projecting the
-    bbox center (chest-height ≈ 1 m above court) gives wildly wrong
-    court positions on most camera angles — see the 2026-04-10 stats-pack
-    session debug dump.
+    Feet are computed via :func:`_feet_image_xy` — ankle midpoint when
+    COCO-17 keypoints are confident, else bbox bottom-center. Projecting
+    a point on the court ground plane is required for the planar
+    homography to be accurate; projecting bbox CENTER (~1 m above floor)
+    gives wildly wrong court positions on most camera angles.
+
+    When ``pre_contact_window=True`` (attack path), aggregate the feet
+    position over the takeoff window ``[frame-12, frame-3]`` as a robust
+    median. This sidesteps the airborne-attacker problem where the
+    player's feet at contact frame are mid-air and don't represent
+    their ground position on the court. If no positions exist in the
+    window (e.g., sparse tracking), fall back to the usual
+    ``±_NEAREST_RADIUS`` nearest-frame lookup.
     """
     best_img: tuple[float, float] | None = None
-    best_d = _NEAREST_RADIUS + 1
-    for pp in positions_raw:
-        try:
-            if int(pp["trackId"]) != track_id:
-                continue
-            d = abs(int(pp["frameNumber"]) - frame)
-        except (KeyError, TypeError, ValueError):
-            continue
-        if d <= _NEAREST_RADIUS and d < best_d:
+
+    if pre_contact_window:
+        low = frame - _PRE_CONTACT_WINDOW_LOW
+        high = frame - _PRE_CONTACT_WINDOW_HIGH
+        xs: list[float] = []
+        ys: list[float] = []
+        for pp in positions_raw:
             try:
-                px = float(pp["x"])
-                py = float(pp["y"]) + float(pp.get("height", 0.10)) / 2.0
-                best_img = (px, py)
-                best_d = d
+                if int(pp["trackId"]) != track_id:
+                    continue
+                fno = int(pp["frameNumber"])
             except (KeyError, TypeError, ValueError):
                 continue
+            if not (low <= fno <= high):
+                continue
+            pt = _feet_image_xy(pp)
+            if pt is not None:
+                xs.append(pt[0])
+                ys.append(pt[1])
+        if xs and ys:
+            best_img = (_median(xs), _median(ys))
+
+    if best_img is None:
+        best_d = _NEAREST_RADIUS + 1
+        for pp in positions_raw:
+            try:
+                if int(pp["trackId"]) != track_id:
+                    continue
+                d = abs(int(pp["frameNumber"]) - frame)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if d <= _NEAREST_RADIUS and d < best_d:
+                pt = _feet_image_xy(pp)
+                if pt is not None:
+                    best_img = pt
+                    best_d = d
+
     if best_img is None:
         return None
     try:
@@ -221,9 +340,11 @@ def annotate_rally_actions(
             a.action_zone = x_to_zone(pc[0], far_side=is_far)
 
     # 2. Attack direction — use PLAYER feet positions (ground plane) for
-    # both the attacker and the next-contact player. Fallback to ball
-    # image-space trajectory when no next-contact player is available
-    # (last action in rally, point scored, etc.).
+    # both the attacker and the next-contact player. Both queries use
+    # the pre-contact window so airborne contact frames don't skew the
+    # feet estimate. Fallback to ball homography projection when no
+    # next-contact player is available (last action in rally, point
+    # scored, etc.).
     for i, a in enumerate(actions_sorted):
         if a.action_type != ActionType.ATTACK:
             continue
@@ -231,11 +352,14 @@ def annotate_rally_actions(
         if a.player_track_id < 0:
             continue
         attacker_court = _player_feet_court_xy(
-            positions_raw, a.player_track_id, a.frame, calibrator
+            positions_raw, a.player_track_id, a.frame, calibrator,
+            pre_contact_window=True,
         )
         if attacker_court is None:
             continue
-        # Primary: next-contact player's feet.
+        # Primary: next-contact player's feet (pre-contact window too —
+        # the defender's pre-dig stance is a better court proxy than
+        # their dive-landing feet).
         landing_court: tuple[float, float] | None = None
         for b in actions_sorted[i + 1 :]:
             # Skip UNKNOWN only — any real action type (serve, dig,
@@ -245,33 +369,56 @@ def annotate_rally_actions(
             if b.player_track_id < 0:
                 continue
             bc = _player_feet_court_xy(
-                positions_raw, b.player_track_id, b.frame, calibrator
+                positions_raw, b.player_track_id, b.frame, calibrator,
+                pre_contact_window=True,
             )
             if bc is not None:
                 landing_court = bc
                 break
-        # Fallback: ball image-space direction (no homography). Fires
-        # on terminal attacks (last action in rally / point scored).
-        # Systematically biased by perspective warp — treat labels from
-        # this path as approximate, not ground truth.
+        # Fallback: project ball image positions through the homography.
+        # Fires on terminal attacks (last action in rally / point
+        # scored). The homography is correct for points on the ground
+        # plane; the ball is not on the ground, but projecting both
+        # endpoints through the same homography keeps them on the same
+        # (biased) surface, so the angle dx/dy is internally consistent.
+        # Scaling image-space delta by court meters (the previous
+        # implementation) was geometrically wrong under any perspective
+        # warp. We deliberately override ``attacker_court`` with the
+        # ball CONTACT projection rather than keeping the feet-based
+        # value: mixing a ground-plane attacker point with a
+        # ball-projected landing point introduces a systematic vertical
+        # offset into the angle calculation. Both-from-ball keeps them
+        # on the same surface even if that surface is slightly above
+        # the ground.
+        #
+        # Assumes ``ball_positions`` is sorted by ``frame_number`` so
+        # the ``break`` on ``dt > _FALLBACK_MAX_DT`` short-circuits
+        # correctly; this matches how ``_parse_ball`` materializes the
+        # stored ``ball_positions_json`` and how WASB writes frames.
         if landing_court is None:
             contact_bp = _nearest_ball(ball_positions, a.frame)
             if contact_bp is not None:
-                landing_bp = None
+                landing_bp: BallPosition | None = None
                 for bp in ball_positions:
                     dt = bp.frame_number - a.frame
-                    if dt >= 15:
-                        landing_bp = bp
+                    if dt < _FALLBACK_MIN_DT:
+                        continue
+                    if dt > _FALLBACK_MAX_DT:
                         break
+                    landing_bp = bp
+                    break
                 if landing_bp is not None:
-                    # Use image-space delta scaled to court-like axes.
-                    # x_img → court_x (width), y_img → court_y (length).
-                    dx_img = landing_bp.x - contact_bp.x
-                    dy_img = landing_bp.y - contact_bp.y
-                    landing_court = (
-                        attacker_court[0] + dx_img * COURT_WIDTH_M,
-                        attacker_court[1] + dy_img * COURT_LENGTH_M,
-                    )
+                    try:
+                        c_pt = calibrator.image_to_court(
+                            (float(contact_bp.x), float(contact_bp.y)), 1, 1
+                        )
+                        l_pt = calibrator.image_to_court(
+                            (float(landing_bp.x), float(landing_bp.y)), 1, 1
+                        )
+                        attacker_court = (float(c_pt[0]), float(c_pt[1]))
+                        landing_court = (float(l_pt[0]), float(l_pt[1]))
+                    except Exception:  # noqa: BLE001
+                        pass
         if landing_court is None:
             continue
         a.attack_direction = classify_attack_direction_from_xy(
