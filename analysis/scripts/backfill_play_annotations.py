@@ -3,13 +3,26 @@
 Reads each rally's already-stored actions_json, ball_positions_json,
 and positions_json from the DB. Parses actions into ClassifiedAction
 objects, runs ``annotate_rally_actions`` (purely additive — no ML
-re-runs), and writes the annotated actions_json back. Court
-calibration is loaded per video. Uncalibrated videos are skipped.
+re-runs), and writes the annotated actions_json back in the canonical
+flat shape the API expects (``ActionsData``).
 
-Touches ONLY the ``actions_json`` column on ``player_tracks``.
-Does NOT re-run detection, tracking, contact detection, or action
-classification. All base action labels are bit-identical before and
-after — only new optional fields are added.
+Does two jobs in one pass:
+
+1. **Annotate**: populate ``actionZone`` / ``attackDirection`` /
+   ``setOriginZone`` / ``setDestZone`` on each action from the player's
+   feet court-space position (via ``annotate_rally_actions``).
+
+2. **Repair shape**: an earlier buggy run of this script wrote
+   ``actions_json`` as a nested ``{actions: {RallyActions...}}`` wrapper
+   instead of the flat ``ActionsData`` the API reads. The
+   ``_normalize_and_extract`` helper handles every historical shape
+   (flat, nested wrapper, bare list) and always rewrites the canonical
+   flat form, so the script is idempotent regardless of what it reads.
+
+Touches ONLY the ``actions_json`` column on ``player_tracks``. Does NOT
+re-run detection, tracking, contact detection, or action classification.
+Base action labels are preserved exactly; annotation fields are
+recomputed from current code on every run.
 
 Usage
 -----
@@ -183,9 +196,11 @@ def main() -> int:
     n_calibrated = sum(1 for c in calibrators.values() if getattr(c, "is_calibrated", False))
     console.print(f"  {n_calibrated}/{len(video_ids)} videos have court calibration")
 
-    n_annotated = 0
-    n_skipped = 0
-    n_no_actions = 0
+    n_annotated = 0          # calibrated rallies with ≥1 attack/set annotation
+    n_flat_rewrite = 0       # calibrated rallies with no annotatable actions (still rewritten in canonical shape)
+    n_no_calibration = 0     # uncalibrated videos — skipped entirely
+    n_no_actions = 0         # actions_json present but contains no parseable actions
+    n_parse_errors = 0       # individual action dicts that failed to parse
     updates: list[tuple[str, str]] = []  # (new_json_str, pt_id)
 
     for idx, row in enumerate(rows, start=1):
@@ -193,7 +208,7 @@ def main() -> int:
 
         cal = calibrators.get(video_id)
         if cal is None or not getattr(cal, "is_calibrated", False):
-            n_skipped += 1
+            n_no_calibration += 1
             continue
 
         if not actions_json or not isinstance(actions_json, dict):
@@ -211,7 +226,7 @@ def main() -> int:
             try:
                 classified.append(_parse_action(ad))
             except (KeyError, ValueError):
-                continue
+                n_parse_errors += 1
 
         rally_actions = RallyActions(
             actions=classified,
@@ -238,17 +253,23 @@ def main() -> int:
         if stats.attacks_annotated > 0 or stats.sets_annotated > 0:
             n_annotated += 1
         else:
-            n_skipped += 1
+            n_flat_rewrite += 1
 
         if idx % 50 == 0 or idx == len(rows):
-            console.print(f"  [{idx}/{len(rows)}] annotated={n_annotated} skipped={n_skipped}")
+            console.print(
+                f"  [{idx}/{len(rows)}] annotated={n_annotated} "
+                f"flat-rewrite={n_flat_rewrite}"
+            )
 
     console.print()
-    console.print(f"  total rallies:    {len(rows)}")
-    console.print(f"  annotated:        {n_annotated}")
-    console.print(f"  skipped (no cal): {n_skipped}")
-    console.print(f"  no actions:       {n_no_actions}")
-    console.print(f"  DB updates ready: {len(updates)}")
+    console.print(f"  total rallies:         {len(rows)}")
+    console.print(f"  annotated:             {n_annotated}")
+    console.print(f"  flat rewrite only:     {n_flat_rewrite}")
+    console.print(f"  skipped (no cal):      {n_no_calibration}")
+    console.print(f"  skipped (no actions):  {n_no_actions}")
+    if n_parse_errors:
+        console.print(f"  [yellow]action parse errors: {n_parse_errors}[/yellow]")
+    console.print(f"  DB updates ready:      {len(updates)}")
 
     if args.apply and updates:
         console.print("[bold]Writing to DB...[/bold]")
