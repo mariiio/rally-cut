@@ -74,13 +74,77 @@ def _parse_action(d: dict) -> ClassifiedAction:
     )
 
 
-def _rebuild_actions_json(
-    original: dict, rally_actions: RallyActions
+def _normalize_and_extract(
+    stored: dict | list | None,
+) -> tuple[list[dict], dict[str, Any]]:
+    """Normalize any stored actions_json shape to (action_dicts, meta).
+
+    The DB has been written in several shapes over time:
+
+    1. **Flat ActionsData** (correct API shape)::
+
+           {"rallyId": ..., "actions": [...], "numContacts": N,
+            "actionSequence": [...], "teamAssignments": {...}, ...}
+
+    2. **Nested RallyActions wrapper** (corrupted by an earlier buggy
+       backfill that set ``out["actions"] = rally_actions.to_dict()``)::
+
+           {"actions": {"rallyId": ..., "actions": [...], ...},
+            "teamAssignments": {...}}
+
+    3. **Bare list** (very old format)::
+
+           {"actions": [...]}
+
+    Returns ``(action_dicts, meta)`` where ``action_dicts`` is the list
+    of ClassifiedAction.to_dict() dicts and ``meta`` holds everything
+    else (teamAssignments, servingTeam). This lets the caller rebuild
+    a canonical flat shape regardless of the input.
+    """
+    if not isinstance(stored, dict):
+        return [], {}
+    meta: dict[str, Any] = {}
+    if "teamAssignments" in stored:
+        meta["teamAssignments"] = stored["teamAssignments"]
+    if "servingTeam" in stored:
+        meta["servingTeam"] = stored["servingTeam"]
+
+    inner = stored.get("actions")
+    if isinstance(inner, list):
+        # Shape 1 (flat) or Shape 3 (bare list). Pull rallyId/numContacts
+        # from the top level if present so the re-serialized form
+        # preserves them.
+        for k in ("rallyId", "numContacts", "actionSequence"):
+            if k in stored:
+                meta[k] = stored[k]
+        return inner, meta
+    if isinstance(inner, dict):
+        # Shape 2 (nested wrapper). The inner dict has the RallyActions
+        # fields; prefer its teamAssignments/servingTeam if present.
+        for k in ("teamAssignments", "servingTeam", "rallyId", "numContacts", "actionSequence"):
+            if k in inner:
+                meta[k] = inner[k]
+        action_list = inner.get("actions")
+        if isinstance(action_list, list):
+            return action_list, meta
+    return [], meta
+
+
+def _build_flat_actions_json(
+    rally_actions: RallyActions, meta: dict[str, Any]
 ) -> dict:
-    """Replace the actions list in the stored JSON with the annotated
-    version while preserving all other fields (contacts, etc.)."""
-    out = dict(original)
-    out["actions"] = rally_actions.to_dict()
+    """Build the canonical flat ActionsData shape the API expects.
+
+    The DB column ``actions_json`` is typed as ``ActionsData`` in
+    ``playerTrackingService.ts`` — the ``actions`` key MUST be a list
+    of ``ActionInfo`` dicts, not a nested RallyActions wrapper.
+    """
+    out = rally_actions.to_dict()  # {rallyId, numContacts, actionSequence, actions[list], teamAssignments?, servingTeam?}
+    # Preserve servingTeam from the stored meta if the fresh to_dict()
+    # didn't emit one (it only emits when the RallyActions has a valid
+    # serving player attached).
+    if "servingTeam" in meta and "servingTeam" not in out:
+        out["servingTeam"] = meta["servingTeam"]
     return out
 
 
@@ -136,16 +200,8 @@ def main() -> int:
             n_no_actions += 1
             continue
 
-        # Parse stored actions. Handle both formats:
-        # New: {"actions": {"rallyId": ..., "actions": [...]}}
-        # Old: {"actions": [...]}
-        actions_data = actions_json.get("actions", {})
-        if isinstance(actions_data, list):
-            action_dicts = actions_data
-        elif isinstance(actions_data, dict):
-            action_dicts = actions_data.get("actions", [])
-        else:
-            action_dicts = []
+        # Normalize any historical stored shape → flat (action_dicts, meta).
+        action_dicts, meta = _normalize_and_extract(actions_json)
         if not action_dicts:
             n_no_actions += 1
             continue
@@ -161,8 +217,8 @@ def main() -> int:
             actions=classified,
             rally_id=rally_id,
         )
-        # Restore team_assignments if present.
-        raw_teams = actions_data.get("teamAssignments", {}) if isinstance(actions_data, dict) else {}
+        # Restore team_assignments from the normalized meta.
+        raw_teams = meta.get("teamAssignments", {})
         if raw_teams:
             rally_actions.team_assignments = {
                 int(tid): 0 if team == "A" else 1
@@ -174,9 +230,12 @@ def main() -> int:
             rally_actions, ball_positions, positions_json or [], cal
         )
 
+        # Always write the flat canonical shape — this repairs any
+        # previously-nested rallies even if the annotate step was a
+        # no-op (e.g. rally has no attacks/sets).
+        new_json = _build_flat_actions_json(rally_actions, meta)
+        updates.append((json.dumps(new_json), pt_id))
         if stats.attacks_annotated > 0 or stats.sets_annotated > 0:
-            new_json = _rebuild_actions_json(actions_json, rally_actions)
-            updates.append((json.dumps(new_json), pt_id))
             n_annotated += 1
         else:
             n_skipped += 1
