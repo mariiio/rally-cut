@@ -1845,6 +1845,11 @@ export interface ActionInfo {
   courtSide: string;
   confidence: number;
   team?: string;  // "A" or "B"
+  // Play annotations (populated on calibrated videos, may be absent on older rallies)
+  actionZone?: number;  // 1-5, player's court-x zone, team-relative
+  attackDirection?: 'line' | 'cross' | 'cut';  // on attack actions only
+  setOriginZone?: number;  // 1-5, setter's zone at set contact
+  setDestZone?: number;    // 1-5, attacker's zone at next attack contact
 }
 
 export interface ActionsData {

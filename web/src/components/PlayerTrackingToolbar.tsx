@@ -423,6 +423,35 @@ export function PlayerTrackingToolbar() {
           {(trackData.actions as ActionsData).actions.map((action, index) => {
             const isActive = index === currentActionIndex;
             const pNum = action.playerTrackId >= 0 ? playerNumberMap.get(action.playerTrackId) : undefined;
+            const playerStr = pNum != null ? `P${pNum}` : action.playerTrackId >= 0 ? `#${action.playerTrackId}` : '';
+
+            // Compact chip label with play annotations when present.
+            // Set → "Set P4 z3→4" (origin→dest subsumes actionZone).
+            // Attack → "Attack P2 z3 → cross" (zone + direction).
+            // Other → "Dig P1 z2".
+            const baseLabel = `${formatPhase(action.action)}${playerStr ? ` ${playerStr}` : ''}`;
+            const zoneSuffix = action.actionZone != null ? ` z${action.actionZone}` : '';
+            let label = `${baseLabel}${zoneSuffix}`;
+            if (action.action === 'set' && action.setOriginZone != null && action.setDestZone != null) {
+              label = `${baseLabel} z${action.setOriginZone}\u2192${action.setDestZone}`;
+            } else if (action.action === 'attack' && action.attackDirection) {
+              label = `${baseLabel}${zoneSuffix} \u2192 ${action.attackDirection}`;
+            }
+
+            // Rich tooltip showing all available annotation fields.
+            const tooltipParts = [
+              `Frame ${action.frame}`,
+              `Player ${pNum != null ? `#${pNum}` : `#${action.playerTrackId}`}`,
+              `${action.courtSide} court`,
+            ];
+            if (action.actionZone != null) tooltipParts.push(`Zone ${action.actionZone}`);
+            if (action.action === 'attack' && action.attackDirection) {
+              tooltipParts.push(`Attack: ${action.attackDirection}`);
+            }
+            if (action.action === 'set' && action.setOriginZone != null && action.setDestZone != null) {
+              tooltipParts.push(`Set: zone ${action.setOriginZone} \u2192 ${action.setDestZone}`);
+            }
+
             return (
             <Box key={index} sx={{ display: 'flex', alignItems: 'center' }}>
               {index > 0 && (
@@ -430,9 +459,9 @@ export function PlayerTrackingToolbar() {
                   {'\u2192'}
                 </Typography>
               )}
-              <Tooltip title={`Frame ${action.frame} | Player ${pNum != null ? `#${pNum}` : `#${action.playerTrackId}`} | ${action.courtSide} court`}>
+              <Tooltip title={tooltipParts.join(' | ')}>
                 <Chip
-                  label={pNum != null ? `${formatPhase(action.action)} P${pNum}` : formatPhase(action.action)}
+                  label={label}
                   size="small"
                   onClick={() => handleSeekToLabel(action.frame)}
                   sx={{
