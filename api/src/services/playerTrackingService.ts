@@ -1509,7 +1509,7 @@ export async function reindexTrackingData(
 
   // Contacts: shift frame on each contact + update rallyStartFrame
   let contactsData = track.contactsJson as ContactsData | null;
-  if (contactsData?.contacts) {
+  if (contactsData && Array.isArray(contactsData.contacts)) {
     const shiftedContacts = shiftFrameField(contactsData.contacts);
     contactsData = {
       ...contactsData,
@@ -1521,7 +1521,7 @@ export async function reindexTrackingData(
 
   // Actions: shift frame on each action
   let actionsData = track.actionsJson as ActionsData | null;
-  if (actionsData?.actions) {
+  if (actionsData && Array.isArray(actionsData.actions)) {
     const shiftedActions = shiftFrameField(actionsData.actions);
     actionsData = {
       ...actionsData,
