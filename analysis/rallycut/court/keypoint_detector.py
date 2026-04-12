@@ -592,31 +592,30 @@ class CourtKeypointDetector:
         or None if the homography is degenerate.
         """
         # Court-space coordinates for the 4 in-frame keypoints
-        # far-left=(0, L), far-right=(W, L), center-left=(0, L/2), center-right=(W, L/2)
-        W, L = COURT_WIDTH, COURT_LENGTH
-        court_pts = np.float32([
-            [0, L],       # far-left
-            [W, L],       # far-right
-            [0, L / 2],   # center-left
-            [W, L / 2],   # center-right
-        ])
+        cw, cl = COURT_WIDTH, COURT_LENGTH
+        court_pts = np.array([
+            [0, cl],       # far-left
+            [cw, cl],      # far-right
+            [0, cl / 2],   # center-left
+            [cw, cl / 2],  # center-right
+        ], dtype=np.float32)
 
         # Image-space coordinates from keypoint detections
-        image_pts = np.float32([
+        image_pts = np.array([
             [corners[3]["x"], corners[3]["y"]],       # far-left
             [corners[2]["x"], corners[2]["y"]],       # far-right
             [center_points[0]["x"], center_points[0]["y"]],  # center-left
             [center_points[1]["x"], center_points[1]["y"]],  # center-right
-        ])
+        ], dtype=np.float32)
 
         # 4 exact correspondences → getPerspectiveTransform (no RANSAC needed)
-        H = cv2.getPerspectiveTransform(court_pts, image_pts)
-        if H is None:
+        h_matrix = cv2.getPerspectiveTransform(court_pts, image_pts)
+        if h_matrix is None:
             return None
 
-        # Project near corners: near-left=(0,0), near-right=(W,0)
-        near_court = np.float32([[0, 0], [W, 0]]).reshape(-1, 1, 2)
-        near_image = cv2.perspectiveTransform(near_court, H)
+        # Project near corners: near-left=(0,0), near-right=(cw,0)
+        near_court = np.array([[0, 0], [cw, 0]], dtype=np.float32).reshape(-1, 1, 2)
+        near_image = cv2.perspectiveTransform(near_court, h_matrix)
 
         if near_image is None:
             return None

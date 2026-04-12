@@ -118,7 +118,9 @@ from rallycut.evaluation.score_ground_truth import (  # noqa: E402
 from rallycut.evaluation.tracking.db import get_connection  # noqa: E402
 from rallycut.scoring.cross_rally_viterbi import (  # noqa: E402
     RallyObservation,
+    RallyPositionData,
     decode_video_dual_hypothesis,
+    detect_side_switches_from_positions,
 )
 from rallycut.tracking.action_classifier import (  # noqa: E402
     _find_serving_side_by_formation,
@@ -585,30 +587,30 @@ def _apply_viterbi_scoring(
     rallies: list[RallyData],
     pred_by_video: dict[str, list[tuple[int, Any]]],
     formation_flip_by_rally: dict[str, bool] | None,
+    t2p_by_rally: dict[str, dict[int, int]] | None = None,
 ) -> None:
     """Post-process per-rally serving_team via dual-hypothesis Viterbi.
 
     Groups rallies by video, extracts physical side from formation,
-    runs ``decode_video_dual_hypothesis`` (tries both near=A and near=B,
-    picks the more plausible score progression), and overrides
-    ``formation_serving_team`` on each ``RallyActions``.
+    detects side switches from player positions (when track_to_player
+    is available, falls back to match_analysis semantic_flip), runs
+    ``decode_video_dual_hypothesis`` (tries both near=A and near=B),
+    and overrides ``formation_serving_team`` on each ``RallyActions``.
 
-    Uses automated side switches from match_analysis (no GT needed).
-    Production-viable: +7.3pp over baseline with zero user input.
+    Production-viable: +10pp over baseline with zero user input.
 
     Modifies ``pred_by_video`` in place.
     """
     rally_data_by_id: dict[str, RallyData] = {r.rally_id: r for r in rallies}
     flips = formation_flip_by_rally or {}
+    t2p = t2p_by_rally or {}
 
     for _video_id, rally_order in pred_by_video.items():
         rally_order.sort(key=lambda x: x[0])
 
         observations: list[RallyObservation] = []
+        position_data: list[RallyPositionData] = []
         rally_actions_list: list[Any] = []
-
-        # Detect automated side-switch transitions.
-        switch_indices: set[int] = set()
 
         for order_i, (_start_ms, rally_actions) in enumerate(rally_order):
             rid = rally_actions.rally_id
@@ -618,6 +620,8 @@ def _apply_viterbi_scoring(
             # Formation physical side (bypasses team_assignments).
             formation_side: str | None = None
             formation_conf = 0.0
+            positions: list[PlayerPosition] = []
+            net_y = 0.5
             if rd and rd.positions_json:
                 positions = _parse_positions(rd.positions_json)
                 net_y = rd.court_split_y if rd.court_split_y else 0.5
@@ -631,8 +635,21 @@ def _apply_viterbi_scoring(
                 formation_confidence=formation_conf,
             ))
 
-            # Automated side-switch transitions from match_analysis.
-            if order_i > 0:
+            position_data.append(RallyPositionData(
+                positions=positions,
+                track_to_player=t2p.get(rid, {}),
+                court_split_y=rd.court_split_y if rd else None,
+            ))
+
+        # Position-based side-switch detection (when track_to_player available).
+        # Falls back to match_analysis semantic_flip transitions.
+        has_t2p = any(pd.track_to_player for pd in position_data)
+        if has_t2p:
+            switch_indices = detect_side_switches_from_positions(position_data)
+        else:
+            switch_indices = set()
+            for order_i in range(1, len(rally_actions_list)):
+                rid = rally_actions_list[order_i].rally_id
                 prev_rid = rally_actions_list[order_i - 1].rally_id
                 cur_flip = flips.get(rid, False)
                 prev_flip = flips.get(prev_rid, False)
@@ -825,7 +842,9 @@ def _run_once(
     # Tries both near=A and near=B, picks the more plausible score
     # progression. Production-viable: +7.3pp with no GT or user input.
     if not ctx.skip_viterbi_scoring:
-        _apply_viterbi_scoring(rallies, pred_by_video, formation_flip_by_rally)
+        _apply_viterbi_scoring(
+            rallies, pred_by_video, formation_flip_by_rally, t2p_by_rally,
+        )
 
     return (
         all_matches,

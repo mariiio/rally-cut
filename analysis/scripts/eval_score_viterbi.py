@@ -30,10 +30,12 @@ if str(REPO) not in sys.path:
 from rallycut.evaluation.tracking.db import get_connection  # noqa: E402
 from rallycut.scoring.cross_rally_viterbi import (  # noqa: E402
     RallyObservation,
+    RallyPositionData,
     calibrate_from_noisy_predictions,
     calibrate_initial_side,
     decode_video,
     decode_video_dual_hypothesis,
+    detect_side_switches_from_positions,
 )
 from rallycut.tracking.action_classifier import (  # noqa: E402
     _find_serving_side_by_formation,
@@ -57,6 +59,7 @@ class EvalRally:
     # Production signals (from match_analysis, not GT)
     prod_serving_team: str | None = None  # from formation + team_assignments + semantic_flip
     prod_semantic_flip: bool = False
+    track_to_player: dict[int, int] | None = None  # track_id -> player_id
 
 
 def _parse_positions(raw: list[dict[str, Any]]) -> list[PlayerPosition]:
@@ -95,7 +98,7 @@ def _load_eval_data() -> dict[str, list[EvalRally]]:
             sw = list(gt.get("sideSwitches", [])) if isinstance(gt, dict) else []
             video_switches[vid] = set(sw)
 
-    # Production signals: team_assignments + semantic_flip from match_analysis
+    # Production signals: team_assignments + semantic_flip + track_to_player
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""
             SELECT id, match_analysis_json FROM videos
@@ -104,17 +107,20 @@ def _load_eval_data() -> dict[str, list[EvalRally]]:
         """)
         prod_teams: dict[str, dict[int, int]] = {}
         prod_flips: dict[str, bool] = {}
+        rally_t2p: dict[str, dict[int, int]] = {}
         for row in cur.fetchall():
             ma = row[1]
             if not isinstance(ma, dict):
                 continue
             prod_teams.update(build_match_team_assignments(ma, 0.70))
-            # Compute automated semantic_flip per rally
+            # Compute automated semantic_flip per rally + track_to_player
             count = 0
             for entry in ma.get("rallies") or []:
                 rid = entry.get("rallyId") or entry.get("rally_id")
                 if rid:
                     prod_flips[rid] = (count % 2 == 1)
+                    t2p = entry.get("trackToPlayer") or entry.get("track_to_player") or {}
+                    rally_t2p[rid] = {int(k): int(v) for k, v in t2p.items()}
                 if entry.get("sideSwitchDetected") or entry.get("side_switch_detected"):
                     count += 1
 
@@ -163,6 +169,7 @@ def _load_eval_data() -> dict[str, list[EvalRally]]:
                 side_flipped=flipped,
                 prod_serving_team=prod_team,
                 prod_semantic_flip=prod_flips.get(rid_str, False),
+                track_to_player=rally_t2p.get(rid_str),
             ))
         out[vid] = vid_out
     return out
@@ -352,6 +359,58 @@ def _eval_dual_hypothesis(
     return correct, total, per_video
 
 
+def _build_position_data(rallies: list[EvalRally]) -> list[RallyPositionData]:
+    """Build RallyPositionData list from EvalRally list."""
+    return [
+        RallyPositionData(
+            positions=r.positions,
+            track_to_player=r.track_to_player or {},
+            court_split_y=r.court_split_y,
+        )
+        for r in rallies
+    ]
+
+
+def _eval_position_switches(
+    video_rallies: dict[str, list[EvalRally]],
+) -> tuple[int, int, dict[str, dict[str, int]]]:
+    """Viterbi with position-based side-switch detection (Phase 1)."""
+    correct = 0
+    total = 0
+    per_video: dict[str, dict[str, int]] = {}
+
+    for vid, rallies in sorted(video_rallies.items()):
+        observations: list[RallyObservation] = []
+        for rally in rallies:
+            net_y = rally.court_split_y or 0.5
+            fs, fc = _find_serving_side_by_formation(
+                rally.positions, net_y=net_y, start_frame=0,
+            )
+            observations.append(RallyObservation(
+                rally_id=rally.rally_id,
+                formation_side=fs,
+                formation_confidence=fc,
+            ))
+
+        # Position-based switch detection instead of prod_semantic_flip.
+        pos_data = _build_position_data(rallies)
+        switch_indices = detect_side_switches_from_positions(pos_data)
+
+        decoded = decode_video_dual_hypothesis(
+            observations, side_switch_rallies=switch_indices,
+        )
+
+        vid_correct = 0
+        for rally, dec in zip(rallies, decoded):
+            total += 1
+            if dec.serving_team == rally.gt_serving_team:
+                correct += 1
+                vid_correct += 1
+        per_video[vid] = {"total": len(rallies), "correct": vid_correct}
+
+    return correct, total, per_video
+
+
 def main() -> int:
     print("=" * 70)
     print("Production-Viable Calibration: Self-Cal vs Dual-Hypothesis")
@@ -389,7 +448,14 @@ def main() -> int:
     all_results["dual_hyp"] = {"correct": c, "total": t, "accuracy": acc}
     all_per_video["dual_hyp"] = pv
 
-    # 4. Baseline: current production (no Viterbi)
+    # 4. Position-based switches (Phase 1)
+    c, t, pv = _eval_position_switches(video_rallies)
+    acc = c / max(t, 1) * 100
+    print(f"  {'Position switches (Phase 1)':<43s}  {c:7d}  {t:5d}  {acc:7.1f}%")
+    all_results["position_switches"] = {"correct": c, "total": t, "accuracy": acc}
+    all_per_video["position_switches"] = pv
+
+    # 5. Baseline: current production (no Viterbi)
     c_prod = sum(
         1 for rallies in video_rallies.values()
         for r in rallies if r.prod_serving_team == r.gt_serving_team
@@ -406,17 +472,19 @@ def main() -> int:
     print(f"\n{'=' * 70}")
     print("PER-VIDEO COMPARISON")
     print(f"{'=' * 70}")
-    print(f"  {'video':>10s}  {'n':>3s}  {'GT-cal':>6s}  {'self':>6s}  {'dual':>6s}  {'prod':>6s}")
-    print(f"  {'-' * 10}  {'-' * 3}  {'-' * 6}  {'-' * 6}  {'-' * 6}  {'-' * 6}")
+    print(f"  {'video':>10s}  {'n':>3s}  {'GT-cal':>6s}  {'dual':>6s}  "
+          f"{'pos_sw':>6s}  {'delta':>6s}")
+    print(f"  {'-' * 10}  {'-' * 3}  {'-' * 6}  {'-' * 6}  "
+          f"{'-' * 6}  {'-' * 6}")
 
     for vid in sorted(video_rallies.keys()):
         n = len(video_rallies[vid])
         gt_acc = all_per_video["gt_calibrated"][vid]["correct"] / n * 100
-        sc_acc = all_per_video["self_cal"][vid]["correct"] / n * 100
         dh_acc = all_per_video["dual_hyp"][vid]["correct"] / n * 100
-        prod_c = sum(1 for r in video_rallies[vid] if r.prod_serving_team == r.gt_serving_team)
-        pr_acc = prod_c / n * 100
-        print(f"  {vid[:10]}  {n:3d}  {gt_acc:5.1f}%  {sc_acc:5.1f}%  {dh_acc:5.1f}%  {pr_acc:5.1f}%")
+        ps_acc = all_per_video["position_switches"][vid]["correct"] / n * 100
+        delta = ps_acc - dh_acc
+        print(f"  {vid[:10]}  {n:3d}  {gt_acc:5.1f}%  {dh_acc:5.1f}%  "
+              f"{ps_acc:5.1f}%  {delta:+5.1f}%")
 
     # ---- Greedy cascade simulation ----
     print(f"\n{'=' * 70}")

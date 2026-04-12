@@ -18,7 +18,12 @@ per-video calibration that determines which team started on which side.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from rallycut.tracking.player_tracker import PlayerPosition
 
 
 @dataclass
@@ -31,6 +36,15 @@ class RallyObservation:
     formation_confidence: float  # 0-1
     # GT (for eval only)
     gt_serving_team: str | None = None  # "A" or "B"
+
+
+@dataclass
+class RallyPositionData:
+    """Per-rally position and identity data for switch/convention detection."""
+
+    positions: list[PlayerPosition] = field(default_factory=list)
+    track_to_player: dict[int, int] = field(default_factory=dict)
+    court_split_y: float | None = None
 
 
 @dataclass
@@ -414,3 +428,280 @@ def _score_plausibility(decoded: list[DecodedRally]) -> float:
     long_run_penalty = max(0, max_run - 8) * 0.5
 
     return -(run_penalty + balance_penalty * 2.0 + long_run_penalty)
+
+
+# ---------------------------------------------------------------------------
+# Position-based side-switch detection (Phase 1)
+# ---------------------------------------------------------------------------
+
+
+def _classify_tracks_to_sides(
+    positions: list[PlayerPosition],
+    court_split_y: float | None,
+    window_frames: int = 120,
+) -> tuple[set[int], set[int]]:
+    """Classify track_ids into near (high Y) and far (low Y) groups.
+
+    Uses court_split_y if available and valid (splits players into 2 groups).
+    Falls back to biggest-gap clustering when court_split_y puts all players
+    on one side.
+
+    Returns:
+        (near_tids, far_tids) — sets of track_ids.
+    """
+    track_ys: dict[int, list[float]] = defaultdict(list)
+    for p in positions:
+        if p.frame_number > window_frames or p.track_id < 0:
+            continue
+        foot_y = p.y + p.height / 2.0
+        track_ys[p.track_id].append(foot_y)
+
+    if len(track_ys) < 2:
+        return set(), set()
+
+    means = {tid: sum(ys) / len(ys) for tid, ys in track_ys.items()}
+
+    # Try court_split_y first.
+    if court_split_y is not None:
+        near = {t for t, y in means.items() if y > court_split_y}
+        far = {t for t, y in means.items() if y <= court_split_y}
+        if near and far:
+            return near, far
+
+    # Fallback: biggest-gap split.
+    sorted_items = sorted(means.items(), key=lambda kv: kv[1])
+    best_gap = 0.0
+    best_idx = 0
+    for i in range(len(sorted_items) - 1):
+        gap = sorted_items[i + 1][1] - sorted_items[i][1]
+        if gap > best_gap:
+            best_gap = gap
+            best_idx = i
+
+    far = {t for t, _ in sorted_items[: best_idx + 1]}
+    near = {t for t, _ in sorted_items[best_idx + 1 :]}
+    return near, far
+
+
+def _pids_on_side(
+    tids: set[int], track_to_player: dict[int, int],
+) -> list[int]:
+    """Map track_ids to player_ids, return sorted list."""
+    return sorted(
+        track_to_player[t] for t in tids if t in track_to_player
+    )
+
+
+def detect_side_switches_from_positions(
+    position_data: list[RallyPositionData],
+    min_persist: int = 2,
+) -> set[int]:
+    """Detect side switches from player position changes across rallies.
+
+    Tracks which player_ids are on the near vs far side. A switch is
+    detected when the near-side player group flips to far and vice versa,
+    persisting for at least ``min_persist`` consecutive rallies.
+
+    Only uses "full" observations (2+ players on each side) to avoid
+    noise from partial tracking. The reference grouping is never updated
+    from partial observations.
+
+    Args:
+        position_data: Per-rally position + track_to_player data.
+        min_persist: Minimum consecutive rallies the new grouping must
+            persist before confirming a switch. Prevents false triggers
+            from tracking noise.
+
+    Returns:
+        Set of rally indices where a side switch occurs (the mapping
+        changes at the START of that rally).
+    """
+    n = len(position_data)
+    if n < 2:
+        return set()
+
+    # Step 1: Compute per-rally near/far player_ids.
+    # Only keep "full" observations where both sides have players.
+    observations: list[tuple[frozenset[int], frozenset[int]] | None] = []
+    for pd in position_data:
+        near_tids, far_tids = _classify_tracks_to_sides(
+            pd.positions, pd.court_split_y,
+        )
+        near_pids = frozenset(_pids_on_side(near_tids, pd.track_to_player))
+        far_pids = frozenset(_pids_on_side(far_tids, pd.track_to_player))
+        if len(near_pids) >= 1 and len(far_pids) >= 1:
+            observations.append((near_pids, far_pids))
+        else:
+            observations.append(None)
+
+    # Step 2: Establish initial reference from earliest full observation.
+    ref_near: frozenset[int] | None = None
+    ref_far: frozenset[int] | None = None
+    for obs in observations:
+        if obs is not None and len(obs[0]) >= 2 and len(obs[1]) >= 2:
+            ref_near, ref_far = obs
+            break
+
+    if ref_near is None:
+        # No full observation found — try best available.
+        for obs in observations:
+            if obs is not None:
+                ref_near, ref_far = obs
+                break
+        if ref_near is None:
+            return set()
+
+    # Step 3: Detect transitions with hysteresis.
+    # "Switched" means the old near-side players are now mostly on the far
+    # side and vice versa. We use a voting approach: count how many of the
+    # current near players were in ref_near vs ref_far.
+    switches: set[int] = set()
+    candidate_switch: int | None = None
+    persist_count = 0
+
+    def _is_switched(near: frozenset[int], far: frozenset[int]) -> bool | None:
+        """Check if current arrangement is switched relative to reference.
+
+        Returns True (switched), False (same), or None (ambiguous).
+        """
+        if ref_near is None or ref_far is None:
+            return None
+        all_ref = ref_near | ref_far
+        # Only consider players we have reference for.
+        known_near = near & all_ref
+        known_far = far & all_ref
+        # Count how many known-near players were originally near vs far.
+        near_was_near = len(known_near & ref_near)
+        near_was_far = len(known_near & ref_far)
+        far_was_near = len(known_far & ref_near)
+        far_was_far = len(known_far & ref_far)
+        # Vote: "same" means near players are still mostly from ref_near.
+        same_votes = near_was_near + far_was_far
+        switch_votes = near_was_far + far_was_near
+        if same_votes > switch_votes:
+            return False
+        if switch_votes > same_votes:
+            return True
+        return None  # Tie — ambiguous.
+
+    for i in range(1, n):
+        obs = observations[i]
+        if obs is None:
+            continue
+
+        status = _is_switched(obs[0], obs[1])
+
+        if status is None:
+            continue  # Ambiguous — skip.
+
+        if not status:
+            # Same as reference — reset any pending candidate.
+            if candidate_switch is not None:
+                candidate_switch = None
+                persist_count = 0
+            # Update ref from full observations to track player_id changes
+            # across rallies (match_tracker may assign different IDs).
+            if len(obs[0]) >= 2 and len(obs[1]) >= 2:
+                ref_near, ref_far = obs
+        else:
+            # Potential switch.
+            if candidate_switch is None:
+                candidate_switch = i
+                persist_count = 1
+            else:
+                persist_count += 1
+
+            if persist_count >= min_persist:
+                switches.add(candidate_switch)
+                # After confirming switch, update ref (swapped).
+                ref_near, ref_far = ref_far, ref_near
+                # Also update from latest full observation if available.
+                if len(obs[0]) >= 2 and len(obs[1]) >= 2:
+                    ref_near, ref_far = obs
+                candidate_switch = None
+                persist_count = 0
+
+    return switches
+
+
+# ---------------------------------------------------------------------------
+# Team-identity convention anchor (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+def calibrate_from_player_identity(
+    observations: list[RallyObservation],
+    position_data: list[RallyPositionData],
+    side_switch_rallies: set[int] | None = None,
+    min_confidence: float = 0.1,
+) -> tuple[bool, float]:
+    """Determine near=A/B convention from player identity on each side.
+
+    **NOTE**: This function does NOT work for initial convention
+    determination because match_tracker assigns player IDs {1,2} to
+    whichever team is initially near — making the near=A/B question
+    circular. Kept for potential future use with externally-grounded
+    team identity (e.g., jersey color → team mapping).
+
+    For each rally, identifies which player_ids are on the near vs far
+    side, and votes on whether near=A (players {1,2}) or near=B ({3,4}).
+    Accounts for side switches.
+
+    Falls back to True (default convention) if insufficient signal.
+
+    Args:
+        observations: Per-rally formation observations.
+        position_data: Per-rally position + track_to_player data.
+        side_switch_rallies: Rally indices where sides swap.
+        min_confidence: Minimum vote margin to return a confident answer.
+
+    Returns:
+        (initial_near_is_a, confidence) — confidence in [0, 1].
+    """
+    switches = side_switch_rallies or set()
+    cumulative_switches = 0
+    votes_near_a = 0.0
+    votes_near_b = 0.0
+
+    for i, (obs, pd) in enumerate(zip(observations, position_data)):
+        if i in switches:
+            cumulative_switches += 1
+        flipped = cumulative_switches % 2 == 1
+
+        near_tids, far_tids = _classify_tracks_to_sides(
+            pd.positions, pd.court_split_y,
+        )
+        near_pids = _pids_on_side(near_tids, pd.track_to_player)
+        if not near_pids:
+            continue
+
+        # Determine which team is on the near side.
+        a_count = sum(1 for p in near_pids if p <= 2)
+        b_count = sum(1 for p in near_pids if p >= 3)
+        if a_count == b_count:
+            continue  # Ambiguous — skip.
+
+        near_team = "A" if a_count > b_count else "B"
+
+        # Account for side switch: if flipped, near physically is the
+        # opposite semantic side from the initial convention.
+        if flipped:
+            near_team = "B" if near_team == "A" else "A"
+
+        weight = max(obs.formation_confidence, 0.3) if obs.formation_side else 0.3
+        if near_team == "A":
+            votes_near_a += weight
+        else:
+            votes_near_b += weight
+
+    total = votes_near_a + votes_near_b
+    if total < 1e-6:
+        return True, 0.0  # No signal — default.
+
+    near_is_a = votes_near_a >= votes_near_b
+    confidence = abs(votes_near_a - votes_near_b) / total
+
+    if confidence < min_confidence:
+        return True, 0.0  # Too close to call — default.
+
+    return near_is_a, confidence
