@@ -731,6 +731,71 @@ def _find_serving_team_by_formation(
     return None, confidence
 
 
+def _find_serving_side_by_formation(
+    player_positions: list[PlayerPosition],
+    net_y: float,
+    start_frame: int = 0,
+    window_frames: int = 120,
+) -> tuple[str | None, float]:
+    """Return the raw physical serving SIDE without team-label mapping.
+
+    Unlike `_find_serving_team_by_formation`, this bypasses team_assignments
+    and semantic_flip entirely. It returns "near" or "far" (physical side)
+    based purely on which side has larger vertical separation.
+
+    Used by the cross-rally Viterbi decoder which operates on physical sides
+    and handles team-label mapping separately.
+
+    Returns:
+        (side, confidence) where side is "near", "far", or None.
+    """
+    if not player_positions:
+        return None, 0.0
+
+    end_frame = start_frame + window_frames
+    by_track: dict[int, list[float]] = defaultdict(list)
+    for p in player_positions:
+        if p.track_id < 0:
+            continue
+        if start_frame <= p.frame_number < end_frame:
+            by_track[p.track_id].append(p.y + p.height / 2.0)
+
+    if len(by_track) < 2:
+        return None, 0.0
+
+    effective_split = net_y
+    track_medians = {tid: sum(ys) / len(ys) for tid, ys in by_track.items()}
+    near_count = sum(1 for y in track_medians.values() if y > effective_split)
+    far_count = len(track_medians) - near_count
+    if near_count == 0 or far_count == 0:
+        auto_split = _compute_auto_split_y(player_positions)
+        if auto_split is None:
+            return None, 0.0
+        effective_split = auto_split
+
+    near_tids = [t for t, y in track_medians.items() if y > effective_split]
+    far_tids = [t for t, y in track_medians.items() if y <= effective_split]
+    if not near_tids or not far_tids:
+        return None, 0.0
+
+    def _sep(tids: list[int]) -> float:
+        if len(tids) >= 2:
+            ys = [track_medians[t] for t in tids]
+            return max(ys) - min(ys)
+        return abs(track_medians[tids[0]] - effective_split) * 0.5
+
+    near_sep = _sep(near_tids)
+    far_sep = _sep(far_tids)
+    ratio = max(near_sep, far_sep) / max(min(near_sep, far_sep), 1e-6)
+
+    if ratio < 1.0 + 1e-4:
+        return None, 0.0
+
+    if near_sep >= far_sep:
+        return "near", min(1.0, ratio - 1.0)
+    return "far", min(1.0, ratio - 1.0)
+
+
 def _is_ball_on_serve_side(
     ball_y: float,
     court_side: str,

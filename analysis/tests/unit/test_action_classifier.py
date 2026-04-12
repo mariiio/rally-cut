@@ -2328,27 +2328,33 @@ class TestFindServingTeamByFormation:
         )
         assert team == "A"
 
-    def test_margin_controls_strictness(self) -> None:
-        """Higher margin filters out marginal differences.
+    def test_graduated_confidence(self) -> None:
+        """Graduated confidence: always predict, lower confidence for marginal ratios.
 
-        Near sep=0.10, far sep=0.09: ratio = 1.11. At margin=1.05 this
-        passes; at margin=1.15 it doesn't.
+        Near sep=0.10, far sep=0.09: ratio = 1.11. Both margins now predict
+        "A" (graduated confidence, no hard abstention). Phase 0 analysis
+        (2026-04-12) showed 0% true formation errors, so we always predict
+        when separation signal exists.
         """
         # Build explicit medians: near 0.60 & 0.70 (sep=0.10), far 0.40 & 0.31 (sep=0.09)
         positions = self._formation_positions(
             near_ys=(0.70, 0.60), far_ys=(0.40, 0.31),
         )
         teams = {1: 0, 2: 0, 3: 1, 4: 1}
-        team_loose, _ = _find_serving_team_by_formation(
+        team_loose, conf_loose = _find_serving_team_by_formation(
             positions, start_frame=0, net_y=0.5,
             team_assignments=teams, margin=1.05,
         )
         assert team_loose == "A"
-        team_strict, _ = _find_serving_team_by_formation(
+        team_grad, conf_grad = _find_serving_team_by_formation(
             positions, start_frame=0, net_y=0.5,
             team_assignments=teams, margin=1.15,
         )
-        assert team_strict is None
+        # With graduated confidence, predicts instead of abstaining
+        assert team_grad == "A"
+        # Confidence is ratio - 1.0 regardless of margin (margin no longer gates)
+        assert conf_grad > 0
+        assert conf_grad == conf_loose  # same ratio → same confidence
 
     def test_too_few_players_returns_none(self) -> None:
         """With <2 tracked players, cannot compute separation."""
