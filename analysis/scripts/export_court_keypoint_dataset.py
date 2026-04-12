@@ -289,6 +289,11 @@ def main() -> None:
         help="Include external annotated images (from annotate_court_corners.py). "
         "Can be specified multiple times. External images go into train split only.",
     )
+    parser.add_argument(
+        "--force-val", type=str, action="append", default=[],
+        help="Force specific video IDs into validation split (repeatable). "
+        "Accepts full UUIDs or prefixes.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -331,14 +336,26 @@ def main() -> None:
         return
 
     # Split videos into train/val (video-level split for honest evaluation)
-    rng = random.Random(args.seed)
+    # Force-val: pin specific video IDs to validation first
     video_ids = [v["id"] for v in videos]
-    rng.shuffle(video_ids)
-    n_val = max(1, int(len(video_ids) * args.val_split))
-    val_ids = set(video_ids[:n_val])
-    train_ids = set(video_ids[n_val:])
+    forced_val_ids: set[str] = set()
+    for prefix in args.force_val:
+        matches = [vid for vid in video_ids if vid.startswith(prefix)]
+        if matches:
+            forced_val_ids.update(matches)
+            print(f"  Force-val: {prefix[:12]} → {matches[0][:12]}")
+        else:
+            print(f"  Force-val: {prefix[:12]} → NOT FOUND (skipping)")
 
-    print(f"Train: {len(train_ids)} videos, Val: {len(val_ids)} videos")
+    remaining_ids = [vid for vid in video_ids if vid not in forced_val_ids]
+    rng = random.Random(args.seed)
+    rng.shuffle(remaining_ids)
+    n_val = max(0, int(len(video_ids) * args.val_split) - len(forced_val_ids))
+    val_ids = forced_val_ids | set(remaining_ids[:n_val])
+    train_ids = set(remaining_ids[n_val:])
+
+    print(f"Train: {len(train_ids)} videos, Val: {len(val_ids)} videos"
+          f" ({len(forced_val_ids)} forced to val)")
 
     # Create output directories
     for split in ["train", "val"]:

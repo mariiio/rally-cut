@@ -399,6 +399,13 @@ class CourtKeypointDetector:
     # Minimum confidence to trust YOLO center points for refinement
     _CENTER_POINT_MIN_CONF = 0.3
 
+    # Below this confidence, near corner is considered off-screen and
+    # homography projection is used instead of sideline projection.
+    # Swept over [0.0, 0.05, 0.10, 0.15, 0.20, 0.30, 0.50] — 0.30
+    # gave lowest MCD (0.0678) and best success rate (40.9%).
+    # (Coincidentally equal to _CENTER_POINT_MIN_CONF; independently determined.)
+    OFF_SCREEN_CONF = 0.30
+
     def _refine_near_corners(
         self,
         corners: list[dict[str, float]],
@@ -476,7 +483,8 @@ class CourtKeypointDetector:
         points to place near corners. For each near corner:
 
         1. If raw Y is plausible, project onto sideline (keep Y, fix X).
-        2. Otherwise, extrapolate via VP + aspect ratio (full replacement).
+        2. Otherwise, compute via 4-point homography from in-frame keypoints.
+        3. Final fallback: VP + aspect ratio extrapolation.
         """
         center_left = (center_points[0]["x"], center_points[0]["y"])
         center_right = (center_points[1]["x"], center_points[1]["y"])
@@ -493,7 +501,12 @@ class CourtKeypointDetector:
             logger.debug("Center-point VP below far baseline — skipping")
             return None
 
-        # VP extrapolation as fallback for off-screen corners
+        # Pre-compute homography-based near corners from 4 in-frame keypoints
+        homo_corners = self._compute_near_corners_via_homography(
+            center_points, corners,
+        )
+
+        # VP extrapolation as final fallback for off-screen corners
         vp_corners, vp_refined = self._extrapolate_from_vp(
             corners, per_corner_confidence, conf_threshold, vp,
         )
@@ -502,8 +515,11 @@ class CourtKeypointDetector:
         refined_names: set[str] = set()
 
         margin = self.NEAR_CORNER_MAX_MARGIN
+        off_screen_conf = self.OFF_SCREEN_CONF
+
         for i, name in [(0, "near-left"), (1, "near-right")]:
-            if per_corner_confidence.get(name, 1.0) >= conf_threshold:
+            corner_conf = per_corner_confidence.get(name, 1.0)
+            if corner_conf >= conf_threshold:
                 continue
 
             raw_x = corners[i]["x"]
@@ -511,9 +527,11 @@ class CourtKeypointDetector:
             far_pt = far_left if i == 0 else far_right
             ctr_pt = center_left if i == 0 else center_right
 
-            # Sideline projection (keep raw Y, fix X)
+            # Strategy A: Sideline projection (keep raw Y, fix X)
+            # Only when corner has moderate confidence — the raw Y is somewhat
+            # trustworthy (corner partially visible or near frame edge).
             raw_y_plausible = far_pt[1] + 0.05 < raw_y < 1.0 + margin
-            if raw_y_plausible:
+            if corner_conf >= off_screen_conf and raw_y_plausible:
                 dy_sl = ctr_pt[1] - far_pt[1]
                 if abs(dy_sl) > 1e-6:
                     t = (raw_y - far_pt[1]) / dy_sl
@@ -521,23 +539,33 @@ class CourtKeypointDetector:
                     refined[i] = {"x": round(proj_x, 6), "y": round(raw_y, 6)}
                     refined_names.add(name)
                     logger.info(
-                        "Sideline-projected %s: (%.3f,%.3f)→(%.3f,%.3f)",
-                        name, raw_x, raw_y, proj_x, raw_y,
+                        "Sideline-projected %s: (%.3f,%.3f)→(%.3f,%.3f) conf=%.3f",
+                        name, raw_x, raw_y, proj_x, raw_y, corner_conf,
                     )
-                else:
-                    if name in vp_refined:
-                        refined[i] = vp_corners[i]
-                        refined_names.add(name)
-            else:
-                # Off-screen or implausible Y — use full VP extrapolation
-                if name in vp_refined:
-                    refined[i] = vp_corners[i]
-                    refined_names.add(name)
-                    logger.info(
-                        "VP-extrapolated %s: (%.3f,%.3f)→(%.3f,%.3f)",
-                        name, raw_x, raw_y,
-                        vp_corners[i]["x"], vp_corners[i]["y"],
-                    )
+                    continue
+
+            # Strategy B: 4-point homography (exact geometry from in-frame pts)
+            # Best for off-screen corners: computes both X and Y from the 4
+            # high-confidence in-frame keypoints with known court dimensions.
+            if homo_corners is not None:
+                hx, hy = homo_corners[i]
+                refined[i] = {"x": round(hx, 6), "y": round(hy, 6)}
+                refined_names.add(name)
+                logger.info(
+                    "Homography-projected %s: (%.3f,%.3f)→(%.3f,%.3f) conf=%.3f",
+                    name, raw_x, raw_y, hx, hy, corner_conf,
+                )
+                continue
+
+            # Strategy C: VP + aspect ratio fallback
+            if name in vp_refined:
+                refined[i] = vp_corners[i]
+                refined_names.add(name)
+                logger.info(
+                    "VP-extrapolated %s: (%.3f,%.3f)→(%.3f,%.3f)",
+                    name, raw_x, raw_y,
+                    vp_corners[i]["x"], vp_corners[i]["y"],
+                )
 
         if not refined_names:
             return corners, set()
@@ -548,6 +576,68 @@ class CourtKeypointDetector:
             return None
 
         return refined, refined_names
+
+    def _compute_near_corners_via_homography(
+        self,
+        center_points: list[dict[str, float]],
+        corners: list[dict[str, float]],
+    ) -> list[tuple[float, float]] | None:
+        """Compute near corners from 4 in-frame keypoints via homography.
+
+        Uses far-left, far-right, center-left, center-right (all high-confidence,
+        always in-frame) with their known court-space coordinates to fit a
+        homography, then projects near-left (0,0) and near-right (W,0).
+
+        Returns [(near_left_x, near_left_y), (near_right_x, near_right_y)]
+        or None if the homography is degenerate.
+        """
+        # Court-space coordinates for the 4 in-frame keypoints
+        # far-left=(0, L), far-right=(W, L), center-left=(0, L/2), center-right=(W, L/2)
+        W, L = COURT_WIDTH, COURT_LENGTH
+        court_pts = np.float32([
+            [0, L],       # far-left
+            [W, L],       # far-right
+            [0, L / 2],   # center-left
+            [W, L / 2],   # center-right
+        ])
+
+        # Image-space coordinates from keypoint detections
+        image_pts = np.float32([
+            [corners[3]["x"], corners[3]["y"]],       # far-left
+            [corners[2]["x"], corners[2]["y"]],       # far-right
+            [center_points[0]["x"], center_points[0]["y"]],  # center-left
+            [center_points[1]["x"], center_points[1]["y"]],  # center-right
+        ])
+
+        # 4 exact correspondences → getPerspectiveTransform (no RANSAC needed)
+        H = cv2.getPerspectiveTransform(court_pts, image_pts)
+        if H is None:
+            return None
+
+        # Project near corners: near-left=(0,0), near-right=(W,0)
+        near_court = np.float32([[0, 0], [W, 0]]).reshape(-1, 1, 2)
+        near_image = cv2.perspectiveTransform(near_court, H)
+
+        if near_image is None:
+            return None
+
+        nl = (float(near_image[0, 0, 0]), float(near_image[0, 0, 1]))
+        nr = (float(near_image[1, 0, 0]), float(near_image[1, 0, 1]))
+
+        # Sanity checks
+        far_mid_y = (corners[2]["y"] + corners[3]["y"]) / 2.0
+        if nl[1] < far_mid_y or nr[1] < far_mid_y:
+            logger.debug("Homography near corners above far baseline — rejecting")
+            return None
+
+        # Reject extreme X projections (e.g., very wide-angle lens)
+        margin = self.NEAR_CORNER_MAX_MARGIN
+        for x, y in [nl, nr]:
+            if x < -margin or x > 1.0 + margin:
+                logger.debug("Homography near corner X=%.2f out of bounds — rejecting", x)
+                return None
+
+        return [nl, nr]
 
     def _refine_via_vp_fallback(
         self,

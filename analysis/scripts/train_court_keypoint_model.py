@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Train YOLO11s-pose model for court keypoint detection.
+"""Train YOLO-pose model for court keypoint detection.
 
-Fine-tunes yolo11s-pose (COCO person-pose pretrained) on beach volleyball
+Fine-tunes a YOLO-pose model (COCO person-pose pretrained) on beach volleyball
 court keypoints. Predicts 6 keypoints:
   0: near-left, 1: near-right, 2: far-right, 3: far-left (corners)
   4: center-left, 5: center-right (net-sideline intersections)
@@ -46,8 +46,16 @@ def main() -> None:
         help="Image size (default: 640)",
     )
     parser.add_argument(
+        "--model", type=str, default="yolo11s-pose.pt",
+        help="Pretrained model to fine-tune (default: yolo11s-pose.pt)",
+    )
+    parser.add_argument(
         "--no-freeze", action="store_true",
         help="Train full model (don't freeze backbone)",
+    )
+    parser.add_argument(
+        "--name", type=str, default="train",
+        help="Run name for output directory (default: train)",
     )
     parser.add_argument(
         "--resume", action="store_true",
@@ -72,7 +80,7 @@ def main() -> None:
         device = "cpu"
 
     # Resume from last checkpoint if available, otherwise start fresh
-    last_pt = Path("runs/court_keypoint/train/weights/last.pt").resolve()
+    last_pt = Path(f"runs/court_keypoint/{args.name}/weights/last.pt").resolve()
     if args.resume and last_pt.exists():
         model = YOLO(str(last_pt))
         print(f"Resuming from {last_pt}")
@@ -83,8 +91,8 @@ def main() -> None:
             device=device,
         )
     else:
-        model = YOLO("yolo11s-pose.pt")
-        print("Loaded yolo11s-pose.pt (COCO pretrained, 17 kpts → fine-tune to 6 kpts)")
+        model = YOLO(args.model)
+        print(f"Loaded {args.model} (pretrained → fine-tune to 6 court kpts)")
         print(f"Dataset: {args.data}")
         print(f"Epochs: {args.epochs}, Batch: {args.batch}, Image size: {args.imgsz}")
         print(f"Freeze backbone: {not args.no_freeze}, Device: {device}")
@@ -116,7 +124,7 @@ def main() -> None:
             # Other settings
             workers=4,
             project=str(Path("runs/court_keypoint").resolve()),
-            name="train",
+            name=args.name,
             exist_ok=True,
             # Checkpoint every 10 epochs for sleep/crash resilience
             save_period=10,
@@ -124,7 +132,7 @@ def main() -> None:
         )
 
     # Copy best model to weights directory
-    best_path = Path("runs/court_keypoint/train/weights/best.pt").resolve()
+    best_path = Path(f"runs/court_keypoint/{args.name}/weights/best.pt").resolve()
     if best_path.exists():
         WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
         dest = WEIGHTS_DIR / "court_keypoint_best.pt"
