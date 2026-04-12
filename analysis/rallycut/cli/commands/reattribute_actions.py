@@ -489,6 +489,7 @@ def reattribute_actions_cmd(
         WHERE r.id IN ({placeholders})
           AND pt.contacts_json IS NOT NULL
           AND pt.actions_json IS NOT NULL
+        ORDER BY r.start_ms
     """
 
     with get_connection() as conn:
@@ -693,7 +694,10 @@ def reattribute_actions_cmd(
                     nested_actions["servingTeam"] = formation_team
                 if prior_serving != formation_team:
                     formation_applied += 1
-                rally_serving_updates.append((rally_id, formation_team))
+                # Note: rally_serving_updates is now built by the Viterbi
+                # post-processing step below, not per-rally. The per-rally
+                # formation prediction is still stamped in actions_json for
+                # backward compatibility with the API reader.
 
         updated_tracks.append((pt_id, json.dumps(new_actions_data)))
 
@@ -707,6 +711,84 @@ def reattribute_actions_cmd(
 
     if video_cap is not None:
         video_cap.release()
+
+    # Cross-rally Viterbi scoring: override per-rally formation predictions
+    # with the Viterbi-decoded serving_team sequence. This uses the physical
+    # side formation signal + dual-hypothesis convention + position-based
+    # switch detection for +10.9pp over per-rally predictions.
+    # See score_tracking_investigation_design.md.
+    from rallycut.scoring.cross_rally_viterbi import (  # noqa: PLC0415
+        RallyObservation,
+        decode_video_dual_hypothesis,
+    )
+    from rallycut.tracking.action_classifier import (  # noqa: PLC0415
+        _find_serving_side_by_formation,
+    )
+
+    # Build observations from positions collected during the loop.
+    viterbi_observations: list[RallyObservation] = []
+    viterbi_rally_ids: list[str] = []
+    for (
+        rally_id_val2, _pt_id_val2, _cj, _aj,
+        positions_json_val2, _sms, court_split_y_val2,
+    ) in rows:
+        rid2 = str(rally_id_val2)
+        viterbi_rally_ids.append(rid2)
+        positions_raw = positions_json_val2
+        split_y = court_split_y_val2
+        formation_side: str | None = None
+        formation_conf = 0.0
+        if positions_raw:
+            from rallycut.tracking.player_tracker import (  # noqa: PLC0415
+                PlayerPosition as _PlayerPos,
+            )
+            pos_list = [
+                _PlayerPos(
+                    frame_number=p["frameNumber"], track_id=p["trackId"],
+                    x=p["x"], y=p["y"],
+                    width=p.get("width", 0.05), height=p.get("height", 0.10),
+                    confidence=p.get("confidence", 1.0), keypoints=p.get("keypoints"),
+                )
+                for p in cast(list[dict[str, Any]], positions_raw)
+            ]
+            net_y = float(str(split_y)) if split_y is not None else 0.5
+            formation_side, formation_conf = _find_serving_side_by_formation(
+                pos_list, net_y=net_y, start_frame=0,
+            )
+        viterbi_observations.append(RallyObservation(
+            rally_id=rid2,
+            formation_side=formation_side,
+            formation_confidence=formation_conf,
+        ))
+
+    # Detect side switches from match_analysis semantic_flip transitions.
+    switch_indices: set[int] = set()
+    for i in range(1, len(viterbi_rally_ids)):
+        cur_flip = formation_flips.get(viterbi_rally_ids[i], False)
+        prev_flip = formation_flips.get(viterbi_rally_ids[i - 1], False)
+        if cur_flip != prev_flip:
+            switch_indices.add(i)
+
+    # Decode and override serving_team.
+    if viterbi_observations:
+        decoded = decode_video_dual_hypothesis(
+            viterbi_observations, side_switch_rallies=switch_indices,
+        )
+        rally_serving_updates = [
+            (dec.rally_id, dec.serving_team) for dec in decoded
+        ]
+        formation_applied = sum(
+            1 for (rid2, team), (
+                _r, _p, _c, aj, _pos, _s, _cs
+            ) in zip(rally_serving_updates, rows)
+            if isinstance(aj, dict)
+            and aj.get("servingTeam") != team
+        )
+        if not quiet:
+            console.print(
+                f"  [cyan]Viterbi scoring: {len(decoded)} rallies decoded, "
+                f"{formation_applied} serving_team changes[/cyan]"
+            )
 
     # Summary
     if not quiet:
@@ -739,7 +821,7 @@ def reattribute_actions_cmd(
             )
             if rally_serving_updates:
                 console.print(
-                    f"  [green]Formation-based serving_team: "
+                    f"  [green]Viterbi serving_team: "
                     f"{formation_applied} changed / "
                     f"{len(rally_serving_updates)} stamped[/green]"
                 )
