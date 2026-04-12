@@ -2524,6 +2524,57 @@ export interface MatchStats {
   finalScoreA?: number;
   finalScoreB?: number;
   scoreConfidence?: number;
+  landingHeatmaps?: {
+    teamA: {
+      serve: { grid: number[][]; count: number };
+      attack: { grid: number[][]; count: number };
+      all: { grid: number[][]; count: number };
+      points: Array<{
+        courtX: number;
+        courtY: number;
+        type: string;
+        team: string;
+        rallyId: string;
+        playerTrackId: number;
+        frame: number;
+        imageX: number;
+        imageY: number;
+        courtSide: string;
+      }>;
+    };
+    teamB: {
+      serve: { grid: number[][]; count: number };
+      attack: { grid: number[][]; count: number };
+      all: { grid: number[][]; count: number };
+      points: Array<{
+        courtX: number;
+        courtY: number;
+        type: string;
+        team: string;
+        rallyId: string;
+        playerTrackId: number;
+        frame: number;
+        imageX: number;
+        imageY: number;
+        courtSide: string;
+      }>;
+    };
+    perRally: Record<string, {
+      points: Array<{
+        courtX: number;
+        courtY: number;
+        type: string;
+        team: string;
+        rallyId: string;
+        playerTrackId: number;
+        frame: number;
+        imageX: number;
+        imageY: number;
+        courtSide: string;
+      }>;
+      servingTeam: string;
+    }>;
+  };
 }
 
 /**

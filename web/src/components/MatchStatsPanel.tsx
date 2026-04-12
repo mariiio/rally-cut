@@ -13,10 +13,13 @@ import {
   Chip,
   Divider,
   CircularProgress,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material';
 import type { MatchStats } from '@/services/api';
 import { getMatchStatsApi, getMatchAnalysis } from '@/services/api';
 import { useEditorStore } from '@/stores/editorStore';
+import CourtHeatmap from '@/components/CourtHeatmap';
 
 function pct(value: number): string {
   return `${(value * 100).toFixed(0)}%`;
@@ -207,6 +210,66 @@ function MatchOverview({ stats }: { stats: MatchStats }) {
   );
 }
 
+function LandingHeatmapSection({ stats }: { stats: MatchStats }) {
+  const [view, setView] = useState<'serve' | 'attack' | 'all'>('all');
+  const hm = stats.landingHeatmaps;
+  if (!hm) return null;
+
+  const teamA = hm.teamA[view];
+  const teamB = hm.teamB[view];
+  if ((!teamA || teamA.count === 0) && (!teamB || teamB.count === 0)) return null;
+
+  const titles: Record<string, string> = {
+    serve: 'Serve Targets',
+    attack: 'Attack Landings',
+    all: 'All Landings',
+  };
+
+  return (
+    <Box sx={{ mb: 1 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>
+          Landing Zones
+        </Typography>
+        <ToggleButtonGroup
+          value={view}
+          exclusive
+          onChange={(_, v) => { if (v) setView(v); }}
+          size="small"
+          sx={{
+            '& .MuiToggleButton-root': {
+              py: 0, px: 0.75, fontSize: '0.65rem', height: 20,
+              textTransform: 'none',
+            },
+          }}
+        >
+          <ToggleButton value="all">All</ToggleButton>
+          <ToggleButton value="serve">Serve</ToggleButton>
+          <ToggleButton value="attack">Attack</ToggleButton>
+        </ToggleButtonGroup>
+      </Box>
+      <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+        {teamA && teamA.count > 0 && (
+          <CourtHeatmap
+            grid={teamA.grid}
+            count={teamA.count}
+            points={view === 'all' ? hm.teamA.points : hm.teamA.points.filter(p => p.type === view)}
+            title={`Team A — ${titles[view]}`}
+          />
+        )}
+        {teamB && teamB.count > 0 && (
+          <CourtHeatmap
+            grid={teamB.grid}
+            count={teamB.count}
+            points={view === 'all' ? hm.teamB.points : hm.teamB.points.filter(p => p.type === view)}
+            title={`Team B — ${titles[view]}`}
+          />
+        )}
+      </Box>
+    </Box>
+  );
+}
+
 export function MatchStatsPanel() {
   const [stats, setStats] = useState<MatchStats | null>(null);
   const [playerNames, setPlayerNames] = useState<Record<string, string>>({});
@@ -271,6 +334,12 @@ export function MatchStatsPanel() {
       <TeamStatsTable stats={stats} />
       <Divider sx={{ my: 1 }} />
       <PlayerStatsTable stats={stats} playerNames={playerNames} />
+      {stats.landingHeatmaps && (
+        <>
+          <Divider sx={{ my: 1 }} />
+          <LandingHeatmapSection stats={stats} />
+        </>
+      )}
     </Box>
   );
 }
