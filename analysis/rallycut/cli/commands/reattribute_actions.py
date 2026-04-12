@@ -828,16 +828,54 @@ def reattribute_actions_cmd(
             team_localization_conf=team_loc_conf,
         ))
 
-    # Detect side switches from match_analysis semantic_flip transitions.
-    switch_indices: set[int] = set()
-    for i in range(1, len(viterbi_rally_ids)):
-        cur_flip = formation_flips.get(viterbi_rally_ids[i], False)
-        prev_flip = formation_flips.get(viterbi_rally_ids[i - 1], False)
-        if cur_flip != prev_flip:
-            switch_indices.add(i)
+    # Per-rally team localization: directly determine serving team from
+    # formation (which side serves) + track_to_player (which team is on
+    # which side). No accumulated side-switch state needed.
+    has_team_loc = any(
+        obs.team_near is not None for obs in viterbi_observations
+    )
 
-    # Decode and override serving_team.
-    if viterbi_observations:
+    if has_team_loc:
+        # Convention: first rally's near team = A (production default)
+        first_near = next(
+            (obs.team_near for obs in viterbi_observations if obs.team_near is not None),
+            "0",
+        )
+        label_a = first_near
+
+        for obs in viterbi_observations:
+            if obs.formation_side is None or obs.team_near is None:
+                rally_serving_updates.append((obs.rally_id, "A"))  # default
+                continue
+            if obs.formation_side == "near":
+                serving_label = obs.team_near
+            else:
+                all_labels = {"0", "1"}
+                serving_label = (all_labels - {obs.team_near}).pop() if obs.team_near in all_labels else obs.team_near
+            team = "A" if serving_label == label_a else "B"
+            rally_serving_updates.append((obs.rally_id, team))
+
+        formation_applied = sum(
+            1 for (rid2, team), (
+                _r, _p, _c, aj, _pos, _s, _cs
+            ) in zip(rally_serving_updates, rows)
+            if isinstance(aj, dict)
+            and aj.get("servingTeam") != team
+        )
+        if not quiet:
+            console.print(
+                f"  [cyan]Team localization: {len(rally_serving_updates)} rallies, "
+                f"{formation_applied} serving_team changes[/cyan]"
+            )
+    elif viterbi_observations:
+        # Fallback: no team localization → use Viterbi with side switches
+        switch_indices: set[int] = set()
+        for i in range(1, len(viterbi_rally_ids)):
+            cur_flip = formation_flips.get(viterbi_rally_ids[i], False)
+            prev_flip = formation_flips.get(viterbi_rally_ids[i - 1], False)
+            if cur_flip != prev_flip:
+                switch_indices.add(i)
+
         decoded = decode_video_dual_hypothesis(
             viterbi_observations, side_switch_rallies=switch_indices,
         )

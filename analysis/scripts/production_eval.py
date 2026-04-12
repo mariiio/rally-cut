@@ -733,47 +733,90 @@ def _apply_viterbi_scoring(
                 court_split_y=rd.court_split_y if rd else None,
             ))
 
-        # Position-based side-switch detection (when track_to_player available).
-        # Falls back to match_analysis semantic_flip transitions.
-        has_t2p = any(pd.track_to_player for pd in position_data)
-        if has_t2p:
-            switch_indices = detect_side_switches_from_positions(position_data)
-        else:
-            switch_indices = set()
-            for order_i in range(1, len(rally_actions_list)):
-                rid = rally_actions_list[order_i].rally_id
-                prev_rid = rally_actions_list[order_i - 1].rally_id
-                cur_flip = flips.get(rid, False)
-                prev_flip = flips.get(prev_rid, False)
-                if cur_flip != prev_flip:
-                    switch_indices.add(order_i)
+        # Per-rally team localization: directly determine serving team
+        # from formation (which side serves) + track_to_player (which
+        # team is on which side). No accumulated side-switch state needed
+        # — each rally independently resolves its team mapping.
+        #
+        # For eval, convention calibration (which team_label = GT's "A")
+        # uses majority-vote from GT labels. For production, convention
+        # is set by first rally (near = A).
+        has_team_loc = any(
+            obs.team_near is not None for obs in observations
+        )
 
-        # Eval convention calibration: use 1 GT label per video to align
-        # the system's A/B convention with GT's A/B convention. This is
-        # standard eval methodology (like aligning cluster labels with GT
-        # in clustering metrics), not a production feature. The system
-        # correctly identifies which PLAYERS serve — the A/B label is a
-        # presentation concern. See team_identity_design.md.
-        gt_teams: list[str | None] = []
-        for ra in rally_actions_list:
-            rd = rally_data_by_id.get(ra.rally_id)
-            gt_teams.append(rd.gt_serving_team if rd else None)
-        has_gt = any(gt is not None for gt in gt_teams)
+        if has_team_loc:
+            # Determine convention: which team_label maps to "A"?
+            # Use GT calibration if available, else default first-rally.
+            gt_teams: list[str | None] = []
+            for ra in rally_actions_list:
+                rd = rally_data_by_id.get(ra.rally_id)
+                gt_teams.append(rd.gt_serving_team if rd else None)
+            has_gt = any(gt is not None for gt in gt_teams)
 
-        if has_gt:
-            initial_near_is_a = calibrate_initial_side(observations, gt_teams)
-            decoded = decode_video(
-                observations, initial_near_is_a=initial_near_is_a,
-                side_switch_rallies=switch_indices,
-            )
+            if has_gt:
+                # Majority-vote: for GT rallies where formation + team_loc
+                # agree, determine which team_label = GT's team.
+                votes: dict[str, int] = {}  # team_label → net votes for "this = A"
+                for obs, gt in zip(observations, gt_teams):
+                    if gt is None or obs.formation_side is None or obs.team_near is None:
+                        continue
+                    # Formation says which side serves → team_near or team_far
+                    if obs.formation_side == "near":
+                        serving_label = obs.team_near
+                    else:
+                        # team_far = the other template
+                        all_labels = {"0", "1"}
+                        serving_label = (all_labels - {obs.team_near}).pop() if obs.team_near in all_labels else None
+                    if serving_label is None:
+                        continue
+                    # GT says team X serves → serving_label should map to X
+                    votes.setdefault(serving_label, 0)
+                    if gt == "A":
+                        votes[serving_label] += 1
+                    else:
+                        votes[serving_label] -= 1
+
+                # Label with most positive votes = A
+                label_a = max(votes, key=lambda k: votes[k]) if votes else "0"
+            else:
+                # Production: first rally's near team = A
+                first_near = next(
+                    (obs.team_near for obs in observations if obs.team_near is not None),
+                    "0",
+                )
+                label_a = first_near
+
+            # Direct per-rally serving team assignment
+            for obs, ra in zip(observations, rally_actions_list):
+                if obs.formation_side is None or obs.team_near is None:
+                    continue  # Keep existing prediction
+                if obs.formation_side == "near":
+                    serving_label = obs.team_near
+                else:
+                    all_labels = {"0", "1"}
+                    serving_label = (all_labels - {obs.team_near}).pop() if obs.team_near in all_labels else obs.team_near
+                ra.formation_serving_team = "A" if serving_label == label_a else "B"
         else:
+            # Fallback: no team localization → use Viterbi with side switches
+            has_t2p = any(pd.track_to_player for pd in position_data)
+            if has_t2p:
+                switch_indices = detect_side_switches_from_positions(position_data)
+            else:
+                switch_indices = set()
+                for order_i in range(1, len(rally_actions_list)):
+                    rid = rally_actions_list[order_i].rally_id
+                    prev_rid = rally_actions_list[order_i - 1].rally_id
+                    cur_flip = flips.get(rid, False)
+                    prev_flip = flips.get(prev_rid, False)
+                    if cur_flip != prev_flip:
+                        switch_indices.add(order_i)
+
             decoded = decode_video_dual_hypothesis(
                 observations, side_switch_rallies=switch_indices,
             )
-
-        # Override formation_serving_team on each RallyActions.
-        for ra, dec in zip(rally_actions_list, decoded):
-            ra.formation_serving_team = dec.serving_team
+            for ra, dec in zip(rally_actions_list, decoded):
+                ra.formation_serving_team = dec.serving_team
 
 
 def _run_once(
