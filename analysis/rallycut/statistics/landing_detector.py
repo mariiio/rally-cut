@@ -234,16 +234,11 @@ def _find_ball_near_frame(
     return (best.x, best.y)
 
 
-def _get_court_side(
-    team: str,
-    team_assignments: dict[str, int] | None,
-) -> str:
+def _get_court_side(team: str) -> str:
     """Map a team label to a court side.
 
-    After ``reattribute-actions``, team "A" is always mapped to near
-    (team 0) and "B" to far (team 1).  If *team_assignments* is not
-    available we fall back to the same convention directly from the
-    team label.
+    After ``reattribute-actions``, team "A" is always near (team 0)
+    and "B" is always far (team 1).
     """
     if team == "A":
         return "near"
@@ -301,7 +296,6 @@ def detect_rally_landings(
 
     landings: list[LandingPoint] = []
     actions = sorted(rally_actions.actions, key=lambda a: a.frame)
-    team_assignments = getattr(rally_actions, "team_assignments", None)
 
     def _make_landing(
         frame: int,
@@ -323,7 +317,7 @@ def detect_rally_landings(
             rally_id=rally_actions.rally_id,
             player_track_id=player_track_id,
             team=team,
-            court_side=_get_court_side(team, team_assignments),
+            court_side=_get_court_side(team),
         )
 
     # --- Serve target (receiving player's feet) ---
@@ -515,6 +509,20 @@ def compute_landing_heatmaps(
             grid /= total
         return [[round(float(v), 4) for v in row] for row in grid]
 
+    def _normalize_point(lp: LandingPoint) -> dict[str, Any]:
+        """Return to_dict() with court coords normalized to half-court."""
+        d = lp.to_dict()
+        if lp.court_x is not None and lp.court_y is not None:
+            cx, cy = lp.court_x, lp.court_y
+            if lp.court_side == "far":
+                cy = COURT_LENGTH_M - cy
+                cx = COURT_WIDTH_M - cx
+            cx = max(0.0, min(cx, COURT_WIDTH_M - 1e-9))
+            cy = max(0.0, min(cy, HALF_COURT_M - 1e-9))
+            d["courtX"] = round(cx, 2)
+            d["courtY"] = round(cy, 2)
+        return d
+
     def _team_block(pts: list[LandingPoint]) -> dict[str, Any]:
         serve_pts = [lp for lp in pts if lp.action_type == "serve"]
         attack_pts = [lp for lp in pts if lp.action_type == "attack"]
@@ -531,7 +539,7 @@ def compute_landing_heatmaps(
                 "grid": _build_half_grid(pts),
                 "count": len(pts),
             },
-            "points": [lp.to_dict() for lp in pts],
+            "points": [_normalize_point(lp) for lp in pts],
         }
 
     team_a_pts = [lp for lp in calibrated_landings if lp.team == "A"]

@@ -18,13 +18,16 @@ logger = logging.getLogger(__name__)
 
 def _load_rally_actions_and_positions(
     video_id: str,
-) -> tuple[list[Any], list[Any], float, dict[str, list[Any]], Any, Any, int, int]:
+) -> tuple[
+    list[Any], list[Any], float, dict[str, list[Any]], Any, Any, int, int,
+    dict[str, list[dict[str, Any]]],
+]:
     """Load actions, positions, and extended data from DB for all tracked rallies.
 
     Returns:
         (rally_actions_list, all_positions, video_fps,
          ball_positions_map, calibrator, match_analysis,
-         video_width, video_height)
+         video_width, video_height, positions_raw_map)
     """
     from rallycut.court.calibration import CourtCalibrator
     from rallycut.evaluation.tracking.db import get_connection
@@ -69,6 +72,7 @@ def _load_rally_actions_and_positions(
     rally_actions_list: list[RallyActions] = []
     all_positions: list[PlayerPosition] = []
     ball_positions_map: dict[str, list[BallPosition]] = {}
+    positions_raw_map: dict[str, list[dict[str, Any]]] = {}
 
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -177,6 +181,7 @@ def _load_rally_actions_and_positions(
         # Parse positions
         pos_json = cast(list[dict[str, Any]] | None, positions_json)
         if pos_json:
+            raw_list: list[dict[str, Any]] = []
             for p in pos_json:
                 orig_tid = p.get("trackId", -1)
                 mapped_tid = player_map.get(orig_tid, orig_tid)
@@ -189,6 +194,11 @@ def _load_rally_actions_and_positions(
                     height=p.get("height", 0.0),
                     confidence=p.get("confidence", 0.0),
                 ))
+                # Keep raw dict with mapped trackId for feet projection.
+                raw_entry = dict(p)
+                raw_entry["trackId"] = mapped_tid
+                raw_list.append(raw_entry)
+            positions_raw_map[rally_id_str] = raw_list
 
         # Parse ball positions
         bp_json = cast(list[dict[str, Any]] | None, ball_json)
@@ -206,7 +216,7 @@ def _load_rally_actions_and_positions(
     return (
         rally_actions_list, all_positions, video_fps,
         ball_positions_map, calibrator, match_analysis,
-        video_width, video_height,
+        video_width, video_height, positions_raw_map,
     )
 
 
@@ -245,7 +255,7 @@ def compute_match_stats_cmd(
     (
         rally_actions_list, all_positions, video_fps,
         ball_positions_map, calibrator, match_analysis,
-        video_width, video_height,
+        video_width, video_height, positions_raw_map,
     ) = _load_rally_actions_and_positions(video_id)
 
     if not rally_actions_list:
@@ -272,6 +282,7 @@ def compute_match_stats_cmd(
         calibrator=calibrator,
         ball_positions_map=ball_positions_map,
         match_analysis=match_analysis,
+        positions_raw_map=positions_raw_map,
     )
 
     result = stats.to_dict()
