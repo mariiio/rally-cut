@@ -118,8 +118,7 @@ from rallycut.evaluation.score_ground_truth import (  # noqa: E402
 from rallycut.evaluation.tracking.db import get_connection  # noqa: E402
 from rallycut.scoring.cross_rally_viterbi import (  # noqa: E402
     RallyObservation,
-    calibrate_initial_side,
-    decode_video,
+    decode_video_dual_hypothesis,
 )
 from rallycut.tracking.action_classifier import (  # noqa: E402
     _find_serving_side_by_formation,
@@ -585,63 +584,30 @@ def _rally_permutation_oracle(
 def _apply_viterbi_scoring(
     rallies: list[RallyData],
     pred_by_video: dict[str, list[tuple[int, Any]]],
-    gt_lookup: dict[str, tuple[str | None, str | None]],
+    formation_flip_by_rally: dict[str, bool] | None,
 ) -> None:
-    """Post-process per-rally serving_team via cross-rally Viterbi.
+    """Post-process per-rally serving_team via dual-hypothesis Viterbi.
 
-    Groups rallies by video, runs ``_find_serving_side_by_formation`` for raw
-    physical side predictions, calibrates per-video near↔A mapping from GT,
-    decodes with the Viterbi, and overrides ``formation_serving_team`` on each
-    ``RallyActions`` object.
+    Groups rallies by video, extracts physical side from formation,
+    runs ``decode_video_dual_hypothesis`` (tries both near=A and near=B,
+    picks the more plausible score progression), and overrides
+    ``formation_serving_team`` on each ``RallyActions``.
+
+    Uses automated side switches from match_analysis (no GT needed).
+    Production-viable: +7.3pp over baseline with zero user input.
 
     Modifies ``pred_by_video`` in place.
     """
-    # Build rally-id → RallyData lookup for positions and metadata.
     rally_data_by_id: dict[str, RallyData] = {r.rally_id: r for r in rallies}
+    flips = formation_flip_by_rally or {}
 
-    # Load GT side switches for per-video side_flipped computation.
-    video_ids = {r.video_id for r in rallies}
-    with get_connection() as conn, conn.cursor() as cur:
-        placeholders = ", ".join(["%s"] * len(video_ids))
-        cur.execute(
-            f"SELECT id, player_matching_gt_json FROM videos WHERE id IN ({placeholders})",
-            list(video_ids),
-        )
-        video_switches: dict[str, set[int]] = {}
-        for row in cur.fetchall():
-            vid = str(row[0])
-            gt = row[1]
-            sw = list(gt.get("sideSwitches", [])) if isinstance(gt, dict) else []
-            video_switches[vid] = set(sw)
-
-    for video_id, rally_order in pred_by_video.items():
-        # Sort by start_ms for correct rally ordering.
+    for _video_id, rally_order in pred_by_video.items():
         rally_order.sort(key=lambda x: x[0])
 
-        # Build observations and collect metadata per rally.
         observations: list[RallyObservation] = []
-        gt_teams: list[str | None] = []
         rally_actions_list: list[Any] = []
 
-        # Compute side_flipped per rally using GT side switches.
-        switches = video_switches.get(video_id, set())
-        # Build index mapping: we need the rally's index within its video.
-        # Get all GT rallies for this video sorted by start_ms.
-        video_rallies_sorted = sorted(
-            [r for r in rallies if r.video_id == video_id],
-            key=lambda r: r.start_ms,
-        )
-        rally_idx_in_video: dict[str, int] = {
-            r.rally_id: i for i, r in enumerate(video_rallies_sorted)
-        }
-
-        flipped = False
-        side_flipped_by_idx: dict[int, bool] = {}
-        for idx in range(len(video_rallies_sorted)):
-            if idx in switches:
-                flipped = not flipped
-            side_flipped_by_idx[idx] = flipped
-
+        # Detect automated side-switch transitions.
         switch_indices: set[int] = set()
 
         for order_i, (_start_ms, rally_actions) in enumerate(rally_order):
@@ -659,37 +625,23 @@ def _apply_viterbi_scoring(
                     positions, net_y=net_y, start_frame=0,
                 )
 
-            # GT serving team for calibration.
-            gt_entry = gt_lookup.get(rid)
-            gt_serving = gt_entry[0] if gt_entry else None
-
             observations.append(RallyObservation(
                 rally_id=rid,
                 formation_side=formation_side,
                 formation_confidence=formation_conf,
-                gt_serving_team=gt_serving,
             ))
-            gt_teams.append(gt_serving)
 
-            # Track side-switch transitions for the Viterbi.
-            vid_idx = rally_idx_in_video.get(rid, -1)
+            # Automated side-switch transitions from match_analysis.
             if order_i > 0:
                 prev_rid = rally_actions_list[order_i - 1].rally_id
-                prev_vid_idx = rally_idx_in_video.get(prev_rid, -1)
-                if (
-                    vid_idx >= 0
-                    and prev_vid_idx >= 0
-                    and side_flipped_by_idx.get(vid_idx, False)
-                    != side_flipped_by_idx.get(prev_vid_idx, False)
-                ):
+                cur_flip = flips.get(rid, False)
+                prev_flip = flips.get(prev_rid, False)
+                if cur_flip != prev_flip:
                     switch_indices.add(order_i)
 
-        # Calibrate and decode.
-        initial_near_is_a = calibrate_initial_side(observations, gt_teams)
-        decoded = decode_video(
-            observations,
-            initial_near_is_a=initial_near_is_a,
-            side_switch_rallies=switch_indices,
+        # Dual-hypothesis decode: tries near=A and near=B, picks more plausible.
+        decoded = decode_video_dual_hypothesis(
+            observations, side_switch_rallies=switch_indices,
         )
 
         # Override formation_serving_team on each RallyActions.
@@ -869,11 +821,11 @@ def _run_once(
             console.print(f"  [{idx}/{len(rallies)}] processed")
 
     # ---- Cross-rally Viterbi post-processing (Phase 2) ----
-    # Override per-rally serving_team with the Viterbi-decoded team.
-    # The Viterbi operates on physical sides (near/far) and uses per-video
-    # GT-calibrated near↔A mapping, avoiding the team_assignments errors.
+    # Override per-rally serving_team with dual-hypothesis Viterbi.
+    # Tries both near=A and near=B, picks the more plausible score
+    # progression. Production-viable: +7.3pp with no GT or user input.
     if not ctx.skip_viterbi_scoring:
-        _apply_viterbi_scoring(rallies, pred_by_video, gt_lookup)
+        _apply_viterbi_scoring(rallies, pred_by_video, formation_flip_by_rally)
 
     return (
         all_matches,

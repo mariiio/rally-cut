@@ -321,3 +321,96 @@ def calibrate_initial_side(
             votes_near_is_a += 1
 
     return votes_near_is_a >= votes_near_is_b
+
+
+def calibrate_from_noisy_predictions(
+    observations: list[RallyObservation],
+    noisy_serving_teams: list[str | None],
+) -> bool:
+    """Self-calibrate near=A/B from existing noisy per-rally predictions.
+
+    Uses the same majority-vote logic as ``calibrate_initial_side`` but
+    substitutes GT labels with the existing pipeline's (noisy) predictions.
+    Works in production without any GT.
+
+    Args:
+        observations: Per-rally formation observations.
+        noisy_serving_teams: Existing per-rally serving_team predictions
+            from the formation + team_assignments + semantic_flip path.
+    """
+    return calibrate_initial_side(observations, noisy_serving_teams)
+
+
+def decode_video_dual_hypothesis(
+    observations: list[RallyObservation],
+    p_stay: float = 0.515,
+    side_switch_rallies: set[int] | None = None,
+) -> list[DecodedRally]:
+    """Decode by trying both near=A and near=B, pick the better hypothesis.
+
+    Scores each hypothesis by how plausible the resulting score progression
+    looks: penalizes long serve runs (>8 consecutive), extreme score
+    imbalance, and deviation from expected mean run length (~2).
+
+    No GT or external calibration needed — purely self-contained.
+    """
+    switches = side_switch_rallies or set()
+
+    results_a = decode_video(
+        observations, p_stay=p_stay, initial_near_is_a=True,
+        side_switch_rallies=switches,
+    )
+    results_b = decode_video(
+        observations, p_stay=p_stay, initial_near_is_a=False,
+        side_switch_rallies=switches,
+    )
+
+    score_a = _score_plausibility(results_a)
+    score_b = _score_plausibility(results_b)
+    return results_a if score_a >= score_b else results_b
+
+
+def _score_plausibility(decoded: list[DecodedRally]) -> float:
+    """Score how plausible a decoded serving sequence looks.
+
+    Higher = more plausible. Based on volleyball priors:
+    - Serve runs should average ~2 rallies (p_stay ≈ 0.515)
+    - Neither team should dominate unrealistically
+    - Score should be roughly balanced (beach volleyball sets are to 21)
+    """
+    if len(decoded) < 2:
+        return 0.0
+
+    # Compute serve run lengths.
+    runs: list[int] = []
+    cur_team = decoded[0].serving_team
+    cur_len = 1
+    for d in decoded[1:]:
+        if d.serving_team == cur_team:
+            cur_len += 1
+        else:
+            runs.append(cur_len)
+            cur_team = d.serving_team
+            cur_len = 1
+    runs.append(cur_len)
+
+    if not runs:
+        return 0.0
+
+    # Penalty for unrealistic run lengths.
+    mean_run = sum(runs) / len(runs)
+    # Expected mean run is ~2.06 (from p_stay=0.515: 1/(1-0.515)).
+    run_penalty = abs(mean_run - 2.06)
+
+    # Penalty for extreme score imbalance.
+    n_a = sum(1 for d in decoded if d.serving_team == "A")
+    n_b = len(decoded) - n_a
+    balance = min(n_a, n_b) / max(n_a, n_b, 1)
+    # Perfect balance = 1.0, extreme imbalance → 0.
+    balance_penalty = 1.0 - balance
+
+    # Penalty for very long runs (>8 is suspicious for beach volleyball).
+    max_run = max(runs) if runs else 0
+    long_run_penalty = max(0, max_run - 8) * 0.5
+
+    return -(run_penalty + balance_penalty * 2.0 + long_run_penalty)
