@@ -69,6 +69,7 @@ interface PlayerTrackingState {
   showBallOverlay: boolean;
   showCourtDebugOverlay: boolean;
   showRawTracks: boolean;
+  showLandingZones: boolean;
 
   // Selected track for highlighting
   selectedTrackId: number | null;
@@ -119,6 +120,7 @@ interface PlayerTrackingState {
   togglePlayerOverlay: () => void;
   toggleBallOverlay: () => void;
   toggleCourtDebugOverlay: () => void;
+  toggleLandingZones: () => void;
   toggleRawTracks: () => void;
   setSelectedTrack: (trackId: number | null) => void;
   setIsCalibrating: (value: boolean) => void;
@@ -254,6 +256,7 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
       showBallOverlay: false,
       showCourtDebugOverlay: false,
       showRawTracks: false,
+      showLandingZones: false,
       selectedTrackId: null,
       isCalibrating: false,
       calibrations: {},
@@ -379,6 +382,10 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
 
       toggleCourtDebugOverlay: () => {
         set((state) => ({ showCourtDebugOverlay: !state.showCourtDebugOverlay }));
+      },
+
+      toggleLandingZones: () => {
+        set((state) => ({ showLandingZones: !state.showLandingZones }));
       },
 
       toggleRawTracks: () => {

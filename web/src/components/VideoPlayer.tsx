@@ -19,6 +19,9 @@ import { CourtDebugOverlay } from './CourtDebugOverlay';
 import { PlayerOverlay } from './PlayerOverlay';
 import { ActionOverlay } from './ActionOverlay';
 import { ActionLabelingMode } from './ActionLabelingMode';
+import { RallyLandingOverlay } from './RallyLandingOverlay';
+import { getMatchStatsApi } from '@/services/api';
+import type { MatchStats } from '@/services/api';
 import { LabelingModeBanner } from './LabelingModeBanner';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { AspectRatio } from '@/constants/enums';
@@ -132,6 +135,7 @@ export function VideoPlayer() {
   const actionGroundTruth = usePlayerTrackingStore((state) => state.actionGroundTruth);
   const updateActionLabel = usePlayerTrackingStore((state) => state.updateActionLabel);
   const removeActionLabel = usePlayerTrackingStore((state) => state.removeActionLabel);
+  const showLandingZones = usePlayerTrackingStore((state) => state.showLandingZones);
 
   // Get active match for fps
   const activeMatch = getActiveMatch();
@@ -168,6 +172,13 @@ export function VideoPlayer() {
     sorted.forEach((t, i) => map.set(t.trackId, i + 1));
     return map;
   }, [isLabelingActions, currentRally, playerTracks]);
+
+  // Match stats for landing overlay
+  const [matchStats, setMatchStats] = useState<MatchStats | null>(null);
+  useEffect(() => {
+    if (!activeMatchId) return;
+    getMatchStatsApi(activeMatchId).then(setMatchStats).catch(() => {});
+  }, [activeMatchId]);
 
   // Get camera edit for current rally
   const currentCameraEdit = useMemo(() => {
@@ -927,6 +938,13 @@ export function VideoPlayer() {
               onUpdateLabel={(frame, action) => updateActionLabel(currentRally._backendId!, frame, action)}
               onDeleteLabel={(frame) => removeActionLabel(currentRally._backendId!, frame)}
               playerNumberMap={labelingPlayerNumbers}
+            />
+          )}
+          {/* Landing zones overlay */}
+          {showLandingZones && currentRally && currentRally._backendId && matchStats && (
+            <RallyLandingOverlay
+              rallyId={currentRally._backendId}
+              matchStats={matchStats}
             />
           )}
           {/* Action labeling keyboard handler */}

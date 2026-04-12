@@ -10,6 +10,7 @@ import SportsVolleyballIcon from '@mui/icons-material/SportsVolleyball';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import LayersIcon from '@mui/icons-material/Layers';
+import PlaceIcon from '@mui/icons-material/Place';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
@@ -62,6 +63,8 @@ export function PlayerTrackingToolbar() {
     toggleBallOverlay,
     showCourtDebugOverlay,
     toggleCourtDebugOverlay,
+    showLandingZones,
+    toggleLandingZones,
     showRawTracks,
     toggleRawTracks,
     swapTracks,
@@ -358,6 +361,18 @@ export function PlayerTrackingToolbar() {
               >
                 <GridOnIcon sx={{ fontSize: 16 }} />
                 Court
+              </ToggleButton>
+              <ToggleButton
+                value="landings"
+                selected={showLandingZones}
+                onClick={toggleLandingZones}
+                sx={{
+                  px: 0.75, textTransform: 'none', fontSize: '0.7rem', gap: 0.5,
+                  '&.Mui-selected': { color: '#FF6B4A', bgcolor: 'rgba(255,107,74,0.12)' },
+                }}
+              >
+                <PlaceIcon sx={{ fontSize: 16 }} />
+                Landings
               </ToggleButton>
             </ToggleButtonGroup>
           </>
