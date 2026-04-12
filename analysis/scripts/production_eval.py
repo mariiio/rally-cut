@@ -247,6 +247,37 @@ def _build_calibrators(video_ids: set[str]) -> dict[str, Any]:
     return out
 
 
+def _build_camera_heights(
+    video_ids: set[str],
+    calibrators: dict[str, Any],
+) -> dict[str, float]:
+    """Compute per-video camera height from court calibration + video resolution."""
+    from rallycut.court.camera_model import calibrate_camera  # noqa: PLC0415
+
+    heights: dict[str, float] = {}
+    if not video_ids:
+        return heights
+    placeholders = ", ".join(["%s"] * len(video_ids))
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"SELECT id, width, height FROM videos WHERE id IN ({placeholders})",
+            list(video_ids),
+        )
+        resolutions = {vid: (int(w), int(h)) for vid, w, h in cur.fetchall() if w and h}
+    for vid, cal in calibrators.items():
+        res = resolutions.get(vid)
+        if res is None or not cal.is_calibrated or cal.homography is None:
+            continue
+        cam = calibrate_camera(
+            cal.homography.image_corners,
+            cal.homography.court_corners,
+            res[0], res[1],
+        )
+        if cam is not None and cam.is_valid:
+            heights[vid] = float(cam.camera_position[2])
+    return heights
+
+
 def _load_formation_semantic_flips(video_ids: set[str]) -> dict[str, bool]:
     """Compute per-rally `semantic_flip` from `match_analysis_json`.
 
@@ -343,6 +374,7 @@ def _run_rally(
     ctx: PipelineContext,
     track_to_player: dict[int, int] | None = None,
     formation_semantic_flip: bool = False,
+    camera_height: float = 0.0,
 ) -> tuple[list[dict], Any]:
     """Mirror `track_player.py:1011–1093` stages 9–14.
 
@@ -429,6 +461,7 @@ def _run_rally(
         calibrator=calibrator,
         track_to_player=track_to_player,
         formation_semantic_flip=formation_semantic_flip,
+        camera_height=camera_height,
     )
 
     # Stage 14 — MS-TCN++ hybrid override (serves exempt).
@@ -546,6 +579,7 @@ def _run_once(
     ctx: PipelineContext,
     t2p_by_rally: dict[str, dict[int, int]] | None = None,
     formation_flip_by_rally: dict[str, bool] | None = None,
+    camera_heights: dict[str, float] | None = None,
     *,
     print_progress: bool = True,
 ) -> tuple[
@@ -606,6 +640,7 @@ def _run_once(
                 ctx,
                 track_to_player=rally_t2p_for_formation,
                 formation_semantic_flip=rally_semantic_flip,
+                camera_height=(camera_heights or {}).get(rally.video_id, 0.0),
             )
         except Exception as exc:  # noqa: BLE001 — we want to surface any prod failure
             rejections.append({
@@ -825,12 +860,14 @@ def _parity_check(rally_id: str) -> int:
     team_map = _load_match_team_assignments({rally.video_id}, rally_positions=rally_pos_lookup)
 
     calibrators = _build_calibrators({rally.video_id})
+    cam_heights = _build_camera_heights({rally.video_id}, calibrators)
     ctx = PipelineContext()
     pred_actions, _ = _run_rally(
         rally,
         team_map.get(rally.rally_id),
         calibrators.get(rally.video_id),
         ctx,
+        camera_height=cam_heights.get(rally.video_id, 0.0),
     )
 
     # DB-stored production output (from the last track-players run that
@@ -1058,7 +1095,11 @@ def main() -> int:
     # Production passes a real `CourtCalibrator` into the three enrichment
     # stages when calibration is available. Build them once up front.
     calibrators = _build_calibrators(video_ids)
-    console.print(f"  court calibration available for {len(calibrators)}/{len(video_ids)} videos")
+    camera_heights = _build_camera_heights(video_ids, calibrators)
+    console.print(
+        f"  court calibration available for {len(calibrators)}/{len(video_ids)} videos"
+        f", camera height for {len(camera_heights)}/{len(video_ids)}"
+    )
 
     # Build PipelineContext + apply ablations.
     ctx = PipelineContext()
@@ -1086,6 +1127,7 @@ def main() -> int:
         ) = _run_once(
             rallies, team_map, calibrators, ctx, t2p_by_rally,
             formation_flip_by_rally,
+            camera_heights=camera_heights,
         )
         dt = time.time() - t0
         console.print(f"  run {run_i + 1} done in {dt:.1f}s  "

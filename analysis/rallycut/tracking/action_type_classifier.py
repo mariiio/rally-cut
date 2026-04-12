@@ -24,6 +24,7 @@ import numpy as np
 from rallycut.tracking.contact_detector import ball_crossed_net
 
 if TYPE_CHECKING:
+    from rallycut.court.calibration import CourtCalibrator
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.contact_detector import Contact
     from rallycut.tracking.player_tracker import PlayerPosition
@@ -86,6 +87,11 @@ class ActionFeatures:
     pose_vertical_disp: float = 0.0  # Hip Y range in ±5 frames (jump/dive magnitude)
     pose_active_arm_extension: float = 0.0  # Elbow angle of ball-nearest arm
 
+    # Court-metric features (v6) — from court calibration homography
+    # 0.0 when no calibration available; GBM handles missing gracefully.
+    player_net_dist: float = 0.0  # Player foot distance to net (metres, 0–8)
+    camera_height: float = 0.0  # Camera height above court (metres, 1–20)
+
     def to_array(self) -> np.ndarray:
         """Convert to numpy feature array for classifier input."""
         player_dist = self.player_distance if math.isfinite(self.player_distance) else 1.0
@@ -119,6 +125,8 @@ class ActionFeatures:
             self.pose_both_arms_raised,
             self.pose_vertical_disp,
             self.pose_active_arm_extension,
+            self.player_net_dist,
+            self.camera_height,
         ], dtype=np.float64)
 
     @staticmethod
@@ -153,6 +161,8 @@ class ActionFeatures:
             "pose_both_arms_raised",
             "pose_vertical_disp",
             "pose_active_arm_extension",
+            "player_net_dist",
+            "camera_height",
         ]
 
 
@@ -273,6 +283,24 @@ def _count_contacts_on_side(
     return min(count, 3)
 
 
+def _find_player_position(
+    player_positions: list[PlayerPosition],
+    track_id: int,
+    frame: int,
+    max_gap: int = 5,
+) -> PlayerPosition | None:
+    """Find the closest player position for *track_id* near *frame*."""
+    best: PlayerPosition | None = None
+    best_gap = max_gap + 1
+    for pp in player_positions:
+        if pp.track_id == track_id:
+            gap = abs(pp.frame_number - frame)
+            if gap < best_gap:
+                best_gap = gap
+                best = pp
+    return best
+
+
 def _get_player_y_relative_net(
     player_positions: list[PlayerPosition] | None,
     track_id: int,
@@ -284,19 +312,10 @@ def _get_player_y_relative_net(
 
     Returns 0.0 if no matching position is found within *max_gap* frames.
     """
-    if not player_positions:
+    pp = _find_player_position(player_positions or [], track_id, frame, max_gap)
+    if pp is None:
         return 0.0
-    best_pp = None
-    best_gap = max_gap + 1
-    for pp in player_positions:
-        if pp.track_id == track_id:
-            gap = abs(pp.frame_number - frame)
-            if gap < best_gap:
-                best_gap = gap
-                best_pp = pp
-    if best_pp is None:
-        return 0.0
-    return (best_pp.y + best_pp.height / 2) - net_y
+    return (pp.y + pp.height / 2) - net_y
 
 
 def extract_action_features(
@@ -308,6 +327,8 @@ def extract_action_features(
     rally_start_frame: int = 0,
     team_assignments: dict[int, int] | None = None,
     player_positions: list[PlayerPosition] | None = None,
+    calibrator: CourtCalibrator | None = None,
+    camera_height: float = 0.0,
 ) -> ActionFeatures:
     """Compute features for a single contact for action classification.
 
@@ -320,6 +341,8 @@ def extract_action_features(
         rally_start_frame: First frame of the rally.
         team_assignments: Track ID → team index mapping.
         player_positions: Player positions for player-Y feature.
+        calibrator: Optional court calibrator for court-space projections.
+        camera_height: Camera height in metres (from camera model, 0.0 = unknown).
 
     Returns:
         ActionFeatures for this contact.
@@ -421,6 +444,22 @@ def extract_action_features(
             )
         )
 
+    # --- v6 court-metric features (from homography projection) ---
+    player_net = 0.0
+    if calibrator is not None and calibrator.is_calibrated and player_positions:
+        pp = _find_player_position(
+            player_positions, contact.player_track_id, contact.frame,
+        )
+        if pp is not None:
+            try:
+                foot_y_img = pp.y + pp.height / 2
+                _, foot_cy = calibrator.image_to_court(
+                    (pp.x + pp.width / 2, foot_y_img), 1, 1,
+                )
+                player_net = max(0.0, min(abs(foot_cy - 8.0), 8.0))
+            except Exception:  # noqa: BLE001
+                pass
+
     return ActionFeatures(
         velocity=contact.velocity,
         direction_change_deg=contact.direction_change_deg,
@@ -449,6 +488,8 @@ def extract_action_features(
         pose_both_arms_raised=pose_both_raised,
         pose_vertical_disp=pose_vert_disp,
         pose_active_arm_extension=pose_arm_ext,
+        player_net_dist=player_net,
+        camera_height=camera_height,
     )
 
 
@@ -586,7 +627,7 @@ def set_prev_action_context(
 
 
 # Bump when feature vector changes (forces retrain of stale pickles).
-FEATURE_VERSION = 5
+FEATURE_VERSION = 6
 
 
 class ActionTypeClassifier:

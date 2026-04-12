@@ -617,17 +617,17 @@ def _find_serving_team_by_formation(
             ≈ 4s @ 30fps). Uses a longer window than `_find_server_by_position`
             (default 45) because formation signal is more stable when
             averaged over more frames.
-        margin: Required separation ratio (default 1.15). Higher = stricter
-            (fewer rallies predicted but higher per-scored accuracy).
-            Measured on canonical production_eval 92-rally action_GT subset:
-            1.15 peaks at 57.6%, 1.00 drops to 56.5% (more track_to_player
-            fallback noise), 1.30 drops to ~57% (abstain loss dominates).
-            Broader 304-rally harness prefers 1.00 (68.8%); 1.15 chosen
-            for canonical metric parity.
+        margin: No longer used for hard abstention (kept for API
+            compatibility). Phase 0 analysis (2026-04-12) showed 0% true
+            formation errors — the side with larger separation is always
+            correct. Graduated confidence replaced hard abstention: all
+            rallies with ratio > 1.0 get a prediction with confidence
+            proportional to the separation ratio.
 
     Returns:
-        (team, confidence) where team is "A", "B", or None (abstain).
-        Confidence is the separation ratio, clipped to [0, 1].
+        (team, confidence) where team is "A", "B", or None (only when
+        separations are truly equal or data is insufficient). Confidence
+        is `min(1.0, ratio - 1.0)`.
     """
     if not player_positions:
         return None, 0.0
@@ -682,14 +682,19 @@ def _find_serving_team_by_formation(
     near_sep = _side_separation(near_tids)
     far_sep = _side_separation(far_tids)
 
-    # Determine serving side by margin
-    if near_sep > far_sep * margin:
+    # Determine serving side — graduated confidence instead of hard abstention.
+    # The ratio captures how much more separated the serving side is.
+    # Phase 0 analysis (2026-04-12) showed 0% true formation errors: the side
+    # with larger separation is ALWAYS correct. So we predict even when the
+    # ratio is below margin, just with lower confidence.
+    ratio = max(near_sep, far_sep) / max(min(near_sep, far_sep), 1e-6)
+    if near_sep >= far_sep:
         serving_side = "near"
-        confidence = min(1.0, (near_sep / max(far_sep, 1e-6)) - 1.0)
-    elif far_sep > near_sep * margin:
-        serving_side = "far"
-        confidence = min(1.0, (far_sep / max(near_sep, 1e-6)) - 1.0)
     else:
+        serving_side = "far"
+    confidence = min(1.0, ratio - 1.0)
+    # Still abstain when separations are truly equal (ratio ≈ 1.0)
+    if ratio < 1.0 + 1e-4:
         return None, 0.0
 
     side_tids = near_tids if serving_side == "near" else far_tids
@@ -958,6 +963,7 @@ class ActionClassifier:
         classifier: ActionTypeClassifier | None = None,
         match_team_assignments: dict[int, int] | None = None,
         calibrator: CourtCalibrator | None = None,
+        camera_height: float = 0.0,
     ) -> RallyActions:
         """Classify all contacts in a rally into action types.
 
@@ -1034,6 +1040,8 @@ class ActionClassifier:
                     rally_start_frame=start_frame,
                     team_assignments=match_team_assignments,
                     player_positions=contact_sequence.player_positions or None,
+                    calibrator=calibrator,
+                    camera_height=camera_height,
                 )
                 pred_action, _conf = classifier.predict([feat])[0]
                 if pred_action == "serve":
@@ -1283,6 +1291,8 @@ class ActionClassifier:
                             rally_start_frame=start_frame,
                             team_assignments=match_team_assignments,
                             player_positions=contact_sequence.player_positions or None,
+                            calibrator=calibrator,
+                            camera_height=camera_height,
                         )
                         pred_action, pred_conf = classifier.predict([feat])[0]
                         if is_phantom and pred_action == "serve":
@@ -1404,6 +1414,8 @@ class ActionClassifier:
                     rally_start_frame=start_frame,
                     team_assignments=match_team_assignments,
                     player_positions=contact_sequence.player_positions or None,
+                    calibrator=calibrator,
+                    camera_height=camera_height,
                 )
                 pred_action, pred_conf = classifier.predict([feat])[0]
                 try:
@@ -1498,6 +1510,8 @@ class ActionClassifier:
                     rally_start_frame=start_frame,
                     team_assignments=match_team_assignments,
                     player_positions=contact_sequence.player_positions or None,
+                    calibrator=calibrator,
+                    camera_height=camera_height,
                 )
                 set_prev_action_context(feat, prev_action_str, prev_conf, same_side)
 
@@ -2843,6 +2857,7 @@ def classify_rally_actions(
     calibrator: CourtCalibrator | None = None,
     track_to_player: dict[int, int] | None = None,
     formation_semantic_flip: bool = False,
+    camera_height: float = 0.0,
 ) -> RallyActions:
     """Convenience function to classify actions in a rally.
 
@@ -2915,6 +2930,7 @@ def classify_rally_actions(
         classifier=learned,
         match_team_assignments=match_team_assignments,
         calibrator=calibrator,
+        camera_height=camera_height,
     )
 
     # Repair with only Rule 1 (consecutive recv/dig → set, +0.8pp LOO-CV).

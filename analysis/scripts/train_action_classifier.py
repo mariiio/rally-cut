@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import copy
 from collections import defaultdict
+from typing import Any
 
 import numpy as np
 from rich.console import Console
@@ -50,12 +51,16 @@ def extract_features_for_rally(
     tolerance: int = 5,
     team_assignments: dict[int, int] | None = None,
     inject_pose: bool = False,
+    calibrator: Any = None,
+    camera_height: float = 0.0,
 ) -> tuple[list[np.ndarray], list[str], list[str]]:
     """Extract action features for matched contacts in a rally.
 
     Args:
         inject_pose: If True, inject keypoints from pose cache into
             PlayerPosition objects so pose features are populated.
+        calibrator: Optional CourtCalibrator for court-space projections.
+        camera_height: Camera height in metres (0.0 = unknown).
 
     Returns:
         Tuple of (feature_arrays, action_labels, rally_ids).
@@ -166,6 +171,8 @@ def extract_features_for_rally(
             rally_start_frame=contact_seq.rally_start_frame,
             team_assignments=team_assignments,
             player_positions=player_positions or None,
+            calibrator=calibrator,
+            camera_height=camera_height,
         )
 
         # Sample 1: no prev-action context (simulates first pass)
@@ -187,6 +194,60 @@ def extract_features_for_rally(
         prev_court_side = court_side
 
     return features_list, labels, rally_ids
+
+
+def _build_calibrators_and_heights(
+    video_ids: set[str],
+) -> tuple[dict[str, Any], dict[str, float]]:
+    """Build per-video CourtCalibrator and camera height from DB calibration.
+
+    Returns (calibrators, camera_heights) dicts keyed by video_id.
+    """
+    from rallycut.court.calibration import CourtCalibrator  # noqa: PLC0415
+    from rallycut.court.camera_model import calibrate_camera  # noqa: PLC0415
+    from rallycut.evaluation.tracking.db import (  # noqa: PLC0415
+        get_connection,
+        load_court_calibration,
+    )
+
+    calibrators: dict[str, Any] = {}
+    heights: dict[str, float] = {}
+
+    # Query video resolutions for camera model
+    resolutions: dict[str, tuple[int, int]] = {}
+    if video_ids:
+        placeholders = ", ".join(["%s"] * len(video_ids))
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"SELECT id, width, height FROM videos WHERE id IN ({placeholders})",
+                list(video_ids),
+            )
+            for vid, w, h in cur.fetchall():
+                if w and h:
+                    resolutions[vid] = (int(w), int(h))
+
+    for vid in video_ids:
+        corners = load_court_calibration(vid)
+        if not corners or len(corners) != 4:
+            continue
+        image_corners = [(c["x"], c["y"]) for c in corners]
+        cal = CourtCalibrator()
+        cal.calibrate(image_corners)
+        if not cal.is_calibrated or cal.homography is None:
+            continue
+        calibrators[vid] = cal
+        # Camera height via pinhole model
+        res = resolutions.get(vid)
+        if res is not None:
+            cam = calibrate_camera(
+                image_corners,
+                cal.homography.court_corners,
+                res[0], res[1],
+            )
+            if cam is not None and cam.is_valid:
+                heights[vid] = float(cam.camera_position[2])
+
+    return calibrators, heights
 
 
 def main() -> None:
@@ -246,6 +307,13 @@ def main() -> None:
     n_with_teams = sum(1 for r in rallies if r.rally_id in match_teams_by_rally)
     console.print(f"  Match teams: {n_with_teams}/{len(rallies)} rallies")
 
+    # Build court calibrators + camera heights per video
+    calibrators, camera_heights = _build_calibrators_and_heights(video_ids)
+    console.print(
+        f"  Court calibration: {len(calibrators)}/{len(video_ids)} videos, "
+        f"camera height: {sum(1 for h in camera_heights.values() if h > 0)}/{len(video_ids)} videos"
+    )
+
     console.print(
         f"\n[bold]Extracting action features from {len(rallies)} rallies[/bold]\n"
     )
@@ -269,6 +337,8 @@ def main() -> None:
             rally, tolerance=args.tolerance,
             team_assignments=match_teams_by_rally.get(rally.rally_id),
             inject_pose=use_pose,
+            calibrator=calibrators.get(rally.video_id),
+            camera_height=camera_heights.get(rally.video_id, 0.0),
         )
 
         all_features.extend(features)
