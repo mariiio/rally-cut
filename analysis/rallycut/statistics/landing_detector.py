@@ -339,17 +339,26 @@ def detect_rally_landings(
                 receive.frame, calibrator,
             )
             if court_pos is not None:
-                # Use ball position at receive frame for image coords.
-                ball_at_recv = _find_ball_near_frame(
-                    ball_positions, receive.frame,
+                # Validate: serve target must land on the opposite half
+                # from the server. If the server is near (Y>8m), the
+                # target must be far (Y<8m), and vice versa.
+                server_side = _get_court_side(serve.team)
+                target_on_near = court_pos[1] > HALF_COURT_M
+                valid = (
+                    (server_side == "near" and not target_on_near)
+                    or (server_side == "far" and target_on_near)
                 )
-                img_x = ball_at_recv[0] if ball_at_recv else receive.ball_x
-                img_y = ball_at_recv[1] if ball_at_recv else receive.ball_y
-                landings.append(_make_landing(
-                    receive.frame, court_pos[0], court_pos[1],
-                    img_x, img_y,
-                    "serve", serve.player_track_id, serve.team,
-                ))
+                if valid:
+                    ball_at_recv = _find_ball_near_frame(
+                        ball_positions, receive.frame,
+                    )
+                    img_x = ball_at_recv[0] if ball_at_recv else receive.ball_x
+                    img_y = ball_at_recv[1] if ball_at_recv else receive.ball_y
+                    landings.append(_make_landing(
+                        receive.frame, court_pos[0], court_pos[1],
+                        img_x, img_y,
+                        "serve", serve.player_track_id, serve.team,
+                    ))
 
     # --- All attacks (mid-rally + terminal) ---
     for i, action in enumerate(actions):
@@ -383,11 +392,19 @@ def detect_rally_landings(
 
         if next_contact_court is not None and next_frame is not None:
             assert next_img is not None
-            landings.append(_make_landing(
-                next_frame, next_contact_court[0], next_contact_court[1],
-                next_img[0], next_img[1],
-                "attack", action.player_track_id, action.team,
-            ))
+            # Validate: attack landing must be on the opponent's half.
+            attacker_side = _get_court_side(action.team)
+            landing_on_near = next_contact_court[1] > HALF_COURT_M
+            valid_attack = (
+                (attacker_side == "near" and not landing_on_near)
+                or (attacker_side == "far" and landing_on_near)
+            )
+            if valid_attack:
+                landings.append(_make_landing(
+                    next_frame, next_contact_court[0], next_contact_court[1],
+                    next_img[0], next_img[1],
+                    "attack", action.player_track_id, action.team,
+                ))
             continue
 
         # Terminal attack: no next contact found.
@@ -420,11 +437,15 @@ def detect_rally_landings(
                     break
 
         if attack_court is not None:
-            landings.append(_make_landing(
-                det_frame, attack_court[0], attack_court[1],
-                img_x, img_y,
-                "attack", action.player_track_id, action.team,
-            ))
+            # Validate: terminal attack landing on opponent's half.
+            t_side = _get_court_side(action.team)
+            t_near = attack_court[1] > HALF_COURT_M
+            if (t_side == "near" and not t_near) or (t_side == "far" and t_near):
+                landings.append(_make_landing(
+                    det_frame, attack_court[0], attack_court[1],
+                    img_x, img_y,
+                    "attack", action.player_track_id, action.team,
+                ))
 
     return landings
 
