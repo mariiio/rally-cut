@@ -427,6 +427,8 @@ class MatchStats:
     avg_matching_confidence: float = 0.0
     # Calibration
     is_calibrated: bool = False
+    # Landing heatmaps (serve + attack court-plane landing positions)
+    landing_heatmaps: dict[str, Any] = field(default_factory=dict)
     # Video metadata
     video_fps: float = 30.0
     video_width: int = 1920
@@ -455,6 +457,8 @@ class MatchStats:
             d["scoreConfidence"] = round(self.score_confidence, 3)
         if self.duo_stats:
             d["duoStats"] = [ds.to_dict() for ds in self.duo_stats]
+        if self.landing_heatmaps:
+            d["landingHeatmaps"] = self.landing_heatmaps
         return d
 
 
@@ -1865,6 +1869,7 @@ def compute_match_stats(
     calibrator: CourtCalibrator | None = None,
     ball_positions_map: dict[str, list[BallPosition]] | None = None,
     match_analysis: dict[str, Any] | None = None,
+    positions_raw_map: dict[str, list[dict[str, Any]]] | None = None,
 ) -> MatchStats:
     """Compute comprehensive match statistics.
 
@@ -1877,6 +1882,8 @@ def compute_match_stats(
         calibrator: Optional court calibrator for real-world distances.
         ball_positions_map: Ball positions per rally_id (for attack/serve analysis).
         match_analysis: Cross-rally player identity from match-players command.
+        positions_raw_map: Raw position dicts per rally_id (with keypoints for
+            feet projection in landing heatmaps).
 
     Returns:
         MatchStats with per-player and per-rally statistics.
@@ -2368,7 +2375,29 @@ def compute_match_stats(
         ts.defensive_heatmap = heatmap
         ts.defensive_heatmap_calibrated = hm_calibrated
 
-    # 8. Scoring runs + momentum
+    # 8. Landing heatmaps (serve + attack court-plane positions)
+    from rallycut.statistics.landing_detector import (
+        compute_landing_heatmaps,
+        detect_rally_landings,
+    )
+
+    all_landings = []
+    for ra in rally_actions_list:
+        ball_pos = (ball_positions_map or {}).get(ra.rally_id, [])
+        if ball_pos:
+            pos_raw = (positions_raw_map or {}).get(ra.rally_id)
+            rally_landings = detect_rally_landings(
+                ra, ball_pos, calibrator, video_width, video_height,
+                positions_raw=pos_raw,
+            )
+            all_landings.extend(rally_landings)
+
+    if all_landings:
+        stats.landing_heatmaps = compute_landing_heatmaps(
+            all_landings, rally_actions_list,
+        )
+
+    # 9. Scoring runs + momentum
     if score_progression:
         runs_by_team, momentum_shifts = _compute_scoring_runs(score_progression)
         stats.momentum_shifts = momentum_shifts
@@ -2378,7 +2407,7 @@ def compute_match_stats(
                 ts.longest_scoring_run = max(team_runs)
                 ts.avg_scoring_run = float(np.mean(team_runs))
 
-    # 9. Free ball conversion per team
+    # 10. Free ball conversion per team
     free_ball_opportunities: dict[str, int] = {"A": 0, "B": 0}
     free_ball_conversions: dict[str, int] = {"A": 0, "B": 0}
     for ra in rally_actions_list:
@@ -2393,7 +2422,7 @@ def compute_match_stats(
         if opp > 0:
             ts.free_ball_conversion_pct = free_ball_conversions.get(ts.team, 0) / opp
 
-    # 10. Transition vs side-out attack efficiency per team
+    # 11. Transition vs side-out attack efficiency per team
     sideout_kills: dict[str, int] = {"A": 0, "B": 0}
     sideout_errors: dict[str, int] = {"A": 0, "B": 0}
     sideout_attacks: dict[str, int] = {"A": 0, "B": 0}
@@ -2441,7 +2470,7 @@ def compute_match_stats(
                 (transition_kills.get(ts.team, 0) - transition_errors.get(ts.team, 0)) / ta
             )
 
-    # 11. Clutch performance (close-score stats)
+    # 12. Clutch performance (close-score stats)
     if score_progression:
         close_rally_ids = _get_close_score_rally_ids(score_progression)
         if close_rally_ids:
@@ -2478,7 +2507,7 @@ def compute_match_stats(
                     )
                     ts.clutch_side_out_pct = close_side_outs / len(close_receiving)
 
-    # 12. Duo sync scores (cross-rally player identity)
+    # 13. Duo sync scores (cross-rally player identity)
     if match_analysis:
         stats.duo_stats = _compute_duo_sync(
             rally_actions_list, stats.rally_stats,

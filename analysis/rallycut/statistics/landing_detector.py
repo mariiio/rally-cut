@@ -42,8 +42,9 @@ COURT_WIDTH_M = 8.0
 COURT_LENGTH_M = 16.0
 
 # Grid resolution for heatmap binning.
-GRID_COLS = 8  # 1m per column on 8m court
-GRID_ROWS = 8  # 2m per row on 16m court
+GRID_COLS = 8  # 1m per column on 8m court width
+GRID_ROWS = 4  # 2m per row on 8m half-court
+HALF_COURT_M = COURT_LENGTH_M / 2.0  # 8m
 
 # Minimum confidence for ball positions to be considered.
 _MIN_BALL_CONF = 0.3
@@ -458,14 +459,19 @@ def _project_court_safe(
 
 def compute_landing_heatmaps(
     landings: list[LandingPoint],
+    rally_actions_list: list[Any] | None = None,
 ) -> dict[str, Any]:
-    """Aggregate landing points into court-space heatmap grids.
+    """Aggregate landing points into per-team half-court heatmap grids.
 
-    Returns a dict with keys ``"serve"``, ``"attack"``, ``"all"``
-    (each containing a normalised grid + count + calibrated flag),
-    and ``"points"`` (raw court-coordinate points for scatter overlay).
+    Each team's landings are normalised to a canonical half-court view
+    (team's own half at bottom, opponent half at top) so that side
+    switches during the match are transparent.
 
-    Grid is GRID_ROWS x GRID_COLS (8x8 default = 2m x 1m cells).
+    Returns a dict with keys ``"teamA"``, ``"teamB"`` (each containing
+    ``"serve"``, ``"attack"``, ``"all"`` grids + ``"points"``), and
+    ``"perRally"`` (raw court coords per rally for debug overlay).
+
+    Grid is GRID_ROWS x GRID_COLS (4x8 = 2m x 1m cells on 8m half-court).
     """
     # Only include landings that project within the court bounds
     # (with a small margin for projection noise).
@@ -477,43 +483,79 @@ def compute_landing_heatmaps(
         and -margin <= lp.court_x <= COURT_WIDTH_M + margin
         and -margin <= lp.court_y <= COURT_LENGTH_M + margin
     ]
-    is_calibrated = len(calibrated_landings) > 0
 
-    def _build_grid(pts: list[LandingPoint]) -> list[list[float]]:
+    def _build_half_grid(pts: list[LandingPoint]) -> list[list[float]]:
+        """Build a normalised 4x8 grid on the opponent's half-court.
+
+        Normalisation rule (canonical view: team's own half at bottom):
+        - Team on "near" side (Y=8-16m): targets land on far side (Y=0-8m)
+          — already canonical, no flip.
+        - Team on "far" side (Y=0-8m): targets land on near side (Y=8-16m)
+          — flip: y = 16 - y, x = 8 - x.
+        After normalisation, clamp to half-court: x in [0, 8m), y in [0, 8m).
+        """
         grid = np.zeros((GRID_ROWS, GRID_COLS), dtype=np.float64)
         for lp in pts:
             if lp.court_x is None or lp.court_y is None:
                 continue
-            # Clamp to court bounds before binning (margin points → edge cell).
-            cx = max(0.0, min(lp.court_x, COURT_WIDTH_M - 1e-9))
-            cy = max(0.0, min(lp.court_y, COURT_LENGTH_M - 1e-9))
+            cx, cy = lp.court_x, lp.court_y
+            # Normalise based on acting team's court side.
+            if lp.court_side == "far":
+                cy = COURT_LENGTH_M - cy
+                cx = COURT_WIDTH_M - cx
+            # After normalisation the target should be on the opponent's
+            # half (Y=0-8m).  Clamp to half-court bounds.
+            cx = max(0.0, min(cx, COURT_WIDTH_M - 1e-9))
+            cy = max(0.0, min(cy, HALF_COURT_M - 1e-9))
             gx = int(cx / COURT_WIDTH_M * GRID_COLS)
-            gy = int(cy / COURT_LENGTH_M * GRID_ROWS)
+            gy = int(cy / HALF_COURT_M * GRID_ROWS)
             grid[gy, gx] += 1
         total = grid.sum()
         if total > 0:
             grid /= total
         return [[round(float(v), 4) for v in row] for row in grid]
 
-    serve_pts = [lp for lp in calibrated_landings if lp.action_type == "serve"]
-    attack_pts = [lp for lp in calibrated_landings if lp.action_type == "attack"]
+    def _team_block(pts: list[LandingPoint]) -> dict[str, Any]:
+        serve_pts = [lp for lp in pts if lp.action_type == "serve"]
+        attack_pts = [lp for lp in pts if lp.action_type == "attack"]
+        return {
+            "serve": {
+                "grid": _build_half_grid(serve_pts),
+                "count": len(serve_pts),
+            },
+            "attack": {
+                "grid": _build_half_grid(attack_pts),
+                "count": len(attack_pts),
+            },
+            "all": {
+                "grid": _build_half_grid(pts),
+                "count": len(pts),
+            },
+            "points": [lp.to_dict() for lp in pts],
+        }
+
+    team_a_pts = [lp for lp in calibrated_landings if lp.team == "A"]
+    team_b_pts = [lp for lp in calibrated_landings if lp.team == "B"]
+
+    # Build per-rally dict with raw (non-normalised) landing coords.
+    per_rally: dict[str, dict[str, Any]] = {}
+    # Pre-compute serving team from rally_actions_list.
+    serving_team_map: dict[str, str] = {}
+    if rally_actions_list is not None:
+        for ra in rally_actions_list:
+            serve = getattr(ra, "serve", None)
+            if serve is not None:
+                serving_team_map[ra.rally_id] = serve.team
+    for lp in calibrated_landings:
+        entry = per_rally.setdefault(lp.rally_id, {
+            "points": [],
+            "servingTeam": serving_team_map.get(lp.rally_id, "unknown"),
+        })
+        entry["points"].append(lp.to_dict())
 
     result: dict[str, Any] = {
-        "serve": {
-            "grid": _build_grid(serve_pts),
-            "count": len(serve_pts),
-            "calibrated": is_calibrated,
-        },
-        "attack": {
-            "grid": _build_grid(attack_pts),
-            "count": len(attack_pts),
-            "calibrated": is_calibrated,
-        },
-        "all": {
-            "grid": _build_grid(calibrated_landings),
-            "count": len(calibrated_landings),
-            "calibrated": is_calibrated,
-        },
-        "points": [lp.to_dict() for lp in calibrated_landings],
+        "teamA": _team_block(team_a_pts),
+        "teamB": _team_block(team_b_pts),
+        "perRally": per_rally,
     }
     return result
