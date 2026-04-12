@@ -42,6 +42,10 @@ from rallycut.tracking.player_features import (
     extract_appearance_features,
     extract_bbox_crop,
 )
+from rallycut.tracking.team_identity import (
+    TeamTemplate,
+    build_team_templates,
+)
 
 if TYPE_CHECKING:
     from rallycut.court.calibration import CourtCalibrator
@@ -1988,6 +1992,7 @@ class MatchPlayersResult:
 
     rally_results: list[RallyTrackingResult]
     player_profiles: dict[int, PlayerAppearanceProfile]  # player_id -> profile
+    team_templates: tuple[TeamTemplate, TeamTemplate] | None = None
     diagnostics: list[RallyAssignmentDiagnostics] = field(default_factory=list)
 
 
@@ -2087,8 +2092,12 @@ def match_players_across_rallies(
     # Pass 2: Re-score all rallies with final profiles
     results = tracker.refine_assignments(results)
 
+    # Build team templates from final profiles
+    team_templates = build_team_templates(tracker.state.players)
+
     return MatchPlayersResult(
         rally_results=results,
         player_profiles=dict(tracker.state.players),
+        team_templates=team_templates,
         diagnostics=tracker.diagnostics,
     )

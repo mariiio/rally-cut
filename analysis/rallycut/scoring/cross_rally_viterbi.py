@@ -36,6 +36,10 @@ class RallyObservation:
     formation_confidence: float  # 0-1
     # GT (for eval only)
     gt_serving_team: str | None = None  # "A" or "B"
+    # Team identity: which team template is on the near side?
+    # Set by TeamLocalizer from team_identity.py.
+    team_near: str | None = None  # Template label ("0"/"1" or "A"/"B")
+    team_localization_conf: float = 0.0  # TeamLocalizer confidence
 
 
 @dataclass
@@ -362,9 +366,11 @@ def decode_video_dual_hypothesis(
 ) -> list[DecodedRally]:
     """Decode by trying both near=A and near=B, pick the better hypothesis.
 
-    Scores each hypothesis by how plausible the resulting score progression
-    looks: penalizes long serve runs (>8 consecutive), extreme score
-    imbalance, and deviation from expected mean run length (~2).
+    Primary tie-breaker: team appearance consistency — checks which hypothesis
+    keeps team templates on consistent sides across rallies. This requires
+    team_near to be set on RallyObservation (from TeamLocalizer).
+
+    Fallback: plausibility scoring (symmetric, effectively random).
 
     No GT or external calibration needed — purely self-contained.
     """
@@ -379,9 +385,61 @@ def decode_video_dual_hypothesis(
         side_switch_rallies=switches,
     )
 
+    # Primary: team consistency scoring (breaks the plausibility tie)
+    team_score_a = _score_team_consistency(observations, switches, initial_near_is_a=True)
+    team_score_b = _score_team_consistency(observations, switches, initial_near_is_a=False)
+
+    if team_score_a != team_score_b:
+        return results_a if team_score_a > team_score_b else results_b
+
+    # Fallback: plausibility (known to be a no-op / always ties)
     score_a = _score_plausibility(results_a)
     score_b = _score_plausibility(results_b)
     return results_a if score_a >= score_b else results_b
+
+
+def _score_team_consistency(
+    observations: list[RallyObservation],
+    side_switch_rallies: set[int],
+    initial_near_is_a: bool,
+) -> float:
+    """Score how consistently team localization agrees with this hypothesis.
+
+    For each rally with team_near data, checks whether the hypothesis's
+    team assignment matches the appearance-based team localization.
+
+    Args:
+        observations: Per-rally observations with optional team_near.
+        side_switch_rallies: Rally indices where teams swap sides.
+        initial_near_is_a: The hypothesis being scored.
+
+    Returns:
+        Weighted agreement score. 0.0 if no team localization data.
+    """
+    near_is_a = initial_near_is_a
+    total_weight = 0.0
+    agreement = 0.0
+
+    for i, obs in enumerate(observations):
+        if i in side_switch_rallies:
+            near_is_a = not near_is_a
+
+        if obs.team_near is None or obs.team_localization_conf < 0.1:
+            continue
+
+        # Under this hypothesis, which team should be near?
+        expected_near = "A" if near_is_a else "B"
+
+        weight = obs.team_localization_conf
+        total_weight += weight
+
+        if obs.team_near == expected_near:
+            agreement += weight
+
+    if total_weight < 1e-6:
+        return 0.0
+
+    return agreement / total_weight
 
 
 def _score_plausibility(decoded: list[DecodedRally]) -> float:

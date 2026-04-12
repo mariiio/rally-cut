@@ -725,6 +725,35 @@ def reattribute_actions_cmd(
         _find_serving_side_by_formation,
     )
 
+    # Load team templates from match_analysis for team localization.
+    from rallycut.tracking.team_identity import TeamTemplate  # noqa: PLC0415
+    from rallycut.tracking.player_features import (  # noqa: PLC0415
+        PlayerAppearanceProfile,
+    )
+
+    team_templates: tuple[TeamTemplate, TeamTemplate] | None = None
+    templates_data = match_analysis.get("teamTemplates")
+    if templates_data and isinstance(templates_data, dict):
+        # Reconstruct profiles for the templates
+        profiles_data = match_analysis.get("playerProfiles", {})
+        profiles: dict[int, PlayerAppearanceProfile] = {}
+        for pid_str, pdata in profiles_data.items():
+            profiles[int(pid_str)] = PlayerAppearanceProfile.from_dict(pdata)
+        t0_data = templates_data.get("0")
+        t1_data = templates_data.get("1")
+        if t0_data and t1_data:
+            t0 = TeamTemplate.from_dict(t0_data, profiles)
+            t1 = TeamTemplate.from_dict(t1_data, profiles)
+            team_templates = (t0, t1)
+
+    # Build per-rally track_to_player lookup from match_analysis
+    rally_t2p: dict[str, dict[int, int]] = {}
+    for rally_entry in match_analysis.get("rallies", []):
+        rid_entry = str(rally_entry.get("rallyId") or rally_entry.get("rally_id", ""))
+        t2p = rally_entry.get("trackToPlayer") or rally_entry.get("track_to_player", {})
+        if rid_entry and t2p:
+            rally_t2p[rid_entry] = {int(k): int(v) for k, v in t2p.items()}
+
     # Build observations from positions collected during the loop.
     viterbi_observations: list[RallyObservation] = []
     viterbi_rally_ids: list[str] = []
@@ -738,6 +767,8 @@ def reattribute_actions_cmd(
         split_y = court_split_y_val2
         formation_side: str | None = None
         formation_conf = 0.0
+        team_near: str | None = None
+        team_loc_conf = 0.0
         if positions_raw:
             from rallycut.tracking.player_tracker import (  # noqa: PLC0415
                 PlayerPosition as _PlayerPos,
@@ -755,10 +786,46 @@ def reattribute_actions_cmd(
             formation_side, formation_conf = _find_serving_side_by_formation(
                 pos_list, net_y=net_y, start_frame=0,
             )
+
+            # Team localization: determine which team is near using
+            # player IDs from track_to_player + Y positions.
+            if team_templates is not None and rid2 in rally_t2p:
+                t2p_rally = rally_t2p[rid2]
+                t0, t1 = team_templates
+                t0_pids = set(t0.player_ids)
+                # Compute mean Y per player_id
+                pid_ys: dict[int, list[float]] = {}
+                for p in pos_list:
+                    pid = t2p_rally.get(p.track_id)
+                    if pid is not None:
+                        pid_ys.setdefault(pid, []).append(p.y + p.height / 2.0)
+                if pid_ys:
+                    import numpy as np  # noqa: PLC0415
+                    t0_y_vals = [
+                        float(np.mean(pid_ys[pid]))
+                        for pid in t0_pids if pid in pid_ys
+                    ]
+                    t1_y_vals = [
+                        float(np.mean(pid_ys[pid]))
+                        for pid in set(t1.player_ids) if pid in pid_ys
+                    ]
+                    if t0_y_vals and t1_y_vals:
+                        mean_t0 = float(np.mean(t0_y_vals))
+                        mean_t1 = float(np.mean(t1_y_vals))
+                        # Higher Y = near
+                        if mean_t0 > mean_t1:
+                            team_near = t0.team_label
+                        else:
+                            team_near = t1.team_label
+                        y_gap = abs(mean_t0 - mean_t1)
+                        team_loc_conf = min(1.0, y_gap / 0.15)
+
         viterbi_observations.append(RallyObservation(
             rally_id=rid2,
             formation_side=formation_side,
             formation_confidence=formation_conf,
+            team_near=team_near,
+            team_localization_conf=team_loc_conf,
         ))
 
     # Detect side switches from match_analysis semantic_flip transitions.

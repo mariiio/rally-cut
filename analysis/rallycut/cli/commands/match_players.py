@@ -594,6 +594,15 @@ def match_players(
             f"rally assignment(s) (GT-anchored)[/cyan]"
         )
 
+    # Serialize team templates
+    team_templates_data = None
+    if match_result.team_templates is not None:
+        t0, t1 = match_result.team_templates
+        team_templates_data = {
+            "0": t0.to_dict(),
+            "1": t1.to_dict(),
+        }
+
     # Build result JSON (same format used by batch_match_players and API)
     result_json: dict[str, Any] = {
         "videoId": video_id,
@@ -601,6 +610,8 @@ def match_players(
         "rallies": rally_entries,
         "playerProfiles": player_profiles_data,
     }
+    if team_templates_data is not None:
+        result_json["teamTemplates"] = team_templates_data
 
     with get_connection() as conn:
         with conn.cursor() as cur:

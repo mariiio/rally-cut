@@ -25,6 +25,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const TEMP_DIR = path.join(os.tmpdir(), 'rallycut-match-analysis');
 
+interface TeamTemplateData {
+  teamLabel: string;
+  playerIds: number[];
+  confidence: number;
+}
+
 interface MatchAnalysisResult {
   videoId: string;
   numRallies: number;
@@ -39,6 +45,7 @@ interface MatchAnalysisResult {
     serverPlayerId: number | null;
   }>;
   playerProfiles?: Record<string, Record<string, unknown>>;
+  teamTemplates?: Record<string, TeamTemplateData>;
 }
 
 export interface MatchStatsResult {
