@@ -65,28 +65,50 @@ SimplePredictor = Callable[[RallyData], str | None]
 def load_score_gt() -> dict[str, list[RallyData]]:
     """Load all rallies with gt_serving_team, grouped by video_id.
 
-    Applies sideSwitches from player_matching_gt_json to compute side_flipped
-    per rally. Also loads gt_point_winner for last-rally derivation.
+    Computes ``side_flipped`` per rally using two switch sources (matching
+    the API's ``computeNearSideByRally`` logic):
+
+    1. ``match_analysis_json.rallies[].sideSwitchDetected`` — pipeline-detected
+    2. ``rally.gt_side_switch`` — per-rally manual override from the UI
+
+    Per-rally overrides take precedence (``True`` forces a switch,
+    ``False`` suppresses one, ``None`` defers to the analysis flag).
+
+    Also loads gt_point_winner for last-rally derivation.
     """
-    # Step 1: Load sideSwitches per video
+    # Step 1: Load per-rally sideSwitchDetected from match_analysis_json
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""
-            SELECT id, player_matching_gt_json FROM videos
+            SELECT id, match_analysis_json FROM videos
             WHERE id IN (
                 SELECT DISTINCT video_id FROM rallies
                 WHERE gt_serving_team IS NOT NULL
             )
         """)
-        video_switches: dict[str, set[int]] = {}
-        for vid, gt in cur.fetchall():
-            sw = list(gt.get("sideSwitches", [])) if isinstance(gt, dict) else []
-            video_switches[vid] = set(sw)
+        # Map rally_id → sideSwitchDetected from analysis
+        analysis_switches: dict[str, bool] = {}
+        for vid, maj in cur.fetchall():
+            if not maj or not isinstance(maj, dict):
+                continue
+            rallies_arr = maj.get("rallies", [])
+            if not isinstance(rallies_arr, list):
+                continue
+            for entry in rallies_arr:
+                if not isinstance(entry, dict):
+                    continue
+                rid = entry.get("rallyId") or entry.get("rally_id")
+                if not rid:
+                    continue
+                flag = entry.get("sideSwitchDetected") is True or \
+                       entry.get("side_switch_detected") is True
+                if flag:
+                    analysis_switches[rid] = True
 
-    # Step 2: Load rally data
+    # Step 2: Load rally data including per-rally gt_side_switch
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""
             SELECT r.id, r.video_id, r.start_ms, r.gt_serving_team,
-                   r.gt_point_winner,
+                   r.gt_point_winner, r.gt_side_switch,
                    pt.positions_json, pt.ball_positions_json,
                    pt.court_split_y, pt.fps
             FROM rallies r
@@ -103,14 +125,19 @@ def load_score_gt() -> dict[str, list[RallyData]]:
             raw[row[1]].append(row)
 
     # Step 3: Build RallyData with side_flipped
+    # Resolve switches: per-rally override ?? analysis flag
     out: dict[str, list[RallyData]] = {}
     for vid, rows in raw.items():
         rows.sort(key=lambda r: r[2])
-        switches = video_switches.get(vid, set())
         flipped = False
         vid_out: list[RallyData] = []
-        for idx, (rid, _, sms, gt_st, gt_pw, pj, bpj, split_y, fps) in enumerate(rows):
-            if idx in switches:
+        for idx, (rid, _, sms, gt_st, gt_pw, gt_sw, pj, bpj, split_y, fps) in enumerate(rows):
+            # Per-rally override takes precedence over analysis flag
+            if gt_sw is not None:
+                switched = bool(gt_sw)
+            else:
+                switched = analysis_switches.get(rid, False)
+            if switched:
                 flipped = not flipped
             vid_out.append(RallyData(
                 rally_id=rid,

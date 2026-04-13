@@ -377,54 +377,75 @@ def _load_formation_semantic_flips(video_ids: set[str]) -> dict[str, bool]:
 def _load_formation_semantic_flips_from_gt(
     video_ids: set[str],
 ) -> dict[str, bool]:
-    """Compute per-rally `semantic_flip` from GT `sideSwitches`.
+    """Compute per-rally ``semantic_flip`` from GT switches.
 
-    Uses `player_matching_gt_json.sideSwitches` instead of the pipeline's
-    `match_analysis_json.sideSwitchDetected`. The GT switches are human-labeled
-    and immune to trackToPlayer phantom flips that corrupt the pipeline's
-    sideSwitchDetected flags (~4-8% of rallies across 51 GT videos).
+    Uses two switch sources (matching the API's ``computeNearSideByRally``):
 
-    Requires rally ordering from the rallies table (sorted by start_ms)
-    to map GT switch indices (ordinal position) to rally IDs.
+    1. ``match_analysis_json.rallies[].sideSwitchDetected`` — pipeline-detected
+    2. ``rally.gt_side_switch`` — per-rally manual override from the Score GT UI
 
-    Falls back to pipeline-derived flips for videos without GT switches.
+    Per-rally overrides take precedence (``True`` forces a switch,
+    ``False`` suppresses one, ``None`` defers to the analysis flag).
+
+    Falls back to pipeline-derived flips for videos without any GT data.
     """
     if not video_ids:
         return {}
 
-    # Step 1: Load GT sideSwitches per video
     placeholders = ", ".join(["%s"] * len(video_ids))
-    gt_switches: dict[str, set[int]] = {}
-    with get_connection() as conn, conn.cursor() as cur:
-        cur.execute(f"""
-            SELECT id, player_matching_gt_json FROM videos
-            WHERE id IN ({placeholders})
-              AND player_matching_gt_json IS NOT NULL
-        """, list(video_ids))
-        for vid, gt_json in cur.fetchall():
-            if isinstance(gt_json, dict):
-                sw = gt_json.get("sideSwitches", gt_json.get("side_switches", []))
-                gt_switches[vid] = set(sw) if sw else set()
 
-    # Step 2: Load rally IDs per video in chronological order
-    rally_order: dict[str, list[str]] = {}
+    # Step 1: Load per-rally sideSwitchDetected from match_analysis_json
+    analysis_switches: dict[str, bool] = {}
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(f"""
-            SELECT id, video_id FROM rallies
+            SELECT id, match_analysis_json FROM videos
+            WHERE id IN ({placeholders})
+        """, list(video_ids))
+        for vid, maj in cur.fetchall():
+            if not maj or not isinstance(maj, dict):
+                continue
+            rallies_arr = maj.get("rallies", [])
+            if not isinstance(rallies_arr, list):
+                continue
+            for entry in rallies_arr:
+                if not isinstance(entry, dict):
+                    continue
+                rid = entry.get("rallyId") or entry.get("rally_id")
+                if not rid:
+                    continue
+                flag = entry.get("sideSwitchDetected") is True or \
+                       entry.get("side_switch_detected") is True
+                if flag:
+                    analysis_switches[rid] = True
+
+    # Step 2: Load rally IDs + per-rally gt_side_switch in chronological order
+    rally_info: dict[str, list[tuple[str, bool | None]]] = {}
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(f"""
+            SELECT id, video_id, gt_side_switch FROM rallies
             WHERE video_id IN ({placeholders})
             ORDER BY video_id, start_ms
         """, list(video_ids))
-        for rid, vid in cur.fetchall():
-            rally_order.setdefault(vid, []).append(rid)
+        for rid, vid, gt_sw in cur.fetchall():
+            rally_info.setdefault(vid, []).append((rid, gt_sw))
 
-    # Step 3: Build GT-based flips
+    # Step 3: Build flips — per-rally override ?? analysis flag
     result: dict[str, bool] = {}
     covered_videos: set[str] = set()
-    for vid, switches in gt_switches.items():
-        rids = rally_order.get(vid, [])
+    for vid, rally_list in rally_info.items():
+        has_any_gt = any(gt_sw is not None for _, gt_sw in rally_list)
+        has_any_analysis = any(
+            analysis_switches.get(rid, False) for rid, _ in rally_list
+        )
+        if not has_any_gt and not has_any_analysis:
+            continue
         flipped = False
-        for idx, rid in enumerate(rids):
-            if idx in switches:
+        for rid, gt_sw in rally_list:
+            if gt_sw is not None:
+                switched = bool(gt_sw)
+            else:
+                switched = analysis_switches.get(rid, False)
+            if switched:
                 flipped = not flipped
             result[rid] = flipped
         covered_videos.add(vid)
