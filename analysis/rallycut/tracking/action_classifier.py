@@ -1063,18 +1063,26 @@ def _find_serving_side_by_formation(
         formation_conf = abs(prob - 0.5) * 2.0
         formation_side = "far"
 
-    # Fuse with serve contact classifier when available
-    if first_contact is not None:
+    # Fuse with serve contact classifier when available.
+    # Contact is a secondary signal — only used when formation is weak
+    # (abstained or very low confidence). The contact classifier has a
+    # high false-positive rate for serves (64% of receives also have
+    # ballY < net_y) so it should NOT override confident formation.
+    contact_fusion_conf_gate = 0.15  # Only use contact when formation < this
+    if first_contact is not None and (
+        formation_side is None or formation_conf < contact_fusion_conf_gate
+    ):
         contact_side, contact_conf = _serving_side_from_contact(
             first_contact, player_positions, net_y,
         )
         if contact_side is not None:
             if formation_side is None:
                 return contact_side, contact_conf
-            if contact_side == formation_side:
-                return formation_side, max(formation_conf, contact_conf)
-            if contact_conf > formation_conf:
+            # Formation has low confidence — use contact if it disagrees
+            if contact_side != formation_side:
                 return contact_side, contact_conf
+            # Both agree — boost confidence
+            return formation_side, max(formation_conf, contact_conf)
 
     if formation_side is not None:
         return formation_side, formation_conf
