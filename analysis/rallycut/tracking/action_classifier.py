@@ -1085,15 +1085,16 @@ def _find_serving_side_by_formation(
             formation_side = side_fixed
             formation_conf = conf_fixed
 
-        # Track the effective window for late-entry detection
-        if conf_adaptive >= conf_fixed:
-            effective_start = adaptive_start
-            effective_window = adaptive_window_frames
-        else:
-            effective_start = start_frame
-            effective_window = window_frames
+        # Late-entry detection scans the union of both windows so it
+        # catches servers who enter after the fixed window ends.
+        effective_start = min(start_frame, adaptive_start)
+        effective_window = (
+            max(start_frame + window_frames, adaptive_start + adaptive_window_frames)
+            - effective_start
+        )
     else:
-        # Single window (no ball data for adaptive, or adaptive not requested)
+        # Single window: either adaptive not requested, or no ball data
+        # (adaptive falls back to fixed window internally when ball is absent).
         if adaptive_window:
             start_frame, window_frames = _compute_adaptive_window(
                 ball_positions, first_contact_frame,
@@ -1127,9 +1128,13 @@ def _find_serving_side_by_formation(
     # ── Secondary signal: near-side late entry ──
     # Server walks into frame from behind the camera. Only overrides when
     # formation disagrees (pred != "near") — one-directional correction.
+    # Scans a wide window because the server may enter well after the
+    # formation analysis window ends.  200 frames ≈ 6.7s at 30fps,
+    # covering the typical serve-toss timing range.
+    late_entry_scan_frames = max(effective_window, 200)
     if formation_side != "near":
         late_side, late_conf = _detect_near_side_late_entry(
-            player_positions, net_y, effective_start, effective_window,
+            player_positions, net_y, 0, late_entry_scan_frames,
         )
         if late_side is not None:
             return late_side, max(late_conf, formation_conf)

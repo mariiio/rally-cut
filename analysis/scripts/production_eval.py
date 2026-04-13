@@ -379,78 +379,31 @@ def _load_formation_semantic_flips_from_gt(
 ) -> dict[str, bool]:
     """Compute per-rally ``semantic_flip`` from GT switches.
 
-    Uses two switch sources (matching the API's ``computeNearSideByRally``):
+    Delegates to the shared ``resolve_side_flipped`` loader which merges
+    pipeline-detected switches with per-rally manual overrides from the
+    Score GT UI.  Uses ``gt_only=False`` so the flip chain spans all
+    rallies in the video (not just GT-labeled ones).
 
-    1. ``match_analysis_json.rallies[].sideSwitchDetected`` — pipeline-detected
-    2. ``rally.gt_side_switch`` — per-rally manual override from the Score GT UI
-
-    Per-rally overrides take precedence (``True`` forces a switch,
-    ``False`` suppresses one, ``None`` defers to the analysis flag).
-
-    Falls back to pipeline-derived flips for videos without any GT data.
+    Falls back to pipeline-derived flips for videos without any switch data.
     """
     if not video_ids:
         return {}
 
-    placeholders = ", ".join(["%s"] * len(video_ids))
+    from rallycut.evaluation.switch_loader import resolve_side_flipped
 
-    # Step 1: Load per-rally sideSwitchDetected from match_analysis_json
-    analysis_switches: dict[str, bool] = {}
-    with get_connection() as conn, conn.cursor() as cur:
-        cur.execute(f"""
-            SELECT id, match_analysis_json FROM videos
-            WHERE id IN ({placeholders})
-        """, list(video_ids))
-        for vid, maj in cur.fetchall():
-            if not maj or not isinstance(maj, dict):
-                continue
-            rallies_arr = maj.get("rallies", [])
-            if not isinstance(rallies_arr, list):
-                continue
-            for entry in rallies_arr:
-                if not isinstance(entry, dict):
-                    continue
-                rid = entry.get("rallyId") or entry.get("rally_id")
-                if not rid:
-                    continue
-                flag = entry.get("sideSwitchDetected") is True or \
-                       entry.get("side_switch_detected") is True
-                if flag:
-                    analysis_switches[rid] = True
+    result = resolve_side_flipped(video_ids, gt_only=False)
 
-    # Step 2: Load rally IDs + per-rally gt_side_switch in chronological order
-    rally_info: dict[str, list[tuple[str, bool | None]]] = {}
-    with get_connection() as conn, conn.cursor() as cur:
-        cur.execute(f"""
-            SELECT id, video_id, gt_side_switch FROM rallies
-            WHERE video_id IN ({placeholders})
-            ORDER BY video_id, start_ms
-        """, list(video_ids))
-        for rid, vid, gt_sw in cur.fetchall():
-            rally_info.setdefault(vid, []).append((rid, gt_sw))
-
-    # Step 3: Build flips — per-rally override ?? analysis flag
-    result: dict[str, bool] = {}
+    # Determine which videos are covered (have at least one rally resolved)
     covered_videos: set[str] = set()
-    for vid, rally_list in rally_info.items():
-        has_any_gt = any(gt_sw is not None for _, gt_sw in rally_list)
-        has_any_analysis = any(
-            analysis_switches.get(rid, False) for rid, _ in rally_list
-        )
-        if not has_any_gt and not has_any_analysis:
-            continue
-        flipped = False
-        for rid, gt_sw in rally_list:
-            if gt_sw is not None:
-                switched = bool(gt_sw)
-            else:
-                switched = analysis_switches.get(rid, False)
-            if switched:
-                flipped = not flipped
-            result[rid] = flipped
-        covered_videos.add(vid)
+    with get_connection() as conn, conn.cursor() as cur:
+        if result:
+            placeholders = ", ".join(["%s"] * len(result))
+            cur.execute(f"""
+                SELECT DISTINCT video_id FROM rallies
+                WHERE id IN ({placeholders})
+            """, list(result.keys()))
+            covered_videos = {row[0] for row in cur.fetchall()}
 
-    # Step 4: Fall back to pipeline-derived flips for uncovered videos
     uncovered = video_ids - covered_videos
     if uncovered:
         result.update(_load_formation_semantic_flips(uncovered))

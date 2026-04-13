@@ -1283,11 +1283,8 @@ export async function getScoreGroundTruthForVideo(
   // Falls back to 'A' when unknown.
   const gt = video.playerMatchingGtJson as Record<string, unknown> | null;
   const analysis = video.matchAnalysisJson as Record<string, unknown> | null;
-  const initialNearTeam: 'A' | 'B' =
-    (gt?.initialNearTeam as 'A' | 'B') ??
-    (analysis?.initialNearTeam as 'A' | 'B') ??
-    (analysis?.initial_near_team as 'A' | 'B') ??
-    'A';
+  const rawNearTeam = gt?.initialNearTeam ?? analysis?.initialNearTeam ?? analysis?.initial_near_team;
+  const initialNearTeam: 'A' | 'B' = rawNearTeam === 'B' ? 'B' : 'A';
   const resolution = computeNearSideByRally(video.matchAnalysisJson, rallies, initialNearTeam);
   return rallies.map((r) => ({
     rallyId: r.id,
