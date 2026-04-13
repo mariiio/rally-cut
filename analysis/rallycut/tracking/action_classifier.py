@@ -560,6 +560,7 @@ def _find_serving_team_by_formation(
     calibrator: CourtCalibrator | None = None,
     first_contact_frame: int | None = None,
     adaptive_window: bool = False,
+    first_contact: Contact | None = None,
 ) -> tuple[str | None, float]:
     """Predict serving team from player formation at rally start.
 
@@ -590,6 +591,7 @@ def _find_serving_team_by_formation(
         window_frames=window_frames, ball_positions=ball_positions,
         calibrator=calibrator, first_contact_frame=first_contact_frame,
         adaptive_window=adaptive_window,
+        first_contact=first_contact,
     )
     if serving_side is None:
         return None, 0.0
@@ -937,6 +939,7 @@ def _find_serving_side_by_formation(
     calibrator: CourtCalibrator | None = None,
     first_contact_frame: int | None = None,
     adaptive_window: bool = False,
+    first_contact: Contact | None = None,
 ) -> tuple[str | None, float]:
     """Return the raw physical serving SIDE without team-label mapping.
 
@@ -1048,15 +1051,34 @@ def _find_serving_side_by_formation(
 
     # Predict side from score sign
     if abs(score) < 1e-6:
-        return None, 0.0
+        formation_side: str | None = None
+        formation_conf = 0.0
+    elif score > 0:
+        # Confidence from logistic sigmoid
+        prob = 1.0 / (1.0 + math.exp(-score))
+        formation_conf = abs(prob - 0.5) * 2.0  # Map [0.5, 1.0] → [0.0, 1.0]
+        formation_side = "near"
+    else:
+        prob = 1.0 / (1.0 + math.exp(-score))
+        formation_conf = abs(prob - 0.5) * 2.0
+        formation_side = "far"
 
-    # Confidence from logistic sigmoid
-    prob = 1.0 / (1.0 + math.exp(-score))
-    confidence = abs(prob - 0.5) * 2.0  # Map [0.5, 1.0] → [0.0, 1.0]
+    # Fuse with serve contact classifier when available
+    if first_contact is not None:
+        contact_side, contact_conf = _serving_side_from_contact(
+            first_contact, player_positions, net_y,
+        )
+        if contact_side is not None:
+            if formation_side is None:
+                return contact_side, contact_conf
+            if contact_side == formation_side:
+                return formation_side, max(formation_conf, contact_conf)
+            if contact_conf > formation_conf:
+                return contact_side, contact_conf
 
-    if score > 0:
-        return "near", confidence
-    return "far", confidence
+    if formation_side is not None:
+        return formation_side, formation_conf
+    return None, 0.0
 
 
 def _is_ball_on_serve_side(
@@ -3307,8 +3329,10 @@ def classify_rally_actions(
     if cfg.use_formation_serving_team:
         # Determine first contact frame for adaptive window
         first_contact_frame_val: int | None = None
+        first_contact_obj: Contact | None = None
         if contact_sequence.contacts:
             first_contact_frame_val = contact_sequence.contacts[0].frame
+            first_contact_obj = contact_sequence.contacts[0]
 
         formation_team, _ = _find_serving_team_by_formation(
             contact_sequence.player_positions,
@@ -3323,6 +3347,7 @@ def classify_rally_actions(
             calibrator=calibrator,
             first_contact_frame=first_contact_frame_val,
             adaptive_window=True,
+            first_contact=first_contact_obj,
         )
         if formation_team is not None:
             result.formation_serving_team = formation_team

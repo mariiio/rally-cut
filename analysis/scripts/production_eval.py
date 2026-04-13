@@ -128,6 +128,7 @@ from rallycut.tracking.action_classifier import (  # noqa: E402
 )
 from rallycut.tracking.ball_tracker import BallPosition  # noqa: E402
 from rallycut.tracking.contact_detector import (  # noqa: E402
+    Contact,
     ContactDetectionConfig,
     detect_contacts,
 )
@@ -683,12 +684,30 @@ def _apply_viterbi_scoring(
                     contacts_list = rd.contacts_json.get("contacts", [])
                     if contacts_list:
                         fc_frame = contacts_list[0].get("frame")
+                # Build first Contact for fusion
+                first_contact_obj: Contact | None = None
+                if rd and rd.contacts_json and isinstance(rd.contacts_json, dict):
+                    contacts_list = rd.contacts_json.get("contacts", [])
+                    if contacts_list:
+                        c = contacts_list[0]
+                        first_contact_obj = Contact(
+                            frame=c.get("frame", 0),
+                            ball_x=c.get("ballX", 0.5),
+                            ball_y=c.get("ballY", 0.5),
+                            velocity=c.get("velocity", 0.0),
+                            direction_change_deg=c.get("directionChangeDeg", 0.0),
+                            player_track_id=c.get("playerTrackId", -1),
+                            player_distance=c.get("playerDistance", float("inf")),
+                            is_at_net=c.get("isAtNet", False),
+                            court_side=c.get("courtSide", "unknown"),
+                        )
                 formation_side, formation_conf = _find_serving_side_by_formation(
                     positions, net_y=net_y, start_frame=0,
                     ball_positions=ball_pos or None,
                     calibrator=vid_cal,
                     first_contact_frame=fc_frame,
                     adaptive_window=True,
+                    first_contact=first_contact_obj,
                 )
 
             # Team localization: which team template is near?
