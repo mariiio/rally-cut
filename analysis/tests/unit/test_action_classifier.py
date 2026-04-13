@@ -15,6 +15,7 @@ from rallycut.tracking.action_classifier import (
     _compute_auto_split_y,
     _compute_expected_teams,
     _find_server_by_position,
+    _find_serving_side_by_formation,
     _find_serving_team_by_formation,
     _infer_serve_side,
     _is_ball_on_serve_side,
@@ -1833,6 +1834,33 @@ def _player_pos(
         frame_number=frame, track_id=track_id,
         x=x, y=y, width=width, height=height, confidence=0.9,
     )
+
+
+class TestFindServingSideByFormation:
+    """Tests for _find_serving_side_by_formation."""
+
+    def test_auto_split_uses_windowed_positions(self) -> None:
+        """Auto-split should use positions from the formation window, not full rally."""
+        positions: list[PlayerPosition] = []
+        # Formation window (frames 0-60): clear 2+2 split
+        for f in range(60):
+            positions.append(_player_pos(f, 1, y=0.70))  # near
+            positions.append(_player_pos(f, 2, y=0.60))  # near
+            positions.append(_player_pos(f, 3, y=0.30))  # far
+            positions.append(_player_pos(f, 4, y=0.20))  # far
+        # Later frames (100-200): all players move to near side
+        for f in range(100, 200):
+            positions.append(_player_pos(f, 1, y=0.80))
+            positions.append(_player_pos(f, 2, y=0.70))
+            positions.append(_player_pos(f, 3, y=0.65))
+            positions.append(_player_pos(f, 4, y=0.60))
+
+        # With net_y=0.2, all windowed players are "above" it.
+        # auto_split should use windowed positions and find 2+2 split.
+        side, conf = _find_serving_side_by_formation(
+            positions, net_y=0.2, start_frame=0, window_frames=60,
+        )
+        assert side is not None, "Should not abstain — 4 players clearly 2+2 in window"
 
 
 class TestFindServerByPosition:

@@ -613,7 +613,11 @@ def _find_serving_team_by_formation(
     effective_split = net_y
     near_count = sum(1 for y in track_medians.values() if y > effective_split)
     if near_count == 0 or near_count == len(track_medians):
-        auto_split = _compute_auto_split_y(player_positions)
+        windowed_positions = [
+            p for p in player_positions
+            if p.track_id >= 0 and start_frame <= p.frame_number < end_frame
+        ]
+        auto_split = _compute_auto_split_y(windowed_positions)
         if auto_split is not None:
             effective_split = auto_split
 
@@ -917,7 +921,11 @@ def _find_serving_side_by_formation(
     near_count = sum(1 for y in track_medians_y.values() if y > effective_split)
     far_count = len(track_medians_y) - near_count
     if near_count == 0 or far_count == 0:
-        auto_split = _compute_auto_split_y(player_positions)
+        windowed_positions = [
+            p for p in player_positions
+            if p.track_id >= 0 and start_frame <= p.frame_number < end_frame
+        ]
+        auto_split = _compute_auto_split_y(windowed_positions)
         if auto_split is None:
             return None, 0.0
         effective_split = auto_split
