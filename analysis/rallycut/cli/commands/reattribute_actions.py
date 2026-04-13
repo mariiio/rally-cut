@@ -495,7 +495,8 @@ def reattribute_actions_cmd(
     placeholders = ", ".join(["%s"] * len(rally_ids))
     query = f"""
         SELECT r.id, pt.id, pt.contacts_json, pt.actions_json,
-               pt.positions_json, r.start_ms, pt.court_split_y
+               pt.positions_json, r.start_ms, pt.court_split_y,
+               r.gt_serving_team
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
         WHERE r.id IN ({placeholders})
@@ -546,6 +547,7 @@ def reattribute_actions_cmd(
     for (
         rally_id_val, pt_id_val, contacts_json_val, actions_json_val,
         positions_json_val, start_ms_val, court_split_y_val,
+        _gt_serving_team_val,
     ) in rows:
         rally_id = str(rally_id_val)
         pt_id = cast(int, pt_id_val)
@@ -724,13 +726,14 @@ def reattribute_actions_cmd(
     if video_cap is not None:
         video_cap.release()
 
-    # Cross-rally Viterbi scoring: override per-rally formation predictions
-    # with the Viterbi-decoded serving_team sequence. This uses the physical
-    # side formation signal + dual-hypothesis convention + position-based
-    # switch detection for +10.9pp over per-rally predictions.
-    # See score_tracking_investigation_design.md.
+    # Cross-rally scoring: override per-rally formation predictions with a
+    # coherent serving_team sequence. Uses GT-aware convention calibration
+    # (when GT labels exist) + team localization per-rally + Viterbi HMM
+    # fallback. See score_tracking_investigation_design.md.
     from rallycut.scoring.cross_rally_viterbi import (  # noqa: PLC0415
         RallyObservation,
+        calibrate_initial_side,
+        decode_video,
         decode_video_dual_hypothesis,
     )
     from rallycut.tracking.action_classifier import (  # noqa: PLC0415
@@ -738,6 +741,7 @@ def reattribute_actions_cmd(
     )
     from rallycut.tracking.team_identity import (  # noqa: PLC0415
         TeamTemplate,
+        calibrate_convention_from_gt,
         localize_team_near,
         resolve_serving_team,
     )
@@ -764,9 +768,11 @@ def reattribute_actions_cmd(
     viterbi_observations: list[RallyObservation] = []
     viterbi_rally_ids: list[str] = []
     team_near_labels: list[str | None] = []
+    gt_serving_teams: list[str | None] = []
     for (
         rally_id_val2, _pt_id_val2, _cj, _aj,
         positions_json_val2, _sms, court_split_y_val2,
+        gt_serving_team_val2,
     ) in rows:
         rid2 = str(rally_id_val2)
         viterbi_rally_ids.append(rid2)
@@ -806,46 +812,91 @@ def reattribute_actions_cmd(
             formation_confidence=formation_conf,
         ))
         team_near_labels.append(team_near)
+        gt_serving_teams.append(
+            str(gt_serving_team_val2) if gt_serving_team_val2 else None,
+        )
 
     # Per-rally team localization: directly determine serving team from
     # formation (which side serves) + track_to_player (which team is on
     # which side). No accumulated side-switch state needed.
     has_team_loc = any(tn is not None for tn in team_near_labels)
 
-    if has_team_loc and team_templates is not None:
-        # Convention: first rally's near team = A (production default)
-        label_a = next(
-            (tn for tn in team_near_labels if tn is not None), "0",
-        )
+    # Build switch indices (needed by both team_loc and Viterbi paths).
+    switch_indices: set[int] = set()
+    for i in range(1, len(viterbi_rally_ids)):
+        cur_flip = formation_flips.get(viterbi_rally_ids[i], False)
+        prev_flip = formation_flips.get(viterbi_rally_ids[i - 1], False)
+        if cur_flip != prev_flip:
+            switch_indices.add(i)
 
+    has_gt = any(gt is not None for gt in gt_serving_teams)
+
+    if has_team_loc and team_templates is not None:
+        # Convention calibration: which template label = "A"?
+        # When GT labels are available (Score GT UI), use majority vote
+        # of formation predictions against GT (same as production_eval).
+        # Otherwise fall back to first non-None team_near (production
+        # default — correct ~50% of videos).
+        if has_gt:
+            formation_sides = [
+                obs.formation_side for obs in viterbi_observations
+            ]
+            label_a = calibrate_convention_from_gt(
+                gt_serving_teams, formation_sides,
+                team_near_labels, team_templates,
+            )
+        else:
+            label_a = next(
+                (tn for tn in team_near_labels if tn is not None), "0",
+            )
+
+        # Run Viterbi with GT-calibrated convention as fallback for rallies
+        # where team localization can't determine the serving team.
+        initial_near_is_a = (
+            calibrate_initial_side(viterbi_observations, gt_serving_teams)
+            if has_gt else True
+        )
+        viterbi_decoded = decode_video(
+            viterbi_observations,
+            initial_near_is_a=initial_near_is_a,
+            side_switch_rallies=switch_indices,
+        )
+        viterbi_by_rally = {
+            dec.rally_id: dec.serving_team for dec in viterbi_decoded
+        }
+
+        n_team_loc = 0
+        n_viterbi_fallback = 0
         for obs, tn in zip(viterbi_observations, team_near_labels):
             team = resolve_serving_team(
                 obs.formation_side, tn, team_templates, label_a,
             )
-            # Keep existing prediction when localization can't determine
-            rally_serving_updates.append((obs.rally_id, team or "A"))
+            if team is not None:
+                rally_serving_updates.append((obs.rally_id, team))
+                n_team_loc += 1
+            else:
+                # Fallback to Viterbi for rallies without team localization
+                viterbi_team = viterbi_by_rally.get(obs.rally_id, "A")
+                rally_serving_updates.append((obs.rally_id, viterbi_team))
+                n_viterbi_fallback += 1
 
         formation_applied = sum(
             1 for (rid2, team), (
-                _r, _p, _c, aj, _pos, _s, _cs
+                _r, _p, _c, aj, _pos, _s, _cs, _gt
             ) in zip(rally_serving_updates, rows)
             if isinstance(aj, dict)
             and aj.get("servingTeam") != team
         )
         if not quiet:
             console.print(
-                f"  [cyan]Team localization: {len(rally_serving_updates)} rallies, "
+                f"  [cyan]Team localization: {n_team_loc} rallies, "
+                f"Viterbi fallback: {n_viterbi_fallback}, "
+                f"label_a={label_a}, "
                 f"{formation_applied} serving_team changes[/cyan]"
             )
     elif viterbi_observations:
-        # Fallback: no team localization → use Viterbi with side switches
-        switch_indices: set[int] = set()
-        for i in range(1, len(viterbi_rally_ids)):
-            cur_flip = formation_flips.get(viterbi_rally_ids[i], False)
-            prev_flip = formation_flips.get(viterbi_rally_ids[i - 1], False)
-            if cur_flip != prev_flip:
-                switch_indices.add(i)
-
+        # No team localization → use Viterbi dual-hypothesis with side
+        # switches. Tries both conventions, picks the more plausible one.
         decoded = decode_video_dual_hypothesis(
             viterbi_observations, side_switch_rallies=switch_indices,
         )
@@ -854,7 +905,7 @@ def reattribute_actions_cmd(
         ]
         formation_applied = sum(
             1 for (rid2, team), (
-                _r, _p, _c, aj, _pos, _s, _cs
+                _r, _p, _c, aj, _pos, _s, _cs, _gt
             ) in zip(rally_serving_updates, rows)
             if isinstance(aj, dict)
             and aj.get("servingTeam") != team
