@@ -2556,3 +2556,46 @@ class TestClassifyServeContact:
         )
         side, conf = _serving_side_from_contact(contact, [], net_y=0.5)
         assert side is None
+
+    def test_fusion_contact_overrides_weak_formation(self) -> None:
+        """Contact classifier overrides formation when formation conf is low."""
+        # Ambiguous formation: both sides nearly equal separation
+        positions: list[PlayerPosition] = []
+        for f in range(120):
+            positions.append(_player_pos(f, 1, y=0.545))  # near, foot=0.62
+            positions.append(_player_pos(f, 2, y=0.505))  # near, foot=0.58
+            positions.append(_player_pos(f, 3, y=0.345))  # far, foot=0.42
+            positions.append(_player_pos(f, 4, y=0.305))  # far, foot=0.38
+        # Serve contact: ball high, player 3 (far side) is server
+        contact = Contact(
+            frame=50, ball_x=0.5, ball_y=0.3,
+            velocity=0.01, direction_change_deg=150.0,
+            player_track_id=3, player_distance=0.06,
+            is_at_net=False, court_side="far",
+        )
+        side, conf = _find_serving_side_by_formation(
+            positions, net_y=0.5, first_contact=contact,
+        )
+        assert side is not None
+
+    def test_fusion_contact_does_not_override_strong_formation(self) -> None:
+        """Contact does NOT override high-confidence formation."""
+        # Clear formation: near side has server at baseline
+        positions: list[PlayerPosition] = []
+        for f in range(120):
+            positions.append(_player_pos(f, 1, y=0.825))  # near baseline, foot=0.90
+            positions.append(_player_pos(f, 2, y=0.475))  # near net, foot=0.55
+            positions.append(_player_pos(f, 3, y=0.345))  # far, foot=0.42
+            positions.append(_player_pos(f, 4, y=0.305))  # far, foot=0.38
+        # Receive contact on near side (ballY > net_y → receive)
+        contact = Contact(
+            frame=80, ball_x=0.5, ball_y=0.7,
+            velocity=0.02, direction_change_deg=130.0,
+            player_track_id=1, player_distance=0.02,
+            is_at_net=False, court_side="near",
+        )
+        side, conf = _find_serving_side_by_formation(
+            positions, net_y=0.5, first_contact=contact,
+        )
+        # Formation is confident "near" → contact should NOT override
+        assert side == "near"

@@ -741,18 +741,14 @@ def _apply_viterbi_scoring(
                 net_y = rd.court_split_y if rd.court_split_y else 0.5
                 ball_pos = _parse_ball(rd.ball_positions_json or [])
                 vid_cal = (calibrators or {}).get(video_id)
-                # Get first contact frame for adaptive window
+                # Parse first contact for adaptive window + fusion
                 fc_frame: int | None = None
+                first_contact_obj: Contact | None = None
                 if rd.contacts_json and isinstance(rd.contacts_json, dict):
                     contacts_list = rd.contacts_json.get("contacts", [])
                     if contacts_list:
-                        fc_frame = contacts_list[0].get("frame")
-                # Build first Contact for fusion
-                first_contact_obj: Contact | None = None
-                if rd and rd.contacts_json and isinstance(rd.contacts_json, dict):
-                    contacts_list = rd.contacts_json.get("contacts", [])
-                    if contacts_list:
                         c = contacts_list[0]
+                        fc_frame = c.get("frame")
                         first_contact_obj = Contact(
                             frame=c.get("frame", 0),
                             ball_x=c.get("ballX", 0.5),
