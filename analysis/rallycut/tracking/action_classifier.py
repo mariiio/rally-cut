@@ -520,6 +520,10 @@ def _compute_auto_split_y(player_positions: list[PlayerPosition]) -> float | Non
     4 tracked players on "near").
 
     Splits at the biggest gap between consecutive player median Y positions.
+    When ≥4 tracks exist, prefers a split that produces a balanced 2v2
+    distribution — if the biggest gap gives 3v1 or 4v0, tries the
+    second-biggest gap instead.
+
     Requires at least 3 tracked players.
 
     Returns:
@@ -537,14 +541,31 @@ def _compute_auto_split_y(player_positions: list[PlayerPosition]) -> float | Non
     medians = sorted(
         sum(ys) / len(ys) for ys in by_track.values()
     )
-    best_gap = 0.0
-    best_split: float | None = None
+
+    # Rank all gaps by size.
+    gaps: list[tuple[float, float]] = []  # (gap_size, split_y)
     for i in range(len(medians) - 1):
         gap = medians[i + 1] - medians[i]
-        if gap > best_gap:
-            best_gap = gap
-            best_split = (medians[i] + medians[i + 1]) / 2.0
-    return best_split
+        split_y = (medians[i] + medians[i + 1]) / 2.0
+        gaps.append((gap, split_y))
+    gaps.sort(key=lambda g: -g[0])  # largest gap first
+
+    if not gaps:
+        return None
+
+    # With ≥4 tracks, prefer a 2v2 split.  The biggest gap often produces
+    # 3v1 when one player is near the net line.
+    n_tracks = len(medians)
+    if n_tracks >= 4:
+        for _, split_y in gaps:
+            below = sum(1 for m in medians if m <= split_y)
+            above = n_tracks - below
+            if below >= 2 and above >= 2:
+                return split_y
+
+    # Fall back to biggest gap (original behaviour for 3-track cases,
+    # or if no 2v2 split exists with ≥4 tracks).
+    return gaps[0][1]
 
 
 def _find_serving_team_by_formation(
@@ -749,28 +770,28 @@ def _compute_formation_features(
 
 
 # Logistic regression weights for serving side prediction.
-# Trained on 304 GT rallies (11 videos), LOO-video CV = 78.3%.
+# Trained on 448 GT rallies (30 videos), LOO-video CV = 93.0%.
 # Features: separation, isolation, baseline_img, baseline_court,
 #           net_dist, count_asym. Positive score → near serving.
 _FORMATION_WEIGHTS_6 = {
-    "intercept": -0.83704409,
-    "separation": 3.09204712,
-    "isolation": 0.91386739,
-    "baseline_img": 1.24791133,
-    "baseline_court": 0.11604062,
-    "net_dist": 0.74777783,
-    "count_asym": -0.41739781,
+    "intercept": -2.23758492,
+    "separation": 33.15155590,
+    "isolation": 0.08680416,
+    "baseline_img": 4.68423319,
+    "baseline_court": 0.16260830,
+    "net_dist": -6.97028831,
+    "count_asym": -3.28034322,
 }
-# Extended model with ball position (LOO-video CV = 79.5%, 87% coverage).
+# Extended model with ball position (LOO-video CV = 95.6%, 86% coverage).
 _FORMATION_WEIGHTS_7 = {
-    "intercept": -1.30292378,
-    "separation": 3.01398477,
-    "isolation": 1.43179472,
-    "baseline_img": 1.00845328,
-    "baseline_court": 0.11972056,
-    "net_dist": 1.25342980,
-    "ball_pos": -1.37945816,
-    "count_asym": -0.28353668,
+    "intercept": -4.90035394,
+    "separation": 36.27364257,
+    "isolation": 2.75031487,
+    "baseline_img": 1.17173663,
+    "baseline_court": 0.09151576,
+    "net_dist": -0.98203087,
+    "ball_pos": -10.21039365,
+    "count_asym": -3.33282825,
 }
 _FORMATION_FEATURE_ORDER_6 = [
     "separation", "isolation", "baseline_img",
