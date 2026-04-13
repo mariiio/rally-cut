@@ -10,7 +10,7 @@ with no accumulated side-switch state.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -117,6 +117,7 @@ def localize_team_near(
     positions: list[PlayerPosition],
     track_to_player: dict[int, int],
     templates: tuple[TeamTemplate, TeamTemplate],
+    min_y_gap: float = 0.03,
 ) -> str | None:
     """Determine which team template is near for a single rally.
 
@@ -124,10 +125,19 @@ def localize_team_near(
     team template and compares mean Y positions. Higher Y = near (closer
     to camera).
 
+    Returns None when the Y gap between teams is below ``min_y_gap``,
+    indicating that localization is unreliable (e.g. narrow-angle cameras
+    where near and far players have similar Y positions). Callers should
+    fall back to Viterbi-based side switch detection in this case.
+
     Args:
         positions: Player positions for this rally.
         track_to_player: track_id -> player_id (1-4).
         templates: The two team templates.
+        min_y_gap: Minimum mean-Y gap between teams to trust the result.
+            Below this threshold, returns None. Default 0.03 (~3% of image
+            height) covers narrow-angle cameras where track_to_player
+            phantom flips cause wrong team grouping.
 
     Returns:
         Team label of the near team ("0" or "1"), or None if ambiguous.
@@ -155,7 +165,13 @@ def localize_team_near(
     if not t0_y or not t1_y:
         return None
 
-    return t0.team_label if float(np.mean(t0_y)) > float(np.mean(t1_y)) else t1.team_label
+    mean_t0 = float(np.mean(t0_y))
+    mean_t1 = float(np.mean(t1_y))
+
+    if abs(mean_t0 - mean_t1) < min_y_gap:
+        return None
+
+    return t0.team_label if mean_t0 > mean_t1 else t1.team_label
 
 
 def resolve_serving_team(

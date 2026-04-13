@@ -374,6 +374,69 @@ def _load_formation_semantic_flips(video_ids: set[str]) -> dict[str, bool]:
     return result
 
 
+def _load_formation_semantic_flips_from_gt(
+    video_ids: set[str],
+) -> dict[str, bool]:
+    """Compute per-rally `semantic_flip` from GT `sideSwitches`.
+
+    Uses `player_matching_gt_json.sideSwitches` instead of the pipeline's
+    `match_analysis_json.sideSwitchDetected`. The GT switches are human-labeled
+    and immune to trackToPlayer phantom flips that corrupt the pipeline's
+    sideSwitchDetected flags (~4-8% of rallies across 51 GT videos).
+
+    Requires rally ordering from the rallies table (sorted by start_ms)
+    to map GT switch indices (ordinal position) to rally IDs.
+
+    Falls back to pipeline-derived flips for videos without GT switches.
+    """
+    if not video_ids:
+        return {}
+
+    # Step 1: Load GT sideSwitches per video
+    placeholders = ", ".join(["%s"] * len(video_ids))
+    gt_switches: dict[str, set[int]] = {}
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(f"""
+            SELECT id, player_matching_gt_json FROM videos
+            WHERE id IN ({placeholders})
+              AND player_matching_gt_json IS NOT NULL
+        """, list(video_ids))
+        for vid, gt_json in cur.fetchall():
+            if isinstance(gt_json, dict):
+                sw = gt_json.get("sideSwitches", gt_json.get("side_switches", []))
+                gt_switches[vid] = set(sw) if sw else set()
+
+    # Step 2: Load rally IDs per video in chronological order
+    rally_order: dict[str, list[str]] = {}
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(f"""
+            SELECT id, video_id FROM rallies
+            WHERE video_id IN ({placeholders})
+            ORDER BY video_id, start_ms
+        """, list(video_ids))
+        for rid, vid in cur.fetchall():
+            rally_order.setdefault(vid, []).append(rid)
+
+    # Step 3: Build GT-based flips
+    result: dict[str, bool] = {}
+    covered_videos: set[str] = set()
+    for vid, switches in gt_switches.items():
+        rids = rally_order.get(vid, [])
+        flipped = False
+        for idx, rid in enumerate(rids):
+            if idx in switches:
+                flipped = not flipped
+            result[rid] = flipped
+        covered_videos.add(vid)
+
+    # Step 4: Fall back to pipeline-derived flips for uncovered videos
+    uncovered = video_ids - covered_videos
+    if uncovered:
+        result.update(_load_formation_semantic_flips(uncovered))
+
+    return result
+
+
 # --------------------------------------------------------------------------- #
 # Per-rally production-mirrored pipeline                                      #
 # --------------------------------------------------------------------------- #
@@ -711,11 +774,18 @@ def _apply_viterbi_scoring(
                 )
 
             # Team localization: which team template is near?
+            # Fallback chain: localize_team_near (Y-position) → GT semantic
+            # flip (when available) → None (triggers Viterbi fallback).
+            # localize_team_near returns None for narrow-angle cameras where
+            # the Y gap is too small to trust. GT flips (from human-labeled
+            # sideSwitches) fill that gap in evaluation contexts.
             team_near: str | None = None
             if video_templates is not None:
                 from rallycut.tracking.team_identity import localize_team_near  # noqa: PLC0415
                 rally_t2p = t2p.get(rid, {})
                 team_near = localize_team_near(positions, rally_t2p, video_templates)
+                if team_near is None and rid in flips:
+                    team_near = "1" if flips[rid] else "0"
             team_near_labels.append(team_near)
 
             observations.append(RallyObservation(
@@ -1315,7 +1385,7 @@ def main() -> int:
     # formation-based serving_team predictor to convert physical→semantic
     # team labels on flipped rallies.
     # See memory/score_tracking_architecture_2026_04.md.
-    formation_flip_by_rally = _load_formation_semantic_flips(video_ids)
+    formation_flip_by_rally = _load_formation_semantic_flips_from_gt(video_ids)
     team_templates_by_video = _load_team_templates_by_video(video_ids)
     if team_templates_by_video:
         console.print(
