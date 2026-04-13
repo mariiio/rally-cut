@@ -13,6 +13,7 @@ from rallycut.tracking.action_classifier import (
     _ball_moving_toward_net,
     _ball_starts_on_contact_side,
     _classify_serve_contact,
+    _serving_side_from_contact,
     _compute_auto_split_y,
     _compute_expected_teams,
     _find_server_by_position,
@@ -2512,3 +2513,46 @@ class TestClassifyServeContact:
         )
         result = _classify_serve_contact(contact, net_y=0.5)
         assert result is None
+
+    def test_serving_side_from_serve_contact(self) -> None:
+        """Serve contact → player's side is serving side."""
+        contact = Contact(
+            frame=50, ball_x=0.5, ball_y=0.3,
+            velocity=0.01, direction_change_deg=150.0,
+            player_track_id=1, player_distance=0.06,
+            is_at_net=False, court_side="far",
+        )
+        # Player 1 on near side (foot Y = 0.70 + 0.075 = 0.775 > 0.5)
+        positions = [_player_pos(f, 1, y=0.70) for f in range(60)]
+        positions += [_player_pos(f, 3, y=0.30) for f in range(60)]
+
+        side, conf = _serving_side_from_contact(contact, positions, net_y=0.5)
+        assert side == "near"
+        assert conf > 0
+
+    def test_serving_side_from_receive_contact(self) -> None:
+        """Receive contact → opposite of player's side."""
+        contact = Contact(
+            frame=80, ball_x=0.5, ball_y=0.7,
+            velocity=0.02, direction_change_deg=130.0,
+            player_track_id=3, player_distance=0.02,
+            is_at_net=False, court_side="near",
+        )
+        # Player 3 on far side (foot Y = 0.30 + 0.075 = 0.375 < 0.5)
+        positions = [_player_pos(f, 1, y=0.70) for f in range(90)]
+        positions += [_player_pos(f, 3, y=0.30) for f in range(90)]
+
+        side, conf = _serving_side_from_contact(contact, positions, net_y=0.5)
+        assert side == "near"  # player 3 on far received → near served
+        assert conf > 0
+
+    def test_serving_side_no_player_positions(self) -> None:
+        """No positions for the contact player → None."""
+        contact = Contact(
+            frame=50, ball_x=0.5, ball_y=0.3,
+            velocity=0.01, direction_change_deg=150.0,
+            player_track_id=99, player_distance=0.06,
+            is_at_net=False, court_side="far",
+        )
+        side, conf = _serving_side_from_contact(contact, [], net_y=0.5)
+        assert side is None

@@ -877,6 +877,57 @@ def _classify_serve_contact(
     return None
 
 
+def _serving_side_from_contact(
+    contact: Contact,
+    player_positions: list[PlayerPosition],
+    net_y: float = 0.5,
+) -> tuple[str | None, float]:
+    """Determine serving side from a contact's classification and player position.
+
+    Classifies the contact as serve/receive via ``_classify_serve_contact``,
+    then uses the contact player's court position to determine which side
+    served:
+    - Serve contact → player's side is serving side
+    - Receive contact → opposite side is serving side
+
+    Args:
+        contact: First detected contact in the rally.
+        player_positions: Player positions for locating the contact player.
+        net_y: Court split Y.
+
+    Returns:
+        (side, confidence) where side is "near", "far", or None.
+    """
+    is_serve = _classify_serve_contact(contact, net_y)
+    if is_serve is None:
+        return None, 0.0
+
+    tid = contact.player_track_id
+    if tid < 0:
+        return None, 0.0
+
+    # Find contact player's foot Y near the contact frame
+    player_ys = [
+        p.y + p.height / 2.0
+        for p in player_positions
+        if p.track_id == tid and abs(p.frame_number - contact.frame) < 30
+    ]
+    if not player_ys:
+        return None, 0.0
+
+    player_y = sum(player_ys) / len(player_ys)
+    player_side = "near" if player_y > net_y else "far"
+
+    # Confidence from how far ballY is from net_y
+    ball_dist_from_net = abs(contact.ball_y - net_y)
+    confidence = min(1.0, ball_dist_from_net / 0.15)
+
+    if is_serve:
+        return player_side, confidence
+    # Receive → opposite side served
+    return ("far" if player_side == "near" else "near"), confidence
+
+
 def _find_serving_side_by_formation(
     player_positions: list[PlayerPosition],
     net_y: float,
