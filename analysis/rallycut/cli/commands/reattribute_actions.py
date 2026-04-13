@@ -801,10 +801,14 @@ def reattribute_actions_cmd(
 
             # Team localization: determine which team is near using
             # player IDs from track_to_player + Y positions.
+            # Fallback: GT side-switch flips (from Score GT UI) for
+            # narrow-angle cameras where Y-gap is too small.
             if team_templates is not None and rid2 in rally_t2p:
                 team_near = localize_team_near(
                     pos_list, rally_t2p[rid2], team_templates,
                 )
+            if team_near is None and rid2 in formation_flips:
+                team_near = "1" if formation_flips[rid2] else "0"
 
         viterbi_observations.append(RallyObservation(
             rally_id=rid2,
