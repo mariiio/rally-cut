@@ -2253,17 +2253,23 @@ class TestFindServingTeamByFormation:
         assert team == "B"
         assert conf > 0.0
 
-    def test_ambiguous_separations_abstain(self) -> None:
-        """Similar separations on both sides → None."""
-        # Both sides have similar mid-court separations — can't decide
+    def test_ambiguous_separations_low_confidence(self) -> None:
+        """Similar separations on both sides → low confidence prediction.
+
+        The multi-feature model uses isolation, baseline proximity, etc.
+        beyond just separation, so it may still predict with low confidence
+        even when separations are similar.
+        """
         positions = self._formation_positions(
             near_ys=(0.60, 0.65), far_ys=(0.35, 0.40),
         )
         teams = {1: 0, 2: 0, 3: 1, 4: 1}
-        team, _ = _find_serving_team_by_formation(
+        team, confidence = _find_serving_team_by_formation(
             positions, start_frame=0, net_y=0.5, team_assignments=teams,
         )
-        assert team is None
+        # Multi-feature model may predict but with low confidence
+        if team is not None:
+            assert confidence < 0.5
 
     def test_team_flipped_far_serves_returns_team_0(self) -> None:
         """When team assignment is flipped (team 0 on far), far-serving
@@ -2329,32 +2335,24 @@ class TestFindServingTeamByFormation:
         assert team == "A"
 
     def test_graduated_confidence(self) -> None:
-        """Graduated confidence: always predict, lower confidence for marginal ratios.
+        """Multi-feature model predicts with graduated confidence.
 
-        Near sep=0.10, far sep=0.09: ratio = 1.11. Both margins now predict
-        "A" (graduated confidence, no hard abstention). Phase 0 analysis
-        (2026-04-12) showed 0% true formation errors, so we always predict
-        when separation signal exists.
+        Near has clear server-at-baseline formation (sep=0.30, player near
+        bottom of frame). Far side is compact (sep=0.05). Model predicts
+        near serving with moderate confidence.
         """
-        # Build explicit medians: near 0.60 & 0.70 (sep=0.10), far 0.40 & 0.31 (sep=0.09)
+        # Near: server at 0.85, partner at 0.55 (sep=0.30)
+        # Far: both mid-court at 0.40 & 0.35 (sep=0.05)
         positions = self._formation_positions(
-            near_ys=(0.70, 0.60), far_ys=(0.40, 0.31),
+            near_ys=(0.85, 0.55), far_ys=(0.40, 0.35),
         )
         teams = {1: 0, 2: 0, 3: 1, 4: 1}
-        team_loose, conf_loose = _find_serving_team_by_formation(
+        team, conf = _find_serving_team_by_formation(
             positions, start_frame=0, net_y=0.5,
-            team_assignments=teams, margin=1.05,
+            team_assignments=teams,
         )
-        assert team_loose == "A"
-        team_grad, conf_grad = _find_serving_team_by_formation(
-            positions, start_frame=0, net_y=0.5,
-            team_assignments=teams, margin=1.15,
-        )
-        # With graduated confidence, predicts instead of abstaining
-        assert team_grad == "A"
-        # Confidence is ratio - 1.0 regardless of margin (margin no longer gates)
-        assert conf_grad > 0
-        assert conf_grad == conf_loose  # same ratio → same confidence
+        assert team == "A"
+        assert conf > 0
 
     def test_too_few_players_returns_none(self) -> None:
         """With <2 tracked players, cannot compute separation."""

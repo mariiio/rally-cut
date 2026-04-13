@@ -343,13 +343,100 @@ BASELINES: list[tuple[str, SimplePredictor]] = [
 ]
 
 
+# ── Formation Predictors ────────────────────────────────────────────────
+
+
+def _make_formation_predictors(
+    video_rallies: dict[str, list[RallyData]],
+) -> list[tuple[str, SimplePredictor]]:
+    """Build formation-based predictors (separation-only and multi-feature)."""
+    from rallycut.court.calibration import CourtCalibrator
+    from rallycut.evaluation.tracking.db import load_court_calibration
+    from rallycut.tracking.action_classifier import _find_serving_side_by_formation
+    from rallycut.tracking.ball_tracker import BallPosition
+    from rallycut.tracking.player_tracker import PlayerPosition
+
+    # Load court calibrations
+    calibrators: dict[str, CourtCalibrator] = {}
+    for vid in video_rallies:
+        corners = load_court_calibration(vid)
+        if corners and len(corners) == 4:
+            cal = CourtCalibrator()
+            cal.calibrate([(c["x"], c["y"]) for c in corners])
+            if cal.is_calibrated:
+                calibrators[vid] = cal
+
+    def _parse_pos(raw: list[dict]) -> list[PlayerPosition]:
+        return [
+            PlayerPosition(
+                frame_number=p["frameNumber"], track_id=p["trackId"],
+                x=p["x"], y=p["y"],
+                width=p.get("width", 0.05), height=p.get("height", 0.10),
+                confidence=p.get("confidence", 1.0), keypoints=p.get("keypoints"),
+            )
+            for p in raw
+        ]
+
+    def _parse_ball(raw: list[dict]) -> list[BallPosition]:
+        return [
+            BallPosition(
+                frame_number=bp["frameNumber"], x=bp["x"], y=bp["y"],
+                confidence=bp.get("confidence", 1.0),
+            )
+            for bp in raw
+            if bp.get("x", 0) > 0 or bp.get("y", 0) > 0
+        ]
+
+    def pred_separation(rally: RallyData) -> str | None:
+        """Separation-only (no ball, no calibrator)."""
+        if not rally.positions:
+            return None
+        positions = _parse_pos(rally.positions)
+        net_y = rally.court_split_y if rally.court_split_y else 0.5
+        side, _ = _find_serving_side_by_formation(
+            positions, net_y=net_y, start_frame=0,
+        )
+        if side is None:
+            return None
+        # Map physical side to team using side_flipped
+        if side == "near":
+            return "B" if rally.side_flipped else "A"
+        return "A" if rally.side_flipped else "B"
+
+    def pred_ensemble(rally: RallyData) -> str | None:
+        """Multi-feature ensemble (with ball + calibrator when available)."""
+        if not rally.positions:
+            return None
+        positions = _parse_pos(rally.positions)
+        ball_pos = _parse_ball(rally.ball_positions) if rally.ball_positions else None
+        cal = calibrators.get(rally.video_id)
+        net_y = rally.court_split_y if rally.court_split_y else 0.5
+        side, _ = _find_serving_side_by_formation(
+            positions, net_y=net_y, start_frame=0,
+            ball_positions=ball_pos,
+            calibrator=cal,
+        )
+        if side is None:
+            return None
+        if side == "near":
+            return "B" if rally.side_flipped else "A"
+        return "A" if rally.side_flipped else "B"
+
+    return [
+        ("formation_sep_only", pred_separation),
+        ("formation_ensemble", pred_ensemble),
+    ]
+
+
 # ── Main ─────────────────────────────────────────────────────────────────
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Score tracking eval harness")
     parser.add_argument("--predictor", type=str, default=None,
-                        help="Run a specific predictor (default: run all baselines)")
+                        help="Run a specific predictor (default: run all)")
+    parser.add_argument("--formation", action="store_true",
+                        help="Include formation predictors")
     args = parser.parse_args()
 
     print("Loading score GT...")
@@ -374,10 +461,14 @@ def main() -> int:
         b = len(rs) - a
         print(f"{vid[:10]:10s}  {len(rs):7d}  {a:4d}  {b:4d}")
 
-    # Run baselines
+    # Build predictors
+    all_predictors: list[tuple[str, SimplePredictor]] = list(BASELINES)
+    if args.formation:
+        all_predictors.extend(_make_formation_predictors(video_rallies))
+
     predictors: list[tuple[str, SimplePredictor]] = []
     if args.predictor:
-        for name, fn in BASELINES:
+        for name, fn in all_predictors:
             if name == args.predictor:
                 predictors.append((name, fn))
                 break
@@ -385,7 +476,7 @@ def main() -> int:
             print(f"Unknown predictor: {args.predictor}")
             return 1
     else:
-        predictors = BASELINES
+        predictors = all_predictors
 
     for name, fn in predictors:
         result = evaluate_simple(name, fn, video_rallies)

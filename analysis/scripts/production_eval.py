@@ -628,6 +628,7 @@ def _apply_viterbi_scoring(
     formation_flip_by_rally: dict[str, bool] | None,
     t2p_by_rally: dict[str, dict[int, int]] | None = None,
     team_templates_by_video: dict[str, tuple[Any, Any]] | None = None,
+    calibrators: dict[str, Any] | None = None,
 ) -> None:
     """Post-process per-rally serving_team via dual-hypothesis Viterbi.
 
@@ -674,8 +675,20 @@ def _apply_viterbi_scoring(
             if rd and rd.positions_json:
                 positions = _parse_positions(rd.positions_json)
                 net_y = rd.court_split_y if rd.court_split_y else 0.5
+                ball_pos = _parse_ball(rd.ball_positions_json or [])
+                vid_cal = (calibrators or {}).get(video_id)
+                # Get first contact frame for adaptive window
+                fc_frame: int | None = None
+                if rd.contacts_json and isinstance(rd.contacts_json, dict):
+                    contacts_list = rd.contacts_json.get("contacts", [])
+                    if contacts_list:
+                        fc_frame = contacts_list[0].get("frame")
                 formation_side, formation_conf = _find_serving_side_by_formation(
                     positions, net_y=net_y, start_frame=0,
+                    ball_positions=ball_pos or None,
+                    calibrator=vid_cal,
+                    first_contact_frame=fc_frame,
+                    adaptive_window=True,
                 )
 
             # Team localization: which team template is near?
@@ -933,7 +946,7 @@ def _run_once(
     if not ctx.skip_viterbi_scoring:
         _apply_viterbi_scoring(
             rallies, pred_by_video, formation_flip_by_rally, t2p_by_rally,
-            team_templates_by_video,
+            team_templates_by_video, calibrators=calibrators,
         )
 
     return (
