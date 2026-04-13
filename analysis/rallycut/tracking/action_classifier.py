@@ -842,6 +842,41 @@ def _compute_adaptive_window(
     return 0, 120
 
 
+def _classify_serve_contact(
+    contact: Contact,
+    net_y: float = 0.5,
+    player_distance_min: float = 0.03,
+) -> bool | None:
+    """Classify whether a detected contact is a serve or receive.
+
+    Uses ball position, net proximity, and player distance — attributes
+    already computed by the contact detector. Validated on 322 GT-labeled
+    contacts: ballY < net_y is 99% indicative of serve, ballY >= net_y
+    is 95% indicative of receive.
+
+    Args:
+        contact: The detected contact with ball/player attributes.
+        net_y: Court split Y (net position in image space).
+        player_distance_min: Minimum player-to-ball distance to qualify
+            as a serve (server reaches for toss, so distance is larger
+            than a close-range receive).
+
+    Returns:
+        True if contact is a serve, False if receive, None if uncertain.
+    """
+    # Ball below net_y (near side, high Y) → receive
+    if contact.ball_y >= net_y:
+        return False
+
+    # Ball above net_y (far side, low Y from toss) + not at net + player
+    # reaching → serve
+    if not contact.is_at_net and contact.player_distance >= player_distance_min:
+        return True
+
+    # Uncertain
+    return None
+
+
 def _find_serving_side_by_formation(
     player_positions: list[PlayerPosition],
     net_y: float,

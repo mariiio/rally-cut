@@ -12,6 +12,7 @@ from rallycut.tracking.action_classifier import (
     RallyActions,
     _ball_moving_toward_net,
     _ball_starts_on_contact_side,
+    _classify_serve_contact,
     _compute_auto_split_y,
     _compute_expected_teams,
     _find_server_by_position,
@@ -2463,3 +2464,51 @@ class TestComputeAutoSplitY:
             _player_pos(0, 2, y=0.7),
         ]
         assert _compute_auto_split_y(positions) is None
+
+
+class TestClassifyServeContact:
+    """Tests for _classify_serve_contact."""
+
+    def test_serve_ball_high_not_at_net(self) -> None:
+        """Ball above net (low Y from toss), not at net, player reaching → serve."""
+        contact = Contact(
+            frame=50, ball_x=0.5, ball_y=0.3,
+            velocity=0.01, direction_change_deg=150.0,
+            player_track_id=1, player_distance=0.06,
+            is_at_net=False, court_side="far",
+        )
+        result = _classify_serve_contact(contact, net_y=0.5)
+        assert result is True
+
+    def test_receive_ball_below_net(self) -> None:
+        """Ball below net (high Y, near side) → receive."""
+        contact = Contact(
+            frame=80, ball_x=0.5, ball_y=0.7,
+            velocity=0.02, direction_change_deg=130.0,
+            player_track_id=2, player_distance=0.02,
+            is_at_net=False, court_side="near",
+        )
+        result = _classify_serve_contact(contact, net_y=0.5)
+        assert result is False
+
+    def test_at_net_not_serve(self) -> None:
+        """Contact at net with ball high → uncertain."""
+        contact = Contact(
+            frame=60, ball_x=0.5, ball_y=0.4,
+            velocity=0.015, direction_change_deg=140.0,
+            player_track_id=3, player_distance=0.02,
+            is_at_net=True, court_side="near",
+        )
+        result = _classify_serve_contact(contact, net_y=0.5)
+        assert result is None
+
+    def test_player_too_close_uncertain(self) -> None:
+        """Ball high but player very close → uncertain."""
+        contact = Contact(
+            frame=50, ball_x=0.5, ball_y=0.3,
+            velocity=0.01, direction_change_deg=150.0,
+            player_track_id=1, player_distance=0.01,
+            is_at_net=False, court_side="far",
+        )
+        result = _classify_serve_contact(contact, net_y=0.5)
+        assert result is None
