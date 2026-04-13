@@ -1204,6 +1204,7 @@ interface NearSideResolution {
 function computeNearSideByRally(
   matchAnalysis: unknown,
   rallies: Array<{ id: string; gtSideSwitch: boolean | null }>,
+  initialNearTeam: 'A' | 'B' = 'A',
 ): NearSideResolution {
   const nearSide = new Map<string, 'A' | 'B'>();
   const switchedHere = new Map<string, boolean>();
@@ -1211,6 +1212,7 @@ function computeNearSideByRally(
   const anyInfo =
     analysisFlags.size > 0 || rallies.some((r) => r.gtSideSwitch !== null);
   let switchCount = 0;
+  const otherTeam: 'A' | 'B' = initialNearTeam === 'A' ? 'B' : 'A';
   for (const r of rallies) {
     const override = r.gtSideSwitch;
     const analysisFlag = analysisFlags.get(r.id) === true;
@@ -1218,7 +1220,7 @@ function computeNearSideByRally(
     switchedHere.set(r.id, switched);
     if (switched) switchCount += 1;
     if (anyInfo) {
-      nearSide.set(r.id, switchCount % 2 === 0 ? 'A' : 'B');
+      nearSide.set(r.id, switchCount % 2 === 0 ? initialNearTeam : otherTeam);
     }
   }
   return { nearSide, switchedHere };
@@ -1252,7 +1254,7 @@ export async function getScoreGroundTruthForVideo(
 > {
   const video = await prisma.video.findUnique({
     where: { id: videoId },
-    select: { userId: true, matchAnalysisJson: true },
+    select: { userId: true, matchAnalysisJson: true, playerMatchingGtJson: true },
   });
   if (!video) throw new NotFoundError('Video', videoId);
   if (video.userId !== userId) {
@@ -1263,7 +1265,10 @@ export async function getScoreGroundTruthForVideo(
   // Score GT is orthogonal to rally confirmation state.
   const rallies = await prisma.rally.findMany({
     where: { videoId },
-    orderBy: [{ order: 'asc' }, { startMs: 'asc' }],
+    // Sort by startMs for correct side-switch accumulation — switches are
+    // temporal events in the video.  The `order` column may diverge from
+    // chronological order when rallies are re-detected or reordered.
+    orderBy: [{ startMs: 'asc' }],
     select: {
       id: true,
       order: true,
@@ -1274,7 +1279,16 @@ export async function getScoreGroundTruthForVideo(
       gtSideSwitch: true,
     },
   });
-  const resolution = computeNearSideByRally(video.matchAnalysisJson, rallies);
+  // Read which team starts on the near side from GT or match analysis.
+  // Falls back to 'A' when unknown.
+  const gt = video.playerMatchingGtJson as Record<string, unknown> | null;
+  const analysis = video.matchAnalysisJson as Record<string, unknown> | null;
+  const initialNearTeam: 'A' | 'B' =
+    (gt?.initialNearTeam as 'A' | 'B') ??
+    (analysis?.initialNearTeam as 'A' | 'B') ??
+    (analysis?.initial_near_team as 'A' | 'B') ??
+    'A';
+  const resolution = computeNearSideByRally(video.matchAnalysisJson, rallies, initialNearTeam);
   return rallies.map((r) => ({
     rallyId: r.id,
     order: r.order,
