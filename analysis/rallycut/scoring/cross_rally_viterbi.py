@@ -36,10 +36,6 @@ class RallyObservation:
     formation_confidence: float  # 0-1
     # GT (for eval only)
     gt_serving_team: str | None = None  # "A" or "B"
-    # Team identity: which team template is on the near side?
-    # Set by TeamLocalizer from team_identity.py.
-    team_near: str | None = None  # Template label ("0"/"1" or "A"/"B")
-    team_localization_conf: float = 0.0  # TeamLocalizer confidence
 
 
 @dataclass
@@ -366,11 +362,9 @@ def decode_video_dual_hypothesis(
 ) -> list[DecodedRally]:
     """Decode by trying both near=A and near=B, pick the better hypothesis.
 
-    Primary tie-breaker: team appearance consistency — checks which hypothesis
-    keeps team templates on consistent sides across rallies. This requires
-    team_near to be set on RallyObservation (from TeamLocalizer).
-
-    Fallback: plausibility scoring (symmetric, effectively random).
+    Scores each hypothesis by how plausible the resulting score progression
+    looks. This is a known weak signal (complementary sequences often tie).
+    Used only as a fallback when per-rally team localization is unavailable.
 
     No GT or external calibration needed — purely self-contained.
     """
@@ -385,61 +379,9 @@ def decode_video_dual_hypothesis(
         side_switch_rallies=switches,
     )
 
-    # Primary: team consistency scoring (breaks the plausibility tie)
-    team_score_a = _score_team_consistency(observations, switches, initial_near_is_a=True)
-    team_score_b = _score_team_consistency(observations, switches, initial_near_is_a=False)
-
-    if team_score_a != team_score_b:
-        return results_a if team_score_a > team_score_b else results_b
-
-    # Fallback: plausibility (known to be a no-op / always ties)
     score_a = _score_plausibility(results_a)
     score_b = _score_plausibility(results_b)
     return results_a if score_a >= score_b else results_b
-
-
-def _score_team_consistency(
-    observations: list[RallyObservation],
-    side_switch_rallies: set[int],
-    initial_near_is_a: bool,
-) -> float:
-    """Score how consistently team localization agrees with this hypothesis.
-
-    For each rally with team_near data, checks whether the hypothesis's
-    team assignment matches the appearance-based team localization.
-
-    Args:
-        observations: Per-rally observations with optional team_near.
-        side_switch_rallies: Rally indices where teams swap sides.
-        initial_near_is_a: The hypothesis being scored.
-
-    Returns:
-        Weighted agreement score. 0.0 if no team localization data.
-    """
-    near_is_a = initial_near_is_a
-    total_weight = 0.0
-    agreement = 0.0
-
-    for i, obs in enumerate(observations):
-        if i in side_switch_rallies:
-            near_is_a = not near_is_a
-
-        if obs.team_near is None or obs.team_localization_conf < 0.1:
-            continue
-
-        # Under this hypothesis, which team should be near?
-        expected_near = "A" if near_is_a else "B"
-
-        weight = obs.team_localization_conf
-        total_weight += weight
-
-        if obs.team_near == expected_near:
-            agreement += weight
-
-    if total_weight < 1e-6:
-        return 0.0
-
-    return agreement / total_weight
 
 
 def _score_plausibility(decoded: list[DecodedRally]) -> float:
@@ -680,86 +622,3 @@ def detect_side_switches_from_positions(
                 persist_count = 0
 
     return switches
-
-
-# ---------------------------------------------------------------------------
-# Team-identity convention anchor (Phase 2)
-# ---------------------------------------------------------------------------
-
-
-def calibrate_from_player_identity(
-    observations: list[RallyObservation],
-    position_data: list[RallyPositionData],
-    side_switch_rallies: set[int] | None = None,
-    min_confidence: float = 0.1,
-) -> tuple[bool, float]:
-    """Determine near=A/B convention from player identity on each side.
-
-    **NOTE**: This function does NOT work for initial convention
-    determination because match_tracker assigns player IDs {1,2} to
-    whichever team is initially near — making the near=A/B question
-    circular. Kept for potential future use with externally-grounded
-    team identity (e.g., jersey color → team mapping).
-
-    For each rally, identifies which player_ids are on the near vs far
-    side, and votes on whether near=A (players {1,2}) or near=B ({3,4}).
-    Accounts for side switches.
-
-    Falls back to True (default convention) if insufficient signal.
-
-    Args:
-        observations: Per-rally formation observations.
-        position_data: Per-rally position + track_to_player data.
-        side_switch_rallies: Rally indices where sides swap.
-        min_confidence: Minimum vote margin to return a confident answer.
-
-    Returns:
-        (initial_near_is_a, confidence) — confidence in [0, 1].
-    """
-    switches = side_switch_rallies or set()
-    cumulative_switches = 0
-    votes_near_a = 0.0
-    votes_near_b = 0.0
-
-    for i, (obs, pd) in enumerate(zip(observations, position_data)):
-        if i in switches:
-            cumulative_switches += 1
-        flipped = cumulative_switches % 2 == 1
-
-        near_tids, far_tids = _classify_tracks_to_sides(
-            pd.positions, pd.court_split_y,
-        )
-        near_pids = _pids_on_side(near_tids, pd.track_to_player)
-        if not near_pids:
-            continue
-
-        # Determine which team is on the near side.
-        a_count = sum(1 for p in near_pids if p <= 2)
-        b_count = sum(1 for p in near_pids if p >= 3)
-        if a_count == b_count:
-            continue  # Ambiguous — skip.
-
-        near_team = "A" if a_count > b_count else "B"
-
-        # Account for side switch: if flipped, near physically is the
-        # opposite semantic side from the initial convention.
-        if flipped:
-            near_team = "B" if near_team == "A" else "A"
-
-        weight = max(obs.formation_confidence, 0.3) if obs.formation_side else 0.3
-        if near_team == "A":
-            votes_near_a += weight
-        else:
-            votes_near_b += weight
-
-    total = votes_near_a + votes_near_b
-    if total < 1e-6:
-        return True, 0.0  # No signal — default.
-
-    near_is_a = votes_near_a >= votes_near_b
-    confidence = abs(votes_near_a - votes_near_b) / total
-
-    if confidence < min_confidence:
-        return True, 0.0  # Too close to call — default.
-
-    return near_is_a, confidence

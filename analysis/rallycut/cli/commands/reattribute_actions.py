@@ -724,26 +724,20 @@ def reattribute_actions_cmd(
     from rallycut.tracking.action_classifier import (  # noqa: PLC0415
         _find_serving_side_by_formation,
     )
-
-    # Load team templates from match_analysis for team localization.
-    from rallycut.tracking.team_identity import TeamTemplate  # noqa: PLC0415
-    from rallycut.tracking.player_features import (  # noqa: PLC0415
-        PlayerAppearanceProfile,
+    from rallycut.tracking.team_identity import (  # noqa: PLC0415
+        TeamTemplate,
+        localize_team_near,
+        resolve_serving_team,
     )
 
     team_templates: tuple[TeamTemplate, TeamTemplate] | None = None
     templates_data = match_analysis.get("teamTemplates")
     if templates_data and isinstance(templates_data, dict):
-        # Reconstruct profiles for the templates
-        profiles_data = match_analysis.get("playerProfiles", {})
-        profiles: dict[int, PlayerAppearanceProfile] = {}
-        for pid_str, pdata in profiles_data.items():
-            profiles[int(pid_str)] = PlayerAppearanceProfile.from_dict(pdata)
         t0_data = templates_data.get("0")
         t1_data = templates_data.get("1")
         if t0_data and t1_data:
-            t0 = TeamTemplate.from_dict(t0_data, profiles)
-            t1 = TeamTemplate.from_dict(t1_data, profiles)
+            t0 = TeamTemplate.from_dict(t0_data)
+            t1 = TeamTemplate.from_dict(t1_data)
             team_templates = (t0, t1)
 
     # Build per-rally track_to_player lookup from match_analysis
@@ -757,6 +751,7 @@ def reattribute_actions_cmd(
     # Build observations from positions collected during the loop.
     viterbi_observations: list[RallyObservation] = []
     viterbi_rally_ids: list[str] = []
+    team_near_labels: list[str | None] = []
     for (
         rally_id_val2, _pt_id_val2, _cj, _aj,
         positions_json_val2, _sms, court_split_y_val2,
@@ -768,7 +763,6 @@ def reattribute_actions_cmd(
         formation_side: str | None = None
         formation_conf = 0.0
         team_near: str | None = None
-        team_loc_conf = 0.0
         if positions_raw:
             from rallycut.tracking.player_tracker import (  # noqa: PLC0415
                 PlayerPosition as _PlayerPos,
@@ -790,70 +784,34 @@ def reattribute_actions_cmd(
             # Team localization: determine which team is near using
             # player IDs from track_to_player + Y positions.
             if team_templates is not None and rid2 in rally_t2p:
-                t2p_rally = rally_t2p[rid2]
-                t0, t1 = team_templates
-                t0_pids = set(t0.player_ids)
-                # Compute mean Y per player_id
-                pid_ys: dict[int, list[float]] = {}
-                for p in pos_list:
-                    pid = t2p_rally.get(p.track_id)
-                    if pid is not None:
-                        pid_ys.setdefault(pid, []).append(p.y + p.height / 2.0)
-                if pid_ys:
-                    import numpy as np  # noqa: PLC0415
-                    t0_y_vals = [
-                        float(np.mean(pid_ys[pid]))
-                        for pid in t0_pids if pid in pid_ys
-                    ]
-                    t1_y_vals = [
-                        float(np.mean(pid_ys[pid]))
-                        for pid in set(t1.player_ids) if pid in pid_ys
-                    ]
-                    if t0_y_vals and t1_y_vals:
-                        mean_t0 = float(np.mean(t0_y_vals))
-                        mean_t1 = float(np.mean(t1_y_vals))
-                        # Higher Y = near
-                        if mean_t0 > mean_t1:
-                            team_near = t0.team_label
-                        else:
-                            team_near = t1.team_label
-                        y_gap = abs(mean_t0 - mean_t1)
-                        team_loc_conf = min(1.0, y_gap / 0.15)
+                team_near = localize_team_near(
+                    pos_list, rally_t2p[rid2], team_templates,
+                )
 
         viterbi_observations.append(RallyObservation(
             rally_id=rid2,
             formation_side=formation_side,
             formation_confidence=formation_conf,
-            team_near=team_near,
-            team_localization_conf=team_loc_conf,
         ))
+        team_near_labels.append(team_near)
 
     # Per-rally team localization: directly determine serving team from
     # formation (which side serves) + track_to_player (which team is on
     # which side). No accumulated side-switch state needed.
-    has_team_loc = any(
-        obs.team_near is not None for obs in viterbi_observations
-    )
+    has_team_loc = any(tn is not None for tn in team_near_labels)
 
-    if has_team_loc:
+    if has_team_loc and team_templates is not None:
         # Convention: first rally's near team = A (production default)
-        first_near = next(
-            (obs.team_near for obs in viterbi_observations if obs.team_near is not None),
-            "0",
+        label_a = next(
+            (tn for tn in team_near_labels if tn is not None), "0",
         )
-        label_a = first_near
 
-        for obs in viterbi_observations:
-            if obs.formation_side is None or obs.team_near is None:
-                rally_serving_updates.append((obs.rally_id, "A"))  # default
-                continue
-            if obs.formation_side == "near":
-                serving_label = obs.team_near
-            else:
-                all_labels = {"0", "1"}
-                serving_label = (all_labels - {obs.team_near}).pop() if obs.team_near in all_labels else obs.team_near
-            team = "A" if serving_label == label_a else "B"
-            rally_serving_updates.append((obs.rally_id, team))
+        for obs, tn in zip(viterbi_observations, team_near_labels):
+            team = resolve_serving_team(
+                obs.formation_side, tn, team_templates, label_a,
+            )
+            # Keep existing prediction when localization can't determine
+            rally_serving_updates.append((obs.rally_id, team or "A"))
 
         formation_applied = sum(
             1 for (rid2, team), (

@@ -119,8 +119,6 @@ from rallycut.evaluation.tracking.db import get_connection  # noqa: E402
 from rallycut.scoring.cross_rally_viterbi import (  # noqa: E402
     RallyObservation,
     RallyPositionData,
-    calibrate_initial_side,
-    decode_video,
     decode_video_dual_hypothesis,
     detect_side_switches_from_positions,
 )
@@ -299,9 +297,6 @@ def _load_team_templates_by_video(
     Returns {video_id: (template_0, template_1)} for videos that have
     teamTemplates in their match_analysis_json.
     """
-    from rallycut.tracking.player_features import (  # noqa: PLC0415
-        PlayerAppearanceProfile,
-    )
     from rallycut.tracking.team_identity import TeamTemplate  # noqa: PLC0415
 
     if not video_ids:
@@ -321,19 +316,14 @@ def _load_team_templates_by_video(
         if not isinstance(ma_json, dict):
             continue
         templates_data = ma_json.get("teamTemplates")
-        profiles_data = ma_json.get("playerProfiles", {})
         if not templates_data or not isinstance(templates_data, dict):
             continue
         t0_data = templates_data.get("0")
         t1_data = templates_data.get("1")
         if not t0_data or not t1_data:
             continue
-        # Reconstruct profiles for template player lookups
-        profiles: dict[int, PlayerAppearanceProfile] = {}
-        for pid_str, pdata in profiles_data.items():
-            profiles[int(pid_str)] = PlayerAppearanceProfile.from_dict(pdata)
-        t0 = TeamTemplate.from_dict(t0_data, profiles)
-        t1 = TeamTemplate.from_dict(t1_data, profiles)
+        t0 = TeamTemplate.from_dict(t0_data)
+        t1 = TeamTemplate.from_dict(t1_data)
         result[video_id] = (t0, t1)
     return result
 
@@ -666,6 +656,7 @@ def _apply_viterbi_scoring(
         observations: list[RallyObservation] = []
         position_data: list[RallyPositionData] = []
         rally_actions_list: list[Any] = []
+        team_near_labels: list[str | None] = []
 
         # Get team templates for this video (if available)
         video_templates = templates_by_vid.get(video_id)
@@ -689,42 +680,16 @@ def _apply_viterbi_scoring(
 
             # Team localization: which team template is near?
             team_near: str | None = None
-            team_loc_conf = 0.0
             if video_templates is not None:
+                from rallycut.tracking.team_identity import localize_team_near  # noqa: PLC0415
                 rally_t2p = t2p.get(rid, {})
-                if rally_t2p and positions:
-                    t0, t1 = video_templates
-                    t0_pids = set(t0.player_ids)
-                    # Mean foot-Y per player_id
-                    pid_ys: dict[int, list[float]] = {}
-                    for p in positions:
-                        pid = rally_t2p.get(p.track_id)
-                        if pid is not None:
-                            pid_ys.setdefault(pid, []).append(
-                                p.y + p.height / 2.0,
-                            )
-                    if pid_ys:
-                        t0_y = [
-                            float(np.mean(pid_ys[pid]))
-                            for pid in t0_pids if pid in pid_ys
-                        ]
-                        t1_y = [
-                            float(np.mean(pid_ys[pid]))
-                            for pid in set(t1.player_ids) if pid in pid_ys
-                        ]
-                        if t0_y and t1_y:
-                            m0 = float(np.mean(t0_y))
-                            m1 = float(np.mean(t1_y))
-                            team_near = t0.team_label if m0 > m1 else t1.team_label
-                            y_gap = abs(m0 - m1)
-                            team_loc_conf = min(1.0, y_gap / 0.15)
+                team_near = localize_team_near(positions, rally_t2p, video_templates)
+            team_near_labels.append(team_near)
 
             observations.append(RallyObservation(
                 rally_id=rid,
                 formation_side=formation_side,
                 formation_confidence=formation_conf,
-                team_near=team_near,
-                team_localization_conf=team_loc_conf,
             ))
 
             position_data.append(RallyPositionData(
@@ -735,19 +700,16 @@ def _apply_viterbi_scoring(
 
         # Per-rally team localization: directly determine serving team
         # from formation (which side serves) + track_to_player (which
-        # team is on which side). No accumulated side-switch state needed
-        # — each rally independently resolves its team mapping.
-        #
-        # For eval, convention calibration (which team_label = GT's "A")
-        # uses majority-vote from GT labels. For production, convention
-        # is set by first rally (near = A).
-        has_team_loc = any(
-            obs.team_near is not None for obs in observations
-        )
+        # team is on which side). No accumulated side-switch state needed.
+        has_team_loc = any(tn is not None for tn in team_near_labels)
 
-        if has_team_loc:
-            # Determine convention: which team_label maps to "A"?
-            # Use GT calibration if available, else default first-rally.
+        if has_team_loc and video_templates is not None:
+            from rallycut.tracking.team_identity import (  # noqa: PLC0415
+                calibrate_convention_from_gt,
+                resolve_serving_team,
+            )
+
+            # Convention: which template label = "A"?
             gt_teams: list[str | None] = []
             for ra in rally_actions_list:
                 rd = rally_data_by_id.get(ra.rally_id)
@@ -755,48 +717,21 @@ def _apply_viterbi_scoring(
             has_gt = any(gt is not None for gt in gt_teams)
 
             if has_gt:
-                # Majority-vote: for GT rallies where formation + team_loc
-                # agree, determine which team_label = GT's team.
-                votes: dict[str, int] = {}  # team_label → net votes for "this = A"
-                for obs, gt in zip(observations, gt_teams):
-                    if gt is None or obs.formation_side is None or obs.team_near is None:
-                        continue
-                    # Formation says which side serves → team_near or team_far
-                    if obs.formation_side == "near":
-                        serving_label = obs.team_near
-                    else:
-                        # team_far = the other template
-                        all_labels = {"0", "1"}
-                        serving_label = (all_labels - {obs.team_near}).pop() if obs.team_near in all_labels else None
-                    if serving_label is None:
-                        continue
-                    # GT says team X serves → serving_label should map to X
-                    votes.setdefault(serving_label, 0)
-                    if gt == "A":
-                        votes[serving_label] += 1
-                    else:
-                        votes[serving_label] -= 1
-
-                # Label with most positive votes = A
-                label_a = max(votes, key=lambda k: votes[k]) if votes else "0"
-            else:
-                # Production: first rally's near team = A
-                first_near = next(
-                    (obs.team_near for obs in observations if obs.team_near is not None),
-                    "0",
+                formation_sides = [obs.formation_side for obs in observations]
+                label_a = calibrate_convention_from_gt(
+                    gt_teams, formation_sides, team_near_labels, video_templates,
                 )
-                label_a = first_near
+            else:
+                label_a = next(
+                    (tn for tn in team_near_labels if tn is not None), "0",
+                )
 
-            # Direct per-rally serving team assignment
-            for obs, ra in zip(observations, rally_actions_list):
-                if obs.formation_side is None or obs.team_near is None:
-                    continue  # Keep existing prediction
-                if obs.formation_side == "near":
-                    serving_label = obs.team_near
-                else:
-                    all_labels = {"0", "1"}
-                    serving_label = (all_labels - {obs.team_near}).pop() if obs.team_near in all_labels else obs.team_near
-                ra.formation_serving_team = "A" if serving_label == label_a else "B"
+            for obs, ra, tn in zip(observations, rally_actions_list, team_near_labels):
+                team = resolve_serving_team(
+                    obs.formation_side, tn, video_templates, label_a,
+                )
+                if team is not None:
+                    ra.formation_serving_team = team
         else:
             # Fallback: no team localization → use Viterbi with side switches
             has_t2p = any(pd.track_to_player for pd in position_data)
