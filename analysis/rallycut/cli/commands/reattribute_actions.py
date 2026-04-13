@@ -27,16 +27,28 @@ logger = logging.getLogger(__name__)
 
 def _build_formation_semantic_flips(
     match_analysis: dict[str, Any],
+    video_id: str | None = None,
 ) -> dict[str, bool]:
-    """Compute per-rally `semantic_flip` from `match_analysis_json`.
+    """Compute per-rally `semantic_flip` from switch data.
 
     Returns `{rally_id: flipped}` where `flipped=True` when the cumulative
     side-switch count BEFORE this rally is odd. Used by the formation-based
     serving_team predictor to correct the physical-near team convention
     (team 0 = near after `verify_team_assignments`) to the semantic team
-    identity on flipped rallies. Mirror of `_load_formation_semantic_flips`
-    in `scripts/production_eval.py`.
+    identity on flipped rallies.
+
+    When ``video_id`` is provided, uses the shared switch loader which
+    merges pipeline-detected switches with per-rally manual overrides
+    from the Score GT UI. Falls back to match_analysis_json-only when
+    video_id is not available.
     """
+    if video_id:
+        try:
+            from rallycut.evaluation.switch_loader import resolve_side_flipped
+            return resolve_side_flipped({video_id}, gt_only=False)
+        except Exception:
+            pass  # fall through to match_analysis-only path
+
     rallies = match_analysis.get("rallies", [])
     if not isinstance(rallies, list):
         return {}
@@ -444,7 +456,7 @@ def reattribute_actions_cmd(
     # Required to map physical-near (team_assignments team 0) to the
     # correct semantic team on flipped rallies. See
     # `score_tracking_architecture_2026_04.md`.
-    formation_flips = _build_formation_semantic_flips(match_analysis)
+    formation_flips = _build_formation_semantic_flips(match_analysis, video_id=video_id)
 
     if not all_teams:
         if not quiet:
