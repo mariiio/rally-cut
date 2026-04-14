@@ -24,24 +24,110 @@ def _load_video_inputs(video_path: str, sample_seconds: int):
     a fast YOLO pass, and CLIP zero-shot scoring. Heavy; unit tests patch this.
     """
     # All heavy imports are function-local so the module loads for unit tests
-    # even when video_io / keypoint_detector / yolo_person aren't available.
-    from rallycut.detection.video_io import sample_frames  # existing
-    from rallycut.court.keypoint_detector import detect_court_corners  # existing
-    from rallycut.detection.yolo_person import detect_persons_in_frames  # existing (fast alias)
+    # even when these heavy deps aren't available.
+    import logging
+    import os
+
+    import cv2
+    import numpy as np
+
+    from rallycut.core.video import Video
+    from rallycut.court.detector import CourtDetectionConfig, CourtDetector
     from rallycut.quality.beach_vb_classifier import embed_and_score_frames
+    from rallycut.quality.camera_distance import Detection
     from rallycut.quality.camera_geometry import CourtCorners
     from rallycut.quality.metadata import VideoMetadata
 
-    meta = VideoMetadata.from_ffprobe(video_path)
-    frames = sample_frames(video_path, n=10, max_seconds=sample_seconds)
+    logger = logging.getLogger(__name__)
 
-    raw_corners = detect_court_corners(video_path, max_seconds=sample_seconds)
-    corners = CourtCorners(
-        tl=raw_corners.tl, tr=raw_corners.tr, br=raw_corners.br, bl=raw_corners.bl,
-        confidence=raw_corners.confidence,
+    # ── 1. Metadata ──────────────────────────────────────────────────────────
+    meta = VideoMetadata.from_ffprobe(video_path)
+
+    # ── 2. Sample ~10 frames evenly across the first sample_seconds ──────────
+    n_frames = 10
+    with Video(video_path) as vid:
+        fps = vid.info.fps
+        total_frames = vid.info.frame_count
+        max_frame = min(total_frames, int(fps * sample_seconds)) if fps > 0 else total_frames
+        max_frame = max(max_frame, 1)
+        step = max(1, max_frame // n_frames)
+        frames: list[np.ndarray] = []
+        for _, frame in vid.iter_frames(start_frame=0, end_frame=max_frame, step=step):
+            frames.append(frame)
+            if len(frames) >= n_frames:
+                break
+
+    # ── 3. Court corners via CourtDetector (keypoint → classical fallback) ───
+    # Convert sample_seconds to end_frame for the detector
+    end_frame_for_court: int | None = None
+    if fps and fps > 0:
+        end_frame_for_court = min(
+            int(fps * sample_seconds),
+            int(cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FRAME_COUNT)),
+        ) or None
+
+    detector = CourtDetector(CourtDetectionConfig())
+    raw_result = detector.detect(
+        video_path,
+        start_frame=0,
+        end_frame=end_frame_for_court,
     )
 
-    per_frame_dets = detect_persons_in_frames(frames)
+    # CourtDetectionResult.corners order: [near-left, near-right, far-right, far-left]
+    # CourtCorners convention: tl=top-left (far-left), tr=top-right (far-right),
+    #                          br=bottom-right (near-right), bl=bottom-left (near-left)
+    if raw_result.corners and len(raw_result.corners) == 4:
+        c = raw_result.corners
+        corners = CourtCorners(
+            tl=(c[3]["x"], c[3]["y"]),  # far-left  → top-left
+            tr=(c[2]["x"], c[2]["y"]),  # far-right → top-right
+            br=(c[1]["x"], c[1]["y"]),  # near-right → bottom-right
+            bl=(c[0]["x"], c[0]["y"]),  # near-left  → bottom-left
+            confidence=raw_result.confidence,
+        )
+    else:
+        # No court detected — return zero-confidence corners at image edges
+        corners = CourtCorners(
+            tl=(0.0, 0.0), tr=(1.0, 0.0),
+            br=(1.0, 1.0), bl=(0.0, 1.0),
+            confidence=0.0,
+        )
+
+    # ── 4. Person detections via YOLO (one pass over sampled frames) ─────────
+    # Disable YOLO telemetry / auto-update noise
+    os.environ.setdefault("YOLO_AUTOCHECK", "False")
+    from ultralytics import YOLO  # noqa: PLC0415
+
+    # yolo11s.pt lives in analysis/ (project root for the analysis package)
+    analysis_root = os.path.join(os.path.dirname(__file__), "..", "..")
+    yolo_path = os.path.normpath(os.path.join(analysis_root, "yolo11s.pt"))
+    if not os.path.exists(yolo_path):
+        yolo_path = "yolo11s.pt"  # fallback: ultralytics auto-download
+
+    yolo = YOLO(yolo_path)
+    PERSON_CLASS = 0
+
+    per_frame_dets: list[list[Detection]] = []
+    for frame in frames:
+        result = yolo.predict(frame, classes=[PERSON_CLASS], verbose=False, imgsz=640)[0]
+        frame_dets: list[Detection] = []
+        if result.boxes is not None and len(result.boxes):
+            h_img, w_img = frame.shape[:2]
+            for box in result.boxes:
+                cls = int(box.cls[0])
+                if cls != PERSON_CLASS:
+                    continue
+                # xywhn = normalized center-x, center-y, width, height
+                xywhn = box.xywhn[0].cpu().numpy()
+                frame_dets.append(Detection(
+                    x=float(xywhn[0]),
+                    y=float(xywhn[1]),
+                    w=float(xywhn[2]),
+                    h=float(xywhn[3]),
+                ))
+        per_frame_dets.append(frame_dets)
+
+    # ── 5. Court bbox from corners ────────────────────────────────────────────
     court_bbox = (
         min(corners.tl[0], corners.bl[0]),
         min(corners.tl[1], corners.tr[1]),
@@ -49,7 +135,19 @@ def _load_video_inputs(video_path: str, sample_seconds: int):
         max(corners.bl[1], corners.br[1]),
     )
 
-    clip_probs = embed_and_score_frames(frames[:5])
+    # ── 6. Beach-VB CLIP probabilities (graceful fallback if open_clip absent) ─
+    clip_probs = []
+    try:
+        from PIL import Image  # noqa: PLC0415
+
+        # open_clip preprocess expects PIL RGB images
+        pil_frames = [
+            Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB))
+            for f in frames[:5]
+        ]
+        clip_probs = embed_and_score_frames(pil_frames)
+    except Exception as exc:  # open_clip not installed or model download fails
+        logger.warning("Beach-VB CLIP scoring skipped: %s", exc)
 
     return meta, frames, corners, per_frame_dets, court_bbox, clip_probs
 
