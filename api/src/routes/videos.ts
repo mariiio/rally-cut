@@ -46,7 +46,8 @@ import {
 import { queueVideoProcessing } from "../services/processingService.js";
 import { trackAllRallies, getBatchTrackingStatus } from "../services/batchTrackingService.js";
 import { getMatchAnalysis, getMatchStats, runMatchAnalysis, type ProgressCallback } from "../services/matchAnalysisService.js";
-import { runPreflightChecks, getAnalysisPipelineStatus, savePlayerMatchingGt, getPlayerMatchingGt } from "../services/qualityService.js";
+import { runPreflightChecks, runPreviewChecks, getAnalysisPipelineStatus, savePlayerMatchingGt, getPlayerMatchingGt } from "../services/qualityService.js";
+import multer from "multer";
 
 const MAX_REFERENCE_CROPS_PER_PLAYER = 6;
 
@@ -923,6 +924,45 @@ router.get(
 // ============================================================================
 // Analysis Pipeline Routes
 // ============================================================================
+
+const previewUpload = multer({ limits: { fileSize: 2 * 1024 * 1024, files: 10 }, storage: multer.memoryStorage() });
+
+/**
+ * POST /v1/videos/preflight-preview
+ * Run camera-geometry check against uploaded JPEG frames before any video row exists.
+ * Accepts multipart: frames[] (JPEG), width, height, durationS.
+ * Returns { pass: boolean, issues: Issue[] }.
+ */
+router.post(
+  "/v1/videos/preflight-preview",
+  requireUser,
+  previewUpload.array("frames", 10),
+  async (req, res, next): Promise<void> => {
+    try {
+      const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+      if (files.length === 0) {
+        res.status(400).json({ error: "At least one frame is required" });
+        return;
+      }
+      const width = Number(req.body.width);
+      const height = Number(req.body.height);
+      const durationS = Number(req.body.durationS);
+      if (!Number.isFinite(width) || !Number.isFinite(height) || !Number.isFinite(durationS)) {
+        res.status(400).json({ error: "width, height, and durationS are required" });
+        return;
+      }
+      const result = await runPreviewChecks({
+        frames: files.map((f) => f.buffer),
+        width,
+        height,
+        durationS,
+      });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 /**
  * POST /v1/videos/:id/assess-quality

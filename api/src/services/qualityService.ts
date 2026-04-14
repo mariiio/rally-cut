@@ -273,6 +273,97 @@ function runPreflightCli(videoPath: string): Promise<QualityReport> {
   });
 }
 
+// ============================================================================
+// Preview checks (pre-upload, no video row required)
+// ============================================================================
+
+export interface PreviewInput {
+  frames: Buffer[];
+  width: number;
+  height: number;
+  durationS: number;
+}
+
+export interface PreviewResult {
+  pass: boolean;
+  issues: Issue[];
+}
+
+export async function runPreviewChecks(input: PreviewInput): Promise<PreviewResult> {
+  await fs.mkdir(TEMP_DIR, { recursive: true });
+  const dir = path.join(
+    TEMP_DIR,
+    `preview_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+  );
+  await fs.mkdir(dir, { recursive: true });
+  try {
+    await Promise.all(
+      input.frames.map((buf, i) => fs.writeFile(path.join(dir, `frame_${i}.jpg`), buf)),
+    );
+    const issues = await runPreviewCli(dir, input);
+    return { pass: !issues.some((i) => i.tier === 'block'), issues };
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+function runPreviewCli(
+  dir: string,
+  meta: { width: number; height: number; durationS: number },
+): Promise<Issue[]> {
+  return new Promise((resolve, reject) => {
+    const args = [
+      'run',
+      'rallycut',
+      'preview-check',
+      dir,
+      '--width',
+      String(meta.width),
+      '--height',
+      String(meta.height),
+      '--duration-s',
+      String(meta.durationS),
+      '--json',
+      '--quiet',
+    ];
+    const child = spawn('uv', args, {
+      cwd: ANALYSIS_DIR,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env },
+    });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        /* ignore */
+      }
+      reject(new Error('Preview timed out'));
+    }, 20_000);
+    child.stdout?.on('data', (d: Buffer) => {
+      stdout += d.toString();
+    });
+    child.stderr?.on('data', (d: Buffer) => {
+      stderr += d.toString();
+    });
+    child.on('exit', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        return reject(new Error(`preview-check exited ${code}: ${stderr.slice(-500)}`));
+      }
+      try {
+        const m = stdout.match(/\{[\s\S]*\}/);
+        if (!m) return reject(new Error('No JSON from preview-check'));
+        const parsed = JSON.parse(m[0]);
+        resolve((parsed.issues ?? []) as Issue[]);
+      } catch (e) {
+        reject(e);
+      }
+    });
+  });
+}
+
 async function downloadFromS3(s3Key: string, destPath: string): Promise<void> {
   const url = await generateDownloadUrl(s3Key);
   const response = await fetch(url);
