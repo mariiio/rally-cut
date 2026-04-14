@@ -64,7 +64,7 @@ export function UploadProgress() {
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >
         <Alert severity="error" onClose={clearError} sx={{ width: '100%' }}>
-          {error}
+          {error.title}
         </Alert>
       </Snackbar>
     );

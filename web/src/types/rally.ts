@@ -63,25 +63,27 @@ export interface Match {
   createdAt?: string;   // ISO timestamp when video was uploaded
   qualityDowngradedAt?: string | null; // ISO timestamp when original quality was removed (FREE tier)
   status?: 'PENDING' | 'UPLOADED' | 'DETECTING' | 'DETECTED' | 'ERROR'; // Video detection status
-  characteristicsJson?: VideoCharacteristics | null; // Auto-detected video quality characteristics
+  qualityReportJson?: QualityReport | null; // Auto-detected video quality report
 }
 
-/** Auto-detected video characteristics for quality insights and stratified evaluation */
-export interface VideoCharacteristics {
-  brightness?: { mean: number; category: string };
-  cameraDistance?: { avgBboxHeight: number; category: string };
-  sceneComplexity?: { avgPeople: number; category: string };
-  courtDetection?: {
-    detected: boolean;
-    confidence: number;
-    linesFound: number;
-    cameraHeight: string;
-    lineVisibility: string;
-    recordingTips: string[];
-  };
-  expectedQuality?: number;
-  uploadWarnings?: string[];
-  version: number;
+export type Tier = 'block' | 'gate' | 'advisory';
+
+export interface QualityIssue {
+  id: string;
+  tier: Tier;
+  severity: number;
+  message: string;
+  source: 'preview' | 'upload' | 'preflight' | 'tracking';
+  detectedAt: string;
+  data?: Record<string, number>;
+}
+
+export interface QualityReport {
+  version: 2;
+  issues: QualityIssue[];
+  preflight?: { ranAt: string; sampleSeconds: number; durationMs: number } | null;
+  brightness?: number | null;
+  resolution?: { width: number; height: number } | null;
 }
 
 /** A session containing multiple matches */
