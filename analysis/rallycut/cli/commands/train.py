@@ -2239,6 +2239,8 @@ def restore(
         rprint(f"  Tracking GT restored: [green]{result.tracking_gt_restored}[/green]")
     if result.action_gt_restored:
         rprint(f"  Action GT restored: [green]{result.action_gt_restored}[/green]")
+    if result.score_gt_restored:
+        rprint(f"  Score GT restored: [green]{result.score_gt_restored}[/green]")
     rprint(f"  Session: [cyan]{result.session_created}[/cyan]")
 
     if result.errors:

@@ -5,7 +5,8 @@ from a local dataset directory into PostgreSQL, so the web editor can access
 them after a DB reset or fresh machine setup.
 
 Expected files: manifest.json, ground_truth.json, tracking_ground_truth.json (optional),
-action_ground_truth.json (optional).
+action_ground_truth.json (optional), player_matching_ground_truth.json (optional),
+score_ground_truth.json (optional).
 """
 
 from __future__ import annotations
@@ -325,6 +326,11 @@ def restore_dataset_to_db(
             if pm_gt_path.exists():
                 _restore_player_matching_gt(conn, pm_gt_path, result)
 
+            # Restore score-tracking ground truth (NULL-only) if available
+            score_gt_path = dataset_dir / "score_ground_truth.json"
+            if score_gt_path.exists():
+                _restore_score_ground_truth(conn, score_gt_path, result)
+
     finally:
         conn.close()
 
@@ -411,6 +417,19 @@ def _preview_restore(
         rprint(
             f"  Would restore: [green]{pm_stats.get('total_rallies', 0)}[/green]"
             f" player matching GT across {pm_stats.get('total_videos', 0)} videos"
+        )
+
+    # Show score GT info if available
+    score_gt_path = dataset_dir / "score_ground_truth.json"
+    if score_gt_path.exists():
+        with open(score_gt_path) as f:
+            score_gt = json.load(f)
+        sgt_stats = score_gt.get("stats", {})
+        rprint(
+            f"  Would restore: [green]{sgt_stats.get('total_rallies', 0)}[/green]"
+            f" score GT (NULL-only) across {sgt_stats.get('total_videos', 0)} videos"
+            f" ({sgt_stats.get('total_with_serving', 0)} serving,"
+            f" {sgt_stats.get('total_with_side_switch', 0)} side-switch)"
         )
 
 
