@@ -226,7 +226,7 @@ model Video {
   qualityDowngradedAt   DateTime?             @map("quality_downgraded_at")
   courtCalibrationJson    Json?                 @map("court_calibration_json")
   courtCalibrationSource  String?               @map("court_calibration_source")
-  characteristicsJson   Json?                 @map("characteristics_json")
+  qualityReportJson     Json?                 @map("quality_report_json")
   matchAnalysisJson     Json?                 @map("match_analysis_json")
   matchStatsJson        Json?                 @map("match_stats_json")
   playerMatchingGtJson  Json?                 @map("player_matching_gt_json")
@@ -536,6 +536,7 @@ enum VideoStatus {
   UPLOADED
   DETECTING
   DETECTED
+  REJECTED
   ERROR
 }
 
