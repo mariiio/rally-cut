@@ -132,19 +132,38 @@ def _best_two_permutations(
     pairs: list[tuple[int, int]],
     canonical_domain: tuple[int, ...] = (1, 2, 3, 4),
 ) -> tuple[dict[int, int], int, dict[int, int], int]:
-    """Enumerate all permutations over canonical_domain (size ≤ 4, so ≤24
-    combinations) and return (best_perm, best_score, second_perm, second_score).
+    """Enumerate WITHIN-TEAM permutations and return the top two.
 
-    We always work in the full canonical 1..4 space so the resulting
-    permutation is a complete bijection applicable to all trackIds in the
-    rally, not just the ones observed in contacts.
+    Constraint rationale: `videos.match_analysis_json.teamTemplates` is
+    video-wide and declares {1,2} = team 0 and {3,4} = team 1 (for beach
+    volleyball). A per-rally cross-team permutation (e.g. 1→3) would
+    relabel a physical team-0 player as pid 3, which the video-wide
+    template reads as team 1 — breaking `localize_team_near` and the
+    downstream Viterbi serving_team for THIS rally while corrupting
+    other rallies' assumption that templates reflect the physical
+    teams. Restricting to within-team permutations (2!×2!=4 options)
+    keeps the template valid. Cross-team drift requires a video-wide
+    fix that is out of scope for a per-rally repair.
     """
+    # Build within-team candidate permutations: pair up {1,2} perms with
+    # {3,4} perms. Domain must be (1,2,3,4) — canonical beach convention.
+    team0 = tuple(x for x in canonical_domain if x <= 2)
+    team1 = tuple(x for x in canonical_domain if x > 2)
+    candidates: list[dict[int, int]] = []
+    for p0 in itertools.permutations(team0):
+        for p1 in itertools.permutations(team1):
+            perm = {}
+            for src, dst in zip(team0, p0):
+                perm[src] = dst
+            for src, dst in zip(team1, p1):
+                perm[src] = dst
+            candidates.append(perm)
+
     best_perm: dict[int, int] = {}
     best_score = -1
     second_perm: dict[int, int] = {}
     second_score = -1
-    for perm_tuple in itertools.permutations(canonical_domain):
-        perm = dict(zip(canonical_domain, perm_tuple))
+    for perm in candidates:
         score = _score_permutation(perm, pairs)
         if score > best_score:
             second_perm = best_perm
