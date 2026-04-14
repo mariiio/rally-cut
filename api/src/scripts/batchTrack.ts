@@ -23,6 +23,7 @@ config({ path: path.resolve(__dirname, '../../.env') });
 import { PrismaClient } from '@prisma/client';
 import {
   downloadVideoToLocal,
+  filterOutCanonicalLockedRallies,
   trackRallyFromLocalVideo,
   TEMP_DIR,
   type CalibrationCorner,
@@ -64,11 +65,25 @@ async function main() {
     process.exit(1);
   }
 
-  const rallies = video.rallies.map((r) => ({
-    id: r.id,
-    startMs: r.startMs,
-    endMs: r.endMs,
-  }));
+  // F3b — filter out canonicalLocked rallies so the worker doesn't count
+  // them against progress. The per-rally gate in trackRallyFromLocalVideo
+  // would short-circuit them anyway, but filtering here keeps totals honest.
+  const allRallyIds = video.rallies.map((r) => r.id);
+  const { unlocked: unlockedIds, locked: lockedIds } =
+    await filterOutCanonicalLockedRallies(video.id, allRallyIds);
+  if (lockedIds.length > 0) {
+    console.log(
+      `[BATCH_WORKER] Skipping ${lockedIds.length}/${allRallyIds.length} canonicalLocked rallies`,
+    );
+  }
+  const unlockedSet = new Set(unlockedIds);
+  const rallies = video.rallies
+    .filter((r) => unlockedSet.has(r.id))
+    .map((r) => ({
+      id: r.id,
+      startMs: r.startMs,
+      endMs: r.endMs,
+    }));
 
   // Load calibration from DB
   let calibrationCorners: CalibrationCorner[] | undefined;

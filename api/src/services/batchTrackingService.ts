@@ -21,6 +21,7 @@ import { env } from '../config/env.js';
 import { prisma } from '../lib/prisma.js';
 import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errorHandler.js';
 import type { CalibrationCorner } from './playerTrackingService.js';
+import { filterOutCanonicalLockedRallies } from './playerTrackingService.js';
 import { triggerModalBatchTracking } from './modalTrackingService.js';
 
 // A job with no progress for this long is considered stale (API crashed, FFmpeg hung, etc.).
@@ -83,6 +84,24 @@ export async function trackAllRallies(
     throw new ValidationError('No confirmed rallies found for this video');
   }
 
+  // F3b — skip retrack on canonicalLocked rallies. Their GT-anchored
+  // trackToPlayer mapping would be silently invalidated by fresh raw IDs.
+  const rallyIds = video.rallies.map((r) => r.id);
+  const { unlocked: unlockedRallyIds, locked: lockedRallyIds } =
+    await filterOutCanonicalLockedRallies(videoId, rallyIds);
+  if (lockedRallyIds.length > 0) {
+    console.log(
+      `[BATCH_TRACK] Skipping ${lockedRallyIds.length}/${rallyIds.length} canonicalLocked rallies for video ${videoId}`,
+    );
+  }
+  const unlockedSet = new Set(unlockedRallyIds);
+  const ralliesToTrack = video.rallies.filter((r) => unlockedSet.has(r.id));
+  if (ralliesToTrack.length === 0) {
+    throw new ValidationError(
+      'All rallies are canonicalLocked — nothing to track',
+    );
+  }
+
   // Prefer original quality for tracking — proxy (720p) degrades ball detection.
   // Falls back to proxy if original has been quality-downgraded.
   const videoKey = video.s3Key ?? video.proxyS3Key;
@@ -105,7 +124,7 @@ export async function trackAllRallies(
     if (existingJob) {
       // If rally count changed (user edited rallies then re-analyzed),
       // cancel the stale job and create a fresh one
-      if (existingJob.totalRallies !== video.rallies.length) {
+      if (existingJob.totalRallies !== ralliesToTrack.length) {
         await tx.batchTrackingJob.update({
           where: { id: existingJob.id },
           data: {
@@ -124,7 +143,7 @@ export async function trackAllRallies(
         videoId,
         userId,
         status: 'PENDING',
-        totalRallies: video.rallies.length,
+        totalRallies: ralliesToTrack.length,
       },
     });
   });
@@ -156,7 +175,7 @@ export async function trackAllRallies(
       batchJobId: job.id,
       videoId,
       videoKey,
-      rallies: video.rallies.map((r) => ({ id: r.id, startMs: r.startMs, endMs: r.endMs })),
+      rallies: ralliesToTrack.map((r) => ({ id: r.id, startMs: r.startMs, endMs: r.endMs })),
       calibrationCorners,
     }).catch(async (error) => {
       console.error(`[BATCH_TRACK] Modal trigger failed for job ${job.id}:`, error);
@@ -178,9 +197,9 @@ export async function trackAllRallies(
     spawnBatchWorker(job.id);
   }
 
-  console.log(`[BATCH_TRACK] Started batch job ${job.id}: ${video.rallies.length} rallies for video ${videoId}`);
+  console.log(`[BATCH_TRACK] Started batch job ${job.id}: ${ralliesToTrack.length} rallies for video ${videoId}`);
 
-  return { jobId: job.id, totalRallies: video.rallies.length };
+  return { jobId: job.id, totalRallies: ralliesToTrack.length };
 }
 
 const __filename = fileURLToPath(import.meta.url);

@@ -145,6 +145,74 @@ export interface GetPlayerTrackResult {
 /**
  * Convert a Prisma PlayerTrack record to the API response shape.
  */
+/**
+ * Check whether a rally is flagged canonicalLocked in the video's
+ * matchAnalysisJson. Locked rallies carry a human-anchored canonical
+ * trackToPlayer assignment that future retracks must not overwrite —
+ * re-running YOLO/BoT-SORT produces fresh raw IDs that don't line up with
+ * the locked mapping, which silently corrupts GT-labeled player IDs in
+ * positionsJson / actionGroundTruthJson. F3b policy: skip retrack entirely
+ * on locked rallies. See analysis/outputs/trackid_stability/diagnostic_report.md.
+ */
+export async function isRallyCanonicalLocked(
+  videoId: string,
+  rallyId: string,
+): Promise<boolean> {
+  const video = await prisma.video.findUnique({
+    where: { id: videoId },
+    select: { matchAnalysisJson: true },
+  });
+  const mj = video?.matchAnalysisJson as
+    | { rallies?: Array<Record<string, unknown>> }
+    | null;
+  if (!mj?.rallies) return false;
+  for (const r of mj.rallies) {
+    const rid = (r.rallyId as string | undefined) ?? (r.rally_id as string | undefined);
+    if (rid !== rallyId) continue;
+    return (
+      (r.canonicalLocked as boolean | undefined) === true ||
+      (r.canonical_locked as boolean | undefined) === true
+    );
+  }
+  return false;
+}
+
+/**
+ * Filter a list of rally IDs down to those that are NOT canonicalLocked.
+ * Used to skip retrack work on GT-anchored rallies. Batched lookup:
+ * reads matchAnalysisJson once per video.
+ */
+export async function filterOutCanonicalLockedRallies(
+  videoId: string,
+  rallyIds: string[],
+): Promise<{ unlocked: string[]; locked: string[] }> {
+  if (rallyIds.length === 0) return { unlocked: [], locked: [] };
+  const video = await prisma.video.findUnique({
+    where: { id: videoId },
+    select: { matchAnalysisJson: true },
+  });
+  const mj = video?.matchAnalysisJson as
+    | { rallies?: Array<Record<string, unknown>> }
+    | null;
+  if (!mj?.rallies) return { unlocked: [...rallyIds], locked: [] };
+  const lockedSet = new Set<string>();
+  for (const r of mj.rallies) {
+    const rid = (r.rallyId as string | undefined) ?? (r.rally_id as string | undefined);
+    if (!rid) continue;
+    const locked =
+      (r.canonicalLocked as boolean | undefined) === true ||
+      (r.canonical_locked as boolean | undefined) === true;
+    if (locked) lockedSet.add(rid);
+  }
+  const unlocked: string[] = [];
+  const locked: string[] = [];
+  for (const rid of rallyIds) {
+    if (lockedSet.has(rid)) locked.push(rid);
+    else unlocked.push(rid);
+  }
+  return { unlocked, locked };
+}
+
 function playerTrackToResult(track: PlayerTrack, extra?: { processingTimeMs?: number }): TrackPlayersResult {
   // Filter raw positions to only non-primary tracks
   const rawAll = track.rawPositionsJson as PlayerPosition[] | null;
@@ -714,6 +782,20 @@ export async function trackRallyFromLocalVideo(
 ): Promise<TrackPlayersResult> {
   const startTime = Date.now();
   const durationMs = endMs - startMs;
+
+  // F3b — skip retrack on canonicalLocked rallies (see isRallyCanonicalLocked docstring).
+  if (await isRallyCanonicalLocked(videoId, rallyId)) {
+    const existing = await prisma.playerTrack.findUnique({ where: { rallyId } });
+    if (existing?.status === 'COMPLETED') {
+      console.log(
+        `[BATCH_TRACK] Rally ${rallyId} is canonicalLocked — returning stored data (retrack skipped)`,
+      );
+      return playerTrackToResult(existing, { processingTimeMs: 0 });
+    }
+    console.log(
+      `[BATCH_TRACK] Rally ${rallyId} is canonicalLocked but has no completed player_track; proceeding with fresh track`,
+    );
+  }
 
   if (durationMs > MAX_BATCH_RALLY_DURATION_MS) {
     console.log(`[BATCH_TRACK] Skipping rally ${rallyId}: duration ${(durationMs / 1000).toFixed(1)}s exceeds limit`);
@@ -1327,6 +1409,24 @@ export async function trackPlayersForRally(
 
   if (rally.video.userId !== userId) {
     throw new ForbiddenError('You do not have permission to track players for this rally');
+  }
+
+  // F3b — canonicalLocked rallies carry a GT-anchored track_to_player that
+  // retracks would silently invalidate (BoT-SORT produces fresh raw IDs that
+  // don't map through the frozen t2p). Skip retrack and return the existing
+  // stored tracking data. See analysis/outputs/trackid_stability/
+  // diagnostic_report.md for the 26.89pp canonical_drift finding.
+  if (await isRallyCanonicalLocked(rally.video.id, rallyId)) {
+    const existing = await prisma.playerTrack.findUnique({ where: { rallyId } });
+    if (existing?.status === 'COMPLETED') {
+      console.log(
+        `[PLAYER_TRACK] Rally ${rallyId} is canonicalLocked — returning stored data (retrack skipped)`,
+      );
+      return playerTrackToResult(existing, { processingTimeMs: 0 });
+    }
+    console.log(
+      `[PLAYER_TRACK] Rally ${rallyId} is canonicalLocked but has no completed player_track; proceeding with fresh track`,
+    );
   }
 
   // Auto-load calibration from DB when not provided by frontend
