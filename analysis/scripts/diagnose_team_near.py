@@ -4,6 +4,13 @@ Measures:
   1. Return None rate (narrow-angle cameras)
   2. When non-None, accuracy vs GT-derived ground truth team_near
   3. Whether restricting to serve window (frames 0-120) improves accuracy
+  4. **None-return bucket distribution**: which of the 4 in-code paths
+     triggered each None return (empty_input / no_pid_mapped /
+     one_team_unmapped / y_gap_below_threshold). See team_identity.py
+     lines 151-178 for the exact branches being mirrored.
+  5. **Wrong-return Y-gap histogram**: whether wrong returns cluster near
+     the min_y_gap=0.03 boundary (→ signal strength is the issue) or are
+     uniformly distributed (→ track_to_player phantom flips dominate).
 
 The key question: is team_near errors the bottleneck preventing production
 score_accuracy from reaching the formation accuracy ceiling?
@@ -16,8 +23,11 @@ Usage:
 from __future__ import annotations
 
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
+from typing import Any
+
+import numpy as np
 
 REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
@@ -49,6 +59,81 @@ def _parse_positions(pos_json: list[dict]) -> list[PlayerPosition]:
         )
         for p in pos_json
     ]
+
+
+# In-code branch reasons (mirrors team_identity.py:151-178).
+REASON_EMPTY_INPUT = "empty_input"
+REASON_NO_PID_MAPPED = "no_pid_mapped"
+REASON_ONE_TEAM_UNMAPPED = "one_team_unmapped"
+REASON_Y_GAP_BELOW = "y_gap_below_threshold"
+REASON_OK = "ok"
+NONE_REASONS = (
+    REASON_EMPTY_INPUT, REASON_NO_PID_MAPPED,
+    REASON_ONE_TEAM_UNMAPPED, REASON_Y_GAP_BELOW,
+)
+
+
+def _localize_team_near_debug(
+    positions: list[PlayerPosition],
+    track_to_player: dict[int, int],
+    templates: tuple[Any, Any],
+    min_y_gap: float = 0.03,
+) -> dict[str, Any]:
+    """Mirror of localize_team_near() that reports which branch fired.
+
+    Exact branch structure tracks team_identity.py:151-178. Returns the
+    same result (team label or None) plus a `reason` tag and the
+    intermediate quantities needed for sub-bucket analysis.
+    """
+    n_positions = len(positions)
+    n_t2p = len(track_to_player)
+    base: dict[str, Any] = {
+        "result": None, "reason": REASON_EMPTY_INPUT,
+        "y_gap": None, "t0_n": 0, "t1_n": 0, "n_pid_mapped": 0,
+        "n_positions": n_positions, "n_t2p": n_t2p,
+    }
+
+    if not positions or not track_to_player:
+        return base
+
+    t0, t1 = templates
+    t0_pids = set(t0.player_ids)
+    t1_pids = set(t1.player_ids)
+
+    pid_ys: dict[int, list[float]] = {}
+    for p in positions:
+        pid = track_to_player.get(p.track_id)
+        if pid is not None:
+            pid_ys.setdefault(pid, []).append(p.y + p.height / 2.0)
+
+    n_pid_mapped = len(pid_ys)
+    base["n_pid_mapped"] = n_pid_mapped
+
+    if not pid_ys:
+        base["reason"] = REASON_NO_PID_MAPPED
+        return base
+
+    t0_ys = [float(np.mean(pid_ys[pid])) for pid in t0_pids if pid in pid_ys]
+    t1_ys = [float(np.mean(pid_ys[pid])) for pid in t1_pids if pid in pid_ys]
+    base["t0_n"] = len(t0_ys)
+    base["t1_n"] = len(t1_ys)
+
+    if not t0_ys or not t1_ys:
+        base["reason"] = REASON_ONE_TEAM_UNMAPPED
+        return base
+
+    mean_t0 = float(np.mean(t0_ys))
+    mean_t1 = float(np.mean(t1_ys))
+    y_gap = abs(mean_t0 - mean_t1)
+    base["y_gap"] = y_gap
+
+    if y_gap < min_y_gap:
+        base["reason"] = REASON_Y_GAP_BELOW
+        return base
+
+    base["reason"] = REASON_OK
+    base["result"] = t0.team_label if mean_t0 > mean_t1 else t1.team_label
+    return base
 
 
 def main() -> int:
@@ -305,6 +390,316 @@ def main() -> int:
     console.print(f"  Early-window accuracy: {early_acc_tot:.1%} "
                   f"({total_early_correct}/{total_early_correct + total_early_wrong})")
     console.print(f"  Delta: {(early_acc_tot - full_acc_tot):+.1%}")
+
+    # ------------------------------------------------------------------
+    # Pass 4: In-code branch bucketing + wrong-return Y-gap histogram.
+    # Mirror the 4 None-return paths in team_identity.py:151-178 and
+    # classify every GT rally.
+    # ------------------------------------------------------------------
+    console.print(
+        "\n[bold]Pass 4: None-return branch bucketing + "
+        "wrong-return Y-gap histogram[/bold]",
+    )
+
+    records: list[dict[str, Any]] = []
+    for p4_vid, p4_rallies in sorted(video_rallies.items()):
+        p4_templates = templates_by_vid.get(p4_vid)
+        if p4_templates is None:
+            continue  # Function can't be called without templates.
+        p4_label_a: str | None = vid_label_a.get(p4_vid)
+        p4_label_b: str | None = None
+        if p4_label_a is not None:
+            p4_t0, p4_t1 = p4_templates
+            p4_label_b = (
+                p4_t0.team_label
+                if p4_label_a == p4_t1.team_label
+                else p4_t1.team_label
+            )
+
+        for p4_rally in p4_rallies:
+            if p4_rally.gt_serving_team is None:
+                continue
+            p4_positions = _parse_positions(p4_rally.positions)
+            p4_t2p = t2p_by_rally.get(p4_rally.rally_id, {})
+
+            dbg = _localize_team_near_debug(
+                p4_positions, p4_t2p, p4_templates,
+            )
+
+            p4_expected_tn: str | None = None
+            p4_formation_side: str | None = None
+            if p4_label_a is not None and p4_label_b is not None:
+                net_y = (
+                    p4_rally.court_split_y if p4_rally.court_split_y else 0.5
+                )
+                p4_formation_side, _ = _find_serving_side_by_formation(
+                    p4_positions, net_y=net_y, start_frame=0,
+                )
+                if p4_formation_side is not None:
+                    if p4_formation_side == "near":
+                        p4_expected_tn = (
+                            p4_label_a
+                            if p4_rally.gt_serving_team == "A"
+                            else p4_label_b
+                        )
+                    else:
+                        p4_expected_tn = (
+                            p4_label_b
+                            if p4_rally.gt_serving_team == "A"
+                            else p4_label_a
+                        )
+
+            records.append({
+                "vid": p4_vid, "rally_id": p4_rally.rally_id,
+                "reason": dbg["reason"], "result": dbg["result"],
+                "y_gap": dbg["y_gap"],
+                "t0_n": dbg["t0_n"], "t1_n": dbg["t1_n"],
+                "n_pid_mapped": dbg["n_pid_mapped"],
+                "n_positions": dbg["n_positions"], "n_t2p": dbg["n_t2p"],
+                "expected_tn": p4_expected_tn,
+                "formation_side": p4_formation_side,
+            })
+
+    total_records = len(records)
+    reason_counts: Counter = Counter(r["reason"] for r in records)
+    none_total = sum(reason_counts[r] for r in NONE_REASONS)
+
+    console.print(f"\nTotal GT rallies with templates: {total_records}")
+    console.print(
+        f"  ok (returned):       {reason_counts[REASON_OK]} "
+        f"({reason_counts[REASON_OK] / max(1, total_records):.1%})",
+    )
+    console.print(
+        f"  None (any reason):   {none_total} "
+        f"({none_total / max(1, total_records):.1%})",
+    )
+
+    # Table A: global None bucket distribution.
+    table_a = Table(title="Table A: None-return bucket distribution (global)")
+    table_a.add_column("Reason", style="cyan")
+    table_a.add_column("Count", justify="right")
+    table_a.add_column("% of None", justify="right")
+    table_a.add_column("% of total", justify="right")
+    for reason in NONE_REASONS:
+        c = reason_counts[reason]
+        table_a.add_row(
+            reason, str(c),
+            f"{c / max(1, none_total):.1%}",
+            f"{c / max(1, total_records):.1%}",
+        )
+    table_a.add_row(
+        "ALL None", str(none_total), "100%",
+        f"{none_total / max(1, total_records):.1%}",
+        style="bold",
+    )
+    console.print(table_a)
+
+    # Table B: wrong-return Y-gap histogram.
+    bin_edges = [0.03, 0.04, 0.05, 0.075, 0.10, 0.15, 0.20, 0.30, float("inf")]
+
+    def _bin_label(lo: float, hi: float) -> str:
+        hi_str = "inf" if hi == float("inf") else f"{hi:.3f}"
+        return f"[{lo:.3f}, {hi_str})"
+
+    scored = [r for r in records
+              if r["result"] is not None and r["expected_tn"] is not None]
+    scored_wrong = [r for r in scored if r["result"] != r["expected_tn"]]
+    scored_correct = [r for r in scored if r["result"] == r["expected_tn"]]
+
+    console.print(f"\nScored (result + expected_tn available): {len(scored)}")
+    console.print(
+        f"  Correct: {len(scored_correct)} "
+        f"({len(scored_correct) / max(1, len(scored)):.1%})",
+    )
+    console.print(
+        f"  Wrong:   {len(scored_wrong)} "
+        f"({len(scored_wrong) / max(1, len(scored)):.1%})",
+    )
+
+    table_b = Table(title="Table B: Wrong-return Y-gap histogram")
+    table_b.add_column("Y-gap bin", style="cyan")
+    table_b.add_column("Correct", justify="right")
+    table_b.add_column("Wrong", justify="right")
+    table_b.add_column("Wrong-rate", justify="right")
+    table_b.add_column("% of wrong", justify="right")
+    for i in range(len(bin_edges) - 1):
+        lo, hi = bin_edges[i], bin_edges[i + 1]
+        c = sum(1 for r in scored_correct
+                if r["y_gap"] is not None and lo <= r["y_gap"] < hi)
+        w = sum(1 for r in scored_wrong
+                if r["y_gap"] is not None and lo <= r["y_gap"] < hi)
+        tot = c + w
+        wr = w / tot if tot else 0.0
+        w_share = w / max(1, len(scored_wrong))
+        table_b.add_row(
+            _bin_label(lo, hi), str(c), str(w),
+            f"{wr:.1%}" if tot else "-",
+            f"{w_share:.1%}",
+        )
+    console.print(table_b)
+
+    # Decision signal: boundary vs tail wrong-rate.
+    bd_c = sum(1 for r in scored_correct
+               if r["y_gap"] is not None and 0.03 <= r["y_gap"] < 0.05)
+    bd_w = sum(1 for r in scored_wrong
+               if r["y_gap"] is not None and 0.03 <= r["y_gap"] < 0.05)
+    tl_c = sum(1 for r in scored_correct
+               if r["y_gap"] is not None and r["y_gap"] >= 0.10)
+    tl_w = sum(1 for r in scored_wrong
+               if r["y_gap"] is not None and r["y_gap"] >= 0.10)
+    bd_rate = bd_w / max(1, bd_c + bd_w)
+    tl_rate = tl_w / max(1, tl_c + tl_w)
+    console.print(
+        f"\n  Wrong-rate at boundary [0.03, 0.05): {bd_rate:.1%} "
+        f"({bd_w}/{bd_c + bd_w})",
+    )
+    console.print(
+        f"  Wrong-rate at tail     [0.10, inf):  {tl_rate:.1%} "
+        f"({tl_w}/{tl_c + tl_w})",
+    )
+    ratio_str = f"{bd_rate / tl_rate:.2f}x" if tl_rate > 0 else "inf"
+    console.print(f"  Ratio (boundary / tail): {ratio_str}")
+
+    # Table C: dominant None bucket sub-split.
+    dominant = max(NONE_REASONS, key=lambda r: reason_counts[r])
+    dominant_records = [r for r in records if r["reason"] == dominant]
+    dom_count = len(dominant_records)
+    console.print(
+        f"\n[bold]Table C: Sub-split of dominant None bucket "
+        f"[cyan]{dominant}[/cyan] (n={dom_count})[/bold]",
+    )
+
+    if dominant == REASON_Y_GAP_BELOW:
+        sub_edges = [0.0, 0.005, 0.01, 0.015, 0.02, 0.025, 0.03]
+        table_c = Table(title="Table C: y_gap_below_threshold Y-gap histogram")
+        table_c.add_column("Y-gap bin", style="cyan")
+        table_c.add_column("Count", justify="right")
+        table_c.add_column("% of dominant", justify="right")
+        for i in range(len(sub_edges) - 1):
+            lo, hi = sub_edges[i], sub_edges[i + 1]
+            c = sum(1 for r in dominant_records
+                    if r["y_gap"] is not None and lo <= r["y_gap"] < hi)
+            table_c.add_row(
+                f"[{lo:.3f}, {hi:.3f})", str(c),
+                f"{c / max(1, dom_count):.1%}",
+            )
+        console.print(table_c)
+    elif dominant == REASON_ONE_TEAM_UNMAPPED:
+        pair_counts: Counter = Counter(
+            (r["t0_n"], r["t1_n"]) for r in dominant_records
+        )
+        table_c = Table(title="Table C: one_team_unmapped (t0_n, t1_n)")
+        table_c.add_column("(t0_n, t1_n)", style="cyan")
+        table_c.add_column("Count", justify="right")
+        table_c.add_column("%", justify="right")
+        for (a, b), c in pair_counts.most_common():
+            table_c.add_row(
+                f"({a}, {b})", str(c), f"{c / max(1, dom_count):.1%}",
+            )
+        console.print(table_c)
+        t2p_counts: Counter = Counter(r["n_t2p"] for r in dominant_records)
+        console.print(
+            f"  n_t2p distribution: {dict(sorted(t2p_counts.items()))}",
+        )
+        n_pid_counts: Counter = Counter(
+            r["n_pid_mapped"] for r in dominant_records
+        )
+        console.print(
+            "  n_pid_mapped distribution: "
+            f"{dict(sorted(n_pid_counts.items()))}",
+        )
+    elif dominant == REASON_NO_PID_MAPPED:
+        t2p_counts = Counter(r["n_t2p"] for r in dominant_records)
+        pos_counts: Counter = Counter(
+            r["n_positions"] for r in dominant_records
+        )
+        table_c = Table(title="Table C: no_pid_mapped n_t2p distribution")
+        table_c.add_column("n_t2p", style="cyan")
+        table_c.add_column("Count", justify="right")
+        for k, c in sorted(t2p_counts.items()):
+            table_c.add_row(str(k), str(c))
+        console.print(table_c)
+        if pos_counts:
+            console.print(
+                f"  n_positions: min={min(pos_counts)} "
+                f"max={max(pos_counts)} zeros={pos_counts.get(0, 0)}",
+            )
+    elif dominant == REASON_EMPTY_INPUT:
+        empty_pos = sum(1 for r in dominant_records if r["n_positions"] == 0)
+        empty_t2p = sum(1 for r in dominant_records if r["n_t2p"] == 0)
+        both_empty = sum(
+            1 for r in dominant_records
+            if r["n_positions"] == 0 and r["n_t2p"] == 0
+        )
+        console.print(
+            f"  positions empty: {empty_pos} "
+            f"({empty_pos / max(1, dom_count):.1%})",
+        )
+        console.print(
+            f"  t2p empty:       {empty_t2p} "
+            f"({empty_t2p / max(1, dom_count):.1%})",
+        )
+        console.print(
+            f"  both empty:      {both_empty} "
+            f"({both_empty / max(1, dom_count):.1%})",
+        )
+
+    # Table D: per-video None-rate + dominant None bucket.
+    by_vid: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in records:
+        by_vid[r["vid"]].append(r)
+
+    def _none_rate(vid_records: list[dict[str, Any]]) -> float:
+        if not vid_records:
+            return 0.0
+        n_none = sum(1 for r in vid_records if r["reason"] in NONE_REASONS)
+        return n_none / len(vid_records)
+
+    table_d = Table(title="Table D: Per-video None-rate + dominant None bucket")
+    table_d.add_column("Video", style="cyan")
+    table_d.add_column("N", justify="right")
+    table_d.add_column("None%", justify="right")
+    table_d.add_column("Top None bucket", style="yellow")
+    table_d.add_column("Top %", justify="right")
+
+    for vid, vid_records in sorted(
+        by_vid.items(), key=lambda kv: -_none_rate(kv[1]),
+    ):
+        n = len(vid_records)
+        vid_counts = Counter(r["reason"] for r in vid_records)
+        vid_none = sum(vid_counts[r] for r in NONE_REASONS)
+        if vid_none > 0:
+            top_reason = max(
+                NONE_REASONS, key=lambda k: vid_counts[k],
+            )
+            top_share = vid_counts[top_reason] / vid_none
+            top_share_str = f"{top_share:.0%}"
+        else:
+            top_reason, top_share_str = "-", "-"
+        table_d.add_row(
+            vid[:10], str(n),
+            f"{vid_none / max(1, n):.0%}",
+            top_reason, top_share_str,
+        )
+    console.print(table_d)
+
+    # Invariants + cross-checks.
+    assert sum(reason_counts.values()) == total_records, (
+        f"Reason counts {sum(reason_counts.values())} != total {total_records}"
+    )
+    marg_wrong = sum(
+        1 for r in scored_wrong
+        if r["y_gap"] is not None and r["y_gap"] < 0.05
+    )
+    console.print("\n[bold]Cross-checks[/bold]")
+    console.print(
+        f"  Invariant OK: sum(reason_counts) = total_records = {total_records}",
+    )
+    console.print(
+        f"  Wrong-return y_gap<0.05: {marg_wrong} / {len(scored_wrong)} "
+        f"= {marg_wrong / max(1, len(scored_wrong)):.0%} "
+        f"(diagnose_phantom_flips.py reported 23% marginal_y_gap)",
+    )
 
     return 0
 
