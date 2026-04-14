@@ -857,7 +857,9 @@ def reattribute_actions_cmd(
         # Run Viterbi with GT-calibrated convention as fallback for rallies
         # where team localization can't determine the serving team.
         initial_near_is_a = (
-            calibrate_initial_side(viterbi_observations, gt_serving_teams)
+            calibrate_initial_side(
+                viterbi_observations, gt_serving_teams, switch_indices,
+            )
             if has_gt else True
         )
         viterbi_decoded = decode_video(

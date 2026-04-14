@@ -308,11 +308,23 @@ def _build_results(
 def calibrate_initial_side(
     observations: list[RallyObservation],
     gt_serving_teams: list[str | None] | None = None,
+    side_switch_rallies: set[int] | None = None,
 ) -> bool:
     """Determine whether near=A at the start of the video.
 
     If GT is available (eval), uses majority vote from GT + formation.
     If not (production), assumes near=A (standard convention).
+
+    Accounts for side switches: votes from rallies after a switch are
+    inverted so they vote for the original (rally 0) mapping.  Without
+    this correction, videos with side switches produce cancelling votes
+    from each half and get miscalibrated (observed 0% accuracy on
+    beb70f61 / fb83f876).
+
+    Args:
+        observations: Per-rally formation observations.
+        gt_serving_teams: GT team labels ("A"/"B"/None) per rally.
+        side_switch_rallies: Rally indices where teams swap sides.
 
     Returns:
         True if near corresponds to team A at rally 0.
@@ -320,19 +332,35 @@ def calibrate_initial_side(
     if gt_serving_teams is None:
         return True
 
+    switches = side_switch_rallies or set()
+
     votes_near_is_a = 0
     votes_near_is_b = 0
-    for obs, gt in zip(observations, gt_serving_teams):
+    n_switches_before = 0
+    for i, (obs, gt) in enumerate(zip(observations, gt_serving_teams)):
+        if i in switches:
+            n_switches_before += 1
         if obs.formation_side is None or gt is None:
             continue
+        # At this rally, near_is_a_current = near_is_a_initial XOR (odd switches)
+        # So to vote for near_is_a_initial, invert when odd switches have occurred.
+        flip = (n_switches_before % 2) == 1
+        near_is_a_current: bool
         if obs.formation_side == "near" and gt == "A":
-            votes_near_is_a += 1
+            near_is_a_current = True
         elif obs.formation_side == "near" and gt == "B":
-            votes_near_is_b += 1
+            near_is_a_current = False
         elif obs.formation_side == "far" and gt == "A":
-            votes_near_is_b += 1
+            near_is_a_current = False
         elif obs.formation_side == "far" and gt == "B":
+            near_is_a_current = True
+        else:
+            continue
+        near_is_a_initial = near_is_a_current != flip  # XOR
+        if near_is_a_initial:
             votes_near_is_a += 1
+        else:
+            votes_near_is_b += 1
 
     return votes_near_is_a >= votes_near_is_b
 
@@ -340,6 +368,7 @@ def calibrate_initial_side(
 def calibrate_from_noisy_predictions(
     observations: list[RallyObservation],
     noisy_serving_teams: list[str | None],
+    side_switch_rallies: set[int] | None = None,
 ) -> bool:
     """Self-calibrate near=A/B from existing noisy per-rally predictions.
 
@@ -351,8 +380,11 @@ def calibrate_from_noisy_predictions(
         observations: Per-rally formation observations.
         noisy_serving_teams: Existing per-rally serving_team predictions
             from the formation + team_assignments + semantic_flip path.
+        side_switch_rallies: Rally indices where teams swap sides.
     """
-    return calibrate_initial_side(observations, noisy_serving_teams)
+    return calibrate_initial_side(
+        observations, noisy_serving_teams, side_switch_rallies,
+    )
 
 
 def decode_video_dual_hypothesis(

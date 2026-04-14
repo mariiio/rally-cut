@@ -212,14 +212,16 @@ def _eval_config(
             ))
             gt_teams.append(rally.gt_serving_team)
 
-        # Per-video calibration
-        initial_near_is_a = calibrate_initial_side(observations, gt_teams)
-
         # GT side switches
         switch_indices: set[int] = set()
         for i in range(1, len(rallies)):
             if rallies[i].side_flipped != rallies[i - 1].side_flipped:
                 switch_indices.add(i)
+
+        # Per-video calibration (accounts for side switches)
+        initial_near_is_a = calibrate_initial_side(
+            observations, gt_teams, switch_indices,
+        )
 
         # Convert GT team → physical side using calibrated mapping.
         # Must account for initial_near_is_a + side switches.
@@ -290,14 +292,17 @@ def _eval_selfcal(
             ))
             noisy_teams.append(rally.prod_serving_team)
 
-        # Calibrate from noisy production predictions (no GT!)
-        initial_near_is_a = calibrate_from_noisy_predictions(observations, noisy_teams)
-
         # Use automated side switches from match_analysis
         switch_indices: set[int] = set()
         for i in range(1, len(rallies)):
             if rallies[i].prod_semantic_flip != rallies[i - 1].prod_semantic_flip:
                 switch_indices.add(i)
+
+        # Calibrate from noisy production predictions (no GT!), accounting
+        # for side switches to avoid cancelling votes from each half.
+        initial_near_is_a = calibrate_from_noisy_predictions(
+            observations, noisy_teams, switch_indices,
+        )
 
         decoded = decode_video(
             observations,
@@ -517,11 +522,13 @@ def main() -> int:
             ))
             gt_teams.append(rally.gt_serving_team)
 
-        initial_near_is_a = calibrate_initial_side(observations, gt_teams)
         switch_indices: set[int] = set()
         for i in range(1, len(rallies)):
             if rallies[i].side_flipped != rallies[i - 1].side_flipped:
                 switch_indices.add(i)
+        initial_near_is_a = calibrate_initial_side(
+            observations, gt_teams, switch_indices,
+        )
 
         def gt_to_phys(idx: int, gt_team: str) -> str:
             nia = initial_near_is_a

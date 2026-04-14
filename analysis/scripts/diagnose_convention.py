@@ -213,11 +213,13 @@ def diagnose_video(vid: str, rallies: list[DiagRally]) -> None:
         gt_teams.append(r.gt_serving_team)
 
     # GT-calibrated decode
-    initial_near_is_a = calibrate_initial_side(observations, gt_teams)
     gt_switch_indices: set[int] = set()
     for i in range(1, len(rallies)):
         if rallies[i].side_flipped != rallies[i - 1].side_flipped:
             gt_switch_indices.add(i)
+    initial_near_is_a = calibrate_initial_side(
+        observations, gt_teams, gt_switch_indices,
+    )
 
     gt_decoded = decode_video(
         observations, initial_near_is_a=initial_near_is_a,
@@ -346,11 +348,11 @@ def main() -> int:
             ))
             gt_teams.append(r.gt_serving_team)
 
-        nia = calibrate_initial_side(observations, gt_teams)
         gt_sw: set[int] = set()
         for i in range(1, len(rallies)):
             if rallies[i].side_flipped != rallies[i - 1].side_flipped:
                 gt_sw.add(i)
+        nia = calibrate_initial_side(observations, gt_teams, gt_sw)
         gt_dec = decode_video(observations, initial_near_is_a=nia, side_switch_rallies=gt_sw)
 
         prod_sw: set[int] = set()
