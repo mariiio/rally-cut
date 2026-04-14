@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -93,3 +95,105 @@ class TestExportScoreGroundTruth:
             "rallycut.evaluation.db.get_connection", return_value=fake_conn
         ):
             assert _export_score_ground_truth({"hashA"}) is None
+
+
+class TestRestoreScoreGroundTruth:
+    def _write_payload(self, tmp_path: Path) -> Path:
+        payload = {
+            "stats": {
+                "total_rallies": 3,
+                "total_videos": 1,
+                "total_with_serving": 2,
+                "total_with_side_switch": 2,
+            },
+            "rallies": [
+                {
+                    "rally_id": "rally-serving-writable",
+                    "video_id": "vid-1",
+                    "content_hash": "hash1",
+                    "gt_serving_team": "A",
+                    "gt_side_switch": True,
+                },
+                {
+                    "rally_id": "rally-switch-only",
+                    "video_id": "vid-1",
+                    "content_hash": "hash1",
+                    "gt_side_switch": False,
+                },
+                {
+                    "rally_id": "rally-missing",
+                    "video_id": "vid-1",
+                    "content_hash": "hash1",
+                    "gt_serving_team": "B",
+                },
+            ],
+        }
+        p = tmp_path / "score_ground_truth.json"
+        p.write_text(json.dumps(payload))
+        return p
+
+    def test_updates_only_null_rows_and_records_misses(
+        self, tmp_path: Path
+    ) -> None:
+        from typing import Any
+
+        from rallycut.training.restore import (
+            RestoreResult,
+            _restore_score_ground_truth,
+        )
+
+        path = self._write_payload(tmp_path)
+
+        # The helper runs, per rally:
+        #   1) SELECT id FROM rallies WHERE id = %s   (existence check)
+        #   2) UPDATE gt_serving_team (only if the field is in the JSON)
+        #   3) UPDATE gt_side_switch  (only if the field is in the JSON)
+        # Rally 1 has both fields: serving UPDATE rowcount=1, side_switch UPDATE
+        #   rowcount=0 (already set) → counts as restored (serving wrote).
+        # Rally 2 has only side_switch: side_switch UPDATE rowcount=1 → counts.
+        # Rally 3 is missing from DB: existence SELECT returns None → error.
+        existence_results = iter(
+            [
+                ("rally-serving-writable",),
+                ("rally-switch-only",),
+                None,
+            ]
+        )
+        update_rowcounts = iter([1, 0, 1])
+
+        cursor = MagicMock()
+
+        def execute_side_effect(sql: str, _params: Any = None) -> None:
+            sql_lower = sql.lower()
+            if "select id from rallies" in sql_lower:
+                cursor._last = "select"
+            elif "update rallies" in sql_lower:
+                cursor._last = "update"
+                cursor.rowcount = next(update_rowcounts)
+            else:
+                cursor._last = "other"
+
+        cursor.execute.side_effect = execute_side_effect
+        cursor.fetchone.side_effect = lambda: next(existence_results)
+
+        conn = MagicMock()
+        conn.cursor.return_value.__enter__.return_value = cursor
+        conn.cursor.return_value.__exit__.return_value = False
+
+        result = RestoreResult()
+        _restore_score_ground_truth(conn, path, result)
+
+        assert result.score_gt_restored == 2
+        assert any("rally-missing" in e for e in result.errors)
+
+    def test_silent_skip_when_file_missing(self, tmp_path: Path) -> None:
+        from rallycut.training.restore import (
+            RestoreResult,
+            _restore_score_ground_truth,
+        )
+
+        result = RestoreResult()
+        _restore_score_ground_truth(MagicMock(), tmp_path / "missing.json", result)
+
+        assert result.score_gt_restored == 0
+        assert result.errors == []

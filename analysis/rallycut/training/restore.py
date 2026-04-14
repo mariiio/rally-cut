@@ -33,6 +33,7 @@ class RestoreResult:
     tracking_gt_restored: int = 0
     action_gt_restored: int = 0
     player_matching_gt_restored: int = 0
+    score_gt_restored: int = 0
     session_created: str = ""
     errors: list[str] = field(default_factory=list)
 
@@ -643,6 +644,78 @@ def _restore_player_matching_gt(
         restored += 1
 
     result.player_matching_gt_restored = restored
+
+
+def _restore_score_ground_truth(
+    conn: psycopg.Connection[tuple[Any, ...]],
+    score_gt_path: Path,
+    result: RestoreResult,
+) -> None:
+    """Restore rallies.gt_serving_team and rallies.gt_side_switch.
+
+    Per-field NULL-only: each column is updated independently, and only
+    when the target column is currently NULL. Existing labels are
+    preserved so a re-run never clobbers DB edits made after the snapshot
+    was taken. A field absent from a JSON entry means it was NULL at
+    export time — its UPDATE is skipped entirely.
+
+    A rally counts as restored if at least one of its fields was actually
+    written.
+    """
+    if not score_gt_path.exists():
+        return
+
+    with open(score_gt_path) as f:
+        payload = json.load(f)
+
+    entries = payload.get("rallies", [])
+    if not entries:
+        return
+
+    restored = 0
+    for entry in entries:
+        rally_id = entry["rally_id"]
+
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM rallies WHERE id = %s", (rally_id,))
+            row = cur.fetchone()
+            if row is None:
+                result.errors.append(
+                    f"Score GT: no matching rally id {rally_id}"
+                )
+                continue
+
+            wrote_any = False
+            if "gt_serving_team" in entry:
+                cur.execute(
+                    """
+                    UPDATE rallies
+                       SET gt_serving_team = %s
+                     WHERE id = %s
+                       AND gt_serving_team IS NULL
+                    """,
+                    (entry["gt_serving_team"], rally_id),
+                )
+                if cur.rowcount > 0:
+                    wrote_any = True
+
+            if "gt_side_switch" in entry:
+                cur.execute(
+                    """
+                    UPDATE rallies
+                       SET gt_side_switch = %s
+                     WHERE id = %s
+                       AND gt_side_switch IS NULL
+                    """,
+                    (bool(entry["gt_side_switch"]), rally_id),
+                )
+                if cur.rowcount > 0:
+                    wrote_any = True
+
+            if wrote_any:
+                restored += 1
+
+    result.score_gt_restored = restored
 
 
 def _find_video_file(
