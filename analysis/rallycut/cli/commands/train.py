@@ -17,7 +17,6 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from rallycut.core.proxy import ProxyGenerator
-from rallycut.evaluation.db import get_connection
 from rallycut.evaluation.ground_truth import EvaluationVideo, load_evaluation_videos
 from rallycut.evaluation.video_resolver import VideoResolver
 from rallycut.training.config import TrainingConfig
@@ -1729,6 +1728,8 @@ def _export_score_ground_truth(
     Returns rallies whose video is in the current dataset and whose
     ``gt_serving_team`` is non-NULL. Returns ``None`` if no such rallies exist.
     """
+    from rallycut.evaluation.db import get_connection
+
     conn = get_connection()
     try:
         with conn.cursor() as cur:

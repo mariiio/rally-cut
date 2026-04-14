@@ -37,7 +37,7 @@ class TestExportScoreGroundTruth:
         )
 
         with patch(
-            "rallycut.cli.commands.train.get_connection", return_value=fake_conn
+            "rallycut.evaluation.db.get_connection", return_value=fake_conn
         ):
             result = _export_score_ground_truth({"hashA", "hashB"})
 
@@ -59,7 +59,7 @@ class TestExportScoreGroundTruth:
 
         _set_rows(fake_conn, [])
         with patch(
-            "rallycut.cli.commands.train.get_connection", return_value=fake_conn
+            "rallycut.evaluation.db.get_connection", return_value=fake_conn
         ):
             assert _export_score_ground_truth({"hashA"}) is None
 
@@ -70,6 +70,6 @@ class TestExportScoreGroundTruth:
 
         _set_rows(fake_conn, [("hashZ", "rally-9", "video-9", "A")])
         with patch(
-            "rallycut.cli.commands.train.get_connection", return_value=fake_conn
+            "rallycut.evaluation.db.get_connection", return_value=fake_conn
         ):
             assert _export_score_ground_truth({"hashA"}) is None
