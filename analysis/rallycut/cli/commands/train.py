@@ -1727,8 +1727,12 @@ def _export_score_ground_truth(
 
     Returns rallies whose video is in the current dataset and for which at
     least one of ``gt_serving_team`` / ``gt_side_switch`` is non-NULL.
-    Per-entry, each column is omitted when its DB value is NULL so
+    Per-entry, each GT column is omitted when its DB value is NULL so
     downstream restore never sees an explicit ``null``.
+
+    Entries match the (content_hash, start_ms, end_ms) key used by sibling
+    optional-GT files so restore survives rally UUID churn (rallies get
+    fresh UUIDs on re-insert).
 
     Returns ``None`` if no qualifying rallies exist.
     """
@@ -1743,6 +1747,8 @@ def _export_score_ground_truth(
                     v.content_hash,
                     r.id,
                     v.id AS video_id,
+                    r.start_ms,
+                    r.end_ms,
                     r.gt_serving_team,
                     r.gt_side_switch
                 FROM rallies r
@@ -1773,12 +1779,12 @@ def _export_score_ground_truth(
             continue
 
         entry: dict[str, Any] = {
-            "rally_id": str(row[1]),
-            "video_id": str(row[2]),
-            "content_hash": content_hash,
+            "video_content_hash": content_hash,
+            "rally_start_ms": row[3],
+            "rally_end_ms": row[4],
         }
-        serving = row[3]
-        side_switch = row[4]
+        serving = row[5]
+        side_switch = row[6]
         if serving is not None:
             entry["gt_serving_team"] = str(serving)
             total_with_serving += 1

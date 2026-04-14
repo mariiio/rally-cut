@@ -31,14 +31,18 @@ class TestExportScoreGroundTruth:
     ) -> None:
         from rallycut.cli.commands.train import _export_score_ground_truth
 
-        # Rows shape: (content_hash, rally_id, video_id, gt_serving_team, gt_side_switch)
+        # Rows: (content_hash, rally_id, video_id, start_ms, end_ms,
+        #        gt_serving_team, gt_side_switch)
+        # rally_id / video_id are still selected for the query but no longer
+        # written to the JSON entry; the stable match key is content_hash +
+        # start_ms + end_ms.
         _set_rows(
             fake_conn,
             [
-                ("hashA", "rally-serving-only", "video-1", "A", None),
-                ("hashA", "rally-switch-only", "video-1", None, True),
-                ("hashB", "rally-both", "video-2", "B", False),
-                ("hashC", "rally-other", "video-3", "A", True),  # not in dataset
+                ("hashA", "rally-1", "video-1", 1000, 5000, "A", None),
+                ("hashA", "rally-2", "video-1", 6000, 10000, None, True),
+                ("hashB", "rally-3", "video-2", 2000, 7000, "B", False),
+                ("hashC", "rally-4", "video-3", 0, 1000, "A", True),  # not in dataset
             ],
         )
 
@@ -55,22 +59,29 @@ class TestExportScoreGroundTruth:
             "total_with_side_switch": 2,
         }
 
-        by_id = {r["rally_id"]: r for r in result["rallies"]}
-        assert set(by_id) == {
-            "rally-serving-only",
-            "rally-switch-only",
-            "rally-both",
+        for entry in result["rallies"]:
+            assert set(entry.keys()) >= {
+                "video_content_hash",
+                "rally_start_ms",
+                "rally_end_ms",
+            }
+            # Stable match-key fields only — no UUID keys
+            assert "rally_id" not in entry
+            assert "video_id" not in entry
+
+        by_timing = {
+            (e["video_content_hash"], e["rally_start_ms"], e["rally_end_ms"]): e
+            for e in result["rallies"]
         }
-
-        serving_only = by_id["rally-serving-only"]
+        serving_only = by_timing[("hashA", 1000, 5000)]
         assert serving_only["gt_serving_team"] == "A"
-        assert "gt_side_switch" not in serving_only  # NULL in DB → omitted
+        assert "gt_side_switch" not in serving_only
 
-        switch_only = by_id["rally-switch-only"]
+        switch_only = by_timing[("hashA", 6000, 10000)]
         assert switch_only["gt_side_switch"] is True
-        assert "gt_serving_team" not in switch_only  # NULL in DB → omitted
+        assert "gt_serving_team" not in switch_only
 
-        both = by_id["rally-both"]
+        both = by_timing[("hashB", 2000, 7000)]
         assert both["gt_serving_team"] == "B"
         assert both["gt_side_switch"] is False
 
@@ -89,7 +100,8 @@ class TestExportScoreGroundTruth:
         from rallycut.cli.commands.train import _export_score_ground_truth
 
         _set_rows(
-            fake_conn, [("hashZ", "rally-9", "video-9", "A", None)]
+            fake_conn,
+            [("hashZ", "rally-9", "video-9", 0, 1000, "A", None)],
         )
         with patch(
             "rallycut.evaluation.db.get_connection", return_value=fake_conn
@@ -108,22 +120,22 @@ class TestRestoreScoreGroundTruth:
             },
             "rallies": [
                 {
-                    "rally_id": "rally-serving-writable",
-                    "video_id": "vid-1",
-                    "content_hash": "hash1",
+                    "video_content_hash": "hash1",
+                    "rally_start_ms": 1000,
+                    "rally_end_ms": 5000,
                     "gt_serving_team": "A",
                     "gt_side_switch": True,
                 },
                 {
-                    "rally_id": "rally-switch-only",
-                    "video_id": "vid-1",
-                    "content_hash": "hash1",
+                    "video_content_hash": "hash1",
+                    "rally_start_ms": 6000,
+                    "rally_end_ms": 10000,
                     "gt_side_switch": False,
                 },
                 {
-                    "rally_id": "rally-missing",
-                    "video_id": "vid-1",
-                    "content_hash": "hash1",
+                    "video_content_hash": "hash1",
+                    "rally_start_ms": 9999,
+                    "rally_end_ms": 99999,
                     "gt_serving_team": "B",
                 },
             ],
@@ -144,28 +156,24 @@ class TestRestoreScoreGroundTruth:
 
         path = self._write_payload(tmp_path)
 
-        # The helper runs, per rally:
-        #   1) SELECT id FROM rallies WHERE id = %s   (existence check)
-        #   2) UPDATE gt_serving_team (only if the field is in the JSON)
-        #   3) UPDATE gt_side_switch  (only if the field is in the JSON)
-        # Rally 1 has both fields: serving UPDATE rowcount=1, side_switch UPDATE
-        #   rowcount=0 (already set) → counts as restored (serving wrote).
-        # Rally 2 has only side_switch: side_switch UPDATE rowcount=1 → counts.
-        # Rally 3 is missing from DB: existence SELECT returns None → error.
-        existence_results = iter(
-            [
-                ("rally-serving-writable",),
-                ("rally-switch-only",),
-                None,
-            ]
-        )
+        # Helper, per rally: SELECT composite-key, then per-field NULL-only
+        # UPDATE. Rally 1 (hash1, 1000, 5000) has both fields: serving UPDATE
+        # rowcount=1, side_switch UPDATE rowcount=0 (already set) → counts as
+        # restored. Rally 2 has only side_switch → UPDATE rowcount=1 → counts.
+        # Rally 3 has no matching (start_ms, end_ms) → lookup returns None,
+        # error recorded, no UPDATE attempted.
+        lookup_results = iter([
+            ("rally-A-db-uuid",),
+            ("rally-B-db-uuid",),
+            None,
+        ])
         update_rowcounts = iter([1, 0, 1])
 
         cursor = MagicMock()
 
         def execute_side_effect(sql: str, _params: Any = None) -> None:
             sql_lower = sql.lower()
-            if "select id from rallies" in sql_lower:
+            if "select r.id" in sql_lower:
                 cursor._last = "select"
             elif "update rallies" in sql_lower:
                 cursor._last = "update"
@@ -174,7 +182,7 @@ class TestRestoreScoreGroundTruth:
                 cursor._last = "other"
 
         cursor.execute.side_effect = execute_side_effect
-        cursor.fetchone.side_effect = lambda: next(existence_results)
+        cursor.fetchone.side_effect = lambda: next(lookup_results)
 
         conn = MagicMock()
         conn.cursor.return_value.__enter__.return_value = cursor
@@ -184,7 +192,8 @@ class TestRestoreScoreGroundTruth:
         _restore_score_ground_truth(conn, path, result)
 
         assert result.score_gt_restored == 2
-        assert any("rally-missing" in e for e in result.errors)
+        # Error mentions the timing (not a UUID)
+        assert any("hash1" in e and "9999" in e for e in result.errors)
 
     def test_silent_skip_when_file_missing(self, tmp_path: Path) -> None:
         from rallycut.training.restore import (

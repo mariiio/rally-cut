@@ -672,14 +672,15 @@ def _restore_score_ground_truth(
 ) -> None:
     """Restore rallies.gt_serving_team and rallies.gt_side_switch.
 
-    Per-field NULL-only: each column is updated independently, and only
-    when the target column is currently NULL. Existing labels are
-    preserved so a re-run never clobbers DB edits made after the snapshot
-    was taken. A field absent from a JSON entry means it was NULL at
-    export time — its UPDATE is skipped entirely.
+    Matches rallies by (content_hash, start_ms, end_ms) so restore is
+    resilient to rally UUID churn across re-inserts — the same composite
+    key used by tracking/action GT restore.
 
-    A rally counts as restored if at least one of its fields was actually
-    written.
+    Per-field NULL-only: each column is updated independently and only
+    when the target column is currently NULL. A field absent from a JSON
+    entry means it was NULL at export time — its UPDATE is skipped
+    entirely. A rally counts as restored if at least one of its fields
+    was actually written.
     """
     if not score_gt_path.exists():
         return
@@ -693,17 +694,33 @@ def _restore_score_ground_truth(
 
     restored = 0
     for entry in entries:
-        rally_id = entry["rally_id"]
+        content_hash = entry["video_content_hash"]
+        start_ms = entry["rally_start_ms"]
+        end_ms = entry["rally_end_ms"]
 
         with conn.cursor() as cur:
-            cur.execute("SELECT id FROM rallies WHERE id = %s", (rally_id,))
+            cur.execute(
+                """
+                SELECT r.id
+                FROM rallies r
+                JOIN videos v ON v.id = r.video_id
+                WHERE v.content_hash = %s
+                  AND r.start_ms = %s
+                  AND r.end_ms = %s
+                  AND v.deleted_at IS NULL
+                LIMIT 1
+                """,
+                (content_hash, start_ms, end_ms),
+            )
             row = cur.fetchone()
             if row is None:
                 result.errors.append(
-                    f"Score GT: no matching rally id {rally_id}"
+                    f"Score GT: no matching rally for {content_hash[:8]}... "
+                    f"({start_ms}-{end_ms}ms)"
                 )
                 continue
 
+            rally_id = str(row[0])
             wrote_any = False
             if "gt_serving_team" in entry:
                 cur.execute(
