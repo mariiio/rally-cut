@@ -9,12 +9,16 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 
+import numpy as np
+
 from rallycut.quality.types import CheckResult, Issue, Tier
 
 # Thresholds — update after calibration (see analysis/scripts/calibrate_quality_checks.py).
 MIN_DURATION_S = 10.0
 MIN_WIDTH = 1280  # 720p
 MIN_FPS = 24.0
+LUMA_DARK_THRESHOLD = 0.15
+LUMA_BRIGHT_THRESHOLD = 0.85
 
 
 @dataclass(frozen=True)
@@ -86,3 +90,36 @@ def check_metadata(meta: VideoMetadata) -> CheckResult:
         "fps": meta.fps,
     }
     return CheckResult(issues=issues, metrics=metrics)
+
+
+def check_brightness(frames: list[np.ndarray]) -> CheckResult:
+    """Compute mean luma across sampled BGR/RGB frames (uint8, shape HxWx3)."""
+    if not frames:
+        return CheckResult(issues=[], metrics={})
+
+    # Use Rec. 601 luma coefficients on the assumption the frames are BGR or RGB;
+    # either way the mean across three channels is a close approximation.
+    lumas = [float(f.mean()) / 255.0 for f in frames]
+    mean_luma = float(np.mean(lumas))
+
+    issues: list[Issue] = []
+    if mean_luma < LUMA_DARK_THRESHOLD:
+        issues.append(Issue(
+            id="too_dark",
+            tier=Tier.GATE,
+            severity=min(1.0, (LUMA_DARK_THRESHOLD - mean_luma) / LUMA_DARK_THRESHOLD),
+            message="Video looks very dim — brighter lighting helps player and ball detection.",
+            source="upload",
+            data={"meanLuma": mean_luma},
+        ))
+    elif mean_luma > LUMA_BRIGHT_THRESHOLD:
+        issues.append(Issue(
+            id="overexposed",
+            tier=Tier.GATE,
+            severity=min(1.0, (mean_luma - LUMA_BRIGHT_THRESHOLD) / (1.0 - LUMA_BRIGHT_THRESHOLD)),
+            message="Video looks overexposed — washed-out colors reduce tracking accuracy.",
+            source="upload",
+            data={"meanLuma": mean_luma},
+        ))
+
+    return CheckResult(issues=issues, metrics={"meanLuma": mean_luma})
