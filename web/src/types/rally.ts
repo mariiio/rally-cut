@@ -62,7 +62,7 @@ export interface Match {
   rallies: Rally[];     // Rallies for this match
   createdAt?: string;   // ISO timestamp when video was uploaded
   qualityDowngradedAt?: string | null; // ISO timestamp when original quality was removed (FREE tier)
-  status?: 'PENDING' | 'UPLOADED' | 'DETECTING' | 'DETECTED' | 'ERROR'; // Video detection status
+  status?: 'PENDING' | 'UPLOADED' | 'DETECTING' | 'DETECTED' | 'REJECTED' | 'ERROR'; // Video detection status
   qualityReportJson?: QualityReport | null; // Auto-detected video quality report
 }
 

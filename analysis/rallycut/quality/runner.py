@@ -35,7 +35,6 @@ def _load_video_inputs(video_path: str, sample_seconds: int):
     import logging
     import os
 
-    import cv2
     import numpy as np
 
     from rallycut.core.video import Video
@@ -64,13 +63,12 @@ def _load_video_inputs(video_path: str, sample_seconds: int):
                 break
 
     # ── 3. Court corners via CourtDetector (keypoint → classical fallback) ───
-    # Convert sample_seconds to end_frame for the detector
+    # Convert sample_seconds to end_frame for the detector. Reuse total_frames
+    # from the Video wrapper above rather than opening a second VideoCapture
+    # (the old code leaked an unclosed capture descriptor).
     end_frame_for_court: int | None = None
     if fps and fps > 0:
-        end_frame_for_court = min(
-            int(fps * sample_seconds),
-            int(cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FRAME_COUNT)),
-        ) or None
+        end_frame_for_court = min(int(fps * sample_seconds), total_frames) or None
 
     detector = CourtDetector(CourtDetectionConfig())
     raw_result = detector.detect(

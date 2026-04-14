@@ -97,8 +97,10 @@ def check_brightness(frames: list[np.ndarray]) -> CheckResult:
     if not frames:
         return CheckResult(issues=[], metrics={})
 
-    # Use Rec. 601 luma coefficients on the assumption the frames are BGR or RGB;
-    # either way the mean across three channels is a close approximation.
+    # Simple mean across all three channels, normalized to [0,1]. Not true
+    # Rec. 601 luma (0.299R + 0.587G + 0.114B) but channel-averaged brightness
+    # correlates well enough with perceived exposure for quality-gating, and
+    # works the same for BGR and RGB input without a color-space-aware check.
     lumas = [float(f.mean()) / 255.0 for f in frames]
     mean_luma = float(np.mean(lumas))
 

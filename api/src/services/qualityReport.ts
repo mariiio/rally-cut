@@ -36,6 +36,23 @@ export function pickTopIssues(issues: Issue[], max = 3): Issue[] {
     .slice(0, max);
 }
 
+/**
+ * Merge N partial reports into a single QualityReport.
+ *
+ * Semantics for scalar fields (brightness, resolution, preflight):
+ *   **First non-null wins.** The order of inputs is the preservation priority.
+ *   Callers pass the *existing* persisted report first and the *new* patch
+ *   second, so existing data is preserved and a patch can only fill in
+ *   previously-null fields. This prevents a later, lower-quality measurement
+ *   from clobbering an earlier good one (e.g., a preflight re-run should not
+ *   overwrite the upload-time brightness from the high-quality poster frame).
+ *
+ * Semantics for `issues`:
+ *   All issues from all reports are concatenated, then trimmed to the top 3
+ *   by `(tier asc, severity desc, id)`. De-duplication by id is NOT applied —
+ *   a later source can add a tier-higher version of the same id and it will
+ *   rank ahead of the earlier occurrence.
+ */
 export function mergeQualityReports(reports: Array<Partial<QualityReport>>): QualityReport {
   const allIssues: Issue[] = reports.flatMap((r) => r.issues ?? []);
   const brightness = reports.map((r) => r.brightness).find((v) => v != null) ?? null;

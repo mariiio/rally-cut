@@ -10,7 +10,7 @@
     "quality_metrics": 67,
     "action_acc": 67,
     "score_acc": 49,
-    "hota": 8
+    "hota": 33
   },
   "n_failures": 32,
   "calibration": [
@@ -309,8 +309,8 @@
       "metric_key": "courtConfidence",
       "direction": "<",
       "best_threshold": 0.75,
-      "best_lift": 1.883,
-      "best_n_fires": 6,
+      "best_lift": 1.771,
+      "best_n_fires": 5,
       "recommendation": "drop",
       "threshold_sweep": [
         {
@@ -339,11 +339,11 @@
         },
         {
           "threshold": 0.75,
-          "n_fires": 6,
-          "n_not_fires": 61,
-          "p_fail_given_fires": 0.8333,
-          "p_fail_given_not_fires": 0.4426,
-          "lift": 1.883
+          "n_fires": 5,
+          "n_not_fires": 62,
+          "p_fail_given_fires": 0.8,
+          "p_fail_given_not_fires": 0.4516,
+          "lift": 1.771
         }
       ]
     }
@@ -404,10 +404,10 @@
         "width": 1920.0,
         "height": 1080.0,
         "fps": 60.0,
-        "meanLuma": 0.5362234693980473,
-        "courtConfidence": 0.7729829728603363,
-        "tiltDeg": 2.7399678191911834,
-        "medianBboxHeight": 0.18490394204854965,
+        "meanLuma": 0.536564833978859,
+        "courtConfidence": 0.7785483956336975,
+        "tiltDeg": 2.8731136045573122,
+        "medianBboxHeight": 0.18489639461040497,
         "avgNonCourtPersons": 5.2,
         "meanResidual": 0.033370142388674945
       },
@@ -683,7 +683,7 @@
       "video_id": "3ad271bd-b94d-4d63-86ec-4ecbe5dbfeac",
       "action_acc": 0.9545454545454546,
       "score_acc": 0.4,
-      "hota": null,
+      "hota": 0.9455158147026123,
       "is_failure": true,
       "quality_metrics": {
         "durationS": 210.659155,
@@ -699,7 +699,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "43928971-2e07-4814-bb1a-3d91c7bf03b2",
@@ -721,13 +721,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "44e89f6c-7708-4830-88ef-e9a9819ff343",
       "action_acc": 0.9411764705882353,
       "score_acc": 0.8181818181818182,
-      "hota": null,
+      "hota": 0.906642156531451,
       "is_failure": false,
       "quality_metrics": {
         "durationS": 335.05,
@@ -743,13 +743,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "4cd680c7-2333-4dab-9fed-159f064a9e8c",
       "action_acc": 1.0,
       "score_acc": null,
-      "hota": null,
+      "hota": 0.9408308039313,
       "is_failure": false,
       "quality_metrics": {
         "durationS": 357.037007,
@@ -765,7 +765,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "4f2bd66a-61a1-49ac-8137-fd2576e0e851",
@@ -787,13 +787,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "56f2739d-ff3c-4cac-8ada-4f275e57ab63",
       "action_acc": 1.0,
       "score_acc": null,
-      "hota": null,
+      "hota": 0.848094498743868,
       "is_failure": false,
       "quality_metrics": {
         "durationS": 199.9327,
@@ -809,13 +809,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "5c641cfe-2a98-44b3-816c-e093d700baef",
       "action_acc": 1.0,
       "score_acc": 0.8,
-      "hota": null,
+      "hota": 0.9923643576104384,
       "is_failure": false,
       "quality_metrics": {
         "durationS": 155.3,
@@ -831,7 +831,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "5c756c41-1cc1-4486-a95c-97398912cfbe",
@@ -853,13 +853,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "601d4a69-b6e9-4b7c-9bd4-2511d282dc5e",
       "action_acc": 0.8709677419354839,
       "score_acc": 0.6363636363636364,
-      "hota": null,
+      "hota": 0.9942474353517053,
       "is_failure": true,
       "quality_metrics": {
         "durationS": 353.650998,
@@ -875,13 +875,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "627c1add-8a80-42ab-8278-3617880ebf81",
       "action_acc": 0.75,
       "score_acc": 1.0,
-      "hota": null,
+      "hota": 0.8812466991035206,
       "is_failure": false,
       "quality_metrics": {
         "durationS": 217.796009,
@@ -897,13 +897,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "635dcba2-2645-49d1-ac62-072f05c957d9",
       "action_acc": 0.88,
       "score_acc": 0.8333333333333334,
-      "hota": null,
+      "hota": 0.9081990751173825,
       "is_failure": false,
       "quality_metrics": {
         "durationS": 909.074,
@@ -919,7 +919,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "6d2f646c-1551-4917-a26c-7707a48ba0e9",
@@ -941,7 +941,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "6f8ca447-a244-4833-bf49-e9f949defc1a",
@@ -963,35 +963,35 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "70ab9d7f-8cc4-48cb-892a-1c36793cac72",
       "action_acc": 0.0,
       "score_acc": null,
-      "hota": null,
+      "hota": 0.7324072606285632,
       "is_failure": true,
       "quality_metrics": {
         "durationS": 301.011667,
         "width": 1920.0,
         "height": 1080.0,
         "fps": 60.0,
-        "meanLuma": 0.6782422664256031,
-        "courtConfidence": 0.7454628914594651,
-        "tiltDeg": 1.072303821072652,
-        "medianBboxHeight": 0.18002593517303467,
+        "meanLuma": 0.6782807123981279,
+        "courtConfidence": 0.7598133534193039,
+        "tiltDeg": 0.32723198147581295,
+        "medianBboxHeight": 0.1800219789147377,
         "avgNonCourtPersons": 5,
         "meanResidual": 0.03728043536345164
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "7ba71fc4-5348-471c-b38d-8dfd029208e4",
       "action_acc": 0.8888888888888888,
       "score_acc": 0.6666666666666666,
-      "hota": null,
+      "hota": 0.816496580927726,
       "is_failure": true,
       "quality_metrics": {
         "durationS": 152.692993,
@@ -1007,7 +1007,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "7bc3ae8a-01b8-454f-9697-49c5f7b6effe",
@@ -1029,7 +1029,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "7c61e308-64b2-4e3d-a3e4-10815645bda2",
@@ -1051,13 +1051,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "7d77980f-3006-40e0-adc0-db491a5bb659",
       "action_acc": 0.9016393442622951,
       "score_acc": 0.9090909090909091,
-      "hota": null,
+      "hota": 0.9936327615774919,
       "is_failure": false,
       "quality_metrics": {
         "durationS": 751.922993,
@@ -1073,7 +1073,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "808a5618-a5dc-4d36-93a8-c502c3eb53c5",
@@ -1095,7 +1095,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "840e8b6b-8428-48d6-8af8-d239d7c64f5c",
@@ -1117,13 +1117,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "84e66e74-8d4f-420a-ad01-0ada95153ad0",
       "action_acc": 0.8157894736842105,
       "score_acc": 0.5,
-      "hota": null,
+      "hota": 0.9512894523135932,
       "is_failure": true,
       "quality_metrics": {
         "durationS": 680.672269,
@@ -1139,7 +1139,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "85108567-a028-4303-87a7-5004a87603a5",
@@ -1161,7 +1161,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "854bb250-3e91-47d2-944d-f62413e3cf45",
@@ -1183,7 +1183,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "90266c1d-5ef9-4285-8ed9-07f4b7116021",
@@ -1205,7 +1205,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "9170269b-8259-462e-8a23-28da51026410",
@@ -1227,13 +1227,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "920ba69d-2526-4e6c-a357-c44af3bf5c99",
       "action_acc": 1.0,
       "score_acc": null,
-      "hota": null,
+      "hota": 0.9469136772902518,
       "is_failure": false,
       "quality_metrics": {
         "durationS": 290.180998,
@@ -1249,7 +1249,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "950fbe5d-fdad-4862-b05d-8b374bdd5ec6",
@@ -1271,7 +1271,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "9a6a9499-ca96-45e3-9f15-d5902c070c0a",
@@ -1293,7 +1293,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "9e9a2327-8766-4515-9188-47293f9aad85",
@@ -1315,13 +1315,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "a5866029-7cf4-42d6-adc2-8e28111ffd81",
       "action_acc": 0.7142857142857143,
       "score_acc": null,
-      "hota": null,
+      "hota": 0.9164374780886864,
       "is_failure": true,
       "quality_metrics": {
         "durationS": 180.361995,
@@ -1337,13 +1337,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "a7ee3d38-a3a9-4dcd-a2af-e0617997e708",
       "action_acc": 0.9090909090909091,
       "score_acc": null,
-      "hota": null,
+      "hota": 0.9001553573814493,
       "is_failure": false,
       "quality_metrics": {
         "durationS": 464.702993,
@@ -1359,7 +1359,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "a9f053a9-7277-4085-9d9c-0ef769a61486",
@@ -1381,7 +1381,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "ab2ccb1d-80fb-4d0e-b90a-a11b65a3498c",
@@ -1403,7 +1403,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "ab4edcdc-7335-44d1-b944-b201feb5a262",
@@ -1425,13 +1425,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "ae81fff5-a80e-4f77-8315-2e3377ce7737",
       "action_acc": 0.9,
       "score_acc": 0.8571428571428571,
-      "hota": null,
+      "hota": 0.9784747250849954,
       "is_failure": false,
       "quality_metrics": {
         "durationS": 809.726259,
@@ -1447,7 +1447,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "b026dc6c-0858-42f2-8513-fc5ee7dbdd93",
@@ -1468,7 +1468,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "b03b461b-b1c1-4f53-8cce-79c0afe8a049",
@@ -1490,13 +1490,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "b097dd2a-6953-4e0e-a603-5be3552f462e",
       "action_acc": 0.9629629629629629,
       "score_acc": 0.6666666666666666,
-      "hota": null,
+      "hota": 0.9569936328750129,
       "is_failure": true,
       "quality_metrics": {
         "durationS": 230.745011,
@@ -1512,7 +1512,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "b5fb0594-d64f-4a0d-bad9-de8fc36414d0",
@@ -1534,7 +1534,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "bbd880f2-2cc1-429c-96c0-9b72222607cb",
@@ -1556,7 +1556,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "beb70f61-de8a-4805-a7ae-e8c7199d7275",
@@ -1578,13 +1578,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "c6e4c876-beca-4cb8-9cce-4a4fc70553f1",
       "action_acc": 0.9615384615384616,
       "score_acc": null,
-      "hota": null,
+      "hota": 0.7715899452709735,
       "is_failure": false,
       "quality_metrics": {
         "durationS": 235.068167,
@@ -1600,13 +1600,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "cb3b68f0-74df-4ab3-9e14-e76ac62ecb2d",
       "action_acc": 0.8846153846153846,
       "score_acc": 0.25,
-      "hota": null,
+      "hota": 0.9447785140296852,
       "is_failure": true,
       "quality_metrics": {
         "durationS": 174.433991,
@@ -1622,13 +1622,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "ce4c67a1-f99c-4e87-9a3e-a34c216d4761",
       "action_acc": 1.0,
       "score_acc": 1.0,
-      "hota": null,
+      "hota": 0.9913511889150011,
       "is_failure": false,
       "quality_metrics": {
         "durationS": 217.071995,
@@ -1644,7 +1644,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "d07ce9e1-aa5d-4875-97c4-f565bbfc14f3",
@@ -1666,7 +1666,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "d3486f0b-6601-43d8-a60f-6ecc4874c408",
@@ -1688,13 +1688,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "d5a6932f-e853-469b-ad9b-8c811a058526",
       "action_acc": 0.9347826086956522,
       "score_acc": 0.5,
-      "hota": null,
+      "hota": 0.9665049076579726,
       "is_failure": true,
       "quality_metrics": {
         "durationS": 757.4,
@@ -1710,13 +1710,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "dd042609-e22e-4f60-83ed-038897c88c32",
       "action_acc": 0.875,
       "score_acc": 0.5555555555555556,
-      "hota": null,
+      "hota": 0.9737533446676603,
       "is_failure": true,
       "quality_metrics": {
         "durationS": 822.763,
@@ -1732,7 +1732,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "eb693a6f-30df-4265-9291-eea46b6a1426",
@@ -1754,13 +1754,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "edc81438-10bc-431d-ae88-5c609f3fae93",
       "action_acc": 1.0,
       "score_acc": null,
-      "hota": null,
+      "hota": 0.9232124243933966,
       "is_failure": false,
       "quality_metrics": {
         "durationS": 190.6905,
@@ -1776,13 +1776,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "fb83f876-7288-44ce-b8e4-4151bc7da4df",
       "action_acc": 0.9428571428571428,
       "score_acc": 1.0,
-      "hota": null,
+      "hota": 0.9890790376725836,
       "is_failure": false,
       "quality_metrics": {
         "durationS": 188.901571,
@@ -1798,13 +1798,13 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     },
     {
       "video_id": "ff175026-bd5b-4349-b390-188438da2005",
       "action_acc": 0.8837209302325582,
       "score_acc": 0.875,
-      "hota": null,
+      "hota": 0.8336390876394694,
       "is_failure": false,
       "quality_metrics": {
         "durationS": 950.166667,
@@ -1820,7 +1820,7 @@
       },
       "quality_error": null,
       "pipeline_error": null,
-      "hota_error": "UndefinedColumn: column v.characteristics_json does not exist\nLINE 20:             v.characteristics_json,\n                     ^"
+      "hota_error": null
     }
   ]
 }

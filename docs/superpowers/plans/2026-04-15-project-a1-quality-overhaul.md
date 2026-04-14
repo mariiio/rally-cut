@@ -2656,3 +2656,17 @@ git commit -am "chore: e2e verification — all scenarios pass"
 **Follow-ups created:**
 - Analyze-anyway modal for soft-gate (currently passes through — spec allows this, A2 adds the modal).
 - `BatchTrackingJob.appendRally`, webhook idempotency, debounced match-analysis, `AnalysisPhase` refactor — all A2.
+
+---
+
+## Deviations from the as-written plan (recorded 2026-04-15 post-review)
+
+Keep these for future readers — the plan above is frozen at its approved-state; these bullets describe what actually shipped:
+
+- **CLIP beach-VB classifier dropped for A1.** `open-clip` wasn't installed in the runtime image and the "no court detected" branch of `camera_geometry` already covers the same block case (lift 2.13 vs CLIP's untested value). The module `analysis/rallycut/quality/beach_vb_classifier.py` is preserved (unused) for Project C's richer sport-type disambiguation.
+- **The 3×-lift calibration rule was not applied as a drop rule.** GT (63 videos, 762 rallies) is curated well-filmed content — it has no negative examples for tilt/dark/shaky/rotated, so those checks never fired and couldn't be calibrated. Checks that *did* fire in GT (`camera_too_far`, `crowded_scene`, `shaky_camera`) showed lift < 1 — strong evidence they'd mis-fire in production too. Rather than dropping them, thresholds were tightened well beyond the calibration-observed range (e.g. `shaky_camera` 0.10 → 0.20, `camera_too_far` 0.10 → 0.08, `crowded_scene` 5 → 10) so they fire only on clearly-extreme cases. Post-launch validation against user-supplied negative examples is the follow-up tuning signal. See `analysis/reports/quality_calibration_2026-04-14.json`.
+- **Old `assess-quality` CLI + `analysis/rallycut/cli/commands/assess_quality.py` deleted.** The spec said delete; the early implementation missed it and kept calling the old CLI for ~2–3 s per upload with the result silently discarded. Cleaned up post-review along with the caller in `processingService.ts`.
+- **ffmpeg.wasm replaced by `HTMLVideoElement` + `<canvas>.toBlob()`** for client-side frame extraction. Functionally equivalent, zero new dependencies.
+- **`REJECTED` status self-reverts.** When a preflight re-run no longer has any block-tier issue, the video status flips back `REJECTED → UPLOADED`. Prevents a legitimate video from being stuck rejected after the user fixes the underlying issue (e.g. re-uploads with a better camera angle).
+- **Post-tracking characteristics writes deleted, not merged.** The spec described merging tracking metrics into the report. In practice, nothing on the web side read `cameraDistance` / `sceneComplexity` / `ballDetectionRate` after the banner swap — so those writes are gone entirely. Re-introduce only if a follow-up feature needs them.
+- **Calibration report is committed** at `analysis/reports/quality_calibration_2026-04-14.json` alongside the code. Future threshold tuning should update both the report and the code constants in the same commit.

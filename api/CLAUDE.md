@@ -94,7 +94,7 @@ Cleanup job: `cleanupExpiredContent()` handles both phases per tier.
 
 ### Video Processing (after upload)
 1. **Poster**: Synchronous 1280px JPEG extraction (~2s)
-2. **Brightness**: Computed during poster generation (grayscale frame sampling), stored in `Video.characteristicsJson`
+2. **Brightness**: Computed during poster generation (grayscale frame sampling), stored in `Video.qualityReportJson.brightness`
 3. **Optimization**: Async H.264 + faststart if needed (high bitrate or moov not at start)
 4. **Proxy**: 720p version for faster editing
 
@@ -137,12 +137,17 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
 - **Permission checks**: `canAccessVideoRallies()` checks both direct video membership and session membership
 
 ### Analysis Pipeline
-- `POST /v1/videos/:id/assess-quality` → quality check + court auto-detection (parallel CLI)
-  - Downloads video from S3 to temp file, runs `assess-quality` and `detect-court` CLI commands
-  - Auto-saves court calibration if confidence > 0.7
-  - Returns quality warnings + court detection result
+- `POST /v1/videos/preflight-preview` → client-side pre-upload gate
+  - Multipart: `frames[]` (JPEG thumbnails, up to 10 × 2 MB each) + `width`, `height`, `durationS` form fields
+  - Runs `rallycut preview-check` on the first frame: court-keypoint detection → `camera_geometry` check
+  - Returns `{ pass: boolean, issues: Issue[] }`; web aborts the upload if any `block`-tier issue fires
+  - **No Video row required** — this endpoint runs before upload commits
+- `POST /v1/videos/:id/assess-quality` → full preflight quality check (runs on "Analyze Match")
+  - Downloads video from S3, runs `rallycut preflight` → metadata, brightness, camera geometry, camera distance, crowd density, shakiness
+  - Merges result into `Video.qualityReportJson`; sets `Video.status = REJECTED` if any block-tier issue fires, reverts REJECTED → UPLOADED if a re-run passes
 - `GET /v1/videos/:id/analysis-pipeline-status` → unified pipeline status (quality, detection, tracking, stats)
-- **Service**: `qualityService.ts` handles quality assessment, court detection, pipeline status
+- **Service**: `qualityService.ts` (entry points + CLI spawning) + `qualityReport.ts` (pure merge/pick-top-3 helpers, test-safe)
+- **Check thresholds**: hand-picked conservative defaults; the 63-video GT was insufficient for 3×-lift calibration because GT has no negative examples for tilt/dark/shaky. Tune from user-reported false positives post-launch.
 
 ### Court Calibration
 - `PUT /v1/videos/:id/court-calibration` → save 4 corner points (persisted per video)
@@ -160,7 +165,7 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
   - Body: `{ trackA: number, trackB: number, fromFrame: number }`
   - Fixes YOLO+BoT-SORT ID switches when players overlap/cross paths
   - Only modifies `positionsJson` (filtered positions), not `rawPositionsJson`
-- After tracking completes, `Video.characteristicsJson` is updated with `cameraDistance` (median primary track bbox height) and `sceneComplexity` (avg people per frame), merged with existing brightness data
+- Post-tracking, no direct writes to `Video.qualityReportJson` occur (tracking metrics are rally-scoped in `PlayerTrack.qualityReportJson`). Earlier cameraDistance/sceneComplexity writes were removed in A1 — nothing in the web banner reads them.
 - **Batch tracking**: `POST /v1/videos/:id/track-all-rallies` tracks all confirmed rallies
   - If `MODAL_TRACKING_URL` is set: sends to Modal T4 GPU (~80 FPS, ~$0.02/batch)
   - If not set: processes locally on CPU (~6 FPS, blocks API server)
@@ -193,8 +198,9 @@ User → Session[] → Video[] → Rally[]
 Rally → RallyCameraEdit → CameraKeyframe[]  # Instagram-style zoom/pan
 
 Video.status: PENDING → UPLOADED → DETECTING → DETECTED → ERROR
+              (plus REJECTED, set by preflight on block-tier issues; reverts to UPLOADED if re-run passes)
 Video.processingStatus: PENDING → PROCESSING → COMPLETED/FAILED (separate from status)
-Video.characteristicsJson: { brightness, cameraDistance, sceneComplexity, version }
+Video.qualityReportJson: { version: 2, issues: Issue[], preflight?, brightness?, resolution? }
 ```
 
 Key tables: User, Session, Video, Rally, Highlight, ExportJob, RallyDetectionJob, SessionShare, VideoShare

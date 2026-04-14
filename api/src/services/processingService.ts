@@ -101,17 +101,6 @@ export async function generatePosterImmediate(
       console.log(`[POSTER] Failed to compute brightness for ${videoId}:`, err);
     }
 
-    // Run early quality assessment (YOLO on sample frames, ~2-3s)
-    let qualityAssessment: Record<string, unknown> | undefined;
-    try {
-      qualityAssessment = await runQualityAssessment(inputPath) ?? undefined;
-      if (qualityAssessment) {
-        console.log(`[POSTER] Video ${videoId} quality: ${qualityAssessment.expectedQuality} (${(qualityAssessment.warnings as string[])?.length ?? 0} warnings)`);
-      }
-    } catch (err) {
-      console.log(`[POSTER] Failed to assess quality for ${videoId}:`, err);
-    }
-
     // Generate S3 key for poster
     const keyParts = s3Key.split("/");
     const filename = keyParts.pop()!;
@@ -150,18 +139,16 @@ export async function generatePosterImmediate(
     // Build qualityReportJson patch from brightness signal (no issues emitted here;
     // preflight/upload checks own issue generation).
     let qualityReportPatch: Partial<QualityReport> | undefined;
-    if (brightnessMean != null || qualityAssessment) {
+    if (brightnessMean != null) {
       const existing = await prisma.video.findUnique({
         where: { id: videoId },
         select: { qualityReportJson: true },
       });
       const prior = (existing?.qualityReportJson as Partial<QualityReport> | null) ?? {};
-      const patch: Partial<QualityReport> = {
-        version: 2,
-        issues: [],
-        ...(brightnessMean != null ? { brightness: brightnessMean } : {}),
-      };
-      qualityReportPatch = mergeQualityReports([prior, patch]);
+      qualityReportPatch = mergeQualityReports([
+        prior,
+        { version: 2, issues: [], brightness: brightnessMean },
+      ]);
     }
 
     // Update database with poster and extracted metadata
@@ -871,68 +858,6 @@ function runFFprobe(args: string[]): Promise<string> {
         reject(new Error(`FFprobe exited with code ${code}: ${stderr.slice(-500)}`));
       }
     });
-  });
-}
-
-/**
- * Run early quality assessment using YOLO on sample frames.
- * Calls `rallycut assess-quality` CLI. Returns null if unavailable.
- */
-async function runQualityAssessment(
-  videoPath: string
-): Promise<Record<string, unknown> | null> {
-  const analysisDir = path.resolve(
-    path.dirname(new URL(import.meta.url).pathname),
-    "../../../analysis"
-  );
-
-  return new Promise((resolve) => {
-    const args = [
-      "run",
-      "rallycut",
-      "assess-quality",
-      videoPath,
-      "--json",
-      "--quiet",
-    ];
-
-    const child = spawn("uv", args, {
-      cwd: analysisDir,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
-    });
-
-    let stdout = "";
-    child.stdout?.on("data", (data: Buffer) => {
-      stdout += data.toString();
-    });
-
-    child.on("error", () => {
-      resolve(null); // CLI not available — skip silently
-    });
-
-    child.on("exit", (code) => {
-      if (code !== 0) {
-        resolve(null);
-        return;
-      }
-      try {
-        const result = JSON.parse(stdout.trim());
-        resolve(result);
-      } catch {
-        resolve(null);
-      }
-    });
-
-    // Timeout after 30s — quality assessment shouldn't take longer
-    setTimeout(() => {
-      try {
-        child.kill();
-      } catch {
-        // Ignore
-      }
-      resolve(null);
-    }, 30000);
   });
 }
 

@@ -57,10 +57,21 @@ export async function runPreflightChecks(videoId: string, userId: string): Promi
       data: { qualityReportJson: merged as unknown as Prisma.InputJsonValue },
     });
 
-    if (merged.issues.some((i) => i.tier === 'block')) {
+    // Sync Video.status with the block-issue state:
+    //   - block issue present → mark REJECTED (disables Analyze button)
+    //   - no block issue AND status was REJECTED from a previous run → revert to UPLOADED
+    //     so the user can proceed after fixing the underlying issue (e.g. replacing the file)
+    //   - otherwise leave status alone (preserves DETECTING/DETECTED)
+    const hasBlock = merged.issues.some((i) => i.tier === 'block');
+    if (hasBlock && video.status !== VideoStatus.REJECTED) {
       await prisma.video.update({
         where: { id: videoId },
         data: { status: VideoStatus.REJECTED },
+      });
+    } else if (!hasBlock && video.status === VideoStatus.REJECTED) {
+      await prisma.video.update({
+        where: { id: videoId },
+        data: { status: VideoStatus.UPLOADED },
       });
     }
 
@@ -333,7 +344,10 @@ function runPreviewCli(
     });
     let stdout = '';
     let stderr = '';
+    let settled = false;
     const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
       try {
         child.kill();
       } catch {
@@ -347,7 +361,15 @@ function runPreviewCli(
     child.stderr?.on('data', (d: Buffer) => {
       stderr += d.toString();
     });
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error(`preview-check failed to start: ${err.message}`));
+    });
     child.on('exit', (code) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       if (code !== 0) {
         return reject(new Error(`preview-check exited ${code}: ${stderr.slice(-500)}`));
