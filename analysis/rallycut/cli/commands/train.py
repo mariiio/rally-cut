@@ -1723,10 +1723,14 @@ def _export_action_ground_truth(
 def _export_score_ground_truth(
     video_content_hashes: set[str],
 ) -> dict[str, Any] | None:
-    """Export score-tracking GT (rallies.gt_serving_team) from DB.
+    """Export score-tracking GT from DB.
 
-    Returns rallies whose video is in the current dataset and whose
-    ``gt_serving_team`` is non-NULL. Returns ``None`` if no such rallies exist.
+    Returns rallies whose video is in the current dataset and for which at
+    least one of ``gt_serving_team`` / ``gt_side_switch`` is non-NULL.
+    Per-entry, each column is omitted when its DB value is NULL so
+    downstream restore never sees an explicit ``null``.
+
+    Returns ``None`` if no qualifying rallies exist.
     """
     from rallycut.evaluation.db import get_connection
 
@@ -1739,11 +1743,15 @@ def _export_score_ground_truth(
                     v.content_hash,
                     r.id,
                     v.id AS video_id,
-                    r.gt_serving_team
+                    r.gt_serving_team,
+                    r.gt_side_switch
                 FROM rallies r
                 JOIN videos v ON v.id = r.video_id
-                WHERE r.gt_serving_team IS NOT NULL
-                  AND v.deleted_at IS NULL
+                WHERE v.deleted_at IS NULL
+                  AND (
+                      r.gt_serving_team IS NOT NULL
+                   OR r.gt_side_switch IS NOT NULL
+                  )
                 ORDER BY v.content_hash, r.start_ms
                 """
             )
@@ -1756,17 +1764,29 @@ def _export_score_ground_truth(
 
     rallies: list[dict[str, Any]] = []
     video_ids_seen: set[str] = set()
+    total_with_serving = 0
+    total_with_side_switch = 0
 
     for row in rows:
         content_hash = str(row[0])
         if content_hash not in video_content_hashes:
             continue
-        rallies.append({
+
+        entry: dict[str, Any] = {
             "rally_id": str(row[1]),
             "video_id": str(row[2]),
             "content_hash": content_hash,
-            "gt_serving_team": str(row[3]),
-        })
+        }
+        serving = row[3]
+        side_switch = row[4]
+        if serving is not None:
+            entry["gt_serving_team"] = str(serving)
+            total_with_serving += 1
+        if side_switch is not None:
+            entry["gt_side_switch"] = bool(side_switch)
+            total_with_side_switch += 1
+
+        rallies.append(entry)
         video_ids_seen.add(str(row[2]))
 
     if not rallies:
@@ -1776,6 +1796,8 @@ def _export_score_ground_truth(
         "stats": {
             "total_rallies": len(rallies),
             "total_videos": len(video_ids_seen),
+            "total_with_serving": total_with_serving,
+            "total_with_side_switch": total_with_side_switch,
         },
         "rallies": rallies,
     }

@@ -24,15 +24,19 @@ def _set_rows(conn: MagicMock, rows: list[tuple]) -> MagicMock:
 
 
 class TestExportScoreGroundTruth:
-    def test_returns_dict_with_filtered_rallies(self, fake_conn: MagicMock) -> None:
+    def test_returns_entries_with_either_field(
+        self, fake_conn: MagicMock
+    ) -> None:
         from rallycut.cli.commands.train import _export_score_ground_truth
 
+        # Rows shape: (content_hash, rally_id, video_id, gt_serving_team, gt_side_switch)
         _set_rows(
             fake_conn,
             [
-                ("hashA", "rally-1", "video-1", "A"),
-                ("hashB", "rally-2", "video-2", "B"),
-                ("hashC", "rally-3", "video-3", "A"),  # not in dataset
+                ("hashA", "rally-serving-only", "video-1", "A", None),
+                ("hashA", "rally-switch-only", "video-1", None, True),
+                ("hashB", "rally-both", "video-2", "B", False),
+                ("hashC", "rally-other", "video-3", "A", True),  # not in dataset
             ],
         )
 
@@ -42,17 +46,31 @@ class TestExportScoreGroundTruth:
             result = _export_score_ground_truth({"hashA", "hashB"})
 
         assert result is not None
-        assert result["stats"] == {"total_rallies": 2, "total_videos": 2}
-        rally_ids = {r["rally_id"] for r in result["rallies"]}
-        assert rally_ids == {"rally-1", "rally-2"}
-        for entry in result["rallies"]:
-            assert set(entry.keys()) == {
-                "rally_id",
-                "video_id",
-                "content_hash",
-                "gt_serving_team",
-            }
-            assert entry["gt_serving_team"] in {"A", "B"}
+        assert result["stats"] == {
+            "total_rallies": 3,
+            "total_videos": 2,
+            "total_with_serving": 2,
+            "total_with_side_switch": 2,
+        }
+
+        by_id = {r["rally_id"]: r for r in result["rallies"]}
+        assert set(by_id) == {
+            "rally-serving-only",
+            "rally-switch-only",
+            "rally-both",
+        }
+
+        serving_only = by_id["rally-serving-only"]
+        assert serving_only["gt_serving_team"] == "A"
+        assert "gt_side_switch" not in serving_only  # NULL in DB → omitted
+
+        switch_only = by_id["rally-switch-only"]
+        assert switch_only["gt_side_switch"] is True
+        assert "gt_serving_team" not in switch_only  # NULL in DB → omitted
+
+        both = by_id["rally-both"]
+        assert both["gt_serving_team"] == "B"
+        assert both["gt_side_switch"] is False
 
     def test_returns_none_when_no_rows(self, fake_conn: MagicMock) -> None:
         from rallycut.cli.commands.train import _export_score_ground_truth
@@ -68,7 +86,9 @@ class TestExportScoreGroundTruth:
     ) -> None:
         from rallycut.cli.commands.train import _export_score_ground_truth
 
-        _set_rows(fake_conn, [("hashZ", "rally-9", "video-9", "A")])
+        _set_rows(
+            fake_conn, [("hashZ", "rally-9", "video-9", "A", None)]
+        )
         with patch(
             "rallycut.evaluation.db.get_connection", return_value=fake_conn
         ):
