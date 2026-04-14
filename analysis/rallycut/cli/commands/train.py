@@ -17,6 +17,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from rallycut.core.proxy import ProxyGenerator
+from rallycut.evaluation.db import get_connection
 from rallycut.evaluation.ground_truth import EvaluationVideo, load_evaluation_videos
 from rallycut.evaluation.video_resolver import VideoResolver
 from rallycut.training.config import TrainingConfig
@@ -1717,6 +1718,65 @@ def _export_action_ground_truth(
             "total_rallies_with_action_gt": len(rallies),
             "total_videos": len(video_ids_seen),
         },
+    }
+
+
+def _export_score_ground_truth(
+    video_content_hashes: set[str],
+) -> dict[str, Any] | None:
+    """Export score-tracking GT (rallies.gt_serving_team) from DB.
+
+    Returns rallies whose video is in the current dataset and whose
+    ``gt_serving_team`` is non-NULL. Returns ``None`` if no such rallies exist.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    v.content_hash,
+                    r.id,
+                    v.id AS video_id,
+                    r.gt_serving_team
+                FROM rallies r
+                JOIN videos v ON v.id = r.video_id
+                WHERE r.gt_serving_team IS NOT NULL
+                  AND v.deleted_at IS NULL
+                ORDER BY v.content_hash, r.start_ms
+                """
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return None
+
+    rallies: list[dict[str, Any]] = []
+    video_ids_seen: set[str] = set()
+
+    for row in rows:
+        content_hash = str(row[0])
+        if content_hash not in video_content_hashes:
+            continue
+        rallies.append({
+            "rally_id": str(row[1]),
+            "video_id": str(row[2]),
+            "content_hash": content_hash,
+            "gt_serving_team": str(row[3]),
+        })
+        video_ids_seen.add(str(row[2]))
+
+    if not rallies:
+        return None
+
+    return {
+        "stats": {
+            "total_rallies": len(rallies),
+            "total_videos": len(video_ids_seen),
+        },
+        "rallies": rallies,
     }
 
 
