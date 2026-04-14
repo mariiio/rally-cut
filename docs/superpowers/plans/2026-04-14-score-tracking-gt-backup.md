@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Round-trip `rallies.gt_serving_team` through S3 by extending the existing `train export-dataset` / `push` / `pull` / `restore` pipeline with a new optional `score_ground_truth.json` artifact.
+**Goal:** Round-trip `rallies.gt_serving_team` and `rallies.gt_side_switch` through S3 by extending the existing `train export-dataset` / `push` / `pull` / `restore` pipeline with a new optional `score_ground_truth.json` artifact.
 
 **Architecture:** Mirror the existing optional-GT pattern (tracking, action, player-matching). Add an export helper, write the JSON when non-empty, append to push/pull metadata files, and add a NULL-only restore that never clobbers newer DB labels.
 
@@ -37,6 +37,11 @@
 **Files:**
 - Modify: `analysis/rallycut/cli/commands/train.py` (insert after `_export_action_ground_truth`, line 1720)
 - Test: `analysis/tests/unit/test_score_gt_backup.py` (new)
+
+> **Scope update (2026-04-14):** After Task 1's first pass landed, scope
+> expanded to also back up `rallies.gt_side_switch` (co-labeled with
+> `gt_serving_team` via the same Score GT UI). See Task 1b for the
+> extension.
 
 - [ ] **Step 1: Create the failing test file**
 
@@ -215,6 +220,205 @@ git commit -m "feat: add _export_score_ground_truth helper"
 
 ---
 
+## Task 1b: Extend helper to include `gt_side_switch`
+
+**Files:**
+- Modify: `analysis/rallycut/cli/commands/train.py` (the `_export_score_ground_truth` helper added in Task 1)
+- Modify: `analysis/tests/unit/test_score_gt_backup.py` (the `TestExportScoreGroundTruth` class)
+
+- [ ] **Step 1: Update the failing tests first**
+
+Replace the body of `TestExportScoreGroundTruth` in `analysis/tests/unit/test_score_gt_backup.py` with:
+
+```python
+class TestExportScoreGroundTruth:
+    def test_returns_entries_with_either_field(
+        self, fake_conn: MagicMock
+    ) -> None:
+        from rallycut.cli.commands.train import _export_score_ground_truth
+
+        # Rows shape: (content_hash, rally_id, video_id, gt_serving_team, gt_side_switch)
+        _set_rows(
+            fake_conn,
+            [
+                ("hashA", "rally-serving-only", "video-1", "A", None),
+                ("hashA", "rally-switch-only", "video-1", None, True),
+                ("hashB", "rally-both", "video-2", "B", False),
+                ("hashC", "rally-other", "video-3", "A", True),  # not in dataset
+            ],
+        )
+
+        with patch(
+            "rallycut.evaluation.db.get_connection", return_value=fake_conn
+        ):
+            result = _export_score_ground_truth({"hashA", "hashB"})
+
+        assert result is not None
+        assert result["stats"] == {
+            "total_rallies": 3,
+            "total_videos": 2,
+            "total_with_serving": 2,
+            "total_with_side_switch": 2,
+        }
+
+        by_id = {r["rally_id"]: r for r in result["rallies"]}
+        assert set(by_id) == {
+            "rally-serving-only",
+            "rally-switch-only",
+            "rally-both",
+        }
+
+        serving_only = by_id["rally-serving-only"]
+        assert serving_only["gt_serving_team"] == "A"
+        assert "gt_side_switch" not in serving_only  # NULL in DB → omitted
+
+        switch_only = by_id["rally-switch-only"]
+        assert switch_only["gt_side_switch"] is True
+        assert "gt_serving_team" not in switch_only  # NULL in DB → omitted
+
+        both = by_id["rally-both"]
+        assert both["gt_serving_team"] == "B"
+        assert both["gt_side_switch"] is False
+
+    def test_returns_none_when_no_rows(self, fake_conn: MagicMock) -> None:
+        from rallycut.cli.commands.train import _export_score_ground_truth
+
+        _set_rows(fake_conn, [])
+        with patch(
+            "rallycut.evaluation.db.get_connection", return_value=fake_conn
+        ):
+            assert _export_score_ground_truth({"hashA"}) is None
+
+    def test_returns_none_when_all_filtered_out(
+        self, fake_conn: MagicMock
+    ) -> None:
+        from rallycut.cli.commands.train import _export_score_ground_truth
+
+        _set_rows(
+            fake_conn, [("hashZ", "rally-9", "video-9", "A", None)]
+        )
+        with patch(
+            "rallycut.evaluation.db.get_connection", return_value=fake_conn
+        ):
+            assert _export_score_ground_truth({"hashA"}) is None
+```
+
+- [ ] **Step 2: Run tests to confirm they fail**
+
+Run: `cd /Users/mario/Personal/Projects/RallyCut/analysis && uv run pytest tests/unit/test_score_gt_backup.py::TestExportScoreGroundTruth -v`
+
+Expected: the first test fails because the current helper's SQL does not return `gt_side_switch` and does not omit NULL fields per-entry.
+
+- [ ] **Step 3: Rewrite the helper**
+
+Replace the body of `_export_score_ground_truth` in `analysis/rallycut/cli/commands/train.py` with:
+
+```python
+def _export_score_ground_truth(
+    video_content_hashes: set[str],
+) -> dict[str, Any] | None:
+    """Export score-tracking GT from DB.
+
+    Returns rallies whose video is in the current dataset and for which at
+    least one of ``gt_serving_team`` / ``gt_side_switch`` is non-NULL.
+    Per-entry, each column is omitted when its DB value is NULL so
+    downstream restore never sees an explicit ``null``.
+
+    Returns ``None`` if no qualifying rallies exist.
+    """
+    from rallycut.evaluation.db import get_connection
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    v.content_hash,
+                    r.id,
+                    v.id AS video_id,
+                    r.gt_serving_team,
+                    r.gt_side_switch
+                FROM rallies r
+                JOIN videos v ON v.id = r.video_id
+                WHERE v.deleted_at IS NULL
+                  AND (
+                      r.gt_serving_team IS NOT NULL
+                   OR r.gt_side_switch IS NOT NULL
+                  )
+                ORDER BY v.content_hash, r.start_ms
+                """
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return None
+
+    rallies: list[dict[str, Any]] = []
+    video_ids_seen: set[str] = set()
+    total_with_serving = 0
+    total_with_side_switch = 0
+
+    for row in rows:
+        content_hash = str(row[0])
+        if content_hash not in video_content_hashes:
+            continue
+
+        entry: dict[str, Any] = {
+            "rally_id": str(row[1]),
+            "video_id": str(row[2]),
+            "content_hash": content_hash,
+        }
+        serving = row[3]
+        side_switch = row[4]
+        if serving is not None:
+            entry["gt_serving_team"] = str(serving)
+            total_with_serving += 1
+        if side_switch is not None:
+            entry["gt_side_switch"] = bool(side_switch)
+            total_with_side_switch += 1
+
+        rallies.append(entry)
+        video_ids_seen.add(str(row[2]))
+
+    if not rallies:
+        return None
+
+    return {
+        "stats": {
+            "total_rallies": len(rallies),
+            "total_videos": len(video_ids_seen),
+            "total_with_serving": total_with_serving,
+            "total_with_side_switch": total_with_side_switch,
+        },
+        "rallies": rallies,
+    }
+```
+
+- [ ] **Step 4: Run tests to confirm they pass**
+
+Run: `cd /Users/mario/Personal/Projects/RallyCut/analysis && uv run pytest tests/unit/test_score_gt_backup.py::TestExportScoreGroundTruth -v`
+
+Expected: 3 passed.
+
+- [ ] **Step 5: Lint and type-check**
+
+Run: `cd /Users/mario/Personal/Projects/RallyCut/analysis && uv run ruff check rallycut/cli/commands/train.py tests/unit/test_score_gt_backup.py && uv run mypy rallycut/cli/commands/train.py`
+
+Expected: clean.
+
+- [ ] **Step 6: Commit**
+
+```bash
+cd /Users/mario/Personal/Projects/RallyCut
+git add analysis/rallycut/cli/commands/train.py analysis/tests/unit/test_score_gt_backup.py
+git commit -m "feat: include gt_side_switch in score_ground_truth export"
+```
+
+---
+
 ## Task 2: Wire score GT into `export_dataset`
 
 **Files:**
@@ -225,7 +429,7 @@ git commit -m "feat: add _export_score_ground_truth helper"
 In `export_dataset()`, immediately after the existing action-GT block ending at line 1916 (the `rprint(f"  Action GT: …")` line), insert:
 
 ```python
-    # Export score-tracking ground truth (rallies.gt_serving_team)
+    # Export score-tracking ground truth (gt_serving_team + gt_side_switch)
     score_gt = _export_score_ground_truth(content_hashes)
     if score_gt:
         score_gt_path = dataset_dir / "score_ground_truth.json"
@@ -236,6 +440,8 @@ In `export_dataset()`, immediately after the existing action-GT block ending at 
         rprint(
             f"  Score GT: [green]{sgt_stats['total_rallies']}[/green] rallies"
             f" across {sgt_stats['total_videos']} videos"
+            f" ([cyan]{sgt_stats['total_with_serving']}[/cyan] serving,"
+            f" [cyan]{sgt_stats['total_with_side_switch']}[/cyan] side-switch)"
         )
 ```
 
@@ -363,25 +569,31 @@ Append to `analysis/tests/unit/test_score_gt_backup.py`:
 class TestRestoreScoreGroundTruth:
     def _write_payload(self, tmp_path: Path) -> Path:
         payload = {
-            "stats": {"total_rallies": 3, "total_videos": 1},
+            "stats": {
+                "total_rallies": 3,
+                "total_videos": 1,
+                "total_with_serving": 2,
+                "total_with_side_switch": 2,
+            },
             "rallies": [
                 {
-                    "rally_id": "rally-A",
+                    "rally_id": "rally-serving-writable",
                     "video_id": "vid-1",
                     "content_hash": "hash1",
                     "gt_serving_team": "A",
+                    "gt_side_switch": True,
                 },
                 {
-                    "rally_id": "rally-B",
+                    "rally_id": "rally-switch-only",
                     "video_id": "vid-1",
                     "content_hash": "hash1",
-                    "gt_serving_team": "B",
+                    "gt_side_switch": False,
                 },
                 {
                     "rally_id": "rally-missing",
                     "video_id": "vid-1",
                     "content_hash": "hash1",
-                    "gt_serving_team": "A",
+                    "gt_serving_team": "B",
                 },
             ],
         }
@@ -399,18 +611,40 @@ class TestRestoreScoreGroundTruth:
 
         path = self._write_payload(tmp_path)
 
-        # Mock cursor: rowcount per UPDATE = 1, 0, 0 → updated, no-op (already
-        # set), missing rally id.
-        rowcounts = iter([1, 0, 0])
-        cursor = MagicMock()
-        cursor.execute.side_effect = lambda *a, **k: setattr(
-            cursor, "rowcount", next(rowcounts)
+        # The helper runs, per rally:
+        #   1) SELECT id FROM rallies WHERE id = %s   (existence check)
+        #   2) UPDATE gt_serving_team (only if the field is in the JSON)
+        #   3) UPDATE gt_side_switch  (only if the field is in the JSON)
+        # Rally 1 has both fields, rally 2 has only side_switch, rally 3 is
+        # missing from DB (existence check fails → no UPDATEs).
+        #
+        # For rally 1: serving UPDATE rowcount=1, side_switch UPDATE rowcount=0
+        #              (already set) → count as restored (serving wrote).
+        # For rally 2: side_switch UPDATE rowcount=1 → count as restored.
+        # For rally 3: existence SELECT returns None → error, no UPDATE.
+        existence_results = iter(
+            [
+                ("rally-serving-writable",),  # rally 1 exists
+                ("rally-switch-only",),       # rally 2 exists
+                None,                          # rally 3 missing
+            ]
         )
+        update_rowcounts = iter([1, 0, 1])  # rally1.serving, rally1.switch, rally2.switch
 
-        # Mock SELECT-existence query: rally-A and rally-B exist, rally-missing
-        # does not.
-        existence = iter([("rally-A",), ("rally-B",), None])
-        cursor.fetchone.side_effect = lambda: next(existence)
+        cursor = MagicMock()
+
+        def execute_side_effect(sql: str, _params: Any = None) -> None:
+            sql_lower = sql.lower()
+            if "select id from rallies" in sql_lower:
+                cursor._last = "select"
+            elif "update rallies" in sql_lower:
+                cursor._last = "update"
+                cursor.rowcount = next(update_rowcounts)
+            else:
+                cursor._last = "other"
+
+        cursor.execute.side_effect = execute_side_effect
+        cursor.fetchone.side_effect = lambda: next(existence_results)
 
         conn = MagicMock()
         conn.cursor.return_value.__enter__.return_value = cursor
@@ -419,7 +653,8 @@ class TestRestoreScoreGroundTruth:
         result = RestoreResult()
         _restore_score_ground_truth(conn, path, result)
 
-        assert result.score_gt_restored == 1
+        # Rally 1 (wrote serving) and rally 2 (wrote side_switch) count.
+        assert result.score_gt_restored == 2
         assert any("rally-missing" in e for e in result.errors)
 
     def test_silent_skip_when_file_missing(self, tmp_path: Path) -> None:
@@ -429,8 +664,6 @@ class TestRestoreScoreGroundTruth:
         )
 
         result = RestoreResult()
-        # Calling on a missing file should be a no-op for callers that don't
-        # gate on existence; the helper itself handles its own existence check.
         _restore_score_ground_truth(MagicMock(), tmp_path / "missing.json", result)
 
         assert result.score_gt_restored == 0
@@ -470,11 +703,16 @@ def _restore_score_ground_truth(
     score_gt_path: Path,
     result: RestoreResult,
 ) -> None:
-    """Restore rallies.gt_serving_team from score_ground_truth.json.
+    """Restore rallies.gt_serving_team and rallies.gt_side_switch.
 
-    NULL-only: only rallies whose ``gt_serving_team`` is currently NULL are
-    updated. Existing labels are preserved so a re-run never clobbers DB
-    edits made after the snapshot was taken.
+    Per-field NULL-only: each column is updated independently, and only
+    when the target column is currently NULL. Existing labels are
+    preserved so a re-run never clobbers DB edits made after the snapshot
+    was taken. A field absent from a JSON entry means it was NULL at
+    export time — its UPDATE is skipped entirely.
+
+    A rally counts as restored if at least one of its fields was actually
+    written.
     """
     if not score_gt_path.exists():
         return
@@ -489,10 +727,8 @@ def _restore_score_ground_truth(
     restored = 0
     for entry in entries:
         rally_id = entry["rally_id"]
-        gt_serving_team = entry["gt_serving_team"]
 
         with conn.cursor() as cur:
-            # Existence check separates "missing rally" from "already labeled"
             cur.execute("SELECT id FROM rallies WHERE id = %s", (rally_id,))
             row = cur.fetchone()
             if row is None:
@@ -501,16 +737,34 @@ def _restore_score_ground_truth(
                 )
                 continue
 
-            cur.execute(
-                """
-                UPDATE rallies
-                   SET gt_serving_team = %s
-                 WHERE id = %s
-                   AND gt_serving_team IS NULL
-                """,
-                (gt_serving_team, rally_id),
-            )
-            if cur.rowcount > 0:
+            wrote_any = False
+            if "gt_serving_team" in entry:
+                cur.execute(
+                    """
+                    UPDATE rallies
+                       SET gt_serving_team = %s
+                     WHERE id = %s
+                       AND gt_serving_team IS NULL
+                    """,
+                    (entry["gt_serving_team"], rally_id),
+                )
+                if cur.rowcount > 0:
+                    wrote_any = True
+
+            if "gt_side_switch" in entry:
+                cur.execute(
+                    """
+                    UPDATE rallies
+                       SET gt_side_switch = %s
+                     WHERE id = %s
+                       AND gt_side_switch IS NULL
+                    """,
+                    (bool(entry["gt_side_switch"]), rally_id),
+                )
+                if cur.rowcount > 0:
+                    wrote_any = True
+
+            if wrote_any:
                 restored += 1
 
     result.score_gt_restored = restored
@@ -586,6 +840,8 @@ Append:
         rprint(
             f"  Would restore: [green]{sgt_stats.get('total_rallies', 0)}[/green]"
             f" score GT (NULL-only) across {sgt_stats.get('total_videos', 0)} videos"
+            f" ({sgt_stats.get('total_with_serving', 0)} serving,"
+            f" {sgt_stats.get('total_with_side_switch', 0)} side-switch)"
         )
 ```
 

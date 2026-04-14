@@ -5,19 +5,29 @@
 
 ## Problem
 
-Score tracking ground truth (`rallies.gt_serving_team` in PostgreSQL) is the
-label set behind the `score_accuracy` metric (currently 88.6% end-to-end).
-It exists only in the local PostgreSQL database. A DB reset, MinIO clear,
-or laptop loss would destroy it. Other GT types (rally bounds, tracking,
+Score tracking ground truth lives on the `rallies` table in two co-labeled
+columns produced by the same Score GT UI:
+
+- `gt_serving_team` — the label behind the `score_accuracy` metric
+  (currently 88.6% end-to-end).
+- `gt_side_switch` — per-rally manual override of the detected side
+  switch, used by the Viterbi score chain.
+
+Both exist only in the local PostgreSQL database. A DB reset, MinIO clear,
+or laptop loss would destroy them. Other GT types (rally bounds, tracking,
 actions, player-matching) already round-trip through S3 via
 `rallycut train export-dataset` → `push` → `pull` → `restore`. Score GT
 should ride the same rails.
 
+(Note: the video-level `player_matching_gt_json.sideSwitches` list is a
+different artifact, already backed up via `player_matching_ground_truth.json`.
+This spec is strictly about per-rally columns on the `rallies` table.)
+
 ## Goals
 
-- Score GT survives DB resets and laptop loss.
+- Score GT (`gt_serving_team` + `gt_side_switch`) survives DB resets and laptop loss.
 - Future `train push --name <name>` snapshots include score GT automatically.
-- `train restore` re-imports score GT without clobbering newer DB labels.
+- `train restore` re-imports score GT without clobbering newer DB labels (per-field NULL-only).
 - Zero changes required for callers of `score_ground_truth.compute_score_metrics`.
 
 ## Non-Goals
@@ -58,22 +68,27 @@ DB (rallies.gt_serving_team)
 {
   "stats": {
     "total_rallies": 316,
-    "total_videos": 63
+    "total_videos": 63,
+    "total_with_serving": 316,
+    "total_with_side_switch": 47
   },
   "rallies": [
     {
       "rally_id": "fb8fd612-...",
       "video_id": "1a5da176-...",
       "content_hash": "abc123...",
-      "gt_serving_team": "A"
+      "gt_serving_team": "A",
+      "gt_side_switch": true
     }
   ]
 }
 ```
 
-- Only rallies with non-NULL `gt_serving_team` are written.
-- File is omitted entirely when zero matching rallies exist.
-- `gt_serving_team` is `"A"` or `"B"` (matches DB convention).
+- A rally is included if **either** `gt_serving_team` **or** `gt_side_switch`
+  is non-NULL in the DB. Fields are omitted per-entry when NULL in the DB
+  (never written as `null`).
+- File is omitted entirely when zero qualifying rallies exist.
+- `gt_serving_team` is `"A"` or `"B"`. `gt_side_switch` is a boolean.
 
 ## Components
 
@@ -83,12 +98,17 @@ Add a private helper:
 
 ```python
 def _export_score_ground_truth(content_hashes: set[str]) -> dict | None:
-    """Query rallies.gt_serving_team for rallies in the dataset's videos."""
+    """Query rallies.gt_serving_team and rallies.gt_side_switch for rallies
+    in the dataset's videos."""
 ```
 
-- Single SQL: `SELECT r.id, r.video_id, v.content_hash, r.gt_serving_team
-  FROM rallies r JOIN videos v ON v.id = r.video_id
-  WHERE v.content_hash = ANY(%s) AND r.gt_serving_team IS NOT NULL`.
+- Single SQL selects `r.id, r.video_id, v.content_hash, r.gt_serving_team,
+  r.gt_side_switch` with `WHERE v.deleted_at IS NULL AND (r.gt_serving_team
+  IS NOT NULL OR r.gt_side_switch IS NOT NULL)`.
+- Each per-rally dict omits `gt_serving_team` when the DB value is NULL,
+  and omits `gt_side_switch` when the DB value is NULL.
+- Stats include `total_with_serving` and `total_with_side_switch` counts
+  alongside `total_rallies` / `total_videos`.
 - Return `None` if no rows; else the dict shape above.
 
 In `export_dataset()`, after the action-GT block, write
@@ -106,27 +126,39 @@ count line consistent with the others.
 
 ### 3. Restore — `analysis/rallycut/training/restore.py`
 
-- Add `score_gt_restored: int = 0` to `RestoreResult`.
+- Add `score_gt_restored: int = 0` to `RestoreResult`. The counter
+  increments once per rally for which at least one field was actually
+  written (either column updated). Per-field granularity is not surfaced.
 - Add `_restore_score_ground_truth(dataset_dir, dry_run, result)`:
   - Read `score_ground_truth.json`; skip if missing (matches existing
     optional GT handling).
-  - For each entry, run:
+  - For each entry, run two conditional UPDATEs — one per field, each
+    gated on its column being NULL:
     ```sql
     UPDATE rallies
        SET gt_serving_team = %s
      WHERE id = %s
        AND gt_serving_team IS NULL
     ```
-  - Sum updated rowcounts into `result.score_gt_restored`.
+    ```sql
+    UPDATE rallies
+       SET gt_side_switch = %s
+     WHERE id = %s
+       AND gt_side_switch IS NULL
+    ```
+    Skip a field's UPDATE entirely when that field is absent from the
+    JSON entry (means it was NULL in the source DB at export time).
+  - If either UPDATE's `rowcount > 0`, count the rally as restored.
   - Per-row failure (missing rally id) logs to `result.errors`, does not
     abort the restore.
 - Wire into `restore_dataset_to_db` after the action-GT restore call.
 - Mirror the file-presence check in the dry-run preview block.
 
-**NULL-only update** is the key invariant: a re-run never overwrites a
-label edited in the DB after the snapshot was taken. Acceptable
-asymmetry — a deliberate NULL-out in the DB will be re-filled by the next
-restore. That is a worthwhile trade for the safety of the common case.
+**Per-field NULL-only update** is the key invariant: a re-run never
+overwrites a label edited in the DB after the snapshot was taken, and the
+two columns are protected independently. Acceptable asymmetry — a
+deliberate NULL-out in the DB will be re-filled by the next restore.
+That is a worthwhile trade for the safety of the common case.
 
 ### 4. CLI summary — `analysis/rallycut/cli/commands/train.py`
 
@@ -151,12 +183,14 @@ if result.score_gt_restored:
 ## Testing
 
 - Unit test: `_export_score_ground_truth` returns expected shape on a
-  seeded rallies+videos fixture; returns `None` when no NULL-stripped
-  rows remain.
-- Unit test: `_restore_score_ground_truth` updates rallies with NULL
-  `gt_serving_team` and leaves existing non-NULL values unchanged. A
-  rally id missing from the DB appends an error string but does not
-  raise.
+  seeded rallies+videos fixture (including a rally with only
+  `gt_side_switch` set, a rally with only `gt_serving_team` set, and a
+  rally with both); returns `None` when no qualifying rows remain.
+  Entries with NULL-in-DB fields omit those keys in the output.
+- Unit test: `_restore_score_ground_truth` updates rallies per-field:
+  a NULL `gt_serving_team` is filled, a non-NULL one is preserved; same
+  independently for `gt_side_switch`. A rally id missing from the DB
+  appends an error string but does not raise.
 
 No integration test against real S3 — push/pull are thin wrappers around
 existing `metadata_files` plumbing already covered by the dataset-backup
