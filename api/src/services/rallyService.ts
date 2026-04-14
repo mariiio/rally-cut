@@ -1,7 +1,8 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
-import { ForbiddenError, NotFoundError } from "../middleware/errorHandler.js";
+import { ConflictError, ForbiddenError, NotFoundError } from "../middleware/errorHandler.js";
 import type { CreateRallyInput, UpdateRallyInput } from "../schemas/rally.js";
+import { isBatchTrackingActive } from "./batchTrackingService.js";
 import { reindexTrackingData } from "./playerTrackingService.js";
 import { canAccessVideoRallies } from "./shareService.js";
 
@@ -23,6 +24,13 @@ export async function createRally(videoId: string, userId: string, data: CreateR
   const hasAccess = await canAccessVideoRallies(videoId, userId, true);
   if (!hasAccess) {
     throw new ForbiddenError("You do not have permission to create rallies for this video");
+  }
+
+  if (await isBatchTrackingActive(videoId)) {
+    throw new ConflictError(
+      'New rallies cannot be added while tracking is running. Please wait for tracking to finish.',
+      { reason: 'CREATE_DURING_TRACKING' },
+    );
   }
 
   // Use MAX(order) + 1 in a transaction to prevent order collisions

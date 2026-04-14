@@ -1,7 +1,8 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
-import { ForbiddenError, NotFoundError } from "../middleware/errorHandler.js";
+import { ConflictError, ForbiddenError, NotFoundError } from "../middleware/errorHandler.js";
 import type { SyncStateInput } from "../schemas/sync.js";
+import { isBatchTrackingActive } from "./batchTrackingService.js";
 import { reindexTrackingData } from "./playerTrackingService.js";
 import { canAccessSession } from "./shareService.js";
 import { getUserTier, getTierLimits } from "./tierService.js";
@@ -110,6 +111,21 @@ export async function syncState(
 
         // Get existing rallies from pre-fetched data
         const existingRallies = existingRalliesByVideo.get(videoId) ?? new Map();
+
+        // A2a — reject the whole sync request if ANY videoId has active tracking
+        // and the payload adds new rallies for it. The throw inside this outer
+        // $transaction rolls back writes for all videos in the request — intentional:
+        // sync-state is all-or-nothing. Task 5 blocks creates only; updates and
+        // deletes for the flagged video still pass through in separate requests.
+        const hasNewRallies = rallies.some(
+          (r) => !r || !r.id || !existingRallies.has(r.id),
+        );
+        if (hasNewRallies && await isBatchTrackingActive(videoId)) {
+          throw new ConflictError(
+            'New rallies cannot be added while tracking is running. Please wait for tracking to finish.',
+            { reason: 'CREATE_DURING_TRACKING' },
+          );
+        }
 
         // Track which IDs we've seen
         const seenIds = new Set<string>();

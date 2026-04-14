@@ -211,6 +211,21 @@ function spawnBatchWorker(jobId: string): void {
 }
 
 /**
+ * Returns true if the latest BatchTrackingJob for this video is active
+ * (PENDING or PROCESSING). A2a uses this to reject mid-batch rally CREATION
+ * with a 409 CONFLICT — existing rallies can still be updated or deleted.
+ * A2b will replace the 409 with an append-rally enqueue.
+ */
+export async function isBatchTrackingActive(videoId: string): Promise<boolean> {
+  const latest = await prisma.batchTrackingJob.findFirst({
+    where: { videoId },
+    orderBy: { createdAt: 'desc' },
+    select: { status: true },
+  });
+  return latest?.status === 'PENDING' || latest?.status === 'PROCESSING';
+}
+
+/**
  * Get batch tracking status for a video.
  */
 export async function getBatchTrackingStatus(
