@@ -48,6 +48,9 @@ runs/
 # Debug output (generated images)
 debug_*/
 
+# Diagnostic outputs (regeneratable audit logs, plots, artifacts)
+outputs/
+
 # Model weights (downloaded/trained)
 weights/
 
