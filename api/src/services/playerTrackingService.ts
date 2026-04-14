@@ -712,59 +712,6 @@ export async function saveTrackingResult(
     }
   }
 
-  // Update video characteristics from first completed tracking
-  try {
-    const primaryIds = new Set(trackerResult.primaryTrackIds ?? []);
-    const heights = (trackerResult.positions as Array<{ trackId: number; height: number }>)
-      .filter(p => primaryIds.has(p.trackId))
-      .map(p => p.height);
-
-    let cameraDistance: { avgBboxHeight: number; category: 'close' | 'medium' | 'far' } | undefined;
-    if (heights.length > 0) {
-      const sorted = [...heights].sort((a, b) => a - b);
-      const avgBboxHeight = sorted[Math.floor(sorted.length / 2)];
-      const category = avgBboxHeight > 0.35 ? 'close' : avgBboxHeight < 0.20 ? 'far' : 'medium';
-      cameraDistance = { avgBboxHeight: Math.round(avgBboxHeight * 1000) / 1000, category };
-    }
-
-    const rawPositions = trackerResult.rawPositions ?? trackerResult.positions;
-    const rawFrameCounts: Record<number, number> = {};
-    for (const p of rawPositions as Array<{ frameNumber: number }>) {
-      rawFrameCounts[p.frameNumber] = (rawFrameCounts[p.frameNumber] ?? 0) + 1;
-    }
-    const rawFrameValues = Object.values(rawFrameCounts);
-    const avgPeople = rawFrameValues.length > 0
-      ? rawFrameValues.reduce((a, b) => a + b, 0) / rawFrameValues.length
-      : 0;
-    const sceneComplexity = {
-      avgPeople: Math.round(avgPeople * 10) / 10,
-      category: (avgPeople > 6 ? 'complex' : 'simple') as 'simple' | 'complex',
-    };
-
-    const courtDetection = trackerResult.courtDetection;
-
-    const video = await prisma.video.findUnique({
-      where: { id: videoId },
-      select: { characteristicsJson: true },
-    });
-    const existing = (video?.characteristicsJson as Record<string, unknown>) ?? {};
-    const characteristics = {
-      ...existing,
-      ...(cameraDistance && { cameraDistance }),
-      sceneComplexity,
-      ...(courtDetection && { courtDetection }),
-      version: 1,
-    };
-    await prisma.video.update({
-      where: { id: videoId },
-      data: {
-        characteristicsJson: characteristics as unknown as Prisma.InputJsonValue,
-      },
-    });
-    console.log(`[PLAYER_TRACK] Updated video characteristics for ${videoId}`);
-  } catch (err) {
-    console.log(`[PLAYER_TRACK] Failed to update video characteristics:`, err);
-  }
 }
 
 /**

@@ -17,6 +17,7 @@ import {
 import { prisma } from "../lib/prisma.js";
 import { NotFoundError } from "../middleware/errorHandler.js";
 import { getUserTier } from "./tierService.js";
+import { mergeQualityReports, type QualityReport } from "./qualityReport.js";
 
 const lambdaClient = new LambdaClient({
   region: env.AWS_REGION,
@@ -90,11 +91,11 @@ export async function generatePosterImmediate(
       console.log(`[POSTER] Failed to extract video metadata for ${videoId}:`, err);
     }
 
-    // Compute brightness for video characteristics
-    let characteristicsJson: { brightness: { mean: number; category: string }; version: number } | undefined;
+    // Compute brightness and store as a numeric signal in qualityReportJson
+    let brightnessMean: number | undefined;
     try {
       const brightness = await computeBrightness(inputPath);
-      characteristicsJson = { brightness, version: 1 };
+      brightnessMean = brightness.mean;
       console.log(`[POSTER] Video ${videoId} brightness: ${brightness.mean} (${brightness.category})`);
     } catch (err) {
       console.log(`[POSTER] Failed to compute brightness for ${videoId}:`, err);
@@ -146,17 +147,21 @@ export async function generatePosterImmediate(
     const posterData = await fs.readFile(posterPath);
     await uploadPoster(posterKey, posterData);
 
-    // Merge quality assessment into characteristics
-    let mergedCharacteristics = characteristicsJson as Record<string, unknown> | undefined;
-    if (qualityAssessment) {
-      mergedCharacteristics = {
-        ...(mergedCharacteristics ?? {}),
-        ...(qualityAssessment.cameraDistance ? { cameraDistance: qualityAssessment.cameraDistance } : {}),
-        ...(qualityAssessment.sceneComplexity ? { sceneComplexity: qualityAssessment.sceneComplexity } : {}),
-        expectedQuality: qualityAssessment.expectedQuality,
-        uploadWarnings: qualityAssessment.warnings,
-        version: 1,
+    // Build qualityReportJson patch from brightness signal (no issues emitted here;
+    // preflight/upload checks own issue generation).
+    let qualityReportPatch: Partial<QualityReport> | undefined;
+    if (brightnessMean != null || qualityAssessment) {
+      const existing = await prisma.video.findUnique({
+        where: { id: videoId },
+        select: { qualityReportJson: true },
+      });
+      const prior = (existing?.qualityReportJson as Partial<QualityReport> | null) ?? {};
+      const patch: Partial<QualityReport> = {
+        version: 2,
+        issues: [],
+        ...(brightnessMean != null ? { brightness: brightnessMean } : {}),
       };
+      qualityReportPatch = mergeQualityReports([prior, patch]);
     }
 
     // Update database with poster and extracted metadata
@@ -168,7 +173,7 @@ export async function generatePosterImmediate(
         ...(fps !== null && { fps }),
         ...(width !== null && { width }),
         ...(height !== null && { height }),
-        ...(mergedCharacteristics && { characteristicsJson: mergedCharacteristics as Prisma.InputJsonValue }),
+        ...(qualityReportPatch && { qualityReportJson: qualityReportPatch as unknown as Prisma.InputJsonValue }),
       },
     });
 
