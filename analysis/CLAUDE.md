@@ -134,8 +134,8 @@ uv run rallycut repair-identities <video-id>             # Fix within-rally ID s
 uv run rallycut repair-identities <video-id> --dry-run   # Preview repairs without updating DB
 uv run rallycut remap-track-ids <video-id>               # Remap stored track IDs to player IDs
 uv run rallycut remap-track-ids <video-id> --dry-run     # Preview changes without updating DB
-uv run rallycut reattribute-actions <video-id>           # Re-attribute actions using match-level teams
-uv run rallycut reattribute-actions <video-id> --min-confidence 0.80  # Stricter confidence gate
+uv run rallycut reattribute-actions <video-id>           # Re-attribute actions using match-level teams (default --min-confidence 0.70, aligned with eval)
+uv run rallycut reattribute-actions <video-id> --min-confidence 0.90  # Only re-attribute on the highest-confidence rallies
 
 # Development
 uv run pytest tests                    # Run tests (excludes slow ML tests)

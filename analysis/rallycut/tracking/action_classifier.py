@@ -1612,19 +1612,10 @@ class ActionClassifier:
                 last_action_type = action_type
                 continue
 
-            # Skip pre-serve contacts — don't let them corrupt possession state
+            # Drop pre-serve FP contacts entirely. Previously emitted as
+            # UNKNOWN then rewritten to SERVE by the MS-TCN++ override,
+            # producing spurious double-serves (see 2026-04-14 audit).
             if not serve_detected and i != serve_index:
-                actions.append(ClassifiedAction(
-                    action_type=ActionType.UNKNOWN,
-                    frame=contact.frame,
-                    ball_x=contact.ball_x,
-                    ball_y=contact.ball_y,
-                    velocity=contact.velocity,
-                    player_track_id=contact.player_track_id,
-                    court_side=contact.court_side,
-                    confidence=self.config.low_confidence,
-                ))
-                last_action_type = ActionType.UNKNOWN
                 continue
 
             # Handle possession changes.  Detection priority:

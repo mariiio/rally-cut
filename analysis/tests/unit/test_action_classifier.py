@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+from rallycut.court.calibration import CourtCalibrator
 from rallycut.tracking.action_classifier import (
     ActionClassifier,
     ActionClassifierConfig,
@@ -13,7 +14,6 @@ from rallycut.tracking.action_classifier import (
     _ball_moving_toward_net,
     _ball_starts_on_contact_side,
     _classify_serve_contact,
-    _serving_side_from_contact,
     _compute_auto_split_y,
     _compute_expected_teams,
     _find_server_by_position,
@@ -23,13 +23,13 @@ from rallycut.tracking.action_classifier import (
     _is_ball_on_serve_side,
     _make_synthetic_serve,
     _reattribute_server_exclusion,
+    _serving_side_from_contact,
     classify_rally_actions,
     reattribute_players,
     repair_action_sequence,
     validate_action_sequence,
     viterbi_decode_actions,
 )
-from rallycut.court.calibration import CourtCalibrator
 from rallycut.tracking.action_type_classifier import _count_contacts_on_side
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.contact_detector import Contact, ContactSequence, ball_crossed_net
@@ -571,10 +571,18 @@ class TestBallMovingTowardNet:
 
 
 class TestPreServeIsolation:
-    """Tests for pre-serve contact isolation from state machine."""
+    """Tests for pre-serve contact isolation from state machine.
 
-    def test_pre_serve_contacts_are_unknown(self) -> None:
-        """Contacts before the serve are classified as UNKNOWN."""
+    Pre-serve false-positive contacts (caused by the sequence-recovery
+    rescue firing at rally start with classifier confidence just above
+    the CLF_FLOOR) are dropped from the output entirely. Previously
+    they were emitted as `UNKNOWN` and rewritten to `SERVE` by the
+    MS-TCN++ override, producing spurious double-serves. See the
+    2026-04-14 audit (`action_anomaly_audit_2026_04_14.md`).
+    """
+
+    def test_pre_serve_fp_contacts_are_dropped(self) -> None:
+        """Pre-serve contacts are NOT emitted in the final action list."""
         contacts = [
             _contact(frame=3, ball_y=0.5, velocity=0.005, court_side="far"),  # Pre-serve FP
             _contact(frame=10, ball_y=0.85, court_side="near"),  # Actual serve
@@ -583,12 +591,15 @@ class TestPreServeIsolation:
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
         result = classify_rally_actions(seq, use_classifier=False)
 
-        assert result.actions[0].action_type == ActionType.UNKNOWN
-        assert result.actions[1].action_type == ActionType.SERVE
-        assert result.actions[2].action_type == ActionType.RECEIVE
+        # Pre-serve FP is dropped; only serve + receive remain.
+        assert len(result.actions) == 2
+        assert result.actions[0].action_type == ActionType.SERVE
+        assert result.actions[0].frame == 10
+        assert result.actions[1].action_type == ActionType.RECEIVE
+        assert result.actions[1].frame == 30
 
     def test_pre_serve_contacts_dont_corrupt_possession(self) -> None:
-        """Pre-serve contacts on opposite side don't reset possession counter."""
+        """Pre-serve contacts don't shift downstream possession counts."""
         contacts = [
             _contact(frame=3, ball_y=0.5, velocity=0.005, court_side="far"),  # Pre-serve FP
             _contact(frame=10, ball_y=0.85, court_side="near"),  # Serve
@@ -598,12 +609,10 @@ class TestPreServeIsolation:
         seq = ContactSequence(contacts=contacts, net_y=0.5, rally_start_frame=0)
         result = classify_rally_actions(seq, use_classifier=False)
 
-        assert result.actions[0].action_type == ActionType.UNKNOWN
-        assert result.actions[1].action_type == ActionType.SERVE
-        assert result.actions[2].action_type == ActionType.RECEIVE
-        # Without isolation, the far-side FP would have set current_side="far",
-        # and contact_count would be wrong
-        assert result.actions[3].action_type == ActionType.SET
+        assert len(result.actions) == 3
+        assert result.actions[0].action_type == ActionType.SERVE
+        assert result.actions[1].action_type == ActionType.RECEIVE
+        assert result.actions[2].action_type == ActionType.SET
 
 
 class TestServeReceiveDisambiguation:

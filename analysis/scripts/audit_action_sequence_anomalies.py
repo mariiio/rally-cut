@@ -27,8 +27,10 @@ import argparse
 import json
 import statistics
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, cast
 
 from rich.console import Console
 from rich.table import Table
@@ -76,19 +78,32 @@ class RallyRow:
         return any(v for v in self.flags.values())
 
 
-def _load_rallies(video_id: str | None = None) -> list[RallyRow]:
+def _load_rallies(
+    video_id: str | None = None,
+    skip_session_id: str | None = None,
+) -> list[RallyRow]:
     """Fetch every rally that has action GT plus its quality proxies.
 
     Joins player_tracks to pull per-rally quality indicators in one trip.
     Ball confidence is computed Python-side from the ball_positions_json
     blob (median of per-frame confidences) because Postgres jsonb_path
     access would balloon the query.
+
+    ``skip_session_id`` filters out videos that belong to a named session
+    (e.g. "poor" — videos with known-bad tracking where action anomalies
+    reflect input quality rather than pipeline logic).
     """
     where = ["pt.action_ground_truth_json IS NOT NULL"]
-    params: list[str] = []
+    params: list[object] = []
     if video_id:
         where.append("r.video_id = %s")
         params.append(video_id)
+    if skip_session_id:
+        where.append(
+            "r.video_id NOT IN (SELECT video_id FROM session_videos "
+            "WHERE session_id = %s)"
+        )
+        params.append(skip_session_id)
 
     query = f"""
         SELECT
@@ -107,8 +122,19 @@ def _load_rallies(video_id: str | None = None) -> list[RallyRow]:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(query, params)
         for row in cur.fetchall():
-            (rid, vid, order, start_ms, end_ms, actions_json, gt_json,
-             det_rate, avg_pc, ball_json, frame_count, fps, court_split_y) = row
+            rid = cast(str, row[0])
+            vid = cast(str, row[1])
+            order = cast("int | None", row[2])
+            start_ms = cast("int | None", row[3])
+            end_ms = cast("int | None", row[4])
+            actions_json: Any = row[5]
+            gt_json: Any = row[6]
+            det_rate = cast("float | None", row[7])
+            avg_pc = cast("float | None", row[8])
+            ball_json: Any = row[9]
+            frame_count = cast("int | None", row[10])
+            fps = cast("float | None", row[11])
+            court_split_y = cast("float | None", row[12])
 
             if isinstance(actions_json, str):
                 actions_json = json.loads(actions_json)
@@ -410,6 +436,74 @@ def _flag_action_type_mismatch(r: RallyRow) -> list[str]:
     return msgs
 
 
+def _flag_missed_block(r: RallyRow) -> list[str]:
+    """GT has a `block` action that pred doesn't match as a block.
+
+    Block F1 on the canonical baseline is ~21% (96% miss rate per
+    `action_detection_errors.md`). A missed block masquerades as a
+    `dig` or `set` on the opposite side of the preceding attack, which
+    feeds `over_three_same_side` because `_flag_over_three_same_side`
+    only skips contacts *predicted* as block. Surfacing missed blocks
+    as a separate bucket tells us how much of the over_three signal is
+    downstream of block-detection failure.
+    """
+    gt_blocks = [g for g in r.gt_actions if g.get("action") == "block"]
+    if not gt_blocks:
+        return []
+    msgs = []
+    for g in gt_blocks:
+        gf = g.get("frame", -1)
+        matched_as_block = any(
+            p.get("action") == "block"
+            and abs(p.get("frame", -1) - gf) <= 5
+            for p in r.pred_actions
+        )
+        if matched_as_block:
+            continue
+        # Find the closest pred within ±5 frames to report what we got instead.
+        closest = min(
+            (p for p in r.pred_actions if abs(p.get("frame", -1) - gf) <= 5),
+            key=lambda p: abs(p.get("frame", -1) - gf),
+            default=None,
+        )
+        if closest is None:
+            msgs.append(f"GT block f{gf} — no pred within ±5 (missed contact)")
+        else:
+            msgs.append(
+                f"GT block f{gf} → pred f{closest.get('frame')} "
+                f"= {closest.get('action')}"
+            )
+    return msgs
+
+
+def _flag_near_edge_gt_ball(r: RallyRow) -> list[str]:
+    """Unmatched GT contacts whose ball position sits near the frame edge.
+
+    Cheap heuristic for "off-frame ball contact" — a ceiling we can't
+    fix with any grammar or classifier change because the ball isn't in
+    the picture.
+    """
+    if not r.gt_actions:
+        return []
+    pairs = _match_pred_to_gt(r.pred_actions, r.gt_actions)
+    matched_gt = {
+        gi for (pi, gi) in pairs if pi is not None and gi is not None
+    }
+    msgs = []
+    for gi, g in enumerate(r.gt_actions):
+        if gi in matched_gt:
+            continue
+        bx, by = g.get("ballX"), g.get("ballY")
+        if bx is None or by is None:
+            continue
+        if not (0.05 <= bx <= 0.95 and 0.05 <= by <= 0.95):
+            msgs.append(
+                f"unmatched GT f{g.get('frame')} {g.get('action')} "
+                f"near edge ball=({bx:.2f},{by:.2f})"
+            )
+    return msgs
+
+
 def _flag_court_side_flip(
     r: RallyRow, team_to_side: dict[str, str] | None = None,
 ) -> list[str]:
@@ -466,11 +560,15 @@ def _flag_court_side_flip(
     return []
 
 
-DETECTORS = {
+Detector = Callable[[RallyRow], list[str]]
+
+DETECTORS: dict[str, Detector] = {
     "double_serve": _flag_double_serve,
     "opposite_side_double": lambda r: _flag_consecutive(r, opposite_sides=True),
     "same_side_double": lambda r: _flag_consecutive(r, opposite_sides=False),
     "over_three_same_side": _flag_over_three_same_side,
+    "missed_block": _flag_missed_block,
+    "near_edge_gt_ball": _flag_near_edge_gt_ball,
     "fp_preserve_contact": _flag_fp_preserve_contact,
     "unknown_rewritten": _flag_unknown_rewritten,
     "missed_contact_cluster": _flag_missed_contact_cluster,
@@ -647,6 +745,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--video", help="Restrict to a single video id")
     parser.add_argument(
+        "--skip-session",
+        help="Exclude videos that belong to this session id "
+        "(e.g. the 'poor' session for known-bad tracking)",
+    )
+    parser.add_argument(
         "--output", type=Path,
         default=Path("outputs/action_anomaly_audit_2026_04_14.md"),
         help="Markdown output path",
@@ -654,7 +757,7 @@ def main() -> None:
     args = parser.parse_args()
 
     console.print("[bold]Loading rallies with action GT…[/bold]")
-    rallies = _load_rallies(args.video)
+    rallies = _load_rallies(args.video, args.skip_session)
     console.print(f"  loaded {len(rallies)} rallies "
                   f"({len({r.video_id for r in rallies})} videos)")
 
@@ -669,7 +772,7 @@ def main() -> None:
     by_video: dict[str, list[RallyRow]] = defaultdict(list)
     for r in rallies:
         by_video[r.video_id].append(r)
-    console.print(f"[dim]Per-video rally counts:[/dim]")
+    console.print("[dim]Per-video rally counts:[/dim]")
     for vid, rs in sorted(by_video.items(), key=lambda kv: -len(kv[1])):
         flagged = sum(1 for r in rs if r.has_any_flag)
         lq = sum(1 for r in rs if r.low_quality)
@@ -679,6 +782,41 @@ def main() -> None:
         )
 
     clean_hist, low_hist = _print_histogram(rallies)
+
+    # Block-FN correlation — key diagnostic for the over_three bucket.
+    clean = [r for r in rallies if not r.low_quality]
+    over3 = [r for r in clean if r.flags.get("over_three_same_side")]
+    over3_with_missed_block = [
+        r for r in over3 if r.flags.get("missed_block")
+    ]
+    over3_with_edge_ball = [
+        r for r in over3 if r.flags.get("near_edge_gt_ball")
+    ]
+    if over3:
+        console.print("")
+        console.print(
+            f"[bold]over_three_same_side root-cause breakdown (clean pool n={len(over3)}):[/bold]"
+        )
+        console.print(
+            f"  co-flag [yellow]missed_block[/yellow]: "
+            f"{len(over3_with_missed_block)} "
+            f"({len(over3_with_missed_block) / len(over3) * 100:.1f}%)"
+        )
+        console.print(
+            f"  co-flag [yellow]near_edge_gt_ball[/yellow]: "
+            f"{len(over3_with_edge_ball)} "
+            f"({len(over3_with_edge_ball) / len(over3) * 100:.1f}%)"
+        )
+        unexplained = [
+            r for r in over3
+            if not r.flags.get("missed_block")
+            and not r.flags.get("near_edge_gt_ball")
+        ]
+        console.print(
+            f"  neither (likely genuine long run / net-cross FN / court_side): "
+            f"{len(unexplained)} "
+            f"({len(unexplained) / len(over3) * 100:.1f}%)"
+        )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     _write_markdown(rallies, clean_hist, low_hist, args.output)

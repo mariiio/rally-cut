@@ -193,6 +193,13 @@ def apply_sequence_override(
         cls = int(np.argmax(per_frame))
         new_type = ActionType(ACTION_TYPES[cls])
 
+        # Serve is heuristic-only: classify_rally picks exactly one
+        # serve per rally via _find_serve_index. The override must
+        # never manufacture additional serves (see 2026-04-14 audit —
+        # the double-serve symptom came from this leak).
+        if new_type == ActionType.SERVE:
+            continue
+
         # Dig guard: GBM said dig, MS-TCN++ wants set — only override if
         # MS-TCN++ is much more confident in set than in dig.
         if (
