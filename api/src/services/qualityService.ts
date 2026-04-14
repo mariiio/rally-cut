@@ -26,6 +26,7 @@ import {
   type QualityReport,
   type Tier,
 } from './qualityReport.js';
+import { expireStaleBatchTrackingJobs } from './staleJobRecovery.js';
 
 // Re-export pure types and functions so callers can import from this module.
 export { mergeQualityReports, pickTopIssues };
@@ -121,25 +122,11 @@ export async function getAnalysisPipelineStatus(videoId: string, userId: string)
           ? 'idle'
           : video.status;
 
-  const STALE_JOB_TIMEOUT_MS = 10 * 60 * 1000;
+  await expireStaleBatchTrackingJobs(videoId);
   let batchJob = await prisma.batchTrackingJob.findFirst({
     where: { videoId },
     orderBy: { createdAt: 'desc' },
   });
-  if (
-    batchJob &&
-    (batchJob.status === 'PROCESSING' || batchJob.status === 'PENDING') &&
-    Date.now() - batchJob.lastProgressAt.getTime() > STALE_JOB_TIMEOUT_MS
-  ) {
-    batchJob = await prisma.batchTrackingJob.update({
-      where: { id: batchJob.id },
-      data: {
-        status: 'FAILED',
-        completedAt: new Date(),
-        error: 'Timed out — job was interrupted or never completed',
-      },
-    });
-  }
 
   const trackedRallies = await prisma.rally.count({
     where: { videoId, status: 'CONFIRMED', playerTrack: { status: 'COMPLETED' } },

@@ -23,35 +23,7 @@ import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/er
 import type { CalibrationCorner } from './playerTrackingService.js';
 import { filterOutCanonicalLockedRallies } from './playerTrackingService.js';
 import { triggerModalBatchTracking } from './modalTrackingService.js';
-
-// A job with no progress for this long is considered stale (API crashed, FFmpeg hung, etc.).
-// Uses lastProgressAt (updated per rally), not createdAt, so long-running jobs with
-// steady progress are never incorrectly expired.
-const STALE_PROGRESS_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes without progress
-
-/**
- * Mark stale PROCESSING/PENDING jobs as FAILED.
- * A job is stale if lastProgressAt hasn't been updated within STALE_PROGRESS_TIMEOUT_MS.
- * This handles cases where the server crashed or was restarted mid-tracking.
- */
-async function expireStaleJobs(videoId: string): Promise<void> {
-  const cutoff = new Date(Date.now() - STALE_PROGRESS_TIMEOUT_MS);
-  const { count } = await prisma.batchTrackingJob.updateMany({
-    where: {
-      videoId,
-      status: { in: ['PENDING', 'PROCESSING'] },
-      lastProgressAt: { lt: cutoff },
-    },
-    data: {
-      status: 'FAILED',
-      completedAt: new Date(),
-      error: 'Timed out — no progress for 10 minutes (server likely restarted)',
-    },
-  });
-  if (count > 0) {
-    console.log(`[BATCH_TRACK] Expired ${count} stale job(s) for video ${videoId}`);
-  }
-}
+import { expireStaleBatchTrackingJobs } from './staleJobRecovery.js';
 
 /**
  * Start batch tracking for all rallies in a video.
@@ -110,7 +82,7 @@ export async function trackAllRallies(
   }
 
   // Expire any stale jobs before checking for in-progress ones
-  await expireStaleJobs(videoId);
+  await expireStaleBatchTrackingJobs(videoId);
 
   // Check for existing in-progress batch job (atomic check-and-create)
   const job = await prisma.$transaction(async (tx) => {
@@ -268,7 +240,7 @@ export async function getBatchTrackingStatus(
   }
 
   // Expire stale jobs before reporting status
-  await expireStaleJobs(videoId);
+  await expireStaleBatchTrackingJobs(videoId);
 
   // Get the most recent batch job
   const job = await prisma.batchTrackingJob.findFirst({
