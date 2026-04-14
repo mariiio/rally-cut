@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma } from '../src/lib/prisma';
 import {
   expireStaleBatchTrackingJobs,
+  expireStaleDetectionJobs,
   STALE_PROGRESS_TIMEOUT_MS,
 } from '../src/services/staleJobRecovery';
 
@@ -88,6 +89,93 @@ describe('expireStaleBatchTrackingJobs', () => {
     });
     await expireStaleBatchTrackingJobs(videoId);
     const refreshed = await prisma.batchTrackingJob.findUniqueOrThrow({ where: { id: job.id } });
+    expect(refreshed.status).toBe('COMPLETED');
+  });
+});
+
+describe('expireStaleDetectionJobs', () => {
+  const videoId = 'vid-det-stale-test';
+
+  beforeEach(async () => {
+    await prisma.rallyDetectionJob.deleteMany({ where: { videoId } });
+    await prisma.video.deleteMany({ where: { id: videoId } });
+    await prisma.video.create({
+      data: {
+        id: videoId,
+        name: 'det-stale-test-video',
+        filename: 'det-stale-test.mp4',
+        s3Key: `${videoId}.mp4`,
+        contentHash: 'det-stale-test-hash',
+      },
+    });
+  });
+
+  afterEach(async () => {
+    await prisma.rallyDetectionJob.deleteMany({ where: { videoId } });
+    await prisma.video.deleteMany({ where: { id: videoId } });
+    vi.useRealTimers();
+  });
+
+  it('marks RUNNING jobs older than 10min as FAILED', async () => {
+    const stale = new Date(Date.now() - STALE_PROGRESS_TIMEOUT_MS - 60_000);
+    const job = await prisma.rallyDetectionJob.create({
+      data: {
+        videoId,
+        contentHash: 'x'.repeat(64),
+        status: 'RUNNING',
+        createdAt: stale,
+      },
+    });
+    await expireStaleDetectionJobs(videoId);
+    const refreshed = await prisma.rallyDetectionJob.findUniqueOrThrow({ where: { id: job.id } });
+    expect(refreshed.status).toBe('FAILED');
+    expect(refreshed.errorMessage).toMatch(/Timed out/i);
+    expect(refreshed.completedAt).not.toBeNull();
+  });
+
+  it('marks PENDING jobs older than 10min as FAILED', async () => {
+    const stale = new Date(Date.now() - STALE_PROGRESS_TIMEOUT_MS - 60_000);
+    const job = await prisma.rallyDetectionJob.create({
+      data: {
+        videoId,
+        contentHash: 'y'.repeat(64),
+        status: 'PENDING',
+        createdAt: stale,
+      },
+    });
+    await expireStaleDetectionJobs(videoId);
+    const refreshed = await prisma.rallyDetectionJob.findUniqueOrThrow({ where: { id: job.id } });
+    expect(refreshed.status).toBe('FAILED');
+  });
+
+  it('leaves recent RUNNING jobs alone', async () => {
+    const fresh = new Date(Date.now() - 30_000);
+    const job = await prisma.rallyDetectionJob.create({
+      data: {
+        videoId,
+        contentHash: 'z'.repeat(64),
+        status: 'RUNNING',
+        createdAt: fresh,
+      },
+    });
+    await expireStaleDetectionJobs(videoId);
+    const refreshed = await prisma.rallyDetectionJob.findUniqueOrThrow({ where: { id: job.id } });
+    expect(refreshed.status).toBe('RUNNING');
+  });
+
+  it('does not touch COMPLETED jobs even if createdAt is ancient', async () => {
+    const ancient = new Date(Date.now() - STALE_PROGRESS_TIMEOUT_MS * 10);
+    const job = await prisma.rallyDetectionJob.create({
+      data: {
+        videoId,
+        contentHash: 'w'.repeat(64),
+        status: 'COMPLETED',
+        createdAt: ancient,
+        completedAt: ancient,
+      },
+    });
+    await expireStaleDetectionJobs(videoId);
+    const refreshed = await prisma.rallyDetectionJob.findUniqueOrThrow({ where: { id: job.id } });
     expect(refreshed.status).toBe('COMPLETED');
   });
 });

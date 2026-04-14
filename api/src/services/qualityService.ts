@@ -26,7 +26,7 @@ import {
   type QualityReport,
   type Tier,
 } from './qualityReport.js';
-import { expireStaleBatchTrackingJobs } from './staleJobRecovery.js';
+import { expireStaleBatchTrackingJobs, expireStaleDetectionJobs } from './staleJobRecovery.js';
 
 // Re-export pure types and functions so callers can import from this module.
 export { mergeQualityReports, pickTopIssues };
@@ -122,6 +122,7 @@ export async function getAnalysisPipelineStatus(videoId: string, userId: string)
           ? 'idle'
           : video.status;
 
+  await expireStaleDetectionJobs(videoId);
   await expireStaleBatchTrackingJobs(videoId);
   let batchJob = await prisma.batchTrackingJob.findFirst({
     where: { videoId },
