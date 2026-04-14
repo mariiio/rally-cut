@@ -15,11 +15,11 @@ import {
 
 export type AnalysisPhase =
   | 'idle'
-  | 'quality_check'
-  | 'quality_warning'
+  | 'preflight'
+  | 'preflight_gate'
   | 'detecting'
-  | 'tracking'
-  | 'completing'
+  | 'ready_tracking'
+  | 'match_analyzing'
   | 'done'
   | 'error';
 
@@ -85,7 +85,7 @@ async function advanceAfterDetection(
     updatePipeline({ phase: 'done', progress: 100, stepMessage: 'No rallies found in this video', ralliesFound: 0 });
     return false;
   }
-  updatePipeline({ phase: 'tracking', progress: 45, stepMessage: `Found ${ralliesFound} rallies! Starting player tracking...`, ralliesFound });
+  updatePipeline({ phase: 'ready_tracking', progress: 45, stepMessage: `Found ${ralliesFound} rallies! Starting player tracking...`, ralliesFound });
   return true;
 }
 
@@ -183,7 +183,7 @@ export const useAnalysisStore = create<AnalysisState>()(
 
         // Initialize pipeline
         update({
-          phase: 'quality_check',
+          phase: 'preflight',
           progress: 2,
           stepMessage: 'Checking your video...',
         });
@@ -202,7 +202,7 @@ export const useAnalysisStore = create<AnalysisState>()(
 
           if (hasWarnings) {
             update({
-              phase: 'quality_warning',
+              phase: 'preflight_gate',
               progress: 5,
               stepMessage: 'We found some potential issues',
               qualityResult,
@@ -233,7 +233,7 @@ export const useAnalysisStore = create<AnalysisState>()(
 
       dismissWarnings: (videoId: string) => {
         const pipeline = get().pipelines[videoId];
-        if (!pipeline || pipeline.phase !== 'quality_warning') return;
+        if (!pipeline || pipeline.phase !== 'preflight_gate') return;
 
         set((state) => ({
           pipelines: {
@@ -284,9 +284,9 @@ export const useAnalysisStore = create<AnalysisState>()(
 
           if (phase === 'detecting') {
             await resumeDetecting(videoId, set, get, updatePipeline, isStale);
-          } else if (phase === 'tracking') {
+          } else if (phase === 'ready_tracking') {
             await resumeTracking(videoId, set, get, updatePipeline, isStale);
-          } else if (phase === 'completing') {
+          } else if (phase === 'match_analyzing') {
             if (!isStale()) await completeAnalysis(videoId, set, get);
           }
           return;
@@ -315,7 +315,7 @@ export const useAnalysisStore = create<AnalysisState>()(
             const completed = status.tracking.completed ?? 0;
             const total = Math.max(status.tracking.total ?? 1, 1);
             updatePipeline({
-              phase: 'tracking',
+              phase: 'ready_tracking',
               progress: 50 + (completed / total) * 40,
               stepMessage: `Tracking players (rally ${completed + 1} of ${total})...`,
               trackingProgress: { completed, total },
@@ -331,7 +331,7 @@ export const useAnalysisStore = create<AnalysisState>()(
     }),
     {
       name: 'rallycut-analysis',
-      version: 2,
+      version: 3,
       migrate: () => ({ pipelines: {} }),
       partialize: (state) => ({
         // Only persist resumable in-progress pipelines. Terminal states
@@ -343,8 +343,8 @@ export const useAnalysisStore = create<AnalysisState>()(
               p.phase !== 'idle' &&
               p.phase !== 'done' &&
               p.phase !== 'error' &&
-              p.phase !== 'quality_check' &&
-              p.phase !== 'quality_warning',
+              p.phase !== 'preflight' &&
+              p.phase !== 'preflight_gate',
           ),
         ),
       }),
@@ -461,7 +461,7 @@ function pollTracking(videoId: string, set: SetFn, get: GetFn) {
   pollTimers[videoId] = setInterval(async () => {
     try {
       const pipeline = get().pipelines[videoId];
-      if (!pipeline || pipeline.phase !== 'tracking') {
+      if (!pipeline || pipeline.phase !== 'ready_tracking') {
         clearPollTimer(videoId);
         return;
       }
@@ -473,7 +473,7 @@ function pollTracking(videoId: string, set: SetFn, get: GetFn) {
       if (status.status === 'completed') {
         clearPollTimer(videoId);
         updatePipeline({
-          phase: 'completing',
+          phase: 'match_analyzing',
           progress: 90,
           stepMessage: 'Generating match stats...',
           trackingProgress: { completed: status.completedRallies ?? 0, total: status.totalRallies ?? 0 },
@@ -589,7 +589,7 @@ async function resumeTracking(
     if (isStale()) return;
 
     if (status.status === 'completed') {
-      updatePipeline({ phase: 'completing', progress: 90, stepMessage: 'Generating match stats...' });
+      updatePipeline({ phase: 'match_analyzing', progress: 90, stepMessage: 'Generating match stats...' });
       if (!isStale()) await completeAnalysis(videoId, set, get);
     } else if (status.status === 'failed') {
       updatePipeline({ phase: 'error', error: status.error || 'Tracking failed', stepMessage: 'Tracking failed' });
