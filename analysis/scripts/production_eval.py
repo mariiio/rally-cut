@@ -1227,11 +1227,21 @@ def _fmt(a: dict | None) -> str:
 
 
 def _git_sha() -> str:
+    # Include a `-dirty` suffix when the working tree differs from HEAD, so
+    # two runs with an uncommitted patch toggled in/out can't appear to
+    # share a git_sha in the output JSON. The 2026-04-14 "1.6pp variance at
+    # same sha" misdiagnosis (see action_audit_2026_04_14.md) was actually
+    # a pre/post A/B of commit b59e264 being staged as a working-tree diff.
     try:
-        return subprocess.check_output(
+        sha = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"],
             stderr=subprocess.DEVNULL,
         ).decode().strip()
+        dirty = subprocess.call(
+            ["git", "diff", "--quiet", "HEAD"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ) != 0
+        return f"{sha}-dirty" if dirty else sha
     except Exception:  # noqa: BLE001
         return "unknown"
 
