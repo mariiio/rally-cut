@@ -51,6 +51,11 @@ debug_*/
 # Diagnostic outputs (regeneratable audit logs, plots, artifacts)
 outputs/
 
+# Training artifacts (large, regeneratable)
+reid_training_data/
+reid_loocv_sweep.txt
+experiments/wasb_gt_labels/
+
 # Model weights (downloaded/trained)
 weights/
 
