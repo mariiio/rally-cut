@@ -39,7 +39,7 @@ src/
 │   ├── PlayerOverlay # Player bounding box visualization
 │   ├── BallTrackOverlay # Ball trajectory visualization
 │   ├── OriginalQualityBanner # FREE tier upgrade prompt (7-day quality warning)
-│   ├── VideoInsightsBanner # Auto-detected quality insights (camera distance, complex scene, calibration recommendation)
+│   ├── QualityReportBanner # Top-3 quality issues (tier-colored; block non-dismissable); reads Match.qualityReportJson
 │   ├── AnalysisPipeline # "Analyze Match" button + progress UI (quality → detect → track → stats)
 ├── stores/           # Zustand stores (see below)
 ├── services/
@@ -47,8 +47,19 @@ src/
 │   └── syncService   # Backend sync (5s debounce)
 └── utils/
     ├── videoExport.ts
-    └── cameraInterpolation.ts
+    ├── cameraInterpolation.ts
+    └── extractPreviewFrames.ts # Client-side 5-frame + metadata extractor for the pre-upload preflight gate
 ```
+
+## Pre-upload preflight gate
+
+Before `uploadStore` requests a presigned S3 URL, it extracts 5 thumbnail JPEGs client-side
+(`utils/extractPreviewFrames.ts`) and POSTs them to `/v1/videos/preflight-preview`. If the
+response is `{ pass: false }` with any `block`-tier issue, the upload is cancelled and the
+structured `{ title, issues }` error surfaces in the store's `error` field. Gate failures
+during preview extraction itself (e.g., browser decode error) are treated as advisory —
+upload continues. This guards against wasting bandwidth on non-volleyball / wrong-angle
+uploads that would hit the same block in post-upload preflight anyway.
 
 ## Zustand Stores
 

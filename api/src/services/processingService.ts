@@ -17,6 +17,7 @@ import {
 import { prisma } from "../lib/prisma.js";
 import { NotFoundError } from "../middleware/errorHandler.js";
 import { getUserTier } from "./tierService.js";
+import { mergeQualityReports, type QualityReport } from "./qualityReport.js";
 
 const lambdaClient = new LambdaClient({
   region: env.AWS_REGION,
@@ -90,25 +91,14 @@ export async function generatePosterImmediate(
       console.log(`[POSTER] Failed to extract video metadata for ${videoId}:`, err);
     }
 
-    // Compute brightness for video characteristics
-    let characteristicsJson: { brightness: { mean: number; category: string }; version: number } | undefined;
+    // Compute brightness and store as a numeric signal in qualityReportJson
+    let brightnessMean: number | undefined;
     try {
       const brightness = await computeBrightness(inputPath);
-      characteristicsJson = { brightness, version: 1 };
+      brightnessMean = brightness.mean;
       console.log(`[POSTER] Video ${videoId} brightness: ${brightness.mean} (${brightness.category})`);
     } catch (err) {
       console.log(`[POSTER] Failed to compute brightness for ${videoId}:`, err);
-    }
-
-    // Run early quality assessment (YOLO on sample frames, ~2-3s)
-    let qualityAssessment: Record<string, unknown> | undefined;
-    try {
-      qualityAssessment = await runQualityAssessment(inputPath) ?? undefined;
-      if (qualityAssessment) {
-        console.log(`[POSTER] Video ${videoId} quality: ${qualityAssessment.expectedQuality} (${(qualityAssessment.warnings as string[])?.length ?? 0} warnings)`);
-      }
-    } catch (err) {
-      console.log(`[POSTER] Failed to assess quality for ${videoId}:`, err);
     }
 
     // Generate S3 key for poster
@@ -146,17 +136,19 @@ export async function generatePosterImmediate(
     const posterData = await fs.readFile(posterPath);
     await uploadPoster(posterKey, posterData);
 
-    // Merge quality assessment into characteristics
-    let mergedCharacteristics = characteristicsJson as Record<string, unknown> | undefined;
-    if (qualityAssessment) {
-      mergedCharacteristics = {
-        ...(mergedCharacteristics ?? {}),
-        ...(qualityAssessment.cameraDistance ? { cameraDistance: qualityAssessment.cameraDistance } : {}),
-        ...(qualityAssessment.sceneComplexity ? { sceneComplexity: qualityAssessment.sceneComplexity } : {}),
-        expectedQuality: qualityAssessment.expectedQuality,
-        uploadWarnings: qualityAssessment.warnings,
-        version: 1,
-      };
+    // Build qualityReportJson patch from brightness signal (no issues emitted here;
+    // preflight/upload checks own issue generation).
+    let qualityReportPatch: Partial<QualityReport> | undefined;
+    if (brightnessMean != null) {
+      const existing = await prisma.video.findUnique({
+        where: { id: videoId },
+        select: { qualityReportJson: true },
+      });
+      const prior = (existing?.qualityReportJson as Partial<QualityReport> | null) ?? {};
+      qualityReportPatch = mergeQualityReports([
+        prior,
+        { version: 2, issues: [], brightness: brightnessMean },
+      ]);
     }
 
     // Update database with poster and extracted metadata
@@ -168,7 +160,7 @@ export async function generatePosterImmediate(
         ...(fps !== null && { fps }),
         ...(width !== null && { width }),
         ...(height !== null && { height }),
-        ...(mergedCharacteristics && { characteristicsJson: mergedCharacteristics as Prisma.InputJsonValue }),
+        ...(qualityReportPatch && { qualityReportJson: qualityReportPatch as unknown as Prisma.InputJsonValue }),
       },
     });
 
@@ -866,68 +858,6 @@ function runFFprobe(args: string[]): Promise<string> {
         reject(new Error(`FFprobe exited with code ${code}: ${stderr.slice(-500)}`));
       }
     });
-  });
-}
-
-/**
- * Run early quality assessment using YOLO on sample frames.
- * Calls `rallycut assess-quality` CLI. Returns null if unavailable.
- */
-async function runQualityAssessment(
-  videoPath: string
-): Promise<Record<string, unknown> | null> {
-  const analysisDir = path.resolve(
-    path.dirname(new URL(import.meta.url).pathname),
-    "../../../analysis"
-  );
-
-  return new Promise((resolve) => {
-    const args = [
-      "run",
-      "rallycut",
-      "assess-quality",
-      videoPath,
-      "--json",
-      "--quiet",
-    ];
-
-    const child = spawn("uv", args, {
-      cwd: analysisDir,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
-    });
-
-    let stdout = "";
-    child.stdout?.on("data", (data: Buffer) => {
-      stdout += data.toString();
-    });
-
-    child.on("error", () => {
-      resolve(null); // CLI not available — skip silently
-    });
-
-    child.on("exit", (code) => {
-      if (code !== 0) {
-        resolve(null);
-        return;
-      }
-      try {
-        const result = JSON.parse(stdout.trim());
-        resolve(result);
-      } catch {
-        resolve(null);
-      }
-    });
-
-    // Timeout after 30s — quality assessment shouldn't take longer
-    setTimeout(() => {
-      try {
-        child.kill();
-      } catch {
-        // Ignore
-      }
-      resolve(null);
-    }, 30000);
   });
 }
 

@@ -8,7 +8,10 @@ import {
   initiateMultipartUpload,
   completeMultipartUpload,
   abortMultipartUpload,
+  preflightPreview,
 } from '@/services/api';
+import { extractPreviewFrames, readVideoMetadata } from '@/utils/extractPreviewFrames';
+import type { QualityIssue } from '@/types/rally';
 import { useTierStore, TIER_LIMITS_DISPLAY } from './tierStore';
 
 interface UploadResult {
@@ -16,12 +19,19 @@ interface UploadResult {
   videoId?: string;
 }
 
+export interface UploadError {
+  /** Human-readable title or message */
+  title: string;
+  /** Structured quality issues (present when upload was cancelled by preflight gate) */
+  issues?: QualityIssue[];
+}
+
 interface UploadState {
   // Upload status
   isUploading: boolean;
   progress: number;
   currentStep: string;
-  error: string | null;
+  error: UploadError | null;
 
   // Abort controller for cancellation
   abortController: AbortController | null;
@@ -254,6 +264,27 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       return false;
     }
 
+    // Pre-upload preview gate — runs before any bytes go to S3.
+    try {
+      const meta = await readVideoMetadata(file);
+      const frames = await extractPreviewFrames(file, 5);
+      const preview = await preflightPreview(frames, meta);
+      if (!preview.pass) {
+        set({
+          error: {
+            title: 'Upload cancelled',
+            issues: preview.issues,
+          },
+        });
+        return false;
+      }
+    } catch (err) {
+      // Preview is advisory-only on failure: if the preview pipeline itself
+      // crashes (browser decoding issue, network error), don't block legitimate
+      // uploads. Log and continue.
+      console.warn('[upload] preview gate failed, continuing:', err);
+    }
+
     const abortController = new AbortController();
     set({
       isUploading: true,
@@ -325,7 +356,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         isUploading: false,
         progress: 0,
         currentStep: '',
-        error: isCancelled ? null : (err instanceof Error ? err.message : 'Upload failed'),
+        error: isCancelled ? null : { title: err instanceof Error ? err.message : 'Upload failed' },
         abortController: null,
       });
       return false;
@@ -335,6 +366,27 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   uploadVideoToLibrary: async (file: File): Promise<UploadResult> => {
     if (get().isUploading) {
       return { success: false };
+    }
+
+    // Pre-upload preview gate — runs before any bytes go to S3.
+    try {
+      const meta = await readVideoMetadata(file);
+      const frames = await extractPreviewFrames(file, 5);
+      const preview = await preflightPreview(frames, meta);
+      if (!preview.pass) {
+        set({
+          error: {
+            title: 'Upload cancelled',
+            issues: preview.issues,
+          },
+        });
+        return { success: false };
+      }
+    } catch (err) {
+      // Preview is advisory-only on failure: if the preview pipeline itself
+      // crashes (browser decoding issue, network error), don't block legitimate
+      // uploads. Log and continue.
+      console.warn('[upload] preview gate failed, continuing:', err);
     }
 
     const abortController = new AbortController();
@@ -479,7 +531,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         isUploading: false,
         progress: 0,
         currentStep: '',
-        error: isCancelled ? null : (err instanceof Error ? err.message : 'Upload failed'),
+        error: isCancelled ? null : { title: err instanceof Error ? err.message : 'Upload failed' },
         abortController: null,
       });
       return { success: false };

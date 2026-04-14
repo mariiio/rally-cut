@@ -18,6 +18,10 @@ uv run rallycut cut <video.mp4> --heuristics    # Force heuristics (57% F1)
 uv run rallycut cut <video.mp4> --model beach   # Use beach volleyball model
 uv run rallycut profile <video.mp4>             # Performance profiling
 
+# Quality checks (A1 ship)
+uv run rallycut preflight <video.mp4>           # Full preflight: metadata, brightness, camera geometry, camera distance, crowd density, shakiness. Emits JSON QualityReport.
+uv run rallycut preview-check <frames-dir>      # Lightweight pre-upload check on a directory of JPEG frames. Used by the web client-side upload gate via api/src/services/qualityService.ts::runPreviewChecks. Runs court-keypoint detection + camera_geometry only.
+
 # Pre-extract features (optional — TemporalMaxer auto-extracts on first run)
 uv run rallycut train extract-features --stride 12
 

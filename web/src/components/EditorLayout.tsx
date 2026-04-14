@@ -24,7 +24,7 @@ import { MobileEditorLayout } from './mobile';
 import { AccessRequestForm } from './AccessRequestForm';
 import { TutorialProvider, TutorialContext } from './tutorial';
 import { PlayerTrackingToolbar } from './PlayerTrackingToolbar';
-import { VideoInsightsBanner } from './VideoInsightsBanner';
+import { QualityReportBanner } from './QualityReportBanner';
 import { MatchStatsPanel } from './MatchStatsPanel';
 import { PlayerMatchingDialog } from './PlayerMatchingDialog';
 import { PlayerReferenceCropDialog } from './PlayerReferenceCropDialog';
@@ -453,7 +453,9 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
             <UploadProgress />
             <ExportProgress />
             <OriginalQualityBanner currentMatch={currentMatch} />
-            <VideoInsightsBanner currentMatch={currentMatch} />
+            {currentMatch && (
+              <QualityReportBanner report={currentMatch.qualityReportJson ?? null} videoId={currentMatch.id} />
+            )}
             {/* Player tracking toolbar */}
             <PlayerTrackingToolbar />
             <Box sx={{ flex: 1, minHeight: 0 }}>

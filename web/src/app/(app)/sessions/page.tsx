@@ -301,7 +301,7 @@ function SessionsPageContent() {
       if (!result.success || !result.videoId) {
         const storeError = useUploadStore.getState().error;
         if (storeError) {
-          lastUploadError = storeError;
+          lastUploadError = storeError.title;
         }
         console.error(`Failed to upload ${file.name}`);
         continue;

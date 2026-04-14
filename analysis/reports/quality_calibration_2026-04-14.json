@@ -1,0 +1,1826 @@
+{
+  "date": "2026-04-14",
+  "n_videos": 67,
+  "failure_thresholds": {
+    "action_acc": 0.75,
+    "score_acc": 0.75,
+    "hota": 0.6
+  },
+  "coverage": {
+    "quality_metrics": 67,
+    "action_acc": 67,
+    "score_acc": 49,
+    "hota": 33
+  },
+  "n_failures": 32,
+  "calibration": [
+    {
+      "check_id": "camera_too_far",
+      "metric_key": "medianBboxHeight",
+      "direction": "<",
+      "best_threshold": 0.15,
+      "best_lift": 0.657,
+      "best_n_fires": 25,
+      "recommendation": "drop",
+      "threshold_sweep": [
+        {
+          "threshold": 0.05,
+          "n_fires": 0,
+          "n_not_fires": 67,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4776,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.08,
+          "n_fires": 2,
+          "n_not_fires": 65,
+          "p_fail_given_fires": 0.5,
+          "p_fail_given_not_fires": 0.4769,
+          "lift": 1.048
+        },
+        {
+          "threshold": 0.1,
+          "n_fires": 7,
+          "n_not_fires": 60,
+          "p_fail_given_fires": 0.2857,
+          "p_fail_given_not_fires": 0.5,
+          "lift": 0.571
+        },
+        {
+          "threshold": 0.12,
+          "n_fires": 14,
+          "n_not_fires": 53,
+          "p_fail_given_fires": 0.2857,
+          "p_fail_given_not_fires": 0.5283,
+          "lift": 0.541
+        },
+        {
+          "threshold": 0.15,
+          "n_fires": 25,
+          "n_not_fires": 42,
+          "p_fail_given_fires": 0.36,
+          "p_fail_given_not_fires": 0.5476,
+          "lift": 0.657
+        }
+      ]
+    },
+    {
+      "check_id": "crowded_scene",
+      "metric_key": "avgNonCourtPersons",
+      "direction": ">",
+      "best_threshold": 2,
+      "best_lift": 1.21,
+      "best_n_fires": 62,
+      "recommendation": "drop",
+      "threshold_sweep": [
+        {
+          "threshold": 2,
+          "n_fires": 62,
+          "n_not_fires": 5,
+          "p_fail_given_fires": 0.4839,
+          "p_fail_given_not_fires": 0.4,
+          "lift": 1.21
+        },
+        {
+          "threshold": 3,
+          "n_fires": 40,
+          "n_not_fires": 27,
+          "p_fail_given_fires": 0.425,
+          "p_fail_given_not_fires": 0.5556,
+          "lift": 0.765
+        },
+        {
+          "threshold": 5,
+          "n_fires": 27,
+          "n_not_fires": 40,
+          "p_fail_given_fires": 0.2963,
+          "p_fail_given_not_fires": 0.6,
+          "lift": 0.494
+        },
+        {
+          "threshold": 8,
+          "n_fires": 11,
+          "n_not_fires": 56,
+          "p_fail_given_fires": 0.0909,
+          "p_fail_given_not_fires": 0.5536,
+          "lift": 0.164
+        },
+        {
+          "threshold": 12,
+          "n_fires": 0,
+          "n_not_fires": 67,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4776,
+          "lift": 0.0
+        }
+      ]
+    },
+    {
+      "check_id": "shaky_camera",
+      "metric_key": "meanResidual",
+      "direction": ">",
+      "best_threshold": 0.05,
+      "best_lift": 0.727,
+      "best_n_fires": 11,
+      "recommendation": "drop",
+      "threshold_sweep": [
+        {
+          "threshold": 0.05,
+          "n_fires": 11,
+          "n_not_fires": 56,
+          "p_fail_given_fires": 0.3636,
+          "p_fail_given_not_fires": 0.5,
+          "lift": 0.727
+        },
+        {
+          "threshold": 0.1,
+          "n_fires": 0,
+          "n_not_fires": 67,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4776,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.15,
+          "n_fires": 0,
+          "n_not_fires": 67,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4776,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.2,
+          "n_fires": 0,
+          "n_not_fires": 67,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4776,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.3,
+          "n_fires": 0,
+          "n_not_fires": 67,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4776,
+          "lift": 0.0
+        }
+      ]
+    },
+    {
+      "check_id": "video_rotated",
+      "metric_key": "tiltDeg",
+      "direction": ">",
+      "best_threshold": null,
+      "best_lift": 0.0,
+      "best_n_fires": 0,
+      "recommendation": "drop",
+      "threshold_sweep": [
+        {
+          "threshold": 3,
+          "n_fires": 0,
+          "n_not_fires": 66,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4697,
+          "lift": 0.0
+        },
+        {
+          "threshold": 5,
+          "n_fires": 0,
+          "n_not_fires": 66,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4697,
+          "lift": 0.0
+        },
+        {
+          "threshold": 8,
+          "n_fires": 0,
+          "n_not_fires": 66,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4697,
+          "lift": 0.0
+        },
+        {
+          "threshold": 12,
+          "n_fires": 0,
+          "n_not_fires": 66,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4697,
+          "lift": 0.0
+        },
+        {
+          "threshold": 20,
+          "n_fires": 0,
+          "n_not_fires": 66,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4697,
+          "lift": 0.0
+        }
+      ]
+    },
+    {
+      "check_id": "too_dark",
+      "metric_key": "meanLuma",
+      "direction": "<",
+      "best_threshold": null,
+      "best_lift": 0.0,
+      "best_n_fires": 0,
+      "recommendation": "drop",
+      "threshold_sweep": [
+        {
+          "threshold": 0.08,
+          "n_fires": 0,
+          "n_not_fires": 67,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4776,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.12,
+          "n_fires": 0,
+          "n_not_fires": 67,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4776,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.15,
+          "n_fires": 0,
+          "n_not_fires": 67,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4776,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.2,
+          "n_fires": 0,
+          "n_not_fires": 67,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4776,
+          "lift": 0.0
+        }
+      ]
+    },
+    {
+      "check_id": "overexposed",
+      "metric_key": "meanLuma",
+      "direction": ">",
+      "best_threshold": null,
+      "best_lift": 0.0,
+      "best_n_fires": 0,
+      "recommendation": "drop",
+      "threshold_sweep": [
+        {
+          "threshold": 0.8,
+          "n_fires": 1,
+          "n_not_fires": 66,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4848,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.85,
+          "n_fires": 0,
+          "n_not_fires": 67,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4776,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.9,
+          "n_fires": 0,
+          "n_not_fires": 67,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4776,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.95,
+          "n_fires": 0,
+          "n_not_fires": 67,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4776,
+          "lift": 0.0
+        }
+      ]
+    },
+    {
+      "check_id": "wrong_angle_or_not_volleyball",
+      "metric_key": "courtConfidence",
+      "direction": "<",
+      "best_threshold": 0.75,
+      "best_lift": 1.771,
+      "best_n_fires": 5,
+      "recommendation": "drop",
+      "threshold_sweep": [
+        {
+          "threshold": 0.3,
+          "n_fires": 0,
+          "n_not_fires": 67,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4776,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.5,
+          "n_fires": 0,
+          "n_not_fires": 67,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.4776,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.6,
+          "n_fires": 1,
+          "n_not_fires": 66,
+          "p_fail_given_fires": 1.0,
+          "p_fail_given_not_fires": 0.4697,
+          "lift": 2.129
+        },
+        {
+          "threshold": 0.75,
+          "n_fires": 5,
+          "n_not_fires": 62,
+          "p_fail_given_fires": 0.8,
+          "p_fail_given_not_fires": 0.4516,
+          "lift": 1.771
+        }
+      ]
+    }
+  ],
+  "per_video": [
+    {
+      "video_id": "073cb11b-c7ba-4fac-8cc9-b032b3152ad6",
+      "action_acc": 0.8947368421052632,
+      "score_acc": 0.6,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 315.902993,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 59.94005994005994,
+        "meanLuma": 0.6057763613405753,
+        "courtConfidence": 0.8483191430568695,
+        "tiltDeg": 1.8263145246328476,
+        "medianBboxHeight": 0.11310255527496338,
+        "avgNonCourtPersons": 5.4,
+        "meanResidual": 0.0507677441669835
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "07fedbd4-693e-4651-9fee-c616a1f4b413",
+      "action_acc": 0.9714285714285714,
+      "score_acc": null,
+      "hota": 0.9924068757113449,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 196.445011,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 29.97002997002997,
+        "meanLuma": 0.8153623736055635,
+        "courtConfidence": 0.8150787144899369,
+        "tiltDeg": 1.1624159489691461,
+        "medianBboxHeight": 0.1859857589006424,
+        "avgNonCourtPersons": 2.7,
+        "meanResidual": 0.039690567180514336
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "0a383519-ecaa-411a-8e5e-e0aadc835725",
+      "action_acc": 0.95,
+      "score_acc": 0.7,
+      "hota": 0.984751872818323,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 1282.055,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 60.0,
+        "meanLuma": 0.536564833978859,
+        "courtConfidence": 0.7785483956336975,
+        "tiltDeg": 2.8731136045573122,
+        "medianBboxHeight": 0.18489639461040497,
+        "avgNonCourtPersons": 5.2,
+        "meanResidual": 0.033370142388674945
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "16458e78-d30d-425c-805b-f9957d469a7c",
+      "action_acc": 0.8620689655172413,
+      "score_acc": 0.5714285714285714,
+      "hota": 0.9532262200699765,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 240.5,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.6829972649000444,
+        "courtConfidence": 0.84293771982193,
+        "tiltDeg": 1.7892515081612572,
+        "medianBboxHeight": 0.1400260031223297,
+        "avgNonCourtPersons": 2.2,
+        "meanResidual": 0.019366149894065328
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "1a5da176-8755-4e0d-8afd-ed1cab746fe3",
+      "action_acc": 0.9259259259259259,
+      "score_acc": 0.6,
+      "hota": 0.9680987500629353,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 199.851995,
+        "width": 1280.0,
+        "height": 720.0,
+        "fps": 30.0,
+        "meanLuma": 0.5700590013956972,
+        "courtConfidence": 0.8458881497383118,
+        "tiltDeg": 0.6420057502127902,
+        "medianBboxHeight": 0.26758694648742676,
+        "avgNonCourtPersons": 2.1,
+        "meanResidual": 0.03258974394864506
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "1efa35cf-4edd-4504-b4a4-834eee9e5218",
+      "action_acc": 1.0,
+      "score_acc": null,
+      "hota": 0.716961422137901,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 433.766667,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.482477605931776,
+        "courtConfidence": 0.8184758931398392,
+        "tiltDeg": 1.5643626804213862,
+        "medianBboxHeight": 0.10139533132314682,
+        "avgNonCourtPersons": 6.7,
+        "meanResidual": 0.01805481149090661
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "20c11175-4387-4079-bd35-f66b7adf50e3",
+      "action_acc": 0.7142857142857143,
+      "score_acc": 0.2,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 121.638183,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 59.94005994005994,
+        "meanLuma": 0.45230392642267814,
+        "courtConfidence": 0.8466719448566437,
+        "tiltDeg": 0.0001517929833927179,
+        "medianBboxHeight": 0.15070144087076187,
+        "avgNonCourtPersons": 2.8,
+        "meanResidual": 0.03554560037122832
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "211e2a4c-c9a3-4438-9b0c-bea4e7555ad0",
+      "action_acc": 0.8571428571428571,
+      "score_acc": 0.8,
+      "hota": null,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 420.867007,
+        "width": 1280.0,
+        "height": 720.0,
+        "fps": 30.0,
+        "meanLuma": 0.6124652808982389,
+        "courtConfidence": 0.8061142891645432,
+        "tiltDeg": 1.0146855200643723,
+        "medianBboxHeight": 0.1752774566411972,
+        "avgNonCourtPersons": 3.7,
+        "meanResidual": 0.021026625918845337
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "23a5f798-78a0-4b3a-8647-b4a2166274b1",
+      "action_acc": 0.3333333333333333,
+      "score_acc": null,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 199.602993,
+        "width": 1280.0,
+        "height": 720.0,
+        "fps": 25.0,
+        "meanLuma": 0.5311648173679193,
+        "courtConfidence": 0.8286495923995972,
+        "tiltDeg": 1.0402785099785137,
+        "medianBboxHeight": 0.1740068644285202,
+        "avgNonCourtPersons": 5.2,
+        "meanResidual": 0.03788796791599856
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "23b662ba-99e0-47d6-a9ac-90bb6fa9bdd1",
+      "action_acc": 0.6666666666666666,
+      "score_acc": null,
+      "hota": 0.8531982408867631,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 238.4382,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 29.97002997002997,
+        "meanLuma": 0.6133478536900872,
+        "courtConfidence": 0.7143037766218185,
+        "tiltDeg": 1.5052624684372333,
+        "medianBboxHeight": 0.08037756383419037,
+        "avgNonCourtPersons": 7.7,
+        "meanResidual": 0.026005286930335894
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "2b2d7786-1f78-4856-95d5-d3003b15f2a3",
+      "action_acc": 0.8888888888888888,
+      "score_acc": null,
+      "hota": null,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 300.07275,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 59.94005994005994,
+        "meanLuma": 0.5188674999873921,
+        "courtConfidence": 0.7632379978895187,
+        "tiltDeg": 1.1635174458534243,
+        "medianBboxHeight": 0.08955906331539154,
+        "avgNonCourtPersons": 9.3,
+        "meanResidual": 0.0362047263317638
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "2d105b7b-12be-476e-b010-1b274380b891",
+      "action_acc": 0.8666666666666667,
+      "score_acc": 0.5,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 273.5,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.519437001608771,
+        "courtConfidence": 0.8312988102436066,
+        "tiltDeg": 0.3345407396998562,
+        "medianBboxHeight": 0.18397241085767746,
+        "avgNonCourtPersons": 1.6,
+        "meanResidual": 0.016049135476350784
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "2e984c43-cef6-4215-8d8e-50d892b510b9",
+      "action_acc": 0.9242424242424242,
+      "score_acc": 0.7777777777777778,
+      "hota": 0.8856434164879141,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 942.318005,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.4022789488647825,
+        "courtConfidence": 0.8361475199460984,
+        "tiltDeg": 0.30618566940068065,
+        "medianBboxHeight": 0.22514598071575165,
+        "avgNonCourtPersons": 2.4,
+        "meanResidual": 0.023420374633537397
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "313c6c95-e586-4585-bfce-a2d293d96815",
+      "action_acc": 0.9375,
+      "score_acc": 0.75,
+      "hota": 0.9086589660331315,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 375.5,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.5187085540980796,
+        "courtConfidence": 0.8656738489866256,
+        "tiltDeg": 0.36582989000748917,
+        "medianBboxHeight": 0.22128699719905853,
+        "avgNonCourtPersons": 2.7,
+        "meanResidual": 0.03351577578319444
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "35ff869f-5698-4982-bcdb-267e11d70e0d",
+      "action_acc": 0.8333333333333334,
+      "score_acc": null,
+      "hota": null,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 300.096979,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 59.94005994005994,
+        "meanLuma": 0.5557373974345396,
+        "courtConfidence": 0.8234678596258164,
+        "tiltDeg": 1.5828217361360464,
+        "medianBboxHeight": 0.08717954903841019,
+        "avgNonCourtPersons": 8,
+        "meanResidual": 0.05795462719268269
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "3ad271bd-b94d-4d63-86ec-4ecbe5dbfeac",
+      "action_acc": 0.9545454545454546,
+      "score_acc": 0.4,
+      "hota": 0.9455158147026123,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 210.659155,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 29.583333333333332,
+        "meanLuma": 0.5728936957859275,
+        "courtConfidence": 0.8400939077138901,
+        "tiltDeg": 0.07443709483108893,
+        "medianBboxHeight": 0.20374076813459396,
+        "avgNonCourtPersons": 3.3,
+        "meanResidual": 0.038895379958881274
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "43928971-2e07-4814-bb1a-3d91c7bf03b2",
+      "action_acc": 0.9117647058823529,
+      "score_acc": 0.6666666666666666,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 195.46,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.6001091550547689,
+        "courtConfidence": 0.8371336340904236,
+        "tiltDeg": 0.9682780284525807,
+        "medianBboxHeight": 0.13901011645793915,
+        "avgNonCourtPersons": 3.8,
+        "meanResidual": 0.0519468527701166
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "44e89f6c-7708-4830-88ef-e9a9819ff343",
+      "action_acc": 0.9411764705882353,
+      "score_acc": 0.8181818181818182,
+      "hota": 0.906642156531451,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 335.05,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 59.94005994005994,
+        "meanLuma": 0.5897409023743243,
+        "courtConfidence": 0.8456600546836853,
+        "tiltDeg": 1.0589288371181347,
+        "medianBboxHeight": 0.1673562303185463,
+        "avgNonCourtPersons": 2.5,
+        "meanResidual": 0.044148394010133214
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "4cd680c7-2333-4dab-9fed-159f064a9e8c",
+      "action_acc": 1.0,
+      "score_acc": null,
+      "hota": 0.9408308039313,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 357.037007,
+        "width": 1280.0,
+        "height": 720.0,
+        "fps": 30.0,
+        "meanLuma": 0.3277690966548656,
+        "courtConfidence": 0.8744578525424003,
+        "tiltDeg": 1.5422212807977462,
+        "medianBboxHeight": 0.12379404529929161,
+        "avgNonCourtPersons": 6.3,
+        "meanResidual": 0.029496870728002653
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "4f2bd66a-61a1-49ac-8137-fd2576e0e851",
+      "action_acc": 0.9130434782608695,
+      "score_acc": 0.0,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 625.090998,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 59.94005994005994,
+        "meanLuma": 0.6748198738703299,
+        "courtConfidence": 0.8078096598386765,
+        "tiltDeg": 2.153181981643888,
+        "medianBboxHeight": 0.11009196192026138,
+        "avgNonCourtPersons": 7,
+        "meanResidual": 0.04521761400004228
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "56f2739d-ff3c-4cac-8ada-4f275e57ab63",
+      "action_acc": 1.0,
+      "score_acc": null,
+      "hota": 0.848094498743868,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 199.9327,
+        "width": 512.0,
+        "height": 288.0,
+        "fps": 29.97002997002997,
+        "meanLuma": 0.48847513878960147,
+        "courtConfidence": 0.8223918110132218,
+        "tiltDeg": 1.3270705244133283,
+        "medianBboxHeight": 0.20611238479614258,
+        "avgNonCourtPersons": 5.6,
+        "meanResidual": 0.027871286910441186
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "5c641cfe-2a98-44b3-816c-e093d700baef",
+      "action_acc": 1.0,
+      "score_acc": 0.8,
+      "hota": 0.9923643576104384,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 155.3,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.687428239542988,
+        "courtConfidence": 0.8165998205542564,
+        "tiltDeg": 2.411152673042257,
+        "medianBboxHeight": 0.14268754422664642,
+        "avgNonCourtPersons": 5.4,
+        "meanResidual": 0.030770549964573648
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "5c756c41-1cc1-4486-a95c-97398912cfbe",
+      "action_acc": 0.8928571428571429,
+      "score_acc": 1.0,
+      "hota": null,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 360.026333,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 59.94005994005994,
+        "meanLuma": 0.5657932850828089,
+        "courtConfidence": 0.8476671248674393,
+        "tiltDeg": 1.8075393609887898,
+        "medianBboxHeight": 0.15060588717460632,
+        "avgNonCourtPersons": 2.3,
+        "meanResidual": 0.03645801585581568
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "601d4a69-b6e9-4b7c-9bd4-2511d282dc5e",
+      "action_acc": 0.8709677419354839,
+      "score_acc": 0.6363636363636364,
+      "hota": 0.9942474353517053,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 353.650998,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.6281614002108045,
+        "courtConfidence": 0.8361120343208314,
+        "tiltDeg": 1.6886230052717084,
+        "medianBboxHeight": 0.16701023280620575,
+        "avgNonCourtPersons": 2.3,
+        "meanResidual": 0.06753270741966036
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "627c1add-8a80-42ab-8278-3617880ebf81",
+      "action_acc": 0.75,
+      "score_acc": 1.0,
+      "hota": 0.8812466991035206,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 217.796009,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 60.0,
+        "meanLuma": 0.6639191432411442,
+        "courtConfidence": 0.8589386582374572,
+        "tiltDeg": 1.5539805311914567,
+        "medianBboxHeight": 0.12756720930337906,
+        "avgNonCourtPersons": 8.1,
+        "meanResidual": 0.03605941372613112
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "635dcba2-2645-49d1-ac62-072f05c957d9",
+      "action_acc": 0.88,
+      "score_acc": 0.8333333333333334,
+      "hota": 0.9081990751173825,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 909.074,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 29.916666666666668,
+        "meanLuma": 0.5513416332556685,
+        "courtConfidence": 0.822556471824646,
+        "tiltDeg": 1.5197990362245024,
+        "medianBboxHeight": 0.21912305057048798,
+        "avgNonCourtPersons": 2,
+        "meanResidual": 0.028978270375066333
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "6d2f646c-1551-4917-a26c-7707a48ba0e9",
+      "action_acc": 1.0,
+      "score_acc": 0.6,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 173.733333,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.3513408048520334,
+        "courtConfidence": 0.8409226566553116,
+        "tiltDeg": 1.2416057699660397,
+        "medianBboxHeight": 0.23223646730184555,
+        "avgNonCourtPersons": 1.8,
+        "meanResidual": 0.02907571331080463
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "6f8ca447-a244-4833-bf49-e9f949defc1a",
+      "action_acc": 0.9183673469387755,
+      "score_acc": 0.125,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 360.019002,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 60.0,
+        "meanLuma": 0.5167636906923264,
+        "courtConfidence": 0.8305644482374192,
+        "tiltDeg": 0.8541850136990907,
+        "medianBboxHeight": 0.18365007638931274,
+        "avgNonCourtPersons": 3,
+        "meanResidual": 0.02462288613120715
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "70ab9d7f-8cc4-48cb-892a-1c36793cac72",
+      "action_acc": 0.0,
+      "score_acc": null,
+      "hota": 0.7324072606285632,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 301.011667,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 60.0,
+        "meanLuma": 0.6782807123981279,
+        "courtConfidence": 0.7598133534193039,
+        "tiltDeg": 0.32723198147581295,
+        "medianBboxHeight": 0.1800219789147377,
+        "avgNonCourtPersons": 5,
+        "meanResidual": 0.03728043536345164
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "7ba71fc4-5348-471c-b38d-8dfd029208e4",
+      "action_acc": 0.8888888888888888,
+      "score_acc": 0.6666666666666666,
+      "hota": 0.816496580927726,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 152.692993,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.5103448808677278,
+        "courtConfidence": 0.8348419547080994,
+        "tiltDeg": 0.8170128695375813,
+        "medianBboxHeight": 0.19517703354358673,
+        "avgNonCourtPersons": 3.8,
+        "meanResidual": 0.03428330355220371
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "7bc3ae8a-01b8-454f-9697-49c5f7b6effe",
+      "action_acc": 0.8148148148148148,
+      "score_acc": 0.7142857142857143,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 360.033333,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.6032544291006011,
+        "courtConfidence": 0.8067036509513855,
+        "tiltDeg": 1.0186083309840142,
+        "medianBboxHeight": 0.17124119400978088,
+        "avgNonCourtPersons": 3,
+        "meanResidual": 0.02911752151946227
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "7c61e308-64b2-4e3d-a3e4-10815645bda2",
+      "action_acc": 0.8888888888888888,
+      "score_acc": null,
+      "hota": null,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 291.755011,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 59.94005994005994,
+        "meanLuma": 0.577893204266017,
+        "courtConfidence": 0.8278068959712982,
+        "tiltDeg": 1.7881324293999983,
+        "medianBboxHeight": 0.10253267735242844,
+        "avgNonCourtPersons": 9.5,
+        "meanResidual": 0.03240751682056321
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "7d77980f-3006-40e0-adc0-db491a5bb659",
+      "action_acc": 0.9016393442622951,
+      "score_acc": 0.9090909090909091,
+      "hota": 0.9936327615774919,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 751.922993,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.5615833139171307,
+        "courtConfidence": 0.8358418017625809,
+        "tiltDeg": 1.5552904240432732,
+        "medianBboxHeight": 0.1978413611650467,
+        "avgNonCourtPersons": 3,
+        "meanResidual": 0.044193925336003304
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "808a5618-a5dc-4d36-93a8-c502c3eb53c5",
+      "action_acc": 1.0,
+      "score_acc": 1.0,
+      "hota": null,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 332.0,
+        "width": 1280.0,
+        "height": 720.0,
+        "fps": 30.0,
+        "meanLuma": 0.5725837106254539,
+        "courtConfidence": 0.7663594186306,
+        "tiltDeg": 1.4022208882926603,
+        "medianBboxHeight": 0.11266899108886719,
+        "avgNonCourtPersons": 8.2,
+        "meanResidual": 0.03921122062537405
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "840e8b6b-8428-48d6-8af8-d239d7c64f5c",
+      "action_acc": 0.9545454545454546,
+      "score_acc": null,
+      "hota": null,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 304.224533,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 29.97002997002997,
+        "meanLuma": 0.5652074642061042,
+        "courtConfidence": 0.745160472393036,
+        "tiltDeg": 1.0887569536576978,
+        "medianBboxHeight": 0.11542485654354095,
+        "avgNonCourtPersons": 8.6,
+        "meanResidual": 0.03653758826355139
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "84e66e74-8d4f-420a-ad01-0ada95153ad0",
+      "action_acc": 0.8157894736842105,
+      "score_acc": 0.5,
+      "hota": 0.9512894523135932,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 680.672269,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 29.75,
+        "meanLuma": 0.633911198357944,
+        "courtConfidence": 0.832231280207634,
+        "tiltDeg": 2.2519246532928956,
+        "medianBboxHeight": 0.28588345646858215,
+        "avgNonCourtPersons": 2.8,
+        "meanResidual": 0.04020842268235154
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "85108567-a028-4303-87a7-5004a87603a5",
+      "action_acc": 0.8333333333333334,
+      "score_acc": null,
+      "hota": null,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 206.857007,
+        "width": 1280.0,
+        "height": 720.0,
+        "fps": 25.0,
+        "meanLuma": 0.5241633097596677,
+        "courtConfidence": 0.8260627090930939,
+        "tiltDeg": 1.1427937475116559,
+        "medianBboxHeight": 0.2520630657672882,
+        "avgNonCourtPersons": 3.6,
+        "meanResidual": 0.05598894858525859
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "854bb250-3e91-47d2-944d-f62413e3cf45",
+      "action_acc": 0.9523809523809523,
+      "score_acc": 1.0,
+      "hota": null,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 137.709002,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 59.94,
+        "meanLuma": 0.4990278002829219,
+        "courtConfidence": 0.8380788713693619,
+        "tiltDeg": 1.0809014920027897,
+        "medianBboxHeight": 0.18483642488718033,
+        "avgNonCourtPersons": 2.6,
+        "meanResidual": 0.034058948771821126
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "90266c1d-5ef9-4285-8ed9-07f4b7116021",
+      "action_acc": 0.9166666666666666,
+      "score_acc": 1.0,
+      "hota": null,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 190.607328,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 59.28943089430894,
+        "meanLuma": 0.6251005461122207,
+        "courtConfidence": 0.8418334007263184,
+        "tiltDeg": 0.3159329106351313,
+        "medianBboxHeight": 0.10598918795585632,
+        "avgNonCourtPersons": 8.4,
+        "meanResidual": 0.03815795936518245
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "9170269b-8259-462e-8a23-28da51026410",
+      "action_acc": 0.9285714285714286,
+      "score_acc": null,
+      "hota": null,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 178.645133,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 29.97002997002997,
+        "meanLuma": 0.7413990271725974,
+        "courtConfidence": 0.8137537837028503,
+        "tiltDeg": 0.7609182285021129,
+        "medianBboxHeight": 0.09823150560259819,
+        "avgNonCourtPersons": 10.3,
+        "meanResidual": 0.02391397435632017
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "920ba69d-2526-4e6c-a357-c44af3bf5c99",
+      "action_acc": 1.0,
+      "score_acc": null,
+      "hota": 0.9469136772902518,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 290.180998,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 29.97002997002997,
+        "meanLuma": 0.6139098962746108,
+        "courtConfidence": 0.8526619881391525,
+        "tiltDeg": 0.005645367862153355,
+        "medianBboxHeight": 0.14012031257152557,
+        "avgNonCourtPersons": 9.1,
+        "meanResidual": 0.07137534105115467
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "950fbe5d-fdad-4862-b05d-8b374bdd5ec6",
+      "action_acc": 0.7894736842105263,
+      "score_acc": 0.25,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 106.476009,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.6773617503958888,
+        "courtConfidence": 0.8400508582592011,
+        "tiltDeg": 1.7539734343255602,
+        "medianBboxHeight": 0.13735085725784302,
+        "avgNonCourtPersons": 6.2,
+        "meanResidual": 0.0471870137585534
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "9a6a9499-ca96-45e3-9f15-d5902c070c0a",
+      "action_acc": 0.9333333333333333,
+      "score_acc": 0.8333333333333334,
+      "hota": null,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 213.702993,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.5608024674337326,
+        "courtConfidence": 0.815494766831398,
+        "tiltDeg": 0.2658924162847187,
+        "medianBboxHeight": 0.07865346223115921,
+        "avgNonCourtPersons": 7.1,
+        "meanResidual": 0.026433676688207522
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "9e9a2327-8766-4515-9188-47293f9aad85",
+      "action_acc": 0.8461538461538461,
+      "score_acc": 1.0,
+      "hota": null,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 167.330998,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.5864356198433592,
+        "courtConfidence": 0.8366349309682847,
+        "tiltDeg": 0.8924553904447226,
+        "medianBboxHeight": 0.23990792036056519,
+        "avgNonCourtPersons": 1.5,
+        "meanResidual": 0.05913490719265408
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "a5866029-7cf4-42d6-adc2-8e28111ffd81",
+      "action_acc": 0.7142857142857143,
+      "score_acc": null,
+      "hota": 0.9164374780886864,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 180.361995,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 29.97002997002997,
+        "meanLuma": 0.5293915146151054,
+        "courtConfidence": 0.8336515367031098,
+        "tiltDeg": 0.5953312860784281,
+        "medianBboxHeight": 0.20236577838659286,
+        "avgNonCourtPersons": 6.1,
+        "meanResidual": 0.03825848735868931
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "a7ee3d38-a3a9-4dcd-a2af-e0617997e708",
+      "action_acc": 0.9090909090909091,
+      "score_acc": null,
+      "hota": 0.9001553573814493,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 464.702993,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.48875174348674655,
+        "courtConfidence": 0.8354894667863846,
+        "tiltDeg": 1.8028882580884191,
+        "medianBboxHeight": 0.2064201608300209,
+        "avgNonCourtPersons": 3.4,
+        "meanResidual": 0.014828112907707691
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "a9f053a9-7277-4085-9d9c-0ef769a61486",
+      "action_acc": 0.95,
+      "score_acc": 0.2,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 360.033333,
+        "width": 1280.0,
+        "height": 720.0,
+        "fps": 30.0,
+        "meanLuma": 0.6151741527947985,
+        "courtConfidence": 0.7665984570980072,
+        "tiltDeg": 0.5076124063434393,
+        "medianBboxHeight": 0.20616039633750916,
+        "avgNonCourtPersons": 3.6,
+        "meanResidual": 0.022057017001012962
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "ab2ccb1d-80fb-4d0e-b90a-a11b65a3498c",
+      "action_acc": 1.0,
+      "score_acc": 1.0,
+      "hota": null,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 360.011995,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 59.94005994005994,
+        "meanLuma": 0.46877618747730576,
+        "courtConfidence": 0.8389682918787003,
+        "tiltDeg": 0.21389147265559486,
+        "medianBboxHeight": 0.2788622975349426,
+        "avgNonCourtPersons": 2,
+        "meanResidual": 0.03501285364230474
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "ab4edcdc-7335-44d1-b944-b201feb5a262",
+      "action_acc": 0.9642857142857143,
+      "score_acc": 0.8333333333333334,
+      "hota": null,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 219.676009,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.6519226246041112,
+        "courtConfidence": 0.8093495160341263,
+        "tiltDeg": 1.0197021028644133,
+        "medianBboxHeight": 0.09497612714767456,
+        "avgNonCourtPersons": 7.3,
+        "meanResidual": 0.0296105889396535
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "ae81fff5-a80e-4f77-8315-2e3377ce7737",
+      "action_acc": 0.9,
+      "score_acc": 0.8571428571428571,
+      "hota": 0.9784747250849954,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 809.726259,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 29.435,
+        "meanLuma": 0.4367445146075405,
+        "courtConfidence": 0.8358522355556488,
+        "tiltDeg": 0.006583533378626919,
+        "medianBboxHeight": 0.14890718460083008,
+        "avgNonCourtPersons": 2.3,
+        "meanResidual": 0.057113591167661876
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "b026dc6c-0858-42f2-8513-fc5ee7dbdd93",
+      "action_acc": 0.9767441860465116,
+      "score_acc": 0.0,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 772.278005,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 29.97002997002997,
+        "meanLuma": 0.6027813212347696,
+        "courtConfidence": 0.5222839504480362,
+        "medianBboxHeight": 0.16278448700904846,
+        "avgNonCourtPersons": 3.1,
+        "meanResidual": 0.06534278185831176
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "b03b461b-b1c1-4f53-8cce-79c0afe8a049",
+      "action_acc": 0.967741935483871,
+      "score_acc": 0.6666666666666666,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 206.435,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.5000541602366255,
+        "courtConfidence": 0.825629398226738,
+        "tiltDeg": 1.1844062691565436,
+        "medianBboxHeight": 0.18122976273298264,
+        "avgNonCourtPersons": 2.5,
+        "meanResidual": 0.03759521163172192
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "b097dd2a-6953-4e0e-a603-5be3552f462e",
+      "action_acc": 0.9629629629629629,
+      "score_acc": 0.6666666666666666,
+      "hota": 0.9569936328750129,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 230.745011,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.634101538986222,
+        "courtConfidence": 0.8299001187086106,
+        "tiltDeg": 0.2608008012567819,
+        "medianBboxHeight": 0.21088501065969467,
+        "avgNonCourtPersons": 2.2,
+        "meanResidual": 0.026467718183994293
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "b5fb0594-d64f-4a0d-bad9-de8fc36414d0",
+      "action_acc": 0.8958333333333334,
+      "score_acc": 0.42857142857142855,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 317.415011,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 60.0,
+        "meanLuma": 0.5540975663555031,
+        "courtConfidence": 0.8250729739665985,
+        "tiltDeg": 0.9618820982398358,
+        "medianBboxHeight": 0.07309909164905548,
+        "avgNonCourtPersons": 8.1,
+        "meanResidual": 0.03163243561155266
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "bbd880f2-2cc1-429c-96c0-9b72222607cb",
+      "action_acc": 0.8695652173913043,
+      "score_acc": 0.5,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 161.972993,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.32494549449538046,
+        "courtConfidence": 0.8200842797756195,
+        "tiltDeg": 1.2549574062907112,
+        "medianBboxHeight": 0.2892831265926361,
+        "avgNonCourtPersons": 2.3,
+        "meanResidual": 0.03956174022621579
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "beb70f61-de8a-4805-a7ae-e8c7199d7275",
+      "action_acc": 0.9545454545454546,
+      "score_acc": 0.5714285714285714,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 223.285011,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.6170389992712619,
+        "courtConfidence": 0.834491041302681,
+        "tiltDeg": 2.1655174041466587,
+        "medianBboxHeight": 0.13376329839229584,
+        "avgNonCourtPersons": 2.6,
+        "meanResidual": 0.0478401854634285
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "c6e4c876-beca-4cb8-9cce-4a4fc70553f1",
+      "action_acc": 0.9615384615384616,
+      "score_acc": null,
+      "hota": 0.7715899452709735,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 235.068167,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 29.97002997002997,
+        "meanLuma": 0.6772375145621521,
+        "courtConfidence": 0.8419318109750747,
+        "tiltDeg": 0.17976814745038228,
+        "medianBboxHeight": 0.1744268238544464,
+        "avgNonCourtPersons": 8.2,
+        "meanResidual": 0.06518597735299005
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "cb3b68f0-74df-4ab3-9e14-e76ac62ecb2d",
+      "action_acc": 0.8846153846153846,
+      "score_acc": 0.25,
+      "hota": 0.9447785140296852,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 174.433991,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.6790042889004881,
+        "courtConfidence": 0.834346255660057,
+        "tiltDeg": 0.6346714715485412,
+        "medianBboxHeight": 0.20596731454133987,
+        "avgNonCourtPersons": 2.9,
+        "meanResidual": 0.03320568034218417
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "ce4c67a1-f99c-4e87-9a3e-a34c216d4761",
+      "action_acc": 1.0,
+      "score_acc": 1.0,
+      "hota": 0.9913511889150011,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 217.071995,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.6179828307184498,
+        "courtConfidence": 0.8152766078710556,
+        "tiltDeg": 0.30872432768722724,
+        "medianBboxHeight": 0.1660686731338501,
+        "avgNonCourtPersons": 6.8,
+        "meanResidual": 0.06755728109015359
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "d07ce9e1-aa5d-4875-97c4-f565bbfc14f3",
+      "action_acc": 0.84375,
+      "score_acc": 0.5,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 347.966667,
+        "width": 1280.0,
+        "height": 720.0,
+        "fps": 30.0,
+        "meanLuma": 0.5522237130934549,
+        "courtConfidence": 0.821791023015976,
+        "tiltDeg": 0.20149596675716439,
+        "medianBboxHeight": 0.16247931122779846,
+        "avgNonCourtPersons": 3.8,
+        "meanResidual": 0.033478330820798874
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "d3486f0b-6601-43d8-a60f-6ecc4874c408",
+      "action_acc": 0.918918918918919,
+      "score_acc": 0.8,
+      "hota": null,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 177.5,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.6506806754569112,
+        "courtConfidence": 0.8266130179166794,
+        "tiltDeg": 1.306882312394023,
+        "medianBboxHeight": 0.14072516560554504,
+        "avgNonCourtPersons": 5.3,
+        "meanResidual": 0.04056776977247662
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "d5a6932f-e853-469b-ad9b-8c811a058526",
+      "action_acc": 0.9347826086956522,
+      "score_acc": 0.5,
+      "hota": 0.9665049076579726,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 757.4,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.47754534515452274,
+        "courtConfidence": 0.8294537723064422,
+        "tiltDeg": 0.8311118281990437,
+        "medianBboxHeight": 0.18305304646492004,
+        "avgNonCourtPersons": 2.3,
+        "meanResidual": 0.039403980804814234
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "dd042609-e22e-4f60-83ed-038897c88c32",
+      "action_acc": 0.875,
+      "score_acc": 0.5555555555555556,
+      "hota": 0.9737533446676603,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 822.763,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 29.916666666666668,
+        "meanLuma": 0.5241409568405551,
+        "courtConfidence": 0.7493031442165375,
+        "tiltDeg": 0.21391368341447142,
+        "medianBboxHeight": 0.2069726660847664,
+        "avgNonCourtPersons": 3.9,
+        "meanResidual": 0.028378291055560112
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "eb693a6f-30df-4265-9291-eea46b6a1426",
+      "action_acc": 0.8723404255319149,
+      "score_acc": 0.7142857142857143,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 293.483751,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 29.695,
+        "meanLuma": 0.4350941781020536,
+        "courtConfidence": 0.7459033638238907,
+        "tiltDeg": 0.23376590652193127,
+        "medianBboxHeight": 0.1408238783478737,
+        "avgNonCourtPersons": 4.4,
+        "meanResidual": 0.03729107458558348
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "edc81438-10bc-431d-ae88-5c609f3fae93",
+      "action_acc": 1.0,
+      "score_acc": null,
+      "hota": 0.9232124243933966,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 190.6905,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 29.97002997002997,
+        "meanLuma": 0.6619669316221859,
+        "courtConfidence": 0.8230800122022629,
+        "tiltDeg": 0.510263095941213,
+        "medianBboxHeight": 0.16093190014362335,
+        "avgNonCourtPersons": 8.9,
+        "meanResidual": 0.035400711827807956
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "fb83f876-7288-44ce-b8e4-4151bc7da4df",
+      "action_acc": 0.9428571428571428,
+      "score_acc": 1.0,
+      "hota": 0.9890790376725836,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 188.901571,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 29.788,
+        "meanLuma": 0.5180691161971476,
+        "courtConfidence": 0.8237127453088761,
+        "tiltDeg": 0.3330268592656409,
+        "medianBboxHeight": 0.24993082880973816,
+        "avgNonCourtPersons": 3.5,
+        "meanResidual": 0.03681066528790527
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "ff175026-bd5b-4349-b390-188438da2005",
+      "action_acc": 0.8837209302325582,
+      "score_acc": 0.875,
+      "hota": 0.8336390876394694,
+      "is_failure": false,
+      "quality_metrics": {
+        "durationS": 950.166667,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 30.0,
+        "meanLuma": 0.5717078910473654,
+        "courtConfidence": 0.8333298057317734,
+        "tiltDeg": 0.9244735834231536,
+        "medianBboxHeight": 0.270491287112236,
+        "avgNonCourtPersons": 2.5,
+        "meanResidual": 0.031287874198622175
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    }
+  ]
+}

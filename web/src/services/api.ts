@@ -109,7 +109,7 @@ interface ApiVideo {
   cameraSettings?: ApiVideoCameraSettings | null;
   createdAt: string;
   qualityDowngradedAt?: string | null;
-  characteristicsJson?: VideoCharacteristics | null;
+  qualityReportJson?: VideoQualityReport | null;
   courtCalibrationJson?: Array<{ x: number; y: number }> | null;
 }
 
@@ -163,7 +163,7 @@ interface ApiHighlightRally {
 }
 
 // Frontend types (from @/types/rally)
-import type { Session, Match, Rally, Highlight, VideoMetadata, VideoCharacteristics } from '@/types/rally';
+import type { Session, Match, Rally, Highlight, VideoMetadata, QualityReport as VideoQualityReport, QualityIssue } from '@/types/rally';
 
 // Extended types with backend IDs for sync (internal use only)
 interface RallyWithBackendId extends Rally {
@@ -238,7 +238,7 @@ function apiVideoToMatch(apiVideo: ApiVideo, cloudfrontDomain?: string): Match {
     createdAt: apiVideo.createdAt,
     qualityDowngradedAt: apiVideo.qualityDowngradedAt,
     status: apiVideo.status,
-    characteristicsJson: apiVideo.characteristicsJson ?? null,
+    qualityReportJson: apiVideo.qualityReportJson ?? null,
   };
 }
 
@@ -716,14 +716,14 @@ interface ApiVideoEditorResponse {
     status: 'PENDING' | 'UPLOADED' | 'DETECTING' | 'DETECTED' | 'ERROR';
     cameraSettings?: ApiVideoCameraSettings | null;
     courtCalibrationJson?: Array<{ x: number; y: number }> | null;
-    characteristicsJson?: VideoCharacteristics | null;
+    qualityReportJson?: VideoQualityReport | null;
   };
   allVideosSessionId: string;
   highlights: ApiHighlight[];
 }
 
-// Re-export for convenience
-export type { VideoCharacteristics } from '@/types/rally';
+// Re-export video quality types for convenience
+export type { VideoQualityReport };
 
 // Result type for fetchVideoForEditor
 export interface FetchVideoEditorResult {
@@ -745,7 +745,7 @@ export interface FetchVideoEditorResult {
   cameraEdits: CameraEditMap;
   globalCameraSettings: GlobalCameraSettingsMap;
   courtCalibration: Array<{ x: number; y: number }> | null;
-  characteristicsJson: VideoCharacteristics | null;
+  qualityReportJson: VideoQualityReport | null;
 }
 
 /**
@@ -833,7 +833,7 @@ export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEd
     },
     rallies,
     status: data.video.status,
-    characteristicsJson: data.video.characteristicsJson ?? null,
+    qualityReportJson: data.video.qualityReportJson ?? null,
   };
 
   // Transform highlights to frontend format
@@ -898,7 +898,7 @@ export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEd
     cameraEdits,
     globalCameraSettings,
     courtCalibration: data.video.courtCalibrationJson ?? null,
-    characteristicsJson: data.video.characteristicsJson ?? null,
+    qualityReportJson: data.video.qualityReportJson ?? null,
   };
 }
 
@@ -1048,6 +1048,39 @@ export async function removeVideoFromSession(
     const error = await response.json().catch(() => ({}));
     throw new Error(error.error?.message || `Failed to remove video from session: ${response.status}`);
   }
+}
+
+// ============================================================================
+// Preflight Preview (pre-upload quality gate)
+// ============================================================================
+
+export interface PreflightPreviewResponse {
+  pass: boolean;
+  issues: QualityIssue[];
+}
+
+/**
+ * Run pre-upload quality checks on sampled video frames before uploading to S3.
+ * Returns pass=false with blocking issues if the video fails sport/angle checks.
+ */
+export async function preflightPreview(
+  frames: Blob[],
+  metadata: { width: number; height: number; durationS: number },
+): Promise<PreflightPreviewResponse> {
+  const form = new FormData();
+  for (const b of frames) form.append('frames', b, 'frame.jpg');
+  form.append('width', String(metadata.width));
+  form.append('height', String(metadata.height));
+  form.append('durationS', String(metadata.durationS));
+
+  const response = await fetch(`${API_BASE_URL}/v1/videos/preflight-preview`, {
+    method: 'POST',
+    headers: getHeaders(), // Note: no Content-Type — browser sets multipart boundary automatically
+    body: form,
+  });
+
+  if (!response.ok) throw new Error(`preflight-preview failed: ${response.status}`);
+  return (await response.json()) as PreflightPreviewResponse;
 }
 
 // Restore a soft-deleted video
