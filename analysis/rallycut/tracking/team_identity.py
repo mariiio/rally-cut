@@ -139,6 +139,12 @@ def localize_team_near(
             height) covers narrow-angle cameras where track_to_player
             phantom flips cause wrong team grouping.
 
+            Raising to 0.05 was tested: isolated team_near accuracy
+            improves 83.8→87.4% but end-to-end score_accuracy regresses
+            (88.6→87.5%) because filtered rallies fall back to Viterbi
+            which is less accurate than marginal team_near returns in the
+            production context.
+
     Returns:
         Team label of the near team ("0" or "1"), or None if ambiguous.
     """
