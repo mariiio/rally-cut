@@ -2401,6 +2401,21 @@ export async function getBatchTrackingStatus(videoId: string): Promise<BatchTrac
   return response.json();
 }
 
+/**
+ * Trigger match analysis for a video.
+ * 409 means analysis is already running — treat as a no-op.
+ */
+export async function triggerMatchAnalysis(videoId: string): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/trigger-match-analysis`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+  if (!res.ok && res.status !== 409) {
+    // 409 = already running, treat as no-op (another tab or rapid re-click)
+    throw new Error(`trigger-match-analysis failed: ${res.status}`);
+  }
+}
+
 // ============================================================================
 // Match Analysis
 // ============================================================================
