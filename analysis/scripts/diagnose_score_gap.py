@@ -21,8 +21,8 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from rich.console import Console
-from rich.table import Table
+from rich.console import Console  # noqa: E402,I001
+from rich.table import Table  # noqa: E402
 
 from eval_score_tracking import load_score_gt  # noqa: E402
 from rallycut.tracking.action_classifier import (  # noqa: E402
@@ -213,7 +213,7 @@ def main() -> int:
     console.print(table)
 
     # Error analysis
-    console.print(f"\n[bold]Team errors where formation was CORRECT:[/bold]")
+    console.print("\n[bold]Team errors where formation was CORRECT:[/bold]")
     convention_errors = [e for e in error_rallies if e["formation_correct"]]
     console.print(f"  {len(convention_errors)} / {len(error_rallies)} team errors "
                   f"are pure convention/mapping errors")
@@ -227,7 +227,7 @@ def main() -> int:
             console.print(f"    {vid}: {cnt} errors")
 
     formation_errors = [e for e in error_rallies if not e["formation_correct"]]
-    console.print(f"\n[bold]Team errors where formation was WRONG:[/bold]")
+    console.print("\n[bold]Team errors where formation was WRONG:[/bold]")
     console.print(f"  {len(formation_errors)} / {len(error_rallies)} team errors "
                   f"are formation prediction errors")
 

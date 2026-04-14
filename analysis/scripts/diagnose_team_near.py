@@ -23,9 +23,8 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-import numpy as np
-from rich.console import Console
-from rich.table import Table
+from rich.console import Console  # noqa: E402,I001
+from rich.table import Table  # noqa: E402
 
 from eval_action_detection import _load_track_to_player_maps  # noqa: E402
 from eval_score_tracking import load_score_gt  # noqa: E402
@@ -34,10 +33,7 @@ from rallycut.tracking.action_classifier import (  # noqa: E402
     _find_serving_side_by_formation,
 )
 from rallycut.tracking.player_tracker import PlayerPosition  # noqa: E402
-from rallycut.tracking.team_identity import (  # noqa: E402
-    TeamTemplate,
-    localize_team_near,
-)
+from rallycut.tracking.team_identity import localize_team_near  # noqa: E402
 
 console = Console()
 
@@ -53,49 +49,6 @@ def _parse_positions(pos_json: list[dict]) -> list[PlayerPosition]:
         )
         for p in pos_json
     ]
-
-
-def _load_team_templates(
-    video_ids: set[str],
-) -> dict[str, tuple[TeamTemplate, TeamTemplate]]:
-    """Load per-video team templates from match_analysis_json or player_matching_gt_json."""
-    templates_by_vid: dict[str, tuple[TeamTemplate, TeamTemplate]] = {}
-
-    if not video_ids:
-        return templates_by_vid
-
-    placeholders = ", ".join(["%s"] * len(video_ids))
-    query = f"""
-        SELECT id, player_matching_gt_json, match_analysis_json
-        FROM videos
-        WHERE id IN ({placeholders})
-    """
-
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(query, list(video_ids))
-        for vid, pm_json, ma_json in cur.fetchall():
-            team_data = None
-            if pm_json and isinstance(pm_json, dict):
-                team_data = pm_json.get("teams")
-            if team_data is None and ma_json and isinstance(ma_json, dict):
-                team_data = ma_json.get("teams")
-            if team_data is None or len(team_data) < 2:
-                continue
-            try:
-                t0 = TeamTemplate(
-                    team_label=str(team_data[0].get("label", "0")),
-                    player_ids=tuple(team_data[0].get("playerIds", [])),
-                )
-                t1 = TeamTemplate(
-                    team_label=str(team_data[1].get("label", "1")),
-                    player_ids=tuple(team_data[1].get("playerIds", [])),
-                )
-                templates_by_vid[vid] = (t0, t1)
-            except Exception:
-                pass
-
-    return templates_by_vid
 
 
 def main() -> int:
@@ -346,7 +299,7 @@ def main() -> int:
     )
     console.print(table)
 
-    console.print(f"\n[bold]Summary[/bold]")
+    console.print("\n[bold]Summary[/bold]")
     console.print(f"  Full-window accuracy:  {full_acc_tot:.1%} "
                   f"({total_full_correct}/{total_full_correct + total_full_wrong})")
     console.print(f"  Early-window accuracy: {early_acc_tot:.1%} "

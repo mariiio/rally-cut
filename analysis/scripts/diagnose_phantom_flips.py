@@ -25,9 +25,9 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-import numpy as np
-from rich.console import Console
-from rich.table import Table
+import numpy as np  # noqa: E402,I001
+from rich.console import Console  # noqa: E402
+from rich.table import Table  # noqa: E402
 
 from eval_action_detection import _load_track_to_player_maps  # noqa: E402
 from eval_score_tracking import load_score_gt  # noqa: E402
