@@ -170,7 +170,7 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
   - If `MODAL_TRACKING_URL` is set: sends to Modal T4 GPU (~80 FPS, ~$0.02/batch)
   - If not set: processes locally on CPU (~6 FPS, blocks API server)
   - Modal path sends per-rally webhooks (`/v1/webhooks/tracking-rally-complete`) for progressive DB updates
-  - Batch completion webhook (`/v1/webhooks/tracking-batch-complete`) triggers match analysis
+  - Batch completion webhook (`/v1/webhooks/tracking-batch-complete`) updates batch status; match analysis is triggered client-side after a 5-second idle window (Project A2a)
   - **Match analysis pipeline**: validate-rallies → match-players → repair-identities → remap-track-ids → reattribute-actions → compute-match-stats (all best-effort, non-fatal)
   - **Rally validation**: Demotes ball-pass FPs to SUGGESTED (rejectionReason=BALL_PASS) using post-tracking signals (contact count, serve detection, duration). Skips user-modified rallies and rallies with low ball detection rate.
 
