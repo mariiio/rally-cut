@@ -770,28 +770,28 @@ def _compute_formation_features(
 
 
 # Logistic regression weights for serving side prediction.
-# Trained on 448 GT rallies (30 videos), LOO-video CV = 93.0%.
+# Trained on 620 GT rallies (66 videos), LOO-video CV = 92.5%.
 # Features: separation, isolation, baseline_img, baseline_court,
 #           net_dist, count_asym. Positive score → near serving.
 _FORMATION_WEIGHTS_6 = {
-    "intercept": -2.23758492,
-    "separation": 33.15155590,
-    "isolation": 0.08680416,
-    "baseline_img": 4.68423319,
-    "baseline_court": 0.16260830,
-    "net_dist": -6.97028831,
-    "count_asym": -3.28034322,
+    "intercept": -0.94187400,
+    "separation": 32.32714573,
+    "isolation": 1.49922060,
+    "baseline_img": 1.91960368,
+    "baseline_court": 0.13569468,
+    "net_dist": -10.79665387,
+    "count_asym": -2.71055660,
 }
-# Extended model with ball position (LOO-video CV = 95.6%, 86% coverage).
+# Extended model with ball position (LOO-video CV = 93.3%, 82% coverage).
 _FORMATION_WEIGHTS_7 = {
-    "intercept": -4.90035394,
-    "separation": 36.27364257,
-    "isolation": 2.75031487,
-    "baseline_img": 1.17173663,
-    "baseline_court": 0.09151576,
-    "net_dist": -0.98203087,
-    "ball_pos": -10.21039365,
-    "count_asym": -3.33282825,
+    "intercept": -4.19889588,
+    "separation": 32.33700808,
+    "isolation": 2.36719675,
+    "baseline_img": 2.10807020,
+    "baseline_court": 0.08997461,
+    "net_dist": -7.28103539,
+    "ball_pos": -8.70393725,
+    "count_asym": -2.50250510,
 }
 _FORMATION_FEATURE_ORDER_6 = [
     "separation", "isolation", "baseline_img",
