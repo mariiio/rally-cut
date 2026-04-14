@@ -859,30 +859,30 @@ class WASBBallTracker:
                 f"({frames_to_process} frames, {fps:.1f} fps, device={self.device})"
             )
 
-            # Read all frames into memory (WASB uses 3-frame sliding window)
-            raw_frames: list[np.ndarray] = []
+            # Stream-preprocess: read one frame at a time, preprocess immediately.
+            # Avoids storing both raw BGR frames and preprocessed frames simultaneously.
+            # Preprocessed frames are stored in a dict for eviction after batch processing.
+            preprocessed_cache: dict[int, np.ndarray] = {}
+            num_frames = 0
             for _ in range(frames_to_process):
                 ret, frame = cap.read()
                 if not ret:
                     break
-                raw_frames.append(frame)
+                preprocessed_cache[num_frames] = preprocess_frame(frame)
+                num_frames += 1
+                # frame goes out of scope here — no raw BGR accumulation
 
-            if len(raw_frames) < NUM_INPUT_FRAMES:
+            if num_frames < NUM_INPUT_FRAMES:
                 processing_time_ms = (time.time() - start_time) * 1000
                 return BallTrackingResult(
                     positions=[],
-                    frame_count=len(raw_frames),
+                    frame_count=num_frames,
                     video_fps=fps,
                     video_width=video_width,
                     video_height=video_height,
                     processing_time_ms=processing_time_ms,
                     model_version="wasb_hrnet",
                 )
-
-            # Cache preprocessed frames (each frame preprocessed once, not 3x)
-            preprocessed_frames = [preprocess_frame(f) for f in raw_frames]
-            num_frames = len(raw_frames)
-            del raw_frames  # Free BGR frames (~1GB for long rallies)
 
             # Run sliding window inference with batching
             frame_detections: dict[int, BallPosition] = {}
@@ -893,7 +893,7 @@ class WASBBallTracker:
                 """Stack triplets from cached preprocessed frames into (B, 9, H, W)."""
                 return np.stack([
                     np.concatenate(
-                        [preprocessed_frames[i + j] for j in range(NUM_INPUT_FRAMES)],
+                        [preprocessed_cache[i + j] for j in range(NUM_INPUT_FRAMES)],
                         axis=0,
                     )
                     for i in batch_indices
@@ -950,6 +950,14 @@ class WASBBallTracker:
                     )
                     _decode_batch(probs, batch_indices)
 
+                    # Evict preprocessed frames no longer needed by future windows.
+                    # Window i needs frames i, i+1, i+2. After processing up to
+                    # window batch_indices[-1], frames < batch_indices[-1]+1 are
+                    # never referenced again.
+                    evict_before = batch_indices[-1] + 1
+                    for old_idx in [k for k in preprocessed_cache if k < evict_before]:
+                        del preprocessed_cache[old_idx]
+
                     if progress_callback and inference_count % 30 < self.batch_size:
                         progress_callback(min(0.99, batch_end / max(1, num_windows)))
             else:
@@ -967,6 +975,11 @@ class WASBBallTracker:
                         inference_count += len(batch_indices)
 
                         _decode_batch(probs, batch_indices)
+
+                        # Evict preprocessed frames no longer needed by future windows
+                        evict_before = batch_indices[-1] + 1
+                        for old_idx in [k for k in preprocessed_cache if k < evict_before]:
+                            del preprocessed_cache[old_idx]
 
                         if progress_callback and inference_count % 30 < self.batch_size:
                             progress_callback(min(0.99, batch_end / max(1, num_windows)))
