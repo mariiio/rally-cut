@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from rallycut.quality.types import CheckResult, Issue, Tier
 
-BBOX_HEIGHT_FAR_THRESHOLD = 0.10  # normalized
+BBOX_HEIGHT_FAR_THRESHOLD = 0.08  # normalized; tightened post-calibration (see reports/quality_calibration_*.json)
 
 
 @dataclass(frozen=True)

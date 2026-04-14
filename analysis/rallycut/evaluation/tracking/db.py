@@ -199,7 +199,7 @@ def load_labeled_rallies(
             pt.court_split_y,
             pt.primary_track_ids,
             pt.ball_positions_json,
-            v.characteristics_json,
+            v.quality_report_json AS characteristics_json,
             v.court_calibration_json
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id

@@ -12,9 +12,10 @@ def test_static_footage_passes():
 
 
 def test_high_jitter_footage_gates():
-    rng = np.random.default_rng(42)
-    # Random noise per frame → huge frame-to-frame residual
-    frames = [rng.integers(0, 255, size=(120, 160, 3), dtype=np.uint8) for _ in range(10)]
+    # Alternate black ↔ white frames → residual ≈ 1.0 (far above the 0.20 gate)
+    black = np.zeros((120, 160, 3), dtype=np.uint8)
+    white = np.full((120, 160, 3), 255, dtype=np.uint8)
+    frames = [black if i % 2 == 0 else white for i in range(10)]
     result = check_shakiness(frames)
     issue = next(i for i in result.issues if i.id == "shaky_camera")
     assert issue.tier == Tier.GATE

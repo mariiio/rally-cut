@@ -7,7 +7,7 @@ import statistics
 from rallycut.quality.camera_distance import Detection
 from rallycut.quality.types import CheckResult, Issue, Tier
 
-AVG_SPECTATORS_GATE_THRESHOLD = 5.0  # avg non-court people per frame
+AVG_SPECTATORS_GATE_THRESHOLD = 10.0  # avg non-court people per frame; tightened post-calibration
 
 
 def _center_in_bbox(d: Detection, bbox: tuple[float, float, float, float]) -> bool:

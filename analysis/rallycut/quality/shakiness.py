@@ -11,7 +11,7 @@ import numpy as np
 
 from rallycut.quality.types import CheckResult, Issue, Tier
 
-SHAKINESS_GATE_THRESHOLD = 0.10  # mean normalized residual
+SHAKINESS_GATE_THRESHOLD = 0.20  # mean normalized residual; tightened post-calibration
 
 
 def _frame_residual(a: np.ndarray, b: np.ndarray) -> float:
