@@ -153,10 +153,57 @@ def get_sequence_probs(
 DIG_GUARD_RATIO: float = 2.5
 
 
+# Relative-confidence gate for apply_sequence_override.
+#
+# Skip the MS-TCN++ override whenever its argmax probability is not at least
+# `OVERRIDE_RELATIVE_CONF_K` times the GBM's top-1 confidence at the same
+# contact. Intuition: if MS-TCN++ is only marginally more certain than the
+# GBM, the GBM's decision (trained on labelled contacts with pose and
+# trajectory features) usually wins. The 2026-04-14 error-origin diagnostic
+# (`action_error_origin_2026-04-14.md`) found that 58% of action-type
+# errors (56/96 on the clean pool) were override regressions: MS-TCN++
+# demoted correct GBM predictions with median peak-prob 0.872 while the
+# GBM had median confidence 0.763. This gate closes that gap without
+# touching any guard-free transition.
+#
+# Chosen value: 1.2 — see `override_guard_sweep_2026-04-14.json`. The
+# cross-product sweep on the 1668-contact probe set found K=1.2 combined
+# with ATTACK_PRESERVE_RATIO=2.5 at the top of the Pareto frontier
+# (+1.68pp action_accuracy, +4.72pp dig F1, +2.43pp attack F1, 0 regression
+# on receive F1). Lower K (1.0) let marginal overrides through; higher K
+# (≥1.5 alone) started blocking correct receive overrides (−3.47pp
+# receive F1 at K=1.5).
+OVERRIDE_RELATIVE_CONF_K: float = 1.2
+
+
+# Attack-preserving guard ratio for apply_sequence_override.
+#
+# When the GBM action classifier predicts `attack` but MS-TCN++'s argmax
+# wants to overwrite it with `set` or `dig`, refuse the override unless
+# MS-TCN++ is at least ATTACK_PRESERVE_RATIO times more confident in the
+# argmax class than in `attack`. Mirrors the DIG_GUARD_RATIO pattern.
+#
+# Attacks (especially tips, rolls, and soft hits) look trajectory-similar
+# to sets and digs, and MS-TCN++ is particularly aggressive about
+# demoting them. The 2026-04-14 diagnostic recorded 29 of 56 bucket-A
+# errors as `attack → {set, dig}` demotions. This guard recovers the
+# majority of those while leaving every non-attack origin untouched.
+#
+# Chosen value: 2.5 — see `override_guard_sweep_2026-04-14.json`. The
+# cross-product sweep picked 2.5 as the Pareto-optimal pair-value when
+# used alongside `OVERRIDE_RELATIVE_CONF_K=1.2`. Identical value to
+# `DIG_GUARD_RATIO` by coincidence: both pairs share the same
+# "trajectory-similar contact, ambiguous class" failure mode, and the
+# sweep grid {1.5, 2.0, 2.5, 3.0} converged on 2.5 for each.
+ATTACK_PRESERVE_RATIO: float = 2.5
+
+
 def apply_sequence_override(
     rally_actions: Any,
     sequence_probs: np.ndarray,
     dig_guard_ratio: float | None = None,
+    override_relative_conf_k: float | None = None,
+    attack_preserve_ratio: float | None = None,
 ) -> None:
     """Override non-serve action types with MS-TCN++ argmax predictions.
 
@@ -165,23 +212,44 @@ def apply_sequence_override(
     stronger than per-frame model predictions. Synthetic actions are also
     skipped because they have no ground frame to look up in the probs array.
 
-    Dig-preserving guard: when the existing GBM prediction is `dig` and
-    MS-TCN++'s argmax would overwrite it with `set`, the guard refuses the
-    overwrite unless `seq_probs[set] >= dig_guard_ratio * seq_probs[dig]`.
-    This recovers GBM digs that MS-TCN++ misclassifies as low sets without
-    affecting any other class transition.
+    Three guards constrain the override. All three read module-level
+    constants at call time so sweep harnesses can monkey-patch them:
+
+    1. Relative-confidence gate (``OVERRIDE_RELATIVE_CONF_K``) — skip the
+       override whenever MS-TCN++'s argmax probability is not at least K
+       times the GBM's top-1 confidence (``action.confidence``). Catches
+       the bulk of the 2026-04-14 override regressions where MS-TCN++
+       was only marginally more certain than a correct GBM call.
+    2. Attack-preserving guard (``ATTACK_PRESERVE_RATIO``) — when the GBM
+       said ``attack`` and MS-TCN++ wants ``set``/``dig``, refuse unless
+       MS-TCN++ is that ratio more confident in the argmax than in
+       ``attack``. Mirrors the dig-guard pattern for attack demotions.
+    3. Dig-preserving guard (``DIG_GUARD_RATIO``) — existing 2026-04-07
+       guard for GBM=dig / MS-TCN++=set. Held fixed by design.
     """
     from rallycut.actions.trajectory_features import ACTION_TYPES
     from rallycut.tracking.action_classifier import ActionType
 
-    # Read the global at call time (not via default arg) so test/sweep
-    # harnesses can monkey-patch DIG_GUARD_RATIO between runs.
-    ratio = dig_guard_ratio if dig_guard_ratio is not None else DIG_GUARD_RATIO
+    # Read globals at call time so test/sweep harnesses can monkey-patch.
+    ratio_dig = (
+        dig_guard_ratio if dig_guard_ratio is not None else DIG_GUARD_RATIO
+    )
+    k_rel = (
+        override_relative_conf_k
+        if override_relative_conf_k is not None
+        else OVERRIDE_RELATIVE_CONF_K
+    )
+    ratio_attack = (
+        attack_preserve_ratio
+        if attack_preserve_ratio is not None
+        else ATTACK_PRESERVE_RATIO
+    )
 
-    # Index of `set` and `dig` inside sequence_probs[1:, :] (NUM_CLASSES − 1
-    # offset because index 0 is background).
+    # Index of `set`, `dig`, `attack` inside sequence_probs[1:, :]
+    # (NUM_CLASSES − 1 offset because index 0 is background).
     set_idx = ACTION_TYPES.index("set")
     dig_idx = ACTION_TYPES.index("dig")
+    attack_idx = ACTION_TYPES.index("attack")
 
     for action in rally_actions.actions:
         if action.is_synthetic or action.action_type == ActionType.SERVE:
@@ -192,6 +260,7 @@ def apply_sequence_override(
         per_frame = sequence_probs[1:, frame]
         cls = int(np.argmax(per_frame))
         new_type = ActionType(ACTION_TYPES[cls])
+        argmax_prob = float(per_frame[cls])
 
         # Serve is heuristic-only: classify_rally picks exactly one
         # serve per rally via _find_serve_index. The override must
@@ -199,6 +268,25 @@ def apply_sequence_override(
         # the double-serve symptom came from this leak).
         if new_type == ActionType.SERVE:
             continue
+
+        # Relative-confidence gate: MS-TCN++ must beat the GBM's top-1
+        # confidence by `k_rel`. Guards against the 2026-04-14
+        # override-regression mode where MS-TCN++ wins the argmax by a
+        # narrow margin over a high-confidence, correct GBM prediction.
+        gbm_conf = float(action.confidence)
+        if argmax_prob < k_rel * gbm_conf:
+            continue
+
+        # Attack-preserving guard: GBM said attack, MS-TCN++ wants set or
+        # dig — only override if MS-TCN++ is much more confident in the
+        # argmax than in attack.
+        if (
+            action.action_type == ActionType.ATTACK
+            and new_type in (ActionType.SET, ActionType.DIG)
+        ):
+            seq_attack = float(per_frame[attack_idx])
+            if argmax_prob < ratio_attack * seq_attack:
+                continue
 
         # Dig guard: GBM said dig, MS-TCN++ wants set — only override if
         # MS-TCN++ is much more confident in set than in dig.
@@ -208,7 +296,7 @@ def apply_sequence_override(
         ):
             seq_set = float(per_frame[set_idx])
             seq_dig = float(per_frame[dig_idx])
-            if seq_set < ratio * seq_dig:
+            if seq_set < ratio_dig * seq_dig:
                 continue
 
         action.action_type = new_type
