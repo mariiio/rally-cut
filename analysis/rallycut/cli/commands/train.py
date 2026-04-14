@@ -1997,6 +1997,21 @@ def export_dataset(
             f"  Action GT: [green]{agt_stats['total_rallies_with_action_gt']}[/green] rallies"
         )
 
+    # Export score-tracking ground truth (gt_serving_team + gt_side_switch)
+    score_gt = _export_score_ground_truth(content_hashes)
+    if score_gt:
+        score_gt_path = dataset_dir / "score_ground_truth.json"
+        with open(score_gt_path, "w") as f:
+            json.dump(score_gt, f, indent=2)
+        sgt_stats = score_gt["stats"]
+        rprint(f"Created [cyan]{score_gt_path}[/cyan]")
+        rprint(
+            f"  Score GT: [green]{sgt_stats['total_rallies']}[/green] rallies"
+            f" across {sgt_stats['total_videos']} videos"
+            f" ([cyan]{sgt_stats['total_with_serving']}[/cyan] serving,"
+            f" [cyan]{sgt_stats['total_with_side_switch']}[/cyan] side-switch)"
+        )
+
     # Summary
     rprint()
     rprint("[green]Dataset exported successfully![/green]")
