@@ -362,7 +362,7 @@ export const useAnalysisStore = create<AnalysisState>()(
         }
 
         // For idle/missing pipeline, check backend for active processing.
-        // Catches page reloads during non-persisted phases (quality_check)
+        // Catches page reloads during non-persisted phases (preflight, preflight_gate)
         // where the backend is still running.
         try {
           const status = await getAnalysisPipelineStatus(videoId);

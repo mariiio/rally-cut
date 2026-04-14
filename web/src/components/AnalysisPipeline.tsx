@@ -27,7 +27,7 @@ interface AnalysisPipelineProps {
 }
 
 /** Phase progress steps for the step indicator */
-const PHASE_ORDER: AnalysisPhase[] = ['quality_check', 'detecting', 'tracking', 'done'];
+const PHASE_ORDER: AnalysisPhase[] = ['preflight', 'detecting', 'ready_tracking', 'done'];
 
 function PhaseIndicator({ currentPhase }: { currentPhase: AnalysisPhase }) {
   const labels = ['Check', 'Detect', 'Track', 'Done'];
@@ -37,7 +37,7 @@ function PhaseIndicator({ currentPhase }: { currentPhase: AnalysisPhase }) {
       {PHASE_ORDER.map((phase, i) => {
         const phaseIndex = PHASE_ORDER.indexOf(currentPhase);
         const isComplete = i < phaseIndex || currentPhase === 'done';
-        const isCurrent = phase === currentPhase || (currentPhase === 'quality_warning' && phase === 'quality_check') || (currentPhase === 'completing' && phase === 'tracking');
+        const isCurrent = phase === currentPhase || (currentPhase === 'preflight_gate' && phase === 'preflight') || (currentPhase === 'match_analyzing' && phase === 'ready_tracking');
         const color = isComplete ? 'success.main' : isCurrent ? 'primary.main' : 'text.disabled';
 
         return (
@@ -95,7 +95,7 @@ export function AnalysisPipeline({ hasRallies, isLocked }: AnalysisPipelineProps
 
   // On mount or match change, resume any in-progress pipeline.
   // Handles both persisted phases (detecting/tracking) and backend-only
-  // processing (page reloaded during non-persisted quality_check phase).
+  // processing (page reloaded during non-persisted preflight phase).
   useEffect(() => {
     if (activeMatchId) {
       resumeIfNeeded(activeMatchId);
@@ -153,7 +153,7 @@ export function AnalysisPipeline({ hasRallies, isLocked }: AnalysisPipelineProps
   }
 
   // Quality warning — show warnings with continue/cancel
-  if (phase === 'quality_warning' && pipeline?.qualityResult) {
+  if (phase === 'preflight_gate' && pipeline?.qualityResult) {
     return (
       <Box sx={{ maxWidth: 400 }}>
         <Alert
@@ -196,8 +196,8 @@ export function AnalysisPipeline({ hasRallies, isLocked }: AnalysisPipelineProps
     );
   }
 
-  // In-progress phases: detecting, tracking, completing
-  if (['quality_check', 'detecting', 'tracking', 'completing'].includes(phase)) {
+  // In-progress phases: preflight, detecting, ready_tracking, match_analyzing
+  if (['preflight', 'detecting', 'ready_tracking', 'match_analyzing'].includes(phase)) {
     return (
       <Stack direction="row" alignItems="center" spacing={1.5} sx={{
         bgcolor: 'action.hover',
@@ -241,7 +241,7 @@ export function AnalysisPipeline({ hasRallies, isLocked }: AnalysisPipelineProps
           </Typography>
           <Stack direction="row" spacing={1} alignItems="center">
             <PhaseIndicator currentPhase={phase as AnalysisPhase} />
-            {phase === 'tracking' && (
+            {phase === 'ready_tracking' && (
               <TimeEstimate ralliesFound={pipeline!.trackingProgress?.total} />
             )}
           </Stack>

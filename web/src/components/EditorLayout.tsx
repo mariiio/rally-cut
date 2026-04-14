@@ -93,7 +93,7 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
     const curr = analysisPipeline?.phase;
 
     // Detection just completed → rallies need to appear in timeline
-    if (prev === 'detecting' && (curr === 'tracking' || curr === 'done')) {
+    if (prev === 'detecting' && (curr === 'ready_tracking' || curr === 'done')) {
       reloadCurrentMatch();
     }
 

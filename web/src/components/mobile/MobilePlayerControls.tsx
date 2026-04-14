@@ -41,7 +41,7 @@ export function MobilePlayerControls() {
   const getActiveMatch = useEditorStore((s) => s.getActiveMatch);
   const activeMatch = getActiveMatch();
 
-  const isDetecting = analysisPipeline?.phase === 'detecting' || analysisPipeline?.phase === 'tracking'
+  const isDetecting = analysisPipeline?.phase === 'detecting' || analysisPipeline?.phase === 'ready_tracking'
     || activeMatch?.status === 'DETECTING';
   const detectionProgress = analysisPipeline?.phase === 'detecting'
     ? Math.max(0, Math.min(100, Math.round(((analysisPipeline.progress - 10) / 35) * 100)))
