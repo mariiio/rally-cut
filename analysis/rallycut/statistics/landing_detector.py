@@ -247,6 +247,21 @@ def _get_court_side(team: str) -> str:
     return "unknown"
 
 
+def _lands_on_opposite_half(source_side: str, target_court_y: float) -> bool:
+    """True if ``target_court_y`` is on the half opposite ``source_side``.
+
+    Court convention (see ``action_classifier.py`` near-baseline split):
+    near baseline at cy=0, net at cy=HALF_COURT_M (8m), far baseline at
+    cy=COURT_LENGTH_M (16m). An unknown source_side cannot be validated
+    and yields False so the caller drops the landing.
+    """
+    if source_side == "near":
+        return target_court_y > HALF_COURT_M
+    if source_side == "far":
+        return target_court_y <= HALF_COURT_M
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Main detection
 # ---------------------------------------------------------------------------
@@ -338,27 +353,19 @@ def detect_rally_landings(
                 positions_raw, receive.player_track_id,
                 receive.frame, calibrator,
             )
-            if court_pos is not None:
-                # Validate: serve target must land on the opposite half
-                # from the server. If the server is near (Y>8m), the
-                # target must be far (Y<8m), and vice versa.
-                server_side = _get_court_side(serve.team)
-                target_on_near = court_pos[1] > HALF_COURT_M
-                valid = (
-                    (server_side == "near" and not target_on_near)
-                    or (server_side == "far" and target_on_near)
+            if court_pos is not None and _lands_on_opposite_half(
+                _get_court_side(serve.team), court_pos[1],
+            ):
+                ball_at_recv = _find_ball_near_frame(
+                    ball_positions, receive.frame,
                 )
-                if valid:
-                    ball_at_recv = _find_ball_near_frame(
-                        ball_positions, receive.frame,
-                    )
-                    img_x = ball_at_recv[0] if ball_at_recv else receive.ball_x
-                    img_y = ball_at_recv[1] if ball_at_recv else receive.ball_y
-                    landings.append(_make_landing(
-                        receive.frame, court_pos[0], court_pos[1],
-                        img_x, img_y,
-                        "serve", serve.player_track_id, serve.team,
-                    ))
+                img_x = ball_at_recv[0] if ball_at_recv else receive.ball_x
+                img_y = ball_at_recv[1] if ball_at_recv else receive.ball_y
+                landings.append(_make_landing(
+                    receive.frame, court_pos[0], court_pos[1],
+                    img_x, img_y,
+                    "serve", serve.player_track_id, serve.team,
+                ))
 
     # --- All attacks (mid-rally + terminal) ---
     for i, action in enumerate(actions):
@@ -392,14 +399,9 @@ def detect_rally_landings(
 
         if next_contact_court is not None and next_frame is not None:
             assert next_img is not None
-            # Validate: attack landing must be on the opponent's half.
-            attacker_side = _get_court_side(action.team)
-            landing_on_near = next_contact_court[1] > HALF_COURT_M
-            valid_attack = (
-                (attacker_side == "near" and not landing_on_near)
-                or (attacker_side == "far" and landing_on_near)
-            )
-            if valid_attack:
+            if _lands_on_opposite_half(
+                _get_court_side(action.team), next_contact_court[1],
+            ):
                 landings.append(_make_landing(
                     next_frame, next_contact_court[0], next_contact_court[1],
                     next_img[0], next_img[1],
@@ -436,16 +438,14 @@ def detect_rally_landings(
                         img_x, img_y = pos
                     break
 
-        if attack_court is not None:
-            # Validate: terminal attack landing on opponent's half.
-            t_side = _get_court_side(action.team)
-            t_near = attack_court[1] > HALF_COURT_M
-            if (t_side == "near" and not t_near) or (t_side == "far" and t_near):
-                landings.append(_make_landing(
-                    det_frame, attack_court[0], attack_court[1],
-                    img_x, img_y,
-                    "attack", action.player_track_id, action.team,
-                ))
+        if attack_court is not None and _lands_on_opposite_half(
+            _get_court_side(action.team), attack_court[1],
+        ):
+            landings.append(_make_landing(
+                det_frame, attack_court[0], attack_court[1],
+                img_x, img_y,
+                "attack", action.player_track_id, action.team,
+            ))
 
     return landings
 
