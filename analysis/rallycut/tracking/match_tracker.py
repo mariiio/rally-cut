@@ -88,6 +88,18 @@ REID_BLEND = 0.50
 # Protects against regressions from unrepresentative reference crops.
 REID_MIN_MARGIN = 0.08
 
+# Frame cutoff used to restrict first-rally side classification to the
+# serve formation window.  During the serve the 2v2 arrangement is
+# formal (each team on their own side); mid-rally players may cross into
+# the opponent's half and contaminate whole-rally Y averages.  Because
+# the first rally's assignment seeds the persistent team templates for
+# the entire match, a single init error propagates to every subsequent
+# rally.  Matches the window used by ``_find_serving_side_by_formation``
+# (120 frames) and is strictly wider than ``detect_serve_anchor``'s
+# 30-frame serve-detection window — ensures we still have enough
+# positions to compute robust averages.
+FIRST_RALLY_INIT_WINDOW_FRAMES = 120
+
 
 def verify_team_assignments(
     team_assignments: dict[int, int],
@@ -521,8 +533,28 @@ class MatchPlayerTracker:
                 )
 
         # Step 2: Classify track sides (soft near/far labels)
+        #
+        # For the first rally, restrict classification to the serve
+        # formation window.  The serve moment has formal 2v2 arrangement
+        # by volleyball rules; mid-rally, players cross sides and
+        # contaminate whole-rally Y averages.  Because the first rally's
+        # assignment seeds every subsequent rally's templates, an init
+        # error here propagates to the whole match — use the cleanest
+        # signal available.
+        classification_positions = player_positions
+        if self.rally_count == 1 and not self.frozen_player_ids:
+            windowed = [
+                p for p in player_positions
+                if p.frame_number < FIRST_RALLY_INIT_WINDOW_FRAMES
+            ]
+            # Fall back to full rally if the serve window is sparse
+            # (short rally, delayed detection, etc.) — we'd rather use
+            # noisy full-rally data than no data.
+            if len(windowed) >= 4 * 10:  # ≥10 frames per player
+                classification_positions = windowed
+
         track_avg_y, track_court_sides = self._classify_track_sides(
-            track_stats, player_positions, court_split_y, team_assignments
+            track_stats, classification_positions, court_split_y, team_assignments
         )
 
         # Step 3: Select top 4 tracks globally by feature count
