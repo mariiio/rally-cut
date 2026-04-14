@@ -46,7 +46,7 @@ import {
 import { queueVideoProcessing } from "../services/processingService.js";
 import { trackAllRallies, getBatchTrackingStatus } from "../services/batchTrackingService.js";
 import { getMatchAnalysis, getMatchStats, runMatchAnalysis, type ProgressCallback } from "../services/matchAnalysisService.js";
-import { assessVideoQuality, getAnalysisPipelineStatus, savePlayerMatchingGt, getPlayerMatchingGt } from "../services/qualityService.js";
+import { runPreflightChecks, getAnalysisPipelineStatus, savePlayerMatchingGt, getPlayerMatchingGt } from "../services/qualityService.js";
 
 const MAX_REFERENCE_CROPS_PER_PLAYER = 6;
 
@@ -937,7 +937,7 @@ router.post(
   }),
   async (req, res, next) => {
     try {
-      const result = await assessVideoQuality(req.params.id, req.userId!);
+      const result = await runPreflightChecks(req.params.id, req.userId!);
       res.json(result);
     } catch (error) {
       next(error);
