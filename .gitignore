@@ -73,3 +73,4 @@ runs/
 
 # Speckit
 .speckit/
+.worktrees/
