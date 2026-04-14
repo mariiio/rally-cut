@@ -66,6 +66,15 @@ uv run rallycut train modal --resume-from-model --lr 1e-6 --epochs 10 --fresh
 uv run rallycut train modal --download --cleanup      # Download and clean up
 
 # S3 backup/restore (survives DB resets and MinIO clears)
+# Dataset export includes these per-video/per-rally artifacts when present:
+#   ground_truth.json                   (always) — rally bounds
+#   tracking_ground_truth.json          (opt)    — player/ball positions
+#   action_ground_truth.json            (opt)    — serve/receive/set/attack/dig/block
+#   player_matching_ground_truth.json   (opt)    — cross-rally player IDs + side switches
+#   score_ground_truth.json             (opt)    — gt_serving_team + gt_side_switch
+# Optional GT files match rallies by (content_hash, start_ms, end_ms) for
+# resilience against rally UUID churn on restore. Score GT restore is
+# per-field NULL-only so re-running never clobbers newer DB labels.
 uv run rallycut train push --name beach_v2            # Upload dataset to S3
 uv run rallycut train pull --name beach_v2            # Download dataset from S3
 uv run rallycut train restore --name beach_v2         # Re-import ground truth into DB
