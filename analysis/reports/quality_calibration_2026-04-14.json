@@ -1,0 +1,395 @@
+{
+  "date": "2026-04-14",
+  "n_videos": 2,
+  "failure_thresholds": {
+    "action_acc": 0.75,
+    "score_acc": 0.75,
+    "hota": 0.6
+  },
+  "coverage": {
+    "quality_metrics": 2,
+    "action_acc": 2,
+    "score_acc": 1,
+    "hota": 1
+  },
+  "n_failures": 2,
+  "calibration": [
+    {
+      "check_id": "camera_too_far",
+      "metric_key": "medianBboxHeight",
+      "direction": "<",
+      "best_threshold": null,
+      "best_lift": 0.0,
+      "best_n_fires": 0,
+      "recommendation": "drop",
+      "threshold_sweep": [
+        {
+          "threshold": 0.05,
+          "n_fires": 0,
+          "n_not_fires": 2,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.08,
+          "n_fires": 0,
+          "n_not_fires": 2,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.1,
+          "n_fires": 0,
+          "n_not_fires": 2,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.12,
+          "n_fires": 1,
+          "n_not_fires": 1,
+          "p_fail_given_fires": 1.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 1.0
+        },
+        {
+          "threshold": 0.15,
+          "n_fires": 1,
+          "n_not_fires": 1,
+          "p_fail_given_fires": 1.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 1.0
+        }
+      ]
+    },
+    {
+      "check_id": "crowded_scene",
+      "metric_key": "avgNonCourtPersons",
+      "direction": ">",
+      "best_threshold": null,
+      "best_lift": 0.0,
+      "best_n_fires": 0,
+      "recommendation": "drop",
+      "threshold_sweep": [
+        {
+          "threshold": 2,
+          "n_fires": 1,
+          "n_not_fires": 1,
+          "p_fail_given_fires": 1.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 1.0
+        },
+        {
+          "threshold": 3,
+          "n_fires": 1,
+          "n_not_fires": 1,
+          "p_fail_given_fires": 1.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 1.0
+        },
+        {
+          "threshold": 5,
+          "n_fires": 0,
+          "n_not_fires": 2,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 0.0
+        },
+        {
+          "threshold": 8,
+          "n_fires": 0,
+          "n_not_fires": 2,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 0.0
+        },
+        {
+          "threshold": 12,
+          "n_fires": 0,
+          "n_not_fires": 2,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 0.0
+        }
+      ]
+    },
+    {
+      "check_id": "shaky_camera",
+      "metric_key": "meanResidual",
+      "direction": ">",
+      "best_threshold": null,
+      "best_lift": 0.0,
+      "best_n_fires": 0,
+      "recommendation": "drop",
+      "threshold_sweep": [
+        {
+          "threshold": 0.05,
+          "n_fires": 1,
+          "n_not_fires": 1,
+          "p_fail_given_fires": 1.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 1.0
+        },
+        {
+          "threshold": 0.1,
+          "n_fires": 0,
+          "n_not_fires": 2,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.15,
+          "n_fires": 0,
+          "n_not_fires": 2,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.2,
+          "n_fires": 0,
+          "n_not_fires": 2,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.3,
+          "n_fires": 0,
+          "n_not_fires": 2,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 0.0
+        }
+      ]
+    },
+    {
+      "check_id": "video_rotated",
+      "metric_key": "tiltDeg",
+      "direction": ">",
+      "best_threshold": null,
+      "best_lift": 0.0,
+      "best_n_fires": 0,
+      "recommendation": "drop",
+      "threshold_sweep": [
+        {
+          "threshold": 3,
+          "n_fires": 0,
+          "n_not_fires": 0,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.0,
+          "lift": 0.0
+        },
+        {
+          "threshold": 5,
+          "n_fires": 0,
+          "n_not_fires": 0,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.0,
+          "lift": 0.0
+        },
+        {
+          "threshold": 8,
+          "n_fires": 0,
+          "n_not_fires": 0,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.0,
+          "lift": 0.0
+        },
+        {
+          "threshold": 12,
+          "n_fires": 0,
+          "n_not_fires": 0,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.0,
+          "lift": 0.0
+        },
+        {
+          "threshold": 20,
+          "n_fires": 0,
+          "n_not_fires": 0,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 0.0,
+          "lift": 0.0
+        }
+      ]
+    },
+    {
+      "check_id": "too_dark",
+      "metric_key": "meanLuma",
+      "direction": "<",
+      "best_threshold": null,
+      "best_lift": 0.0,
+      "best_n_fires": 0,
+      "recommendation": "drop",
+      "threshold_sweep": [
+        {
+          "threshold": 0.08,
+          "n_fires": 0,
+          "n_not_fires": 2,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.12,
+          "n_fires": 0,
+          "n_not_fires": 2,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.15,
+          "n_fires": 0,
+          "n_not_fires": 2,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.2,
+          "n_fires": 0,
+          "n_not_fires": 2,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 0.0
+        }
+      ]
+    },
+    {
+      "check_id": "overexposed",
+      "metric_key": "meanLuma",
+      "direction": ">",
+      "best_threshold": null,
+      "best_lift": 0.0,
+      "best_n_fires": 0,
+      "recommendation": "drop",
+      "threshold_sweep": [
+        {
+          "threshold": 0.8,
+          "n_fires": 1,
+          "n_not_fires": 1,
+          "p_fail_given_fires": 1.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 1.0
+        },
+        {
+          "threshold": 0.85,
+          "n_fires": 0,
+          "n_not_fires": 2,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.9,
+          "n_fires": 0,
+          "n_not_fires": 2,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 0.0
+        },
+        {
+          "threshold": 0.95,
+          "n_fires": 0,
+          "n_not_fires": 2,
+          "p_fail_given_fires": 0.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 0.0
+        }
+      ]
+    },
+    {
+      "check_id": "wrong_angle_or_not_volleyball",
+      "metric_key": "courtConfidence",
+      "direction": "<",
+      "best_threshold": null,
+      "best_lift": 0.0,
+      "best_n_fires": 0,
+      "recommendation": "drop",
+      "threshold_sweep": [
+        {
+          "threshold": 0.3,
+          "n_fires": 1,
+          "n_not_fires": 1,
+          "p_fail_given_fires": 1.0,
+          "p_fail_given_not_fires": 1.0,
+          "lift": 1.0
+        },
+        {
+          "threshold": 0.5,
+          "n_fires": 2,
+          "n_not_fires": 0,
+          "p_fail_given_fires": 1.0,
+          "p_fail_given_not_fires": 0.0,
+          "lift": 1000000.0
+        },
+        {
+          "threshold": 0.6,
+          "n_fires": 2,
+          "n_not_fires": 0,
+          "p_fail_given_fires": 1.0,
+          "p_fail_given_not_fires": 0.0,
+          "lift": 1000000.0
+        },
+        {
+          "threshold": 0.75,
+          "n_fires": 2,
+          "n_not_fires": 0,
+          "p_fail_given_fires": 1.0,
+          "p_fail_given_not_fires": 0.0,
+          "lift": 1000000.0
+        }
+      ]
+    }
+  ],
+  "per_video": [
+    {
+      "video_id": "073cb11b-c7ba-4fac-8cc9-b032b3152ad6",
+      "action_acc": 0.2916666666666667,
+      "score_acc": 0.6,
+      "hota": null,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 315.902993,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 59.94005994005994,
+        "meanLuma": 0.6057763613405753,
+        "courtConfidence": 0.0,
+        "medianBboxHeight": 0.11310255527496338,
+        "avgNonCourtPersons": 0,
+        "meanResidual": 0.0507677441669835
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    },
+    {
+      "video_id": "07fedbd4-693e-4651-9fee-c616a1f4b413",
+      "action_acc": 0.3333333333333333,
+      "score_acc": null,
+      "hota": 0.9924068757113449,
+      "is_failure": true,
+      "quality_metrics": {
+        "durationS": 196.445011,
+        "width": 1920.0,
+        "height": 1080.0,
+        "fps": 29.97002997002997,
+        "meanLuma": 0.8153623736055635,
+        "courtConfidence": 0.488,
+        "medianBboxHeight": 0.1859857589006424,
+        "avgNonCourtPersons": 4,
+        "meanResidual": 0.039690567180514336
+      },
+      "quality_error": null,
+      "pipeline_error": null,
+      "hota_error": null
+    }
+  ]
+}

@@ -1,14 +1,17 @@
 """Top-level preflight runner.
 
-Loads inputs once (metadata, sampled frames, court corners, person detections,
-beach-VB probabilities), then runs each check and merges their results into a
-QualityReport.
+Loads inputs once (metadata, sampled frames, court corners, person detections),
+then runs each check and merges their results into a QualityReport.
 
 `_load_video_inputs` is deliberately extracted so unit tests can patch it.
+
+Note: the CLIP-based beach-VB classifier (beach_vb_classifier.py) is intentionally
+NOT wired in here for A1. The "wrong sport / wrong angle" case is already covered by
+the court-confidence branch of `camera_geometry`. CLIP will be re-evaluated in
+Project C once open-clip is available in the runtime image.
 """
 from __future__ import annotations
 
-from rallycut.quality.beach_vb_classifier import classify_is_beach_vb
 from rallycut.quality.camera_distance import check_camera_distance
 from rallycut.quality.camera_geometry import check_camera_geometry
 from rallycut.quality.crowd_density import check_crowd_density
@@ -18,10 +21,14 @@ from rallycut.quality.types import QualityReport
 
 
 def _load_video_inputs(video_path: str, sample_seconds: int):
-    """Return (metadata, sampled_frames, court_corners, person_detections, court_bbox, clip_probs).
+    """Return (metadata, sampled_frames, court_corners, person_detections, court_bbox).
 
     Integration-only: wraps ffprobe, frame sampling, court-keypoint inference,
-    a fast YOLO pass, and CLIP zero-shot scoring. Heavy; unit tests patch this.
+    and a fast YOLO pass. Heavy; unit tests patch this.
+
+    Note: CLIP zero-shot scoring was removed for A1 — the CLIP result is dropped
+    from this tuple. The beach-VB classifier (beach_vb_classifier.py) is preserved
+    for Project C but is not called here.
     """
     # All heavy imports are function-local so the module loads for unit tests
     # even when these heavy deps aren't available.
@@ -33,7 +40,6 @@ def _load_video_inputs(video_path: str, sample_seconds: int):
 
     from rallycut.core.video import Video
     from rallycut.court.detector import CourtDetectionConfig, CourtDetector
-    from rallycut.quality.beach_vb_classifier import embed_and_score_frames
     from rallycut.quality.camera_distance import Detection
     from rallycut.quality.camera_geometry import CourtCorners
     from rallycut.quality.metadata import VideoMetadata
@@ -135,25 +141,11 @@ def _load_video_inputs(video_path: str, sample_seconds: int):
         max(corners.bl[1], corners.br[1]),
     )
 
-    # ── 6. Beach-VB CLIP probabilities (graceful fallback if open_clip absent) ─
-    clip_probs = []
-    try:
-        from PIL import Image  # noqa: PLC0415
-
-        # open_clip preprocess expects PIL RGB images
-        pil_frames = [
-            Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB))
-            for f in frames[:5]
-        ]
-        clip_probs = embed_and_score_frames(pil_frames)
-    except Exception as exc:  # open_clip not installed or model download fails
-        logger.warning("Beach-VB CLIP scoring skipped: %s", exc)
-
-    return meta, frames, corners, per_frame_dets, court_bbox, clip_probs
+    return meta, frames, corners, per_frame_dets, court_bbox
 
 
 def run_full_preflight(video_path: str, sample_seconds: int = 60) -> QualityReport:
-    meta, frames, corners, dets, court_bbox, clip_probs = _load_video_inputs(
+    meta, frames, corners, dets, court_bbox = _load_video_inputs(
         video_path, sample_seconds=sample_seconds
     )
     results = [
@@ -163,7 +155,6 @@ def run_full_preflight(video_path: str, sample_seconds: int = 60) -> QualityRepo
         check_camera_distance(dets),
         check_crowd_density(dets, court_bbox),
         check_shakiness(frames),
-        classify_is_beach_vb(clip_probs),
     ]
     return QualityReport.from_checks(
         results, source="preflight", sample_seconds=sample_seconds, duration_ms=int(meta.duration_s * 1000)
