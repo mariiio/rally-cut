@@ -48,6 +48,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import psycopg
 from psycopg.rows import dict_row
 from rich.console import Console
@@ -72,7 +73,9 @@ console = Console()
 
 DB_CONN_STR = "host=localhost port=5436 user=postgres password=postgres dbname=rallycut"
 BACKUP_DIR = Path("outputs/trackid_stability/backups")
+POSE_CACHE_BACKUP_DIR = Path("outputs/trackid_stability/backups/pose_cache")
 REPORT_PATH = Path("outputs/trackid_stability/repair_report.json")
+POSE_CACHE_DIR = Path("training_data/pose_cache")
 
 
 @dataclass
@@ -293,8 +296,9 @@ def _apply_rewrite_to_match_analysis(
 def _backup_rally(rally_id: str, video_id: str) -> Path:
     """Snapshot every mutable row for a rally before rewriting.
 
-    Returns path to backup JSON. Rollback: read, then apply reverse-path
-    UPDATE statements manually (or write a sibling restore script).
+    Returns path to DB backup JSON. Also snapshots the pose_cache .npz
+    (if present) to POSE_CACHE_BACKUP_DIR. Rollback: read backup + restore
+    pose_cache from the snapshot.
     """
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     out_path = BACKUP_DIR / f"{rally_id}.json"
@@ -320,7 +324,58 @@ def _backup_rally(rally_id: str, video_id: str) -> Path:
     }
     with out_path.open("w") as f:
         json.dump(payload, f, indent=2, default=str)
+
+    # Pose cache snapshot (the track_ids array is what gets rewritten).
+    pose_path = POSE_CACHE_DIR / f"{rally_id}.npz"
+    if pose_path.exists():
+        POSE_CACHE_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        pose_backup = POSE_CACHE_BACKUP_DIR / f"{rally_id}.npz"
+        # Only back up if not already backed up (avoid overwriting the
+        # original on a second repair pass).
+        if not pose_backup.exists():
+            import shutil  # noqa: PLC0415
+            shutil.copyfile(pose_path, pose_backup)
+
     return out_path
+
+
+def _apply_rewrite_to_pose_cache(
+    rally_id: str,
+    perm: dict[int, int],
+) -> int:
+    """Permute pose_cache.npz track_ids so they align with rewritten
+    positionsJson.trackId. Critical — eval_action_detection._build_player_positions
+    uses (frame, trackId) as the cache key; mismatched keys attach the wrong
+    keypoints to the wrong player and poison downstream contact/action
+    classification (see outputs/trackid_stability/diagnostic_report.md).
+
+    Returns the number of track_id entries mutated.
+    """
+    pose_path = POSE_CACHE_DIR / f"{rally_id}.npz"
+    if not pose_path.exists():
+        return 0
+    data = dict(np.load(pose_path))
+    if "track_ids" not in data:
+        return 0
+    track_ids = data["track_ids"]
+    new_track_ids = track_ids.copy()
+    n_mutated = 0
+    for i, tid in enumerate(track_ids):
+        tid_int = int(tid)
+        if tid_int in perm and perm[tid_int] != tid_int:
+            new_track_ids[i] = perm[tid_int]
+            n_mutated += 1
+    if n_mutated == 0:
+        return 0
+    data["track_ids"] = new_track_ids
+    # np.savez_compressed auto-appends .npz to filenames, so we write to a
+    # neighbor path with a _tmp suffix (no extension), let numpy add .npz,
+    # then rename. This avoids the ".npz.tmp" → ".npz.tmp.npz" pitfall.
+    tmp_stem = pose_path.parent / (pose_path.stem + "_tmp")
+    np.savez_compressed(tmp_stem, **data)
+    tmp_written = tmp_stem.with_suffix(".npz")
+    tmp_written.replace(pose_path)
+    return n_mutated
 
 
 def main() -> int:
@@ -516,13 +571,19 @@ def main() -> int:
                             cur, d.video_id, d.rally_id, d.permutation,
                         )
                     conn.commit()
+                    # Pose cache rewrite is on the filesystem (not the DB
+                    # transaction) and must happen AFTER the commit so rollback
+                    # on DB failure doesn't leave an out-of-sync .npz.
+                    n_pose = _apply_rewrite_to_pose_cache(
+                        d.rally_id, d.permutation,
+                    )
                     d.n_positions_rewritten = n_pos
                     d.n_contacts_rewritten = n_con
                     d.n_actions_rewritten = n_act
                     d.decision = "APPLIED"
                     d.reason = f"backup={backup_path.name}"
                     print(f"  [{i+1}/{len(affected)}] {d.rally_id[:8]} "
-                          f"pos={n_pos} con={n_con} act={n_act} "
+                          f"pos={n_pos} con={n_con} act={n_act} pose={n_pose} "
                           f"(+{d.n_correct_best_perm - d.n_correct_before} contacts)", flush=True)
                 except Exception as exc:  # noqa: BLE001 — log and move on
                     conn.rollback()
