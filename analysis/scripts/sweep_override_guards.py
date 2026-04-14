@@ -42,7 +42,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 from rich.console import Console
 from rich.table import Table
 
@@ -130,30 +129,33 @@ def _simulate_override(probe: dict[str, Any], g: GuardConfig) -> str:
     serve-exempt, synthetic-exempt (captured via override_would_apply),
     existing DIG_GUARD_RATIO held fixed, new guards applied additively.
     """
+    # Cast probe fields to strict types at entry so `return pre`/`return argmax`
+    # yield `str` (not `Any`) under strict mypy.
+    pre: str = str(probe["pre_override_type"])
+
     if not probe["seq_present"]:
-        return probe["pre_override_type"]
+        return pre
     if not probe["override_would_apply"]:
         # Serve would be manufactured, or synthetic, or out-of-range —
         # override doesn't fire for this action regardless of new guards.
-        return probe["pre_override_type"]
+        return pre
 
-    argmax = probe["override_argmax"]
+    argmax: str = str(probe["override_argmax"])
     if argmax == "":
-        return probe["pre_override_type"]
+        return pre
 
-    probs = probe["seq_probs_nonbg"]  # length 6
+    probs: list[float] = [float(p) for p in probe["seq_probs_nonbg"]]  # length 6
     if not probs:
-        return probe["pre_override_type"]
+        return pre
 
     # Resolve indices within the non-background slice (same as ACTION_TYPES).
     try:
         argmax_idx = ACTION_TYPES.index(argmax)
     except ValueError:
-        return probe["pre_override_type"]
+        return pre
     argmax_prob = probs[argmax_idx]
 
-    pre = probe["pre_override_type"]
-    gbm_conf = probe["pre_override_confidence"]
+    gbm_conf = float(probe["pre_override_confidence"])
 
     # -- New constraint 1: global seq_peak floor.
     if g.global_floor is not None and argmax_prob < g.global_floor:
@@ -216,10 +218,10 @@ class CellResult:
     n_matched: int
     n_correct: int
     n_errors_target: int                 # dig/set/attack errors
-    bucket_A: int                        # override regressions vs pre-override GT
-    bucket_B: int
-    bucket_C: int
-    deltas_vs_baseline: dict[str, float] = None  # populated after baseline known
+    bucket_a: int                        # override regressions vs pre-override GT
+    bucket_b: int                        # GBM wrong + override kept wrong (same class)
+    bucket_c: int                        # GBM wrong + override wrong (different class)
+    deltas_vs_baseline: dict[str, float] | None = None  # populated post-baseline
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -229,15 +231,20 @@ class CellResult:
             "n_matched": self.n_matched,
             "n_correct": self.n_correct,
             "n_errors_target": self.n_errors_target,
-            "bucket_A": self.bucket_A,
-            "bucket_B": self.bucket_B,
-            "bucket_C": self.bucket_C,
+            "bucket_a": self.bucket_a,
+            "bucket_b": self.bucket_b,
+            "bucket_c": self.bucket_c,
             "deltas_vs_baseline": self.deltas_vs_baseline,
         }
 
 
 def _evaluate_cell(probes: list[dict[str, Any]], g: GuardConfig) -> CellResult:
-    """Simulate override on every probe, compute metrics."""
+    """Simulate override on every probe, compute metrics.
+
+    Single-pass loop: runs ``_simulate_override`` exactly once per probe and
+    accumulates n_correct, per-class F1 counts, error-bucket counts, and
+    n_errors_target together.
+    """
     # We only evaluate GT-matched contacts (probes are all GT-matched by
     # construction — the diagnostic script skipped FNs).
     n_matched = len(probes)
@@ -249,11 +256,12 @@ def _evaluate_cell(probes: list[dict[str, Any]], g: GuardConfig) -> CellResult:
         c: {"tp": 0, "fp": 0, "fn": 0} for c in ALL_CLASSES_FOR_F1
     }
     n_correct = 0
+    n_errors_target = 0
     bucket_counts: Counter[str] = Counter()
 
     for p in probes:
-        gt = p["gt_action"]
-        pre = p["pre_override_type"]
+        gt = str(p["gt_action"])
+        pre = str(p["pre_override_type"])
         post = _simulate_override(p, g)
 
         if gt == post:
@@ -271,6 +279,7 @@ def _evaluate_cell(probes: list[dict[str, Any]], g: GuardConfig) -> CellResult:
         # Bucket assignment (subset of the original diagnostic's logic, only
         # for dig/set/attack pairs — same scope as the ship criterion).
         if gt in TARGET_CLASSES and post in TARGET_CLASSES and gt != post:
+            n_errors_target += 1
             if not p["seq_present"]:
                 bucket_counts["E"] += 1
             elif pre == gt:
@@ -289,13 +298,6 @@ def _evaluate_cell(probes: list[dict[str, Any]], g: GuardConfig) -> CellResult:
         recall = tp / max(1, tp + fn)
         f1[c] = 2 * precision * recall / max(1e-9, precision + recall)
 
-    n_errors_target = sum(
-        1 for p in probes
-        if p["gt_action"] in TARGET_CLASSES
-        and _simulate_override(p, g) in TARGET_CLASSES
-        and _simulate_override(p, g) != p["gt_action"]
-    )
-
     return CellResult(
         guards=g,
         action_accuracy=n_correct / n_matched,
@@ -303,9 +305,9 @@ def _evaluate_cell(probes: list[dict[str, Any]], g: GuardConfig) -> CellResult:
         n_matched=n_matched,
         n_correct=n_correct,
         n_errors_target=n_errors_target,
-        bucket_A=bucket_counts["A"],
-        bucket_B=bucket_counts["B"],
-        bucket_C=bucket_counts["C"],
+        bucket_a=bucket_counts["A"],
+        bucket_b=bucket_counts["B"],
+        bucket_c=bucket_counts["C"],
     )
 
 
@@ -314,10 +316,8 @@ def _evaluate_cell(probes: list[dict[str, Any]], g: GuardConfig) -> CellResult:
 # --------------------------------------------------------------------------- #
 
 
-PARETO_KEYS: tuple[str, ...] = ("action_accuracy", "dig_f1", "set_f1", "attack_f1")
-
-
 def _score_tuple(cell: CellResult) -> tuple[float, ...]:
+    # Maximize action_accuracy + F1 on the three target classes.
     return (
         cell.action_accuracy,
         cell.f1["dig"],
@@ -380,9 +380,9 @@ def _print_pareto(front: list[CellResult], baseline: CellResult) -> None:
             f"{c.f1['dig']*100:.1f}%",
             f"{c.f1['set']*100:.1f}%",
             f"{c.f1['attack']*100:.1f}%",
-            str(c.bucket_A),
-            str(c.bucket_B),
-            str(c.bucket_C),
+            str(c.bucket_a),
+            str(c.bucket_b),
+            str(c.bucket_c),
         )
     console.print(tbl)
 
@@ -394,9 +394,9 @@ def _print_baseline(baseline: CellResult) -> None:
     tbl.add_row("action_accuracy", f"{baseline.action_accuracy*100:.2f}%")
     for c in ALL_CLASSES_FOR_F1:
         tbl.add_row(f"{c} F1", f"{baseline.f1[c]*100:.2f}%")
-    tbl.add_row("bucket A (override regressions)", str(baseline.bucket_A))
-    tbl.add_row("bucket B (both wrong same)", str(baseline.bucket_B))
-    tbl.add_row("bucket C (both wrong diff)", str(baseline.bucket_C))
+    tbl.add_row("bucket A (override regressions)", str(baseline.bucket_a))
+    tbl.add_row("bucket B (both wrong same)", str(baseline.bucket_b))
+    tbl.add_row("bucket C (both wrong diff)", str(baseline.bucket_c))
     tbl.add_row("n_matched", str(baseline.n_matched))
     tbl.add_row("n_correct", str(baseline.n_correct))
     console.print(tbl)
@@ -407,7 +407,7 @@ def _compute_deltas(cells: list[CellResult], baseline: CellResult) -> None:
     for c in cells:
         c.deltas_vs_baseline = {
             "action_accuracy": c.action_accuracy - baseline.action_accuracy,
-            "bucket_A": c.bucket_A - baseline.bucket_A,
+            "bucket_a": float(c.bucket_a - baseline.bucket_a),
             **{f"{k}_f1": c.f1[k] - baseline.f1[k] for k in ALL_CLASSES_FOR_F1},
         }
 
@@ -502,9 +502,10 @@ def main() -> None:
 
     _compute_deltas(cells_all, baseline)
 
-    # Filter to "weakly improving" cells (don't regress action_accuracy by
-    # more than a noise-level 0.1pp — keeps the Pareto set bounded to
-    # meaningful candidates).
+    # Pareto frontier is scoped to cells that tie or beat baseline
+    # action_accuracy. Strictly regressive cells (even by a fraction of a
+    # point) aren't shippable, so excluding them keeps the frontier focused
+    # on meaningful candidates and the tie-at-baseline row acts as a floor.
     improving = [
         c for c in cells_all
         if c.action_accuracy >= baseline.action_accuracy

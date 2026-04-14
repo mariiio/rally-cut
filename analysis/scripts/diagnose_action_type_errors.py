@@ -35,8 +35,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections import Counter, defaultdict
-from dataclasses import dataclass, field
+from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -219,6 +219,13 @@ def _probe_rally(
     status, and the probability vector at the contact frame. Final
     ``action.action_type`` is set exactly as the production call would set
     it, so post-override predictions match production bit-for-bit.
+
+    IMPORTANT: the inline override loop below must stay in sync with
+    ``rallycut.tracking.sequence_action_runtime.apply_sequence_override``.
+    This diagnostic captures the *baseline* (no new guards) decision state
+    so the sweep harness can simulate any guard combination on the result.
+    If the production override grows a new always-on branch, mirror it here
+    or the probes will drift from production.
     """
     ball_positions = _parse_ball(rally.ball_positions_json or [])
     player_positions: list[PlayerPosition] = _build_player_positions(
