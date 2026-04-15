@@ -298,6 +298,12 @@ model PlayerTrack {
   id                  String            @id @default(uuid())
   rallyId             String            @unique @map("rally_id")
   status              PlayerTrackStatus @default(PENDING)
+  /// Set to true when the owning Rally's bounds are extended (start moved
+  /// earlier or end moved later) such that the existing tracking no longer
+  /// covers all frames. The catch-up pipeline (POST /track-untracked) picks
+  /// these up alongside rallies without any PlayerTrack. Cleared on successful
+  /// tracking-rally-complete webhook.
+  needsRetrack        Boolean           @default(false) @map("needs_retrack")
   frameCount          Int?              @map("frame_count")
   processingTimeMs    Int?              @map("processing_time_ms")
   modelVersion        String?           @map("model_version")
@@ -490,6 +496,20 @@ model BatchTrackingJob {
   @@index([videoId])
   @@index([status])
   @@map("batch_tracking_jobs")
+}
+
+/// Idempotency record for Modal webhook deliveries. deliveryId is either
+/// the Modal-provided UUID (when present) or a SHA-256 fingerprint of the
+/// payload (when Modal doesn't tag the webhook). Rows can be pruned after
+/// 7 days — the uniqueness window that matters is minutes, not weeks.
+model WebhookDelivery {
+  id          String   @id @default(uuid())
+  deliveryId  String   @unique @map("delivery_id")
+  webhookPath String   @map("webhook_path")
+  receivedAt  DateTime @default(now()) @map("received_at")
+
+  @@index([receivedAt])
+  @@map("webhook_deliveries")
 }
 
 model Feedback {
