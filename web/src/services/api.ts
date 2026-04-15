@@ -2385,6 +2385,26 @@ export async function trackAllRallies(videoId: string): Promise<BatchTrackingRes
 }
 
 /**
+ * Track only rallies that do not yet have a PlayerTrack row.
+ * Used by the match-analysis debounce to catch up on rallies created during
+ * the previous batch-tracking run. Returns {jobId, totalRallies}. When
+ * totalRallies === 0 no job is created and jobId is null.
+ */
+export async function trackUntracked(videoId: string): Promise<{ jobId: string | null; totalRallies: number }> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/track-untracked`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `track-untracked failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
  * Get batch tracking status for a video.
  */
 export async function getBatchTrackingStatus(videoId: string): Promise<BatchTrackingStatus> {
@@ -2399,6 +2419,21 @@ export async function getBatchTrackingStatus(videoId: string): Promise<BatchTrac
   }
 
   return response.json();
+}
+
+/**
+ * Trigger match analysis for a video.
+ * 409 means analysis is already running — treat as a no-op.
+ */
+export async function triggerMatchAnalysis(videoId: string): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/trigger-match-analysis`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+  if (!res.ok && res.status !== 409) {
+    // 409 = already running, treat as no-op (another tab or rapid re-click)
+    throw new Error(`trigger-match-analysis failed: ${res.status}`);
+  }
 }
 
 // ============================================================================

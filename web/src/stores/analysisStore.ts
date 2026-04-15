@@ -15,11 +15,11 @@ import {
 
 export type AnalysisPhase =
   | 'idle'
-  | 'quality_check'
-  | 'quality_warning'
+  | 'preflight'
+  | 'preflight_gate'
   | 'detecting'
-  | 'tracking'
-  | 'completing'
+  | 'ready_tracking'
+  | 'match_analyzing'
   | 'done'
   | 'error';
 
@@ -33,6 +33,10 @@ export interface AnalysisPipeline {
   playerCount?: number;
   error?: string;
   startedAt?: number;
+  /** Set to true once BatchTrackingJob.status === COMPLETED. Used to gate the
+   *  match-analysis debounce: the debounce only fires when both this flag is
+   *  true AND a 5-second quiet window has elapsed since the last rally CRUD. */
+  batchTrackingComplete?: boolean;
 }
 
 const DEFAULT_PIPELINE: AnalysisPipeline = {
@@ -50,6 +54,13 @@ interface AnalysisState {
   dismissWarnings: (videoId: string) => void;
   cancelAnalysis: (videoId: string) => void;
   resumeIfNeeded: (videoId: string) => Promise<void>;
+
+  /** Called by editorStore after any rally CRUD for this video. Resets the
+   *  5-second debounce that eventually fires match-analysis — but only if the
+   *  pipeline is currently in `ready_tracking` AND batchTrackingComplete=true.
+   *  Edits during active tracking (before the batch finishes) are held until
+   *  the batch completes and arms the initial debounce. */
+  notifyRallyEdited: (videoId: string) => void;
 }
 
 // ============================================================================
@@ -85,7 +96,7 @@ async function advanceAfterDetection(
     updatePipeline({ phase: 'done', progress: 100, stepMessage: 'No rallies found in this video', ralliesFound: 0 });
     return false;
   }
-  updatePipeline({ phase: 'tracking', progress: 45, stepMessage: `Found ${ralliesFound} rallies! Starting player tracking...`, ralliesFound });
+  updatePipeline({ phase: 'ready_tracking', progress: 45, stepMessage: `Found ${ralliesFound} rallies! Starting player tracking...`, ralliesFound });
   return true;
 }
 
@@ -125,6 +136,31 @@ function clearPollTimer(videoId: string) {
   stalePollCounts.delete(videoId);
 }
 
+// ============================================================================
+// Match-analysis debounce timers (keyed per videoId)
+// ============================================================================
+
+const MATCH_ANALYSIS_DEBOUNCE_MS = 5000;
+
+const HMR_DEBOUNCE_KEY = '__rallycut_match_analysis_debounce_timers__' as const;
+
+const staleDebounceTimers = (globalThis as Record<string, unknown>)[HMR_DEBOUNCE_KEY] as
+  | Record<string, ReturnType<typeof setTimeout>>
+  | undefined;
+if (staleDebounceTimers) {
+  Object.values(staleDebounceTimers).forEach(clearTimeout);
+}
+
+const matchAnalysisDebounceTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+(globalThis as Record<string, unknown>)[HMR_DEBOUNCE_KEY] = matchAnalysisDebounceTimers;
+
+function clearMatchAnalysisDebounce(videoId: string) {
+  if (matchAnalysisDebounceTimers[videoId]) {
+    clearTimeout(matchAnalysisDebounceTimers[videoId]);
+    delete matchAnalysisDebounceTimers[videoId];
+  }
+}
+
 /** Returns true (and errors the pipeline) if the pipeline started > 30 min ago. */
 function checkAbsoluteTimeout(videoId: string, pipeline: AnalysisPipeline, updatePipeline: PipelineUpdater, label: string): boolean {
   if (pipeline.startedAt && Date.now() - pipeline.startedAt > STALE_TIMEOUT_MS) {
@@ -151,6 +187,78 @@ function countStaleAndMaybeError(videoId: string, updatePipeline: PipelineUpdate
 // Store
 // ============================================================================
 
+/**
+ * Poll the latest batch-tracking job for this video until it completes or fails.
+ * Used by the debounce chain to wait for catch-up tracking before kicking off
+ * match-analysis. Returns when status !== processing. Throws on failure.
+ */
+async function pollCatchUpUntilComplete(
+  videoId: string,
+  api: { getBatchTrackingStatus: (videoId: string) => Promise<{ status: string; completedRallies?: number; totalRallies?: number; error?: string }> },
+): Promise<void> {
+  const CATCH_UP_TIMEOUT_MS = 5 * 60 * 1000; // 5 min — tuned for ~0.02$/batch Modal runs
+  const CATCH_UP_POLL_INTERVAL_MS = 3000;
+  const start = Date.now();
+
+  while (Date.now() - start < CATCH_UP_TIMEOUT_MS) {
+    await new Promise((r) => setTimeout(r, CATCH_UP_POLL_INTERVAL_MS));
+    const status = await api.getBatchTrackingStatus(videoId);
+    if (status.status === 'completed') return;
+    if (status.status === 'failed') {
+      throw new Error(status.error ?? 'Catch-up tracking failed');
+    }
+    // status.status is 'processing' or 'pending' — keep polling
+  }
+  throw new Error('Catch-up tracking timed out after 5 minutes');
+}
+
+function armMatchAnalysisDebounce(videoId: string, set: SetFn, get: GetFn) {
+  clearMatchAnalysisDebounce(videoId);
+  const updatePipeline = makePipelineUpdater(videoId, set);
+  matchAnalysisDebounceTimers[videoId] = setTimeout(async () => {
+    delete matchAnalysisDebounceTimers[videoId];
+    const current = get().pipelines[videoId];
+    if (!current || current.phase !== 'ready_tracking' || !current.batchTrackingComplete) return;
+
+    updatePipeline({
+      phase: 'match_analyzing',
+      progress: 90,
+      stepMessage: 'Checking for new rallies to track...',
+    });
+
+    // Catch-up step — best-effort. Failure logs but proceeds to match-analysis.
+    try {
+      const api = await import('@/services/api');
+      const catchUp = await api.trackUntracked(videoId);
+      if (catchUp.jobId && catchUp.totalRallies > 0) {
+        updatePipeline({
+          stepMessage: `Tracking ${catchUp.totalRallies} new ${catchUp.totalRallies === 1 ? 'rally' : 'rallies'}...`,
+          trackingProgress: { completed: 0, total: catchUp.totalRallies },
+        });
+        await pollCatchUpUntilComplete(videoId, api);
+      }
+    } catch (err) {
+      console.warn(`[ANALYSIS] Catch-up tracking failed, proceeding to match-analysis anyway:`, err);
+      // Fall through — tracked rallies still produce meaningful stats
+    }
+
+    // Staleness re-check after any catch-up work — user may have cancelled.
+    const stillCurrent = get().pipelines[videoId];
+    if (!stillCurrent || stillCurrent.phase !== 'match_analyzing') return;
+
+    // Match-analysis step — real failures DO error the pipeline.
+    try {
+      const { triggerMatchAnalysis } = await import('@/services/api');
+      updatePipeline({ progress: 92, stepMessage: 'Generating match stats...' });
+      await triggerMatchAnalysis(videoId);
+      await completeAnalysis(videoId, set, get);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Match analysis failed';
+      updatePipeline({ phase: 'error', error: message, stepMessage: 'Match analysis failed' });
+    }
+  }, MATCH_ANALYSIS_DEBOUNCE_MS);
+}
+
 export const useAnalysisStore = create<AnalysisState>()(
   persist(
     (set, get) => ({
@@ -166,6 +274,7 @@ export const useAnalysisStore = create<AnalysisState>()(
         if (existing && existing.phase !== 'idle' && existing.phase !== 'done' && existing.phase !== 'error') {
           clearPollTimer(videoId);
         }
+        clearMatchAnalysisDebounce(videoId);
         completingLock.delete(videoId);
 
         // Capture generation marker — all updates in this run include it so
@@ -183,7 +292,7 @@ export const useAnalysisStore = create<AnalysisState>()(
 
         // Initialize pipeline
         update({
-          phase: 'quality_check',
+          phase: 'preflight',
           progress: 2,
           stepMessage: 'Checking your video...',
         });
@@ -202,7 +311,7 @@ export const useAnalysisStore = create<AnalysisState>()(
 
           if (hasWarnings) {
             update({
-              phase: 'quality_warning',
+              phase: 'preflight_gate',
               progress: 5,
               stepMessage: 'We found some potential issues',
               qualityResult,
@@ -233,7 +342,7 @@ export const useAnalysisStore = create<AnalysisState>()(
 
       dismissWarnings: (videoId: string) => {
         const pipeline = get().pipelines[videoId];
-        if (!pipeline || pipeline.phase !== 'quality_warning') return;
+        if (!pipeline || pipeline.phase !== 'preflight_gate') return;
 
         set((state) => ({
           pipelines: {
@@ -252,12 +361,20 @@ export const useAnalysisStore = create<AnalysisState>()(
 
       cancelAnalysis: (videoId: string) => {
         clearPollTimer(videoId);
+        clearMatchAnalysisDebounce(videoId);
         set((state) => ({
           pipelines: {
             ...state.pipelines,
             [videoId]: DEFAULT_PIPELINE,
           },
         }));
+      },
+
+      notifyRallyEdited: (videoId: string) => {
+        const pipeline = get().pipelines[videoId];
+        if (!pipeline || pipeline.phase !== 'ready_tracking') return;
+        if (!pipeline.batchTrackingComplete) return;
+        armMatchAnalysisDebounce(videoId, set, get);
       },
 
       resumeIfNeeded: async (videoId: string) => {
@@ -284,16 +401,16 @@ export const useAnalysisStore = create<AnalysisState>()(
 
           if (phase === 'detecting') {
             await resumeDetecting(videoId, set, get, updatePipeline, isStale);
-          } else if (phase === 'tracking') {
+          } else if (phase === 'ready_tracking') {
             await resumeTracking(videoId, set, get, updatePipeline, isStale);
-          } else if (phase === 'completing') {
+          } else if (phase === 'match_analyzing') {
             if (!isStale()) await completeAnalysis(videoId, set, get);
           }
           return;
         }
 
         // For idle/missing pipeline, check backend for active processing.
-        // Catches page reloads during non-persisted phases (quality_check)
+        // Catches page reloads during non-persisted phases (preflight, preflight_gate)
         // where the backend is still running.
         try {
           const status = await getAnalysisPipelineStatus(videoId);
@@ -315,7 +432,7 @@ export const useAnalysisStore = create<AnalysisState>()(
             const completed = status.tracking.completed ?? 0;
             const total = Math.max(status.tracking.total ?? 1, 1);
             updatePipeline({
-              phase: 'tracking',
+              phase: 'ready_tracking',
               progress: 50 + (completed / total) * 40,
               stepMessage: `Tracking players (rally ${completed + 1} of ${total})...`,
               trackingProgress: { completed, total },
@@ -331,7 +448,7 @@ export const useAnalysisStore = create<AnalysisState>()(
     }),
     {
       name: 'rallycut-analysis',
-      version: 2,
+      version: 3,
       migrate: () => ({ pipelines: {} }),
       partialize: (state) => ({
         // Only persist resumable in-progress pipelines. Terminal states
@@ -343,8 +460,8 @@ export const useAnalysisStore = create<AnalysisState>()(
               p.phase !== 'idle' &&
               p.phase !== 'done' &&
               p.phase !== 'error' &&
-              p.phase !== 'quality_check' &&
-              p.phase !== 'quality_warning',
+              p.phase !== 'preflight' &&
+              p.phase !== 'preflight_gate',
           ),
         ),
       }),
@@ -461,7 +578,7 @@ function pollTracking(videoId: string, set: SetFn, get: GetFn) {
   pollTimers[videoId] = setInterval(async () => {
     try {
       const pipeline = get().pipelines[videoId];
-      if (!pipeline || pipeline.phase !== 'tracking') {
+      if (!pipeline || pipeline.phase !== 'ready_tracking') {
         clearPollTimer(videoId);
         return;
       }
@@ -473,12 +590,12 @@ function pollTracking(videoId: string, set: SetFn, get: GetFn) {
       if (status.status === 'completed') {
         clearPollTimer(videoId);
         updatePipeline({
-          phase: 'completing',
           progress: 90,
-          stepMessage: 'Generating match stats...',
+          stepMessage: 'Tracking complete — waiting for edits to settle...',
           trackingProgress: { completed: status.completedRallies ?? 0, total: status.totalRallies ?? 0 },
+          batchTrackingComplete: true,
         });
-        await completeAnalysis(videoId, set, get);
+        armMatchAnalysisDebounce(videoId, set, get);
       } else if (status.status === 'failed') {
         clearPollTimer(videoId);
         updatePipeline({ phase: 'error', error: status.error || 'Tracking failed', stepMessage: 'Tracking failed' });
@@ -518,17 +635,42 @@ async function completeAnalysis(videoId: string, set: SetFn, get: GetFn) {
   };
 
   try {
-    // Wait a moment for match analysis to complete (auto-triggered by batch tracking)
-    await new Promise((r) => setTimeout(r, 2000));
-    if (isStale()) return;
+    // Match analysis is now fire-and-forget on the server (Task 3 removed the
+    // synchronous webhook call). Poll until stats appear or we time out.
+    const MATCH_ANALYSIS_TIMEOUT_MS = 60_000;
+    const STATS_POLL_INTERVAL_MS = 2_000;
+    const start = Date.now();
 
+    while (Date.now() - start < MATCH_ANALYSIS_TIMEOUT_MS) {
+      await new Promise((r) => setTimeout(r, STATS_POLL_INTERVAL_MS));
+      if (isStale()) return;
+
+      const stats = await getMatchStatsApi(videoId);
+      if (isStale()) return;
+
+      const playerCount = stats?.playerStats?.length ?? 0;
+      if (playerCount > 0) {
+        const status = await getAnalysisPipelineStatus(videoId);
+        if (isStale()) return;
+        const ralliesFound = status.detection.ralliesFound;
+        updatePipeline({
+          phase: 'done',
+          progress: 100,
+          stepMessage: `Analysis complete! ${ralliesFound} rallies, ${playerCount} players`,
+          ralliesFound,
+          playerCount,
+        });
+        return;
+      }
+    }
+
+    // Timed out — stats never materialized. Fall back to "done" with whatever we have.
     const status = await getAnalysisPipelineStatus(videoId);
+    if (isStale()) return;
     const stats = await getMatchStatsApi(videoId);
     if (isStale()) return;
-
     const playerCount = stats?.playerStats?.length ?? 0;
     const ralliesFound = status.detection.ralliesFound;
-
     updatePipeline({
       phase: 'done',
       progress: 100,
@@ -589,8 +731,12 @@ async function resumeTracking(
     if (isStale()) return;
 
     if (status.status === 'completed') {
-      updatePipeline({ phase: 'completing', progress: 90, stepMessage: 'Generating match stats...' });
-      if (!isStale()) await completeAnalysis(videoId, set, get);
+      updatePipeline({
+        progress: 90,
+        stepMessage: 'Tracking complete — waiting for edits to settle...',
+        batchTrackingComplete: true,
+      });
+      if (!isStale()) armMatchAnalysisDebounce(videoId, set, get);
     } else if (status.status === 'failed') {
       updatePipeline({ phase: 'error', error: status.error || 'Tracking failed', stepMessage: 'Tracking failed' });
     } else if (status.status === 'processing' || status.status === 'pending') {

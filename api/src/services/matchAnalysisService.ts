@@ -117,9 +117,45 @@ export interface MatchStatsResult {
   finalScoreB?: number;
 }
 
+// ---------------------------------------------------------------------------
+// Fire-and-forget trigger with in-memory running-set guard
+// ---------------------------------------------------------------------------
+
+const runningVideos = new Set<string>();
+
+export function isMatchAnalysisRunning(videoId: string): boolean {
+  return runningVideos.has(videoId);
+}
+
+/**
+ * Fire-and-forget trigger. Returns true if scheduling succeeded, false if
+ * a run is already in flight for this videoId (caller should respond 409).
+ *
+ * The running-set is process-local — if the API scales horizontally, two pods
+ * could race. A2b's WebhookDelivery / job-model work will replace this with a
+ * durable lock; for A2a we accept the limitation because runMatchAnalysis is
+ * effectively idempotent (last write wins on Video.matchAnalysisJson).
+ */
+export function triggerMatchAnalysis(videoId: string): boolean {
+  if (runningVideos.has(videoId)) return false;
+  runningVideos.add(videoId);
+  runMatchAnalysis(videoId)
+    .catch((err) => {
+      console.error(`[MATCH_ANALYSIS] ${videoId} failed:`, err);
+    })
+    .finally(() => {
+      runningVideos.delete(videoId);
+    });
+  return true;
+}
+
 /**
  * Run cross-rally player matching for a video.
  * Called automatically after batch tracking completes.
+ *
+ * Prefer `triggerMatchAnalysis(videoId)` for client-initiated fire-and-forget flows.
+ * Use this synchronous variant only for ops scripts, the legacy `/run-match-analysis`
+ * SSE route, and test harnesses that need to await completion directly.
  */
 export type ProgressCallback = (step: string, index: number, total: number) => void;
 

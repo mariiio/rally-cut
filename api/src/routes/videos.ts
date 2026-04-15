@@ -20,6 +20,7 @@ function getAllowedOrigin(req: Request): string {
 import { getObject, generateDownloadUrl, uploadPlayerCrop, deleteObject } from "../lib/s3.js";
 import { requireUser } from "../middleware/resolveUser.js";
 import { validateRequest } from "../middleware/validateRequest.js";
+import { NotFoundError, ForbiddenError, ConflictError } from "../middleware/errorHandler.js";
 import { paginationSchema, uuidSchema } from "../schemas/common.js";
 import {
   abortMultipartSchema,
@@ -45,7 +46,7 @@ import {
 } from "../services/videoService.js";
 import { queueVideoProcessing } from "../services/processingService.js";
 import { trackAllRallies, getBatchTrackingStatus } from "../services/batchTrackingService.js";
-import { getMatchAnalysis, getMatchStats, runMatchAnalysis, type ProgressCallback } from "../services/matchAnalysisService.js";
+import { getMatchAnalysis, getMatchStats, runMatchAnalysis, triggerMatchAnalysis, type ProgressCallback } from "../services/matchAnalysisService.js";
 import { runPreflightChecks, runPreviewChecks, getAnalysisPipelineStatus, savePlayerMatchingGt, getPlayerMatchingGt } from "../services/qualityService.js";
 import multer from "multer";
 
@@ -822,6 +823,29 @@ router.post(
 );
 
 /**
+ * POST /v1/videos/:id/track-untracked
+ * Track only rallies that do not yet have a PlayerTrack row.
+ * Used by the match-analysis debounce to catch up on rallies created during
+ * a previous batch-tracking run. Returns 202 with {jobId, totalRallies}.
+ * When totalRallies === 0 no job is created and jobId is null.
+ */
+router.post(
+  "/v1/videos/:id/track-untracked",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      const result = await trackAllRallies(req.params.id, req.userId!, { skipTracked: true });
+      res.status(202).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+/**
  * GET /v1/videos/:id/batch-tracking-status
  * Poll for batch tracking progress.
  */
@@ -915,6 +939,37 @@ router.get(
     try {
       const stats = await getMatchStats(req.params.id, req.userId!);
       res.json(stats ?? { status: 'not_available' });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /v1/videos/:id/trigger-match-analysis
+ * Fire-and-forget client trigger for the match analysis pipeline.
+ * Returns 202 if scheduled, 409 if already in flight.
+ */
+router.post(
+  "/v1/videos/:id/trigger-match-analysis",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      const videoId = req.params.id;
+      const video = await prisma.video.findUnique({ where: { id: videoId } });
+      if (!video) throw new NotFoundError('Video', videoId);
+      if (video.userId !== req.userId) throw new ForbiddenError('You do not have access to this video');
+
+      const started = triggerMatchAnalysis(videoId);
+      if (!started) {
+        throw new ConflictError('Match analysis is already running for this video', {
+          reason: 'MATCH_ANALYSIS_IN_PROGRESS',
+        });
+      }
+      res.status(202).json({ status: 'processing' });
     } catch (error) {
       next(error);
     }

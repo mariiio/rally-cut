@@ -170,7 +170,9 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
   - If `MODAL_TRACKING_URL` is set: sends to Modal T4 GPU (~80 FPS, ~$0.02/batch)
   - If not set: processes locally on CPU (~6 FPS, blocks API server)
   - Modal path sends per-rally webhooks (`/v1/webhooks/tracking-rally-complete`) for progressive DB updates
-  - Batch completion webhook (`/v1/webhooks/tracking-batch-complete`) triggers match analysis
+  - Batch completion webhook (`/v1/webhooks/tracking-batch-complete`) updates batch status; match analysis is triggered client-side after a 5-second idle window (Project A2a)
+  - `POST /v1/videos/:id/track-untracked` (A2a): wraps `trackAllRallies` with `{skipTracked:true}` — filters `playerTrack: null` so only rallies without existing tracking are queued. Returns `{jobId: string | null, totalRallies: number}`. jobId is null when nothing needs tracking. Used by the client-side debounce to catch up on rallies created mid-batch before firing match-analysis.
+  - `POST /v1/videos/:id/trigger-match-analysis` (A2a): fire-and-forget endpoint that wraps `runMatchAnalysis` with an in-memory running-set guard. Returns 202 on success, 409 with `details.reason='MATCH_ANALYSIS_IN_PROGRESS'` if already running (client treats 409 as no-op). Replaces the auto-trigger that used to live inside the Modal `tracking-batch-complete` webhook.
   - **Match analysis pipeline**: validate-rallies → match-players → repair-identities → remap-track-ids → reattribute-actions → compute-match-stats (all best-effort, non-fatal)
   - **Rally validation**: Demotes ball-pass FPs to SUGGESTED (rejectionReason=BALL_PASS) using post-tracking signals (contact count, serve detection, duration). Skips user-modified rallies and rallies with low ball detection rate.
 

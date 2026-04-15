@@ -10,7 +10,6 @@
 import { env } from '../config/env.js';
 import { prisma } from '../lib/prisma.js';
 import { saveTrackingResult, type PlayerTrackerOutput } from './playerTrackingService.js';
-import { runMatchAnalysis } from './matchAnalysisService.js';
 
 interface TriggerParams {
   batchJobId: string;
@@ -140,7 +139,7 @@ interface BatchCompletePayload {
 
 /**
  * Handle batch-complete webhook from Modal.
- * Updates job status and triggers match analysis.
+ * Updates job status. Match analysis is triggered client-side (see Project A2a).
  */
 export async function handleTrackingBatchComplete(
   payload: BatchCompletePayload,
@@ -163,15 +162,8 @@ export async function handleTrackingBatchComplete(
     },
   });
 
-  // Trigger match analysis if any rallies succeeded
-  if (completed_rallies > 0) {
-    try {
-      await runMatchAnalysis(video_id);
-      console.log(`[MODAL_TRACK] Match analysis completed for video ${video_id}`);
-    } catch (error) {
-      console.error(`[MODAL_TRACK] Match analysis failed for video ${video_id}:`, error);
-    }
-  }
+  // Match analysis is now triggered client-side via POST /v1/videos/:id/trigger-match-analysis
+  // after a 5-second idle window following batch completion. See Project A2a.
 
   return { success: true };
 }
