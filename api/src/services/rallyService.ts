@@ -120,3 +120,30 @@ export async function deleteRally(id: string, userId: string) {
     where: { id },
   });
 }
+
+export async function unlockRally(
+  rallyId: string,
+  userId: string,
+): Promise<{ rallyId: string; wasLocked: boolean; unlockedAt: Date }> {
+  return prisma.$transaction(async (tx) => {
+    const rally = await tx.rally.findUnique({
+      where: { id: rallyId },
+      select: { videoId: true, video: { select: { userId: true, matchAnalysisJson: true } } },
+    });
+    if (!rally || rally.video.userId !== userId) throw new NotFoundError('Rally', rallyId);
+
+    const json: any = rally.video.matchAnalysisJson ?? { rallies: [] };
+    const entry = (json.rallies ?? []).find((r: any) => r.rallyId === rallyId);
+    const wasLocked = entry?.canonicalLocked === true;
+
+    if (wasLocked) {
+      entry.canonicalLocked = false;
+      await tx.video.update({
+        where: { id: rally.videoId },
+        data: { matchAnalysisJson: json },
+      });
+    }
+
+    return { rallyId, wasLocked, unlockedAt: new Date() };
+  });
+}

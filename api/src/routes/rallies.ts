@@ -8,6 +8,7 @@ import {
   createRally,
   deleteRally,
   listRallies,
+  unlockRally,
   updateRally,
 } from "../services/rallyService.js";
 import { trackPlayersForRally, getPlayerTrack, swapPlayerTracks, promoteRawTrack, getActionGroundTruth, saveActionGroundTruth, saveScoreGroundTruth, getScoreGroundTruthForVideo } from "../services/playerTrackingService.js";
@@ -79,6 +80,20 @@ router.delete(
       next(error);
     }
   }
+);
+
+router.post(
+  '/v1/rallies/:id/unlock',
+  requireUser,
+  validateRequest({ params: z.object({ id: uuidSchema }) }),
+  async (req, res, next) => {
+    try {
+      const result = await unlockRally(req.params.id, req.userId!);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
 );
 
 // ============================================================================
