@@ -176,6 +176,11 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
   - **Match analysis pipeline**: validate-rallies → match-players → repair-identities → remap-track-ids → reattribute-actions → compute-match-stats (all best-effort, non-fatal)
   - **Rally validation**: Demotes ball-pass FPs to SUGGESTED (rejectionReason=BALL_PASS) using post-tracking signals (contact count, serve detection, duration). Skips user-modified rallies and rallies with low ball detection rate.
 
+### Resilience (A2b)
+- **Webhook idempotency**: every Modal webhook handler is wrapped in a `tryRecordDelivery` gate (see `services/webhookIdempotency.ts`). The key is `body.deliveryId` if provided by Modal, else a SHA-256 canonical fingerprint over `(webhookPath, body)` with keys sorted so key-insertion order doesn't affect the result. Duplicates return 200 `{deduplicated: true}` with zero side effects. Records are pruned by the 5-min sweeper after 7 days.
+- **EXTEND-rally retrack**: when a rally's bounds are extended (start moved earlier OR end moved later), `markRetrackIfExtended` flips `PlayerTrack.needsRetrack=true` inside the same transaction as the rally update. The catch-up pipeline (`trackAllRallies({skipTracked:true})`) picks up such rallies alongside rallies without any `PlayerTrack`. Cleared on the next successful `saveTrackingResult`.
+- **Stale-job sweeper**: a 5-minute `setInterval` (see `jobs/staleJobSweeper.ts`) sweeps `BatchTrackingJob` + `RallyDetectionJob` globally, expiring jobs with no progress in 10 minutes. Also prunes old `WebhookDelivery` rows. Skipped under `NODE_ENV=test`. `unref()`'d so it doesn't block shutdown.
+
 ### Label Studio Integration (Ground Truth)
 - `GET /v1/rallies/:id/label-studio` → status (hasTrackingData, hasGroundTruth, taskId)
 - `POST /v1/rallies/:id/label-studio/export` → exports tracking to Label Studio

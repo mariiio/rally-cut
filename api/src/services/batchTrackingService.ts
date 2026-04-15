@@ -18,6 +18,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import { env } from '../config/env.js';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errorHandler.js';
 import type { CalibrationCorner } from './playerTrackingService.js';
@@ -232,21 +233,6 @@ function spawnBatchWorker(jobId: string): void {
 }
 
 /**
- * Returns true if the latest BatchTrackingJob for this video is active
- * (PENDING or PROCESSING).
- *
- * @internal Retained for A2b
- */
-export async function isBatchTrackingActive(videoId: string): Promise<boolean> {
-  const latest = await prisma.batchTrackingJob.findFirst({
-    where: { videoId },
-    orderBy: { createdAt: 'desc' },
-    select: { status: true },
-  });
-  return latest?.status === 'PENDING' || latest?.status === 'PROCESSING';
-}
-
-/**
  * Compare a rally's new bounds against its previous bounds. If the rally
  * has been EXTENDED — start moved earlier or end moved later — its existing
  * PlayerTrack no longer covers all frames. Mark PlayerTrack.needsRetrack
@@ -259,6 +245,7 @@ export async function isBatchTrackingActive(videoId: string): Promise<boolean> {
  * Returns true if a retrack was scheduled, false otherwise.
  */
 export async function markRetrackIfExtended(
+  client: Prisma.TransactionClient | typeof prisma,
   rallyId: string,
   oldBounds: { startMs: number; endMs: number },
   newBounds: { startMs: number; endMs: number },
@@ -267,7 +254,7 @@ export async function markRetrackIfExtended(
     newBounds.startMs < oldBounds.startMs || newBounds.endMs > oldBounds.endMs;
   if (!extended) return false;
 
-  const { count } = await prisma.playerTrack.updateMany({
+  const { count } = await client.playerTrack.updateMany({
     where: { rallyId },
     data: { needsRetrack: true },
   });

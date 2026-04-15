@@ -49,10 +49,7 @@ describe('staleJobSweeper', () => {
       })),
     });
 
-    startStaleJobSweeper();
-    // The sweep is async; await a couple of event-loop ticks.
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
+    await startStaleJobSweeper();
 
     const jobs = await prisma.batchTrackingJob.findMany({
       where: { videoId: { in: testVideoIds } },

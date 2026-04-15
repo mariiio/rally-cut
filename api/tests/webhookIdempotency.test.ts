@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../src/lib/prisma';
 import {
   fingerprintDelivery,
+  pruneOldWebhookDeliveries,
   resolveDeliveryId,
   tryRecordDelivery,
 } from '../src/services/webhookIdempotency';
@@ -28,7 +29,7 @@ describe('webhookIdempotency helper', () => {
 
   it('fingerprintDelivery is deterministic for identical (path, body) pairs', () => {
     const a = fingerprintDelivery('/p', { x: 1, y: 'two' });
-    const b = fingerprintDelivery('/p', { x: 1, y: 'two' });
+    const b = fingerprintDelivery('/p', { y: 'two', x: 1 }); // keys reordered
     expect(a).toBe(b);
   });
 
@@ -54,5 +55,27 @@ describe('webhookIdempotency helper', () => {
     const body = { x: 1 };
     const id = resolveDeliveryId('/p', body);
     expect(id).toBe(fingerprintDelivery('/p', body));
+  });
+
+  it('pruneOldWebhookDeliveries drops rows older than 7 days', async () => {
+    const oldId = `prune-old-${crypto.randomUUID()}`;
+    const freshId = `prune-fresh-${crypto.randomUUID()}`;
+    await prisma.webhookDelivery.create({
+      data: {
+        deliveryId: oldId,
+        webhookPath: '/test',
+        receivedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), // 8 days
+      },
+    });
+    await prisma.webhookDelivery.create({
+      data: { deliveryId: freshId, webhookPath: '/test' }, // default now
+    });
+    const pruned = await pruneOldWebhookDeliveries();
+    expect(pruned).toBeGreaterThanOrEqual(1);
+    const fresh = await prisma.webhookDelivery.findUnique({ where: { deliveryId: freshId } });
+    expect(fresh).not.toBeNull();
+    const gone = await prisma.webhookDelivery.findUnique({ where: { deliveryId: oldId } });
+    expect(gone).toBeNull();
+    await prisma.webhookDelivery.deleteMany({ where: { deliveryId: { in: [oldId, freshId] } } });
   });
 });

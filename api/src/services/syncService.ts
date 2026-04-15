@@ -154,8 +154,9 @@ export async function syncState(
                 if (reindexed) {
                   reindexedVideoIds.add(videoId);
                 }
-                // Mark for retrack if bounds were extended (not just shortened/shifted)
+                // Mark for retrack if bounds were extended (inside tx — rolled back atomically on failure)
                 await markRetrackIfExtended(
+                  tx,
                   rally.id,
                   { startMs: existing.startMs, endMs: existing.endMs },
                   { startMs: rally.startMs, endMs: rally.endMs },

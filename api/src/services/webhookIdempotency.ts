@@ -32,23 +32,49 @@ export async function tryRecordDelivery(
   }
 }
 
+function canonicalStringify(v: unknown): string {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v);
+  if (Array.isArray(v)) return `[${v.map(canonicalStringify).join(',')}]`;
+  const keys = Object.keys(v as object).sort();
+  return `{${keys
+    .map((k) => `${JSON.stringify(k)}:${canonicalStringify((v as Record<string, unknown>)[k])}`)
+    .join(',')}}`;
+}
+
 /**
  * Derive a deterministic deliveryId from an arbitrary webhook payload
  * when the caller didn't supply one explicitly. Uses SHA-256 over the
- * path + canonical JSON of the body, so identical retries dedup and
- * legitimately distinct deliveries don't collide.
+ * path + canonical JSON of the body (keys sorted), so identical retries
+ * dedup and legitimately distinct deliveries don't collide regardless of
+ * key-insertion order in Modal's sender.
  */
 export function fingerprintDelivery(
   webhookPath: string,
   body: unknown,
 ): string {
-  const canonical = JSON.stringify(body);
+  const canonical = canonicalStringify(body);
   return crypto
     .createHash('sha256')
     .update(webhookPath)
     .update('\0')
     .update(canonical)
     .digest('hex');
+}
+
+const DELIVERY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Drop WebhookDelivery rows older than 7 days. Called by the stale-job
+ * sweeper so the idempotency table doesn't grow unbounded. The uniqueness
+ * window that matters is minutes (Modal retries happen within seconds),
+ * so 7 days is generously safe.
+ */
+export async function pruneOldWebhookDeliveries(): Promise<number> {
+  const cutoff = new Date(Date.now() - DELIVERY_RETENTION_MS);
+  const { count } = await prisma.webhookDelivery.deleteMany({
+    where: { receivedAt: { lt: cutoff } },
+  });
+  return count;
 }
 
 /**

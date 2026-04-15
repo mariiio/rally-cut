@@ -83,8 +83,9 @@ export async function updateRally(id: string, userId: string, data: UpdateRallyI
           data: { matchAnalysisJson: Prisma.DbNull, matchStatsJson: Prisma.DbNull },
         });
       }
-      // Mark for retrack if bounds were extended (runs outside tx — acceptable for A2b)
+      // Mark for retrack if bounds were extended (inside tx — rolled back atomically on failure)
       await markRetrackIfExtended(
+        tx,
         id,
         { startMs: rally.startMs, endMs: rally.endMs },
         { startMs: data.startMs ?? rally.startMs, endMs: data.endMs ?? rally.endMs },

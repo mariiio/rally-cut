@@ -91,7 +91,7 @@ if (process.env["NODE_ENV"] !== "test") {
     cleanupStaleJobs().catch((e) =>
       console.error(`[STARTUP] Failed to clean up stale jobs: ${e}`)
     );
-    startStaleJobSweeper();
+    void startStaleJobSweeper();
   });
 
   process.on("SIGTERM", () => {

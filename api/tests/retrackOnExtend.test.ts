@@ -94,6 +94,7 @@ describe('markRetrackIfExtended', () => {
 
   it('marks needsRetrack=true when rally start is moved earlier', async () => {
     const result = await markRetrackIfExtended(
+      prisma,
       rallyId,
       { startMs: 5000, endMs: 10000 },
       { startMs: 3000, endMs: 10000 },
@@ -105,6 +106,7 @@ describe('markRetrackIfExtended', () => {
 
   it('marks needsRetrack=true when rally end is moved later', async () => {
     const result = await markRetrackIfExtended(
+      prisma,
       rallyId,
       { startMs: 5000, endMs: 10000 },
       { startMs: 5000, endMs: 12000 },
@@ -116,6 +118,7 @@ describe('markRetrackIfExtended', () => {
 
   it('marks needsRetrack=true when both start is earlier AND end is later', async () => {
     const result = await markRetrackIfExtended(
+      prisma,
       rallyId,
       { startMs: 5000, endMs: 10000 },
       { startMs: 3000, endMs: 12000 },
@@ -127,6 +130,7 @@ describe('markRetrackIfExtended', () => {
 
   it('does NOT mark when rally is shortened (start later and end earlier)', async () => {
     const result = await markRetrackIfExtended(
+      prisma,
       rallyId,
       { startMs: 5000, endMs: 10000 },
       { startMs: 6000, endMs: 9000 },
@@ -138,6 +142,7 @@ describe('markRetrackIfExtended', () => {
 
   it('does NOT mark when bounds are unchanged', async () => {
     const result = await markRetrackIfExtended(
+      prisma,
       rallyId,
       { startMs: 5000, endMs: 10000 },
       { startMs: 5000, endMs: 10000 },
@@ -149,6 +154,7 @@ describe('markRetrackIfExtended', () => {
 
   it('no-op and returns false when there is no PlayerTrack row for the rally', async () => {
     const result = await markRetrackIfExtended(
+      prisma,
       rallyId2,
       { startMs: 11000, endMs: 15000 },
       { startMs: 9000, endMs: 15000 },
