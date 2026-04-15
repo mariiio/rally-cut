@@ -8,7 +8,15 @@ export type ErrorCode =
   | "ACCESS_DENIED"
   | "LIMIT_EXCEEDED"
   | "CONFLICT"
-  | "INTERNAL_ERROR";
+  | "INTERNAL_ERROR"
+  | "LOCKED_RALLY_CANNOT_EXTEND"
+  | "LOCKED_RALLY_CANNOT_SPLIT"
+  | "LOCKED_RALLY_CANNOT_MERGE"
+  | "LOCKED_RALLY_REQUIRES_CONFIRM"
+  | "RALLY_TRACKING_IN_PROGRESS"
+  | "RALLY_TRACKING_FAILED"
+  | "RALLIES_OVERLAP"
+  | "SPLIT_BOUNDS_INVALID";
 
 export interface ApiError {
   error: {
@@ -88,6 +96,72 @@ export class AccessDeniedError extends AppError {
       ownerName,
       hasPendingRequest,
     });
+  }
+}
+
+type LockedOp = "EXTEND" | "SPLIT" | "MERGE";
+
+export class LockedRallyError extends AppError {
+  constructor(op: LockedOp, rallyId: string) {
+    super(
+      `LOCKED_RALLY_CANNOT_${op}` as ErrorCode,
+      `Rally '${rallyId}' is canonical-locked; ${op.toLowerCase()} is not allowed. Unlock the rally first.`,
+      409,
+      { rallyId, op }
+    );
+    this.name = "LockedRallyError";
+  }
+}
+
+export class LockedRallyRequiresConfirmError extends AppError {
+  constructor(rallyId: string, gtFrameCount: number) {
+    super(
+      "LOCKED_RALLY_REQUIRES_CONFIRM",
+      `Rally '${rallyId}' is canonical-locked with ${gtFrameCount} GT frames. Pass {confirmUnlock: true} to proceed.`,
+      409,
+      { rallyId, gtFrameCount }
+    );
+    this.name = "LockedRallyRequiresConfirmError";
+  }
+}
+
+type RallyTrackingFailReason = "IN_PROGRESS" | "FAILED";
+
+export class RallyTrackingStateError extends AppError {
+  constructor(reason: RallyTrackingFailReason, rallyId: string) {
+    super(
+      `RALLY_TRACKING_${reason}` as ErrorCode,
+      reason === "IN_PROGRESS"
+        ? `Rally '${rallyId}' is currently being tracked. Retry once tracking completes.`
+        : `Rally '${rallyId}' tracking failed. Retrack or delete before retrying this operation.`,
+      409,
+      { rallyId, reason }
+    );
+    this.name = "RallyTrackingStateError";
+  }
+}
+
+export class RalliesOverlapError extends AppError {
+  constructor(rallyIds: string[]) {
+    super(
+      "RALLIES_OVERLAP",
+      "Rallies overlap in time and cannot be merged.",
+      400,
+      { rallyIds }
+    );
+    this.name = "RalliesOverlapError";
+  }
+}
+
+export class SplitBoundsError extends AppError {
+  constructor(detail: string, bounds: Record<string, number>) {
+    super(
+      "SPLIT_BOUNDS_INVALID",
+      `Split bounds invalid: ${detail}`,
+      400,
+      bounds
+    );
+    this.name = "SplitBoundsError";
   }
 }
 

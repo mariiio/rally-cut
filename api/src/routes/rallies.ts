@@ -8,6 +8,9 @@ import {
   createRally,
   deleteRally,
   listRallies,
+  mergeRallies,
+  splitRally,
+  unlockRally,
   updateRally,
 } from "../services/rallyService.js";
 import { trackPlayersForRally, getPlayerTrack, swapPlayerTracks, promoteRawTrack, getActionGroundTruth, saveActionGroundTruth, saveScoreGroundTruth, getScoreGroundTruthForVideo } from "../services/playerTrackingService.js";
@@ -68,17 +71,71 @@ router.patch(
 );
 
 router.delete(
-  "/v1/rallies/:id",
+  '/v1/rallies/:id',
   requireUser,
-  validateRequest({ params: z.object({ id: uuidSchema }) }),
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: z.object({ confirmUnlock: z.boolean().optional() }).optional(),
+  }),
   async (req, res, next) => {
     try {
-      await deleteRally(req.params.id, req.userId!);
+      await deleteRally(req.params.id, req.userId!, { confirmUnlock: req.body?.confirmUnlock });
       res.status(204).send();
     } catch (error) {
       next(error);
     }
-  }
+  },
+);
+
+router.post(
+  '/v1/rallies/:id/unlock',
+  requireUser,
+  validateRequest({ params: z.object({ id: uuidSchema }) }),
+  async (req, res, next) => {
+    try {
+      const result = await unlockRally(req.params.id, req.userId!);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+const splitRallySchema = z.object({
+  firstEndMs: z.number().int().nonnegative(),
+  secondStartMs: z.number().int().nonnegative(),
+});
+
+router.post(
+  '/v1/rallies/:id/split',
+  requireUser,
+  validateRequest({ params: z.object({ id: uuidSchema }), body: splitRallySchema }),
+  async (req, res, next) => {
+    try {
+      const result = await splitRally(req.params.id, req.userId!, req.body);
+      res.status(201).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+const mergeRalliesSchema = z.object({
+  rallyIds: z.tuple([uuidSchema, uuidSchema]),
+});
+
+router.post(
+  '/v1/rallies/merge',
+  requireUser,
+  validateRequest({ body: mergeRalliesSchema }),
+  async (req, res, next) => {
+    try {
+      const result = await mergeRallies(req.body.rallyIds, req.userId!);
+      res.status(201).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
 );
 
 // ============================================================================

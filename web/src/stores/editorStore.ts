@@ -13,7 +13,7 @@ import {
   SessionManifest,
 } from '@/types/rally';
 import { usePlayerStore } from './playerStore';
-import { fetchSession as fetchSessionFromApi, fetchVideoForEditor, getCurrentUser, getConfirmationStatus, AccessDeniedError, type CameraEditMap, type GlobalCameraSettingsMap, type CourtCalibrationMap } from '@/services/api';
+import { fetchSession as fetchSessionFromApi, fetchVideoForEditor, getCurrentUser, getConfirmationStatus, AccessDeniedError, splitRally as splitRallyApi, mergeRalliesApi, unlockRally as unlockRallyApi, apiRallyToFrontend, type CameraEditMap, type GlobalCameraSettingsMap, type CourtCalibrationMap } from '@/services/api';
 import { usePlayerTrackingStore } from './playerTrackingStore';
 import { useCameraStore } from './cameraStore';
 import type { RallyCameraEdit } from '@/types/camera';
@@ -192,7 +192,9 @@ interface EditorState {
   adjustRallyEnd: (id: string, delta: number) => boolean;
   createRallyAtTime: (time: number, duration?: number) => void;
   removeRally: (id: string) => void;
-  mergeRallies: (firstId: string, secondId: string) => void;
+  mergeRallies: (firstId: string, secondId: string) => Promise<void>;
+  splitRally: (rallyId: string, firstEndMs: number, secondStartMs: number) => Promise<void>;
+  unlockRally: (rallyId: string) => Promise<void>;
   selectRally: (id: string | null) => void;
   exportToJson: () => RallyFile | null;
   clearAll: () => void;
@@ -244,6 +246,66 @@ interface EditorState {
   startRallyRecording: () => void;
   stopRallyRecording: (endTime: number) => void;
   cancelRallyRecording: () => void;
+}
+
+// ---------------------------------------------------------------------------
+// Camera-edit merge helper: merges keyframes from two source rallies into a
+// single target rally ID, removing both source keys from the camera store.
+// Used by mergeRallies (both local-only and server-backed paths).
+// ---------------------------------------------------------------------------
+function _applyMergedCameraEdit(
+  cameraStore: ReturnType<typeof useCameraStore.getState>,
+  earlier: { id: string; start_time: number; end_time: number },
+  later: { id: string; start_time: number; end_time: number },
+  mergedId: string,
+  laterIdToRemove: string,
+) {
+  const earlierEdit = cameraStore.cameraEdits[earlier.id];
+  const laterEdit = cameraStore.cameraEdits[later.id];
+
+  if (!earlierEdit && !laterEdit) return;
+
+  const earlierDuration = earlier.end_time - earlier.start_time;
+  const laterDuration = later.end_time - later.start_time;
+  const mergedDuration = later.end_time - earlier.start_time;
+
+  const useVertical =
+    earlierEdit?.aspectRatio === 'VERTICAL' ||
+    laterEdit?.aspectRatio === 'VERTICAL';
+  const mergedAspectRatio = useVertical ? 'VERTICAL' : 'ORIGINAL';
+
+  type Keyframe = { id: string; timeOffset: number; positionX: number; positionY: number; zoom: number; rotation: number; easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT' };
+
+  const convertEarlierKeyframe = (kf: Keyframe): Keyframe => ({
+    ...kf,
+    timeOffset: (kf.timeOffset * earlierDuration) / mergedDuration,
+  });
+
+  const convertLaterKeyframe = (kf: Keyframe): Keyframe => ({
+    ...kf,
+    timeOffset: ((later.start_time - earlier.start_time) + kf.timeOffset * laterDuration) / mergedDuration,
+  });
+
+  const mergeKeyframesForRatio = (ratio: 'ORIGINAL' | 'VERTICAL'): Keyframe[] => {
+    const earlierKfs = earlierEdit?.keyframes[ratio] ?? [];
+    const laterKfs = laterEdit?.keyframes[ratio] ?? [];
+    return [
+      ...earlierKfs.map(convertEarlierKeyframe),
+      ...laterKfs.map(convertLaterKeyframe),
+    ].sort((a, b) => a.timeOffset - b.timeOffset);
+  };
+
+  const mergedCameraEdit: RallyCameraEdit = {
+    enabled: earlierEdit?.enabled || laterEdit?.enabled || false,
+    aspectRatio: mergedAspectRatio,
+    keyframes: {
+      ORIGINAL: mergeKeyframesForRatio('ORIGINAL'),
+      VERTICAL: mergeKeyframesForRatio('VERTICAL'),
+    },
+  };
+
+  cameraStore.setCameraEdit(mergedId, mergedCameraEdit);
+  cameraStore.removeCameraEdit(laterIdToRemove);
 }
 
 export const useEditorStore = create<EditorState>((set, get) => ({
@@ -1418,7 +1480,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
   },
 
-  mergeRallies: (firstId: string, secondId: string) => {
+  mergeRallies: async (firstId: string, secondId: string) => {
     const state = get();
     const first = state.rallies.find((r) => r.id === firstId);
     const second = state.rallies.find((r) => r.id === secondId);
@@ -1431,81 +1493,75 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const earlierId = earlier.id;
     const laterId = later.id;
 
+    // Both rallies must have backend IDs to call the server endpoint
+    if (!earlier._backendId || !later._backendId) {
+      // Fallback: local-only merge (e.g. rallies not yet synced to server)
+      state.pushHistory();
+      const fps = state.videoMetadata?.fps ?? 30;
+      const mergedLocal = recalculateRally({ ...earlier, end_time: later.end_time }, fps);
+      const cameraStoreLocal = useCameraStore.getState();
+      _applyMergedCameraEdit(cameraStoreLocal, earlier, later, earlierId, laterId);
+      const updatedHighlightsLocal = state.highlights.map((h) => ({
+        ...h,
+        rallyIds: h.rallyIds.includes(laterId)
+          ? [...new Set([...h.rallyIds.filter((id) => id !== laterId), earlierId])]
+          : h.rallyIds,
+      }));
+      set({
+        rallies: state.rallies
+          .filter((r) => r.id !== laterId)
+          .map((r) => (r.id === earlierId ? mergedLocal : r)),
+        highlights: updatedHighlightsLocal,
+        selectedRallyId: earlierId,
+        hasUnsavedChanges: true,
+      });
+      syncService.markDirty();
+      debouncedSave(() => get().saveToStorage());
+      const activeMatchIdLocal = get().activeMatchId;
+      if (activeMatchIdLocal) useAnalysisStore.getState().notifyRallyEdited(activeMatchIdLocal);
+      return;
+    }
+
+    // Call server endpoint to merge
+    const { rally: apiMerged } = await mergeRalliesApi([earlier._backendId, later._backendId]);
+
     state.pushHistory();
 
     const fps = state.videoMetadata?.fps ?? 30;
-    const merged = recalculateRally({
-      ...earlier,
-      end_time: later.end_time,
-    }, fps);
+    const activeMatchId = get().activeMatchId;
+    const merged = apiRallyToFrontend(apiMerged, activeMatchId ?? '', fps);
 
-    // Merge camera edits from both rallies
+    // Merge camera edits from both rallies into the new merged rally's frontend ID
     const cameraStore = useCameraStore.getState();
-    const earlierEdit = cameraStore.cameraEdits[earlierId];
-    const laterEdit = cameraStore.cameraEdits[laterId];
-
-    if (earlierEdit || laterEdit) {
-      const earlierDuration = earlier.end_time - earlier.start_time;
-      const laterDuration = later.end_time - later.start_time;
-      const mergedDuration = later.end_time - earlier.start_time;
-
-      // Determine aspect ratio: prefer VERTICAL if either has it
-      const useVertical =
-        earlierEdit?.aspectRatio === 'VERTICAL' ||
-        laterEdit?.aspectRatio === 'VERTICAL';
-      const mergedAspectRatio = useVertical ? 'VERTICAL' : 'ORIGINAL';
-
-      // Helper to convert keyframe timeOffset to new merged rally coordinates
-      const convertEarlierKeyframe = (kf: { id: string; timeOffset: number; positionX: number; positionY: number; zoom: number; rotation: number; easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT' }) => ({
-        ...kf,
-        // Earlier rally starts at 0, so just scale down the offset
-        timeOffset: (kf.timeOffset * earlierDuration) / mergedDuration,
-      });
-
-      const convertLaterKeyframe = (kf: { id: string; timeOffset: number; positionX: number; positionY: number; zoom: number; rotation: number; easing: 'LINEAR' | 'EASE_IN' | 'EASE_OUT' | 'EASE_IN_OUT' }) => ({
-        ...kf,
-        // Later rally starts after the gap, calculate absolute time then convert to offset
-        timeOffset: ((later.start_time - earlier.start_time) + kf.timeOffset * laterDuration) / mergedDuration,
-      });
-
-      // Merge keyframes for each aspect ratio
-      const mergeKeyframesForRatio = (ratio: 'ORIGINAL' | 'VERTICAL') => {
-        const earlierKfs = earlierEdit?.keyframes[ratio] ?? [];
-        const laterKfs = laterEdit?.keyframes[ratio] ?? [];
-        return [
-          ...earlierKfs.map(convertEarlierKeyframe),
-          ...laterKfs.map(convertLaterKeyframe),
-        ].sort((a, b) => a.timeOffset - b.timeOffset);
-      };
-
-      const mergedCameraEdit: RallyCameraEdit = {
-        enabled: earlierEdit?.enabled || laterEdit?.enabled || false,
-        aspectRatio: mergedAspectRatio,
-        keyframes: {
-          ORIGINAL: mergeKeyframesForRatio('ORIGINAL'),
-          VERTICAL: mergeKeyframesForRatio('VERTICAL'),
-        },
-      };
-
-      // Set merged camera edit and remove later rally's edit
-      cameraStore.setCameraEdit(earlierId, mergedCameraEdit);
-      cameraStore.removeCameraEdit(laterId);
+    _applyMergedCameraEdit(cameraStore, earlier, later, merged.id, laterId);
+    // Also remove the old earlierId camera edit key (replaced by merged.id)
+    // _applyMergedCameraEdit already stored the result at merged.id and removed laterId.
+    // If merged.id differs from earlierId, also clean up the old earlier key.
+    if (merged.id !== earlierId) {
+      cameraStore.removeCameraEdit(earlierId);
     }
 
-    // Transfer highlights from later rally to earlier (deduplicate)
-    const updatedHighlights = state.highlights.map((h) => ({
-      ...h,
-      rallyIds: h.rallyIds.includes(laterId)
-        ? [...new Set([...h.rallyIds.filter((id) => id !== laterId), earlierId])]
-        : h.rallyIds,
-    }));
+    // Transfer highlights from both parent rallies to merged rally (deduplicate)
+    const updatedHighlights = state.highlights.map((h) => {
+      const hasEarlier = h.rallyIds.includes(earlierId);
+      const hasLater = h.rallyIds.includes(laterId);
+      if (!hasEarlier && !hasLater) return h;
+      return {
+        ...h,
+        rallyIds: [...new Set([
+          ...h.rallyIds.filter((id) => id !== earlierId && id !== laterId),
+          merged.id,
+        ])],
+      };
+    });
 
     set({
       rallies: state.rallies
-        .filter((r) => r.id !== laterId)
-        .map((r) => (r.id === earlierId ? merged : r)),
+        .filter((r) => r.id !== earlierId && r.id !== laterId)
+        .concat([merged])
+        .sort((a, b) => a.start_time - b.start_time),
       highlights: updatedHighlights,
-      selectedRallyId: earlierId,
+      selectedRallyId: merged.id,
       hasUnsavedChanges: true,
     });
 
@@ -1515,9 +1571,53 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     debouncedSave(() => get().saveToStorage());
 
     // Notify analysis pipeline — resets match-analysis debounce if tracking is complete
-    const videoId = get().activeMatchId;
-    if (videoId) {
-      useAnalysisStore.getState().notifyRallyEdited(videoId);
+    if (activeMatchId) {
+      useAnalysisStore.getState().notifyRallyEdited(activeMatchId);
+    }
+  },
+
+  splitRally: async (rallyId: string, firstEndMs: number, secondStartMs: number) => {
+    const state = get();
+    const rally = state.rallies.find((r) => r.id === rallyId);
+    if (!rally?._backendId) return;
+
+    const { firstRally: apiFirst, secondRally: apiSecond } = await splitRallyApi(rally._backendId, { firstEndMs, secondStartMs });
+
+    state.pushHistory();
+
+    const fps = state.videoMetadata?.fps ?? 30;
+    const activeMatchId = get().activeMatchId;
+    const first = apiRallyToFrontend(apiFirst, activeMatchId ?? '', fps);
+    const second = apiRallyToFrontend(apiSecond, activeMatchId ?? '', fps);
+
+    set({
+      rallies: state.rallies
+        .filter((r) => r.id !== rallyId)
+        .concat([first, second])
+        .sort((a, b) => a.start_time - b.start_time),
+      hasUnsavedChanges: true,
+    });
+
+    syncService.markDirty();
+
+    debouncedSave(() => get().saveToStorage());
+
+    if (activeMatchId) {
+      useAnalysisStore.getState().notifyRallyEdited(activeMatchId);
+    }
+  },
+
+  unlockRally: async (rallyId: string) => {
+    const state = get();
+    const rally = state.rallies.find((r) => r.id === rallyId);
+    if (!rally?._backendId) return;
+
+    await unlockRallyApi(rally._backendId);
+    // Lock state is stored in the DB and reflected via the confirmation status;
+    // re-fetch confirmation status to update UI lock badges.
+    const activeMatchId = state.activeMatchId;
+    if (activeMatchId) {
+      useAnalysisStore.getState().notifyRallyEdited(activeMatchId);
     }
   },
 

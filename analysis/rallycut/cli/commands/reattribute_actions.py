@@ -412,6 +412,11 @@ def reattribute_actions_cmd(
         "--visual",
         help="Enable visual attribution using VideoMAE per-player action classifier",
     ),
+    rally_ids: str | None = typer.Option(
+        None,
+        "--rally-ids",
+        help="Comma-separated rally UUIDs to process. If omitted, all tracked rallies in the video are processed.",
+    ),
 ) -> None:
     """Re-attribute player actions using match-level team assignments.
 
@@ -465,6 +470,15 @@ def reattribute_actions_cmd(
             console.print("[yellow]No rallies with match teams[/yellow]")
         return
 
+    # Parse --rally-ids filter
+    rally_id_filter: list[str] | None = (
+        [s.strip() for s in rally_ids.split(",") if s.strip()]
+        if rally_ids else None
+    )
+    if rally_id_filter is not None:
+        all_teams = {k: v for k, v in all_teams.items() if k in rally_id_filter}
+        reattrib_teams = {k: v for k, v in reattrib_teams.items() if k in rally_id_filter}
+
     if not quiet:
         console.print(
             f"[bold]Re-attributing actions[/bold] for video {video_id[:8]}..."
@@ -493,8 +507,8 @@ def reattribute_actions_cmd(
             console.print("  Visual attribution classifier loaded")
 
     # Load contacts + actions for all rallies with match teams
-    rally_ids = list(all_teams.keys())
-    placeholders = ", ".join(["%s"] * len(rally_ids))
+    rally_ids_list = list(all_teams.keys())
+    placeholders = ", ".join(["%s"] * len(rally_ids_list))
     query = f"""
         SELECT r.id, pt.id, pt.contacts_json, pt.actions_json,
                pt.positions_json, r.start_ms, pt.court_split_y,
@@ -509,7 +523,7 @@ def reattribute_actions_cmd(
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, rally_ids)
+            cur.execute(query, rally_ids_list)
             rows = cur.fetchall()
 
     # Build track_to_player mapping from match analysis for ReID

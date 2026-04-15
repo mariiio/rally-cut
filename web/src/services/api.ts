@@ -130,7 +130,7 @@ interface ApiCameraEdit {
   keyframes: ApiCameraKeyframe[];
 }
 
-interface ApiRally {
+export interface ApiRally {
   id: string;
   videoId: string;
   startMs: number;
@@ -176,7 +176,7 @@ interface HighlightWithBackendId extends Highlight {
 }
 
 // Transform API response to frontend format
-function apiRallyToFrontend(apiRally: ApiRally, videoId: string, fps: number): RallyWithBackendId {
+export function apiRallyToFrontend(apiRally: ApiRally, videoId: string, fps: number): RallyWithBackendId {
   const startTime = apiRally.startMs / 1000;
   const endTime = apiRally.endMs / 1000;
   const duration = endTime - startTime;
@@ -2807,4 +2807,69 @@ export async function savePlayerMatchingGtApi(
   }
 
   return response.json();
+}
+
+// ============================================================================
+// Rally Mutation API (split / merge / unlock / delete-with-confirm)
+// ============================================================================
+
+export async function splitRally(
+  rallyId: string,
+  body: { firstEndMs: number; secondStartMs: number },
+): Promise<{ firstRally: ApiRally; secondRally: ApiRally }> {
+  const response = await fetch(`${API_BASE_URL}/v1/rallies/${rallyId}/split`, {
+    method: 'POST',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to split rally: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function mergeRalliesApi(
+  rallyIds: [string, string],
+): Promise<{ rally: ApiRally }> {
+  const response = await fetch(`${API_BASE_URL}/v1/rallies/merge`, {
+    method: 'POST',
+    headers: getHeaders('application/json'),
+    body: JSON.stringify({ rallyIds }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to merge rallies: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function unlockRally(
+  rallyId: string,
+): Promise<{ rallyId: string; wasLocked: boolean; unlockedAt: string }> {
+  const response = await fetch(`${API_BASE_URL}/v1/rallies/${rallyId}/unlock`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to unlock rally: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function deleteRally(
+  rallyId: string,
+  opts?: { confirmUnlock?: boolean },
+): Promise<void> {
+  const hasBody = opts?.confirmUnlock;
+  const response = await fetch(`${API_BASE_URL}/v1/rallies/${rallyId}`, {
+    method: 'DELETE',
+    headers: getHeaders(hasBody ? 'application/json' : undefined),
+    body: hasBody ? JSON.stringify({ confirmUnlock: true }) : undefined,
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to delete rally: ${response.status}`);
+  }
 }
