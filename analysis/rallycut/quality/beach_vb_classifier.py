@@ -1,57 +1,66 @@
-"""Zero-shot "is this beach volleyball" classifier using open-clip ViT-B/32.
+"""Binary zero-shot "is this beach volleyball" classifier using open-clip.
 
-The actual model inference is wrapped behind `embed_and_score_frames()` so
-unit tests can pass precomputed probabilities without loading the model.
+Scores each frame against two prompts and returns the softmax prob of the
+beach-VB prompt. The runtime path (`embed_and_score_frames`) imports open-clip
+lazily so unit tests can pass precomputed probabilities without loading the
+model.
+
+Calibration principle (see spec §Guiding Principle): threshold is set below
+the lowest-scoring positive, not at the midpoint between positives and
+negatives. Favor false-accept over false-reject.
 """
 from __future__ import annotations
 
 import statistics
-from dataclasses import dataclass
 from typing import Any
 
 from rallycut.quality.types import CheckResult, Issue, Tier
 
-BEACH_VB_BLOCK_THRESHOLD = 0.20  # average beach_vb prob below this = block
+# Calibrated against 5 negatives + positives (see
+# analysis/reports/beach_vb_calibration_<date>.json). Post-Task 10 this value
+# may be refined; keep the constant as the single source of truth.
+BEACH_VB_BLOCK_THRESHOLD = 0.50
 
-PROMPTS = {
-    "beach_vb": "a beach volleyball match on sand",
-    "indoor_vb": "an indoor volleyball match",
-    "other": "a video that is not volleyball",
-}
-
-
-@dataclass(frozen=True)
-class BeachVBProbabilities:
-    beach_vb: float
-    indoor_vb: float
-    other: float
+PROMPTS = (
+    "a beach volleyball match played on sand",
+    "a video that is not beach volleyball",
+)
 
 
-def classify_is_beach_vb(per_frame_probs: list[BeachVBProbabilities]) -> CheckResult:
-    if not per_frame_probs:
+def classify_is_beach_vb(per_frame_beach_vb_probs: list[float]) -> CheckResult:
+    """Classify a video from its per-frame beach-VB probabilities.
+
+    Args:
+        per_frame_beach_vb_probs: softmax prob of PROMPTS[0] per frame, in [0,1].
+
+    Returns a CheckResult. Empty input is a no-op (no issues, no metrics).
+    """
+    if not per_frame_beach_vb_probs:
         return CheckResult(issues=[], metrics={})
 
-    avg_beach = statistics.mean(p.beach_vb for p in per_frame_probs)
-    metrics = {"avgBeachVbProb": avg_beach}
+    avg = statistics.mean(per_frame_beach_vb_probs)
+    metrics = {"avgBeachVbProb": avg}
     issues: list[Issue] = []
-    if avg_beach < BEACH_VB_BLOCK_THRESHOLD:
+
+    if avg < BEACH_VB_BLOCK_THRESHOLD:
         issues.append(Issue(
-            id="wrong_angle_or_not_volleyball",
+            id="not_beach_volleyball",
             tier=Tier.BLOCK,
-            severity=1.0 - avg_beach,
-            message="This doesn't look like a beach volleyball match. RallyCut is tuned for beach volleyball filmed from behind the baseline.",
-            source="preflight",
-            data={"avgBeachVbProb": avg_beach},
+            severity=1.0 - avg,
+            message="This doesn't look like a beach volleyball match. RallyCut is tuned for beach volleyball only.",
+            source="preview",
+            data={"avgBeachVbProb": avg},
         ))
     return CheckResult(issues=issues, metrics=metrics)
 
 
-def embed_and_score_frames(frames: list[Any]) -> list[BeachVBProbabilities]:
-    """Run open-clip on each frame, return softmax over the three prompts.
+def embed_and_score_frames(frames: list[Any]) -> list[float]:
+    """Run open-clip ViT-B/32 on each frame and return PROMPTS[0] softmax probs.
 
-    Kept out of unit tests — integration-tested via `rallycut preflight`.
+    `frames` is a list of PIL.Image objects. Integration-tested via
+    `rallycut preview-check`, not unit-tested.
     """
-    import open_clip  # type: ignore[import-not-found]  # local import: heavy, optional (Project C)
+    import open_clip
     import torch
 
     model, _, preprocess = open_clip.create_model_and_transforms(
@@ -60,8 +69,7 @@ def embed_and_score_frames(frames: list[Any]) -> list[BeachVBProbabilities]:
     tokenizer = open_clip.get_tokenizer("ViT-B-32")
     model.eval()
 
-    labels = list(PROMPTS.keys())
-    text_tokens = tokenizer([PROMPTS[k] for k in labels])
+    text_tokens = tokenizer(list(PROMPTS))
     with torch.no_grad():
         text_features = model.encode_text(text_tokens)
         text_features /= text_features.norm(dim=-1, keepdim=True)
@@ -73,12 +81,5 @@ def embed_and_score_frames(frames: list[Any]) -> list[BeachVBProbabilities]:
         logits = (image_features @ text_features.T) * 100.0
         probs = logits.softmax(dim=-1).cpu().numpy()
 
-    out: list[BeachVBProbabilities] = []
-    for row in probs:
-        kv = dict(zip(labels, row))
-        out.append(BeachVBProbabilities(
-            beach_vb=float(kv["beach_vb"]),
-            indoor_vb=float(kv["indoor_vb"]),
-            other=float(kv["other"]),
-        ))
-    return out
+    # Column 0 is PROMPTS[0] (beach VB). Return per-frame beach-VB prob.
+    return [float(row[0]) for row in probs]
