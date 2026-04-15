@@ -15,17 +15,26 @@ import { describe, expect, it } from 'vitest';
 import { shouldAutoRotate } from '../src/services/processingService.js';
 
 describe('shouldAutoRotate', () => {
-  it('fires when tilt > 5 and confidence > 0.6', () => {
-    expect(shouldAutoRotate({ tiltDeg: 7, courtConfidence: 0.7 })).toBe(true);
+  it('fires when |tilt| > 5 and linesScored >= 3', () => {
+    expect(shouldAutoRotate({ tiltDeg: 7, linesScored: 5 })).toBe(true);
   });
-  it('does not fire when tilt is 5 (strict >)', () => {
-    expect(shouldAutoRotate({ tiltDeg: 5, courtConfidence: 0.9 })).toBe(false);
+  it('fires on negative tilt (|tilt| > 5)', () => {
+    expect(shouldAutoRotate({ tiltDeg: -8, linesScored: 10 })).toBe(true);
   });
-  it('does not fire when confidence is 0.6 (strict >)', () => {
-    expect(shouldAutoRotate({ tiltDeg: 10, courtConfidence: 0.6 })).toBe(false);
+  it('does not fire when |tilt| is 5 (strict >)', () => {
+    expect(shouldAutoRotate({ tiltDeg: 5, linesScored: 20 })).toBe(false);
+  });
+  it('does not fire when |tilt| is -5 (strict >)', () => {
+    expect(shouldAutoRotate({ tiltDeg: -5, linesScored: 20 })).toBe(false);
+  });
+  it('does not fire when linesScored is 2 (needs >= 3)', () => {
+    expect(shouldAutoRotate({ tiltDeg: 10, linesScored: 2 })).toBe(false);
+  });
+  it('fires when linesScored is exactly 3 (inclusive lower bound)', () => {
+    expect(shouldAutoRotate({ tiltDeg: 10, linesScored: 3 })).toBe(true);
   });
   it('does not fire when already autoRotated', () => {
-    expect(shouldAutoRotate({ autoRotated: true, tiltDeg: 10, courtConfidence: 0.9 })).toBe(false);
+    expect(shouldAutoRotate({ autoRotated: true, tiltDeg: 10, linesScored: 20 })).toBe(false);
   });
   it('does not fire on null fields', () => {
     expect(shouldAutoRotate({})).toBe(false);

@@ -108,8 +108,7 @@ export async function generatePosterImmediate(
       tiltResult = await runTiltDetect(inputPath);
       console.log(
         `[TILT] Video ${videoId} tiltDeg=${tiltResult.tiltDeg.toFixed(2)} ` +
-        `confidence=${tiltResult.courtConfidence.toFixed(2)} ` +
-        `framesScored=${tiltResult.framesScored}`,
+        `linesScored=${tiltResult.linesScored}`,
       );
     } catch (err) {
       console.log(`[TILT] Failed to detect tilt for ${videoId}:`, err);
@@ -168,7 +167,7 @@ export async function generatePosterImmediate(
           version: 2,
           issues: [],
           tiltDeg: tiltResult.tiltDeg,
-          courtConfidence: tiltResult.courtConfidence,
+          linesScored: tiltResult.linesScored,
           autoRotated: false,
         });
       }
@@ -336,6 +335,11 @@ export interface ProcessingCompletePayload {
   proxy_s3_key?: string;
   proxy_size_bytes?: number;
   was_optimized?: boolean;
+  // Project C Component B: Lambda reports whether it applied the rotate
+  // filter and by what angle. The webhook handler uses this to perform the
+  // autoRotated/autoFixes state update (same as local path does inline).
+  was_rotated?: boolean;
+  rotation_applied_deg?: number;
   error_message?: string;
   user_id?: string; // For retry handling
 }
@@ -503,6 +507,43 @@ export async function handleProcessingComplete(
   // to allow FREE users to upgrade for full quality exports.
   // The cleanup job handles deletion after 7 days for FREE tier.
 
+  // Project C Component B: if Lambda applied auto-rotate, perform the
+  // autoRotated/autoFixes/courtCalibrationJson state update. Mirrors what
+  // the local FFmpeg path does inline post-rotate, but here it runs off
+  // the Lambda success webhook instead. Uses read-mutate-write (NOT merge)
+  // so the pre-rotate tiltDeg doesn't survive "first non-null wins".
+  if (payload.was_rotated) {
+    const originalTilt = payload.rotation_applied_deg ?? 0;
+    await prisma.$transaction(async (tx) => {
+      const row = await tx.video.findUnique({ where: { id: payload.video_id } });
+      const prior = (row?.qualityReportJson as QualityReport | null) ?? { version: 2, issues: [] };
+      const updated: QualityReport = {
+        ...prior,
+        autoRotated: true,
+        tiltDeg: 0,
+        autoFixes: [
+          ...(prior.autoFixes ?? []),
+          {
+            id: "auto_straightened",
+            message: `Auto-straightened by ${Math.round(Math.abs(originalTilt))}°`,
+            appliedAt: new Date().toISOString(),
+            data: { originalTiltDeg: originalTilt },
+          },
+        ],
+      };
+      await tx.video.update({
+        where: { id: payload.video_id },
+        data: {
+          qualityReportJson: updated as unknown as Prisma.InputJsonValue,
+          courtCalibrationJson: Prisma.DbNull, // invalidated by rotation
+        },
+      });
+    });
+    console.log(
+      `[TILT] Video ${payload.video_id} auto-straightened by ${Math.round(Math.abs(originalTilt))}° (Lambda path)`,
+    );
+  }
+
   console.log(
     `[PROCESSING] Video ${payload.video_id} completed` +
       (payload.was_optimized ? ` (optimized to ${payload.processed_s3_key})` : " (no optimization needed)")
@@ -527,6 +568,15 @@ async function triggerLambdaProcessing(
     data: { processingAttempts: { increment: 1 } },
   });
 
+  // Project C Component B: read persisted quality report to decide if we
+  // want Lambda to apply the rotate filter. rotation_rad is the NEGATIVE
+  // of the measured tilt (correcting, not replicating).
+  const vidForRotate = await prisma.video.findUnique({ where: { id: videoId } });
+  const qr = (vidForRotate?.qualityReportJson as Partial<QualityReport> | null) ?? {};
+  const wantsRotate = shouldAutoRotate(qr);
+  const rotationRad = wantsRotate ? -((qr.tiltDeg ?? 0) * Math.PI) / 180 : 0;
+  const rotationAppliedDeg = wantsRotate ? (qr.tiltDeg ?? 0) : 0;
+
   const payload = {
     videoId,
     originalS3Key: s3Key,
@@ -535,6 +585,12 @@ async function triggerLambdaProcessing(
     webhookSecret: env.MODAL_WEBHOOK_SECRET,
     tier,
     userId, // Pass userId for retry handling in webhook
+    // Zero means "no rotation"; Lambda skips the filter. Non-zero means
+    // apply `rotate=<rad>:ow=iw:oh=ih:c=black` and echo rotation_applied_deg
+    // back in the webhook so `handleProcessingComplete` knows to run the
+    // autoRotated/autoFixes state update.
+    rotation_rad: rotationRad,
+    rotation_applied_deg: rotationAppliedDeg,
   };
 
   const command = new InvokeCommand({
@@ -556,22 +612,29 @@ async function triggerLambdaProcessing(
 
 /**
  * Predicate: should we apply auto-rotation correction during optimize?
- * Fires when tilt > 5° AND court confidence > 0.6 AND not already rotated.
+ * Fires when |tilt| > 5° AND at least 3 Hough lines supported the measurement
+ * AND the video hasn't already been rotated.
  *
- * The confidence floor was originally 0.8 in the design spec, but Task 13
- * validation showed that the beach-trained court-keypoint model plateaus at
- * ~0.6–0.75 confidence on rotated footage (it's trained on mostly-straight
- * match footage). 0.8 was dead code in practice. 0.6 aligns with A1's
- * `MIN_COURT_CONFIDENCE` floor and fires correctly on 6°–10° tilt fixtures.
- * Future work: fine-tune the keypoint model on rotated data to raise the
- * ceiling back to 0.8.
+ * `tiltDeg` is signed — the rotate filter uses the sign to pick direction, and
+ * this predicate takes the absolute value so a video tilted by -7° triggers
+ * the fix the same way as one tilted by +7°.
+ *
+ * Supersedes the original beach-trained court-keypoint approach, whose
+ * confidence metric topped out at ~0.6–0.75 on rotated footage (making the
+ * 0.8 gate dead code) and which collapsed entirely at >10° tilt. The Hough
+ * pipeline is rotation-equivariant and measures to ±0.1° across the full
+ * fixture set.
  */
 export function shouldAutoRotate(qr: {
   autoRotated?: boolean;
   tiltDeg?: number | null;
-  courtConfidence?: number | null;
+  linesScored?: number | null;
 }): boolean {
-  return !qr.autoRotated && (qr.tiltDeg ?? 0) > 5 && (qr.courtConfidence ?? 0) > 0.6;
+  return (
+    !qr.autoRotated &&
+    Math.abs(qr.tiltDeg ?? 0) > 5 &&
+    (qr.linesScored ?? 0) >= 3
+  );
 }
 
 /**

@@ -1,70 +1,93 @@
-"""Tests for the tilt-detect CLI's pure computation layer."""
+"""Tests for the Hough-based tilt detection pure functions."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import math
 
-from rallycut.cli.commands.tilt_detect import _compute_tilt_from_frames
+import cv2
+import numpy as np
 
-
-def _mock_detect(corners_conf_pairs):
-    """Build a fake CourtKeypointDetector that returns canned results per call."""
-    calls = iter(corners_conf_pairs)
-
-    def _detect_from_frame(_bgr):
-        corners, confidence = next(calls)
-        result = MagicMock()
-        result.corners = corners
-        result.confidence = confidence
-        return result
-
-    det = MagicMock()
-    det.detect_from_frame.side_effect = _detect_from_frame
-    return det
+from rallycut.cli.commands.tilt_detect import (
+    _near_horizontal_lines,
+    _weighted_median,
+    compute_tilt_from_frames,
+)
 
 
-def _corners_tilted(deg: float):
-    import math
-    # Build corners that baseline_tilt_deg will read as `deg` degrees
-    # (baseline is TL → TR; keypoint format: [nl, nr, fr, fl])
-    dx = 0.4
-    dy = dx * math.tan(math.radians(deg))
-    # keypoint_detector order: [nl, nr, fr, fl]
-    return [
-        {"x": 0.2, "y": 0.8},  # nl → bl
-        {"x": 0.8, "y": 0.8},  # nr → br
-        {"x": 0.7, "y": 0.4 + dy},  # fr → tr
-        {"x": 0.3, "y": 0.4},  # fl → tl
+def _black_frame_with_line(angle_deg: float, width: int = 640, height: int = 360) -> np.ndarray:
+    """Draw a long white line tilted by `angle_deg` degrees on a black frame.
+
+    The line runs through the frame center and spans nearly the full width,
+    which guarantees it passes the minLineLength cutoff in _near_horizontal_lines.
+    """
+    img = np.zeros((height, width, 3), dtype=np.uint8)
+    cx, cy = width / 2.0, height / 2.0
+    rad = math.radians(angle_deg)
+    half_len = min(width, height) * 0.4
+    dx = math.cos(rad) * half_len
+    dy = math.sin(rad) * half_len
+    p1 = (int(cx - dx), int(cy - dy))
+    p2 = (int(cx + dx), int(cy + dy))
+    cv2.line(img, p1, p2, color=(255, 255, 255), thickness=3)
+    return img
+
+
+def test_weighted_median_simple():
+    assert _weighted_median([(1.0, 1.0), (2.0, 1.0), (3.0, 1.0)]) == 2.0
+
+
+def test_weighted_median_respects_weights():
+    # Heavy weight on the second value drags the median there
+    assert _weighted_median([(1.0, 1.0), (5.0, 100.0), (10.0, 1.0)]) == 5.0
+
+
+def test_straight_line_detects_zero_tilt():
+    frame = _black_frame_with_line(0.0)
+    result = compute_tilt_from_frames([frame])
+    assert abs(result["tiltDeg"]) < 1.0
+    assert result["linesScored"] >= 1
+
+
+def test_positive_tilt_detected_with_correct_sign():
+    frame = _black_frame_with_line(7.0)
+    result = compute_tilt_from_frames([frame])
+    # 7° image-space tilt (clockwise in image coords = positive dy/dx)
+    assert abs(result["tiltDeg"] - 7.0) < 1.5
+    assert result["linesScored"] >= 1
+
+
+def test_negative_tilt_detected_with_correct_sign():
+    frame = _black_frame_with_line(-10.0)
+    result = compute_tilt_from_frames([frame])
+    assert abs(result["tiltDeg"] - (-10.0)) < 1.5
+    assert result["linesScored"] >= 1
+
+
+def test_near_vertical_line_is_filtered_out():
+    # 60° from horizontal — outside the ANGLE_FILTER_DEG=30° window
+    frame = _black_frame_with_line(60.0)
+    result = compute_tilt_from_frames([frame])
+    # No qualifying lines → no-op response
+    assert result["tiltDeg"] == 0.0
+    assert result["linesScored"] == 0
+
+
+def test_empty_input_is_noop():
+    result = compute_tilt_from_frames([])
+    assert result["tiltDeg"] == 0.0
+    assert result["linesScored"] == 0
+
+
+def test_median_across_multiple_frames():
+    frames = [
+        _black_frame_with_line(5.0),
+        _black_frame_with_line(6.0),
+        _black_frame_with_line(7.0),
     ]
+    result = compute_tilt_from_frames(frames)
+    assert 5.0 <= result["tiltDeg"] <= 7.0
+    assert result["linesScored"] >= 3
 
 
-def test_tilt_detect_returns_median_of_high_confidence_frames():
-    detector = _mock_detect([
-        (_corners_tilted(7), 0.85),
-        (_corners_tilted(9), 0.90),
-        (_corners_tilted(6), 0.82),
-    ])
-    result = _compute_tilt_from_frames(detector, frames=[b"a", b"b", b"c"])
-    assert abs(result["tiltDeg"] - 7.0) < 0.5  # median of 6,7,9
-    assert abs(result["courtConfidence"] - 0.85) < 0.01  # median of 0.82, 0.85, 0.90
-    assert result["framesScored"] == 3
-
-
-def test_tilt_detect_filters_low_confidence_frames():
-    detector = _mock_detect([
-        (_corners_tilted(8), 0.85),    # kept
-        (_corners_tilted(20), 0.10),   # dropped (low conf)
-        (_corners_tilted(7), 0.80),    # kept
-    ])
-    result = _compute_tilt_from_frames(detector, frames=[b"a", b"b", b"c"])
-    assert abs(result["tiltDeg"] - 7.5) < 0.5
-    assert result["framesScored"] == 2
-
-
-def test_tilt_detect_no_confident_frames_returns_zero_conf():
-    detector = _mock_detect([
-        (_corners_tilted(8), 0.20),
-        (_corners_tilted(12), 0.30),
-    ])
-    result = _compute_tilt_from_frames(detector, frames=[b"a", b"b"])
-    assert result["courtConfidence"] == 0.0
-    assert result["framesScored"] == 0
+def test_near_horizontal_lines_returns_empty_for_blank_frame():
+    blank = np.zeros((360, 640, 3), dtype=np.uint8)
+    assert _near_horizontal_lines(blank) == []

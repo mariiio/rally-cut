@@ -94,7 +94,7 @@ export interface QualityReport {
   resolution?: { width: number; height: number } | null;
   autoRotated?: boolean;
   tiltDeg?: number | null;
-  courtConfidence?: number | null;
+  linesScored?: number | null;
 }
 
 /** A session containing multiple matches */

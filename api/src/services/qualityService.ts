@@ -380,8 +380,7 @@ function runPreviewCli(
 
 export interface TiltDetectResult {
   tiltDeg: number;
-  courtConfidence: number;
-  framesScored: number;
+  linesScored: number;
 }
 
 /**
@@ -389,8 +388,8 @@ export interface TiltDetectResult {
  * evenly-sampled frames via ffmpeg, spawns the CLI against the frame dir,
  * parses the JSON response.
  *
- * Fails soft: any error returns `{tiltDeg: 0, courtConfidence: 0, framesScored: 0}`.
- * Callers treat that as "no rotation; no flag." Never throws.
+ * Fails soft: any error returns `{tiltDeg: 0, linesScored: 0}`. Callers
+ * treat that as "no rotation; no flag." Never throws.
  */
 export async function runTiltDetect(localPath: string): Promise<TiltDetectResult> {
   const frameDir = path.join(
@@ -403,7 +402,7 @@ export async function runTiltDetect(localPath: string): Promise<TiltDetectResult
     return await runTiltDetectCli(frameDir);
   } catch (err) {
     console.warn(`[tilt-detect] failed, returning zero result: ${err}`);
-    return { tiltDeg: 0, courtConfidence: 0, framesScored: 0 };
+    return { tiltDeg: 0, linesScored: 0 };
   } finally {
     await fs.rm(frameDir, { recursive: true, force: true }).catch(() => {});
   }
@@ -490,8 +489,7 @@ function runTiltDetectCli(frameDir: string): Promise<TiltDetectResult> {
         const parsed = JSON.parse(m[0]);
         resolve({
           tiltDeg: Number(parsed.tiltDeg ?? 0),
-          courtConfidence: Number(parsed.courtConfidence ?? 0),
-          framesScored: Number(parsed.framesScored ?? 0),
+          linesScored: Number(parsed.linesScored ?? 0),
         });
       } catch (e) {
         reject(new Error(`tilt-detect parse failed: ${e}`));

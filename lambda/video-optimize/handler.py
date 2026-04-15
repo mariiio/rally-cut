@@ -38,6 +38,13 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     callback_url = event["callbackUrl"]
     webhook_secret = event["webhookSecret"]
     tier = event.get("tier", "FREE")
+    # Project C Component B: API passes `rotation_rad` when it wants the
+    # optimize pass to correct a detected tilt. 0 means no rotation. When
+    # non-zero, Lambda applies `rotate=<rad>:ow=iw:oh=ih:c=black` during
+    # encoding and echoes the numbers back so the webhook handler can run
+    # its autoRotated/autoFixes state update.
+    rotation_rad = float(event.get("rotation_rad") or 0.0)
+    rotation_applied_deg = float(event.get("rotation_applied_deg") or 0.0)
 
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -47,8 +54,13 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 s3_bucket=s3_bucket,
                 tmpdir=Path(tmpdir),
                 tier=tier,
+                rotation_rad=rotation_rad,
             )
 
+        # `was_rotated` is True only if we actually applied the filter (i.e.
+        # rotation_rad != 0 AND optimize_video was run). `status == "skipped"`
+        # means no re-encode happened, so no rotation either — echo False.
+        was_rotated = result.get("was_rotated", False)
         # Notify success (raise on error so Lambda fails if webhook fails)
         send_webhook(
             callback_url,
@@ -62,6 +74,8 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 "proxy_s3_key": result.get("proxy_s3_key"),
                 "proxy_size_bytes": result.get("proxy_size_bytes"),
                 "was_optimized": result.get("was_optimized", False),
+                "was_rotated": was_rotated,
+                "rotation_applied_deg": rotation_applied_deg if was_rotated else 0.0,
             },
             raise_on_error=True,
         )
@@ -88,6 +102,7 @@ def process_video(
     s3_bucket: str,
     tmpdir: Path,
     tier: str,
+    rotation_rad: float = 0.0,
 ) -> dict[str, Any]:
     """Process video and return result."""
 
@@ -129,8 +144,10 @@ def process_video(
         },
     )
 
-    # Check if optimization is needed
-    if not needs_optimization(input_path):
+    # Check if optimization is needed. Auto-rotate is a superset: if we need
+    # to rotate, we also need to re-encode, so skip the "already optimized"
+    # shortcut when rotation_rad is non-zero.
+    if rotation_rad == 0.0 and not needs_optimization(input_path):
         print("Video already optimized, skipping processing")
         return {
             "status": "skipped",
@@ -138,11 +155,12 @@ def process_video(
             "processed_size_bytes": original_size,
             "poster_s3_key": poster_key,
             "was_optimized": False,
+            "was_rotated": False,
         }
 
-    # Optimize video
+    # Optimize video (optionally with rotate filter)
     output_path = tmpdir / "output.mp4"
-    optimize_video(input_path, output_path, tier)
+    optimize_video(input_path, output_path, tier, rotation_rad=rotation_rad)
 
     processed_size = output_path.stat().st_size
     processed_key = f"{base_key}_optimized.mp4"
@@ -188,6 +206,7 @@ def process_video(
         "proxy_s3_key": proxy_key,
         "proxy_size_bytes": proxy_size_bytes,
         "was_optimized": True,
+        "was_rotated": rotation_rad != 0.0,
     }
 
 
@@ -237,8 +256,17 @@ def needs_optimization(video_path: Path) -> bool:
         return True
 
 
-def optimize_video(input_path: Path, output_path: Path, tier: str) -> None:
-    """Re-encode video with optimization settings."""
+def optimize_video(
+    input_path: Path, output_path: Path, tier: str, rotation_rad: float = 0.0
+) -> None:
+    """Re-encode video with optimization settings, optionally rotating.
+
+    Matches the local FFmpeg invocation in
+    `api/src/services/processingService.ts::triggerLocalProcessing`. When
+    `rotation_rad != 0`, appends `-vf rotate=<rad>:ow=iw:oh=ih:c=black` to
+    correct a measured tilt — the rotation_rad is the NEGATIVE of the tilt
+    (correcting, not replicating).
+    """
 
     # FFmpeg command for optimization
     # - CRF 23: visually lossless quality
@@ -259,8 +287,11 @@ def optimize_video(input_path: Path, output_path: Path, tier: str) -> None:
         "-c:a", "aac",
         "-b:a", "128k",
         "-ac", "2",  # Stereo
-        str(output_path),
     ]
+    if rotation_rad != 0.0:
+        cmd.extend(["-vf", f"rotate={rotation_rad}:ow=iw:oh=ih:c=black"])
+        print(f"Applying auto-rotate: {rotation_rad:.4f} rad")
+    cmd.append(str(output_path))
 
     print(f"Running: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)

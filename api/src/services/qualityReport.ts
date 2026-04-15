@@ -29,10 +29,14 @@ export interface QualityReport {
   preflight?: { ranAt: string; sampleSeconds: number; durationMs: number } | null;
   brightness?: number | null;
   resolution?: { width: number; height: number } | null;
-  // Project C auto-rotate state fields
+  // Project C auto-rotate state fields. `tiltDeg` is signed (positive =
+  // frame tilted clockwise in image coordinates). `linesScored` is the
+  // number of near-horizontal Hough line segments that supported the
+  // tilt measurement — the rotate predicate requires a minimum count
+  // before acting on the signal.
   autoRotated?: boolean;
   tiltDeg?: number | null;
-  courtConfidence?: number | null;
+  linesScored?: number | null;
 }
 
 const TIER_ORDER: Record<Tier, number> = { block: 0, gate: 1, advisory: 2 };
@@ -86,8 +90,8 @@ export function mergeQualityReports(reports: Array<Partial<QualityReport>>): Qua
     reports.map((r) => r.autoRotated).find((v) => v != null) ?? undefined;
   const tiltDeg =
     reports.map((r) => r.tiltDeg).find((v) => v != null) ?? null;
-  const courtConfidence =
-    reports.map((r) => r.courtConfidence).find((v) => v != null) ?? null;
+  const linesScored =
+    reports.map((r) => r.linesScored).find((v) => v != null) ?? null;
 
   return {
     version: 2,
@@ -98,6 +102,6 @@ export function mergeQualityReports(reports: Array<Partial<QualityReport>>): Qua
     autoFixes: autoFixes.length ? autoFixes : undefined,
     autoRotated,
     tiltDeg,
-    courtConfidence,
+    linesScored,
   };
 }
