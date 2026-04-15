@@ -556,14 +556,22 @@ async function triggerLambdaProcessing(
 
 /**
  * Predicate: should we apply auto-rotation correction during optimize?
- * Fires when tilt > 5° AND court confidence > 0.8 AND not already rotated.
+ * Fires when tilt > 5° AND court confidence > 0.6 AND not already rotated.
+ *
+ * The confidence floor was originally 0.8 in the design spec, but Task 13
+ * validation showed that the beach-trained court-keypoint model plateaus at
+ * ~0.6–0.75 confidence on rotated footage (it's trained on mostly-straight
+ * match footage). 0.8 was dead code in practice. 0.6 aligns with A1's
+ * `MIN_COURT_CONFIDENCE` floor and fires correctly on 6°–10° tilt fixtures.
+ * Future work: fine-tune the keypoint model on rotated data to raise the
+ * ceiling back to 0.8.
  */
 export function shouldAutoRotate(qr: {
   autoRotated?: boolean;
   tiltDeg?: number | null;
   courtConfidence?: number | null;
 }): boolean {
-  return !qr.autoRotated && (qr.tiltDeg ?? 0) > 5 && (qr.courtConfidence ?? 0) > 0.8;
+  return !qr.autoRotated && (qr.tiltDeg ?? 0) > 5 && (qr.courtConfidence ?? 0) > 0.6;
 }
 
 /**

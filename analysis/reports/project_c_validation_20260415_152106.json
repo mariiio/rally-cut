@@ -1,0 +1,100 @@
+{
+  "results": {
+    "a1_regression": [
+      {
+        "video": "bad angle.mp4",
+        "blocked": true,
+        "ids": [
+          "wrong_angle_or_not_volleyball"
+        ],
+        "known_gap": null
+      },
+      {
+        "video": "very bad angle.mp4",
+        "blocked": false,
+        "ids": [],
+        "known_gap": "pre-upload-gate miss accepted: single-frame court confidence clears 0.6; the 60s preflight CLI still blocks this video server-side (A1 behavior preserved)."
+      },
+      {
+        "video": "indoor 1.mp4",
+        "blocked": true,
+        "ids": [
+          "wrong_angle_or_not_volleyball",
+          "not_beach_volleyball"
+        ],
+        "known_gap": null
+      },
+      {
+        "video": "indoor 2.mp4",
+        "blocked": true,
+        "ids": [
+          "not_beach_volleyball"
+        ],
+        "known_gap": null
+      },
+      {
+        "video": "not related.mp4",
+        "blocked": true,
+        "ids": [
+          "wrong_angle_or_not_volleyball",
+          "not_beach_volleyball"
+        ],
+        "known_gap": null
+      },
+      {
+        "video": "match.mp4",
+        "blocked": false,
+        "ids": []
+      },
+      {
+        "video": "Newport Beach Games 10_12_25 Paul_Nate vs Colin_Tim - Nathan Gali (1080p, h264).mp4",
+        "blocked": false,
+        "ids": []
+      }
+    ],
+    "component_b": [
+      {
+        "video": "tilt_3deg.mp4",
+        "expected_deg": 3.0,
+        "got_deg": 3.8006305576445554,
+        "conf": 0.7479340374469757,
+        "would_rotate": false,
+        "within_tolerance": true,
+        "known_gap": null
+      },
+      {
+        "video": "tilt_6deg.mp4",
+        "expected_deg": 6.0,
+        "got_deg": 6.082669502411623,
+        "conf": 0.742350161075592,
+        "would_rotate": true,
+        "within_tolerance": true,
+        "known_gap": null
+      },
+      {
+        "video": "tilt_10deg.mp4",
+        "expected_deg": 10.0,
+        "got_deg": 8.544617173685264,
+        "conf": 0.6267209619283676,
+        "would_rotate": true,
+        "within_tolerance": true,
+        "known_gap": null
+      },
+      {
+        "video": "tilt_15deg.mp4",
+        "expected_deg": 15.0,
+        "got_deg": 3.342242792110602,
+        "conf": 0.7082446664571762,
+        "would_rotate": false,
+        "within_tolerance": false,
+        "known_gap": "model-capability limit: beach-trained court-keypoint model collapses at >~10\u00b0 rotation (not rotation-equivariant); fine-tune on rotated data to close."
+      }
+    ]
+  },
+  "failures": [],
+  "warnings": [
+    "A1 negative not blocked: very bad angle.mp4  [KNOWN GAP: pre-upload-gate miss accepted: single-frame court confidence clears 0.6; the 60s preflight CLI still blocks this video server-side (A1 behavior preserved).]",
+    "B: tilt_15deg.mp4 tilt detection off: expected \u224815.0, got 3.34  [KNOWN GAP: model-capability limit: beach-trained court-keypoint model collapses at >~10\u00b0 rotation (not rotation-equivariant); fine-tune on rotated data to close.]",
+    "B: tilt_15deg.mp4 rotation decision wrong: expected True, got False  [KNOWN GAP: model-capability limit: beach-trained court-keypoint model collapses at >~10\u00b0 rotation (not rotation-equivariant); fine-tune on rotated data to close.]"
+  ]
+}
