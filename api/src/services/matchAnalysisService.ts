@@ -20,6 +20,8 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { getObject } from '../lib/s3.js';
 import { ForbiddenError, NotFoundError } from '../middleware/errorHandler.js';
+import { consumePendingEdits } from './pendingAnalysisEdits.js';
+import { planStages } from './matchAnalysisPlanning.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -163,139 +165,185 @@ export async function runMatchAnalysis(
   videoId: string,
   onProgress?: ProgressCallback,
 ): Promise<MatchAnalysisResult | null> {
+  const started = Date.now();
+  const timings: Record<string, number> = {};
+
+  const edits = await consumePendingEdits(videoId);
+  const plan = planStages(edits);
+
   const report = onProgress ?? (() => {});
 
-  // Step 0: Validate tracked rallies — demote ball-pass false positives
+  const timed = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+    const t0 = Date.now();
+    try { return await fn(); } finally { timings[label] = Date.now() - t0; }
+  };
+
+  // Stage 1: Validate tracked rallies — demote ball-pass false positives (always runs)
   report('Validating tracked rallies...', 1, 6);
   try {
-    await validateTrackedRallies(videoId);
+    await timed('stage1_validate', () => validateTrackedRallies(videoId));
   } catch (valError) {
     console.error(`[MATCH_ANALYSIS] Rally validation failed (non-fatal):`, valError);
   }
 
-  // Check that video has tracked rallies
-  const trackedRallies = await prisma.rally.findMany({
-    where: {
-      videoId,
-      status: 'CONFIRMED',
-      playerTrack: { status: 'COMPLETED' },
-    },
-    orderBy: { startMs: 'asc' },
-  });
+  let result: MatchAnalysisResult | null = null;
 
-  if (trackedRallies.length < 2) {
-    console.log(`[MATCH_ANALYSIS] Skipping video ${videoId}: only ${trackedRallies.length} tracked rallies (need 2+)`);
-    return null;
-  }
-
-  console.log(`[MATCH_ANALYSIS] Running cross-rally matching for video ${videoId} (${trackedRallies.length} rallies)`);
-
-  await fs.mkdir(TEMP_DIR, { recursive: true });
-  const outputPath = path.join(TEMP_DIR, `match_${videoId}.json`);
-  let cropsDir: string | undefined;
-
-  try {
-    // Download reference crops (if any) for the CLI
-    let referenceCropsJsonPath: string | undefined;
-    const referenceCrops = await prisma.playerReferenceCrop.findMany({
-      where: { videoId },
-      orderBy: [{ playerId: 'asc' }, { createdAt: 'asc' }],
+  if (plan.fullRerun) {
+    // Check that video has tracked rallies (required for match-players CLI)
+    const trackedRallies = await prisma.rally.findMany({
+      where: {
+        videoId,
+        status: 'CONFIRMED',
+        playerTrack: { status: 'COMPLETED' },
+      },
+      orderBy: { startMs: 'asc' },
     });
 
-    if (referenceCrops.length > 0) {
-      cropsDir = path.join(TEMP_DIR, `crops_${videoId}`);
-      await fs.mkdir(cropsDir, { recursive: true });
+    if (trackedRallies.length < 2) {
+      console.log(`[MATCH_ANALYSIS] Skipping video ${videoId}: only ${trackedRallies.length} tracked rallies (need 2+)`);
+      return null;
+    }
 
-      const downloadResults = await Promise.all(
-        referenceCrops.map(async (crop) => {
-          try {
-            const obj = await getObject(crop.s3Key);
-            const chunks: Buffer[] = [];
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            for await (const chunk of obj.Body as any) {
-              chunks.push(Buffer.from(chunk));
+    console.log(`[MATCH_ANALYSIS] Running cross-rally matching for video ${videoId} (${trackedRallies.length} rallies)`);
+
+    await fs.mkdir(TEMP_DIR, { recursive: true });
+    const outputPath = path.join(TEMP_DIR, `match_${videoId}.json`);
+    let cropsDir: string | undefined;
+
+    try {
+      // Download reference crops (if any) for the CLI
+      let referenceCropsJsonPath: string | undefined;
+      const referenceCrops = await prisma.playerReferenceCrop.findMany({
+        where: { videoId },
+        orderBy: [{ playerId: 'asc' }, { createdAt: 'asc' }],
+      });
+
+      if (referenceCrops.length > 0) {
+        cropsDir = path.join(TEMP_DIR, `crops_${videoId}`);
+        await fs.mkdir(cropsDir, { recursive: true });
+
+        const downloadResults = await Promise.all(
+          referenceCrops.map(async (crop) => {
+            try {
+              const obj = await getObject(crop.s3Key);
+              const chunks: Buffer[] = [];
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              for await (const chunk of obj.Body as any) {
+                chunks.push(Buffer.from(chunk));
+              }
+              const cropPath = path.join(cropsDir!, `${crop.id}.jpg`);
+              await fs.writeFile(cropPath, Buffer.concat(chunks));
+              return {
+                playerId: crop.playerId,
+                cropPath,
+                frameMs: crop.frameMs,
+                bbox: { x: crop.bboxX, y: crop.bboxY, w: crop.bboxW, h: crop.bboxH },
+              };
+            } catch (dlError) {
+              console.error(`[MATCH_ANALYSIS] Failed to download crop ${crop.id}:`, dlError);
+              return null;
             }
-            const cropPath = path.join(cropsDir!, `${crop.id}.jpg`);
-            await fs.writeFile(cropPath, Buffer.concat(chunks));
-            return {
-              playerId: crop.playerId,
-              cropPath,
-              frameMs: crop.frameMs,
-              bbox: { x: crop.bboxX, y: crop.bboxY, w: crop.bboxW, h: crop.bboxH },
-            };
-          } catch (dlError) {
-            console.error(`[MATCH_ANALYSIS] Failed to download crop ${crop.id}:`, dlError);
-            return null;
-          }
-        })
-      );
+          })
+        );
 
-      const manifest = downloadResults.filter((r): r is NonNullable<typeof r> => r !== null);
-      if (manifest.length > 0) {
-        referenceCropsJsonPath = path.join(cropsDir, 'manifest.json');
-        await fs.writeFile(referenceCropsJsonPath, JSON.stringify(manifest));
-        console.log(`[MATCH_ANALYSIS] Using ${manifest.length} reference crops for matching`);
+        const manifest = downloadResults.filter((r): r is NonNullable<typeof r> => r !== null);
+        if (manifest.length > 0) {
+          referenceCropsJsonPath = path.join(cropsDir, 'manifest.json');
+          await fs.writeFile(referenceCropsJsonPath, JSON.stringify(manifest));
+          console.log(`[MATCH_ANALYSIS] Using ${manifest.length} reference crops for matching`);
+        }
+      }
+
+      // Stage 2: Match players across rallies
+      report('Matching players across rallies...', 2, 6);
+      result = await timed('stage2_match', () => runMatchPlayersCli(videoId, outputPath, referenceCropsJsonPath));
+
+      // Persist to database
+      await prisma.video.update({
+        where: { id: videoId },
+        data: {
+          matchAnalysisJson: result as unknown as Prisma.InputJsonValue,
+        },
+      });
+
+      console.log(`[MATCH_ANALYSIS] Saved match analysis for video ${videoId}: ${result.numRallies} rallies matched`);
+
+      // Stage 3: Repair within-rally identity switches using match-level profiles
+      // (best-effort — don't fail the whole pipeline)
+      report('Repairing identity switches...', 3, 6);
+      try {
+        await timed('stage3_repair', () => repairIdentities(videoId));
+      } catch (repairError) {
+        console.error(`[MATCH_ANALYSIS] Identity repair failed (non-fatal):`, repairError);
+      }
+
+      // Stage 4: Remap per-rally track IDs to consistent player IDs (1-4)
+      // (best-effort — don't fail the whole pipeline)
+      report('Remapping track IDs...', 4, 6);
+      try {
+        await timed('stage4_remap', () => remapTrackIds(videoId));
+      } catch (remapError) {
+        console.error(`[MATCH_ANALYSIS] Track ID remapping failed (non-fatal):`, remapError);
+      }
+
+      // Stage 5: Re-attribute player actions using match-level team identity
+      // (best-effort — don't fail the whole pipeline)
+      report('Classifying actions...', 5, 6);
+      try {
+        await timed('stage5_reattribute', () => reattributeActions(videoId));
+      } catch (reattribError) {
+        console.error(`[MATCH_ANALYSIS] Action re-attribution failed (non-fatal):`, reattribError);
+      }
+    } catch (error) {
+      console.error(`[MATCH_ANALYSIS] Failed for video ${videoId}:`, error);
+      return null;
+    } finally {
+      await fs.unlink(outputPath).catch(() => {});
+      if (cropsDir) {
+        await fs.rm(cropsDir, { recursive: true, force: true }).catch(() => {});
       }
     }
+  } else {
+    // Partial rerun: only re-process changed rallies (stages 4 + 5)
+    if (plan.changedRallyIds.length > 0) {
+      report('Remapping changed rallies...', 4, 6);
+      try {
+        await timed('stage4_remap', () => remapTrackIds(videoId, { rallyIds: plan.changedRallyIds }));
+      } catch (remapError) {
+        console.error(`[MATCH_ANALYSIS] Track ID remapping failed (non-fatal):`, remapError);
+      }
 
-    report('Matching players across rallies...', 2, 6);
-    const result = await runMatchPlayersCli(videoId, outputPath, referenceCropsJsonPath);
-
-    // Persist to database
-    await prisma.video.update({
-      where: { id: videoId },
-      data: {
-        matchAnalysisJson: result as unknown as Prisma.InputJsonValue,
-      },
-    });
-
-    console.log(`[MATCH_ANALYSIS] Saved match analysis for video ${videoId}: ${result.numRallies} rallies matched`);
-
-    // Repair within-rally identity switches using match-level profiles
-    // (best-effort — don't fail the whole pipeline)
-    report('Repairing identity switches...', 3, 6);
-    try {
-      await repairIdentities(videoId);
-    } catch (repairError) {
-      console.error(`[MATCH_ANALYSIS] Identity repair failed (non-fatal):`, repairError);
-    }
-
-    // Remap per-rally track IDs to consistent player IDs (1-4)
-    // (best-effort — don't fail the whole pipeline)
-    report('Remapping track IDs...', 4, 6);
-    try {
-      await remapTrackIds(videoId);
-    } catch (remapError) {
-      console.error(`[MATCH_ANALYSIS] Track ID remapping failed (non-fatal):`, remapError);
-    }
-
-    // Re-attribute player actions using match-level team identity
-    // (best-effort — don't fail the whole pipeline)
-    report('Classifying actions...', 5, 6);
-    try {
-      await reattributeActions(videoId);
-    } catch (reattribError) {
-      console.error(`[MATCH_ANALYSIS] Action re-attribution failed (non-fatal):`, reattribError);
-    }
-
-    // Also compute match stats (best-effort — don't fail the whole pipeline)
-    report('Computing match stats...', 6, 6);
-    try {
-      await computeAndSaveMatchStats(videoId);
-    } catch (statsError) {
-      console.error(`[MATCH_ANALYSIS] Stats computation failed (non-fatal):`, statsError);
-    }
-
-    return result;
-  } catch (error) {
-    console.error(`[MATCH_ANALYSIS] Failed for video ${videoId}:`, error);
-    return null;
-  } finally {
-    await fs.unlink(outputPath).catch(() => {});
-    if (cropsDir) {
-      await fs.rm(cropsDir, { recursive: true, force: true }).catch(() => {});
+      report('Reattributing changed rallies...', 5, 6);
+      try {
+        await timed('stage5_reattribute', () => reattributeActions(videoId, { rallyIds: plan.changedRallyIds }));
+      } catch (reattribError) {
+        console.error(`[MATCH_ANALYSIS] Action re-attribution failed (non-fatal):`, reattribError);
+      }
     }
   }
+
+  // Stage 6: Compute match stats (best-effort — don't fail the whole pipeline)
+  report('Computing match stats...', 6, 6);
+  try {
+    await timed('stage6_stats', () => computeAndSaveMatchStats(videoId));
+  } catch (statsError) {
+    console.error(`[MATCH_ANALYSIS] Stats computation failed (non-fatal):`, statsError);
+  }
+
+  await prisma.video.update({
+    where: { id: videoId },
+    data: { matchAnalysisRanAt: new Date() },
+  });
+
+  console.log(JSON.stringify({
+    event: 'match_analysis.stage_timings',
+    videoId,
+    plan,
+    timingsMs: timings,
+    totalMs: Date.now() - started,
+  }));
+
+  return result;
 }
 
 /**
@@ -451,10 +499,13 @@ async function repairIdentities(videoId: string): Promise<void> {
  * Remap per-rally track IDs to consistent match-level player IDs (1-4).
  * Updates positions_json, contacts_json, actions_json in player_tracks.
  */
-async function remapTrackIds(videoId: string): Promise<void> {
+async function remapTrackIds(videoId: string, opts: { rallyIds?: string[] } = {}): Promise<void> {
   const logPrefix = 'REMAP_TRACKS';
   const analysisDir = path.resolve(__dirname, '../../../analysis');
   const args = ['run', 'rallycut', 'remap-track-ids', videoId, '--quiet'];
+  if (opts.rallyIds && opts.rallyIds.length > 0) {
+    args.push('--rally-ids', opts.rallyIds.join(','));
+  }
 
   console.log(`[${logPrefix}] Running: uv ${args.join(' ')}`);
 
@@ -785,10 +836,13 @@ async function applyRemapToRally(
  * Re-attribute player actions using match-level team assignments.
  * Updates actions_json in player_tracks where the team signal improves attribution.
  */
-async function reattributeActions(videoId: string): Promise<void> {
+async function reattributeActions(videoId: string, opts: { rallyIds?: string[] } = {}): Promise<void> {
   const logPrefix = 'REATTRIBUTE';
   const analysisDir = path.resolve(__dirname, '../../../analysis');
   const args = ['run', 'rallycut', 'reattribute-actions', videoId, '--quiet'];
+  if (opts.rallyIds && opts.rallyIds.length > 0) {
+    args.push('--rally-ids', opts.rallyIds.join(','));
+  }
 
   console.log(`[${logPrefix}] Running: uv ${args.join(' ')}`);
 
