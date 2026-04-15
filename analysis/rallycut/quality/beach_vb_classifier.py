@@ -19,11 +19,20 @@ from rallycut.quality.types import CheckResult, Issue, Tier
 # Calibrated against 5 negatives + positives (see
 # analysis/reports/beach_vb_calibration_<date>.json). Post-Task 10 this value
 # may be refined; keep the constant as the single source of truth.
-BEACH_VB_BLOCK_THRESHOLD = 0.50
+BEACH_VB_BLOCK_THRESHOLD = 0.886
 
+# Multi-class prompts with one positive (index 0) and several negatives.
+# Binary prompts ("a video that is not beach volleyball" as the second class)
+# failed calibration — CLIP assigned ~98% mass to the broad "not beach
+# volleyball" prompt even for real matches. Replacing with specific
+# alternatives forces the softmax to compete on concrete scene content.
+# See analysis/reports/beach_vb_calibration_<date>.json for the sweep.
 PROMPTS = (
     "a beach volleyball match played on sand",
-    "a video that is not beach volleyball",
+    "an indoor volleyball match played on a wooden court",
+    "a soccer or football match on grass",
+    "a group of people on a beach",
+    "an arbitrary video that is not about sports",
 )
 
 

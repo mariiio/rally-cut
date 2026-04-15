@@ -35,7 +35,7 @@ def test_preview_check_passes_when_scores_high(tmp_path):
     (tmp_path / "frame_0.jpg").write_bytes(b"\x00" * 16)
 
     with patch.object(pc, "_detect_corners_from_frame", return_value=_good_corners()), \
-         patch.object(pc, "_score_beach_vb_for_frames", return_value=[0.85, 0.9, 0.88, 0.92, 0.87]):
+         patch.object(pc, "_score_beach_vb_for_frames", return_value=[0.95, 0.97, 0.96, 0.98, 0.94]):
         report = pc._run(tmp_path, width=640, height=360, duration_s=60.0)
 
     assert report.issues == []
