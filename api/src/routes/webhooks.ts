@@ -21,6 +21,10 @@ import {
   handleTrackingRallyComplete,
   handleTrackingBatchComplete,
 } from "../services/modalTrackingService.js";
+import {
+  resolveDeliveryId,
+  tryRecordDelivery,
+} from "../services/webhookIdempotency.js";
 
 const router = Router();
 
@@ -82,6 +86,12 @@ router.post(
   validateRequest({ body: detectionCompleteSchema }),
   async (req, res, next) => {
     try {
+      const deliveryId = resolveDeliveryId('/v1/webhooks/detection-complete', req.body);
+      const fresh = await tryRecordDelivery(deliveryId, '/v1/webhooks/detection-complete');
+      if (!fresh) {
+        console.log(`[WEBHOOK] Deduplicated ${deliveryId.slice(0, 8)}… on ${req.path}`);
+        res.status(200).json({ deduplicated: true }); return;
+      }
       const result = await handleDetectionComplete(req.body);
       res.json(result);
     } catch (error) {
@@ -103,6 +113,12 @@ router.post(
   validateRequest({ body: progressUpdateSchema }),
   async (req, res, next) => {
     try {
+      const deliveryId = resolveDeliveryId('/v1/webhooks/detection-progress', req.body);
+      const fresh = await tryRecordDelivery(deliveryId, '/v1/webhooks/detection-progress');
+      if (!fresh) {
+        console.log(`[WEBHOOK] Deduplicated ${deliveryId.slice(0, 8)}… on ${req.path}`);
+        res.status(200).json({ deduplicated: true }); return;
+      }
       await updateDetectionProgress(
         req.body.job_id,
         req.body.progress,
@@ -132,6 +148,12 @@ router.post(
   validateRequest({ body: exportCompleteSchema }),
   async (req, res, next) => {
     try {
+      const deliveryId = resolveDeliveryId('/v1/webhooks/export-complete', req.body);
+      const fresh = await tryRecordDelivery(deliveryId, '/v1/webhooks/export-complete');
+      if (!fresh) {
+        console.log(`[WEBHOOK] Deduplicated ${deliveryId.slice(0, 8)}… on ${req.path}`);
+        res.status(200).json({ deduplicated: true }); return;
+      }
       const result = await handleExportComplete(req.body);
       res.json(result);
     } catch (error) {
@@ -151,6 +173,12 @@ router.post(
   validateRequest({ body: exportProgressSchema }),
   async (req, res, next) => {
     try {
+      const deliveryId = resolveDeliveryId('/v1/webhooks/export-progress', req.body);
+      const fresh = await tryRecordDelivery(deliveryId, '/v1/webhooks/export-progress');
+      if (!fresh) {
+        console.log(`[WEBHOOK] Deduplicated ${deliveryId.slice(0, 8)}… on ${req.path}`);
+        res.status(200).json({ deduplicated: true }); return;
+      }
       await updateExportProgress(req.body.job_id, req.body.progress);
       res.json({ success: true });
     } catch (error) {
@@ -178,6 +206,12 @@ router.post(
   validateRequest({ body: confirmationCompleteSchema }),
   async (req, res, next) => {
     try {
+      const deliveryId = resolveDeliveryId('/v1/webhooks/confirmation-complete', req.body);
+      const fresh = await tryRecordDelivery(deliveryId, '/v1/webhooks/confirmation-complete');
+      if (!fresh) {
+        console.log(`[WEBHOOK] Deduplicated ${deliveryId.slice(0, 8)}… on ${req.path}`);
+        res.status(200).json({ deduplicated: true }); return;
+      }
       const result = await handleConfirmationComplete(req.body);
       res.json(result);
     } catch (error) {
@@ -197,6 +231,12 @@ router.post(
   validateRequest({ body: confirmationProgressSchema }),
   async (req, res, next) => {
     try {
+      const deliveryId = resolveDeliveryId('/v1/webhooks/confirmation-progress', req.body);
+      const fresh = await tryRecordDelivery(deliveryId, '/v1/webhooks/confirmation-progress');
+      if (!fresh) {
+        console.log(`[WEBHOOK] Deduplicated ${deliveryId.slice(0, 8)}… on ${req.path}`);
+        res.status(200).json({ deduplicated: true }); return;
+      }
       await updateConfirmationProgress(
         req.body.confirmation_id,
         req.body.progress
@@ -227,6 +267,12 @@ router.post(
   validateRequest({ body: processingCompleteSchema }),
   async (req, res, next) => {
     try {
+      const deliveryId = resolveDeliveryId('/v1/webhooks/processing-complete', req.body);
+      const fresh = await tryRecordDelivery(deliveryId, '/v1/webhooks/processing-complete');
+      if (!fresh) {
+        console.log(`[WEBHOOK] Deduplicated ${deliveryId.slice(0, 8)}… on ${req.path}`);
+        res.status(200).json({ deduplicated: true }); return;
+      }
       const result = await handleProcessingComplete(req.body);
       res.json(result);
     } catch (error) {
@@ -254,6 +300,12 @@ router.post(
   validateRequest({ body: trackingRallyCompleteSchema }),
   async (req, res, next) => {
     try {
+      const deliveryId = resolveDeliveryId('/v1/webhooks/tracking-rally-complete', req.body);
+      const fresh = await tryRecordDelivery(deliveryId, '/v1/webhooks/tracking-rally-complete');
+      if (!fresh) {
+        console.log(`[WEBHOOK] Deduplicated ${deliveryId.slice(0, 8)}… on ${req.path}`);
+        res.status(200).json({ deduplicated: true }); return;
+      }
       const result = await handleTrackingRallyComplete(req.body);
       res.json(result);
     } catch (error) {
@@ -277,6 +329,12 @@ router.post(
   validateRequest({ body: trackingBatchCompleteSchema }),
   async (req, res, next) => {
     try {
+      const deliveryId = resolveDeliveryId('/v1/webhooks/tracking-batch-complete', req.body);
+      const fresh = await tryRecordDelivery(deliveryId, '/v1/webhooks/tracking-batch-complete');
+      if (!fresh) {
+        console.log(`[WEBHOOK] Deduplicated ${deliveryId.slice(0, 8)}… on ${req.path}`);
+        res.status(200).json({ deduplicated: true }); return;
+      }
       const result = await handleTrackingBatchComplete(req.body);
       res.json(result);
     } catch (error) {
