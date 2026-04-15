@@ -75,3 +75,17 @@ def check_camera_geometry(corners: CourtCorners) -> CheckResult:
         return CheckResult(issues=issues, metrics=metrics)
 
     return CheckResult(issues=issues, metrics=metrics)
+
+
+def baseline_tilt_deg(corners: CourtCorners) -> float:
+    """Absolute tilt in degrees of the top baseline vs. horizontal.
+
+    Returns 0.0 for degenerate corners (all points coincident). Re-added in
+    Project C to feed the tilt-detect CLI; kept as a pure helper (no issue
+    emission) so the dropped `video_rotated` advisory stays dropped.
+    """
+    dx = corners.tr[0] - corners.tl[0]
+    dy = corners.tr[1] - corners.tl[1]
+    if dx == 0 and dy == 0:
+        return 0.0
+    return abs(math.degrees(math.atan2(dy, dx)))
