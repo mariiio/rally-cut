@@ -187,6 +187,31 @@ function countStaleAndMaybeError(videoId: string, updatePipeline: PipelineUpdate
 // Store
 // ============================================================================
 
+/**
+ * Poll the latest batch-tracking job for this video until it completes or fails.
+ * Used by the debounce chain to wait for catch-up tracking before kicking off
+ * match-analysis. Returns when status !== processing. Throws on failure.
+ */
+async function pollCatchUpUntilComplete(
+  videoId: string,
+  api: { getBatchTrackingStatus: (videoId: string) => Promise<{ status: string; completedRallies?: number; totalRallies?: number; error?: string }> },
+): Promise<void> {
+  const CATCH_UP_TIMEOUT_MS = 5 * 60 * 1000; // 5 min — tuned for ~0.02$/batch Modal runs
+  const POLL_INTERVAL_MS = 3000;
+  const start = Date.now();
+
+  while (Date.now() - start < CATCH_UP_TIMEOUT_MS) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    const status = await api.getBatchTrackingStatus(videoId);
+    if (status.status === 'completed') return;
+    if (status.status === 'failed') {
+      throw new Error(status.error ?? 'Catch-up tracking failed');
+    }
+    // status.status is 'processing' or 'pending' — keep polling
+  }
+  throw new Error('Catch-up tracking timed out after 5 minutes');
+}
+
 function armMatchAnalysisDebounce(videoId: string, set: SetFn, get: GetFn) {
   clearMatchAnalysisDebounce(videoId);
   const updatePipeline = makePipelineUpdater(videoId, set);
@@ -197,11 +222,33 @@ function armMatchAnalysisDebounce(videoId: string, set: SetFn, get: GetFn) {
 
     updatePipeline({
       phase: 'match_analyzing',
-      progress: 92,
-      stepMessage: 'Generating match stats...',
+      progress: 90,
+      stepMessage: 'Checking for new rallies to track...',
     });
+
+    // Catch-up step — best-effort. Failure logs but proceeds to match-analysis.
+    try {
+      const api = await import('@/services/api');
+      const catchUp = await api.trackUntracked(videoId);
+      if (catchUp.jobId && catchUp.totalRallies > 0) {
+        updatePipeline({
+          stepMessage: `Tracking ${catchUp.totalRallies} new ${catchUp.totalRallies === 1 ? 'rally' : 'rallies'}...`,
+          trackingProgress: { completed: 0, total: catchUp.totalRallies },
+        });
+        await pollCatchUpUntilComplete(videoId, api);
+        // Re-check staleness after the poll — the user may have cancelled mid-catch-up.
+        const stillCurrent = get().pipelines[videoId];
+        if (!stillCurrent || stillCurrent.phase !== 'match_analyzing') return;
+      }
+    } catch (err) {
+      console.warn(`[ANALYSIS] Catch-up tracking failed, proceeding to match-analysis anyway:`, err);
+      // Fall through — tracked rallies still produce meaningful stats
+    }
+
+    // Match-analysis step — real failures DO error the pipeline.
     try {
       const { triggerMatchAnalysis } = await import('@/services/api');
+      updatePipeline({ progress: 92, stepMessage: 'Generating match stats...' });
       await triggerMatchAnalysis(videoId);
       await completeAnalysis(videoId, set, get);
     } catch (err) {

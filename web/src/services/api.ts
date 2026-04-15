@@ -2385,6 +2385,26 @@ export async function trackAllRallies(videoId: string): Promise<BatchTrackingRes
 }
 
 /**
+ * Track only rallies that do not yet have a PlayerTrack row.
+ * Used by the match-analysis debounce to catch up on rallies created during
+ * the previous batch-tracking run. Returns {jobId, totalRallies}. When
+ * totalRallies === 0 no job is created and jobId is null.
+ */
+export async function trackUntracked(videoId: string): Promise<{ jobId: string | null; totalRallies: number }> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/track-untracked`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `track-untracked failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
  * Get batch tracking status for a video.
  */
 export async function getBatchTrackingStatus(videoId: string): Promise<BatchTrackingStatus> {

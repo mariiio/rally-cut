@@ -235,6 +235,25 @@ describe('rally CRUD while tracking is active', () => {
     expect(await isBatchTrackingActive(videoId)).toBe(false);
   });
 
+  it('POST /v1/videos/:id/track-untracked returns {jobId:null, totalRallies:0} when nothing needs tracking', async () => {
+    // Mark the fixture batch job COMPLETED so dedup doesn't reuse it.
+    await prisma.batchTrackingJob.update({
+      where: { id: jobId },
+      data: { status: 'COMPLETED', completedAt: new Date() },
+    });
+    // Seed the fixture rally with a PlayerTrack so the filter finds nothing to do.
+    await prisma.playerTrack.create({
+      data: { rallyId: existingRallyId, status: 'COMPLETED' },
+    });
+
+    const res = await request(app)
+      .post(`/v1/videos/${videoId}/track-untracked`)
+      .set('X-Visitor-Id', visitorId);
+
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({ jobId: null, totalRallies: 0 });
+  });
+
   it('trackAllRallies with skipTracked=true returns {jobId:null, totalRallies:0} when all rallies are already tracked', async () => {
     // Seed: make the existing rally have a PlayerTrack row (already tracked)
     await prisma.playerTrack.create({
@@ -243,6 +262,23 @@ describe('rally CRUD while tracking is active', () => {
     const result = await trackAllRallies(videoId, userId, { skipTracked: true });
     expect(result.jobId).toBeNull();
     expect(result.totalRallies).toBe(0);
+  });
+
+  it('POST /v1/videos/:id/track-untracked returns a real jobId when there is an untracked rally', async () => {
+    // Mark the fixture batch job COMPLETED so dedup doesn't reuse it.
+    await prisma.batchTrackingJob.update({
+      where: { id: jobId },
+      data: { status: 'COMPLETED', completedAt: new Date() },
+    });
+    // Leave the fixture rally untracked (no PlayerTrack row) so the filter finds work.
+
+    const res = await request(app)
+      .post(`/v1/videos/${videoId}/track-untracked`)
+      .set('X-Visitor-Id', visitorId);
+
+    expect(res.status).toBe(202);
+    expect(res.body.jobId).toEqual(expect.any(String));
+    expect(res.body.totalRallies).toBeGreaterThanOrEqual(1);
   });
 
   it('trackAllRallies with skipTracked=true returns a real jobId when there is an untracked rally', async () => {

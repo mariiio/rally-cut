@@ -823,6 +823,29 @@ router.post(
 );
 
 /**
+ * POST /v1/videos/:id/track-untracked
+ * Track only rallies that do not yet have a PlayerTrack row.
+ * Used by the match-analysis debounce to catch up on rallies created during
+ * a previous batch-tracking run. Returns 202 with {jobId, totalRallies}.
+ * When totalRallies === 0 no job is created and jobId is null.
+ */
+router.post(
+  "/v1/videos/:id/track-untracked",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      const result = await trackAllRallies(req.params.id, req.userId!, { skipTracked: true });
+      res.status(202).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+/**
  * GET /v1/videos/:id/batch-tracking-status
  * Poll for batch tracking progress.
  */
