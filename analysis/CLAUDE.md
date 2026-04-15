@@ -141,6 +141,12 @@ uv run rallycut remap-track-ids <video-id> --dry-run     # Preview changes witho
 uv run rallycut reattribute-actions <video-id>           # Re-attribute actions using match-level teams (default --min-confidence 0.70, aligned with eval)
 uv run rallycut reattribute-actions <video-id> --min-confidence 0.90  # Only re-attribute on the highest-confidence rallies
 
+# Player/Ball Tracking (for debug visualization)
+uv run rallycut track-players video.mp4               # Track players with court filtering (default)
+uv run rallycut track-players video.mp4 --no-filter   # Track all persons (includes spectators)
+uv run rallycut track-players video.mp4 --stride 3    # Faster: process every 3rd frame
+uv run rallycut track-ball video.mp4                  # Track ball positions
+
 # Development
 uv run pytest tests                    # Run tests (excludes slow ML tests)
 uv run pytest tests --run-slow         # Include slow ML inference tests
