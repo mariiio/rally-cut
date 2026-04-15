@@ -6,7 +6,7 @@ into a QualityReport that the API serializes to qualityReportJson.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -36,7 +36,7 @@ class Issue:
             "severity": self.severity,
             "message": self.message,
             "source": self.source,
-            "detectedAt": datetime.now(timezone.utc).isoformat(),
+            "detectedAt": datetime.now(UTC).isoformat(),
             "data": self.data,
         }
 
@@ -71,7 +71,7 @@ class QualityReport:
             "version": 2,
             "issues": [i.to_dict() for i in self.issues],
             self.source: {
-                "ranAt": datetime.now(timezone.utc).isoformat(),
+                "ranAt": datetime.now(UTC).isoformat(),
                 "sampleSeconds": self.sample_seconds,
                 "durationMs": self.duration_ms,
             },

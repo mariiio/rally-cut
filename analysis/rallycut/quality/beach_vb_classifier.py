@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import statistics
 from dataclasses import dataclass
+from typing import Any
 
 from rallycut.quality.types import CheckResult, Issue, Tier
 
@@ -45,12 +46,12 @@ def classify_is_beach_vb(per_frame_probs: list[BeachVBProbabilities]) -> CheckRe
     return CheckResult(issues=issues, metrics=metrics)
 
 
-def embed_and_score_frames(frames) -> list[BeachVBProbabilities]:
+def embed_and_score_frames(frames: list[Any]) -> list[BeachVBProbabilities]:
     """Run open-clip on each frame, return softmax over the three prompts.
 
     Kept out of unit tests — integration-tested via `rallycut preflight`.
     """
-    import open_clip  # local import: heavy
+    import open_clip  # type: ignore[import-not-found]  # local import: heavy, optional (Project C)
     import torch
 
     model, _, preprocess = open_clip.create_model_and_transforms(

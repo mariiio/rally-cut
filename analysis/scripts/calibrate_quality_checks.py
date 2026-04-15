@@ -66,13 +66,14 @@ if str(_SCRIPTS_DIR) not in sys.path:
 # Threshold sweeps — drop CLIP row (no open-clip in runtime image for A1)
 # ──────────────────────────────────────────────────────────────────────────────
 
+# Post-2026-04-15: camera_too_far, crowded_scene, shaky_camera, video_rotated,
+# too_dark, and overexposed were dropped after the calibration in
+# analysis/reports/quality_calibration_2026-04-14.json recommended "drop" for
+# every one (zero or anti-predictive lift) AND a validation sweep against
+# ~/Desktop/rallies/Negative/* + two positives confirmed camera_too_far as a
+# false positive on normal footage. Only wrong_angle_or_not_volleyball retains
+# empirical support. The historical sweep report is kept for audit.
 SWEEPS: list[tuple[str, str, list[float], str]] = [
-    ("camera_too_far",             "medianBboxHeight",     [0.05, 0.08, 0.10, 0.12, 0.15], "<"),
-    ("crowded_scene",              "avgNonCourtPersons",   [2,    3,    5,    8,    12   ], ">"),
-    ("shaky_camera",               "meanResidual",         [0.05, 0.10, 0.15, 0.20, 0.30], ">"),
-    ("video_rotated",              "tiltDeg",              [3,    5,    8,    12,   20   ], ">"),
-    ("too_dark",                   "meanLuma",             [0.08, 0.12, 0.15, 0.20      ], "<"),
-    ("overexposed",                "meanLuma",             [0.80, 0.85, 0.90, 0.95      ], ">"),
     ("wrong_angle_or_not_volleyball", "courtConfidence",   [0.3,  0.5,  0.6,  0.75      ], "<"),
 ]
 
@@ -137,23 +138,16 @@ def run_quality_checks(video_path: str) -> dict[str, float]:
     actually emit are present (e.g., tiltDeg is absent when court confidence
     is too low to compute tilt).
     """
-    from rallycut.quality.runner import _load_video_inputs
-    from rallycut.quality.camera_distance import check_camera_distance
     from rallycut.quality.camera_geometry import check_camera_geometry
-    from rallycut.quality.crowd_density import check_crowd_density
-    from rallycut.quality.metadata import check_brightness, check_metadata
-    from rallycut.quality.shakiness import check_shakiness
+    from rallycut.quality.metadata import check_metadata
+    from rallycut.quality.runner import _load_video_inputs
 
-    meta, frames, corners, dets, court_bbox = _load_video_inputs(video_path, sample_seconds=60)
+    meta, corners = _load_video_inputs(video_path, sample_seconds=60)
 
     all_metrics: dict[str, float] = {}
     for check_result in [
         check_metadata(meta),
-        check_brightness(frames),
         check_camera_geometry(corners),
-        check_camera_distance(dets),
-        check_crowd_density(dets, court_bbox),
-        check_shakiness(frames),
     ]:
         all_metrics.update(check_result.metrics)
 

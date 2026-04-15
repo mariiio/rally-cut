@@ -143,11 +143,11 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
   - Returns `{ pass: boolean, issues: Issue[] }`; web aborts the upload if any `block`-tier issue fires
   - **No Video row required** — this endpoint runs before upload commits
 - `POST /v1/videos/:id/assess-quality` → full preflight quality check (runs on "Analyze Match")
-  - Downloads video from S3, runs `rallycut preflight` → metadata, brightness, camera geometry, camera distance, crowd density, shakiness
+  - Downloads video from S3, runs `rallycut preflight` → metadata invariants + camera geometry (court-keypoint confidence + behind-baseline heuristic)
   - Merges result into `Video.qualityReportJson`; sets `Video.status = REJECTED` if any block-tier issue fires, reverts REJECTED → UPLOADED if a re-run passes
 - `GET /v1/videos/:id/analysis-pipeline-status` → unified pipeline status (quality, detection, tracking, stats)
 - **Service**: `qualityService.ts` (entry points + CLI spawning) + `qualityReport.ts` (pure merge/pick-top-3 helpers, test-safe)
-- **Check thresholds**: hand-picked conservative defaults; the 63-video GT was insufficient for 3×-lift calibration because GT has no negative examples for tilt/dark/shaky. Tune from user-reported false positives post-launch.
+- **Checks shipped** (post-validation 2026-04-15): hard-invariant metadata (`video_too_short`, `resolution_too_low`, `fps_too_low`) + camera-geometry block (`wrong_angle_or_not_volleyball`, lift 2.13 at courtConfidence<0.6). The original A1 set also shipped `camera_too_far`, `crowded_scene`, `shaky_camera`, `too_dark`, `overexposed`, and `video_rotated`; all six were dropped after calibration (`analysis/reports/quality_calibration_2026-04-14.json`) showed zero or negative lift and a validation sweep against 5 negative + 2 positive fixtures reproduced `camera_too_far` as a false positive on normal footage. Indoor-volleyball + arbitrary non-VB uploads slip through today (beach-trained court model finds a "court" at 0.78–0.83 confidence) — tracked as Project C scope.
 
 ### Court Calibration
 - `PUT /v1/videos/:id/court-calibration` → save 4 corner points (persisted per video)

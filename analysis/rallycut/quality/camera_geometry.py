@@ -2,11 +2,19 @@
 
 The court-keypoint model returns four corners (TL, TR, BR, BL) in normalized
 coordinates with a confidence score. We use them to detect:
-  - tilt (baseline not horizontal → advisory; C will later auto-rotate)
-  - wrong camera angle (camera not behind baseline → hard block)
-  - no court detected (confidence too low → hard block, also subsumes 'not beach volleyball')
+  - no court detected (confidence too low → hard block)
+  - wrong camera angle (not behind baseline → hard block)
 
-Thresholds are conservative defaults; see calibrate_quality_checks.py.
+The tilt-advisory (`video_rotated`) was dropped on 2026-04-15: it never fired
+in calibration (0 of 66 GT videos) or validation fixtures, and Project C will
+re-add it bundled with auto-rotation once that lever is worth pulling.
+
+MIN_COURT_CONFIDENCE=0.6 is the only empirically-supported threshold in the
+A1 check set (best_lift 2.13 at 0.6, 1.77 at 0.75 on GT). Validation
+fixtures confirm it blocks 3 of 5 obvious negatives; the two that slip
+through (beach-trained model confidently finds a "court" in indoor /
+unrelated footage) are tracked as Project C scope (richer non-VB rejection,
+e.g. CLIP zero-shot).
 """
 from __future__ import annotations
 
@@ -15,7 +23,6 @@ from dataclasses import dataclass
 
 from rallycut.quality.types import CheckResult, Issue, Tier
 
-TILT_ADVISORY_DEG = 5.0  # baseline vs horizontal
 MIN_COURT_CONFIDENCE = 0.6
 
 
@@ -26,13 +33,6 @@ class CourtCorners:
     br: tuple[float, float]
     bl: tuple[float, float]
     confidence: float
-
-
-def _baseline_tilt_deg(corners: CourtCorners) -> float:
-    """Return the absolute tilt in degrees of the top baseline."""
-    dx = corners.tr[0] - corners.tl[0]
-    dy = corners.tr[1] - corners.tl[1]
-    return abs(math.degrees(math.atan2(dy, dx)))
 
 
 def _is_behind_baseline(corners: CourtCorners) -> bool:
@@ -73,17 +73,5 @@ def check_camera_geometry(corners: CourtCorners) -> CheckResult:
             data={"courtConfidence": corners.confidence},
         ))
         return CheckResult(issues=issues, metrics=metrics)
-
-    tilt = _baseline_tilt_deg(corners)
-    metrics["tiltDeg"] = tilt
-    if tilt > TILT_ADVISORY_DEG:
-        issues.append(Issue(
-            id="video_rotated",
-            tier=Tier.ADVISORY,
-            severity=min(1.0, (tilt - TILT_ADVISORY_DEG) / 20.0),
-            message=f"Video is tilted about {tilt:.0f}° — straightening the camera improves tracking accuracy.",
-            source="preflight",
-            data={"tiltDeg": tilt},
-        ))
 
     return CheckResult(issues=issues, metrics=metrics)

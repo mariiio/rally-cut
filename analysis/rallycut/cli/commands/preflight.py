@@ -14,7 +14,7 @@ def preflight(
     sample_seconds: int = typer.Option(60, "--sample-seconds"),
     as_json: bool = typer.Option(True, "--json/--no-json"),
     quiet: bool = typer.Option(False, "--quiet"),
-):
+) -> None:
     """Run the full preflight quality check and print a JSON QualityReport."""
     report = run_full_preflight(str(video), sample_seconds=sample_seconds)
     d = report.to_dict()

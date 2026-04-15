@@ -1,24 +1,26 @@
 """Metadata-only quality checks (duration, resolution, framerate).
 
 These are cheap and run at upload time (no decoding required beyond ffprobe).
-Thresholds are conservative defaults; `calibrate_quality_checks.py` tunes
-them against the 63-video GT and updates `DEFAULT_THRESHOLDS` if needed.
+These are hard invariants, not calibrated thresholds: a 5-second video is too
+short to find rallies regardless of how well every other check scores.
+
+Brightness, darkness, and overexposure checks were dropped on 2026-04-15:
+calibration showed zero predictive lift against the 63-video GT and the
+validation fixtures (5 negatives, 2 positives) never triggered them. The
+brightness metric is still computed and persisted server-side
+(`api/src/services/processingService.ts::computeBrightness`) — this module
+owns only the metadata invariants.
 """
 from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
 
-import numpy as np
-
 from rallycut.quality.types import CheckResult, Issue, Tier
 
-# Thresholds — update after calibration (see analysis/scripts/calibrate_quality_checks.py).
 MIN_DURATION_S = 10.0
 MIN_WIDTH = 1280  # 720p
 MIN_FPS = 24.0
-LUMA_DARK_THRESHOLD = 0.15
-LUMA_BRIGHT_THRESHOLD = 0.85
 
 
 @dataclass(frozen=True)
@@ -90,38 +92,3 @@ def check_metadata(meta: VideoMetadata) -> CheckResult:
         "fps": meta.fps,
     }
     return CheckResult(issues=issues, metrics=metrics)
-
-
-def check_brightness(frames: list[np.ndarray]) -> CheckResult:
-    """Compute mean luma across sampled BGR/RGB frames (uint8, shape HxWx3)."""
-    if not frames:
-        return CheckResult(issues=[], metrics={})
-
-    # Simple mean across all three channels, normalized to [0,1]. Not true
-    # Rec. 601 luma (0.299R + 0.587G + 0.114B) but channel-averaged brightness
-    # correlates well enough with perceived exposure for quality-gating, and
-    # works the same for BGR and RGB input without a color-space-aware check.
-    lumas = [float(f.mean()) / 255.0 for f in frames]
-    mean_luma = float(np.mean(lumas))
-
-    issues: list[Issue] = []
-    if mean_luma < LUMA_DARK_THRESHOLD:
-        issues.append(Issue(
-            id="too_dark",
-            tier=Tier.GATE,
-            severity=min(1.0, (LUMA_DARK_THRESHOLD - mean_luma) / LUMA_DARK_THRESHOLD),
-            message="Video looks very dim — brighter lighting helps player and ball detection.",
-            source="upload",
-            data={"meanLuma": mean_luma},
-        ))
-    elif mean_luma > LUMA_BRIGHT_THRESHOLD:
-        issues.append(Issue(
-            id="overexposed",
-            tier=Tier.GATE,
-            severity=min(1.0, (mean_luma - LUMA_BRIGHT_THRESHOLD) / (1.0 - LUMA_BRIGHT_THRESHOLD)),
-            message="Video looks overexposed — washed-out colors reduce tracking accuracy.",
-            source="upload",
-            data={"meanLuma": mean_luma},
-        ))
-
-    return CheckResult(issues=issues, metrics={"meanLuma": mean_luma})

@@ -4,8 +4,6 @@ import typer
 from rich.console import Console
 
 from rallycut.cli.commands.analyze import app as analyze_app
-from rallycut.cli.commands.preflight import preflight as preflight_command
-from rallycut.cli.commands.preview_check import preview_check as preview_check_command
 from rallycut.cli.commands.compare_tracking import compare_tracking as compare_tracking_command
 from rallycut.cli.commands.compute_match_stats import compute_match_stats_cmd
 from rallycut.cli.commands.cut import cut as cut_command
@@ -14,6 +12,8 @@ from rallycut.cli.commands.evaluate import app as evaluate_app
 from rallycut.cli.commands.evaluate_tracking import app as evaluate_tracking_app
 from rallycut.cli.commands.label import app as label_app
 from rallycut.cli.commands.match_players import match_players as match_players_command
+from rallycut.cli.commands.preflight import preflight as preflight_command
+from rallycut.cli.commands.preview_check import preview_check as preview_check_command
 from rallycut.cli.commands.profile import profile as profile_command
 from rallycut.cli.commands.reattribute_actions import reattribute_actions_cmd
 from rallycut.cli.commands.remap_track_ids import remap_track_ids_cmd

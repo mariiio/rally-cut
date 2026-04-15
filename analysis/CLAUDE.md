@@ -19,7 +19,7 @@ uv run rallycut cut <video.mp4> --model beach   # Use beach volleyball model
 uv run rallycut profile <video.mp4>             # Performance profiling
 
 # Quality checks (A1 ship)
-uv run rallycut preflight <video.mp4>           # Full preflight: metadata, brightness, camera geometry, camera distance, crowd density, shakiness. Emits JSON QualityReport.
+uv run rallycut preflight <video.mp4>           # Full preflight: metadata invariants + camera geometry. Emits JSON QualityReport. (Brightness, camera-distance, crowd, shakiness, tilt, dark/overexposed dropped on 2026-04-15 after validation — see reports/quality_calibration_2026-04-14.json.)
 uv run rallycut preview-check <frames-dir>      # Lightweight pre-upload check on a directory of JPEG frames. Used by the web client-side upload gate via api/src/services/qualityService.ts::runPreviewChecks. Runs court-keypoint detection + camera_geometry only.
 
 # Pre-extract features (optional — TemporalMaxer auto-extracts on first run)
