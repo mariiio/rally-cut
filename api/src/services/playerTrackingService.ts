@@ -657,6 +657,7 @@ export async function saveTrackingResult(
     create: {
       rallyId,
       status: 'COMPLETED',
+      needsRetrack: false,
       frameCount: trackerResult.frameCount,
       fps: trackerResult.fps,
       detectionRate: trackerResult.detectionRate,
@@ -677,6 +678,7 @@ export async function saveTrackingResult(
     },
     update: {
       status: 'COMPLETED',
+      needsRetrack: false,
       frameCount: trackerResult.frameCount,
       fps: trackerResult.fps,
       detectionRate: trackerResult.detectionRate,

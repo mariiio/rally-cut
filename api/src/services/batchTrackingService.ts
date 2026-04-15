@@ -40,7 +40,13 @@ export async function trackAllRallies(
 ): Promise<{ jobId: string | null; totalRallies: number }> {
   // Fetch video with rallies
   const ralliesWhere = options.skipTracked
-    ? { status: 'CONFIRMED' as const, playerTrack: null }
+    ? {
+        status: 'CONFIRMED' as const,
+        OR: [
+          { playerTrack: null },
+          { playerTrack: { is: { needsRetrack: true } } },
+        ],
+      }
     : { status: 'CONFIRMED' as const };
 
   const video = await prisma.video.findUnique({
@@ -238,6 +244,37 @@ export async function isBatchTrackingActive(videoId: string): Promise<boolean> {
     select: { status: true },
   });
   return latest?.status === 'PENDING' || latest?.status === 'PROCESSING';
+}
+
+/**
+ * Compare a rally's new bounds against its previous bounds. If the rally
+ * has been EXTENDED — start moved earlier or end moved later — its existing
+ * PlayerTrack no longer covers all frames. Mark PlayerTrack.needsRetrack
+ * so the next catch-up pass re-runs tracking for this rally.
+ *
+ * SHORTENING (start later or end earlier) doesn't mark — the existing
+ * tracking still covers the new narrower range, and reindexTrackingData
+ * handles the offset shift.
+ *
+ * Returns true if a retrack was scheduled, false otherwise.
+ */
+export async function markRetrackIfExtended(
+  rallyId: string,
+  oldBounds: { startMs: number; endMs: number },
+  newBounds: { startMs: number; endMs: number },
+): Promise<boolean> {
+  const extended =
+    newBounds.startMs < oldBounds.startMs || newBounds.endMs > oldBounds.endMs;
+  if (!extended) return false;
+
+  const { count } = await prisma.playerTrack.updateMany({
+    where: { rallyId },
+    data: { needsRetrack: true },
+  });
+  if (count > 0) {
+    console.log(`[RETRACK] Rally ${rallyId} extended — marked PlayerTrack for retrack`);
+  }
+  return count > 0;
 }
 
 /**

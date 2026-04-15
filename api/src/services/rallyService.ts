@@ -3,6 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import { ForbiddenError, NotFoundError } from "../middleware/errorHandler.js";
 import type { CreateRallyInput, UpdateRallyInput } from "../schemas/rally.js";
 import { reindexTrackingData } from "./playerTrackingService.js";
+import { markRetrackIfExtended } from "./batchTrackingService.js";
 import { canAccessVideoRallies } from "./shareService.js";
 
 export async function listRallies(videoId: string, userId: string) {
@@ -82,6 +83,12 @@ export async function updateRally(id: string, userId: string, data: UpdateRallyI
           data: { matchAnalysisJson: Prisma.DbNull, matchStatsJson: Prisma.DbNull },
         });
       }
+      // Mark for retrack if bounds were extended (runs outside tx — acceptable for A2b)
+      await markRetrackIfExtended(
+        id,
+        { startMs: rally.startMs, endMs: rally.endMs },
+        { startMs: data.startMs ?? rally.startMs, endMs: data.endMs ?? rally.endMs },
+      );
       return updated;
     });
   }
