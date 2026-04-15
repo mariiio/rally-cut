@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { slicePlayerTrack } from '../src/services/rallySlicing.js';
+import { slicePlayerTrack, concatPlayerTracks } from '../src/services/rallySlicing.js';
 
 const basePt = {
   id: 'pt-1', rallyId: 'r-parent', status: 'COMPLETED',
@@ -57,5 +57,37 @@ describe('slicePlayerTrack', () => {
     const { first, second } = slicePlayerTrack(basePt as any, 100, 200);
     expect(first.groundTruthJson).toBeNull();
     expect(second.groundTruthJson).toBeNull();
+  });
+});
+
+describe('concatPlayerTracks', () => {
+  const a = {
+    fps: 30, frameCount: 100, courtSplitY: 0.5, processingTimeMs: 500, modelVersion: 'v1',
+    status: 'COMPLETED', needsRetrack: false, qualityReportJson: null,
+    positionsJson: [{ frameNumber: 10, trackId: 1, confidence: 0.9 }],
+    rawPositionsJson: [], ballPositionsJson: [{ frameNumber: 20 }],
+    contactsJson: [{ frame: 50, playerTrackId: 1 }],
+    actionsJson: [], groundTruthJson: null, actionGroundTruthJson: null,
+  };
+  const b = {
+    fps: 30, frameCount: 150, courtSplitY: 0.5, processingTimeMs: 700, modelVersion: 'v1',
+    status: 'COMPLETED', needsRetrack: false, qualityReportJson: null,
+    positionsJson: [{ frameNumber: 5, trackId: 2, confidence: 0.85 }],
+    rawPositionsJson: [], ballPositionsJson: [{ frameNumber: 10 }],
+    contactsJson: [{ frame: 30, playerTrackId: 2 }],
+    actionsJson: [], groundTruthJson: null, actionGroundTruthJson: null,
+  };
+
+  it('shifts b frames up by a.frameCount', () => {
+    const merged = concatPlayerTracks(a as any, b as any);
+    expect(merged.frameCount).toBe(250);
+    expect(merged.positionsJson.map((p: any) => p.frameNumber).sort((x: number, y: number) => x - y)).toEqual([10, 105]);
+    expect(merged.contactsJson.map((c: any) => c.frame).sort((x: number, y: number) => x - y)).toEqual([50, 130]);
+    expect(merged.ballPositionsJson.map((p: any) => p.frameNumber).sort((x: number, y: number) => x - y)).toEqual([20, 110]);
+  });
+
+  it('unions trackIds', () => {
+    const merged = concatPlayerTracks(a as any, b as any);
+    expect(merged.uniqueTrackCount).toBe(2);
   });
 });

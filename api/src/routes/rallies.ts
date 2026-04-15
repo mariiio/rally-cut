@@ -8,6 +8,7 @@ import {
   createRally,
   deleteRally,
   listRallies,
+  mergeRallies,
   splitRally,
   unlockRally,
   updateRally,
@@ -112,6 +113,24 @@ router.post(
   async (req, res, next) => {
     try {
       const result = await splitRally(req.params.id, req.userId!, req.body);
+      res.status(201).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+const mergeRalliesSchema = z.object({
+  rallyIds: z.tuple([uuidSchema, uuidSchema]),
+});
+
+router.post(
+  '/v1/rallies/merge',
+  requireUser,
+  validateRequest({ body: mergeRalliesSchema }),
+  async (req, res, next) => {
+    try {
+      const result = await mergeRallies(req.body.rallyIds, req.userId!);
       res.status(201).json(result);
     } catch (error) {
       next(error);

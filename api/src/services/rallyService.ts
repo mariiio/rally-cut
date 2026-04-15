@@ -1,12 +1,12 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
-import { ForbiddenError, LockedRallyRequiresConfirmError, NotFoundError, RallyTrackingStateError, SplitBoundsError } from "../middleware/errorHandler.js";
+import { ForbiddenError, LockedRallyRequiresConfirmError, NotFoundError, RalliesOverlapError, RallyTrackingStateError, SplitBoundsError } from "../middleware/errorHandler.js";
 import type { CreateRallyInput, UpdateRallyInput } from "../schemas/rally.js";
 import { reindexTrackingData } from "./playerTrackingService.js";
 import { markRetrackIfExtended } from "./batchTrackingService.js";
 import { canAccessVideoRallies } from "./shareService.js";
 import { appendEdit, appendEditsBatch } from "./pendingAnalysisEdits.js";
-import { slicePlayerTrack } from "./rallySlicing.js";
+import { slicePlayerTrack, concatPlayerTracks } from "./rallySlicing.js";
 import { assertNotLocked } from "./canonicalLockGuard.js";
 
 export async function listRallies(videoId: string, userId: string) {
@@ -293,5 +293,76 @@ export async function unlockRally(
     }
 
     return { rallyId, wasLocked, unlockedAt: new Date() };
+  });
+}
+
+export async function mergeRallies(
+  rallyIds: [string, string],
+  userId: string,
+): Promise<{ rally: Awaited<ReturnType<typeof prisma.rally.create>> }> {
+  return prisma.$transaction(async (tx) => {
+    const raw = await tx.rally.findMany({
+      where: { id: { in: rallyIds } },
+      include: { playerTrack: true, video: { select: { userId: true, matchAnalysisJson: true } } },
+    });
+    if (raw.length !== 2) throw new NotFoundError('Rally', rallyIds.join(','));
+    if (raw[0].video.userId !== userId || raw[1].video.userId !== userId) {
+      throw new NotFoundError('Rally', rallyIds.join(','));
+    }
+    if (raw[0].videoId !== raw[1].videoId) throw new RalliesOverlapError(rallyIds);
+
+    const [a, b] = [...raw].sort((x, y) => x.startMs - y.startMs);
+    if (b.startMs < a.endMs) throw new RalliesOverlapError(rallyIds);
+
+    // Lock gate on both
+    await assertNotLocked(tx, a.id, 'MERGE');
+    await assertNotLocked(tx, b.id, 'MERGE');
+
+    // PlayerTrack state gate on both
+    for (const r of [a, b]) {
+      if (r.playerTrack?.status === 'PROCESSING') throw new RallyTrackingStateError('IN_PROGRESS', r.id);
+      if (r.playerTrack?.status === 'FAILED') throw new RallyTrackingStateError('FAILED', r.id);
+    }
+
+    const gap = b.startMs > a.endMs;
+
+    // Create merged rally
+    const merged = await tx.rally.create({
+      data: {
+        videoId: a.videoId,
+        startMs: a.startMs,
+        endMs: b.endMs,
+        scoreA: b.scoreA,
+        scoreB: b.scoreB,
+        servingTeam: b.servingTeam,
+        notes: [a.notes, b.notes].filter(Boolean).join('\n') || null,
+        confidence: Math.min(a.confidence ?? 1, b.confidence ?? 1),
+      },
+    });
+
+    // Concat tracks only when there's no gap AND both tracks exist
+    if (!gap && a.playerTrack && b.playerTrack) {
+      const stitched = concatPlayerTracks(a.playerTrack as any, b.playerTrack as any);
+      await tx.playerTrack.create({ data: { rallyId: merged.id, ...(stitched as any) } });
+    }
+
+    // Update matchAnalysisJson.rallies[]
+    const json: any = a.video.matchAnalysisJson ?? { rallies: [] };
+    const aEntry = (json.rallies ?? []).find((r: any) => r.rallyId === a.id);
+    json.rallies = (json.rallies ?? []).filter((r: any) => r.rallyId !== a.id && r.rallyId !== b.id);
+    json.rallies.push({
+      rallyId: merged.id, canonicalLocked: false,
+      trackToPlayer: aEntry?.trackToPlayer ?? {},
+      assignmentConfidence: null, serverPlayerId: null,
+    });
+    await tx.video.update({ where: { id: a.videoId }, data: { matchAnalysisJson: json } });
+
+    // Delete parents (cascades their PlayerTracks)
+    await tx.rally.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+
+    // Record edit
+    await appendEditsBatch(tx, a.videoId, [{ rallyId: merged.id, editKind: 'merge' }]);
+
+    return { rally: merged };
   });
 }

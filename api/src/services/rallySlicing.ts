@@ -82,6 +82,54 @@ function recomputeMetadata(
   };
 }
 
+function shiftFrames(arr: AnyFrameEntry[] | null, field: FrameField, offset: number): AnyFrameEntry[] {
+  if (!arr) return [];
+  return arr.map(entry => {
+    const f = entry[field];
+    return typeof f === 'number' ? { ...entry, [field]: f + offset } : entry;
+  });
+}
+
+export function concatPlayerTracks(
+  a: SlicePlayerTrackInput,
+  b: SlicePlayerTrackInput,
+): SlicedPlayerTrack {
+  const offset = a.frameCount;
+  const positionsJson = [...(a.positionsJson ?? []), ...shiftFrames(b.positionsJson, 'frameNumber', offset)];
+  const rawPositionsJson = [...(a.rawPositionsJson ?? []), ...shiftFrames(b.rawPositionsJson, 'frameNumber', offset)];
+  const ballPositionsJson = [...(a.ballPositionsJson ?? []), ...shiftFrames(b.ballPositionsJson, 'frameNumber', offset)];
+  const contactsJson = [...(a.contactsJson ?? []), ...shiftFrames(b.contactsJson, 'frame', offset)];
+  const actionsJson = [...(a.actionsJson ?? []), ...shiftFrames(b.actionsJson, 'frame', offset)];
+  const groundTruthJson = (a.groundTruthJson || b.groundTruthJson)
+    ? [...(a.groundTruthJson ?? []), ...shiftFrames(b.groundTruthJson, 'frame', offset)]
+    : null;
+  const actionGroundTruthJson = (a.actionGroundTruthJson || b.actionGroundTruthJson)
+    ? [...(a.actionGroundTruthJson ?? []), ...shiftFrames(b.actionGroundTruthJson, 'frame', offset)]
+    : null;
+
+  const frameCount = a.frameCount + b.frameCount;
+  const meta = recomputeMetadata(positionsJson, frameCount);
+
+  return {
+    fps: a.fps,
+    courtSplitY: a.courtSplitY,
+    processingTimeMs: (a.processingTimeMs ?? 0) + (b.processingTimeMs ?? 0),
+    modelVersion: a.modelVersion,
+    status: a.status === 'COMPLETED' && b.status === 'COMPLETED' ? 'COMPLETED' : 'PROCESSING',
+    needsRetrack: a.needsRetrack || b.needsRetrack,
+    qualityReportJson: a.qualityReportJson,
+    frameCount,
+    ...meta,
+    positionsJson,
+    rawPositionsJson,
+    ballPositionsJson,
+    contactsJson,
+    actionsJson,
+    groundTruthJson,
+    actionGroundTruthJson,
+  };
+}
+
 export function slicePlayerTrack(
   pt: SlicePlayerTrackInput,
   firstEndFrame: number,
