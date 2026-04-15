@@ -191,6 +191,11 @@ def remap_track_ids_cmd(
         "--quiet", "-q",
         help="Suppress progress output",
     ),
+    rally_ids: str | None = typer.Option(
+        None,
+        "--rally-ids",
+        help="Comma-separated rally UUIDs to process. If omitted, all tracked rallies in the video are processed.",
+    ),
 ) -> None:
     """Remap per-rally track IDs to consistent match-level player IDs (1-4).
 
@@ -238,6 +243,15 @@ def remap_track_ids_cmd(
         console.print("[yellow]No track mappings found in match analysis[/yellow]")
         return
 
+    # Parse --rally-ids filter
+    rally_id_filter: list[str] | None = (
+        [s.strip() for s in rally_ids.split(",") if s.strip()]
+        if rally_ids else None
+    )
+    if rally_id_filter is not None:
+        raw_mappings = {k: v for k, v in raw_mappings.items() if k in rally_id_filter}
+        rally_entries_by_id = {k: v for k, v in rally_entries_by_id.items() if k in rally_id_filter}
+
     if not quiet:
         console.print(
             f"[bold]Remapping track IDs[/bold] for video {video_id[:8]}..."
@@ -245,8 +259,8 @@ def remap_track_ids_cmd(
         console.print(f"  {len(raw_mappings)} rallies with mappings")
 
     # Load all player tracks for this video
-    rally_ids = list(raw_mappings.keys())
-    placeholders = ", ".join(["%s"] * len(rally_ids))
+    rally_ids_list = list(raw_mappings.keys())
+    placeholders = ", ".join(["%s"] * len(rally_ids_list))
     query = f"""
         SELECT r.id, pt.id, pt.positions_json, pt.contacts_json,
                pt.actions_json, pt.primary_track_ids,
@@ -258,7 +272,7 @@ def remap_track_ids_cmd(
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, rally_ids)
+            cur.execute(query, rally_ids_list)
             rows = cur.fetchall()
 
     total_remapped = 0
