@@ -23,6 +23,7 @@ import accessRequestsRouter from "./routes/accessRequests.js";
 import videosRouter from "./routes/videos.js";
 import webhooksRouter from "./routes/webhooks.js";
 import { cleanupStaleJobs } from "./services/detectionService.js";
+import { startStaleJobSweeper, stopStaleJobSweeper } from "./jobs/staleJobSweeper.js";
 
 const app = express();
 
@@ -90,6 +91,15 @@ if (process.env["NODE_ENV"] !== "test") {
     cleanupStaleJobs().catch((e) =>
       console.error(`[STARTUP] Failed to clean up stale jobs: ${e}`)
     );
+    startStaleJobSweeper();
+  });
+
+  process.on("SIGTERM", () => {
+    stopStaleJobSweeper();
+  });
+
+  process.on("SIGINT", () => {
+    stopStaleJobSweeper();
   });
 }
 
