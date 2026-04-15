@@ -78,12 +78,23 @@ export interface QualityIssue {
   data?: Record<string, number>;
 }
 
+export interface AutoFix {
+  id: string;
+  message: string;
+  appliedAt: string;
+  data?: Record<string, number>;
+}
+
 export interface QualityReport {
   version: 2;
   issues: QualityIssue[];
+  autoFixes?: AutoFix[];
   preflight?: { ranAt: string; sampleSeconds: number; durationMs: number } | null;
   brightness?: number | null;
   resolution?: { width: number; height: number } | null;
+  autoRotated?: boolean;
+  tiltDeg?: number | null;
+  courtConfidence?: number | null;
 }
 
 /** A session containing multiple matches */

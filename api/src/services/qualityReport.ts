@@ -15,12 +15,24 @@ export interface Issue {
   data?: Record<string, number>;
 }
 
+export interface AutoFix {
+  id: string;
+  message: string;
+  appliedAt: string; // ISO timestamp
+  data?: Record<string, number>;
+}
+
 export interface QualityReport {
   version: 2;
   issues: Issue[];
+  autoFixes?: AutoFix[];
   preflight?: { ranAt: string; sampleSeconds: number; durationMs: number } | null;
   brightness?: number | null;
   resolution?: { width: number; height: number } | null;
+  // Project C auto-rotate state fields
+  autoRotated?: boolean;
+  tiltDeg?: number | null;
+  courtConfidence?: number | null;
 }
 
 const TIER_ORDER: Record<Tier, number> = { block: 0, gate: 1, advisory: 2 };
@@ -58,11 +70,34 @@ export function mergeQualityReports(reports: Array<Partial<QualityReport>>): Qua
   const brightness = reports.map((r) => r.brightness).find((v) => v != null) ?? null;
   const resolution = reports.map((r) => r.resolution).find((v) => v != null) ?? null;
   const preflight = reports.map((r) => r.preflight).find((v) => v != null) ?? null;
+
+  // autoFixes: concat all arrays, dedupe by id keeping the FIRST occurrence.
+  const seenFixIds = new Set<string>();
+  const autoFixes: AutoFix[] = [];
+  for (const r of reports) {
+    for (const fx of r.autoFixes ?? []) {
+      if (seenFixIds.has(fx.id)) continue;
+      seenFixIds.add(fx.id);
+      autoFixes.push(fx);
+    }
+  }
+
+  const autoRotated =
+    reports.map((r) => r.autoRotated).find((v) => v != null) ?? undefined;
+  const tiltDeg =
+    reports.map((r) => r.tiltDeg).find((v) => v != null) ?? null;
+  const courtConfidence =
+    reports.map((r) => r.courtConfidence).find((v) => v != null) ?? null;
+
   return {
     version: 2,
     issues: pickTopIssues(allIssues),
     preflight,
     brightness,
     resolution,
+    autoFixes: autoFixes.length ? autoFixes : undefined,
+    autoRotated,
+    tiltDeg,
+    courtConfidence,
   };
 }
