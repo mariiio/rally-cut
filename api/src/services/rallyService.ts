@@ -1,11 +1,13 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
-import { ForbiddenError, LockedRallyRequiresConfirmError, NotFoundError } from "../middleware/errorHandler.js";
+import { ForbiddenError, LockedRallyRequiresConfirmError, NotFoundError, RallyTrackingStateError, SplitBoundsError } from "../middleware/errorHandler.js";
 import type { CreateRallyInput, UpdateRallyInput } from "../schemas/rally.js";
 import { reindexTrackingData } from "./playerTrackingService.js";
 import { markRetrackIfExtended } from "./batchTrackingService.js";
 import { canAccessVideoRallies } from "./shareService.js";
-import { appendEdit } from "./pendingAnalysisEdits.js";
+import { appendEdit, appendEditsBatch } from "./pendingAnalysisEdits.js";
+import { slicePlayerTrack } from "./rallySlicing.js";
+import { assertNotLocked } from "./canonicalLockGuard.js";
 
 export async function listRallies(videoId: string, userId: string) {
   // canAccessVideoRallies throws NotFoundError if video doesn't exist
@@ -158,6 +160,112 @@ export async function deleteRally(id: string, userId: string, opts?: { confirmUn
     await tx.rally.delete({ where: { id } });
 
     await appendEdit(tx, rally.videoId, id, 'delete');
+  });
+}
+
+export type SplitRallyInput = { firstEndMs: number; secondStartMs: number };
+
+export async function splitRally(
+  rallyId: string,
+  userId: string,
+  input: SplitRallyInput,
+): Promise<{ firstRally: Awaited<ReturnType<typeof prisma.rally.create>>; secondRally: Awaited<ReturnType<typeof prisma.rally.create>> }> {
+  return prisma.$transaction(async (tx) => {
+    const rally = await tx.rally.findUnique({
+      where: { id: rallyId },
+      include: { playerTrack: true, video: { select: { userId: true, matchAnalysisJson: true } } },
+    });
+    if (!rally || rally.video.userId !== userId) throw new NotFoundError('Rally', rallyId);
+
+    // Bounds validation
+    const { firstEndMs, secondStartMs } = input;
+    if (!(rally.startMs < firstEndMs && firstEndMs <= secondStartMs && secondStartMs < rally.endMs)) {
+      throw new SplitBoundsError(
+        'must satisfy startMs < firstEndMs <= secondStartMs < endMs',
+        { startMs: rally.startMs, firstEndMs, secondStartMs, endMs: rally.endMs },
+      );
+    }
+
+    // Lock gate
+    await assertNotLocked(tx, rallyId, 'SPLIT');
+
+    // PlayerTrack state gate
+    const pt = rally.playerTrack;
+    if (pt) {
+      if (pt.status === 'PROCESSING') throw new RallyTrackingStateError('IN_PROGRESS', rallyId);
+      if (pt.status === 'FAILED') throw new RallyTrackingStateError('FAILED', rallyId);
+    }
+
+    // Frame math
+    const fps = pt?.fps ?? 30;
+    const firstEndFrame = Math.round(((firstEndMs - rally.startMs) / 1000) * fps);
+    const secondStartFrame = Math.round(((secondStartMs - rally.startMs) / 1000) * fps);
+
+    // Previous rally lookup for first-child score inheritance
+    const prevRally = await tx.rally.findFirst({
+      where: { videoId: rally.videoId, endMs: { lte: rally.startMs } },
+      orderBy: { endMs: 'desc' },
+    });
+
+    // Create child Rally rows
+    const firstRally = await tx.rally.create({
+      data: {
+        videoId: rally.videoId,
+        startMs: rally.startMs,
+        endMs: firstEndMs,
+        scoreA: prevRally?.scoreA ?? 0,
+        scoreB: prevRally?.scoreB ?? 0,
+        servingTeam: prevRally?.servingTeam ?? rally.servingTeam,
+        notes: rally.notes,
+        confidence: rally.confidence,
+      },
+    });
+    const secondRally = await tx.rally.create({
+      data: {
+        videoId: rally.videoId,
+        startMs: secondStartMs,
+        endMs: rally.endMs,
+        scoreA: rally.scoreA,
+        scoreB: rally.scoreB,
+        servingTeam: rally.servingTeam,
+        notes: rally.notes,
+        confidence: rally.confidence,
+      },
+    });
+
+    // Slice PlayerTrack if present
+    if (pt) {
+      const { first, second } = slicePlayerTrack(pt as any, firstEndFrame, secondStartFrame);
+      await tx.playerTrack.create({
+        data: { rallyId: firstRally.id, ...(first as any) },
+      });
+      await tx.playerTrack.create({
+        data: { rallyId: secondRally.id, ...(second as any) },
+      });
+    }
+
+    // Update matchAnalysisJson.rallies[]
+    const json: any = rally.video.matchAnalysisJson ?? { rallies: [] };
+    const parentEntry = (json.rallies ?? []).find((r: any) => r.rallyId === rallyId);
+    const inheritMapping = parentEntry?.trackToPlayer ?? {};
+    const inheritServer = parentEntry?.serverPlayerId ?? null;
+    json.rallies = (json.rallies ?? []).filter((r: any) => r.rallyId !== rallyId);
+    json.rallies.push(
+      { rallyId: firstRally.id, canonicalLocked: false, trackToPlayer: inheritMapping, assignmentConfidence: parentEntry?.assignmentConfidence ?? null, serverPlayerId: inheritServer },
+      { rallyId: secondRally.id, canonicalLocked: false, trackToPlayer: inheritMapping, assignmentConfidence: parentEntry?.assignmentConfidence ?? null, serverPlayerId: inheritServer },
+    );
+    await tx.video.update({ where: { id: rally.videoId }, data: { matchAnalysisJson: json } });
+
+    // Delete parent (cascades PlayerTrack)
+    await tx.rally.delete({ where: { id: rallyId } });
+
+    // Record edits last
+    await appendEditsBatch(tx, rally.videoId, [
+      { rallyId: firstRally.id, editKind: 'split' },
+      { rallyId: secondRally.id, editKind: 'split' },
+    ]);
+
+    return { firstRally, secondRally };
   });
 }
 

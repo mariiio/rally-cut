@@ -8,6 +8,7 @@ import {
   createRally,
   deleteRally,
   listRallies,
+  splitRally,
   unlockRally,
   updateRally,
 } from "../services/rallyService.js";
@@ -93,6 +94,25 @@ router.post(
     try {
       const result = await unlockRally(req.params.id, req.userId!);
       res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+const splitRallySchema = z.object({
+  firstEndMs: z.number().int().nonnegative(),
+  secondStartMs: z.number().int().nonnegative(),
+});
+
+router.post(
+  '/v1/rallies/:id/split',
+  requireUser,
+  validateRequest({ params: z.object({ id: uuidSchema }), body: splitRallySchema }),
+  async (req, res, next) => {
+    try {
+      const result = await splitRally(req.params.id, req.userId!, req.body);
+      res.status(201).json(result);
     } catch (error) {
       next(error);
     }
