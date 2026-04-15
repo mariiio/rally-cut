@@ -69,17 +69,20 @@ router.patch(
 );
 
 router.delete(
-  "/v1/rallies/:id",
+  '/v1/rallies/:id',
   requireUser,
-  validateRequest({ params: z.object({ id: uuidSchema }) }),
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: z.object({ confirmUnlock: z.boolean().optional() }).optional(),
+  }),
   async (req, res, next) => {
     try {
-      await deleteRally(req.params.id, req.userId!);
+      await deleteRally(req.params.id, req.userId!, { confirmUnlock: req.body?.confirmUnlock });
       res.status(204).send();
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 router.post(

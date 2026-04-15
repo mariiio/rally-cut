@@ -1,10 +1,11 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
-import { ForbiddenError, NotFoundError } from "../middleware/errorHandler.js";
+import { ForbiddenError, LockedRallyRequiresConfirmError, NotFoundError } from "../middleware/errorHandler.js";
 import type { CreateRallyInput, UpdateRallyInput } from "../schemas/rally.js";
 import { reindexTrackingData } from "./playerTrackingService.js";
 import { markRetrackIfExtended } from "./batchTrackingService.js";
 import { canAccessVideoRallies } from "./shareService.js";
+import { appendEdit } from "./pendingAnalysisEdits.js";
 
 export async function listRallies(videoId: string, userId: string) {
   // canAccessVideoRallies throws NotFoundError if video doesn't exist
@@ -33,7 +34,7 @@ export async function createRally(videoId: string, userId: string, data: CreateR
       _max: { order: true },
     });
 
-    return tx.rally.create({
+    const rally = await tx.rally.create({
       data: {
         videoId,
         startMs: data.startMs,
@@ -46,6 +47,10 @@ export async function createRally(videoId: string, userId: string, data: CreateR
         order: (maxOrder._max.order ?? -1) + 1,
       },
     });
+
+    await appendEdit(tx, videoId, rally.id, 'create');
+
+    return rally;
   });
 }
 
@@ -90,34 +95,69 @@ export async function updateRally(id: string, userId: string, data: UpdateRallyI
         { startMs: rally.startMs, endMs: rally.endMs },
         { startMs: data.startMs ?? rally.startMs, endMs: data.endMs ?? rally.endMs },
       );
+
+      // Classify edit kind
+      const newStart = data.startMs ?? rally.startMs;
+      const newEnd = data.endMs ?? rally.endMs;
+      const extended = newStart < rally.startMs || newEnd > rally.endMs;
+      const editKind: 'shorten' | 'extend' = extended ? 'extend' : 'shorten';
+      await appendEdit(tx, rally.videoId, id, editKind);
+
       return updated;
     });
   }
 
-  return prisma.rally.update({
-    where: { id },
-    data,
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.rally.update({ where: { id }, data });
+
+    // Classify edit kind for scalar fields
+    let editKind: 'scalar' | null = null;
+    if (data.scoreA !== undefined || data.scoreB !== undefined || data.servingTeam !== undefined || data.notes !== undefined) {
+      editKind = 'scalar';
+    }
+    if (editKind) await appendEdit(tx, rally.videoId, id, editKind);
+
+    return updated;
   });
 }
 
-export async function deleteRally(id: string, userId: string) {
-  const rally = await prisma.rally.findUnique({
-    where: { id },
-    select: { videoId: true },
-  });
+export async function deleteRally(id: string, userId: string, opts?: { confirmUnlock?: boolean }): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const rally = await tx.rally.findUnique({
+      where: { id },
+      select: { videoId: true, video: { select: { userId: true, matchAnalysisJson: true } } },
+    });
+    if (!rally || rally.video.userId !== userId) throw new NotFoundError('Rally', id);
 
-  if (rally === null) {
-    throw new NotFoundError("Rally", id);
-  }
+    // Canonical-lock confirm gate
+    const json: any = rally.video.matchAnalysisJson ?? { rallies: [] };
+    const entry = (json.rallies ?? []).find((r: any) => r.rallyId === id);
+    const locked = entry?.canonicalLocked === true;
+    if (locked && !opts?.confirmUnlock) {
+      // Best-effort count of GT frames for the error payload
+      const pt = await tx.playerTrack.findUnique({ where: { rallyId: id }, select: { groundTruthJson: true, actionGroundTruthJson: true } });
+      const gtFrameCount = ((pt?.groundTruthJson as any)?.length ?? 0) + ((pt?.actionGroundTruthJson as any)?.length ?? 0);
+      throw new LockedRallyRequiresConfirmError(id, gtFrameCount);
+    }
 
-  // canAccessVideoRallies throws NotFoundError if video doesn't exist
-  const hasAccess = await canAccessVideoRallies(rally.videoId, userId, true);
-  if (!hasAccess) {
-    throw new ForbiddenError("You do not have permission to delete this rally");
-  }
+    // Audit log for the destructive confirmed path
+    if (locked && opts?.confirmUnlock) {
+      console.log(JSON.stringify({
+        event: 'rally.locked.deleted',
+        rallyId: id, videoId: rally.videoId, userId,
+        gtFrameCount: entry?.gtFrameCount ?? null,
+      }));
+    }
 
-  await prisma.rally.delete({
-    where: { id },
+    // Also drop the rally from matchAnalysisJson.rallies[] so stats don't reference it
+    if (json.rallies) {
+      json.rallies = json.rallies.filter((r: any) => r.rallyId !== id);
+      await tx.video.update({ where: { id: rally.videoId }, data: { matchAnalysisJson: json } });
+    }
+
+    await tx.rally.delete({ where: { id } });
+
+    await appendEdit(tx, rally.videoId, id, 'delete');
   });
 }
 
