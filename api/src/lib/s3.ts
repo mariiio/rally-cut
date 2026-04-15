@@ -219,17 +219,3 @@ export async function abortMultipartUpload(
 
   await s3Client.send(command);
 }
-
-/**
- * Upload a JSON file to S3.
- */
-export async function uploadJson(key: string, data: object): Promise<void> {
-  const command = new PutObjectCommand({
-    Bucket: env.S3_BUCKET_NAME,
-    Key: key,
-    Body: JSON.stringify(data, null, 2),
-    ContentType: "application/json",
-  });
-
-  await s3Client.send(command);
-}

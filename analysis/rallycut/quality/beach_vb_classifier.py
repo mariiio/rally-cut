@@ -1,12 +1,12 @@
-"""Binary zero-shot "is this beach volleyball" classifier using open-clip.
+"""Zero-shot "is this beach volleyball" classifier using open-clip.
 
-Scores each frame against two prompts and returns the softmax prob of the
-beach-VB prompt. The runtime path (`embed_and_score_frames`) imports open-clip
-lazily so unit tests can pass precomputed probabilities without loading the
-model.
+Scores each frame against 5 positive-anchored prompts and returns the softmax
+prob of the beach-VB prompt (index 0). The runtime path
+(`embed_and_score_frames`) imports open-clip lazily so unit tests can pass
+precomputed probabilities without loading the model.
 
-Calibration principle (see spec §Guiding Principle): threshold is set below
-the lowest-scoring positive, not at the midpoint between positives and
+Calibration principle (see design spec §Guiding Principle): threshold is set
+below the lowest-scoring positive, not at the midpoint between positives and
 negatives. Favor false-accept over false-reject.
 """
 from __future__ import annotations
@@ -16,17 +16,17 @@ from typing import Any
 
 from rallycut.quality.types import CheckResult, Issue, Tier
 
-# Calibrated against 5 negatives + positives (see
-# analysis/reports/beach_vb_calibration_<date>.json). Post-Task 10 this value
-# may be refined; keep the constant as the single source of truth.
+# Calibrated 2026-04-15 against 3 content-negatives (indoor 1, indoor 2, not
+# related) + 2 positives: gap 0.986 on [lowest_positive 0.986, highest_negative
+# 0.000]. Threshold = lowest_positive - 0.10. See
+# analysis/reports/beach_vb_calibration_2026-04-15.json.
 BEACH_VB_BLOCK_THRESHOLD = 0.886
 
 # Multi-class prompts with one positive (index 0) and several negatives.
 # Binary prompts ("a video that is not beach volleyball" as the second class)
-# failed calibration — CLIP assigned ~98% mass to the broad "not beach
-# volleyball" prompt even for real matches. Replacing with specific
+# failed calibration — CLIP assigned ~98% softmax mass to the broad "not
+# beach volleyball" prompt even for real matches. Replacing with specific
 # alternatives forces the softmax to compete on concrete scene content.
-# See analysis/reports/beach_vb_calibration_<date>.json for the sweep.
 PROMPTS = (
     "a beach volleyball match played on sand",
     "an indoor volleyball match played on a wooden court",

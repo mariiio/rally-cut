@@ -6,8 +6,10 @@ coordinates with a confidence score. We use them to detect:
   - wrong camera angle (not behind baseline → hard block)
 
 The tilt-advisory (`video_rotated`) was dropped on 2026-04-15: it never fired
-in calibration (0 of 66 GT videos) or validation fixtures, and Project C will
-re-add it bundled with auto-rotation once that lever is worth pulling.
+in calibration (0 of 66 GT videos) or A1 validation fixtures. Project C
+re-added `baseline_tilt_deg` as a pure helper (no advisory emission) to feed
+the `rallycut tilt-detect` CLI, which powers silent server-side auto-rotate
+during optimize. The user-facing advisory tier stays dropped.
 
 MIN_COURT_CONFIDENCE=0.6 is the only empirically-supported threshold in the
 A1 check set (best_lift 2.13 at 0.6, 1.77 at 0.75 on GT). Validation
