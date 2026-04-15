@@ -147,7 +147,11 @@ Outputs: `{base}_poster.jpg`, `{base}_optimized.mp4`, `{base}_proxy.mp4`
   - Merges result into `Video.qualityReportJson`; sets `Video.status = REJECTED` if any block-tier issue fires, reverts REJECTED → UPLOADED if a re-run passes
 - `GET /v1/videos/:id/analysis-pipeline-status` → unified pipeline status (quality, detection, tracking, stats)
 - **Service**: `qualityService.ts` (entry points + CLI spawning) + `qualityReport.ts` (pure merge/pick-top-3 helpers, test-safe)
-- **Checks shipped** (post-validation 2026-04-15): hard-invariant metadata (`video_too_short`, `resolution_too_low`, `fps_too_low`) + camera-geometry block (`wrong_angle_or_not_volleyball`, lift 2.13 at courtConfidence<0.6). The original A1 set also shipped `camera_too_far`, `crowded_scene`, `shaky_camera`, `too_dark`, `overexposed`, and `video_rotated`; all six were dropped after calibration (`analysis/reports/quality_calibration_2026-04-14.json`) showed zero or negative lift and a validation sweep against 5 negative + 2 positive fixtures reproduced `camera_too_far` as a false positive on normal footage. Indoor-volleyball + arbitrary non-VB uploads slip through today (beach-trained court model finds a "court" at 0.78–0.83 confidence) — tracked as Project C scope.
+- **Checks shipped** (post-validation 2026-04-15): hard-invariant metadata (`video_too_short`, `resolution_too_low`, `fps_too_low`) + camera-geometry block (`wrong_angle_or_not_volleyball`, lift 2.13 at courtConfidence<0.6). The original A1 set also shipped `camera_too_far`, `crowded_scene`, `shaky_camera`, `too_dark`, `overexposed`, and `video_rotated`; all six were dropped after calibration (`analysis/reports/quality_calibration_2026-04-14.json`) showed zero or negative lift and a validation sweep against 5 negative + 2 positive fixtures reproduced `camera_too_far` as a false positive on normal footage.
+- **Project C additions** (branch `feat/c-sport-sanity`):
+  - Component A: `not_beach_volleyball` block at the pre-upload gate via open-clip ViT-B/32 zero-shot (5-way positive-anchored prompts, threshold 0.886). Closes the indoor/non-VB slip-through A1 could not (beach-trained court model returned 0.78–0.83 confidence on non-VB content).
+  - Component B: silent auto-rotate during the local FFmpeg optimize pass when `tiltDeg > 5° AND courtConfidence > 0.6` (wired in `processingService.triggerLocalProcessing`; Lambda path not yet wired). Adds `qualityReportJson.autoFixes[]` — a separate field from `issues[]` — logging "auto-straightened by N°". Tilt detection runs during confirm via `runTiltDetect` spawning `rallycut tilt-detect`.
+  - Known gaps: `very bad angle.mp4` slips pre-upload gate (single-frame court check clears 0.6) but is still blocked by the 60s preflight CLI server-side; court-keypoint model's tilt measurement collapses at >~10° rotation — fine-tune on rotated data to close.
 
 ### Court Calibration
 - `PUT /v1/videos/:id/court-calibration` → save 4 corner points (persisted per video)
@@ -207,7 +211,7 @@ Rally → RallyCameraEdit → CameraKeyframe[]  # Instagram-style zoom/pan
 Video.status: PENDING → UPLOADED → DETECTING → DETECTED → ERROR
               (plus REJECTED, set by preflight on block-tier issues; reverts to UPLOADED if re-run passes)
 Video.processingStatus: PENDING → PROCESSING → COMPLETED/FAILED (separate from status)
-Video.qualityReportJson: { version: 2, issues: Issue[], preflight?, brightness?, resolution? }
+Video.qualityReportJson: { version: 2, issues: Issue[], autoFixes?: AutoFix[], preflight?, brightness?, resolution?, autoRotated?, tiltDeg?, courtConfidence? }
 ```
 
 Key tables: User, Session, Video, Rally, Highlight, ExportJob, RallyDetectionJob, SessionShare, VideoShare
