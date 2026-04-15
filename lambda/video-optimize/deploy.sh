@@ -45,6 +45,29 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 docker tag ${ECR_REPO}:latest $ECR_IMAGE
 docker push $ECR_IMAGE
 
+# Step 2.5: Ensure the ECR repo grants the Lambda service pull access.
+# Without this, Lambda CreateFunction fails with "Lambda does not have
+# permission to access the ECR image". Applied idempotently on every deploy.
+echo ""
+echo "🔓 Setting ECR repo policy for Lambda access..."
+aws ecr set-repository-policy \
+  --repository-name $ECR_REPO \
+  --region $REGION \
+  --policy-text "{
+    \"Version\": \"2008-10-17\",
+    \"Statement\": [{
+      \"Sid\": \"LambdaECRImageRetrievalPolicy\",
+      \"Effect\": \"Allow\",
+      \"Principal\": {\"Service\": \"lambda.amazonaws.com\"},
+      \"Action\": [\"ecr:BatchGetImage\", \"ecr:GetDownloadUrlForLayer\"],
+      \"Condition\": {
+        \"StringLike\": {
+          \"aws:sourceArn\": \"arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:*\"
+        }
+      }
+    }]
+  }" > /dev/null
+
 # Step 3: Create IAM role if it doesn't exist
 echo ""
 echo "📋 Setting up IAM role..."
