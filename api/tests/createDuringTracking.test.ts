@@ -1,21 +1,54 @@
 /**
- * Integration tests for the CREATE_DURING_TRACKING 409 guard.
+ * Integration tests for rally CRUD while batch tracking is active.
+ *
+ * Post-Task-11: CREATE is no longer blocked with 409. New rallies are saved
+ * without a PlayerTrack row and tagged for catch-up tracking (Task 12).
  *
  * Uses a real DB (same pattern as trackingBatchComplete.test.ts and
  * staleJobRecovery.test.ts). The sync-state route is POST /v1/sessions/:id/sync-state
- * and uses `ralliesPerVideo` (a map of videoId -> rally[]), not `rallies: [...]`.
+ * and uses `ralliesPerVideo` (a map of videoId -> rally[]).
+ *
+ * Worker spawning is mocked so trackAllRallies({skipTracked:true}) creates
+ * a real DB job but does not launch a child process.
  *
  * Fixture chain:
  *   User (PRO) → AnonymousIdentity (visitorId → userId)
  *              → Session (userId) → SessionVideo → Video
  *                                              → BatchTrackingJob (PROCESSING)
  */
+
+// ---------------------------------------------------------------------------
+// Mock child_process.spawn BEFORE any imports so spawnBatchWorker is a no-op.
+// The mock returns an object shaped like ChildProcess (error handler + unref).
+// ---------------------------------------------------------------------------
+import { vi } from 'vitest';
+
+vi.mock('child_process', async (importOriginal) => {
+  const real = await importOriginal<typeof import('child_process')>();
+  return {
+    ...real,
+    spawn: vi.fn().mockReturnValue({
+      on: vi.fn(),
+      unref: vi.fn(),
+    }),
+  };
+});
+
+// Also mock modalTrackingService in case MODAL_TRACKING_URL gets set.
+vi.mock('../src/services/modalTrackingService.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/services/modalTrackingService.js')>();
+  return {
+    ...real,
+    triggerModalBatchTracking: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
 import 'dotenv/config';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import app from '../src/index';
 import { prisma } from '../src/lib/prisma';
-import { isBatchTrackingActive } from '../src/services/batchTrackingService';
+import { isBatchTrackingActive, trackAllRallies } from '../src/services/batchTrackingService';
 
 const videoId = 'cd700000-0000-0000-0000-000000000001';
 const userId = 'cd700000-0000-0000-0000-000000000002';
@@ -24,7 +57,7 @@ const sessionId = 'cd700000-0000-0000-0000-000000000004';
 const jobId = 'cd700000-0000-0000-0000-000000000005';
 const existingRallyId = 'cd700000-0000-0000-0000-000000000006';
 
-describe('create rally while tracking is active → 409', () => {
+describe('rally CRUD while tracking is active', () => {
   beforeEach(async () => {
     // Symmetric teardown first (handles test isolation if a previous run left data)
     await prisma.batchTrackingJob.deleteMany({ where: { videoId } });
@@ -106,6 +139,7 @@ describe('create rally while tracking is active → 409', () => {
   });
 
   afterEach(async () => {
+    await prisma.playerTrack.deleteMany({ where: { rally: { videoId } } });
     await prisma.batchTrackingJob.deleteMany({ where: { videoId } });
     await prisma.rally.deleteMany({ where: { videoId } });
     await prisma.sessionVideo.deleteMany({ where: { sessionId } });
@@ -113,26 +147,32 @@ describe('create rally while tracking is active → 409', () => {
     await prisma.video.deleteMany({ where: { id: videoId } });
     await prisma.anonymousIdentity.deleteMany({ where: { visitorId } });
     await prisma.user.deleteMany({ where: { id: userId } });
+    vi.clearAllMocks();
   });
 
-  it('rejects a NEW rally in sync-state while batch job is PROCESSING', async () => {
+  it('allows CREATE of a new rally while batch job is PROCESSING (no 409)', async () => {
     const res = await request(app)
       .post(`/v1/sessions/${sessionId}/sync-state`)
       .set('X-Visitor-Id', visitorId)
       .send({
         ralliesPerVideo: {
+          // No `id` → treated as a new rally create
           [videoId]: [
-            // New rally — no id, so no existing DB row
             { startMs: 1000, endMs: 4000 },
           ],
         },
         highlights: [],
       });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true });
 
-    expect(res.status).toBe(409);
-    expect(res.body).toMatchObject({
-      error: { code: 'CONFLICT', details: { reason: 'CREATE_DURING_TRACKING' } },
+    // The new rally should exist in the DB with no PlayerTrack
+    const created = await prisma.rally.findFirst({
+      where: { videoId, startMs: 1000 },
+      include: { playerTrack: true },
     });
+    expect(created).not.toBeNull();
+    expect(created?.playerTrack).toBeNull();
   });
 
   it('allows UPDATE of an existing rally while batch job is PROCESSING', async () => {
@@ -193,5 +233,29 @@ describe('create rally while tracking is active → 409', () => {
       data: { status: 'COMPLETED', completedAt: new Date() },
     });
     expect(await isBatchTrackingActive(videoId)).toBe(false);
+  });
+
+  it('trackAllRallies with skipTracked=true returns {jobId:null, totalRallies:0} when all rallies are already tracked', async () => {
+    // Seed: make the existing rally have a PlayerTrack row (already tracked)
+    await prisma.playerTrack.create({
+      data: { rallyId: existingRallyId, status: 'COMPLETED' },
+    });
+    const result = await trackAllRallies(videoId, userId, { skipTracked: true });
+    expect(result.jobId).toBeNull();
+    expect(result.totalRallies).toBe(0);
+  });
+
+  it('trackAllRallies with skipTracked=true returns a real jobId when there is an untracked rally', async () => {
+    // The existing fixture rally (existingRallyId) has no PlayerTrack — it counts as untracked.
+    // Complete the in-progress job so trackAllRallies doesn't reuse it (rally count differs after
+    // the existing job was created with totalRallies=1 and our filter also finds 1, so it would
+    // reuse — complete it to force a fresh job creation).
+    await prisma.batchTrackingJob.update({
+      where: { id: jobId },
+      data: { status: 'COMPLETED', completedAt: new Date() },
+    });
+    const result = await trackAllRallies(videoId, userId, { skipTracked: true });
+    expect(result.jobId).not.toBeNull();
+    expect(result.totalRallies).toBeGreaterThanOrEqual(1);
   });
 });

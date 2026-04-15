@@ -28,17 +28,26 @@ import { expireStaleBatchTrackingJobs } from './staleJobRecovery.js';
 /**
  * Start batch tracking for all rallies in a video.
  * Returns immediately with job ID (fire-and-forget).
+ *
+ * When `options.skipTracked` is true, only rallies without an existing
+ * PlayerTrack row are included. Returns `{ jobId: null, totalRallies: 0 }`
+ * if there is nothing to catch up (instead of throwing).
  */
 export async function trackAllRallies(
   videoId: string,
   userId: string,
-): Promise<{ jobId: string; totalRallies: number }> {
+  options: { skipTracked?: boolean } = {},
+): Promise<{ jobId: string | null; totalRallies: number }> {
   // Fetch video with rallies
+  const ralliesWhere = options.skipTracked
+    ? { status: 'CONFIRMED' as const, playerTrack: null }
+    : { status: 'CONFIRMED' as const };
+
   const video = await prisma.video.findUnique({
     where: { id: videoId },
     include: {
       rallies: {
-        where: { status: 'CONFIRMED' },
+        where: ralliesWhere,
         orderBy: { startMs: 'asc' },
       },
     },
@@ -53,6 +62,9 @@ export async function trackAllRallies(
   }
 
   if (video.rallies.length === 0) {
+    if (options.skipTracked) {
+      return { jobId: null, totalRallies: 0 };
+    }
     throw new ValidationError('No confirmed rallies found for this video');
   }
 
@@ -69,6 +81,9 @@ export async function trackAllRallies(
   const unlockedSet = new Set(unlockedRallyIds);
   const ralliesToTrack = video.rallies.filter((r) => unlockedSet.has(r.id));
   if (ralliesToTrack.length === 0) {
+    if (options.skipTracked) {
+      return { jobId: null, totalRallies: 0 };
+    }
     throw new ValidationError(
       'All rallies are canonicalLocked — nothing to track',
     );
@@ -212,9 +227,9 @@ function spawnBatchWorker(jobId: string): void {
 
 /**
  * Returns true if the latest BatchTrackingJob for this video is active
- * (PENDING or PROCESSING). A2a uses this to reject mid-batch rally CREATION
- * with a 409 CONFLICT — existing rallies can still be updated or deleted.
- * A2b will replace the 409 with an append-rally enqueue.
+ * (PENDING or PROCESSING).
+ *
+ * @internal Retained for A2b
  */
 export async function isBatchTrackingActive(videoId: string): Promise<boolean> {
   const latest = await prisma.batchTrackingJob.findFirst({

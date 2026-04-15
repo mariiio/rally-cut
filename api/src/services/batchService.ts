@@ -1,8 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
-import { ConflictError, NotFoundError, ValidationError } from "../middleware/errorHandler.js";
+import { NotFoundError, ValidationError } from "../middleware/errorHandler.js";
 import type { BatchOperation, BatchResponse } from "../schemas/batch.js";
-import { isBatchTrackingActive } from "./batchTrackingService.js";
 import { reindexTrackingData } from "./playerTrackingService.js";
 
 export async function processBatch(
@@ -40,12 +39,6 @@ export async function processBatch(
         if (op.entity === "rally") {
           // Check video is in this session via pre-fetched set
           validateVideoInSession(op.data.videoId);
-          if (await isBatchTrackingActive(op.data.videoId)) {
-            throw new ConflictError(
-              'New rallies cannot be added while tracking is running. Please wait for tracking to finish.',
-              { reason: 'CREATE_DURING_TRACKING' },
-            );
-          }
           const maxOrder = await tx.rally.aggregate({
             where: { videoId: op.data.videoId },
             _max: { order: true },
