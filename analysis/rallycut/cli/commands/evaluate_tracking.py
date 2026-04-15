@@ -2139,3 +2139,128 @@ def compare_yolo_models(
         console.print(f"\n[green]Full results exported to {output}[/green]")
 
 
+@app.command(name="audit")
+@handle_errors
+def audit(
+    rally_id: Annotated[
+        str | None,
+        typer.Option("--rally-id", "-r", help="Audit a specific rally by ID"),
+    ] = None,
+    video_id: Annotated[
+        str | None,
+        typer.Option("--video-id", "-v", help="Audit all labeled rallies in a video"),
+    ] = None,
+    all_rallies: Annotated[
+        bool,
+        typer.Option("--all", "-a", help="Audit every rally with player GT"),
+    ] = False,
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir", "-o",
+            help="Directory to write per-rally JSON + _summary.json",
+        ),
+    ] = Path("reports/tracking_audit"),
+    iou_threshold: Annotated[
+        float,
+        typer.Option("--iou", "-i", help="IoU threshold for matching"),
+    ] = 0.5,
+) -> None:
+    """Dump a per-GT-track audit JSON per rally.
+
+    Classifies missed frames (out-of-frame / edge / occlusion / filter-drop /
+    detector-miss), lists real ID switches with cause (net-crossing / same-team
+    / cross-team), reports fragmentation (distinct pred IDs per GT track), and
+    flags convention drift (GT label ↔ pred track side/team mismatch).
+
+    Output: <output-dir>/<rally_id>.json + <output-dir>/_summary.json.
+    """
+    import json as _json
+
+    from rallycut.evaluation.tracking.audit import build_rally_audit
+    from rallycut.evaluation.tracking.db import load_labeled_rallies
+
+    if not rally_id and not video_id and not all_rallies:
+        console.print("[red]Error:[/red] Specify --rally-id, --video-id, or --all")
+        raise typer.Exit(1)
+
+    console.print("[bold]Loading labeled rallies from database...[/bold]")
+    rallies = load_labeled_rallies(video_id=video_id, rally_id=rally_id)
+    if not rallies:
+        console.print("[yellow]No labeled rallies found[/yellow]")
+        raise typer.Exit(1)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    console.print(f"  Found {len(rallies)} rally(s). Writing to [cyan]{output_dir}[/cyan]\n")
+
+    summary: list[dict[str, Any]] = []
+    for idx, rally in enumerate(rallies, start=1):
+        if rally.predictions is None:
+            console.print(
+                f"[{idx}/{len(rallies)}] {rally.rally_id}: [yellow]no predictions in DB — skipped[/yellow]"
+            )
+            continue
+
+        rally_audit = build_rally_audit(
+            rally_id=rally.rally_id,
+            video_id=rally.video_id,
+            ground_truth=rally.ground_truth,
+            predictions=rally.predictions,
+            raw_positions=rally.raw_positions,
+            iou_threshold=iou_threshold,
+        )
+
+        # Per-rally JSON
+        rally_path = output_dir / f"{rally.rally_id}.json"
+        with open(rally_path, "w") as f:
+            _json.dump(rally_audit.to_dict(), f, indent=2)
+
+        # Progress line (CLAUDE.md §Running Diagnostics rule #3)
+        missed_ranges_total = sum(
+            sum(len(ranges) for ranges in g.missed_by_cause.values())
+            for g in rally_audit.per_gt
+        )
+        worst_coverage = (
+            min((g.coverage for g in rally_audit.per_gt), default=1.0)
+        )
+        console.print(
+            f"[{idx}/{len(rallies)}] {rally.rally_id}: "
+            f"HOTA={rally_audit.hota or 0:.3f} "
+            f"MOTA={rally_audit.mota:.3f} "
+            f"realIDsw={rally_audit.aggregate_real_switches} "
+            f"missedRanges={missed_ranges_total} "
+            f"worstCov={worst_coverage:.2f} "
+            f"convFlip={'Y' if rally_audit.convention.team_label_flip else 'n'}"
+        )
+
+        summary.append({
+            "rallyId": rally.rally_id,
+            "videoId": rally.video_id,
+            "hota": rally_audit.hota,
+            "mota": rally_audit.mota,
+            "realSwitches": rally_audit.aggregate_real_switches,
+            "missedRanges": missed_ranges_total,
+            "worstCoverage": worst_coverage,
+            "courtSideFlip": rally_audit.convention.court_side_flip,
+            "teamLabelFlip": rally_audit.convention.team_label_flip,
+            "perGt": [
+                {
+                    "gtTrackId": g.gt_track_id,
+                    "coverage": g.coverage,
+                    "distinctPredIds": g.distinct_pred_ids,
+                    "realSwitchCount": len(g.real_switches),
+                    "missCauseCounts": {
+                        c.value: sum(end - start + 1 for start, end in ranges)
+                        for c, ranges in g.missed_by_cause.items()
+                    },
+                }
+                for g in rally_audit.per_gt
+            ],
+        })
+
+    summary_path = output_dir / "_summary.json"
+    with open(summary_path, "w") as f:
+        _json.dump({"rallies": summary}, f, indent=2)
+    console.print(f"\n[green]Audit summary written to {summary_path}[/green]")
+
+
