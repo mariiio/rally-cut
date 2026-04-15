@@ -48,7 +48,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import app from '../src/index';
 import { prisma } from '../src/lib/prisma';
-import { isBatchTrackingActive, trackAllRallies } from '../src/services/batchTrackingService';
+import { trackAllRallies } from '../src/services/batchTrackingService';
 
 const videoId = 'cd700000-0000-0000-0000-000000000001';
 const userId = 'cd700000-0000-0000-0000-000000000002';
@@ -216,23 +216,6 @@ describe('rally CRUD while tracking is active', () => {
     // Verify the rally was actually deleted
     const deleted = await prisma.rally.findUnique({ where: { id: existingRallyId } });
     expect(deleted).toBeNull();
-  });
-
-  it('isBatchTrackingActive returns true for PENDING/PROCESSING, false for COMPLETED', async () => {
-    expect(await isBatchTrackingActive(videoId)).toBe(true);
-
-    // PENDING jobs are also considered active
-    await prisma.batchTrackingJob.update({
-      where: { id: jobId },
-      data: { status: 'PENDING' },
-    });
-    expect(await isBatchTrackingActive(videoId)).toBe(true);
-
-    await prisma.batchTrackingJob.update({
-      where: { id: jobId },
-      data: { status: 'COMPLETED', completedAt: new Date() },
-    });
-    expect(await isBatchTrackingActive(videoId)).toBe(false);
   });
 
   it('POST /v1/videos/:id/track-untracked returns {jobId:null, totalRallies:0} when nothing needs tracking', async () => {

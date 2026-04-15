@@ -3,6 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import { ForbiddenError, NotFoundError } from "../middleware/errorHandler.js";
 import type { SyncStateInput } from "../schemas/sync.js";
 import { reindexTrackingData } from "./playerTrackingService.js";
+import { markRetrackIfExtended } from "./batchTrackingService.js";
 import { canAccessSession } from "./shareService.js";
 import { getUserTier, getTierLimits } from "./tierService.js";
 
@@ -153,6 +154,13 @@ export async function syncState(
                 if (reindexed) {
                   reindexedVideoIds.add(videoId);
                 }
+                // Mark for retrack if bounds were extended (inside tx — rolled back atomically on failure)
+                await markRetrackIfExtended(
+                  tx,
+                  rally.id,
+                  { startMs: existing.startMs, endMs: existing.endMs },
+                  { startMs: rally.startMs, endMs: rally.endMs },
+                );
               }
             }
             rallyId = rally.id;

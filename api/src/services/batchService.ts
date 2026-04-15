@@ -3,6 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import { NotFoundError, ValidationError } from "../middleware/errorHandler.js";
 import type { BatchOperation, BatchResponse } from "../schemas/batch.js";
 import { reindexTrackingData } from "./playerTrackingService.js";
+import { markRetrackIfExtended } from "./batchTrackingService.js";
 
 export async function processBatch(
   sessionId: string,
@@ -106,6 +107,13 @@ export async function processBatch(
                 data: { matchAnalysisJson: Prisma.DbNull, matchStatsJson: Prisma.DbNull },
               });
             }
+            // Mark for retrack if bounds were extended (inside tx — rolled back atomically on failure)
+            await markRetrackIfExtended(
+              tx,
+              op.id,
+              { startMs: rally.startMs, endMs: rally.endMs },
+              { startMs: op.data.startMs ?? rally.startMs, endMs: op.data.endMs ?? rally.endMs },
+            );
           }
         } else if (op.entity === "highlight") {
           const highlight = await tx.highlight.findFirst({

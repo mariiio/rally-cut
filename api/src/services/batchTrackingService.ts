@@ -18,6 +18,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import { env } from '../config/env.js';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errorHandler.js';
 import type { CalibrationCorner } from './playerTrackingService.js';
@@ -40,7 +41,13 @@ export async function trackAllRallies(
 ): Promise<{ jobId: string | null; totalRallies: number }> {
   // Fetch video with rallies
   const ralliesWhere = options.skipTracked
-    ? { status: 'CONFIRMED' as const, playerTrack: null }
+    ? {
+        status: 'CONFIRMED' as const,
+        OR: [
+          { playerTrack: null },
+          { playerTrack: { is: { needsRetrack: true } } },
+        ],
+      }
     : { status: 'CONFIRMED' as const };
 
   const video = await prisma.video.findUnique({
@@ -226,18 +233,35 @@ function spawnBatchWorker(jobId: string): void {
 }
 
 /**
- * Returns true if the latest BatchTrackingJob for this video is active
- * (PENDING or PROCESSING).
+ * Compare a rally's new bounds against its previous bounds. If the rally
+ * has been EXTENDED — start moved earlier or end moved later — its existing
+ * PlayerTrack no longer covers all frames. Mark PlayerTrack.needsRetrack
+ * so the next catch-up pass re-runs tracking for this rally.
  *
- * @internal Retained for A2b
+ * SHORTENING (start later or end earlier) doesn't mark — the existing
+ * tracking still covers the new narrower range, and reindexTrackingData
+ * handles the offset shift.
+ *
+ * Returns true if a retrack was scheduled, false otherwise.
  */
-export async function isBatchTrackingActive(videoId: string): Promise<boolean> {
-  const latest = await prisma.batchTrackingJob.findFirst({
-    where: { videoId },
-    orderBy: { createdAt: 'desc' },
-    select: { status: true },
+export async function markRetrackIfExtended(
+  client: Prisma.TransactionClient | typeof prisma,
+  rallyId: string,
+  oldBounds: { startMs: number; endMs: number },
+  newBounds: { startMs: number; endMs: number },
+): Promise<boolean> {
+  const extended =
+    newBounds.startMs < oldBounds.startMs || newBounds.endMs > oldBounds.endMs;
+  if (!extended) return false;
+
+  const { count } = await client.playerTrack.updateMany({
+    where: { rallyId },
+    data: { needsRetrack: true },
   });
-  return latest?.status === 'PENDING' || latest?.status === 'PROCESSING';
+  if (count > 0) {
+    console.log(`[RETRACK] Rally ${rallyId} extended — marked PlayerTrack for retrack`);
+  }
+  return count > 0;
 }
 
 /**
