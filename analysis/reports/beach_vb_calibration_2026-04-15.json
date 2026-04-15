@@ -1,0 +1,15 @@
+{
+  "date": "2026-04-15",
+  "per_video": {
+    "/Users/mario/Desktop/rallies/Negative/indoor 1.mp4": 0.0001217438051753561,
+    "/Users/mario/Desktop/rallies/Negative/indoor 2.mp4": 0.00016683599387761204,
+    "/Users/mario/Desktop/rallies/Negative/not related.mp4": 0.00021737601491622627,
+    "/Users/mario/Desktop/rallies/Matches/match.mp4": 0.9862965822219849,
+    "/Users/mario/Desktop/rallies/Matches/Newport Beach Games 10_12_25 Paul_Nate vs Colin_Tim - Nathan Gali (1080p, h264).mp4": 0.9895146250724792
+  },
+  "highest_negative": 0.00021737601491622627,
+  "lowest_positive": 0.9862965822219849,
+  "gap": 0.9860792062070687,
+  "chosen_threshold": 0.8862965822219849,
+  "ship_gate_passed": true
+}

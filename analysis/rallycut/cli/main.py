@@ -18,6 +18,7 @@ from rallycut.cli.commands.profile import profile as profile_command
 from rallycut.cli.commands.reattribute_actions import reattribute_actions_cmd
 from rallycut.cli.commands.remap_track_ids import remap_track_ids_cmd
 from rallycut.cli.commands.repair_identities import repair_identities_cmd
+from rallycut.cli.commands.tilt_detect import tilt_detect as tilt_detect_command
 from rallycut.cli.commands.track_player import track_players as track_players_command
 from rallycut.cli.commands.train import app as train_app
 
@@ -38,6 +39,7 @@ app.command(name="match-players")(match_players_command)
 app.command(name="detect-court")(detect_court_command)
 app.command(name="preflight")(preflight_command)
 app.command(name="preview-check")(preview_check_command)
+app.command(name="tilt-detect")(tilt_detect_command)
 app.command(name="compute-match-stats")(compute_match_stats_cmd)
 app.command(name="reattribute-actions")(reattribute_actions_cmd)
 app.command(name="remap-track-ids")(remap_track_ids_cmd)

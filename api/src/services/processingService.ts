@@ -18,6 +18,7 @@ import { prisma } from "../lib/prisma.js";
 import { NotFoundError } from "../middleware/errorHandler.js";
 import { getUserTier } from "./tierService.js";
 import { mergeQualityReports, type QualityReport } from "./qualityReport.js";
+import { runTiltDetect, type TiltDetectResult } from "./qualityService.js";
 
 const lambdaClient = new LambdaClient({
   region: env.AWS_REGION,
@@ -101,6 +102,19 @@ export async function generatePosterImmediate(
       console.log(`[POSTER] Failed to compute brightness for ${videoId}:`, err);
     }
 
+    // Project C Component B: detect tilt at confirm time so optimize can rotate.
+    let tiltResult: TiltDetectResult | null = null;
+    try {
+      tiltResult = await runTiltDetect(inputPath);
+      console.log(
+        `[TILT] Video ${videoId} tiltDeg=${tiltResult.tiltDeg.toFixed(2)} ` +
+        `confidence=${tiltResult.courtConfidence.toFixed(2)} ` +
+        `framesScored=${tiltResult.framesScored}`,
+      );
+    } catch (err) {
+      console.log(`[TILT] Failed to detect tilt for ${videoId}:`, err);
+    }
+
     // Generate S3 key for poster
     const keyParts = s3Key.split("/");
     const filename = keyParts.pop()!;
@@ -136,19 +150,29 @@ export async function generatePosterImmediate(
     const posterData = await fs.readFile(posterPath);
     await uploadPoster(posterKey, posterData);
 
-    // Build qualityReportJson patch from brightness signal (no issues emitted here;
+    // Build qualityReportJson patch from brightness + tilt signals (no issues emitted here;
     // preflight/upload checks own issue generation).
     let qualityReportPatch: Partial<QualityReport> | undefined;
-    if (brightnessMean != null) {
+    if (brightnessMean != null || tiltResult != null) {
       const existing = await prisma.video.findUnique({
         where: { id: videoId },
         select: { qualityReportJson: true },
       });
       const prior = (existing?.qualityReportJson as Partial<QualityReport> | null) ?? {};
-      qualityReportPatch = mergeQualityReports([
-        prior,
-        { version: 2, issues: [], brightness: brightnessMean },
-      ]);
+      const patches: Partial<QualityReport>[] = [prior];
+      if (brightnessMean != null) {
+        patches.push({ version: 2, issues: [], brightness: brightnessMean });
+      }
+      if (tiltResult != null) {
+        patches.push({
+          version: 2,
+          issues: [],
+          tiltDeg: tiltResult.tiltDeg,
+          courtConfidence: tiltResult.courtConfidence,
+          autoRotated: false,
+        });
+      }
+      qualityReportPatch = mergeQualityReports(patches);
     }
 
     // Update database with poster and extracted metadata
@@ -531,6 +555,26 @@ async function triggerLambdaProcessing(
 }
 
 /**
+ * Predicate: should we apply auto-rotation correction during optimize?
+ * Fires when tilt > 5° AND court confidence > 0.6 AND not already rotated.
+ *
+ * The confidence floor was originally 0.8 in the design spec, but Task 13
+ * validation showed that the beach-trained court-keypoint model plateaus at
+ * ~0.6–0.75 confidence on rotated footage (it's trained on mostly-straight
+ * match footage). 0.8 was dead code in practice. 0.6 aligns with A1's
+ * `MIN_COURT_CONFIDENCE` floor and fires correctly on 6°–10° tilt fixtures.
+ * Future work: fine-tune the keypoint model on rotated data to raise the
+ * ceiling back to 0.8.
+ */
+export function shouldAutoRotate(qr: {
+  autoRotated?: boolean;
+  tiltDeg?: number | null;
+  courtConfidence?: number | null;
+}): boolean {
+  return !qr.autoRotated && (qr.tiltDeg ?? 0) > 5 && (qr.courtConfidence ?? 0) > 0.6;
+}
+
+/**
  * Run FFmpeg locally for development.
  * Downloads video from S3, optimizes it, generates poster and proxy.
  */
@@ -618,9 +662,19 @@ async function triggerLocalProcessing(
       return;
     }
 
+    // Project C Component B: read persisted quality report to decide if we rotate.
+    const vidForRotate = await prisma.video.findUnique({ where: { id: videoId } });
+    const qr = (vidForRotate?.qualityReportJson as Partial<QualityReport> | null) ?? {};
+    const wantsRotate = shouldAutoRotate(qr);
+    const rotationRad = wantsRotate ? -((qr.tiltDeg ?? 0) * Math.PI) / 180 : 0;
+
     // Optimize video with FFmpeg
     // Use -pix_fmt yuv420p to handle 10-bit/HDR videos (libx264 only supports 8-bit)
-    console.log(`[LOCAL PROCESSING] Optimizing video ${videoId}...`);
+    console.log(`[LOCAL PROCESSING] Optimizing video ${videoId}${wantsRotate ? ` (auto-rotate ${(qr.tiltDeg ?? 0).toFixed(1)}°)` : ""}...`);
+    const vfArgs: string[] = [];
+    if (wantsRotate) {
+      vfArgs.push(`rotate=${rotationRad}:ow=iw:oh=ih:c=black`);
+    }
     await runFFmpeg([
       "-i", inputPath,
       "-c:v", "libx264",
@@ -634,8 +688,40 @@ async function triggerLocalProcessing(
       "-c:a", "aac",
       "-b:a", "128k",
       "-ac", "2",
+      ...(vfArgs.length > 0 ? ["-vf", vfArgs.join(",")] : []),
       "-y", outputPath,
     ]);
+
+    // Project C Component B: after successful rotation, update quality report via
+    // read-mutate-write (NOT merge — merge's "first non-null wins" keeps autoRotated:false).
+    if (wantsRotate) {
+      await prisma.$transaction(async (tx) => {
+        const row = await tx.video.findUnique({ where: { id: videoId } });
+        const prior = (row?.qualityReportJson as QualityReport | null) ?? { version: 2, issues: [] };
+        const updated: QualityReport = {
+          ...prior,
+          autoRotated: true,
+          tiltDeg: 0,
+          autoFixes: [
+            ...(prior.autoFixes ?? []),
+            {
+              id: "auto_straightened",
+              message: `Auto-straightened by ${Math.round(qr.tiltDeg ?? 0)}°`,
+              appliedAt: new Date().toISOString(),
+              data: { originalTiltDeg: qr.tiltDeg ?? 0 },
+            },
+          ],
+        };
+        await tx.video.update({
+          where: { id: videoId },
+          data: {
+            qualityReportJson: updated as unknown as Prisma.InputJsonValue,
+            courtCalibrationJson: Prisma.DbNull, // invalidated by rotation
+          },
+        });
+      });
+      console.log(`[TILT] Video ${videoId} auto-straightened by ${Math.round(qr.tiltDeg ?? 0)}°, courtCalibrationJson cleared`);
+    }
 
     const processedSize = (await fs.stat(outputPath)).size;
     const reduction = ((1 - processedSize / originalSize) * 100).toFixed(1);

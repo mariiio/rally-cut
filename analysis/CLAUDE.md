@@ -20,7 +20,8 @@ uv run rallycut profile <video.mp4>             # Performance profiling
 
 # Quality checks (A1 ship)
 uv run rallycut preflight <video.mp4>           # Full preflight: metadata invariants + camera geometry. Emits JSON QualityReport. (Brightness, camera-distance, crowd, shakiness, tilt, dark/overexposed dropped on 2026-04-15 after validation — see reports/quality_calibration_2026-04-14.json.)
-uv run rallycut preview-check <frames-dir>      # Lightweight pre-upload check on a directory of JPEG frames. Used by the web client-side upload gate via api/src/services/qualityService.ts::runPreviewChecks. Runs court-keypoint detection + camera_geometry only.
+uv run rallycut preview-check <frames-dir>      # Lightweight pre-upload check on a directory of JPEG frames. Used by the web client-side upload gate. Runs court-keypoint detection + camera_geometry + CLIP beach-VB classifier (Project C, open-clip ViT-B/32 via [preflight] extra).
+uv run rallycut tilt-detect <frames-dir>        # Emit {tiltDeg, courtConfidence, framesScored} from a directory of JPEGs. Used server-side at POST /v1/videos/:id/confirm to decide auto-rotate (Project C).
 
 # Pre-extract features (optional — TemporalMaxer auto-extracts on first run)
 uv run rallycut train extract-features --stride 12

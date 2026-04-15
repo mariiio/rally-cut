@@ -2231,6 +2231,25 @@ wheels = [
 ]
 
 [[package]]
+name = "open-clip-torch"
+version = "3.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ftfy" },
+    { name = "huggingface-hub" },
+    { name = "regex" },
+    { name = "safetensors" },
+    { name = "timm" },
+    { name = "torch" },
+    { name = "torchvision" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4a/1f/2bc9795047fa2c1ad2567ef78ce6dfc9a7b763fa534acee09a94da2a5b8f/open_clip_torch-3.3.0.tar.gz", hash = "sha256:904b1a9f909df8281bb3de60ab95491cd2994a509177ea4f9d6292a84fe24d6d", size = 1503380, upload-time = "2026-02-27T00:32:46.74Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/37/b5/41c315ccd94ca332ead3e832e83eee343ab245005c3e43d9d3e75eae34eb/open_clip_torch-3.3.0-py3-none-any.whl", hash = "sha256:c549ad5ed6bfc119cc11105033c0a2b9d7a2a4afeb40a58a09aab3da1a0043ce", size = 1547268, upload-time = "2026-02-27T00:32:44.902Z" },
+]
+
+[[package]]
 name = "opencv-python"
 version = "4.11.0.86"
 source = { registry = "https://pypi.org/simple" }
@@ -3092,6 +3111,9 @@ onnx = [
 openvino = [
     { name = "openvino" },
 ]
+preflight = [
+    { name = "open-clip-torch" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -3126,6 +3148,7 @@ requires-dist = [
     { name = "onnxruntime", marker = "extra == 'onnx'", specifier = ">=1.16.0" },
     { name = "onnxruntime-gpu", marker = "extra == 'gpu'", specifier = ">=1.16.0" },
     { name = "onnxscript", specifier = ">=0.5.7" },
+    { name = "open-clip-torch", marker = "extra == 'preflight'", specifier = ">=2.24.0" },
     { name = "opencv-python", specifier = ">=4.8.0" },
     { name = "openvino", marker = "extra == 'openvino'", specifier = ">=2023.0.0" },
     { name = "platformdirs", specifier = ">=4.0.0" },
@@ -3151,7 +3174,7 @@ requires-dist = [
     { name = "typer", extras = ["all"], specifier = ">=0.9.0" },
     { name = "ultralytics", specifier = ">=8.2.0" },
 ]
-provides-extras = ["dev", "onnx", "gpu", "hwaccel", "openvino", "cloud"]
+provides-extras = ["dev", "preflight", "onnx", "gpu", "hwaccel", "openvino", "cloud"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -374,6 +374,132 @@ function runPreviewCli(
   });
 }
 
+// ============================================================================
+// Tilt detection
+// ============================================================================
+
+export interface TiltDetectResult {
+  tiltDeg: number;
+  courtConfidence: number;
+  framesScored: number;
+}
+
+/**
+ * Run `rallycut tilt-detect` against a video at `localPath`. Extracts 5
+ * evenly-sampled frames via ffmpeg, spawns the CLI against the frame dir,
+ * parses the JSON response.
+ *
+ * Fails soft: any error returns `{tiltDeg: 0, courtConfidence: 0, framesScored: 0}`.
+ * Callers treat that as "no rotation; no flag." Never throws.
+ */
+export async function runTiltDetect(localPath: string): Promise<TiltDetectResult> {
+  const frameDir = path.join(
+    TEMP_DIR,
+    `tilt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+  );
+  try {
+    await fs.mkdir(frameDir, { recursive: true });
+    await extractFramesForTiltDetect(localPath, frameDir, 5);
+    return await runTiltDetectCli(frameDir);
+  } catch (err) {
+    console.warn(`[tilt-detect] failed, returning zero result: ${err}`);
+    return { tiltDeg: 0, courtConfidence: 0, framesScored: 0 };
+  } finally {
+    await fs.rm(frameDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function extractFramesForTiltDetect(
+  videoPath: string,
+  outDir: string,
+  count: number,
+): Promise<void> {
+  // Get duration via ffprobe
+  const duration = await new Promise<number>((resolve, reject) => {
+    let out = '';
+    const p = spawn('ffprobe', [
+      '-v', 'error',
+      '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      videoPath,
+    ]);
+    p.stdout.on('data', (d: Buffer) => { out += d.toString(); });
+    p.on('exit', (code) => {
+      if (code !== 0) return reject(new Error('ffprobe failed'));
+      const secs = parseFloat(out.trim());
+      if (!Number.isFinite(secs) || secs <= 0) return reject(new Error('bad duration'));
+      resolve(secs);
+    });
+  });
+
+  // Extract `count` frames evenly across the duration
+  await Promise.all(
+    Array.from({ length: count }, (_, i) => {
+      const ts = ((i + 0.5) / count) * duration;
+      const outPath = path.join(outDir, `frame_${String(i).padStart(2, '0')}.jpg`);
+      return new Promise<void>((resolve, reject) => {
+        const p = spawn('ffmpeg', [
+          '-y', '-v', 'error',
+          '-ss', ts.toFixed(2),
+          '-i', videoPath,
+          '-frames:v', '1',
+          '-q:v', '2',
+          outPath,
+        ]);
+        p.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg exit ${code}`)));
+      });
+    }),
+  );
+}
+
+function runTiltDetectCli(frameDir: string): Promise<TiltDetectResult> {
+  return new Promise((resolve, reject) => {
+    const args = ['run', 'rallycut', 'tilt-detect', frameDir, '--json'];
+    const child = spawn('uv', args, {
+      cwd: ANALYSIS_DIR,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env },
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { child.kill(); } catch { /* ignore */ }
+      reject(new Error('tilt-detect timed out'));
+    }, 30_000);
+    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error(`tilt-detect failed to start: ${err.message}`));
+    });
+    child.on('exit', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code !== 0) {
+        return reject(new Error(`tilt-detect exited ${code}: ${stderr.slice(-500)}`));
+      }
+      try {
+        const m = stdout.match(/\{[\s\S]*\}/);
+        if (!m) return reject(new Error('No JSON from tilt-detect'));
+        const parsed = JSON.parse(m[0]);
+        resolve({
+          tiltDeg: Number(parsed.tiltDeg ?? 0),
+          courtConfidence: Number(parsed.courtConfidence ?? 0),
+          framesScored: Number(parsed.framesScored ?? 0),
+        });
+      } catch (e) {
+        reject(new Error(`tilt-detect parse failed: ${e}`));
+      }
+    });
+  });
+}
+
 async function downloadFromS3(s3Key: string, destPath: string): Promise<void> {
   const url = await generateDownloadUrl(s3Key);
   const response = await fetch(url);

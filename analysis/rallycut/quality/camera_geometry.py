@@ -6,8 +6,10 @@ coordinates with a confidence score. We use them to detect:
   - wrong camera angle (not behind baseline → hard block)
 
 The tilt-advisory (`video_rotated`) was dropped on 2026-04-15: it never fired
-in calibration (0 of 66 GT videos) or validation fixtures, and Project C will
-re-add it bundled with auto-rotation once that lever is worth pulling.
+in calibration (0 of 66 GT videos) or A1 validation fixtures. Project C
+re-added `baseline_tilt_deg` as a pure helper (no advisory emission) to feed
+the `rallycut tilt-detect` CLI, which powers silent server-side auto-rotate
+during optimize. The user-facing advisory tier stays dropped.
 
 MIN_COURT_CONFIDENCE=0.6 is the only empirically-supported threshold in the
 A1 check set (best_lift 2.13 at 0.6, 1.77 at 0.75 on GT). Validation
@@ -75,3 +77,17 @@ def check_camera_geometry(corners: CourtCorners) -> CheckResult:
         return CheckResult(issues=issues, metrics=metrics)
 
     return CheckResult(issues=issues, metrics=metrics)
+
+
+def baseline_tilt_deg(corners: CourtCorners) -> float:
+    """Absolute tilt in degrees of the top baseline vs. horizontal.
+
+    Returns 0.0 for degenerate corners (all points coincident). Re-added in
+    Project C to feed the tilt-detect CLI; kept as a pure helper (no issue
+    emission) so the dropped `video_rotated` advisory stays dropped.
+    """
+    dx = corners.tr[0] - corners.tl[0]
+    dy = corners.tr[1] - corners.tl[1]
+    if dx == 0 and dy == 0:
+        return 0.0
+    return abs(math.degrees(math.atan2(dy, dx)))

@@ -25,6 +25,7 @@ import { AccessRequestForm } from './AccessRequestForm';
 import { TutorialProvider, TutorialContext } from './tutorial';
 import { PlayerTrackingToolbar } from './PlayerTrackingToolbar';
 import { QualityReportBanner } from './QualityReportBanner';
+import { AutoFixNote } from './AutoFixNote';
 import { MatchStatsPanel } from './MatchStatsPanel';
 import { PlayerMatchingDialog } from './PlayerMatchingDialog';
 import { PlayerReferenceCropDialog } from './PlayerReferenceCropDialog';
@@ -456,6 +457,7 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
             {currentMatch && (
               <QualityReportBanner report={currentMatch.qualityReportJson ?? null} videoId={currentMatch.id} />
             )}
+            <AutoFixNote fixes={currentMatch?.qualityReportJson?.autoFixes} />
             {/* Player tracking toolbar */}
             <PlayerTrackingToolbar />
             <Box sx={{ flex: 1, minHeight: 0 }}>

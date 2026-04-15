@@ -78,6 +78,9 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0.0",
 ]
+preflight = [
+    "open-clip-torch>=2.24.0",
+]
 onnx = [
     # ONNX Runtime for faster inference (cross-platform)
     "onnx>=1.14.0",
@@ -143,6 +146,8 @@ module = [
     "onnxruntime.*",
     "evaluate",
     "evaluate.*",
+    "open_clip",
+    "open_clip.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"
