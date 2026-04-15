@@ -25,7 +25,10 @@ fi
 # Step 2: Build and push Docker image
 echo ""
 echo "🐳 Building Docker image (ARM64)..."
-docker build --platform linux/arm64 -t $ECR_REPO:latest .
+# --provenance=false --sbom=false keeps the output to classic Docker v2
+# manifest format; the default OCI manifest produced by buildx gets rejected
+# by Lambda with "image manifest ... is not supported".
+docker build --platform linux/arm64 --provenance=false --sbom=false -t $ECR_REPO:latest .
 
 echo ""
 echo "📤 Pushing to ECR..."
