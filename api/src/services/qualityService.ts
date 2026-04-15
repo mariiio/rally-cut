@@ -124,7 +124,7 @@ export async function getAnalysisPipelineStatus(videoId: string, userId: string)
 
   await expireStaleDetectionJobs(videoId);
   await expireStaleBatchTrackingJobs(videoId);
-  let batchJob = await prisma.batchTrackingJob.findFirst({
+  const batchJob = await prisma.batchTrackingJob.findFirst({
     where: { videoId },
     orderBy: { createdAt: 'desc' },
   });

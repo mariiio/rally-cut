@@ -72,7 +72,7 @@ uploads that would hit the same block in post-upload preflight anyway.
 | `exportStore` | Export job tracking, download progress |
 | `tierStore` | Subscription tier, usage limits |
 | `playerTrackingStore` | Player/ball tracking data, court calibration, overlay visibility |
-| `analysisStore` | "Analyze Match" pipeline orchestration (quality → detect → track → stats), localStorage-persisted |
+| `analysisStore` | "Analyze Match" pipeline orchestration (preflight → detect → track → 5s edit-quiescence → catch-up → match-analysis → stats), localStorage-persisted. After batch tracking completes, a 5-second idle timer debounces rally edits before running catch-up tracking for any newly created rallies and then match-analysis. |
 
 ## Camera System
 

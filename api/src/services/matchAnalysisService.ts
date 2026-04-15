@@ -152,6 +152,10 @@ export function triggerMatchAnalysis(videoId: string): boolean {
 /**
  * Run cross-rally player matching for a video.
  * Called automatically after batch tracking completes.
+ *
+ * Prefer `triggerMatchAnalysis(videoId)` for client-initiated fire-and-forget flows.
+ * Use this synchronous variant only for ops scripts, the legacy `/run-match-analysis`
+ * SSE route, and test harnesses that need to await completion directly.
  */
 export type ProgressCallback = (step: string, index: number, total: number) => void;
 

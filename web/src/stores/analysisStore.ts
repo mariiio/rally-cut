@@ -197,11 +197,11 @@ async function pollCatchUpUntilComplete(
   api: { getBatchTrackingStatus: (videoId: string) => Promise<{ status: string; completedRallies?: number; totalRallies?: number; error?: string }> },
 ): Promise<void> {
   const CATCH_UP_TIMEOUT_MS = 5 * 60 * 1000; // 5 min — tuned for ~0.02$/batch Modal runs
-  const POLL_INTERVAL_MS = 3000;
+  const CATCH_UP_POLL_INTERVAL_MS = 3000;
   const start = Date.now();
 
   while (Date.now() - start < CATCH_UP_TIMEOUT_MS) {
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    await new Promise((r) => setTimeout(r, CATCH_UP_POLL_INTERVAL_MS));
     const status = await api.getBatchTrackingStatus(videoId);
     if (status.status === 'completed') return;
     if (status.status === 'failed') {
@@ -236,14 +236,15 @@ function armMatchAnalysisDebounce(videoId: string, set: SetFn, get: GetFn) {
           trackingProgress: { completed: 0, total: catchUp.totalRallies },
         });
         await pollCatchUpUntilComplete(videoId, api);
-        // Re-check staleness after the poll — the user may have cancelled mid-catch-up.
-        const stillCurrent = get().pipelines[videoId];
-        if (!stillCurrent || stillCurrent.phase !== 'match_analyzing') return;
       }
     } catch (err) {
       console.warn(`[ANALYSIS] Catch-up tracking failed, proceeding to match-analysis anyway:`, err);
       // Fall through — tracked rallies still produce meaningful stats
     }
+
+    // Staleness re-check after any catch-up work — user may have cancelled.
+    const stillCurrent = get().pipelines[videoId];
+    if (!stillCurrent || stillCurrent.phase !== 'match_analyzing') return;
 
     // Match-analysis step — real failures DO error the pipeline.
     try {
@@ -637,11 +638,11 @@ async function completeAnalysis(videoId: string, set: SetFn, get: GetFn) {
     // Match analysis is now fire-and-forget on the server (Task 3 removed the
     // synchronous webhook call). Poll until stats appear or we time out.
     const MATCH_ANALYSIS_TIMEOUT_MS = 60_000;
-    const POLL_INTERVAL_MS = 2_000;
+    const STATS_POLL_INTERVAL_MS = 2_000;
     const start = Date.now();
 
     while (Date.now() - start < MATCH_ANALYSIS_TIMEOUT_MS) {
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      await new Promise((r) => setTimeout(r, STATS_POLL_INTERVAL_MS));
       if (isStale()) return;
 
       const stats = await getMatchStatsApi(videoId);

@@ -1513,6 +1513,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     syncService.markDirty();
 
     debouncedSave(() => get().saveToStorage());
+
+    // Notify analysis pipeline — resets match-analysis debounce if tracking is complete
+    const videoId = get().activeMatchId;
+    if (videoId) {
+      useAnalysisStore.getState().notifyRallyEdited(videoId);
+    }
   },
 
   selectRally: (id: string | null) => {
@@ -1658,6 +1664,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     syncService.markDirty();
 
     debouncedSave(() => get().saveToStorage());
+
+    // Notify analysis pipeline — resets match-analysis debounce if tracking is complete
+    const videoId = get().activeMatchId;
+    if (videoId) {
+      useAnalysisStore.getState().notifyRallyEdited(videoId);
+    }
   },
 
   redo: () => {
@@ -1692,6 +1704,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     syncService.markDirty();
 
     debouncedSave(() => get().saveToStorage());
+
+    // Notify analysis pipeline — resets match-analysis debounce if tracking is complete
+    const videoId = get().activeMatchId;
+    if (videoId) {
+      useAnalysisStore.getState().notifyRallyEdited(videoId);
+    }
   },
 
   resetToOriginal: () => {
@@ -1721,6 +1739,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     // Mark dirty for backend sync (to sync the reset state)
     syncService.markDirty();
+
+    // Notify analysis pipeline — resets match-analysis debounce if tracking is complete
+    const videoId = get().activeMatchId;
+    if (videoId) {
+      useAnalysisStore.getState().notifyRallyEdited(videoId);
+    }
 
     // Clear localStorage since we're back to original
     if (typeof window !== 'undefined' && state.session) {

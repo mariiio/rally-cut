@@ -41,7 +41,7 @@ export function MobilePlayerControls() {
   const getActiveMatch = useEditorStore((s) => s.getActiveMatch);
   const activeMatch = getActiveMatch();
 
-  const isDetecting = analysisPipeline?.phase === 'detecting' || analysisPipeline?.phase === 'ready_tracking'
+  const isAnalyzing = analysisPipeline?.phase === 'detecting' || analysisPipeline?.phase === 'ready_tracking'
     || activeMatch?.status === 'DETECTING';
   const detectionProgress = analysisPipeline?.phase === 'detecting'
     ? Math.max(0, Math.min(100, Math.round(((analysisPipeline.progress - 10) / 35) * 100)))
@@ -77,7 +77,7 @@ export function MobilePlayerControls() {
   );
 
   const hasVideo = Boolean(videoUrl);
-  const canDetect = hasVideo && !isDetecting && videoDetectionStatus !== VideoStatus.DETECTED;
+  const canDetect = hasVideo && !isAnalyzing && videoDetectionStatus !== VideoStatus.DETECTED;
 
   return (
     <Box
@@ -181,7 +181,7 @@ export function MobilePlayerControls() {
           </IconButton>
 
           {/* Detect Rallies */}
-          {isDetecting ? (
+          {isAnalyzing ? (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
               <CircularProgress size={20} />
               <Typography variant="caption" color="text.secondary">
