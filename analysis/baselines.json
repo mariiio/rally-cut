@@ -1,26 +1,85 @@
 {
-  "_updated": "2026-02-24",
+  "_updated": "2026-04-15",
   "_description": "Canonical baselines for ML experiments. Read by agents at runtime. Update after significant eval runs.",
 
   "ball_tracking": {
-    "wasb_hrnet": {
-      "match_pct": 86.4,
-      "error_px": 29.2,
+    "wasb_hrnet_db_keyframes_only": {
+      "match_pct": 96.91,
+      "source": "production DB (player_tracks.ball_positions_json)",
+      "gt_mode": "keyframes_only",
+      "rallies": 43,
+      "gt_keyframes": 11668,
       "config": "get_wasb_filter_config()",
-      "notes": "Fine-tuned WASB, 9 rallies, Feb 2026"
+      "notes": "Honest per-keyframe match (2026-04-15). Supersedes the 91.1% figure which was measured on interpolated GT — that metric is inflated by GT-line vs ball-parabola artifact on fast motion. See analysis/reports/ball_gap_diagnosis_2026_04_15.md.",
+      "buckets": {
+        "matched_or_interp_correct_pct": 96.91,
+        "missed_no_raw_pct": 0.87,
+        "missed_filter_killed_pct": 0.37,
+        "wrong_object_pct": 1.65,
+        "interpolated_wrong_pct": 0.21
+      },
+      "event_counts": {
+        "teleports": 50,
+        "revisit_clusters": 4,
+        "revisit_cluster_visits": 23,
+        "stationary_clusters": 0
+      }
+    },
+    "wasb_hrnet_interpolated_gt": {
+      "match_pct": 82.01,
+      "source": "production DB (player_tracks.ball_positions_json)",
+      "gt_mode": "interpolated",
+      "rallies": 43,
+      "gt_frames": 15077,
+      "notes": "Per-frame match against linearly-interpolated GT. Measurement-artifact inflated: GT interp is a straight line between keyframes but the real ball follows a parabola, so 5+ points of the gap are a metric property not a tracker failure. Keep for backward comparison only — prefer keyframes-only for decisions."
     }
   },
 
   "per_rally": {
-    "1bfcbc4f": { "match_pct": 86.5, "error_px": 11.9, "video_id": "07fedbd4" },
-    "73581b32": { "match_pct": 92.7, "error_px": 12.1, "video_id": "1efa35cf" },
-    "1f87460b": { "match_pct": 77.5, "error_px": 86.5, "video_id": "4cd680c7" },
-    "c3b31af2": { "match_pct": 98.4, "error_px": 8.7,  "video_id": "5c641cfe" },
-    "9dbe457a": { "match_pct": 61.4, "error_px": 44.6, "video_id": "70ab9d7f" },
-    "0af554b5": { "match_pct": 88.1, "error_px": 33.4, "video_id": "920ba69d" },
-    "bd77efd1": { "match_pct": 96.5, "error_px": 18.1, "video_id": "a5866029" },
-    "0d84f858": { "match_pct": 67.2, "error_px": 6.2,  "video_id": "a7ee3d38" },
-    "87ce7bff": { "match_pct": 99.4, "error_px": 12.7, "video_id": "cb3b68f0" }
+    "__metric__": "match_pct is keyframes-only DB-source per-rally match rate (matched + interpolated_correct / total_gt_keyframes). Jitter_p90 is p90 of per-frame prediction acceleration magnitude in px/frame\u00b2 (smooth parabolic motion sits near 10).",
+    "740ffd88": { "match_pct": 99.8, "gt_keyframes": 474, "teleports": 2, "revisit_clusters": 2, "jitter_p90": 15.8, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 1, "video_id": "0a383519" },
+    "9db9cb6b": { "match_pct": 92.5, "gt_keyframes": 186, "teleports": 7, "revisit_clusters": 1, "jitter_p90": 44.2, "missed_no_raw": 1, "missed_filter_killed": 9, "wrong_object": 3, "video_id": "ce4c67a1" },
+    "21029e9f": { "match_pct": 99.5, "gt_keyframes": 191, "teleports": 1, "revisit_clusters": 1, "jitter_p90": 20.1, "missed_no_raw": 1, "missed_filter_killed": 0, "wrong_object": 0, "video_id": "2e984c43" },
+    "97f95cda": { "match_pct": 97.7, "gt_keyframes": 172, "teleports": 5, "revisit_clusters": 0, "jitter_p90": 52.5, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 2, "video_id": "304df1bf" },
+    "2dff5eeb": { "match_pct": 94.9, "gt_keyframes": 136, "teleports": 5, "revisit_clusters": 0, "jitter_p90": 47.5, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 6, "video_id": "56f2739d" },
+    "0af554b5": { "match_pct": 94.0, "gt_keyframes": 84,  "teleports": 4, "revisit_clusters": 0, "jitter_p90": 51.3, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 4, "video_id": "920ba69d" },
+    "de7136d1": { "match_pct": 100.0,"gt_keyframes": 214, "teleports": 3, "revisit_clusters": 0, "jitter_p90": 34.7, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 0, "video_id": "601d4a69" },
+    "209be896": { "match_pct": 98.9, "gt_keyframes": 276, "teleports": 3, "revisit_clusters": 0, "jitter_p90": 31.9, "missed_no_raw": 3, "missed_filter_killed": 0, "wrong_object": 0, "video_id": "7ba71fc4" },
+    "8b0b9e13": { "match_pct": 98.5, "gt_keyframes": 688, "teleports": 3, "revisit_clusters": 0, "jitter_p90": 13.8, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 10, "video_id": "7d77980f" },
+    "e84deef3": { "match_pct": 90.4, "gt_keyframes": 271, "teleports": 2, "revisit_clusters": 0, "jitter_p90": 41.7, "missed_no_raw": 10, "missed_filter_killed": 2, "wrong_object": 14, "video_id": "3ad271bd" },
+    "bd77efd1": { "match_pct": 98.0, "gt_keyframes": 199, "teleports": 2, "revisit_clusters": 0, "jitter_p90": 40.9, "missed_no_raw": 0, "missed_filter_killed": 1, "wrong_object": 3, "video_id": "a5866029" },
+    "8ce5a9e2": { "match_pct": 97.6, "gt_keyframes": 210, "teleports": 2, "revisit_clusters": 0, "jitter_p90": 31.3, "missed_no_raw": 1, "missed_filter_killed": 0, "wrong_object": 4, "video_id": "3ad271bd" },
+    "f6fa0cbb": { "match_pct": 100.0,"gt_keyframes": 331, "teleports": 2, "revisit_clusters": 0, "jitter_p90": 27.0, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 0, "video_id": "304df1bf" },
+    "572bff7e": { "match_pct": 99.5, "gt_keyframes": 192, "teleports": 2, "revisit_clusters": 0, "jitter_p90": 17.4, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 1, "video_id": "313c6c95" },
+    "1bfcbc4f": { "match_pct": 90.8, "gt_keyframes": 76,  "teleports": 1, "revisit_clusters": 0, "jitter_p90": 74.2, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 7, "video_id": "07fedbd4" },
+    "9dbe457a": { "match_pct": 42.9, "gt_keyframes": 70,  "teleports": 1, "revisit_clusters": 0, "jitter_p90": 37.3, "missed_no_raw": 7, "missed_filter_killed": 5, "wrong_object": 21, "video_id": "70ab9d7f" },
+    "fb8fd612": { "match_pct": 97.8, "gt_keyframes": 364, "teleports": 1, "revisit_clusters": 0, "jitter_p90": 32.1, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 6, "video_id": "1a5da176" },
+    "5e2e58fb": { "match_pct": 97.9, "gt_keyframes": 144, "teleports": 1, "revisit_clusters": 0, "jitter_p90": 31.5, "missed_no_raw": 1, "missed_filter_killed": 1, "wrong_object": 1, "video_id": "edc81438" },
+    "d724bbf0": { "match_pct": 98.5, "gt_keyframes": 131, "teleports": 1, "revisit_clusters": 0, "jitter_p90": 27.0, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 2, "video_id": "23b662ba" },
+    "d474b2ad": { "match_pct": 99.0, "gt_keyframes": 788, "teleports": 1, "revisit_clusters": 0, "jitter_p90": 25.6, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 8, "video_id": "fb83f876" },
+    "29cb4e29": { "match_pct": 100.0,"gt_keyframes": 161, "teleports": 1, "revisit_clusters": 0, "jitter_p90": 23.6, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 0, "video_id": "304df1bf" },
+    "b7f92cdc": { "match_pct": 88.2, "gt_keyframes": 110, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 39.9, "missed_no_raw": 3, "missed_filter_killed": 1, "wrong_object": 6, "video_id": "cb3b68f0" },
+    "d4938222": { "match_pct": 95.0, "gt_keyframes": 535, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 39.4, "missed_no_raw": 4, "missed_filter_killed": 1, "wrong_object": 21, "video_id": "ae81fff5" },
+    "0d84f858": { "match_pct": 67.2, "gt_keyframes": 61,  "teleports": 0, "revisit_clusters": 0, "jitter_p90": 33.1, "missed_no_raw": 8, "missed_filter_killed": 6, "wrong_object": 4, "video_id": "a7ee3d38" },
+    "53ca3586": { "match_pct": 100.0,"gt_keyframes": 124, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 32.4, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 0, "video_id": "601d4a69" },
+    "fad29c31": { "match_pct": 98.9, "gt_keyframes": 378, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 30.3, "missed_no_raw": 1, "missed_filter_killed": 0, "wrong_object": 3, "video_id": "c6e4c876" },
+    "7ff96129": { "match_pct": 94.6, "gt_keyframes": 355, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 29.9, "missed_no_raw": 1, "missed_filter_killed": 0, "wrong_object": 18, "video_id": "ae81fff5" },
+    "87ce7bff": { "match_pct": 97.0, "gt_keyframes": 474, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 28.6, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 13, "video_id": "cb3b68f0" },
+    "2e8b3ce2": { "match_pct": 95.8, "gt_keyframes": 215, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 27.6, "missed_no_raw": 1, "missed_filter_killed": 1, "wrong_object": 6, "video_id": "3ad271bd" },
+    "72c8229b": { "match_pct": 99.3, "gt_keyframes": 602, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 26.7, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 4, "video_id": "b097dd2a" },
+    "a43fb033": { "match_pct": 95.3, "gt_keyframes": 212, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 26.6, "missed_no_raw": 3, "missed_filter_killed": 3, "wrong_object": 2, "video_id": "16458e78" },
+    "73581b32": { "match_pct": 90.2, "gt_keyframes": 41,  "teleports": 0, "revisit_clusters": 0, "jitter_p90": 26.5, "missed_no_raw": 1, "missed_filter_killed": 2, "wrong_object": 1, "video_id": "1efa35cf" },
+    "e5c1a9b3": { "match_pct": 99.6, "gt_keyframes": 534, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 22.2, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 2, "video_id": "635dcba2" },
+    "072fb8c5": { "match_pct": 99.4, "gt_keyframes": 161, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 21.6, "missed_no_raw": 1, "missed_filter_killed": 0, "wrong_object": 0, "video_id": "d5a6932f" },
+    "21266995": { "match_pct": 99.0, "gt_keyframes": 292, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 21.6, "missed_no_raw": 1, "missed_filter_killed": 1, "wrong_object": 1, "video_id": "dd042609" },
+    "793625cd": { "match_pct": 98.9, "gt_keyframes": 351, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 20.8, "missed_no_raw": 1, "missed_filter_killed": 0, "wrong_object": 3, "video_id": "84e66e74" },
+    "c48eeb7d": { "match_pct": 96.0, "gt_keyframes": 277, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 20.1, "missed_no_raw": 3, "missed_filter_killed": 7, "wrong_object": 1, "video_id": "ff175026" },
+    "1f87460b": { "match_pct": 100.0,"gt_keyframes": 190, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 17.2, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 0, "video_id": "4cd680c7" },
+    "c3b31af2": { "match_pct": 99.5, "gt_keyframes": 189, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 16.6, "missed_no_raw": 1, "missed_filter_killed": 0, "wrong_object": 0, "video_id": "5c641cfe" },
+    "8c2d30ce": { "match_pct": 98.8, "gt_keyframes": 242, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 16.4, "missed_no_raw": 0, "missed_filter_killed": 0, "wrong_object": 3, "video_id": "44e89f6c" },
+    "21a9b203": { "match_pct": 86.4, "gt_keyframes": 338, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 16.3, "missed_no_raw": 42, "missed_filter_killed": 2, "wrong_object": 2, "video_id": "0a383519" },
+    "0a376585": { "match_pct": 93.7, "gt_keyframes": 190, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 15.5, "missed_no_raw": 3, "missed_filter_killed": 1, "wrong_object": 8, "video_id": "edc81438" },
+    "f0fdfcdb": { "match_pct": 98.9, "gt_keyframes": 439, "teleports": 0, "revisit_clusters": 0, "jitter_p90": 10.5, "missed_no_raw": 4, "missed_filter_killed": 0, "wrong_object": 1, "video_id": "627c1add" }
   },
 
   "rally_detection": {
@@ -38,9 +97,15 @@
   },
 
   "known_problem_rallies": {
-    "0d84f858": "Stationary FPs — motion energy filter's biggest win (was 8.2% -> 67.2%)",
-    "9dbe457a": "Weakest rally — 61.4% match, 44.6px error",
-    "1f87460b": "High error despite decent match — 77.5% match, 86.5px error"
+    "9dbe457a": "Severe outlier — 42.9% keyframe match, 21 wrong_object frames, 7 no_raw + 5 filter_killed. Worth targeted visual QA to decide whether it's labelling, scene-specific detector failure, or something else.",
+    "0d84f858": "Second-worst — 67.2% keyframe match, 8 no_raw + 6 filter_killed. Historically attributed to a distractor ball, but the current raw cache shows none — see 2026-04-15 diagnosis.",
+    "21a9b203": "42 missed_no_raw frames (worst detector miss in the set) — ball often off-screen or far-court during this rally.",
+    "b7f92cdc": "High mean error (32.3 px) despite 88% match — jitter p90 40 px/f\u00b2, no revisits. Slight systematic offset rather than tracker defect.",
+    "_distractor_hotspots": {
+      "9db9cb6b": "Court-side flag at normalized (0.237, 0.265). 6 raw visits across frames 83-220. passes current filter.",
+      "740ffd88": "Two player-head clusters in upper court ~y=0.30. 9 raw visits total. Current filter catches both (passed_filter=False).",
+      "21029e9f": "Extra volleyball on bench behind net at (0.555, 0.505). 8 raw visits in frames 37-45. Passes current filter."
+    }
   },
 
   "video_to_rally": {

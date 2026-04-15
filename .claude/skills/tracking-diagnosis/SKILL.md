@@ -34,12 +34,44 @@ Read `analysis/baselines.json` for current per-rally baselines, tuned filter con
 
 ## Ball Tracking Diagnostics
 
+Ball tracking is currently at **96.91% keyframe match on 43 GT rallies**
+(2026-04-15). Closed as non-priority — see
+`~/.claude/projects/-Users-mario-Personal-Projects-RallyCut/memory/ball_gap_diagnosis_2026_04_15.md`
+before opening a new investigation.
+
 ```bash
 cd analysis
-uv run python scripts/diagnose_ball_tracking.py --rally <rally-id>  # Single rally (~30s)
-uv run python scripts/diagnose_ball_tracking.py --all               # All 16 rallies (~5min)
-uv run python scripts/eval_wasb.py                                  # WASB eval (~2-5min)
+
+# Primary gap-diagnostic (rendered MP4 overlay + failure budgets + HTML dashboard)
+uv run python scripts/diagnose_ball_gaps.py --rally <rally-id> --source db --eval-keyframes-only
+uv run python scripts/diagnose_ball_gaps.py --all --source db --eval-keyframes-only      # all 43 rallies (~2-3min)
+uv run python scripts/diagnose_ball_gaps.py --all --source refilter --eval-keyframes-only  # A/B today's filter config
+uv run python scripts/build_ball_failure_report.py                                       # HTML dashboard
+
+# Populate BallRawCache for GT rallies that lack raw WASB output (required before --source refilter is honest)
+uv run python scripts/populate_ball_raw_cache.py
+
+# Legacy text-only stage walker (text output only, 3 hardcoded rallies)
+uv run python scripts/diagnose_ball_tracking.py
+
+# Metric-only WASB eval
+uv run python scripts/eval_wasb.py
 ```
+
+Key flags for `diagnose_ball_gaps.py`:
+- `--source {db,refilter}` — `db` measures production (stored
+  `ball_positions_json`), `refilter` re-applies current
+  `get_wasb_filter_config()` to raw. They can diverge materially.
+- `--eval-keyframes-only` — always use for decisions; interpolated-GT
+  mode inflates the gap by ~5pp via GT-line-vs-parabola artifact.
+- `--no-video` — skip MP4 render for fast JSON-only runs.
+- `--teleport-v-max` (default 120 px/frame), `--wrong-object-px`
+  (default 100) — thresholds chosen to avoid false positives on
+  legitimate spike motion.
+
+Output: `analysis/outputs/ball_gap_report/index.html`,
+`aggregate.json`, and per-rally `overlay.mp4` + `events.json` +
+`failure_budget.json`.
 
 ## Player Tracking Diagnostics
 
@@ -66,7 +98,17 @@ uv run python scripts/diagnose_yolo_detections.py <video> --start <ms> --end <ms
 
 ## Debug Methodology
 
-### Ball
+### Ball (current workflow)
+1. Run `diagnose_ball_gaps.py --all --source db --eval-keyframes-only`
+2. Open `outputs/ball_gap_report/index.html` — sorted by revisit count,
+   then teleport count, then jitter p90. The worst rallies are first.
+3. Click any rally's overlay.mp4 — GT (green), filtered pred (red), raw
+   WASB (faint blue), filter-kill (orange X), teleport arrows, wrong-
+   object bboxes, revisit-cluster boxes (persistent purple).
+4. For A/B of a proposed filter change: re-run with `--source refilter`
+   into a fresh output dir and diff the aggregate.json.
+
+### Ball (historical stage-walk)
 1. Load GT: `load_labeled_rallies(rally_id=..., ball_gt_only=True)`
 2. Get raw positions (filtering disabled)
 3. Enable filters one at a time, measure match% after each stage
@@ -86,6 +128,10 @@ uv run python scripts/diagnose_yolo_detections.py <video> --start <ms> --end <ms
 - `tracking/color_repair.py` — HSV-based track splitting
 - `tracking/global_identity.py` — cross-team identity resolution
 - `tracking/court_identity.py` — side-aware identity resolution
-- `scripts/diagnose_ball_tracking.py` — ball stage-by-stage diagnostic
+- `scripts/diagnose_ball_gaps.py` — current ball gap diagnostic (MP4 overlays + failure budgets)
+- `scripts/build_ball_failure_report.py` — HTML dashboard
+- `scripts/populate_ball_raw_cache.py` — fill BallRawCache via WASB preserve_raw
+- `evaluation/tracking/ball_failure_modes.py` — pure detectors (teleport, revisit cluster, wrong-object, etc.)
+- `scripts/diagnose_ball_tracking.py` — legacy text-only stage-by-stage diagnostic
 - `scripts/diagnose_net_interactions.py` — player ID switch analysis
 - `evaluation/tracking/ball_metrics.py` — ball metrics
