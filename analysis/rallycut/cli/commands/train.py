@@ -2934,3 +2934,216 @@ def train_temporal_maxer_cmd(
     rprint(f"  Best epoch:     {result.best_epoch + 1}")
     rprint(f"  Training time:  {result.training_time_seconds:.1f}s")
     rprint(f"  Model saved to: [dim]{output_dir}/best_temporal_maxer.pt[/dim]")
+
+
+def _parse_csv(value: str | None) -> set[str]:
+    if not value:
+        return set()
+    return {v.strip() for v in value.split(",") if v.strip()}
+
+
+@app.command("prune")
+def prune(
+    snapshots_keep: str = typer.Option(
+        "",
+        "--snapshots-keep",
+        help="Comma-separated weight snapshot names to preserve (deletes the rest)",
+    ),
+    datasets_keep: str = typer.Option(
+        "",
+        "--datasets-keep",
+        help="Comma-separated dataset names to preserve (deletes the rest)",
+    ),
+    player_matching_keep: int = typer.Option(
+        0,
+        "--player-matching-keep",
+        help="Keep the N newest player_matching_gt JSON files (0 = skip this step)",
+    ),
+    wasb_images: bool = typer.Option(
+        False,
+        "--wasb-images",
+        help="Delete all objects under wasb_gt_labels/images/",
+    ),
+    orphan_weight_files: bool = typer.Option(
+        False,
+        "--orphan-weight-files",
+        help="GC weights/files/ entries not referenced by surviving manifests (runs after --snapshots-keep)",
+    ),
+    orphan_training_videos: bool = typer.Option(
+        False,
+        "--orphan-training-videos",
+        help="GC videos/{hash}.mp4 entries not referenced by surviving datasets (runs after --datasets-keep)",
+    ),
+    execute: bool = typer.Option(
+        False,
+        "--execute",
+        help="Actually delete (default is dry-run listing only)",
+    ),
+) -> None:
+    """Prune superseded and orphaned objects from the training S3 backup.
+
+    Dry-run by default — prints the exact keys that would be deleted per step
+    and a final summary. Pass --execute to apply.
+
+    Example:
+        uv run rallycut train prune \\
+          --snapshots-keep apr-13-backup,march-2026-final,post-review-final-v2 \\
+          --datasets-keep beach_v11,score_gt_2026_04_14 \\
+          --player-matching-keep 1 \\
+          --wasb-images \\
+          --orphan-weight-files \\
+          --orphan-training-videos
+    """
+    from rallycut.training.backup import DatasetBackup
+    from rallycut.training.prune import (
+        PruneResult,
+        prune_datasets,
+        prune_orphan_training_videos,
+        prune_orphan_weight_files,
+        prune_player_matching_gt,
+        prune_snapshots,
+        prune_wasb_images,
+    )
+
+    try:
+        backup = DatasetBackup()
+    except ValueError as e:
+        rprint(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    snapshots_set = _parse_csv(snapshots_keep)
+    datasets_set = _parse_csv(datasets_keep)
+
+    mode = "[red]EXECUTE[/red]" if execute else "[yellow]DRY-RUN[/yellow]"
+    rprint(f"[bold]Prune Training S3 Backup[/bold]  ({mode})")
+    rprint(f"  Bucket: [cyan]{backup.bucket}[/cyan]")
+    rprint(f"  Prefix: [cyan]{backup.prefix}[/cyan]")
+    rprint()
+
+    steps: list[PruneResult] = []
+    total_steps = sum(
+        [
+            bool(snapshots_set),
+            bool(datasets_set),
+            player_matching_keep > 0,
+            wasb_images,
+            orphan_weight_files,
+            orphan_training_videos,
+        ]
+    )
+    if total_steps == 0:
+        rprint("[yellow]No prune steps requested. Pass --snapshots-keep, --datasets-keep, etc.[/yellow]")
+        raise typer.Exit(1)
+
+    step_idx = 0
+
+    def _announce(step_name: str) -> None:
+        nonlocal step_idx
+        step_idx += 1
+        rprint(f"[bold][{step_idx}/{total_steps}] {step_name}[/bold]")
+
+    # Ordering matters: snapshot/dataset prunes must run BEFORE their orphan GCs.
+    if snapshots_set:
+        _announce("prune weight snapshots")
+        steps.append(prune_snapshots(backup, snapshots_set, execute=execute))
+        _report_step(steps[-1])
+
+    if datasets_set:
+        _announce("prune datasets")
+        steps.append(prune_datasets(backup, datasets_set, execute=execute))
+        _report_step(steps[-1])
+
+    if player_matching_keep > 0:
+        _announce(f"prune player_matching_gt (keep newest {player_matching_keep})")
+        steps.append(
+            prune_player_matching_gt(
+                backup, keep_latest=player_matching_keep, execute=execute
+            )
+        )
+        _report_step(steps[-1])
+
+    if wasb_images:
+        _announce("prune wasb_gt_labels/images/")
+        steps.append(prune_wasb_images(backup, execute=execute))
+        _report_step(steps[-1])
+
+    if orphan_weight_files:
+        _announce("GC orphan weight files")
+        steps.append(prune_orphan_weight_files(backup, execute=execute))
+        _report_step(steps[-1])
+
+    if orphan_training_videos:
+        _announce("GC orphan training videos")
+        steps.append(prune_orphan_training_videos(backup, execute=execute))
+        _report_step(steps[-1])
+
+    # Summary
+    rprint()
+    rprint("[bold]Summary[/bold]")
+    summary_table = Table()
+    summary_table.add_column("Step", style="cyan")
+    summary_table.add_column("Objects", justify="right")
+    summary_table.add_column("Size", justify="right")
+    summary_table.add_column("Status")
+
+    grand_objs = 0
+    grand_bytes = 0
+    total_errors = 0
+    for res in steps:
+        status = "skipped" if res.skipped_reason else ("deleted" if execute else "would delete")
+        note = f" ({res.skipped_reason})" if res.skipped_reason else ""
+        summary_table.add_row(
+            res.step,
+            str(res.count),
+            _human_size(res.total_bytes),
+            f"{status}{note}",
+        )
+        grand_objs += res.count
+        grand_bytes += res.total_bytes
+        total_errors += len(res.errors)
+
+    summary_table.add_row(
+        "[bold]total[/bold]",
+        f"[bold]{grand_objs}[/bold]",
+        f"[bold]{_human_size(grand_bytes)}[/bold]",
+        f"[bold]{'deleted' if execute else 'would delete'}[/bold]",
+    )
+    console.print(summary_table)
+
+    if total_errors:
+        rprint()
+        rprint(f"[red]{total_errors} error(s) across steps:[/red]")
+        for res in steps:
+            for err in res.errors:
+                rprint(f"  [{res.step}] {err}")
+
+    if not execute:
+        rprint()
+        rprint("[yellow]Dry run — nothing deleted. Re-run with --execute to apply.[/yellow]")
+
+
+def _report_step(res: Any) -> None:
+    """Print per-step detail: skipped reason or deleted keys + subtotal."""
+    if res.skipped_reason:
+        rprint(f"  [yellow]skipped: {res.skipped_reason}[/yellow]")
+        rprint()
+        return
+    # Progress: one line per batch of 1000 keys
+    batches = max(1, (res.count + 999) // 1000)
+    for b in range(batches):
+        start = b * 1000
+        end = min(start + 1000, res.count)
+        rprint(f"  [dim][{b + 1}/{batches}] batch {start + 1}-{end} of {res.count}[/dim]")
+    # Preview first/last few keys for eyeballing
+    preview = 5
+    if res.count <= preview * 2:
+        for key, size in res.deleted_keys:
+            rprint(f"    - {key}  ({_human_size(size)})")
+    else:
+        for key, size in res.deleted_keys[:preview]:
+            rprint(f"    - {key}  ({_human_size(size)})")
+        rprint(f"    [dim]... {res.count - 2 * preview} more ...[/dim]")
+        for key, size in res.deleted_keys[-preview:]:
+            rprint(f"    - {key}  ({_human_size(size)})")
+    rprint(f"  [green]subtotal: {res.count} object(s), {_human_size(res.total_bytes)}[/green]")
+    rprint()
