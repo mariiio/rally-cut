@@ -90,6 +90,12 @@ export async function updateRally(id: string, userId: string, data: UpdateRallyI
           data: { matchAnalysisJson: Prisma.DbNull, matchStatsJson: Prisma.DbNull },
         });
       }
+      // Guard: extending bounds invalidates GT — reject if rally is locked
+      const willExtend = (data.startMs ?? rally.startMs) < rally.startMs || (data.endMs ?? rally.endMs) > rally.endMs;
+      if (willExtend) {
+        await assertNotLocked(tx, id, 'EXTEND');
+      }
+
       // Mark for retrack if bounds were extended (inside tx — rolled back atomically on failure)
       await markRetrackIfExtended(
         tx,
