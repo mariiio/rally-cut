@@ -13,7 +13,8 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Default (and only) ball tracking model.
-# Fine-tuned WASB HRNet: 86.4% match, 29.2px error on beach volleyball GT.
+# Fine-tuned WASB HRNet: 96.9% keyframes-only match on 43 beach-VB GT rallies
+# (2026-04-15). See analysis/reports/ball_gap_diagnosis_2026_04_15.md.
 DEFAULT_BALL_MODEL = "wasb"
 
 

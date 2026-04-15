@@ -674,8 +674,9 @@ class WASBBallTracker:
     2. ONNX + CPU (4 FPS) — fallback when CoreML unavailable
     3. PyTorch batched (10 FPS on MPS) — fallback when ONNX unavailable
 
-    WASB achieves 86.4% match rate on beach volleyball GT (with tuned filter)
-    with 29.2px mean error.
+    WASB achieves 96.9% keyframes-only match on 43 beach-VB GT rallies
+    (2026-04-15, with tuned filter). See
+    analysis/reports/ball_gap_diagnosis_2026_04_15.md.
     """
 
     def __init__(

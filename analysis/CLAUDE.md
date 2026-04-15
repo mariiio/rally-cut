@@ -312,7 +312,7 @@ Multi-stage filtering to identify 4 active players and exclude non-players. Key 
 
 ## Ball Tracking
 
-WASB HRNet is the sole ball tracker (86.4% match rate, 33 FPS ONNX+CoreML). Multi-stage temporal filter handles false positives (static positions, player lock-on, oscillation, exit ghosts, non-ball objects, trajectory blips) and interpolates gaps. All parameters and filter stages are in `BallFilterConfig` in `tracking/ball_filter.py`.
+WASB HRNet is the sole ball tracker (96.9% keyframes-only match on 43 GT rallies, 33 FPS ONNX+CoreML). Multi-stage temporal filter handles false positives (static positions, player lock-on, oscillation, exit ghosts, non-ball objects, trajectory blips) and interpolates gaps. All parameters and filter stages are in `BallFilterConfig` in `tracking/ball_filter.py`. See `reports/ball_gap_diagnosis_2026_04_15.md` and `scripts/diagnose_ball_gaps.py` for the diagnostic tooling.
 
 ## Cross-Rally Player Consistency
 
