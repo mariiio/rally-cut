@@ -1,6 +1,13 @@
 #!/bin/bash
 set -e
 
+# Use a dedicated deployer AWS profile so runtime creds (rallycut-api,
+# scoped to S3 / Lambda invoke only) are never used for deploys.
+# Precedence: explicit DEPLOY_PROFILE env > inherited AWS_PROFILE > "deployer".
+# See lambda/video-optimize/deploy.sh for the full setup notes.
+export AWS_PROFILE="${DEPLOY_PROFILE:-${AWS_PROFILE:-deployer}}"
+echo "🔑 Deploying as AWS profile: $AWS_PROFILE"
+
 STAGE=${1:-dev}
 REGION=${AWS_REGION:-us-east-1}
 FUNCTION_NAME="rallycut-video-export-${STAGE}"

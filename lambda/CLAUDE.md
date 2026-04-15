@@ -64,17 +64,32 @@ Watermark: `s3://bucket/assets/watermark.png`, overlaid bottom-right.
 
 ## Deployment
 
+Both scripts default to `AWS_PROFILE=deployer` — a dedicated IAM user with
+an inline policy scoped to `rallycut-*` IAM roles + ECR repos + Lambda
+functions. Runtime creds (`rallycut-api`) are S3/Lambda-invoke only and
+deliberately lack deploy permissions.
+
+One-time setup:
+- Console → IAM → Users → create `rallycut-deployer`
+- Attach inline policy from `/tmp/rallycut-api-deploy-policy.json`
+  (ECR push + Lambda manage + IAM role create for `rallycut-*`)
+- Create access key, then `aws configure --profile deployer`
+
 ```bash
-# Export Lambda
+# Export Lambda (uses AWS_PROFILE=deployer by default)
 cd lambda/video-export
 ./deploy-cli.sh dev   # or prod
 
 # Optimize Lambda
 cd lambda/video-optimize
 ./deploy.sh dev       # or prod
+
+# Override the profile if needed:
+DEPLOY_PROFILE=admin ./deploy.sh prod
 ```
 
-Scripts handle: ECR repo creation, Docker build (arm64), IAM role, Lambda update.
+Scripts handle: ECR repo creation, Docker build (arm64, classic v2 manifest
+via `--provenance=false --sbom=false`), IAM role setup, Lambda update.
 
 ## Environment
 
