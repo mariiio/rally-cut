@@ -4,6 +4,8 @@ import { NotFoundError, ValidationError } from "../middleware/errorHandler.js";
 import type { BatchOperation, BatchResponse } from "../schemas/batch.js";
 import { reindexTrackingData } from "./playerTrackingService.js";
 import { markRetrackIfExtended } from "./batchTrackingService.js";
+import { isRallyLocked } from "./canonicalLockGuard.js";
+import { appendEdit } from "./pendingAnalysisEdits.js";
 
 export async function processBatch(
   sessionId: string,
@@ -145,11 +147,18 @@ export async function processBatch(
                 sessionVideos: { some: { sessionId } },
               },
             },
+            select: { id: true, videoId: true },
           });
           if (rally === null) {
             throw new ValidationError(`Rally ${op.id} not found in session`);
           }
+          if (await isRallyLocked(tx, op.id)) {
+            throw new ValidationError(
+              `Rally ${op.id} is canonical-locked and cannot be deleted via batch. Use DELETE /v1/rallies/:id with {confirmUnlock: true}.`,
+            );
+          }
           await tx.rally.delete({ where: { id: op.id } });
+          await appendEdit(tx, rally.videoId, op.id, 'delete');
         } else if (op.entity === "highlight") {
           const highlight = await tx.highlight.findFirst({
             where: { id: op.id, sessionId },

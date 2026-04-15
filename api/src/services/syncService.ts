@@ -1,11 +1,13 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
-import { ForbiddenError, NotFoundError } from "../middleware/errorHandler.js";
+import { ForbiddenError, NotFoundError, ValidationError } from "../middleware/errorHandler.js";
 import type { SyncStateInput } from "../schemas/sync.js";
 import { reindexTrackingData } from "./playerTrackingService.js";
 import { markRetrackIfExtended } from "./batchTrackingService.js";
 import { canAccessSession } from "./shareService.js";
 import { getUserTier, getTierLimits } from "./tierService.js";
+import { isRallyLocked } from "./canonicalLockGuard.js";
+import { appendEdit } from "./pendingAnalysisEdits.js";
 
 /**
  * Sync the full state from the frontend.
@@ -266,9 +268,18 @@ export async function syncState(
         // Delete rallies that are no longer in the list
         const toDelete = [...existingRallies.keys()].filter((id) => !seenIds.has(id));
         if (toDelete.length > 0) {
-          await tx.rally.deleteMany({
-            where: { id: { in: toDelete } },
-          });
+          for (const id of toDelete) {
+            // Lock guard: sync-state can't confirm-unlock → reject
+            if (await isRallyLocked(tx, id)) {
+              throw new ValidationError(
+                `Rally ${id} is canonical-locked and cannot be deleted via sync-state. Use DELETE /v1/rallies/:id with {confirmUnlock: true}.`,
+              );
+            }
+            // Capture videoId before delete for the edit marker
+            const rally = await tx.rally.findUnique({ where: { id }, select: { videoId: true } });
+            await tx.rally.delete({ where: { id } });
+            if (rally) await appendEdit(tx, rally.videoId, id, 'delete');
+          }
         }
       }
 

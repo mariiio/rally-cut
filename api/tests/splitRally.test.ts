@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { prisma } from '../src/lib/prisma';
 import { splitRally } from '../src/services/rallyService';
 import { LockedRallyError, RallyTrackingStateError, SplitBoundsError } from '../src/middleware/errorHandler';

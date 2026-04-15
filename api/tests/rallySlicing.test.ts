@@ -5,7 +5,7 @@ const basePt = {
   id: 'pt-1', rallyId: 'r-parent', status: 'COMPLETED',
   fps: 30, frameCount: 300, detectionRate: 1.0, avgConfidence: 0.9,
   avgPlayerCount: 4, uniqueTrackCount: 6, courtSplitY: 0.5,
-  processingTimeMs: 1000, modelVersion: 'v1', needsRetrack: false,
+  processingTimeMs: 1000, modelVersion: 'v1', needsRetrack: false, primaryTrackIds: null,
   positionsJson: [
     { frameNumber: 10, trackId: 1, x: 0.1, y: 0.1 },
     { frameNumber: 150, trackId: 1, x: 0.5, y: 0.5 },
@@ -58,12 +58,19 @@ describe('slicePlayerTrack', () => {
     expect(first.groundTruthJson).toBeNull();
     expect(second.groundTruthJson).toBeNull();
   });
+
+  it('propagates primaryTrackIds verbatim to both children', () => {
+    const pt = { ...basePt, primaryTrackIds: [1, 2] };
+    const { first, second } = slicePlayerTrack(pt as any, 100, 200);
+    expect(first.primaryTrackIds).toEqual([1, 2]);
+    expect(second.primaryTrackIds).toEqual([1, 2]);
+  });
 });
 
 describe('concatPlayerTracks', () => {
   const a = {
     fps: 30, frameCount: 100, courtSplitY: 0.5, processingTimeMs: 500, modelVersion: 'v1',
-    status: 'COMPLETED', needsRetrack: false, qualityReportJson: null,
+    status: 'COMPLETED', needsRetrack: false, primaryTrackIds: null, qualityReportJson: null,
     positionsJson: [{ frameNumber: 10, trackId: 1, confidence: 0.9 }],
     rawPositionsJson: [], ballPositionsJson: [{ frameNumber: 20 }],
     contactsJson: [{ frame: 50, playerTrackId: 1 }],
@@ -71,7 +78,7 @@ describe('concatPlayerTracks', () => {
   };
   const b = {
     fps: 30, frameCount: 150, courtSplitY: 0.5, processingTimeMs: 700, modelVersion: 'v1',
-    status: 'COMPLETED', needsRetrack: false, qualityReportJson: null,
+    status: 'COMPLETED', needsRetrack: false, primaryTrackIds: null, qualityReportJson: null,
     positionsJson: [{ frameNumber: 5, trackId: 2, confidence: 0.85 }],
     rawPositionsJson: [], ballPositionsJson: [{ frameNumber: 10 }],
     contactsJson: [{ frame: 30, playerTrackId: 2 }],
@@ -89,5 +96,17 @@ describe('concatPlayerTracks', () => {
   it('unions trackIds', () => {
     const merged = concatPlayerTracks(a as any, b as any);
     expect(merged.uniqueTrackCount).toBe(2);
+  });
+
+  it('merges primaryTrackIds: union of both arrays; falls back to non-null side', () => {
+    const aWithIds = { ...a, primaryTrackIds: [1] };
+    const bWithIds = { ...b, primaryTrackIds: [2, 3] };
+    const merged = concatPlayerTracks(aWithIds as any, bWithIds as any);
+    expect((merged.primaryTrackIds as number[]).sort()).toEqual([1, 2, 3]);
+
+    const aNull = { ...a, primaryTrackIds: null };
+    const bWithIds2 = { ...b, primaryTrackIds: [2] };
+    const merged2 = concatPlayerTracks(aNull as any, bWithIds2 as any);
+    expect(merged2.primaryTrackIds).toEqual([2]);
   });
 });

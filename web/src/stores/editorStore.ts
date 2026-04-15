@@ -13,7 +13,7 @@ import {
   SessionManifest,
 } from '@/types/rally';
 import { usePlayerStore } from './playerStore';
-import { fetchSession as fetchSessionFromApi, fetchVideoForEditor, getCurrentUser, getConfirmationStatus, AccessDeniedError, splitRally as splitRallyApi, mergeRalliesApi, unlockRally as unlockRallyApi, deleteRally as deleteRallyApi, apiRallyToFrontend, type CameraEditMap, type GlobalCameraSettingsMap, type CourtCalibrationMap } from '@/services/api';
+import { fetchSession as fetchSessionFromApi, fetchVideoForEditor, getCurrentUser, getConfirmationStatus, AccessDeniedError, splitRally as splitRallyApi, mergeRalliesApi, unlockRally as unlockRallyApi, apiRallyToFrontend, type CameraEditMap, type GlobalCameraSettingsMap, type CourtCalibrationMap } from '@/services/api';
 import { usePlayerTrackingStore } from './playerTrackingStore';
 import { useCameraStore } from './cameraStore';
 import type { RallyCameraEdit } from '@/types/camera';

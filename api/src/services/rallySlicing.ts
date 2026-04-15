@@ -10,6 +10,7 @@ export type SlicePlayerTrackInput = {
   modelVersion: string | null;
   status: string;
   needsRetrack: boolean;
+  primaryTrackIds: unknown;
   positionsJson: AnyFrameEntry[] | null;
   rawPositionsJson: AnyFrameEntry[] | null;
   ballPositionsJson: AnyFrameEntry[] | null;
@@ -110,6 +111,16 @@ export function concatPlayerTracks(
   const frameCount = a.frameCount + b.frameCount;
   const meta = recomputeMetadata(positionsJson, frameCount);
 
+  // Merge primaryTrackIds: union of both if arrays, else whichever is non-null
+  let mergedPrimaryTrackIds: unknown;
+  if (Array.isArray(a.primaryTrackIds) && Array.isArray(b.primaryTrackIds)) {
+    mergedPrimaryTrackIds = [...new Set([...a.primaryTrackIds, ...b.primaryTrackIds])];
+  } else if (a.primaryTrackIds != null) {
+    mergedPrimaryTrackIds = a.primaryTrackIds;
+  } else {
+    mergedPrimaryTrackIds = b.primaryTrackIds ?? null;
+  }
+
   return {
     fps: a.fps,
     courtSplitY: a.courtSplitY,
@@ -117,6 +128,7 @@ export function concatPlayerTracks(
     modelVersion: a.modelVersion,
     status: a.status === 'COMPLETED' && b.status === 'COMPLETED' ? 'COMPLETED' : 'PROCESSING',
     needsRetrack: a.needsRetrack || b.needsRetrack,
+    primaryTrackIds: mergedPrimaryTrackIds,
     qualityReportJson: a.qualityReportJson,
     frameCount,
     ...meta,
@@ -156,6 +168,7 @@ export function slicePlayerTrack(
     modelVersion: pt.modelVersion,
     status: pt.status,
     needsRetrack: pt.needsRetrack,
+    primaryTrackIds: pt.primaryTrackIds,
     qualityReportJson: pt.qualityReportJson,
   };
 
